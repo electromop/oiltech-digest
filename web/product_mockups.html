@@ -1,0 +1,903 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="OilTech Digest — отбор нефтегазовых статей, AI-скоринг, месячный дайджест (макет интерфейса).">
+  <title>OilTech Digest — интерфейс администратора</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:#f0f3f8; --panel:#fff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0;
+      --accent:#0369a1; --accent-hover:#075985; --accent-soft:#e0f2fe; --accent-ring:rgba(3,105,161,.35);
+      --green:#0d9488; --green-soft:#ccfbf1;
+      --amber:#b45309; --amber-soft:#fef3c7;
+      --red:#dc2626; --red-soft:#fee2e2;
+      --sidebar:#0c1929; --sidebar-hover:rgba(255,255,255,.08);
+      --shadow-sm:0 1px 2px rgba(15,23,42,.05);
+      --shadow:0 12px 40px rgba(15,23,42,.08);
+      --radius:10px; --radius-sm:8px;
+      --font: "Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+      --text-xs:11px; --text-sm:13px; --text:14px; --text-lg:17px; --text-xl:22px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; }
+    }
+    * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:var(--text)/1.5 var(--font); -webkit-font-smoothing:antialiased; }
+    html[data-theme="dark"] {
+      --bg:#0b1220; --panel:#0f1b2d; --ink:#e5e7eb; --muted:#9aa8bd; --line:#1f2a3d;
+      --accent:#38bdf8; --accent-hover:#0ea5e9; --accent-soft:rgba(56,189,248,.14); --accent-ring:rgba(56,189,248,.35);
+      --green:#2dd4bf; --green-soft:rgba(45,212,191,.16);
+      --amber:#fbbf24; --amber-soft:rgba(251,191,36,.16);
+      --red:#fb7185; --red-soft:rgba(251,113,133,.16);
+      --sidebar:#0a1424; --sidebar-hover:rgba(255,255,255,.08);
+      --shadow-sm:0 1px 2px rgba(0,0,0,.25);
+      --shadow:0 18px 60px rgba(0,0,0,.35);
+    }
+    button,input,select,textarea { font:inherit; }
+    button { min-height:36px; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff; color:var(--ink); padding:8px 14px; font-weight:600; font-size:var(--text-sm); cursor:pointer; transition:border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+    button:hover:not(:disabled) { border-color:#cbd5e1; background:#f8fafc; }
+    button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .primary:hover:not(:disabled) { background:var(--accent-hover); border-color:var(--accent-hover); }
+    .btn-ghost { background:transparent; border-color:transparent; }
+    .btn-ghost:hover:not(:disabled) { background:#f1f5f9; border-color:transparent; }
+    .danger { color:var(--red); }
+    input,select,textarea { width:100%; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff; color:var(--ink); padding:0 12px; transition:border-color .15s, box-shadow .15s; }
+    html[data-theme="dark"] button { background:rgba(255,255,255,.02); border-color:rgba(255,255,255,.10); }
+    html[data-theme="dark"] button:hover:not(:disabled) { background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.14); }
+    html[data-theme="dark"] input, html[data-theme="dark"] select, html[data-theme="dark"] textarea { background:rgba(255,255,255,.03); border-color:rgba(255,255,255,.10); color:var(--ink); }
+    html[data-theme="dark"] .panel-head { background:linear-gradient(180deg,rgba(255,255,255,.03) 0%, rgba(255,255,255,.01) 100%); }
+    html[data-theme="dark"] .group-head { background:rgba(255,255,255,.03); }
+    html[data-theme="dark"] .article-row:hover { background:rgba(255,255,255,.02); }
+    html[data-theme="dark"] .article-detail { background:rgba(255,255,255,.02); }
+    html[data-theme="dark"] .tag { background:rgba(99,102,241,.20); color:#c7d2fe; }
+    html[data-theme="dark"] .status { background:rgba(148,163,184,.14); color:#cbd5e1; }
+    input:focus-visible, select:focus-visible, textarea:focus-visible { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring); }
+    input,select { height:38px; }
+    textarea { min-height:72px; padding-top:10px; resize:vertical; }
+    input[type="checkbox"] { width:16px; height:16px; padding:0; accent-color:var(--accent); }
+    label { display:block; margin-bottom:6px; color:var(--muted); font-size:var(--text-xs); font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .skip { position:absolute; left:-9999px; z-index:100; padding:8px 16px; background:var(--accent); color:#fff; border-radius:var(--radius-sm); }
+    .skip:focus { left:12px; top:12px; }
+    .app {
+      --sidebar-width:220px;
+      min-height:100vh;
+      display:grid;
+      grid-template-columns:var(--sidebar-width) minmax(0,1fr);
+      transition:grid-template-columns .22s ease;
+    }
+    .app.sidebar-collapsed { --sidebar-width:72px; }
+    .side {
+      background:var(--sidebar); color:#f1f5f9; padding:16px 10px 20px;
+      display:flex; flex-direction:column; gap:4px;
+      border-right:1px solid rgba(255,255,255,.06);
+      overflow-x:hidden;
+      overflow-y:auto;
+      min-width:0;
+      align-self:stretch;
+      position:sticky;
+      top:0;
+      height:100vh;
+      min-height:100vh;
+      max-height:100vh;
+    }
+    .side-bottom-spacer { margin-top:auto; display:flex; flex-direction:column; gap:6px; padding-top:12px; border-top:1px solid rgba(255,255,255,.08); flex-shrink:0; }
+    .side-bottom { display:flex; justify-content:flex-end; align-items:center; padding:0 2px 2px; }
+    .sidebar-toggle {
+      display:flex; align-items:center; justify-content:center;
+      width:40px; height:40px; padding:0; margin:0;
+      border:0; border-radius:var(--radius-sm);
+      background:transparent; color:rgba(241,245,249,.72);
+      cursor:pointer;
+      transition:background .15s ease, color .15s ease, transform .22s ease;
+    }
+    .sidebar-toggle:hover { background:var(--sidebar-hover); color:#fff; }
+    .sidebar-toggle:focus-visible { outline:2px solid #38bdf8; outline-offset:2px; }
+    .app.sidebar-collapsed .sidebar-toggle { transform:rotate(180deg); }
+    .app.sidebar-collapsed .side-bottom { justify-content:center; }
+    .brand { display:flex; align-items:center; gap:12px; padding:4px 8px 18px; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,.08); min-width:0; }
+    .brand-mark { width:40px; height:40px; border-radius:12px; background:linear-gradient(145deg,#38bdf8,#0369a1); display:grid; place-items:center; font-weight:800; font-size:15px; color:#fff; letter-spacing:-.02em; flex-shrink:0; }
+    .brand-text { min-width:0; }
+    .brand-name { font-weight:700; font-size:var(--text-sm); line-height:1.25; color:#fff; }
+    .brand-tag { font-size:var(--text-xs); color:rgba(241,245,249,.55); margin-top:2px; }
+    .nav-section { font-size:var(--text-xs); font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:rgba(241,245,249,.45); padding:16px 10px 8px; }
+    .icon { display:flex; align-items:center; gap:12px; width:100%; min-height:42px; border:0; border-radius:var(--radius-sm); color:rgba(241,245,249,.82); background:transparent; font-size:var(--text-sm); text-align:left; padding:0 12px; cursor:pointer; transition:background .12s ease, color .12s ease, justify-content .22s ease, padding .22s ease; }
+    .icon svg { flex-shrink:0; opacity:.9; }
+    .nav-label { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+    .visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    .icon:hover { background:var(--sidebar-hover); color:#fff; }
+    .icon.active { background:rgba(56,189,248,.18); color:#fff; box-shadow:inset 0 0 0 1px rgba(56,189,248,.25); }
+    .icon:focus-visible { outline:2px solid #38bdf8; outline-offset:2px; }
+    .side-footer { display:none; }
+    .top { display:none; }
+    .page-head { margin-bottom:20px; }
+    .page-head-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    h1 { margin:0; font-size:var(--text-xl); font-weight:700; letter-spacing:-.02em; line-height:1.2; }
+    .sub { color:var(--muted); margin-top:6px; font-size:var(--text-sm); max-width:62ch; line-height:1.55; }
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .tab.active { background:#111827; color:#fff; border-color:#111827; }
+    .content { padding:28px 32px 40px; max-width:1680px; }
+    .screen { display:none; }
+    .screen.active { display:block; animation:fadeIn .2s ease; }
+    @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+    .stats-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:0 0 14px; }
+    .stat-card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:13px 15px; min-width:0; }
+    .stat-value { font-size:22px; line-height:1.15; font-weight:800; letter-spacing:-.02em; }
+    .stat-label { margin-top:4px; color:var(--muted); font-size:12px; font-weight:700; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm); overflow:hidden; }
+    .panel + .panel { margin-top:16px; }
+    .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,#fafbfc 0%,#fff 100%); }
+    .panel-title { font-size:var(--text-lg); font-weight:700; letter-spacing:-.01em; }
+    .panel-body { padding:20px; }
+    .filters { display:grid; grid-template-columns:minmax(260px,1.25fr) minmax(180px,.8fr) minmax(220px,.95fr) minmax(150px,.7fr) minmax(160px,.7fr); gap:8px; margin-bottom:12px; align-items:end; }
+    .filter-row-secondary { display:grid; grid-template-columns:260px 260px minmax(0,1fr) 120px; gap:8px; margin-bottom:12px; align-items:end; }
+    .advanced-toggle { display:flex; justify-content:flex-end; margin:10px 0 12px; }
+    .advanced-toggle button { min-height:34px; padding:7px 12px; }
+    .range-pair { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .range-field { position:relative; }
+    .range-field span { position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:12px; font-weight:800; pointer-events:none; }
+    .range-field input { padding-left:32px; }
+    .source-combo { position:relative; }
+    .source-popover { display:none; position:absolute; z-index:8; left:0; right:0; top:calc(100% + 6px); max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:9px; background:#fff; box-shadow:var(--shadow); padding:8px; }
+    .source-combo.open .source-popover { display:block; }
+    .source-option { display:flex; justify-content:space-between; gap:10px; padding:8px 9px; border-radius:7px; font-weight:700; cursor:pointer; }
+    .source-option:hover { background:var(--accent-soft); }
+    .table { border:1px solid var(--line); border-radius:9px; overflow:auto; background:#fff; }
+    .tag-group { min-width:1020px; border-top:1px solid var(--line); }
+    .tag-group:first-child { border-top:0; }
+    .group-head { display:flex; align-items:center; gap:10px; min-height:40px; padding:8px 12px; background:#f8fafc; font-weight:800; }
+    .row { display:grid; grid-template-columns:34px 44px minmax(430px,2fr) 112px 92px 136px 128px; align-items:center; min-height:52px; border-top:1px solid var(--line); }
+    .row.header { min-height:34px; background:#fff; color:var(--muted); font-weight:800; }
+    .row > div { padding:8px 11px; min-width:0; }
+    .article-row { cursor:pointer; }
+    .article-row:hover { background:#fbfdff; }
+    .expand { width:30px; height:30px; min-height:30px; padding:0; border-radius:8px; display:grid; place-items:center; color:var(--muted); }
+    .expand svg { transition:transform .15s ease; }
+    .article-row.open .expand svg { transform:rotate(180deg); }
+    .title { display:block; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .title-wrap { min-width:0; }
+    .meta { margin-top:3px; color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .article-detail { display:none; grid-column:1/-1; border-top:1px solid var(--line); background:#fbfcfe; padding:12px 14px; }
+    .article-row.open + .article-detail { display:block; }
+    .detail-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr); gap:14px; }
+    .summary-box,.digest-card,.criterion { border:1px solid var(--line); border-radius:9px; padding:10px; background:#fff; }
+    html[data-theme="dark"] .summary-box, html[data-theme="dark"] .digest-card, html[data-theme="dark"] .criterion { background:rgba(255,255,255,.02); }
+    .pill { display:inline-flex; align-items:center; justify-content:center; min-height:25px; border-radius:999px; padding:3px 9px; font-weight:800; white-space:nowrap; }
+    .score { background:var(--accent-soft); color:var(--accent); }
+    .score.high { background:var(--green-soft); color:var(--green); }
+    .score.mid { background:var(--amber-soft); color:var(--amber); }
+    .tag { background:#e8efff; color:#194185; }
+    .status { background:#edf2f7; color:#475467; }
+    .selected { background:var(--green-soft); color:var(--green); }
+    .criterion { margin-top:8px; }
+    .criterion-top { display:flex; justify-content:space-between; gap:10px; font-weight:800; }
+    .bar { height:7px; margin-top:8px; border-radius:999px; background:#edf2f7; overflow:hidden; }
+    .bar span { display:block; height:100%; background:var(--accent); }
+    .digest-grid { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; align-items:start; }
+    .digest-grid .panel { overflow:visible; }
+    .pick-row { display:grid; grid-template-columns:30px minmax(0,1fr); gap:10px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+    .pick-row:first-child { border-top:0; }
+    .empty { min-height:120px; display:grid; place-items:center; color:var(--muted); text-align:center; border:1px dashed var(--line); border-radius:9px; background:#fbfcfe; }
+    .reset-danger { color:var(--red); border-color:#f3b8b3; background:#fff7f7; }
+    html[data-theme="dark"] .reset-danger { border-color:rgba(251,113,133,.30); background:rgba(251,113,133,.10); }
+    .settings-wide { max-width:1480px; }
+    .settings-row { display:grid; grid-template-columns:minmax(190px,.85fr) 92px minmax(270px,1.2fr) minmax(270px,1.2fr) minmax(260px,1.05fr) 86px; gap:10px; align-items:end; padding:11px 0; border-top:1px solid var(--line); }
+    .settings-row:first-child { border-top:0; }
+    .tag-row { display:grid; grid-template-columns:42px 34px minmax(190px,.75fr) minmax(190px,.75fr) minmax(300px,1.15fr) minmax(300px,1.15fr) 86px; gap:10px; align-items:end; padding:11px 0; border-top:1px solid var(--line); }
+    .tag-row:first-child { border-top:0; }
+    .weight-total { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:999px; padding:5px 10px; font-weight:800; color:var(--green); background:var(--green-soft); }
+    .weight-total.bad { color:var(--red); background:var(--red-soft); }
+    .remove-btn { min-height:30px; color:var(--red); border-color:#f3b8b3; background:#fff7f7; }
+    .tag-tree { border:1px solid var(--line); border-radius:9px; overflow:hidden; background:#fff; }
+    .tag-parent { border-top:1px solid var(--line); }
+    .tag-parent:first-child { border-top:0; }
+    .tag-parent-head { display:grid; grid-template-columns:42px minmax(180px,.8fr) minmax(320px,1.2fr) 86px; gap:10px; align-items:end; padding:12px; background:#f8fafc; }
+    .tag-child { display:grid; grid-template-columns:42px minmax(180px,.8fr) minmax(320px,1.2fr) 86px; gap:10px; align-items:end; padding:11px 12px 11px 54px; border-top:1px solid var(--line); }
+    .plus-btn { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; color:var(--accent); background:var(--accent-soft); border-color:#b9d9ef; font-size:18px; }
+    .download-menu { position:relative; }
+    .download-options { display:none; position:absolute; right:0; top:calc(100% + 6px); min-width:150px; border:1px solid var(--line); border-radius:9px; background:#fff; box-shadow:var(--shadow); padding:7px; z-index:10; }
+    .download-menu.open .download-options { display:grid; gap:5px; }
+    .switch { position:relative; display:inline-block; width:38px; height:22px; }
+    .switch input { display:none; }
+    .slider { position:absolute; inset:0; border-radius:999px; background:#cbd5e1; cursor:pointer; }
+    .slider:before { content:""; position:absolute; width:18px; height:18px; left:2px; top:2px; border-radius:50%; background:#fff; transition:transform .16s ease; }
+    .switch input:checked + .slider { background:var(--green); }
+    .switch input:checked + .slider:before { transform:translateX(16px); }
+    .toast { position:fixed; right:20px; bottom:20px; z-index:20; display:none; max-width:420px; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff; box-shadow:var(--shadow); padding:14px 18px; font-weight:600; font-size:var(--text-sm); border-left:4px solid var(--accent); }
+    .toast.show { display:block; }
+    .toast.success { border-left-color:var(--green); }
+    .toast.error { border-left-color:var(--red); }
+    .toast-title { font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-bottom:4px; font-weight:700; }
+    @media (max-width:1180px) {
+      .filters,.digest-grid,.detail-grid,.settings-row,.tag-row { grid-template-columns:1fr; }
+      .tag-group,.row { min-width:920px; }
+      .content { padding:20px 16px 32px; }
+      .stats-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    }
+    @media (min-width:901px) {
+      .app.sidebar-collapsed .brand-text,
+      .app.sidebar-collapsed .nav-section,
+      .app.sidebar-collapsed .side-footer { display:none; }
+      .app.sidebar-collapsed .side-bottom-spacer { border-top-color:rgba(255,255,255,.06); }
+      .app.sidebar-collapsed .brand { justify-content:center; padding:8px 4px 16px; gap:0; border-bottom-color:rgba(255,255,255,.06); }
+      .app.sidebar-collapsed .icon { justify-content:center; padding:0 8px; gap:0; }
+      .app.sidebar-collapsed .nav-label { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+      .app.sidebar-collapsed .icon { position:relative; }
+    }
+    @media (max-width:900px) {
+      .app { grid-template-columns:1fr !important; }
+      .sidebar-toggle { display:none !important; }
+      .side-bottom-spacer { display:none !important; }
+      .side { flex-direction:row; flex-wrap:wrap; align-items:center; padding:12px; gap:8px; }
+      .brand { border-bottom:0; padding:4px 8px; margin:0; flex:1 1 auto; min-width:200px; }
+      .nav-section { display:none; }
+      .icon { flex:1 1 auto; min-width:0; justify-content:center; padding:10px 8px; font-size:var(--text-xs); }
+      .icon svg { display:none; }
+      .side-footer { display:none; }
+    }
+    @media (max-width:760px) {
+      :root { --text:13px; --text-lg:16px; --text-xl:21px; }
+      body { background:#f6f8fb; }
+      .app { display:block; padding-bottom:74px; min-height:100svh; }
+      .side {
+        position:fixed; left:0; right:0; bottom:0; top:auto; z-index:30;
+        display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px;
+        padding:7px 8px calc(7px + env(safe-area-inset-bottom));
+        height:auto; min-height:70px; max-height:none; border-right:0; border-top:1px solid rgba(255,255,255,.08);
+        box-shadow:0 -12px 36px rgba(15,23,42,.2);
+      }
+      .brand,.nav-section,.side-bottom-spacer,.side-footer { display:none !important; }
+      .icon {
+        min-height:54px; flex-direction:column; justify-content:center; gap:4px;
+        padding:5px 3px; border-radius:11px; font-size:10px; line-height:1.15;
+      }
+      .icon svg { display:block; width:18px; height:18px; }
+      .nav-label { white-space:normal; text-align:center; overflow:visible; text-overflow:clip; }
+      .content { padding:14px 12px 94px; max-width:none; }
+      .page-head { margin-bottom:12px; }
+      h1 { font-size:22px; letter-spacing:0; }
+      .sub { margin-top:4px; font-size:12px; line-height:1.45; }
+      .stats-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+      .stat-card { padding:11px 12px; border-radius:9px; }
+      .stat-value { font-size:20px; }
+      .stat-label { font-size:11px; }
+      .panel { border-radius:9px; box-shadow:none; }
+      .panel-head { flex-direction:column; align-items:stretch; gap:10px; padding:13px 12px; }
+      .panel-title { font-size:16px; }
+      .panel-body { padding:12px; }
+      .tabs { gap:6px; }
+      .tabs > * { flex:1 1 auto; }
+      .panel-head .tabs { display:grid; grid-template-columns:1fr; }
+      #articleCount { justify-self:start; }
+      button { min-height:34px; padding:7px 10px; }
+      .filters,.filter-row-secondary { grid-template-columns:1fr !important; gap:9px; }
+      .advanced-toggle { justify-content:stretch; margin:8px 0 10px; }
+      .advanced-toggle button { width:100%; }
+      .range-pair { grid-template-columns:1fr 1fr; }
+      .table { border:0; border-radius:0; overflow:visible; background:transparent; }
+      .tag-group {
+        min-width:0; border:1px solid var(--line); border-radius:10px; overflow:hidden;
+        margin-bottom:10px; background:#fff;
+      }
+      .group-head { min-height:42px; padding:9px 10px; flex-wrap:wrap; }
+      .row.header { display:none; }
+      .row {
+        min-width:0; grid-template-columns:28px 34px minmax(0,1fr);
+        align-items:start; min-height:0; padding:10px 8px; gap:0;
+      }
+      .row > div { padding:3px 5px; }
+      .row > div:nth-child(3) { grid-column:3; min-width:0; }
+      .row > div:nth-child(4),
+      .row > div:nth-child(5),
+      .row > div:nth-child(6),
+      .row > div:nth-child(7) {
+        grid-column:3; display:flex; align-items:center; gap:8px; min-height:28px;
+      }
+      .row > div:nth-child(4)::before,
+      .row > div:nth-child(5)::before,
+      .row > div:nth-child(6)::before,
+      .row > div:nth-child(7)::before {
+        width:58px; flex:0 0 58px; color:var(--muted); font-size:11px; font-weight:800;
+      }
+      .row > div:nth-child(4)::before { content:"Дата"; }
+      .row > div:nth-child(5)::before { content:"Скоринг"; }
+      .row > div:nth-child(6)::before { content:"Оценка"; }
+      .row > div:nth-child(7)::before { content:"Статус"; }
+      .row > div:nth-child(7) select { max-width:190px; }
+      .title { max-width:100%; white-space:normal; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+      .title-wrap { min-width:0; }
+      .meta { white-space:normal; line-height:1.35; }
+      .expand { width:28px; height:28px; min-height:28px; border-radius:7px; }
+      .article-detail { grid-column:1/-1; padding:10px; }
+      .detail-grid { grid-template-columns:1fr; gap:10px; }
+      .digest-grid { grid-template-columns:1fr; gap:12px; }
+      .pick-row { grid-template-columns:28px minmax(0,1fr); }
+      .settings-row,.tag-parent-head,.tag-child {
+        grid-template-columns:1fr !important; gap:8px; padding:12px;
+      }
+      .tag-child { padding-left:26px; border-left:3px solid var(--accent-soft); }
+      .remove-btn { width:100%; }
+      .download-options { left:0; right:auto; top:calc(100% + 6px); bottom:auto; }
+      .source-popover { position:fixed; left:12px; right:12px; top:auto; bottom:82px; max-height:45svh; }
+      .toast { left:12px; right:12px; bottom:84px; max-width:none; padding:12px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">К основному содержимому</a>
+  <div class="app">
+    <aside class="side" id="sidebarNav" aria-label="Разделы приложения">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">OT</div>
+        <div class="brand-text">
+          <div class="brand-name">OilTech Digest</div>
+          <div class="brand-tag">Сбор · скоринг · дайджест</div>
+        </div>
+      </div>
+      <div class="nav-section">Работа</div>
+      <button type="button" class="icon active" data-screen="articles" aria-current="page" title="Все статьи">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        <span class="nav-label">Все статьи</span>
+      </button>
+      <button type="button" class="icon" data-screen="digest" title="Ручной отбор в месячный дайджест, PDF/DOCX">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 3h8l4 4v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v4h4"/></svg>
+        <span class="nav-label">Месячный дайджест</span>
+      </button>
+      <div class="nav-section">Настройки</div>
+      <button type="button" class="icon" data-screen="scoring" title="Критерии и веса → итоговый AI-score">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>
+        <span class="nav-label">Скоринг</span>
+      </button>
+      <button type="button" class="icon" data-screen="tags" title="Иерархия тегов для AI-классификатора">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h12M3 18h18"/></svg>
+        <span class="nav-label">Теги</span>
+      </button>
+      <div class="side-bottom-spacer">
+        <div class="side-bottom">
+          <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-expanded="true" aria-controls="sidebarNav" title="Свернуть меню">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+            <span class="visually-hidden">Свернуть боковое меню</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+    <div>
+      <main id="main" class="content">
+        <section class="screen active" id="articles" aria-labelledby="articles-heading">
+          <header class="page-head">
+            <div class="page-head-row">
+              <div>
+                <h1 id="articles-heading">Все статьи</h1>
+                <p class="sub">Отфильтруйте поток, отметьте нужные статьи и добавьте их в месячный дайджест.</p>
+              </div>
+            </div>
+          </header>
+          <div class="stats-grid" aria-label="Сводка по обработанным статьям">
+            <div class="stat-card"><div class="stat-value" id="statArticles">0</div><div class="stat-label">Карточек в базе</div></div>
+            <div class="stat-card"><div class="stat-value" id="statDigest">0</div><div class="stat-label">Выбрано в дайджест</div></div>
+            <div class="stat-card"><div class="stat-value" id="statAvgScore">0</div><div class="stat-label">Средний AI-score</div></div>
+            <div class="stat-card"><div class="stat-value" id="statGroups">0</div><div class="stat-label">Групп тегов</div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-title">Каталог карточек</div>
+              <div class="tabs"><span class="pill status" id="articleCount">0 статей</span><button type="button" class="btn-ghost" id="exportCsvBtn">Экспорт CSV</button><button type="button" class="primary" id="addDigestFromArticles" disabled>Добавить в дайджест</button></div>
+            </div>
+            <div class="panel-body">
+              <div class="filters">
+                <div><label>Поиск</label><input id="articleSearch" placeholder="Название, суть, ключевые слова"></div>
+                <div><label>Тег</label><select id="tagFilter"></select></div>
+                <div class="source-combo" id="sourceCombo">
+                  <label>Источник</label>
+                  <input id="sourceFilterInput" placeholder="Начните вводить источник">
+                  <div class="source-popover" id="sourceOptions"></div>
+                </div>
+                <div><label>Статус</label><select id="statusFilter"></select></div>
+                <div><label>Сортировка</label><select id="sortFilter"><option value="score_desc">Score: по убыванию</option><option value="score_asc">Score: по возрастанию</option><option value="date_desc">Сначала новые</option></select></div>
+              </div>
+              <div class="advanced-toggle">
+                <button type="button" id="advancedFiltersBtn" aria-expanded="false" aria-controls="advancedFilters">Расширенные фильтры</button>
+              </div>
+              <div class="filter-row-secondary" id="advancedFilters" hidden>
+                <div><label>Скоринг</label><div class="range-pair"><div class="range-field"><span>от</span><input id="scoreMin" type="number" min="0" max="100" value="0"></div><div class="range-field"><span>до</span><input id="scoreMax" type="number" min="0" max="100" value="100"></div></div></div>
+                <div><label>Дата попадания</label><div class="range-pair"><div class="range-field"><span>от</span><input id="dateFrom" type="date"></div><div class="range-field"><span>до</span><input id="dateTo" type="date"></div></div></div>
+                <div></div>
+                <div><button type="button" class="reset-danger" id="resetFilters">Сбросить</button></div>
+              </div>
+              <div class="table" id="articleTable"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen" id="digest" aria-labelledby="digest-heading">
+          <header class="page-head">
+            <h1 id="digest-heading">Месячный дайджест</h1>
+            <p class="sub">Ручной режим: отфильтруйте материалы, отметьте строки слева — черновик обновится справа. Выгрузка в PDF или DOCX через кнопку загрузки.</p>
+          </header>
+          <div class="digest-grid">
+            <div class="panel">
+              <div class="panel-head"><div class="panel-title">Выбор статей за месяц</div><span class="pill status">Отметьте материалы для выгрузки</span></div>
+              <div class="panel-body">
+                <div class="filters" style="grid-template-columns:minmax(220px,1fr) 160px 190px;">
+                  <div><label>Поиск</label><input id="digestSearch" placeholder="Найти статью"></div>
+                  <div><label>Тег</label><select id="digestTagFilter"></select></div>
+                  <div><label>Скоринг</label><div class="range-pair"><div class="range-field"><span>от</span><input id="digestScoreMin" type="number" value="60"></div><div class="range-field"><span>до</span><input id="digestScoreMax" type="number" value="100"></div></div></div>
+                </div>
+                <div id="digestPickList"></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><div class="panel-title">Черновик дайджеста</div><span class="pill tag">Порядок = порядок в PDF/DOCX</span></div>
+              <div class="panel-body">
+                <label for="digestMonth">Месяц дайджеста</label><select id="digestMonth"><option value="2026-05">Май 2026</option><option value="2026-04">Апрель 2026</option></select>
+                <div id="digestPreview" style="margin-top:16px"></div>
+                <div class="tabs" style="margin-top:16px">
+                  <div class="download-menu" id="downloadMenu">
+                    <button type="button" class="primary" id="downloadDigestBtn">Скачать дайджест</button>
+                    <div class="download-options">
+                      <button type="button" data-download-format="PDF">PDF</button>
+                      <button type="button" data-download-format="DOCX">DOCX</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen" id="scoring" aria-labelledby="scoring-heading">
+          <header class="page-head">
+            <h1 id="scoring-heading">Скоринг</h1>
+            <p class="sub">Один профиль критериев: веса должны суммироваться в 100%. Ключевые слова и AI-оценка дают итоговый score 0–100.</p>
+          </header>
+          <div class="panel settings-wide">
+            <div class="panel-head">
+              <div><div class="panel-title">Критерии оценки</div><div class="sub">Русские ключевые слова нормализуются в английские подсказки для зарубежных источников. Сохранение доступно только при сумме весов 100%.</div></div>
+              <div class="tabs"><span class="weight-total" id="weightTotal">Сумма весов: 100%</span><button type="button" id="normalizeWeights">Нормализовать</button><button type="button" class="primary" id="saveScoring">Сохранить</button></div>
+            </div>
+            <div class="panel-body"><div id="criteriaList"></div><button type="button" id="addCriterion">Добавить параметр</button></div>
+          </div>
+        </section>
+
+        <section class="screen" id="tags" aria-labelledby="tags-heading">
+          <header class="page-head">
+            <h1 id="tags-heading">Теги</h1>
+            <p class="sub">Иерархия тегов: родительские группы и подтеги для классификации статей.</p>
+          </header>
+          <div class="panel settings-wide">
+            <div class="panel-head"><div><div class="panel-title">Иерархия тегов</div><div class="sub">Добавляйте подтеги кнопкой «+» в строке родителя.</div></div><button type="button" class="primary" id="saveTags">Сохранить</button></div>
+            <div class="panel-body"><div id="tagSettings"></div><button type="button" id="addTag">Добавить родительский тег</button></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => [...document.querySelectorAll(selector)];
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+
+    const state = {
+      selectedSource: '',
+      expanded: new Set(),
+      articles: [
+        {id:1,title:'Новый подход к электрическому ГРП снижает водопотребление',source:'JPT',tag:'ГРП / Электро-ГРП',date:'2026-05-08',published:'2026-05-08',score:86,rating:'Высокая',status:'В дайджест',digest:true,url:'https://example.com/frac-electric',summary:'Технология электрического ГРП снижает потребление воды и ускоряет подготовку операций. Потенциально применима на зрелых месторождениях, где есть ограничения по логистике и экологическим требованиям.',criteria:[['Технологическая новизна',94],['Применимость для РФ',82],['Бизнес-эффект',78]]},
+        {id:2,title:'Операторы тестируют автономные буровые комплексы',source:'World Oil',tag:'Бурение / Автономное бурение',date:'2026-05-07',published:'2026-05-07',score:74,rating:'Выше средней',status:'Новая',digest:false,url:'https://example.com/auto-drilling',summary:'Автономные комплексы снижают простои на удаленных объектах и повышают безопасность персонала. Основной эффект ожидается в сокращении NPT.',criteria:[['Технологическая новизна',76],['Применимость для РФ',68],['Бизнес-эффект',78]]},
+        {id:3,title:'Сервисные компании ускоряют импортозамещение датчиков',source:'Neftegaz.ru',tag:'Импортозамещение',date:'2026-05-06',published:'2026-05-06',score:61,rating:'Средняя',status:'Новая',digest:false,url:'https://example.com/sensors',summary:'Локальные поставщики закрывают часть критичных компонентов для мониторинга промысловой инфраструктуры.',criteria:[['Технологическая новизна',48],['Применимость для РФ',88],['Бизнес-эффект',56]]},
+        {id:4,title:'Новые проппанты повышают проводимость трещины на зрелых активах',source:'Oil & Gas Journal',tag:'ГРП / Материалы ГРП',date:'2026-05-05',published:'2026-05-05',score:79,rating:'Выше средней',status:'На проверке',digest:false,url:'https://example.com/proppant',summary:'Материалы нового поколения обещают стабильную проводимость трещины при высоких давлениях и сложной минералогии.',criteria:[['Технологическая новизна',82],['Применимость для РФ',76],['Бизнес-эффект',78]]},
+        {id:5,title:'Цифровой двойник кустовой площадки снижает время диагностики',source:'Offshore Technology',tag:'Цифровизация / Digital Twin',date:'2026-05-04',published:'2026-05-04',score:72,rating:'Выше средней',status:'Новая',digest:false,url:'https://example.com/digital-twin',summary:'Система объединяет телеметрию, модель оборудования и прогноз отказов, сокращая время диагностики инцидентов.',criteria:[['Технологическая новизна',78],['Применимость для РФ',70],['Бизнес-эффект',68]]},
+        {id:6,title:'Компактная установка подготовки газа проходит промышленный пилот',source:'Rigzone',tag:'Добыча / Подготовка газа',date:'2026-05-03',published:'2026-05-03',score:68,rating:'Средняя',status:'Архив',digest:false,url:'https://example.com/gas-unit',summary:'Модульная установка может сократить сроки ввода инфраструктуры на небольших месторождениях.',criteria:[['Технологическая новизна',58],['Применимость для РФ',74],['Бизнес-эффект',70]]},
+        {id:7,title:'AI-модель прогнозирует осложнения при бурении горизонтальных скважин',source:'SPE',tag:'Бурение / Геонавигация',date:'2026-05-02',published:'2026-05-02',score:83,rating:'Высокая',status:'В дайджест',digest:true,url:'https://example.com/ai-drilling',summary:'Модель заранее выявляет зоны риска по телеметрии и геологическим признакам, снижая вероятность аварийных операций.',criteria:[['Технологическая новизна',88],['Применимость для РФ',80],['Бизнес-эффект',82]]},
+        {id:8,title:'Новая методика ППД снижает обводненность добывающих скважин',source:'Neftegaz.ru',tag:'Добыча / ППД',date:'2026-05-01',published:'2026-05-01',score:77,rating:'Выше средней',status:'Новая',digest:false,url:'https://example.com/waterflood',summary:'Методика перераспределяет закачку и улучшает профиль вытеснения на зрелых участках.',criteria:[['Технологическая новизна',66],['Применимость для РФ',90],['Бизнес-эффект',76]]},
+        {id:9,title:'Роботизированный инспектор трубопроводов выходит на рынок',source:'TechCrunch',tag:'Промбезопасность / Роботы',date:'2026-04-30',published:'2026-04-30',score:58,rating:'Средняя',status:'Архив',digest:false,url:'https://example.com/robot-pipe',summary:'Решение автоматизирует визуальную инспекцию участков трубопровода и формирует карту дефектов.',criteria:[['Технологическая новизна',72],['Применимость для РФ',48],['Бизнес-эффект',54]]},
+        {id:10,title:'Химический трассер помогает точнее оценивать межскважинные связи',source:'JPT',tag:'Геология / Трассеры',date:'2026-04-29',published:'2026-04-29',score:69,rating:'Средняя',status:'На проверке',digest:false,url:'https://example.com/tracer',summary:'Трассерная технология уточняет гидродинамическую связь между скважинами и помогает корректировать разработку.',criteria:[['Технологическая новизна',64],['Применимость для РФ',76],['Бизнес-эффект',66]]}
+      ],
+      criteria: [
+        {name:'Технологическая новизна', weight:35, description:'Новая технология, метод, материал или процесс, который может изменить операционную практику.', keywords:'новый метод, пилот, патент, прототип'},
+        {name:'Применимость для РФ', weight:30, description:'Насколько решение применимо в российских активах, с учетом зрелых месторождений и доступности оборудования.', keywords:'зрелые месторождения, обводненность, холодный климат'},
+        {name:'Бизнес-эффект', weight:35, description:'Экономия, рост добычи, снижение рисков, ускорение операций или сокращение CAPEX/OPEX.', keywords:'снижение затрат, рост добычи, надежность, эффективность'}
+      ],
+      tags: [
+        {id:1,parent:'',name:'ГРП',enabled:true,description:'Все технологии гидроразрыва пласта и интенсификации.',keywords:'frac, hydraulic fracturing, stimulation'},
+        {id:2,parent:'ГРП',name:'Электро-ГРП',enabled:true,description:'Электрические и маловодные технологии интенсификации добычи.',keywords:'fracturing, stimulation, electric frac'},
+        {id:3,parent:'ГРП',name:'Материалы ГРП',enabled:true,description:'Проппанты, жидкости, химия и материалы для ГРП.',keywords:'proppant, fluid, conductivity'},
+        {id:4,parent:'',name:'Бурение',enabled:true,description:'Буровые технологии, автоматизация, траектории и безопасность.',keywords:'drilling, rig, wellbore'},
+        {id:5,parent:'Бурение',name:'Автономное бурение',enabled:true,description:'Автоматизация буровых установок и снижение NPT.',keywords:'drilling, rig, autonomous'},
+        {id:6,parent:'Бурение',name:'Геонавигация',enabled:true,description:'Геонавигация, траектории, прогноз осложнений.',keywords:'geosteering, wellbore, telemetry'}
+      ],
+      sources: [
+        {id:1,name:'JPT',type:'RSS',url:'https://jpt.spe.org/rss',enabled:true,status:'готов'},
+        {id:2,name:'World Oil',type:'Request',url:'https://worldoil.com/news',enabled:true,status:'готов'},
+        {id:3,name:'Neftegaz.ru',type:'RSS',url:'https://neftegaz.ru/rss',enabled:true,status:'готов'},
+        {id:4,name:'Oil & Gas Journal',type:'RSS',url:'https://ogj.com/rss',enabled:true,status:'готов'},
+        {id:5,name:'Offshore Technology',type:'RSS',url:'https://offshore-technology.com/feed',enabled:false,status:'отключен'},
+        {id:6,name:'Rigzone',type:'Request',url:'https://rigzone.com/news',enabled:true,status:'готов'},
+        {id:7,name:'TechCrunch',type:'RSS',url:'https://techcrunch.com/feed',enabled:false,status:'отключен'},
+        {id:8,name:'SPE',type:'RSS',url:'https://spe.org/rss',enabled:true,status:'готов'}
+      ]
+    };
+    const statuses = ['Новая','На проверке','В дайджест','Архив'];
+    const translation = {'новый метод':'new method','пилот':'pilot','патент':'patent','прототип':'prototype','зрелые месторождения':'mature fields','обводненность':'water cut','холодный климат':'cold climate','снижение затрат':'cost reduction','рост добычи':'production increase','надежность':'reliability','эффективность':'efficiency'};
+    function setAdvancedFiltersOpen(open) {
+      const panel = $('#advancedFilters');
+      const btn = $('#advancedFiltersBtn');
+      if (!panel || !btn) return;
+      panel.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? 'Скрыть фильтры' : 'Расширенные фильтры';
+    }
+
+    function showToast(text, variant = 'default') {
+      const node = $('#toast');
+      node.textContent = text;
+      node.className = 'toast show' + (variant === 'success' ? ' success' : variant === 'error' ? ' error' : '');
+      clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => { node.classList.remove('show'); node.classList.remove('success', 'error'); }, 2600);
+    }
+
+    function tagOptions(selected = '') {
+      const parents = [...new Set([
+        ...state.tags.filter((tag) => !tag.parent).map((tag) => tag.name),
+        ...state.tags.map((tag) => tag.parent).filter(Boolean)
+      ])];
+      const groups = parents.map((parent) => {
+        const children = state.tags.filter((tag) => tag.parent === parent);
+        const options = [
+          `<option value="${esc(parent)}" ${selected === parent ? 'selected' : ''}>Все: ${esc(parent)}</option>`,
+          ...children.map((tag) => {
+            const value = `${tag.parent} / ${tag.name}`;
+            return `<option value="${esc(value)}" ${selected === value ? 'selected' : ''}>${esc(tag.name)}</option>`;
+          })
+        ].join('');
+        return `<optgroup label="${esc(parent)}">${options}</optgroup>`;
+      }).join('');
+      return `<option value="">Все теги</option>${groups}`;
+    }
+
+    function renderFilters() {
+      $('#tagFilter').innerHTML = tagOptions($('#tagFilter').value);
+      $('#digestTagFilter').innerHTML = tagOptions($('#digestTagFilter').value);
+      $('#statusFilter').innerHTML = ['', ...statuses].map((status) => `<option value="${esc(status)}">${esc(status || 'Любой статус')}</option>`).join('');
+      renderSourceOptions();
+    }
+
+    function filteredArticles() {
+      const q = $('#articleSearch').value.trim().toLowerCase();
+      const tag = $('#tagFilter').value;
+      const status = $('#statusFilter').value;
+      const source = state.selectedSource;
+      const min = Number($('#scoreMin').value || 0);
+      const max = Number($('#scoreMax').value || 100);
+      const from = $('#dateFrom').value;
+      const to = $('#dateTo').value;
+      const items = state.articles.filter((article) => {
+        const hay = [article.title, article.summary, article.source, article.tag].join(' ').toLowerCase();
+        return (!q || hay.includes(q))
+          && (!tag || article.tag === tag || article.tag.startsWith(`${tag} /`))
+          && (!status || article.status === status)
+          && (!source || article.source === source)
+          && article.score >= min && article.score <= max
+          && (!from || article.date >= from)
+          && (!to || article.date <= to);
+      });
+      const sort = $('#sortFilter').value;
+      items.sort((a, b) => sort === 'score_asc' ? a.score - b.score : sort === 'date_desc' ? b.date.localeCompare(a.date) : b.score - a.score);
+      return items;
+    }
+
+    function renderArticles() {
+      const items = filteredArticles();
+      $('#articleCount').textContent = `${items.length} статей`;
+      renderStats();
+      const groups = Object.fromEntries([...new Set(state.articles.map((article) => article.tag.split(' / ')[0]))].map((group) => [group, []]));
+      items.forEach((article) => {
+        const group = article.tag.split(' / ')[0];
+        if (!groups[group]) groups[group] = [];
+        groups[group].push(article);
+      });
+      $('#articleTable').innerHTML = Object.entries(groups).map(([group, articles]) => `
+        <div class="tag-group">
+          <div class="group-head"><span class="pill tag">${esc(group)}</span><span class="meta">${articles.length ? `${articles.length} статей · средний score ${Math.round(articles.reduce((s,a)=>s+a.score,0)/articles.length)}` : 'по текущим фильтрам пусто'}</span></div>
+          ${articles.length ? '<div class="row header"><div></div><div></div><div>Статья</div><div>Дата попадания</div><div>Скоринг</div><div>Оценка</div><div>Статус</div></div>' : ''}
+          ${articles.map(articleRow).join('')}
+        </div>
+      `).join('');
+      syncButtons();
+    }
+
+    function renderStats() {
+      const avg = state.articles.length ? Math.round(state.articles.reduce((sum, article) => sum + article.score, 0) / state.articles.length) : 0;
+      const groups = new Set(state.articles.map((article) => article.tag.split(' / ')[0])).size;
+      $('#statArticles').textContent = state.articles.length;
+      $('#statDigest').textContent = state.articles.filter((article) => article.digest).length;
+      $('#statAvgScore').textContent = avg;
+      $('#statGroups').textContent = groups;
+    }
+
+    function articleRow(article) {
+      const open = state.expanded.has(article.id);
+      return `
+        <div class="row article-row ${open ? 'open' : ''}" data-article-id="${article.id}">
+          <div><input class="article-check" type="checkbox" data-check-article="${article.id}" ${article.digest ? 'checked' : ''}></div>
+          <div><button type="button" class="expand" data-expand="${article.id}" title="${open ? 'Свернуть' : 'Раскрыть'}" aria-expanded="${open}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div>
+          <div>
+            <div class="title-wrap">
+              <a class="title" href="${esc(article.url)}" target="_blank">${esc(article.title)}</a>
+              <div class="meta">${esc(article.source)} · ${esc(article.tag)}</div>
+            </div>
+          </div>
+          <div>${formatDate(article.date)}</div><div><span class="pill score ${article.score >= 80 ? 'high' : article.score >= 60 ? 'mid' : ''}">${article.score}</span></div><div><span class="pill selected">${esc(article.rating)}</span></div>
+          <div><select data-status="${article.id}">${statuses.map((status) => `<option ${article.status === status ? 'selected' : ''}>${status}</option>`).join('')}</select></div>
+        </div>
+        <div class="article-detail">
+          <div class="detail-grid">
+            <div class="summary-box"><b>Суть:</b> ${esc(article.summary)}<div class="meta" style="margin-top:10px">Оригинал открывается кликом по названию.</div></div>
+            <div>${article.criteria.map(([name, value]) => `<div class="criterion"><div class="criterion-top"><span>${esc(name)}</span><span>${value}/100</span></div><div class="bar"><span style="width:${value}%"></span></div></div>`).join('')}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderSourceOptions() {
+      const q = $('#sourceFilterInput').value.trim().toLowerCase();
+      const sources = state.sources.filter((source) => !q || source.name.toLowerCase().includes(q)).slice(0, 8);
+      $('#sourceOptions').innerHTML = `<div class="source-option" data-source-pick=""><span>Все источники</span><span class="meta">сброс</span></div>` + sources.map((source) => `<div class="source-option" data-source-pick="${esc(source.name)}"><span>${esc(source.name)}</span><span class="meta">${esc(source.type)}</span></div>`).join('');
+    }
+
+    function renderDigest() {
+      const q = $('#digestSearch').value.trim().toLowerCase();
+      const tag = $('#digestTagFilter').value;
+      const min = Number($('#digestScoreMin').value || 0);
+      const max = Number($('#digestScoreMax').value || 100);
+      const items = state.articles.filter((article) => (!q || article.title.toLowerCase().includes(q)) && (!tag || article.tag === tag) && article.score >= min && article.score <= max);
+      $('#digestPickList').innerHTML = items.map((article) => `<div class="pick-row"><input class="digest-check" type="checkbox" data-check-article="${article.id}" ${article.digest ? 'checked' : ''}><div><a href="${esc(article.url)}" target="_blank"><b>${esc(article.title)}</b></a><div class="meta">${esc(article.tag)} · score ${article.score} · ${formatDate(article.date)}</div></div></div>`).join('');
+      const chosen = state.articles.filter((article) => article.digest);
+      $('#digestPreview').innerHTML = chosen.length ? chosen.map((article, index) => `<div class="digest-card"><b>${index + 1}. ${esc(article.tag)}</b><div>${esc(article.title)}</div><div class="meta">${esc(article.summary)}</div></div>`).join('') : '<div class="empty">Пока ничего не выбрано. Отметьте статьи слева, чтобы собрать черновик.</div>';
+      syncButtons();
+    }
+
+    function renderCriteria() {
+      $('#criteriaList').innerHTML = state.criteria.map((item, index) => {
+        const translated = item.keywords.split(',').map((word) => {
+          const key = word.trim().toLowerCase();
+          return translation[key] || key;
+        }).filter(Boolean).join(', ');
+        return `<div class="settings-row" data-criterion="${index}">
+          <div><label>Параметр</label><input data-criterion-field="name" value="${esc(item.name)}"></div>
+          <div><label>Вес</label><input type="number" min="0" max="100" data-criterion-field="weight" value="${esc(item.weight)}"></div>
+          <div><label>Описание для AI</label><textarea data-criterion-field="description">${esc(item.description)}</textarea></div>
+          <div><label>Ключевые слова RU / любые</label><textarea data-criterion-field="keywords">${esc(item.keywords)}</textarea></div>
+          <div><label>Авто EN-нормализация</label><textarea readonly>${esc(translated)}</textarea></div>
+          <button type="button" class="remove-btn" data-remove-criterion="${index}">Удалить</button>
+        </div>`;
+      }).join('');
+      updateWeightTotal();
+    }
+
+    function updateWeightTotal() {
+      const total = state.criteria.reduce((sum, item) => sum + Number(item.weight || 0), 0);
+      $('#weightTotal').textContent = `Сумма весов: ${total}%`;
+      $('#weightTotal').classList.toggle('bad', total !== 100);
+      $('#saveScoring').disabled = total !== 100;
+    }
+
+    function renderTags() {
+      const parents = state.tags.filter((tag) => !tag.parent);
+      $('#tagSettings').innerHTML = `<div class="tag-tree">${parents.map((parent) => {
+        const parentIndex = state.tags.indexOf(parent);
+        const children = state.tags.filter((tag) => tag.parent === parent.name);
+        return `<div class="tag-parent">
+          <div class="tag-parent-head" data-tag="${parentIndex}">
+            <button type="button" class="plus-btn" data-add-subtag="${esc(parent.name)}" aria-label="Добавить подтег к ${esc(parent.name)}">+</button>
+            <div><label>Родительский тег</label><input data-tag-field="name" value="${esc(parent.name)}"></div>
+            <div><label>Описание</label><input data-tag-field="description" value="${esc(parent.description)}"></div>
+            <button type="button" class="remove-btn" data-remove-tag="${parentIndex}">Удалить</button>
+          </div>
+          ${children.map((child) => {
+            const childIndex = state.tags.indexOf(child);
+            return `<div class="tag-child" data-tag="${childIndex}">
+              <label class="switch"><input type="checkbox" data-tag-field="enabled" ${child.enabled ? 'checked' : ''}><span class="slider"></span></label>
+              <div><label>Подтег</label><input data-tag-field="name" value="${esc(child.name)}"></div>
+              <div><label>Описание</label><input data-tag-field="description" value="${esc(child.description)}"></div>
+              <button type="button" class="remove-btn" data-remove-tag="${childIndex}">Удалить</button>
+            </div>`;
+          }).join('')}
+        </div>`;
+      }).join('')}</div>`;
+    }
+
+    function syncButtons() {
+      const anyDigest = state.articles.some((article) => article.digest);
+      $('#addDigestFromArticles').disabled = !anyDigest;
+    }
+
+    function formatDate(value) {
+      return new Date(`${value}T00:00:00`).toLocaleDateString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric' });
+    }
+
+    function rerenderAll() {
+      renderFilters();
+      renderArticles();
+      renderDigest();
+      renderCriteria();
+      renderTags();
+    }
+
+    document.addEventListener('click', (event) => {
+      const tab = event.target.closest('[data-screen]');
+      if (tab) {
+        $$('[data-screen]').forEach((item) => {
+          const on = item === tab;
+          item.classList.toggle('active', on);
+          if (on) item.setAttribute('aria-current', 'page');
+          else item.removeAttribute('aria-current');
+        });
+        $$('.screen').forEach((screen) => screen.classList.toggle('active', screen.id === tab.dataset.screen));
+      }
+      const expand = event.target.closest('[data-expand]');
+      if (expand) {
+        const id = Number(expand.dataset.expand);
+        state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+        renderArticles();
+      }
+      const sourcePick = event.target.closest('[data-source-pick]');
+      if (sourcePick) {
+        state.selectedSource = sourcePick.dataset.sourcePick;
+        $('#sourceFilterInput').value = state.selectedSource;
+        $('#sourceCombo').classList.remove('open');
+        renderArticles();
+      }
+      if (event.target.id === 'resetFilters') {
+        $('#articleSearch').value = ''; $('#tagFilter').value = ''; $('#sourceFilterInput').value = ''; state.selectedSource = ''; $('#statusFilter').value = ''; $('#scoreMin').value = 0; $('#scoreMax').value = 100; $('#dateFrom').value = ''; $('#dateTo').value = ''; renderArticles();
+      }
+      if (event.target.closest('#advancedFiltersBtn')) {
+        const panel = $('#advancedFilters');
+        setAdvancedFiltersOpen(Boolean(panel && panel.hidden));
+      }
+      if (event.target.id === 'addCriterion') {
+        state.criteria.push({name:'Новый параметр', weight:0, description:'Опишите, что AI должен оценивать.', keywords:'ключевое слово'});
+        renderCriteria();
+      }
+      const removeCriterionBtn = event.target.closest('[data-remove-criterion]');
+      if (removeCriterionBtn) {
+        state.criteria.splice(Number(removeCriterionBtn.dataset.removeCriterion), 1);
+        renderCriteria();
+      }
+      if (event.target.id === 'normalizeWeights') {
+        const each = Math.floor(100 / state.criteria.length);
+        let rest = 100;
+        state.criteria.forEach((item, index) => { item.weight = index === state.criteria.length - 1 ? rest : each; rest -= each; });
+        renderCriteria();
+        showToast('Веса нормализованы до 100%', 'success');
+      }
+      if (event.target.id === 'addTag') {
+        state.tags.push({parent:'', name:'Новый тег', enabled:true, description:'Описание для AI', keywords:'keyword'});
+        renderTags();
+      }
+      const addSub = event.target.closest('[data-add-subtag]');
+      if (addSub) {
+        state.tags.push({parent:addSub.dataset.addSubtag, name:'Новый подтег', enabled:true, description:'Описание для AI', keywords:'keyword'});
+        renderTags();
+      }
+      const removeTagBtn = event.target.closest('[data-remove-tag]');
+      if (removeTagBtn) {
+        const index = Number(removeTagBtn.dataset.removeTag);
+        const removed = state.tags[index];
+        state.tags = state.tags.filter((tag, tagIndex) => tagIndex !== index && tag.parent !== removed.name);
+        renderTags();
+      }
+      if (event.target.id === 'saveScoring') showToast('Настройки скоринга сохранены', 'success');
+      if (event.target.id === 'saveTags') showToast('Настройки тегов сохранены', 'success');
+      if (event.target.id === 'exportCsvBtn') showToast('Выгрузка CSV запущена', 'success');
+      if (event.target.id === 'addDigestFromArticles' && !event.target.disabled) {
+        const digestNav = document.querySelector('[data-screen="digest"]');
+        if (digestNav) digestNav.click();
+        showToast('Открыт раздел «Месячный дайджест»', 'success');
+      }
+      if (event.target.id === 'downloadDigestBtn') $('#downloadMenu').classList.toggle('open');
+      if (event.target.dataset.downloadFormat) {
+        $('#downloadMenu').classList.remove('open');
+        showToast(`Запущена выгрузка: ${event.target.dataset.downloadFormat}`, 'success');
+      }
+      if (!event.target.closest('#downloadMenu') && !event.target.closest('#downloadDigestBtn')) $('#downloadMenu').classList.remove('open');
+    });
+
+    document.addEventListener('input', (event) => {
+      if (['articleSearch','scoreMin','scoreMax','dateFrom','dateTo'].includes(event.target.id)) renderArticles();
+      if (event.target.id === 'sourceFilterInput') { $('#sourceCombo').classList.add('open'); renderSourceOptions(); }
+      if (['digestSearch','digestScoreMin','digestScoreMax'].includes(event.target.id)) renderDigest();
+      if (event.target.dataset.criterionField) {
+        const row = event.target.closest('[data-criterion]');
+        const field = event.target.dataset.criterionField;
+        state.criteria[Number(row.dataset.criterion)][field] = field === 'weight' ? Number(event.target.value || 0) : event.target.value;
+        if (field === 'weight') updateWeightTotal();
+      }
+      if (event.target.dataset.tagField) {
+        const row = event.target.closest('[data-tag]');
+        const tag = state.tags[Number(row.dataset.tag)];
+        tag[event.target.dataset.tagField] = event.target.dataset.tagField === 'enabled' ? event.target.checked : event.target.value;
+      }
+    });
+
+    document.addEventListener('change', (event) => {
+      if (['tagFilter','statusFilter','sortFilter'].includes(event.target.id)) renderArticles();
+      if (['digestTagFilter'].includes(event.target.id)) renderDigest();
+      if (event.target.dataset.status) {
+        const article = state.articles.find((item) => item.id === Number(event.target.dataset.status));
+        article.status = event.target.value;
+        article.digest = event.target.value === 'В дайджест';
+        renderArticles(); renderDigest(); showToast('Статус карточки обновлён', 'success');
+      }
+      if (event.target.dataset.checkArticle) {
+        const article = state.articles.find((item) => item.id === Number(event.target.dataset.checkArticle));
+        article.digest = event.target.checked;
+        if (article.digest) article.status = 'В дайджест';
+        renderArticles(); renderDigest();
+      }
+    });
+
+    $('#sourceFilterInput').addEventListener('focus', () => { $('#sourceCombo').classList.add('open'); renderSourceOptions(); });
+    document.addEventListener('click', (event) => { if (!event.target.closest('#sourceCombo')) $('#sourceCombo').classList.remove('open'); });
+
+    const SIDEBAR_STORAGE_KEY = 'oiltech-digest-sidebar-collapsed';
+    const appEl = document.querySelector('.app');
+    const sidebarToggleEl = $('#sidebarToggle');
+    const sidebarToggleLabel = sidebarToggleEl?.querySelector('.visually-hidden');
+
+    function applySidebarCollapsed(collapsed) {
+      if (!appEl || !sidebarToggleEl) return;
+      appEl.classList.toggle('sidebar-collapsed', collapsed);
+      sidebarToggleEl.setAttribute('aria-expanded', String(!collapsed));
+      sidebarToggleEl.title = collapsed ? 'Развернуть меню' : 'Свернуть меню';
+      if (sidebarToggleLabel) sidebarToggleLabel.textContent = collapsed ? 'Развернуть боковое меню' : 'Свернуть боковое меню';
+      try { localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? '1' : '0'); } catch (_) {}
+    }
+
+    function readSidebarPreference() {
+      try { return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'; } catch (_) { return false; }
+    }
+
+    function isSidebarMobile() {
+      return window.matchMedia('(max-width: 900px)').matches;
+    }
+
+    if (sidebarToggleEl && appEl) {
+      if (!isSidebarMobile()) applySidebarCollapsed(readSidebarPreference());
+      sidebarToggleEl.addEventListener('click', () => {
+        if (isSidebarMobile()) return;
+        applySidebarCollapsed(!appEl.classList.contains('sidebar-collapsed'));
+      });
+      let sidebarResizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(sidebarResizeTimer);
+        sidebarResizeTimer = setTimeout(() => {
+          if (isSidebarMobile()) appEl.classList.remove('sidebar-collapsed');
+          else applySidebarCollapsed(readSidebarPreference());
+        }, 120);
+      });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      const key = String(event.key || '').toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && key === 'k') {
+        event.preventDefault();
+        const input = $('#articleSearch');
+        if (input) { input.focus(); input.select?.(); }
+      }
+    });
+
+    rerenderAll();
+    setAdvancedFiltersOpen(false);
+  </script>
+</body>
+</html>
