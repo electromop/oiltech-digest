@@ -14,7 +14,7 @@ from urllib.parse import urljoin, urlsplit
 import feedparser
 from lxml import html as lxml_html
 
-from oiltech_digest.config import MAX_WORKERS
+from oiltech_digest.config import MAX_WORKERS, RSS_PROBE_TIMEOUT
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.http_client import probe
 
@@ -52,16 +52,16 @@ def _links_from_html(content: bytes, base_url: str) -> list[str]:
     return out
 
 
-def discover_feed(site_url: str | None) -> str | None:
+def discover_feed(site_url: str | None, timeout: int = RSS_PROBE_TIMEOUT) -> str | None:
     """Найти рабочую ленту по сайту источника. None, если не найдена."""
     if not site_url:
         return None
 
     # 1) <link rel="alternate"> на главной странице
-    home = probe(site_url)
+    home = probe(site_url, timeout=timeout)
     if home:
         for cand in _links_from_html(home, site_url):
-            if _looks_like_feed(probe(cand)):
+            if _looks_like_feed(probe(cand, timeout=timeout)):
                 return cand
 
     # 2) перебор типичных путей от корня домена
@@ -70,20 +70,26 @@ def discover_feed(site_url: str | None) -> str | None:
         base = f"{split.scheme}://{split.netloc}"
         for path in _CANDIDATE_PATHS:
             cand = urljoin(base, path)
-            if _looks_like_feed(probe(cand)):
+            if _looks_like_feed(probe(cand, timeout=timeout)):
                 return cand
 
     return None
 
 
 def discover_all(only_missing: bool = True, source_id: int | None = None,
-                 workers: int = MAX_WORKERS, dry_run: bool = False) -> dict:
+                 workers: int = MAX_WORKERS, dry_run: bool = False,
+                 limit: int | None = None,
+                 timeout: int = RSS_PROBE_TIMEOUT) -> dict:
     """Обойти источники-кандидаты, проставить rss_url/parse_strategy. Вернуть статистику."""
-    sources = repository.get_sources_for_discovery(only_missing=only_missing, source_id=source_id)
+    sources = repository.get_sources_for_discovery(
+        only_missing=only_missing,
+        source_id=source_id,
+        limit=limit,
+    )
     stats = {"checked": 0, "rss": 0, "request": 0, "results": []}
 
     def work(src: dict):
-        return src, discover_feed(src.get("url"))
+        return src, discover_feed(src.get("url"), timeout=timeout)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(work, s): s for s in sources}

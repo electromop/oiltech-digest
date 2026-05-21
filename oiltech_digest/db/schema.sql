@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS sources (
   enabled        BOOLEAN DEFAULT TRUE,
   parse_strategy TEXT,                           -- rss / request / telegram / none
   category       TEXT,
+  update_frequency TEXT,                         -- Excel «Частота мониторинга»
   priority       NUMERIC DEFAULT 1.0,            -- из Excel «Рейтинг источника» (1..3)
   last_parsed_at TIMESTAMPTZ,
   created_at     TIMESTAMPTZ DEFAULT now(),
@@ -53,6 +54,8 @@ CREATE TABLE IF NOT EXISTS article_cards (
   id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   article_id          BIGINT NOT NULL REFERENCES articles(id),
   summary             TEXT,
+  summary_model       TEXT,
+  summary_generated_at TIMESTAMPTZ,
   status              TEXT DEFAULT 'new',         -- new / review / digest / archive
   selected_for_digest BOOLEAN DEFAULT FALSE,
   digest_month        TEXT,
@@ -61,6 +64,7 @@ CREATE TABLE IF NOT EXISTS article_cards (
   updated_at          TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_article_cards_article_id ON article_cards(article_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_article_cards_article_unique ON article_cards(article_id);
 
 -- =========================================================================
 -- Скоринг — будущее
@@ -77,10 +81,12 @@ CREATE TABLE IF NOT EXISTS scoring_criteria (
   created_at       TIMESTAMPTZ DEFAULT now(),
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scoring_criteria_name ON scoring_criteria(name);
 
 CREATE TABLE IF NOT EXISTS article_scores (
   id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   article_id   BIGINT NOT NULL REFERENCES articles(id),
+  model        TEXT,
   total_score  NUMERIC NOT NULL,
   score_label  TEXT,
   explanation  TEXT,
@@ -88,6 +94,7 @@ CREATE TABLE IF NOT EXISTS article_scores (
   updated_at   TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_article_scores_article_id ON article_scores(article_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_article_scores_article_unique ON article_scores(article_id);
 
 CREATE TABLE IF NOT EXISTS article_score_items (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -107,24 +114,29 @@ CREATE TABLE IF NOT EXISTS tags (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   parent_id     BIGINT REFERENCES tags(id),
   name          TEXT NOT NULL,
+  name_en       TEXT,
   description   TEXT,
   keywords_json JSONB,
+  keywords_en_json JSONB,
   enabled       BOOLEAN DEFAULT TRUE,
   sort_order    INTEGER DEFAULT 0,
   created_at    TIMESTAMPTZ DEFAULT now(),
   updated_at    TIMESTAMPTZ DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_parent ON tags(name, (COALESCE(parent_id, 0)));
 
 CREATE TABLE IF NOT EXISTS article_tags (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   article_id  BIGINT NOT NULL REFERENCES articles(id),
   tag_id      BIGINT NOT NULL REFERENCES tags(id),
+  model       TEXT,
   confidence  NUMERIC,
   rationale   TEXT,
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_article_tags_article_id ON article_tags(article_id);
 CREATE INDEX IF NOT EXISTS idx_article_tags_tag_id ON article_tags(tag_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_article_tags_article_unique ON article_tags(article_id);
 
 -- =========================================================================
 -- Месячные дайджесты — будущее
@@ -161,3 +173,33 @@ CREATE TABLE IF NOT EXISTS export_jobs (
   started_at    TIMESTAMPTZ,
   finished_at   TIMESTAMPTZ
 );
+
+-- =========================================================================
+-- Метрики AI-обработки (для Issue #10)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS ai_processing_runs (
+  id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  article_id      BIGINT REFERENCES articles(id),
+  stage           TEXT NOT NULL,                 -- summary / tagging / scoring / digest
+  provider        TEXT NOT NULL DEFAULT 'openai',
+  model           TEXT,
+  language        TEXT,
+  input_tokens    INTEGER DEFAULT 0,
+  output_tokens   INTEGER DEFAULT 0,
+  total_tokens    INTEGER DEFAULT 0,
+  cost_usd        NUMERIC DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'ok',
+  error_message   TEXT,
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_runs_stage_language ON ai_processing_runs(stage, language);
+CREATE INDEX IF NOT EXISTS idx_ai_runs_article_id ON ai_processing_runs(article_id);
+
+-- Idempotent upgrades for databases initialized before these columns existed.
+ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
+ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;
+ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE tags ADD COLUMN IF NOT EXISTS name_en TEXT;
+ALTER TABLE tags ADD COLUMN IF NOT EXISTS keywords_en_json JSONB;
+ALTER TABLE article_tags ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS update_frequency TEXT;

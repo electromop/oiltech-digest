@@ -5,7 +5,7 @@
   - вынесено в отдельный модуль (единая ответственность), параметры — из config;
   - браузерный User-Agent сохранён (без него многие источники отдают 403);
   - SSL-fallback `verify=False` оставлен ТОЛЬКО как запасной путь при SSLError
-    и с явным предупреждением в лог — НЕ дефолт. Нужен для рунет-серверов с
+    и логируется на INFO/DEBUG, чтобы не шуметь при массовом RSS-discovery. Нужен для рунет-серверов с
     неполной цепочкой сертификатов на macOS (Python.framework без полного CA-bundle).
     RSS — публичный контент, риск ограниченный, но факт обхода логируется.
 """
@@ -70,12 +70,12 @@ def probe(url: str, timeout: int = 10) -> bytes | None:
         resp.raise_for_status()
         return resp.content
     except requests.exceptions.SSLError:
-        return _fetch_insecure(url, timeout)
+        return _fetch_insecure(url, timeout, quiet=True)
     except requests.RequestException:
         return None
 
 
-def _fetch_insecure(url: str, timeout: int) -> bytes | None:
+def _fetch_insecure(url: str, timeout: int, quiet: bool = False) -> bytes | None:
     """Запасной GET без проверки сертификата (только при SSLError)."""
     try:
         import urllib3
@@ -86,8 +86,11 @@ def _fetch_insecure(url: str, timeout: int) -> bytes | None:
             allow_redirects=True, verify=False,
         )
         resp.raise_for_status()
-        logger.warning("HTTP %s — SSL обойдён через verify=False (fallback, небезопасно)", url)
+        logger.info("HTTP %s — SSL обойдён через verify=False (fallback)", url)
         return resp.content
     except requests.RequestException as e:
-        logger.warning("HTTP %s — SSL-fallback не удался: %s", url, e)
+        if quiet:
+            logger.debug("HTTP %s — SSL-fallback не удался: %s", url, e)
+        else:
+            logger.warning("HTTP %s — SSL-fallback не удался: %s", url, e)
         return None

@@ -18,6 +18,8 @@ COL = {
     "type": "Тип",
     "url": "Ссылка",
     "rating": "Рейтинг источника",
+    "frequency": "Частота мониторинга",
+    "role": "Роль в дайджесте",
     "directions": "Покрываемые направления",
 }
 
@@ -79,7 +81,8 @@ def seed_sources_from_excel(path=SOURCES_XLSX, sheet: str = SOURCES_SHEET) -> di
 
             group = str(cell("group")).strip() if cell("group") else ""
             directions = str(cell("directions")).strip() if cell("directions") else ""
-            category = " | ".join(x for x in (group, directions) if x) or None
+            role = str(cell("role")).strip() if cell("role") else ""
+            category = " | ".join(x for x in (group, role, directions) if x) or None
 
             rec = {
                 "name": name,
@@ -89,6 +92,7 @@ def seed_sources_from_excel(path=SOURCES_XLSX, sheet: str = SOURCES_SHEET) -> di
                 "enabled": True,
                 "parse_strategy": strategy,
                 "category": category,
+                "update_frequency": str(cell("frequency")).strip() if cell("frequency") else None,
                 "priority": priority,
             }
             result = upsert_source(rec)  # 'inserted' | 'updated'

@@ -24,6 +24,19 @@ SOURCES_SHEET = "Sources_Expanded"
 
 # --- Параметры HTTP / парсинга ---
 REQUEST_TIMEOUT = 20          # сек на один HTTP-запрос
+RSS_PROBE_TIMEOUT = int(os.environ.get("RSS_PROBE_TIMEOUT", "4"))
 MAX_WORKERS = 10              # параллелизм при обходе лент / автообнаружении
 RETRY_ATTEMPTS = 3            # попыток HTTP с экспоненциальным backoff
 RETRY_BACKOFF_BASE = 1.0      # базовая задержка backoff (1с, 2с, 4с)
+
+# --- OpenAI / AI processing ---
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-nano")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "60"))
+OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "minimal")
+
+# USD per 1M tokens. Defaults follow the model docs snapshot used when this code
+# was written; override in .env if pricing changes or another model is selected.
+OPENAI_INPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_INPUT_USD_PER_MTOK", "0.05"))
+OPENAI_OUTPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_OUTPUT_USD_PER_MTOK", "0.40"))

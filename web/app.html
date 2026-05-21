@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OilTech Digest</title>
+  <style>
+    :root {
+      --bg:#eef2f6; --panel:#fff; --ink:#111827; --muted:#64748b; --line:#dbe3ee;
+      --accent:#0369a1; --accent-2:#0f766e; --danger:#dc2626; --warn:#b45309;
+      --soft:#e0f2fe; --good:#ccfbf1; --bad:#fee2e2; --side:#0d1b2a;
+      --radius:8px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 var(--font); }
+    button,input,select,textarea { font:inherit; }
+    button { min-height:34px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); padding:7px 12px; font-weight:700; cursor:pointer; }
+    button:hover { border-color:#b7c4d6; background:#f8fafc; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .ghost { background:transparent; border-color:transparent; }
+    input,select,textarea { width:100%; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); padding:0 10px; }
+    input,select { height:36px; }
+    textarea { min-height:70px; padding-top:8px; }
+    label { display:block; margin-bottom:5px; color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .app { min-height:100vh; display:grid; grid-template-columns:220px minmax(0,1fr); }
+    .side { background:var(--side); color:#e5eef8; padding:16px 10px; position:sticky; top:0; height:100vh; }
+    .brand { padding:6px 10px 18px; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,.09); }
+    .brand b { display:block; font-size:16px; }
+    .brand span { color:#9fb0c5; font-size:12px; }
+    .nav-title { padding:14px 10px 7px; color:#8190a5; font-size:11px; font-weight:900; text-transform:uppercase; }
+    .nav { display:grid; gap:4px; }
+    .nav button { justify-content:flex-start; width:100%; color:#dbeafe; background:transparent; border:0; text-align:left; }
+    .nav button.active { background:rgba(56,189,248,.18); color:#fff; }
+    .main { padding:24px; max-width:1700px; }
+    .screen { display:none; }
+    .screen.active { display:block; }
+    .head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:16px; }
+    h1 { margin:0; font-size:24px; line-height:1.2; }
+    .sub { margin-top:5px; color:var(--muted); }
+    .grid { display:grid; gap:10px; }
+    .stats { grid-template-columns:repeat(5,minmax(0,1fr)); margin-bottom:14px; }
+    .stat,.panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); }
+    .stat { padding:13px 14px; }
+    .stat b { display:block; font-size:22px; }
+    .stat span { color:var(--muted); font-weight:700; font-size:12px; }
+    .panel-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); }
+    .panel-title { font-weight:900; font-size:16px; }
+    .panel-body { padding:16px; }
+    .filters { display:grid; grid-template-columns:minmax(260px,1fr) 180px 220px 150px 120px; gap:9px; align-items:end; margin-bottom:12px; }
+    .table { overflow:auto; border:1px solid var(--line); border-radius:8px; background:#fff; }
+    table { width:100%; border-collapse:collapse; min-width:900px; }
+    th,td { border-bottom:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:11px; text-transform:uppercase; background:#f8fafc; }
+    tr:last-child td { border-bottom:0; }
+    .title { font-weight:800; }
+    .meta { color:var(--muted); font-size:12px; margin-top:3px; }
+    .pill { display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px; font-weight:900; font-size:12px; white-space:nowrap; }
+    .score { background:var(--soft); color:var(--accent); }
+    .score.high { background:var(--good); color:var(--accent-2); }
+    .score.low { background:var(--bad); color:var(--danger); }
+    .tag { background:#eef2ff; color:#3730a3; }
+    .status { background:#f1f5f9; color:#475569; }
+    .source-on { color:var(--accent-2); font-weight:900; }
+    .source-off { color:var(--danger); font-weight:900; }
+    .split { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:14px; align-items:start; }
+    .form-row { display:grid; grid-template-columns:1fr 1fr 1fr 120px; gap:10px; align-items:end; }
+    .settings-row { display:grid; grid-template-columns:minmax(160px,.8fr) 90px minmax(260px,1.2fr) minmax(260px,1fr); gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+    .tag-row { display:grid; grid-template-columns:80px minmax(220px,1fr) minmax(260px,1.2fr) 80px; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+    .toast { display:none; position:fixed; right:20px; bottom:20px; background:#fff; border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:8px; padding:12px 14px; box-shadow:0 18px 50px rgba(15,23,42,.18); max-width:460px; font-weight:700; }
+    .toast.show { display:block; }
+    .toast.error { border-left-color:var(--danger); }
+    @media (max-width:1000px) {
+      .app { grid-template-columns:1fr; }
+      .side { position:static; height:auto; }
+      .nav { grid-template-columns:repeat(3,minmax(0,1fr)); }
+      .main { padding:14px; }
+      .stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .filters,.split,.form-row,.settings-row,.tag-row { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand"><b>OilTech Digest</b><span>Сбор · AI · дайджест</span></div>
+      <div class="nav-title">Работа</div>
+      <div class="nav">
+        <button class="active" data-screen="articles">Все статьи</button>
+        <button data-screen="digest">Месячный дайджест</button>
+        <button data-screen="sources">Источники</button>
+      </div>
+      <div class="nav-title">Настройки</div>
+      <div class="nav">
+        <button data-screen="scoring">Скоринг</button>
+        <button data-screen="tags">Теги</button>
+        <button data-screen="metrics">Стоимость</button>
+      </div>
+    </aside>
+    <main class="main">
+      <section id="articles" class="screen active">
+        <div class="head">
+          <div><h1>Все статьи</h1><div class="sub">Реальные статьи из PostgreSQL, AI-суть, тегирование и скоринг.</div></div>
+          <div><button class="primary" id="processSelected">Обработать выбранные</button></div>
+        </div>
+        <div class="grid stats">
+          <div class="stat"><b id="statArticles">0</b><span>Статей</span></div>
+          <div class="stat"><b id="statProcessed">0</b><span>С AI-сутью</span></div>
+          <div class="stat"><b id="statDigest">0</b><span>В дайджесте</span></div>
+          <div class="stat"><b id="statAvg">0</b><span>Средний score</span></div>
+          <div class="stat"><b id="statSources">0</b><span>Источников</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Каталог карточек</div><button id="reloadData">Обновить</button></div>
+          <div class="panel-body">
+            <div class="filters">
+              <div><label>Поиск</label><input id="articleSearch" placeholder="Название, суть, источник"></div>
+              <div><label>Источник</label><select id="articleSource"></select></div>
+              <div><label>Тег</label><select id="articleTag"></select></div>
+              <div><label>Мин. score</label><input id="articleMinScore" type="number" min="0" max="100" value="0"></div>
+              <div><button id="applyArticleFilters" class="primary">Найти</button></div>
+            </div>
+            <div class="table"><table>
+              <thead><tr><th></th><th>Статья</th><th>Тег</th><th>Score</th><th>Статус</th><th>Дата</th></tr></thead>
+              <tbody id="articleRows"></tbody>
+            </table></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="digest" class="screen">
+        <div class="head"><div><h1>Месячный дайджест</h1><div class="sub">Черновик по отмеченным статьям.</div></div></div>
+        <div class="split">
+          <div class="panel"><div class="panel-head"><div class="panel-title">Выборка</div></div><div class="panel-body" id="digestRows"></div></div>
+          <div class="panel"><div class="panel-head"><div class="panel-title">Черновик</div></div><div class="panel-body" id="digestPreview"></div></div>
+        </div>
+      </section>
+
+      <section id="sources" class="screen">
+        <div class="head"><div><h1>Источники</h1><div class="sub">Включение, стратегия парсинга, RSS URL и частота мониторинга.</div></div></div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Добавить RSS</div></div>
+          <div class="panel-body">
+            <div class="form-row">
+              <div><label>Название</label><input id="newSourceName"></div>
+              <div><label>RSS URL</label><input id="newSourceRss"></div>
+              <div><label>Частота</label><input id="newSourceFrequency" placeholder="ежедневно"></div>
+              <button class="primary" id="addSource">Добавить</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:14px">
+          <div class="panel-head"><div class="panel-title">Каталог источников</div><div><input id="sourceSearch" placeholder="Поиск источника"></div></div>
+          <div class="panel-body">
+            <div class="table"><table>
+              <thead><tr><th>ID</th><th>Источник</th><th>Стратегия</th><th>Частота</th><th>RSS / URL</th><th>Вкл</th></tr></thead>
+              <tbody id="sourceRows"></tbody>
+            </table></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="scoring" class="screen">
+        <div class="head"><div><h1>Скоринг</h1><div class="sub">Активные критерии из БД.</div></div></div>
+        <div class="panel"><div class="panel-body" id="criteriaRows"></div></div>
+      </section>
+
+      <section id="tags" class="screen">
+        <div class="head"><div><h1>Теги</h1><div class="sub">Иерархия тегов, используемая AI-классификатором.</div></div></div>
+        <div class="panel"><div class="panel-body" id="tagRows"></div></div>
+      </section>
+
+      <section id="metrics" class="screen">
+        <div class="head"><div><h1>Стоимость</h1><div class="sub">Токены и цена AI-обработки.</div></div></div>
+        <div class="split">
+          <div class="panel"><div class="panel-head"><div class="panel-title">По этапам</div></div><div class="panel-body" id="costRows"></div></div>
+          <div class="panel"><div class="panel-head"><div class="panel-title">За статью</div></div><div class="panel-body" id="articleCostRows"></div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => [...document.querySelectorAll(s)];
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const state = { articles: [], sources: [], tags: [], criteria: [], costs: [], articleCosts: [], selected: new Set() };
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, { headers: {'Content-Type':'application/json'}, ...options });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+    function toast(text, error=false) {
+      const t = $('#toast'); t.textContent = text; t.className = `toast show${error ? ' error' : ''}`;
+      clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => t.className = 'toast', 2800);
+    }
+    function fmtDate(value) { return value ? new Date(`${value}T00:00:00`).toLocaleDateString('ru-RU') : '—'; }
+    function scoreClass(score) { return score >= 70 ? 'high' : score < 25 ? 'low' : ''; }
+
+    async function loadAll() {
+      const params = new URLSearchParams();
+      const q = $('#articleSearch')?.value?.trim(); if (q) params.set('search', q);
+      const source = $('#articleSource')?.value; if (source) params.set('source', source);
+      const tag = $('#articleTag')?.value; if (tag) params.set('tag', tag);
+      const min = $('#articleMinScore')?.value; if (min) params.set('min_score', min);
+      params.set('limit', '300');
+      const [articles, sources, tags, criteria, costs, articleCosts] = await Promise.all([
+        api(`/api/articles?${params}`),
+        api('/api/sources?limit=500'),
+        api('/api/tags'),
+        api('/api/scoring-criteria'),
+        api('/api/reports/ai-cost'),
+        api('/api/reports/ai-article-cost?limit=50&include_partial=true'),
+      ]);
+      Object.assign(state, { articles, sources, tags, criteria, costs, articleCosts });
+      renderAll();
+    }
+
+    function renderAll() {
+      renderFilters(); renderStats(); renderArticles(); renderDigest(); renderSources(); renderTags(); renderCriteria(); renderCosts();
+    }
+    function renderFilters() {
+      const srcValue = $('#articleSource').value || '';
+      $('#articleSource').innerHTML = '<option value="">Все</option>' + state.sources.map(s => `<option ${srcValue===s.name?'selected':''}>${esc(s.name)}</option>`).join('');
+      const tagValue = $('#articleTag').value || '';
+      const tagNames = [...new Set(state.tags.map(t => t.parent_name ? `${t.parent_name} / ${t.name}` : t.name))].sort();
+      $('#articleTag').innerHTML = '<option value="">Все</option>' + tagNames.map(t => `<option ${tagValue===t?'selected':''}>${esc(t)}</option>`).join('');
+    }
+    function renderStats() {
+      const processed = state.articles.filter(a => a.summary).length;
+      const avg = state.articles.length ? Math.round(state.articles.reduce((s,a) => s + Number(a.score || 0), 0) / state.articles.length) : 0;
+      $('#statArticles').textContent = state.articles.length;
+      $('#statProcessed').textContent = processed;
+      $('#statDigest').textContent = state.articles.filter(a => a.digest).length;
+      $('#statAvg').textContent = avg;
+      $('#statSources').textContent = state.sources.length;
+    }
+    function renderArticles() {
+      $('#articleRows').innerHTML = state.articles.map(a => `
+        <tr>
+          <td><input type="checkbox" data-select="${a.id}" ${state.selected.has(a.id) ? 'checked' : ''}></td>
+          <td>
+            <a class="title" href="${esc(a.url)}" target="_blank">${esc(a.title)}</a>
+            <div class="meta">${esc(a.source)} · ${esc(a.language || 'unknown')} · ${a.raw_text_chars} симв.</div>
+            ${a.summary ? `<div class="meta">${esc(a.summary)}</div>` : '<div class="meta">AI-суть ещё не сформирована</div>'}
+          </td>
+          <td><span class="pill tag">${esc(a.tag)}</span>${a.tag_confidence ? `<div class="meta">confidence ${Number(a.tag_confidence).toFixed(2)}</div>` : ''}</td>
+          <td><span class="pill score ${scoreClass(a.score)}">${Math.round(a.score || 0)}</span><div class="meta">${esc(a.rating)}</div></td>
+          <td><select data-status="${a.id}">${['new','review','digest','archive'].map(s => `<option value="${s}" ${a.status===s?'selected':''}>${s}</option>`).join('')}</select></td>
+          <td>${fmtDate(a.date)}</td>
+        </tr>
+      `).join('');
+    }
+    function renderDigest() {
+      const candidates = state.articles.filter(a => a.score >= 40 || a.digest).slice(0, 80);
+      $('#digestRows').innerHTML = candidates.map(a => `<label style="display:grid;grid-template-columns:24px 1fr;gap:8px;text-transform:none;font-size:14px;color:var(--ink);font-weight:700;margin-bottom:10px"><input type="checkbox" data-digest="${a.id}" ${a.digest?'checked':''}><span>${esc(a.title)}<span class="meta"> · score ${Math.round(a.score)} · ${esc(a.tag)}</span></span></label>`).join('') || '<div class="meta">Нет кандидатов.</div>';
+      const chosen = state.articles.filter(a => a.digest);
+      $('#digestPreview').innerHTML = chosen.length ? chosen.map((a,i) => `<div style="border-bottom:1px solid var(--line);padding:9px 0"><b>${i+1}. ${esc(a.title)}</b><div class="meta">${esc(a.summary || a.tag)}</div></div>`).join('') : '<div class="meta">Пока ничего не выбрано.</div>';
+    }
+    function renderSources() {
+      const q = ($('#sourceSearch')?.value || '').toLowerCase();
+      const items = state.sources.filter(s => !q || [s.name,s.url,s.rss_url,s.parse_strategy].join(' ').toLowerCase().includes(q));
+      $('#sourceRows').innerHTML = items.map(s => `
+        <tr>
+          <td>${s.id}</td>
+          <td><b>${esc(s.name)}</b><div class="meta">${esc(s.source_type || '')}</div></td>
+          <td><select data-source-field="parse_strategy" data-source-id="${s.id}">${['rss','request','telegram','none'].map(v => `<option value="${v}" ${s.parse_strategy===v?'selected':''}>${v}</option>`).join('')}</select></td>
+          <td><input data-source-field="update_frequency" data-source-id="${s.id}" value="${esc(s.update_frequency || '')}"></td>
+          <td><input data-source-field="rss_url" data-source-id="${s.id}" value="${esc(s.rss_url || s.url || '')}"><div class="meta">${esc(s.url || '')}</div></td>
+          <td><button data-source-toggle="${s.id}" class="${s.enabled ? 'source-on' : 'source-off'}">${s.enabled ? 'on' : 'off'}</button></td>
+        </tr>
+      `).join('');
+    }
+    function renderCriteria() {
+      $('#criteriaRows').innerHTML = state.criteria.map(c => `<div class="settings-row"><div><label>Критерий</label><b>${esc(c.name)}</b></div><div><label>Вес</label>${Number(c.weight)}%</div><div><label>Описание</label>${esc(c.description || '')}</div><div><label>EN keywords</label>${esc((c.keywords_en_json || []).slice(0,8).join(', '))}</div></div>`).join('');
+    }
+    function renderTags() {
+      $('#tagRows').innerHTML = state.tags.map(t => `<div class="tag-row"><div>${t.id}</div><div><b>${esc(t.parent_name ? `${t.parent_name} / ${t.name}` : t.name)}</b><div class="meta">${esc(t.name_en || '')}</div></div><div>${esc(t.description || '')}</div><div>${t.enabled ? 'on' : 'off'}</div></div>`).join('');
+    }
+    function renderCosts() {
+      $('#costRows').innerHTML = state.costs.map(c => `<div style="border-bottom:1px solid var(--line);padding:9px 0"><b>${esc(c.stage)} · ${esc(c.language)}</b><div class="meta">runs ${c.runs} · tokens ${c.total_tokens} · cost $${Number(c.cost_usd).toFixed(6)}</div></div>`).join('') || '<div class="meta">Метрик пока нет.</div>';
+      $('#articleCostRows').innerHTML = state.articleCosts.map(c => `<div style="border-bottom:1px solid var(--line);padding:9px 0"><b>#${c.article_id} · $${Number(c.cost_usd || 0).toFixed(6)}</b><div class="meta">${esc(c.title)} · tokens ${c.total_tokens || 0}</div></div>`).join('') || '<div class="meta">Полных циклов пока нет.</div>';
+    }
+
+    document.addEventListener('click', async (e) => {
+      const nav = e.target.closest('[data-screen]');
+      if (nav) {
+        $$('[data-screen]').forEach(b => b.classList.toggle('active', b === nav));
+        $$('.screen').forEach(s => s.classList.toggle('active', s.id === nav.dataset.screen));
+      }
+      if (e.target.id === 'reloadData' || e.target.id === 'applyArticleFilters') loadAll().catch(err => toast(err.message, true));
+      if (e.target.id === 'processSelected') {
+        const ids = [...state.selected];
+        if (!ids.length) return toast('Выберите статьи для обработки', true);
+        toast('AI-обработка запущена');
+        await api('/api/process', { method:'POST', body:JSON.stringify({ article_ids: ids, offline:false }) });
+        state.selected.clear(); await loadAll(); toast('AI-обработка завершена');
+      }
+      if (e.target.dataset.sourceToggle) {
+        const source = state.sources.find(s => s.id === Number(e.target.dataset.sourceToggle));
+        await api(`/api/sources/${source.id}`, { method:'PATCH', body:JSON.stringify({ enabled: !source.enabled }) });
+        await loadAll(); toast('Источник обновлён');
+      }
+      if (e.target.id === 'addSource') {
+        await api('/api/sources', { method:'POST', body:JSON.stringify({ name:$('#newSourceName').value, rss_url:$('#newSourceRss').value, update_frequency:$('#newSourceFrequency').value }) });
+        $('#newSourceName').value = ''; $('#newSourceRss').value = ''; $('#newSourceFrequency').value = '';
+        await loadAll(); toast('RSS-источник добавлен');
+      }
+    });
+    document.addEventListener('change', async (e) => {
+      if (e.target.dataset.select) {
+        const id = Number(e.target.dataset.select); e.target.checked ? state.selected.add(id) : state.selected.delete(id);
+      }
+      if (e.target.dataset.digest) {
+        const id = Number(e.target.dataset.digest);
+        await api(`/api/articles/${id}`, { method:'PATCH', body:JSON.stringify({ selected_for_digest:e.target.checked, status:e.target.checked ? 'digest' : 'new' }) });
+        await loadAll();
+      }
+      if (e.target.dataset.status) {
+        await api(`/api/articles/${e.target.dataset.status}`, { method:'PATCH', body:JSON.stringify({ status:e.target.value, selected_for_digest:e.target.value === 'digest' }) });
+        await loadAll();
+      }
+      if (e.target.dataset.sourceField && e.target.tagName === 'SELECT') {
+        await api(`/api/sources/${e.target.dataset.sourceId}`, { method:'PATCH', body:JSON.stringify({ [e.target.dataset.sourceField]: e.target.value }) });
+        await loadAll();
+      }
+    });
+    document.addEventListener('blur', async (e) => {
+      if (e.target.dataset.sourceField && e.target.tagName === 'INPUT') {
+        await api(`/api/sources/${e.target.dataset.sourceId}`, { method:'PATCH', body:JSON.stringify({ [e.target.dataset.sourceField]: e.target.value }) });
+        await loadAll();
+      }
+    }, true);
+    $('#sourceSearch').addEventListener('input', renderSources);
+    ['articleSearch','articleSource','articleTag','articleMinScore'].forEach(id => document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') loadAll(); }));
+    loadAll().catch(err => toast(err.message, true));
+  </script>
+</body>
+</html>
