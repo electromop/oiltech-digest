@@ -159,9 +159,9 @@ def insert_article(rec: dict) -> bool:
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, published_at,
-                                  raw_text, language, content_hash)
+                                  raw_text, text_truncated, language, content_hash)
             VALUES (%(source_id)s, %(title)s, %(url)s, %(published_at)s,
-                    %(raw_text)s, %(language)s, %(content_hash)s)
+                    %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s, %(content_hash)s)
             ON CONFLICT (url) DO NOTHING
             RETURNING id
             """,
@@ -284,6 +284,45 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
         return cur.fetchall()
 
 
+def get_articles_needing_relevance(limit: int = 20) -> list[dict]:
+    """Статьи с готовой сутью, но без проверки релевантности (card.relevant IS NULL)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
+                   s.category AS source_category
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            JOIN article_cards c ON c.article_id = a.id
+            WHERE c.summary IS NOT NULL AND c.relevant IS NULL
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def set_article_relevance(article_id: int, relevant: bool, reason: str | None,
+                          model: str | None = None) -> None:
+    """Записать вердикт релевантности. Нерелевантные → status='rejected'."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE article_cards
+            SET relevant = %s,
+                relevance_reason = %s,
+                relevance_model = %s,
+                status = CASE WHEN %s THEN status ELSE 'rejected' END,
+                updated_at = now()
+            WHERE article_id = %s
+            """,
+            (relevant, reason, model, relevant, article_id),
+        )
+        conn.commit()
+
+
 def get_articles_needing_tags(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -295,7 +334,7 @@ def get_articles_needing_tags(limit: int = 20) -> list[dict]:
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
-            WHERE c.summary IS NOT NULL AND at.id IS NULL
+            WHERE c.summary IS NOT NULL AND c.relevant IS TRUE AND at.id IS NULL
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -315,7 +354,7 @@ def get_articles_needing_scores(limit: int = 20) -> list[dict]:
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
-            WHERE c.summary IS NOT NULL AND sc.id IS NULL
+            WHERE c.summary IS NOT NULL AND c.relevant IS TRUE AND sc.id IS NULL
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -500,6 +539,73 @@ def list_enabled_scoring_criteria() -> list[dict]:
         return cur.fetchall()
 
 
+def delete_scoring_criterion(criterion_id: int) -> None:
+    """Мягкое удаление критерия (enabled=FALSE) — не рвём FK на article_score_items."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE scoring_criteria SET enabled = FALSE, updated_at = now() WHERE id = %s",
+            (criterion_id,),
+        )
+        conn.commit()
+
+
+def save_scoring_criteria(items: list[dict]) -> dict:
+    """Bulk-сохранение профиля критериев (как кнопка «Сохранить» в мокапе).
+
+    Валидирует сумму весов = 100. Существующие обновляются по id, новые вставляются,
+    отсутствующие в списке — отключаются (soft delete, чтобы не рвать FK).
+    """
+    total = round(sum(float(i.get("weight") or 0) for i in items), 2)
+    if total != 100:
+        raise ValueError(f"Сумма весов критериев должна быть 100, сейчас {total}")
+
+    keep_ids: list[int] = []
+    with get_connection() as conn:
+        for it in items:
+            payload = {
+                "name": it["name"],
+                "description": it.get("description"),
+                "weight": it["weight"],
+                "keywords_json": Json(it.get("keywords_json") or []),
+                "keywords_en_json": Json(it.get("keywords_en_json") or []),
+                "sort_order": it.get("sort_order") or 0,
+            }
+            if it.get("id"):
+                conn.execute(
+                    """
+                    UPDATE scoring_criteria SET name=%(name)s, description=%(description)s,
+                        weight=%(weight)s, keywords_json=%(keywords_json)s,
+                        keywords_en_json=%(keywords_en_json)s, sort_order=%(sort_order)s,
+                        enabled=TRUE, updated_at=now()
+                    WHERE id=%(id)s
+                    """,
+                    {**payload, "id": int(it["id"])},
+                )
+                keep_ids.append(int(it["id"]))
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO scoring_criteria (name, description, weight, keywords_json,
+                                                  keywords_en_json, enabled, sort_order)
+                    VALUES (%(name)s, %(description)s, %(weight)s, %(keywords_json)s,
+                            %(keywords_en_json)s, TRUE, %(sort_order)s)
+                    ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description,
+                        weight=EXCLUDED.weight, keywords_json=EXCLUDED.keywords_json,
+                        keywords_en_json=EXCLUDED.keywords_en_json, enabled=TRUE, updated_at=now()
+                    RETURNING id
+                    """,
+                    payload,
+                )
+                keep_ids.append(int(cur.fetchone()[0]))
+        if keep_ids:
+            conn.execute(
+                "UPDATE scoring_criteria SET enabled=FALSE, updated_at=now() WHERE id <> ALL(%s)",
+                (keep_ids,),
+            )
+        conn.commit()
+    return {"saved": len(items), "weight_sum": total}
+
+
 def replace_article_score(article_id: int, total_score: float, score_label: str,
                           explanation: str, items: list[dict],
                           model: str | None = None) -> None:
@@ -627,6 +733,8 @@ def digest_candidates(month: str, limit: int = 20, min_score: float = 60) -> lis
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             WHERE to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %s
+              AND COALESCE(c.status, 'new') <> 'rejected'
+              AND c.relevant IS NOT FALSE
               AND (c.selected_for_digest = TRUE OR COALESCE(sc.total_score, 0) >= %s)
             ORDER BY c.selected_for_digest DESC, sc.total_score DESC NULLS LAST,
                      a.published_at DESC NULLS LAST

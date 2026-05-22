@@ -10,6 +10,8 @@ from typing import Any
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, OfflineAIClient, OpenAIResponsesClient
 from oiltech_digest.processing.prompts import (
+    RELEVANCE_INSTRUCTIONS,
+    RELEVANCE_SCHEMA,
     SCORING_INSTRUCTIONS,
     SCORE_SCHEMA,
     SUMMARY_INSTRUCTIONS,
@@ -38,6 +40,31 @@ def process_summary_articles(articles: list[dict], client) -> dict:
             stats["processed"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
             _record_error(article, "summary", client, exc)
+            stats["errors"] += 1
+    return stats
+
+
+def process_relevance(limit: int = 20, offline: bool = False) -> dict:
+    client = make_client(offline)
+    return process_relevance_articles(repository.get_articles_needing_relevance(limit), client)
+
+
+def process_relevance_articles(articles: list[dict], client) -> dict:
+    """AI-фильтр: помечает статьи как релевантные/нерелевантные нефтесервису.
+    Нерелевантные получают status='rejected' и дальше не тегируются/не скорятся."""
+    stats = {"processed": 0, "relevant": 0, "rejected": 0, "errors": 0}
+    for article in articles:
+        try:
+            response = relevance_article(article, client)
+            relevant = bool(response.data.get("relevant"))
+            repository.set_article_relevance(
+                article["id"], relevant, response.data.get("reason"), response.model
+            )
+            _record_run(article, "relevance", client, response)
+            stats["processed"] += 1
+            stats["relevant" if relevant else "rejected"] += 1
+        except Exception as exc:  # noqa: BLE001 - batch should continue
+            _record_error(article, "relevance", client, exc)
             stats["errors"] += 1
     return stats
 
@@ -108,6 +135,15 @@ def summarize_article(article: dict, client) -> AIResponse:
         _article_prompt(article),
         SUMMARY_SCHEMA,
         max_output_tokens=1200,
+    )
+
+
+def relevance_article(article: dict, client) -> AIResponse:
+    return client.complete_json(
+        RELEVANCE_INSTRUCTIONS,
+        _article_prompt(article),
+        RELEVANCE_SCHEMA,
+        max_output_tokens=400,
     )
 
 

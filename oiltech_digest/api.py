@@ -19,6 +19,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import repository
 from oiltech_digest.processing.pipeline import (
     make_client,
+    process_relevance_articles,
     process_score_articles,
     process_summary_articles,
     process_tag_articles,
@@ -51,6 +52,16 @@ class SourceCreate(BaseModel):
     priority: float = 1.0
     category: str | None = None
     update_frequency: str | None = None
+
+
+class ScoringCriterionIn(BaseModel):
+    id: int | None = None
+    name: str
+    description: str | None = None
+    weight: float
+    keywords_json: list[str] = []
+    keywords_en_json: list[str] = []
+    sort_order: int = 0
 
 
 class ProcessRequest(BaseModel):
@@ -107,9 +118,10 @@ def list_articles(
         cur.execute(
             f"""
             SELECT a.id, a.title, a.url, a.language, a.raw_text, a.published_at,
-                   a.collected_at, s.name AS source_name,
+                   a.collected_at, a.text_truncated, s.name AS source_name,
                    COALESCE(c.summary, '') AS summary,
                    COALESCE(c.status, 'new') AS status,
+                   c.relevant, c.relevance_reason,
                    COALESCE(c.selected_for_digest, FALSE) AS selected_for_digest,
                    sc.total_score, sc.score_label, sc.explanation AS score_explanation,
                    t.name AS tag_name, parent.name AS parent_tag_name,
@@ -203,6 +215,21 @@ def list_scoring_criteria() -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.list_enabled_scoring_criteria()]
 
 
+@app.put("/api/scoring-criteria")
+def save_scoring_criteria(items: list[ScoringCriterionIn]) -> dict[str, Any]:
+    try:
+        result = repository.save_scoring_criteria([i.model_dump() for i in items])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **result}
+
+
+@app.delete("/api/scoring-criteria/{criterion_id}")
+def delete_scoring_criterion(criterion_id: int) -> dict[str, Any]:
+    repository.delete_scoring_criterion(criterion_id)
+    return {"ok": True}
+
+
 @app.get("/api/reports/ai-cost")
 def ai_cost() -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.ai_cost_report()]
@@ -223,6 +250,13 @@ def process_articles(payload: ProcessRequest) -> dict[str, Any]:
     summaries = process_summary_articles(articles, client)
 
     ids = [int(article["id"]) for article in articles]
+    relevance_articles = (
+        repository.get_articles_by_ids(ids, include_summary=True)
+        if payload.article_ids
+        else repository.get_articles_needing_relevance(payload.limit)
+    )
+    relevance = process_relevance_articles(relevance_articles, client)
+
     if payload.article_ids:
         with_summary = repository.get_articles_by_ids(ids, include_summary=True)
     else:
@@ -234,7 +268,7 @@ def process_articles(payload: ProcessRequest) -> dict[str, Any]:
     else:
         with_summary = repository.get_articles_needing_scores(payload.limit)
     scores = process_score_articles(with_summary, client)
-    return {"summary": summaries, "tagging": tags, "scoring": scores}
+    return {"summary": summaries, "relevance": relevance, "tagging": tags, "scoring": scores}
 
 
 def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -259,6 +293,9 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         "tag_rationale": row.get("tag_rationale"),
         "score_explanation": row.get("score_explanation"),
         "raw_text_chars": len(row.get("raw_text") or ""),
+        "text_truncated": bool(row.get("text_truncated")),
+        "relevant": row.get("relevant"),
+        "relevance_reason": row.get("relevance_reason"),
     }
 
 

@@ -86,3 +86,34 @@ def compute_content_hash(title: str, url: str) -> str:
     """sha256 от нормализованных title|url. Мягкий сигнал кросс-источниковых дублей."""
     basis = f"{_normalize_title(title)}|{_normalize_url(url)}"
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+
+# Маркеры «продолжение по ссылке» — типичный признак обрезанной RSS-ленты
+_TRUNCATION_TAIL_MARKERS = (
+    "read more", "read the full", "read full", "continue reading", "see more",
+    "view more", "full story", "[…]", "[...]",
+    "читать далее", "читать полностью", "подробнее", "продолжение", "далее по ссылке",
+)
+
+# Минимум символов: короче — почти наверняка только анонс, а не полный текст
+TRUNCATION_MIN_CHARS = 280
+
+
+def is_truncated(raw_text: str, min_chars: int = TRUNCATION_MIN_CHARS) -> bool:
+    """Эвристика: похоже ли, что RSS отдал сокращённый/обрезанный текст.
+
+    Срабатывает при: пустом тексте; концовке-многоточии; маркерах «читать далее /
+    read more»; слишком коротком теле. Это сигнал для ручной проверки/дозагрузки,
+    а не строгий критерий.
+    """
+    text = (raw_text or "").strip()
+    if not text:
+        return True
+    if text.endswith(("…", "...", "[…]", "[...]")):
+        return True
+    tail = text[-60:].lower()
+    if any(marker in tail for marker in _TRUNCATION_TAIL_MARKERS):
+        return True
+    if len(text) < min_chars:
+        return True
+    return False

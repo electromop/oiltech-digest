@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS articles (
   published_at   TIMESTAMPTZ,
   collected_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   raw_text       TEXT,
+  text_truncated BOOLEAN DEFAULT FALSE,           -- RSS отдал обрезанный/сокращённый текст
   language       TEXT,
   content_hash   TEXT,
   created_at     TIMESTAMPTZ DEFAULT now(),
@@ -56,7 +57,10 @@ CREATE TABLE IF NOT EXISTS article_cards (
   summary             TEXT,
   summary_model       TEXT,
   summary_generated_at TIMESTAMPTZ,
-  status              TEXT DEFAULT 'new',         -- new / review / digest / archive
+  relevant            BOOLEAN,                    -- AI-фильтр релевантности (Issue: AI-gate)
+  relevance_reason    TEXT,
+  relevance_model     TEXT,
+  status              TEXT DEFAULT 'new',         -- new / review / digest / archive / rejected
   selected_for_digest BOOLEAN DEFAULT FALSE,
   digest_month        TEXT,
   analyst_comment     TEXT,
@@ -203,3 +207,7 @@ ALTER TABLE tags ADD COLUMN IF NOT EXISTS name_en TEXT;
 ALTER TABLE tags ADD COLUMN IF NOT EXISTS keywords_en_json JSONB;
 ALTER TABLE article_tags ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS update_frequency TEXT;
+ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS relevant BOOLEAN;
+ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS relevance_reason TEXT;
+ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS relevance_model TEXT;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS text_truncated BOOLEAN DEFAULT FALSE;

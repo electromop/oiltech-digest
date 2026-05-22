@@ -67,6 +67,7 @@ def parse_source(source: dict, max_age_days: int | None = None) -> dict:
             "url": url,
             "published_at": published,
             "raw_text": summary or None,
+            "text_truncated": normalize.is_truncated(summary or ""),
             "language": language,
             "content_hash": normalize.compute_content_hash(title, url),
         }

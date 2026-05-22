@@ -122,17 +122,36 @@ def cmd_score(args: argparse.Namespace) -> None:
     print(f"scoring: обработано={stats['processed']}, ошибок={stats['errors']}")
 
 
-def cmd_process(args: argparse.Namespace) -> None:
-    from oiltech_digest.processing.pipeline import process_scores, process_summaries, process_tags
+def cmd_relevance(args: argparse.Namespace) -> None:
+    from oiltech_digest.processing.pipeline import process_relevance
 
+    stats = process_relevance(limit=args.limit, offline=args.offline)
+    print(
+        f"relevance: обработано={stats['processed']}, релевантно={stats['relevant']}, "
+        f"отклонено={stats['rejected']}, ошибок={stats['errors']}"
+    )
+
+
+def cmd_process(args: argparse.Namespace) -> None:
+    from oiltech_digest.processing.pipeline import (
+        process_relevance,
+        process_scores,
+        process_summaries,
+        process_tags,
+    )
+
+    # Порядок: суть → релевантность (отсев) → теги → скоринг.
+    # tag/score автоматически пропускают нерелевантные (см. get_articles_needing_*).
     summaries = process_summaries(limit=args.limit, offline=args.offline)
+    relevance = process_relevance(limit=args.limit, offline=args.offline)
     tags = process_tags(limit=args.limit, offline=args.offline)
     scores = process_scores(limit=args.limit, offline=args.offline)
     print(
         "process: "
-        f"summary={summaries['processed']}/{summaries['errors']} errors, "
-        f"tagging={tags['processed']}/{tags['errors']} errors, "
-        f"scoring={scores['processed']}/{scores['errors']} errors"
+        f"summary={summaries['processed']}/{summaries['errors']} err, "
+        f"relevance={relevance['processed']} (отклонено={relevance['rejected']})/{relevance['errors']} err, "
+        f"tagging={tags['processed']}/{tags['errors']} err, "
+        f"scoring={scores['processed']}/{scores['errors']} err"
     )
 
 
@@ -140,6 +159,7 @@ def cmd_process_articles(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
     from oiltech_digest.processing.pipeline import (
         make_client,
+        process_relevance_articles,
         process_score_articles,
         process_summary_articles,
         process_tag_articles,
@@ -149,13 +169,15 @@ def cmd_process_articles(args: argparse.Namespace) -> None:
     articles = repository.get_articles_by_ids(args.article_id, include_summary=False)
     summaries = process_summary_articles(articles, client)
     articles_with_summary = repository.get_articles_by_ids(args.article_id, include_summary=True)
+    relevance = process_relevance_articles(articles_with_summary, client)
     tags = process_tag_articles(articles_with_summary, client)
     scores = process_score_articles(articles_with_summary, client)
     print(
         "process-articles: "
-        f"summary={summaries['processed']}/{summaries['errors']} errors, "
-        f"tagging={tags['processed']}/{tags['errors']} errors, "
-        f"scoring={scores['processed']}/{scores['errors']} errors"
+        f"summary={summaries['processed']}/{summaries['errors']} err, "
+        f"relevance={relevance['processed']} (отклонено={relevance['rejected']})/{relevance['errors']} err, "
+        f"tagging={tags['processed']}/{tags['errors']} err, "
+        f"scoring={scores['processed']}/{scores['errors']} err"
     )
 
 
@@ -298,6 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_summary = sub.add_parser("summarize", help="сформировать AI-суть статей")
     add_ai_args(p_summary)
     p_summary.set_defaults(func=cmd_summarize)
+
+    p_relevance = sub.add_parser("relevance", help="AI-фильтр релевантности (отсев нерелевантных)")
+    add_ai_args(p_relevance)
+    p_relevance.set_defaults(func=cmd_relevance)
 
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)

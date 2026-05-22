@@ -17,5 +17,19 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build: .
+    container_name: oiltech_app
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oiltech}:${POSTGRES_PASSWORD:-oiltech_local_dev}@db:5432/${POSTGRES_DB:-oiltech_digest}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
 volumes:
   pgdata:
