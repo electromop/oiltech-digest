@@ -3,340 +3,188 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OilTech Digest</title>
+  <title>OilTech Digest — интерфейс администратора</title>
   <style>
     :root {
-      --bg:#eef2f6; --panel:#fff; --ink:#111827; --muted:#64748b; --line:#dbe3ee;
-      --accent:#0369a1; --accent-2:#0f766e; --danger:#dc2626; --warn:#b45309;
-      --soft:#e0f2fe; --good:#ccfbf1; --bad:#fee2e2; --side:#0d1b2a;
-      --radius:8px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
+      --bg:#f0f3f8; --panel:#fff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0;
+      --accent:#0369a1; --accent-hover:#075985; --accent-soft:#e0f2fe; --ring:rgba(3,105,161,.25);
+      --green:#0d9488; --green-soft:#ccfbf1; --amber:#b45309; --amber-soft:#fef3c7; --red:#dc2626; --red-soft:#fee2e2;
+      --sidebar:#0c1929; --shadow:0 12px 40px rgba(15,23,42,.08); --radius:8px; --radius-sm:7px;
+      --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
     }
     * { box-sizing:border-box; }
-    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 var(--font); }
+    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 var(--font); }
     button,input,select,textarea { font:inherit; }
-    button { min-height:34px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); padding:7px 12px; font-weight:700; cursor:pointer; }
-    button:hover { border-color:#b7c4d6; background:#f8fafc; }
-    button:disabled { opacity:.5; cursor:not-allowed; }
-    .primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-    .ghost { background:transparent; border-color:transparent; }
-    input,select,textarea { width:100%; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); padding:0 10px; }
-    input,select { height:36px; }
-    textarea { min-height:70px; padding-top:8px; }
-    label { display:block; margin-bottom:5px; color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; }
+    button { min-height:36px; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff; color:var(--ink); padding:8px 14px; font-weight:700; cursor:pointer; }
+    button:hover:not(:disabled) { background:#f8fafc; border-color:#cbd5e1; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .primary:hover:not(:disabled) { background:var(--accent-hover); border-color:var(--accent-hover); }
+    .btn-ghost { background:transparent; border-color:transparent; }
+    input,select,textarea { width:100%; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff; color:var(--ink); padding:0 12px; }
+    input:focus,select:focus,textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--ring); }
+    input,select { height:38px; }
+    textarea { min-height:72px; padding-top:9px; resize:vertical; }
+    input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); padding:0; }
+    [hidden] { display:none!important; }
+    label { display:block; margin-bottom:6px; color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0; }
     a { color:var(--accent); text-decoration:none; }
     a:hover { text-decoration:underline; }
     .app { min-height:100vh; display:grid; grid-template-columns:220px minmax(0,1fr); }
-    .side { background:var(--side); color:#e5eef8; padding:16px 10px; position:sticky; top:0; height:100vh; }
-    .brand { padding:6px 10px 18px; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,.09); }
-    .brand b { display:block; font-size:16px; }
-    .brand span { color:#9fb0c5; font-size:12px; }
-    .nav-title { padding:14px 10px 7px; color:#8190a5; font-size:11px; font-weight:900; text-transform:uppercase; }
-    .nav { display:grid; gap:4px; }
-    .nav button { justify-content:flex-start; width:100%; color:#dbeafe; background:transparent; border:0; text-align:left; }
-    .nav button.active { background:rgba(56,189,248,.18); color:#fff; }
-    .main { padding:24px; max-width:1700px; }
+    .side { background:var(--sidebar); color:#f1f5f9; padding:16px 10px 20px; position:sticky; top:0; height:100vh; }
+    .brand { display:flex; gap:12px; align-items:center; padding:4px 8px 18px; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,.08); }
+    .brand-mark { width:40px; height:40px; border-radius:12px; background:linear-gradient(145deg,#38bdf8,#0369a1); display:grid; place-items:center; color:#fff; font-weight:900; }
+    .brand-name { font-weight:800; }
+    .brand-tag { color:rgba(241,245,249,.55); font-size:12px; }
+    .nav-section { padding:16px 10px 8px; color:rgba(241,245,249,.45); font-size:11px; font-weight:900; text-transform:uppercase; }
+    .icon { display:flex; align-items:center; gap:12px; width:100%; min-height:42px; border:0; background:transparent; color:rgba(241,245,249,.82); text-align:left; }
+    .icon:hover,.icon.active { background:rgba(255,255,255,.08); color:#fff; }
+    .icon.active { box-shadow:inset 0 0 0 1px rgba(56,189,248,.25); background:rgba(56,189,248,.18); }
+    .content { padding:28px 32px 40px; max-width:1680px; }
     .screen { display:none; }
     .screen.active { display:block; }
-    .head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:16px; }
-    h1 { margin:0; font-size:24px; line-height:1.2; }
-    .sub { margin-top:5px; color:var(--muted); }
-    .grid { display:grid; gap:10px; }
-    .stats { grid-template-columns:repeat(5,minmax(0,1fr)); margin-bottom:14px; }
-    .stat,.panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); }
-    .stat { padding:13px 14px; }
-    .stat b { display:block; font-size:22px; }
-    .stat span { color:var(--muted); font-weight:700; font-size:12px; }
-    .panel-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); }
-    .panel-title { font-weight:900; font-size:16px; }
-    .panel-body { padding:16px; }
-    .filters { display:grid; grid-template-columns:minmax(260px,1fr) 180px 220px 150px 120px; gap:9px; align-items:end; margin-bottom:12px; }
-    .table { overflow:auto; border:1px solid var(--line); border-radius:8px; background:#fff; }
-    table { width:100%; border-collapse:collapse; min-width:900px; }
-    th,td { border-bottom:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }
-    th { color:var(--muted); font-size:11px; text-transform:uppercase; background:#f8fafc; }
-    tr:last-child td { border-bottom:0; }
-    .title { font-weight:800; }
-    .meta { color:var(--muted); font-size:12px; margin-top:3px; }
-    .pill { display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px; font-weight:900; font-size:12px; white-space:nowrap; }
-    .score { background:var(--soft); color:var(--accent); }
-    .score.high { background:var(--good); color:var(--accent-2); }
-    .score.low { background:var(--bad); color:var(--danger); }
-    .tag { background:#eef2ff; color:#3730a3; }
-    .status { background:#f1f5f9; color:#475569; }
-    .source-on { color:var(--accent-2); font-weight:900; }
-    .source-off { color:var(--danger); font-weight:900; }
-    .split { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:14px; align-items:start; }
-    .form-row { display:grid; grid-template-columns:1fr 1fr 1fr 120px; gap:10px; align-items:end; }
-    .settings-row { display:grid; grid-template-columns:minmax(160px,.8fr) 90px minmax(260px,1.2fr) minmax(260px,1fr); gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
-    .tag-row { display:grid; grid-template-columns:80px minmax(220px,1fr) minmax(260px,1.2fr) 80px; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
-    .toast { display:none; position:fixed; right:20px; bottom:20px; background:#fff; border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:8px; padding:12px 14px; box-shadow:0 18px 50px rgba(15,23,42,.18); max-width:460px; font-weight:700; }
+    .page-head { margin-bottom:20px; }
+    .page-head-row { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+    h1 { margin:0; font-size:22px; line-height:1.2; }
+    .sub { color:var(--muted); margin-top:6px; max-width:70ch; }
+    .stats-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+    .stat-card,.panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow:0 1px 2px rgba(15,23,42,.05); }
+    .stat-card { padding:13px 15px; }
+    .stat-value { font-size:22px; line-height:1.15; font-weight:900; }
+    .stat-label { margin-top:4px; color:var(--muted); font-size:12px; font-weight:800; }
+    .panel + .panel { margin-top:16px; }
+    .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,#fafbfc 0%,#fff 100%); }
+    .panel-title { font-size:17px; font-weight:900; }
+    .panel-body { padding:20px; }
+    .tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .filters { display:grid; grid-template-columns:minmax(210px,1.2fr) minmax(160px,.82fr) minmax(200px,.92fr) minmax(140px,.68fr) minmax(140px,.7fr); gap:8px; margin-bottom:12px; align-items:end; }
+    .filter-row-secondary { display:grid; grid-template-columns:260px 260px minmax(0,1fr) 120px; gap:8px; margin-bottom:12px; align-items:end; }
+    .advanced-toggle { display:flex; justify-content:flex-end; margin:10px 0 12px; }
+    .range-pair { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .range-field { position:relative; }
+    .range-field span { position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:12px; font-weight:900; pointer-events:none; }
+    .range-field input { padding-left:32px; }
+    .source-combo { position:relative; }
+    .source-popover { display:none; position:absolute; z-index:8; left:0; right:0; top:calc(100% + 6px); max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:9px; background:#fff; box-shadow:var(--shadow); padding:8px; }
+    .source-combo.open .source-popover { display:block; }
+    .source-option { display:flex; justify-content:space-between; gap:10px; padding:8px 9px; border-radius:7px; font-weight:800; cursor:pointer; }
+    .source-option:hover { background:var(--accent-soft); }
+    .table { border:1px solid var(--line); border-radius:9px; overflow:auto; background:#fff; }
+    .tag-group { min-width:1020px; border-top:1px solid var(--line); }
+    .tag-group:first-child { border-top:0; }
+    .group-head { display:flex; align-items:center; gap:10px; min-height:40px; padding:8px 12px; background:#f8fafc; font-weight:900; }
+    .row { display:grid; grid-template-columns:34px 44px minmax(430px,2fr) 112px 92px 136px 128px; align-items:center; min-height:52px; border-top:1px solid var(--line); }
+    .row.header { min-height:34px; background:#fff; color:var(--muted); font-weight:900; font-size:12px; }
+    .row > div { padding:8px 11px; min-width:0; }
+    .article-row { cursor:pointer; }
+    .article-row:hover { background:#fbfdff; }
+    .expand { width:30px; height:30px; min-height:30px; padding:0; display:grid; place-items:center; color:var(--muted); }
+    .article-row.open .expand svg { transform:rotate(180deg); }
+    .title { display:block; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .meta { margin-top:3px; color:var(--muted); font-size:12px; }
+    .article-detail { display:none; grid-column:1/-1; border-top:1px solid var(--line); background:#fbfcfe; padding:12px 14px; }
+    .article-row.open + .article-detail { display:block; }
+    .detail-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr); gap:14px; }
+    .summary-box,.digest-card,.criterion,.source-card { border:1px solid var(--line); border-radius:9px; padding:10px; background:#fff; }
+    .pill { display:inline-flex; align-items:center; justify-content:center; min-height:25px; border-radius:999px; padding:3px 9px; font-weight:900; white-space:nowrap; font-size:12px; }
+    .score { background:var(--accent-soft); color:var(--accent); }
+    .score.high { background:var(--green-soft); color:var(--green); }
+    .score.mid { background:var(--amber-soft); color:var(--amber); }
+    .score.low { background:var(--red-soft); color:var(--red); }
+    .tag { background:#e8efff; color:#194185; }
+    .status { background:#edf2f7; color:#475467; }
+    .selected { background:var(--green-soft); color:var(--green); }
+    .criterion { margin-top:8px; }
+    .criterion-top { display:flex; justify-content:space-between; gap:10px; font-weight:900; }
+    .bar { height:7px; margin-top:8px; border-radius:999px; background:#edf2f7; overflow:hidden; }
+    .bar span { display:block; height:100%; background:var(--accent); }
+    .digest-grid { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; align-items:start; }
+    .pick-row { display:grid; grid-template-columns:30px minmax(0,1fr); gap:10px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+    .pick-row:first-child { border-top:0; }
+    .empty { min-height:120px; display:grid; place-items:center; color:var(--muted); text-align:center; border:1px dashed var(--line); border-radius:9px; background:#fbfcfe; }
+    .settings-row { display:grid; grid-template-columns:minmax(190px,.85fr) 92px minmax(270px,1.2fr) minmax(270px,1.2fr) minmax(260px,1.05fr); gap:10px; align-items:end; padding:11px 0; border-top:1px solid var(--line); }
+    .tag-row { display:grid; grid-template-columns:42px minmax(220px,.85fr) minmax(240px,.75fr) minmax(320px,1.1fr) 86px; gap:10px; align-items:center; padding:11px 0; border-top:1px solid var(--line); }
+    .source-filters { display:grid; grid-template-columns:minmax(260px,1fr) 180px 180px 140px; gap:8px; margin-bottom:12px; align-items:end; }
+    .source-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .source-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start; }
+    .source-name { font-weight:900; font-size:15px; }
+    .source-line { color:var(--muted); font-size:12px; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .cost-list > div { padding:9px 0; border-top:1px solid var(--line); }
+    .cost-list > div:first-child { border-top:0; }
+    .toast { position:fixed; right:20px; bottom:20px; z-index:20; display:none; max-width:420px; border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:var(--radius-sm); background:#fff; box-shadow:var(--shadow); padding:14px 18px; font-weight:700; }
     .toast.show { display:block; }
-    .toast.error { border-left-color:var(--danger); }
-    @media (max-width:1000px) {
-      .app { grid-template-columns:1fr; }
-      .side { position:static; height:auto; }
-      .nav { grid-template-columns:repeat(3,minmax(0,1fr)); }
-      .main { padding:14px; }
-      .stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
-      .filters,.split,.form-row,.settings-row,.tag-row { grid-template-columns:1fr; }
-    }
+    .toast.error { border-left-color:var(--red); }
+    @media (max-width:1180px) { .filters,.filter-row-secondary,.digest-grid,.detail-grid,.settings-row,.tag-row,.source-filters,.source-grid { grid-template-columns:1fr; } .tag-group,.row { min-width:920px; } .content { padding:20px 16px 32px; } .stats-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:760px) { .app { display:block; } .side { position:static; height:auto; } .content { padding:14px 12px 28px; } .icon { width:auto; display:inline-flex; } .nav-section { display:none; } .row { min-width:760px; } }
   </style>
 </head>
 <body>
   <div class="app">
     <aside class="side">
-      <div class="brand"><b>OilTech Digest</b><span>Сбор · AI · дайджест</span></div>
-      <div class="nav-title">Работа</div>
-      <div class="nav">
-        <button class="active" data-screen="articles">Все статьи</button>
-        <button data-screen="digest">Месячный дайджест</button>
-        <button data-screen="sources">Источники</button>
-      </div>
-      <div class="nav-title">Настройки</div>
-      <div class="nav">
-        <button data-screen="scoring">Скоринг</button>
-        <button data-screen="tags">Теги</button>
-        <button data-screen="metrics">Стоимость</button>
-      </div>
+      <div class="brand"><div class="brand-mark">OT</div><div><div class="brand-name">OilTech Digest</div><div class="brand-tag">Сбор · скоринг · дайджест</div></div></div>
+      <div class="nav-section">Работа</div>
+      <button class="icon active" data-screen="articles">Все статьи</button>
+      <button class="icon" data-screen="digest">Месячный дайджест</button>
+      <button class="icon" data-screen="sources">Источники</button>
+      <div class="nav-section">Настройки</div>
+      <button class="icon" data-screen="scoring">Скоринг</button>
+      <button class="icon" data-screen="tags">Теги</button>
+      <button class="icon" data-screen="metrics">Стоимость</button>
     </aside>
-    <main class="main">
-      <section id="articles" class="screen active">
-        <div class="head">
-          <div><h1>Все статьи</h1><div class="sub">Реальные статьи из PostgreSQL, AI-суть, тегирование и скоринг.</div></div>
-          <div><button class="primary" id="processSelected">Обработать выбранные</button></div>
-        </div>
-        <div class="grid stats">
-          <div class="stat"><b id="statArticles">0</b><span>Статей</span></div>
-          <div class="stat"><b id="statProcessed">0</b><span>С AI-сутью</span></div>
-          <div class="stat"><b id="statDigest">0</b><span>В дайджесте</span></div>
-          <div class="stat"><b id="statAvg">0</b><span>Средний score</span></div>
-          <div class="stat"><b id="statSources">0</b><span>Источников</span></div>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><div class="panel-title">Каталог карточек</div><button id="reloadData">Обновить</button></div>
-          <div class="panel-body">
-            <div class="filters">
-              <div><label>Поиск</label><input id="articleSearch" placeholder="Название, суть, источник"></div>
-              <div><label>Источник</label><select id="articleSource"></select></div>
-              <div><label>Тег</label><select id="articleTag"></select></div>
-              <div><label>Мин. score</label><input id="articleMinScore" type="number" min="0" max="100" value="0"></div>
-              <div><button id="applyArticleFilters" class="primary">Найти</button></div>
-            </div>
-            <div class="table"><table>
-              <thead><tr><th></th><th>Статья</th><th>Тег</th><th>Score</th><th>Статус</th><th>Дата</th></tr></thead>
-              <tbody id="articleRows"></tbody>
-            </table></div>
-          </div>
-        </div>
+    <main class="content">
+      <section class="screen active" id="articles">
+        <header class="page-head"><div class="page-head-row"><div><h1>Все статьи</h1><p class="sub">Отфильтруйте поток, отметьте нужные статьи и добавьте их в месячный дайджест.</p></div><button class="primary" id="processSelected">Обработать выбранные</button></div></header>
+        <div class="stats-grid"><div class="stat-card"><div class="stat-value" id="statArticles">0</div><div class="stat-label">Карточек в базе</div></div><div class="stat-card"><div class="stat-value" id="statProcessed">0</div><div class="stat-label">С AI-сутью</div></div><div class="stat-card"><div class="stat-value" id="statDigest">0</div><div class="stat-label">Выбрано в дайджест</div></div><div class="stat-card"><div class="stat-value" id="statAvgScore">0</div><div class="stat-label">Средний AI-score</div></div><div class="stat-card"><div class="stat-value" id="statSources">0</div><div class="stat-label">Источников</div></div></div>
+        <div class="panel"><div class="panel-head"><div class="panel-title">Каталог карточек</div><div class="tabs"><span class="pill status" id="articleCount">0 статей</span><button id="reloadData">Обновить</button></div></div><div class="panel-body">
+          <div class="filters"><div><label>Поиск</label><input id="articleSearch" placeholder="Название, суть, ключевые слова"></div><div><label>Тег</label><select id="tagFilter"></select></div><div class="source-combo" id="sourceCombo"><label>Источник</label><input id="sourceFilterInput" placeholder="Начните вводить источник"><div class="source-popover" id="sourceOptions"></div></div><div><label>Статус</label><select id="statusFilter"></select></div><div><label>Сортировка</label><select id="sortFilter"><option value="score_desc">Score: по убыванию</option><option value="score_asc">Score: по возрастанию</option><option value="date_desc">Сначала новые</option></select></div></div>
+          <div class="advanced-toggle"><button id="advancedFiltersBtn" aria-expanded="false">Расширенные фильтры</button></div>
+          <div class="filter-row-secondary" id="advancedFilters" hidden><div><label>Скоринг</label><div class="range-pair"><div class="range-field"><span>от</span><input id="scoreMin" type="number" value="0"></div><div class="range-field"><span>до</span><input id="scoreMax" type="number" value="100"></div></div></div><div><label>Дата попадания</label><div class="range-pair"><div class="range-field"><span>от</span><input id="dateFrom" type="date"></div><div class="range-field"><span>до</span><input id="dateTo" type="date"></div></div></div><div><label>Язык</label><select id="languageFilter"><option value="">Любой</option><option value="ru">ru</option><option value="en">en</option></select></div><div><button id="resetFilters">Сбросить</button></div></div>
+          <div class="table" id="articleTable"></div>
+        </div></div>
       </section>
 
-      <section id="digest" class="screen">
-        <div class="head"><div><h1>Месячный дайджест</h1><div class="sub">Черновик по отмеченным статьям.</div></div></div>
-        <div class="split">
-          <div class="panel"><div class="panel-head"><div class="panel-title">Выборка</div></div><div class="panel-body" id="digestRows"></div></div>
-          <div class="panel"><div class="panel-head"><div class="panel-title">Черновик</div></div><div class="panel-body" id="digestPreview"></div></div>
-        </div>
-      </section>
+      <section class="screen" id="digest"><header class="page-head"><h1>Месячный дайджест</h1><p class="sub">Ручной режим: отфильтруйте материалы, отметьте строки слева — черновик обновится справа.</p></header><div class="digest-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Выбор статей за месяц</div><span class="pill status">Отметьте материалы</span></div><div class="panel-body"><div id="digestPickList"></div></div></div><div class="panel"><div class="panel-head"><div class="panel-title">Черновик дайджеста</div><span class="pill tag">Порядок = порядок в PDF/DOCX</span></div><div class="panel-body"><div id="digestPreview"></div></div></div></div></section>
 
-      <section id="sources" class="screen">
-        <div class="head"><div><h1>Источники</h1><div class="sub">Включение, стратегия парсинга, RSS URL и частота мониторинга.</div></div></div>
-        <div class="panel">
-          <div class="panel-head"><div class="panel-title">Добавить RSS</div></div>
-          <div class="panel-body">
-            <div class="form-row">
-              <div><label>Название</label><input id="newSourceName"></div>
-              <div><label>RSS URL</label><input id="newSourceRss"></div>
-              <div><label>Частота</label><input id="newSourceFrequency" placeholder="ежедневно"></div>
-              <button class="primary" id="addSource">Добавить</button>
-            </div>
-          </div>
-        </div>
-        <div class="panel" style="margin-top:14px">
-          <div class="panel-head"><div class="panel-title">Каталог источников</div><div><input id="sourceSearch" placeholder="Поиск источника"></div></div>
-          <div class="panel-body">
-            <div class="table"><table>
-              <thead><tr><th>ID</th><th>Источник</th><th>Стратегия</th><th>Частота</th><th>RSS / URL</th><th>Вкл</th></tr></thead>
-              <tbody id="sourceRows"></tbody>
-            </table></div>
-          </div>
-        </div>
-      </section>
+      <section class="screen" id="sources"><header class="page-head"><h1>Источники</h1><p class="sub">Неизменяемый каталог источников: тип, стратегия, частота, RSS и статус включения.</p></header><div class="panel"><div class="panel-head"><div class="panel-title">Каталог источников</div><span class="pill status" id="sourceCount">0 источников</span></div><div class="panel-body"><div class="source-filters"><div><label>Поиск</label><input id="sourceSearch" placeholder="Название или URL"></div><div><label>Стратегия</label><select id="sourceStrategy"><option value="">Все</option><option value="rss">rss</option><option value="request">request</option><option value="telegram">telegram</option><option value="none">none</option></select></div><div><label>Статус</label><select id="sourceEnabled"><option value="">Все</option><option value="on">Включены</option><option value="off">Выключены</option></select></div><div><button id="resetSourceFilters">Сбросить</button></div></div><div class="source-grid" id="sourceGrid"></div></div></div></section>
 
-      <section id="scoring" class="screen">
-        <div class="head"><div><h1>Скоринг</h1><div class="sub">Активные критерии из БД.</div></div></div>
-        <div class="panel"><div class="panel-body" id="criteriaRows"></div></div>
-      </section>
-
-      <section id="tags" class="screen">
-        <div class="head"><div><h1>Теги</h1><div class="sub">Иерархия тегов, используемая AI-классификатором.</div></div></div>
-        <div class="panel"><div class="panel-body" id="tagRows"></div></div>
-      </section>
-
-      <section id="metrics" class="screen">
-        <div class="head"><div><h1>Стоимость</h1><div class="sub">Токены и цена AI-обработки.</div></div></div>
-        <div class="split">
-          <div class="panel"><div class="panel-head"><div class="panel-title">По этапам</div></div><div class="panel-body" id="costRows"></div></div>
-          <div class="panel"><div class="panel-head"><div class="panel-title">За статью</div></div><div class="panel-body" id="articleCostRows"></div></div>
-        </div>
-      </section>
+      <section class="screen" id="scoring"><header class="page-head"><h1>Скоринг</h1><p class="sub">Активный профиль критериев: веса суммируются в 100%.</p></header><div class="panel settings-wide"><div class="panel-head"><div class="panel-title">Критерии оценки</div><span class="pill selected" id="weightTotal">Сумма весов: 100%</span></div><div class="panel-body" id="criteriaList"></div></div></section>
+      <section class="screen" id="tags"><header class="page-head"><h1>Теги</h1><p class="sub">Иерархия тегов для классификации статей.</p></header><div class="panel settings-wide"><div class="panel-head"><div class="panel-title">Иерархия тегов</div></div><div class="panel-body" id="tagSettings"></div></div></section>
+      <section class="screen" id="metrics"><header class="page-head"><h1>Стоимость</h1><p class="sub">Токены и стоимость AI-обработки.</p></header><div class="digest-grid"><div class="panel"><div class="panel-head"><div class="panel-title">По этапам</div></div><div class="panel-body cost-list" id="costRows"></div></div><div class="panel"><div class="panel-head"><div class="panel-title">За статью</div></div><div class="panel-body cost-list" id="articleCostRows"></div></div></div></section>
     </main>
   </div>
-  <div id="toast" class="toast"></div>
+  <div class="toast" id="toast"></div>
   <script>
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const state = { articles: [], sources: [], tags: [], criteria: [], costs: [], articleCosts: [], selected: new Set() };
-
-    async function api(path, options = {}) {
-      const res = await fetch(path, { headers: {'Content-Type':'application/json'}, ...options });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    }
-    function toast(text, error=false) {
-      const t = $('#toast'); t.textContent = text; t.className = `toast show${error ? ' error' : ''}`;
-      clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => t.className = 'toast', 2800);
-    }
-    function fmtDate(value) { return value ? new Date(`${value}T00:00:00`).toLocaleDateString('ru-RU') : '—'; }
-    function scoreClass(score) { return score >= 70 ? 'high' : score < 25 ? 'low' : ''; }
-
-    async function loadAll() {
-      const params = new URLSearchParams();
-      const q = $('#articleSearch')?.value?.trim(); if (q) params.set('search', q);
-      const source = $('#articleSource')?.value; if (source) params.set('source', source);
-      const tag = $('#articleTag')?.value; if (tag) params.set('tag', tag);
-      const min = $('#articleMinScore')?.value; if (min) params.set('min_score', min);
-      params.set('limit', '300');
-      const [articles, sources, tags, criteria, costs, articleCosts] = await Promise.all([
-        api(`/api/articles?${params}`),
-        api('/api/sources?limit=500'),
-        api('/api/tags'),
-        api('/api/scoring-criteria'),
-        api('/api/reports/ai-cost'),
-        api('/api/reports/ai-article-cost?limit=50&include_partial=true'),
-      ]);
-      Object.assign(state, { articles, sources, tags, criteria, costs, articleCosts });
-      renderAll();
-    }
-
-    function renderAll() {
-      renderFilters(); renderStats(); renderArticles(); renderDigest(); renderSources(); renderTags(); renderCriteria(); renderCosts();
-    }
-    function renderFilters() {
-      const srcValue = $('#articleSource').value || '';
-      $('#articleSource').innerHTML = '<option value="">Все</option>' + state.sources.map(s => `<option ${srcValue===s.name?'selected':''}>${esc(s.name)}</option>`).join('');
-      const tagValue = $('#articleTag').value || '';
-      const tagNames = [...new Set(state.tags.map(t => t.parent_name ? `${t.parent_name} / ${t.name}` : t.name))].sort();
-      $('#articleTag').innerHTML = '<option value="">Все</option>' + tagNames.map(t => `<option ${tagValue===t?'selected':''}>${esc(t)}</option>`).join('');
-    }
-    function renderStats() {
-      const processed = state.articles.filter(a => a.summary).length;
-      const avg = state.articles.length ? Math.round(state.articles.reduce((s,a) => s + Number(a.score || 0), 0) / state.articles.length) : 0;
-      $('#statArticles').textContent = state.articles.length;
-      $('#statProcessed').textContent = processed;
-      $('#statDigest').textContent = state.articles.filter(a => a.digest).length;
-      $('#statAvg').textContent = avg;
-      $('#statSources').textContent = state.sources.length;
-    }
-    function renderArticles() {
-      $('#articleRows').innerHTML = state.articles.map(a => `
-        <tr>
-          <td><input type="checkbox" data-select="${a.id}" ${state.selected.has(a.id) ? 'checked' : ''}></td>
-          <td>
-            <a class="title" href="${esc(a.url)}" target="_blank">${esc(a.title)}</a>
-            <div class="meta">${esc(a.source)} · ${esc(a.language || 'unknown')} · ${a.raw_text_chars} симв.</div>
-            ${a.summary ? `<div class="meta">${esc(a.summary)}</div>` : '<div class="meta">AI-суть ещё не сформирована</div>'}
-          </td>
-          <td><span class="pill tag">${esc(a.tag)}</span>${a.tag_confidence ? `<div class="meta">confidence ${Number(a.tag_confidence).toFixed(2)}</div>` : ''}</td>
-          <td><span class="pill score ${scoreClass(a.score)}">${Math.round(a.score || 0)}</span><div class="meta">${esc(a.rating)}</div></td>
-          <td><select data-status="${a.id}">${['new','review','digest','archive'].map(s => `<option value="${s}" ${a.status===s?'selected':''}>${s}</option>`).join('')}</select></td>
-          <td>${fmtDate(a.date)}</td>
-        </tr>
-      `).join('');
-    }
-    function renderDigest() {
-      const candidates = state.articles.filter(a => a.score >= 40 || a.digest).slice(0, 80);
-      $('#digestRows').innerHTML = candidates.map(a => `<label style="display:grid;grid-template-columns:24px 1fr;gap:8px;text-transform:none;font-size:14px;color:var(--ink);font-weight:700;margin-bottom:10px"><input type="checkbox" data-digest="${a.id}" ${a.digest?'checked':''}><span>${esc(a.title)}<span class="meta"> · score ${Math.round(a.score)} · ${esc(a.tag)}</span></span></label>`).join('') || '<div class="meta">Нет кандидатов.</div>';
-      const chosen = state.articles.filter(a => a.digest);
-      $('#digestPreview').innerHTML = chosen.length ? chosen.map((a,i) => `<div style="border-bottom:1px solid var(--line);padding:9px 0"><b>${i+1}. ${esc(a.title)}</b><div class="meta">${esc(a.summary || a.tag)}</div></div>`).join('') : '<div class="meta">Пока ничего не выбрано.</div>';
-    }
-    function renderSources() {
-      const q = ($('#sourceSearch')?.value || '').toLowerCase();
-      const items = state.sources.filter(s => !q || [s.name,s.url,s.rss_url,s.parse_strategy].join(' ').toLowerCase().includes(q));
-      $('#sourceRows').innerHTML = items.map(s => `
-        <tr>
-          <td>${s.id}</td>
-          <td><b>${esc(s.name)}</b><div class="meta">${esc(s.source_type || '')}</div></td>
-          <td><select data-source-field="parse_strategy" data-source-id="${s.id}">${['rss','request','telegram','none'].map(v => `<option value="${v}" ${s.parse_strategy===v?'selected':''}>${v}</option>`).join('')}</select></td>
-          <td><input data-source-field="update_frequency" data-source-id="${s.id}" value="${esc(s.update_frequency || '')}"></td>
-          <td><input data-source-field="rss_url" data-source-id="${s.id}" value="${esc(s.rss_url || s.url || '')}"><div class="meta">${esc(s.url || '')}</div></td>
-          <td><button data-source-toggle="${s.id}" class="${s.enabled ? 'source-on' : 'source-off'}">${s.enabled ? 'on' : 'off'}</button></td>
-        </tr>
-      `).join('');
-    }
-    function renderCriteria() {
-      $('#criteriaRows').innerHTML = state.criteria.map(c => `<div class="settings-row"><div><label>Критерий</label><b>${esc(c.name)}</b></div><div><label>Вес</label>${Number(c.weight)}%</div><div><label>Описание</label>${esc(c.description || '')}</div><div><label>EN keywords</label>${esc((c.keywords_en_json || []).slice(0,8).join(', '))}</div></div>`).join('');
-    }
-    function renderTags() {
-      $('#tagRows').innerHTML = state.tags.map(t => `<div class="tag-row"><div>${t.id}</div><div><b>${esc(t.parent_name ? `${t.parent_name} / ${t.name}` : t.name)}</b><div class="meta">${esc(t.name_en || '')}</div></div><div>${esc(t.description || '')}</div><div>${t.enabled ? 'on' : 'off'}</div></div>`).join('');
-    }
-    function renderCosts() {
-      $('#costRows').innerHTML = state.costs.map(c => `<div style="border-bottom:1px solid var(--line);padding:9px 0"><b>${esc(c.stage)} · ${esc(c.language)}</b><div class="meta">runs ${c.runs} · tokens ${c.total_tokens} · cost $${Number(c.cost_usd).toFixed(6)}</div></div>`).join('') || '<div class="meta">Метрик пока нет.</div>';
-      $('#articleCostRows').innerHTML = state.articleCosts.map(c => `<div style="border-bottom:1px solid var(--line);padding:9px 0"><b>#${c.article_id} · $${Number(c.cost_usd || 0).toFixed(6)}</b><div class="meta">${esc(c.title)} · tokens ${c.total_tokens || 0}</div></div>`).join('') || '<div class="meta">Полных циклов пока нет.</div>';
-    }
-
-    document.addEventListener('click', async (e) => {
-      const nav = e.target.closest('[data-screen]');
-      if (nav) {
-        $$('[data-screen]').forEach(b => b.classList.toggle('active', b === nav));
-        $$('.screen').forEach(s => s.classList.toggle('active', s.id === nav.dataset.screen));
-      }
-      if (e.target.id === 'reloadData' || e.target.id === 'applyArticleFilters') loadAll().catch(err => toast(err.message, true));
-      if (e.target.id === 'processSelected') {
-        const ids = [...state.selected];
-        if (!ids.length) return toast('Выберите статьи для обработки', true);
-        toast('AI-обработка запущена');
-        await api('/api/process', { method:'POST', body:JSON.stringify({ article_ids: ids, offline:false }) });
-        state.selected.clear(); await loadAll(); toast('AI-обработка завершена');
-      }
-      if (e.target.dataset.sourceToggle) {
-        const source = state.sources.find(s => s.id === Number(e.target.dataset.sourceToggle));
-        await api(`/api/sources/${source.id}`, { method:'PATCH', body:JSON.stringify({ enabled: !source.enabled }) });
-        await loadAll(); toast('Источник обновлён');
-      }
-      if (e.target.id === 'addSource') {
-        await api('/api/sources', { method:'POST', body:JSON.stringify({ name:$('#newSourceName').value, rss_url:$('#newSourceRss').value, update_frequency:$('#newSourceFrequency').value }) });
-        $('#newSourceName').value = ''; $('#newSourceRss').value = ''; $('#newSourceFrequency').value = '';
-        await loadAll(); toast('RSS-источник добавлен');
-      }
-    });
-    document.addEventListener('change', async (e) => {
-      if (e.target.dataset.select) {
-        const id = Number(e.target.dataset.select); e.target.checked ? state.selected.add(id) : state.selected.delete(id);
-      }
-      if (e.target.dataset.digest) {
-        const id = Number(e.target.dataset.digest);
-        await api(`/api/articles/${id}`, { method:'PATCH', body:JSON.stringify({ selected_for_digest:e.target.checked, status:e.target.checked ? 'digest' : 'new' }) });
-        await loadAll();
-      }
-      if (e.target.dataset.status) {
-        await api(`/api/articles/${e.target.dataset.status}`, { method:'PATCH', body:JSON.stringify({ status:e.target.value, selected_for_digest:e.target.value === 'digest' }) });
-        await loadAll();
-      }
-      if (e.target.dataset.sourceField && e.target.tagName === 'SELECT') {
-        await api(`/api/sources/${e.target.dataset.sourceId}`, { method:'PATCH', body:JSON.stringify({ [e.target.dataset.sourceField]: e.target.value }) });
-        await loadAll();
-      }
-    });
-    document.addEventListener('blur', async (e) => {
-      if (e.target.dataset.sourceField && e.target.tagName === 'INPUT') {
-        await api(`/api/sources/${e.target.dataset.sourceId}`, { method:'PATCH', body:JSON.stringify({ [e.target.dataset.sourceField]: e.target.value }) });
-        await loadAll();
-      }
-    }, true);
-    $('#sourceSearch').addEventListener('input', renderSources);
-    ['articleSearch','articleSource','articleTag','articleMinScore'].forEach(id => document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') loadAll(); }));
-    loadAll().catch(err => toast(err.message, true));
+    const state = { articles:[], sources:[], tags:[], criteria:[], costs:[], articleCosts:[], selected:new Set(), expanded:new Set(), selectedSource:'' };
+    const statuses = ['new','review','digest','archive'];
+    const statusLabels = {new:'Новая',review:'На проверке',digest:'В дайджест',archive:'Архив'};
+    const ARTICLE_RENDER_LIMIT = 180;
+    async function api(path, options={}) { const r = await fetch(path, {headers:{'Content-Type':'application/json'}, ...options}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+    function showToast(text, variant='default') { const n=$('#toast'); n.textContent=text; n.className='toast show'+(variant==='error'?' error':''); clearTimeout(window.toastTimer); window.toastTimer=setTimeout(()=>n.className='toast',2600); }
+    function formatDate(v){ return v ? new Date(`${v}T00:00:00`).toLocaleDateString('ru-RU') : '—'; }
+    function scoreClass(s){ return s>=80?'high':s>=60?'mid':s<25?'low':''; }
+    function topTag(a){ return (a.tag || 'Без тега').split(' / ')[0]; }
+    function tagOptions(selected=''){ const names=[...new Set(state.articles.map(a=>a.tag).filter(Boolean))].sort(); const parents=[...new Set(names.map(n=>n.split(' / ')[0]))]; return '<option value="">Все теги</option>'+parents.map(p=>{ const children=names.filter(n=>n.startsWith(`${p} /`)); return `<optgroup label="${esc(p)}"><option value="${esc(p)}" ${selected===p?'selected':''}>Все: ${esc(p)}</option>${children.map(n=>`<option value="${esc(n)}" ${selected===n?'selected':''}>${esc(n.split(' / ').pop())}</option>`).join('')}</optgroup>`; }).join(''); }
+    async function loadAll(){ const [articles,sources,tags,criteria,costs,articleCosts]=await Promise.all([api('/api/articles?limit=1000'),api('/api/sources?limit=500'),api('/api/tags'),api('/api/scoring-criteria'),api('/api/reports/ai-cost'),api('/api/reports/ai-article-cost?limit=50&include_partial=true')]); Object.assign(state,{articles,sources,tags,criteria,costs,articleCosts}); rerenderAll(); }
+    function rerenderAll(){ renderFilters(); renderArticles(); renderStats(); renderDigest(); renderSources(); renderCriteria(); renderTags(); renderCosts(); }
+    function renderFilters(){ $('#tagFilter').innerHTML=tagOptions($('#tagFilter').value); $('#statusFilter').innerHTML=['',...statuses].map(s=>`<option value="${esc(s)}">${esc(s?statusLabels[s]:'Любой статус')}</option>`).join(''); renderSourceOptions(); }
+    function renderSourceOptions(){ const q=$('#sourceFilterInput').value.trim().toLowerCase(); const items=state.sources.filter(s=>!q||s.name.toLowerCase().includes(q)).slice(0,10); $('#sourceOptions').innerHTML=`<div class="source-option" data-source-pick=""><span>Все источники</span><span class="meta">сброс</span></div>`+items.map(s=>`<div class="source-option" data-source-pick="${esc(s.name)}"><span>${esc(s.name)}</span><span class="meta">${esc(s.parse_strategy||s.source_type||'')}</span></div>`).join(''); }
+    function filteredArticles(){ const q=$('#articleSearch').value.trim().toLowerCase(); const tag=$('#tagFilter').value; const status=$('#statusFilter').value; const min=Number($('#scoreMin').value||0); const max=Number($('#scoreMax').value||100); const from=$('#dateFrom').value; const to=$('#dateTo').value; const lang=$('#languageFilter').value; let items=state.articles.filter(a=>{ const hay=[a.title,a.summary,a.source,a.tag].join(' ').toLowerCase(); return (!q||hay.includes(q))&&(!tag||a.tag===tag||a.tag.startsWith(`${tag} /`))&&(!status||a.status===status)&&(!state.selectedSource||a.source===state.selectedSource)&&a.score>=min&&a.score<=max&&(!from||a.date>=from)&&(!to||a.date<=to)&&(!lang||a.language===lang); }); const sort=$('#sortFilter').value; items.sort((a,b)=>sort==='score_asc'?a.score-b.score:sort==='date_desc'?String(b.date).localeCompare(String(a.date)):b.score-a.score); return items; }
+    function renderStats(){ const avg=state.articles.length?Math.round(state.articles.reduce((s,a)=>s+Number(a.score||0),0)/state.articles.length):0; $('#statArticles').textContent=state.articles.length; $('#statProcessed').textContent=state.articles.filter(a=>a.summary).length; $('#statDigest').textContent=state.articles.filter(a=>a.digest).length; $('#statAvgScore').textContent=avg; $('#statSources').textContent=state.sources.length; }
+    function renderArticles(){ const items=filteredArticles(); const visible=items.slice(0,ARTICLE_RENDER_LIMIT); $('#articleCount').textContent=items.length>visible.length?`${items.length} статей · показаны ${visible.length}`:`${items.length} статей`; const groups=Object.fromEntries([...new Set(visible.map(topTag))].map(g=>[g,[]])); visible.forEach(a=>{ const g=topTag(a); if(!groups[g]) groups[g]=[]; groups[g].push(a); }); $('#articleTable').innerHTML=visible.length?Object.entries(groups).map(([group,arts])=>`<div class="tag-group"><div class="group-head"><span class="pill tag">${esc(group)}</span><span class="meta">${arts.length} статей · средний score ${Math.round(arts.reduce((s,a)=>s+Number(a.score||0),0)/arts.length)}</span></div><div class="row header"><div></div><div></div><div>Статья</div><div>Дата попадания</div><div>Скоринг</div><div>Оценка</div><div>Статус</div></div>${arts.map(articleRow).join('')}</div>`).join(''):'<div class="empty">По текущим фильтрам ничего не найдено.</div>'; }
+    function articleRow(a){ const open=state.expanded.has(a.id); const criteria=[['Score',Math.round(a.score||0)],['Тег',a.tag_confidence?Math.round(a.tag_confidence*100):0],['Текст',Math.min(100,Math.round((a.raw_text_chars||0)/30))]]; return `<div class="row article-row ${open?'open':''}" data-article-id="${a.id}"><div><input class="article-check" type="checkbox" data-check-article="${a.id}" ${a.digest?'checked':''}></div><div><button class="expand" data-expand="${a.id}" title="${open?'Свернуть':'Раскрыть'}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M6 9l6 6 6-6"/></svg></button></div><div><a class="title" href="${esc(a.url)}" target="_blank">${esc(a.title)}</a><div class="meta">${esc(a.source)} · ${esc(a.tag)} · ${esc(a.language||'unknown')} · ${a.raw_text_chars||0} симв.</div></div><div>${formatDate(a.date)}</div><div><span class="pill score ${scoreClass(a.score)}">${Math.round(a.score||0)}</span></div><div><span class="pill selected">${esc(a.rating)}</span></div><div><select data-status="${a.id}">${statuses.map(s=>`<option value="${s}" ${a.status===s?'selected':''}>${esc(statusLabels[s])}</option>`).join('')}</select></div></div><div class="article-detail"><div class="detail-grid"><div class="summary-box"><b>Суть:</b> ${esc(a.summary||'AI-суть ещё не сформирована.')}<div class="meta" style="margin-top:10px">${esc(a.score_explanation||a.tag_rationale||'Оригинал открывается кликом по названию.')}</div></div><div>${criteria.map(([n,v])=>`<div class="criterion"><div class="criterion-top"><span>${esc(n)}</span><span>${v}/100</span></div><div class="bar"><span style="width:${Math.max(0,Math.min(100,v))}%"></span></div></div>`).join('')}</div></div></div>`; }
+    function renderDigest(){ const candidates=state.articles.filter(a=>a.score>=40||a.digest).slice(0,120); $('#digestPickList').innerHTML=candidates.length?candidates.map(a=>`<div class="pick-row"><input class="digest-check" type="checkbox" data-check-article="${a.id}" ${a.digest?'checked':''}><div><a href="${esc(a.url)}" target="_blank"><b>${esc(a.title)}</b></a><div class="meta">${esc(a.tag)} · score ${Math.round(a.score)} · ${formatDate(a.date)}</div></div></div>`).join(''):'<div class="empty">Нет кандидатов с текущим score.</div>'; const chosen=state.articles.filter(a=>a.digest); $('#digestPreview').innerHTML=chosen.length?chosen.map((a,i)=>`<div class="digest-card"><b>${i+1}. ${esc(a.tag)}</b><div>${esc(a.title)}</div><div class="meta">${esc(a.summary||'')}</div></div>`).join(''):'<div class="empty">Пока ничего не выбрано.</div>'; }
+    function renderSources(){ const q=$('#sourceSearch')?.value?.trim().toLowerCase()||''; const strategy=$('#sourceStrategy')?.value||''; const enabled=$('#sourceEnabled')?.value||''; const items=state.sources.filter(s=>(!q||[s.name,s.url,s.rss_url,s.source_type].join(' ').toLowerCase().includes(q))&&(!strategy||s.parse_strategy===strategy)&&(!enabled||(enabled==='on'?s.enabled:!s.enabled))); $('#sourceCount').textContent=`${items.length} источников`; $('#sourceGrid').innerHTML=items.map(s=>`<div class="source-card"><div><div class="source-name">${esc(s.name)}</div><div class="source-line">${esc(s.source_type||'')} · ${esc(s.update_frequency||'частота не задана')}</div><div class="source-line">${esc(s.rss_url||s.url||'URL не задан')}</div></div><div><span class="pill ${s.enabled?'selected':'status'}">${s.enabled?'вкл':'выкл'}</span><div class="meta" style="text-align:right">${esc(s.parse_strategy||'—')}</div></div></div>`).join('')||'<div class="empty">Источники не найдены.</div>'; }
+    function renderCriteria(){ const total=state.criteria.reduce((s,c)=>s+Number(c.weight||0),0); $('#weightTotal').textContent=`Сумма весов: ${total}%`; $('#criteriaList').innerHTML=state.criteria.map(c=>`<div class="settings-row"><div><label>Параметр</label><b>${esc(c.name)}</b></div><div><label>Вес</label>${Number(c.weight)}%</div><div><label>Описание для AI</label>${esc(c.description||'')}</div><div><label>Ключевые слова RU / любые</label>${esc((c.keywords_json||[]).slice(0,10).join(', '))}</div><div><label>EN-нормализация</label>${esc((c.keywords_en_json||[]).slice(0,10).join(', '))}</div></div>`).join(''); }
+    function renderTags(){ $('#tagSettings').innerHTML=state.tags.map(t=>`<div class="tag-row"><div><span class="pill ${t.enabled?'selected':'status'}">${t.enabled?'on':'off'}</span></div><div><b>${esc(t.parent_name?`${t.parent_name} / ${t.name}`:t.name)}</b></div><div>${esc(t.name_en||'')}</div><div>${esc(t.description||'')}</div><div class="meta">#${t.id}</div></div>`).join(''); }
+    function renderCosts(){ $('#costRows').innerHTML=state.costs.map(c=>`<div><b>${esc(c.stage)} · ${esc(c.language)}</b><div class="meta">runs ${c.runs} · tokens ${c.total_tokens} · cost $${Number(c.cost_usd||0).toFixed(6)}</div></div>`).join('')||'<div class="empty">Метрик пока нет.</div>'; $('#articleCostRows').innerHTML=state.articleCosts.map(c=>`<div><b>#${c.article_id} · $${Number(c.cost_usd||0).toFixed(6)}</b><div class="meta">${esc(c.title)} · tokens ${c.total_tokens||0}</div></div>`).join('')||'<div class="empty">Полных циклов пока нет.</div>'; }
+    function setAdvanced(open){ $('#advancedFilters').hidden=!open; $('#advancedFiltersBtn').setAttribute('aria-expanded',String(open)); $('#advancedFiltersBtn').textContent=open?'Скрыть фильтры':'Расширенные фильтры'; }
+    document.addEventListener('click', async e=>{ const nav=e.target.closest('[data-screen]'); if(nav){ $$('[data-screen]').forEach(b=>b.classList.toggle('active',b===nav)); $$('.screen').forEach(s=>s.classList.toggle('active',s.id===nav.dataset.screen)); } const exp=e.target.closest('[data-expand]'); if(exp){ const id=Number(exp.dataset.expand); state.expanded.has(id)?state.expanded.delete(id):state.expanded.add(id); renderArticles(); } const pick=e.target.closest('[data-source-pick]'); if(pick){ state.selectedSource=pick.dataset.sourcePick; $('#sourceFilterInput').value=state.selectedSource; $('#sourceCombo').classList.remove('open'); renderArticles(); } if(e.target.id==='advancedFiltersBtn') setAdvanced($('#advancedFilters').hidden); if(e.target.id==='resetFilters'){ ['articleSearch','sourceFilterInput','dateFrom','dateTo'].forEach(id=>$('#'+id).value=''); state.selectedSource=''; $('#tagFilter').value=''; $('#statusFilter').value=''; $('#scoreMin').value=0; $('#scoreMax').value=100; $('#languageFilter').value=''; renderArticles(); } if(e.target.id==='reloadData') await loadAll(); if(e.target.id==='processSelected'){ const ids=[...state.selected]; if(!ids.length) return showToast('Выберите статьи для обработки','error'); showToast('AI-обработка запущена'); await api('/api/process',{method:'POST',body:JSON.stringify({article_ids:ids})}); state.selected.clear(); await loadAll(); showToast('AI-обработка завершена'); } if(e.target.id==='resetSourceFilters'){ $('#sourceSearch').value=''; $('#sourceStrategy').value=''; $('#sourceEnabled').value=''; renderSources(); } });
+    document.addEventListener('input', e=>{ if(['articleSearch','scoreMin','scoreMax','dateFrom','dateTo'].includes(e.target.id)) renderArticles(); if(e.target.id==='sourceFilterInput'){ $('#sourceCombo').classList.add('open'); renderSourceOptions(); } if(e.target.id==='sourceSearch') renderSources(); });
+    document.addEventListener('change', async e=>{ if(['tagFilter','statusFilter','sortFilter','languageFilter'].includes(e.target.id)) renderArticles(); if(['sourceStrategy','sourceEnabled'].includes(e.target.id)) renderSources(); if(e.target.dataset.status){ await api(`/api/articles/${e.target.dataset.status}`,{method:'PATCH',body:JSON.stringify({status:e.target.value,selected_for_digest:e.target.value==='digest'})}); await loadAll(); } if(e.target.dataset.checkArticle){ const id=Number(e.target.dataset.checkArticle); const checked=e.target.checked; checked?state.selected.add(id):state.selected.delete(id); await api(`/api/articles/${id}`,{method:'PATCH',body:JSON.stringify(checked?{selected_for_digest:true,status:'digest'}:{selected_for_digest:false})}); await loadAll(); } });
+    $('#sourceFilterInput').addEventListener('focus',()=>{$('#sourceCombo').classList.add('open'); renderSourceOptions();}); document.addEventListener('click',e=>{ if(!e.target.closest('#sourceCombo')) $('#sourceCombo').classList.remove('open'); }); setAdvanced(false); loadAll().catch(err=>showToast(err.message,'error'));
   </script>
 </body>
 </html>
