@@ -477,6 +477,69 @@ def list_enabled_tags() -> list[dict]:
         return cur.fetchall()
 
 
+def save_tags(items: list[dict]) -> dict:
+    """Bulk-сохранение дерева тегов из UI. Родители обрабатываются раньше детей
+    (parent резолвится по имени). Отсутствующие в списке — отключаются (soft delete,
+    чтобы не рвать FK на article_tags)."""
+    name_to_id: dict[str, int] = {}
+    keep: list[int] = []
+    # сначала корневые, затем дочерние — чтобы parent_id уже был известен
+    ordered = [i for i in items if not i.get("parent_name")] + [i for i in items if i.get("parent_name")]
+    with get_connection() as conn:
+        for it in ordered:
+            parent_id = name_to_id.get(it.get("parent_name")) if it.get("parent_name") else None
+            payload = {
+                "parent_id": parent_id,
+                "name": it["name"],
+                "name_en": it.get("name_en"),
+                "description": it.get("description"),
+                "keywords_json": Json(it.get("keywords_json") or []),
+                "keywords_en_json": Json(it.get("keywords_en_json") or []),
+                "enabled": bool(it.get("enabled", True)),
+                "sort_order": it.get("sort_order") or 0,
+            }
+            if it.get("id"):
+                conn.execute(
+                    """
+                    UPDATE tags SET parent_id=%(parent_id)s, name=%(name)s, name_en=%(name_en)s,
+                        description=%(description)s, keywords_json=%(keywords_json)s,
+                        keywords_en_json=%(keywords_en_json)s, enabled=%(enabled)s,
+                        sort_order=%(sort_order)s, updated_at=now()
+                    WHERE id=%(id)s
+                    """,
+                    {**payload, "id": int(it["id"])},
+                )
+                tag_id = int(it["id"])
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO tags (parent_id, name, name_en, description, keywords_json,
+                                      keywords_en_json, enabled, sort_order)
+                    VALUES (%(parent_id)s, %(name)s, %(name_en)s, %(description)s,
+                            %(keywords_json)s, %(keywords_en_json)s, %(enabled)s, %(sort_order)s)
+                    RETURNING id
+                    """,
+                    payload,
+                )
+                tag_id = int(cur.fetchone()[0])
+            name_to_id[it["name"]] = tag_id
+            keep.append(tag_id)
+        if keep:
+            conn.execute("UPDATE tags SET enabled=FALSE WHERE id <> ALL(%s)", (keep,))
+        conn.commit()
+    return {"saved": len(items)}
+
+
+def delete_tag(tag_id: int) -> None:
+    """Мягкое удаление тега и его подтегов (enabled=FALSE) — FK на article_tags не рвём."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE tags SET enabled=FALSE, updated_at=now() WHERE id=%s OR parent_id=%s",
+            (tag_id, tag_id),
+        )
+        conn.commit()
+
+
 def upsert_article_tag(article_id: int, tag_id: int, confidence: float,
                        rationale: str | None, model: str | None = None) -> None:
     with get_connection() as conn:

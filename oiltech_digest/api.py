@@ -64,6 +64,18 @@ class ScoringCriterionIn(BaseModel):
     sort_order: int = 0
 
 
+class TagIn(BaseModel):
+    id: int | None = None
+    parent_name: str | None = None
+    name: str
+    name_en: str | None = None
+    description: str | None = None
+    keywords_json: list[str] = []
+    keywords_en_json: list[str] = []
+    enabled: bool = True
+    sort_order: int = 0
+
+
 class ProcessRequest(BaseModel):
     article_ids: list[int] | None = None
     limit: int = 5
@@ -208,6 +220,18 @@ def update_source(source_id: int, patch: SourcePatch) -> dict[str, Any]:
 @app.get("/api/tags")
 def list_tags() -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.list_enabled_tags()]
+
+
+@app.put("/api/tags")
+def save_tags(items: list[TagIn]) -> dict[str, Any]:
+    result = repository.save_tags([i.model_dump() for i in items])
+    return {"ok": True, **result}
+
+
+@app.delete("/api/tags/{tag_id}")
+def delete_tag(tag_id: int) -> dict[str, Any]:
+    repository.delete_tag(tag_id)
+    return {"ok": True}
 
 
 @app.get("/api/scoring-criteria")
