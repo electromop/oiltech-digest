@@ -21,6 +21,7 @@ DATABASE_URL = os.environ.get(
 SOURCES_XLSX = REPO_ROOT / "1_Список_источников_для_дайджеста.xlsx"
 DIRECTIONS_XLSX = REPO_ROOT / "2_Направления_и_ключевые_слова.xlsx"
 SOURCES_SHEET = "Sources_Expanded"
+EXPORTS_DIR = REPO_ROOT / "exports"
 
 # --- Параметры HTTP / парсинга ---
 REQUEST_TIMEOUT = 20          # сек на один HTTP-запрос
@@ -40,3 +41,7 @@ OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "minimal")
 # was written; override in .env if pricing changes or another model is selected.
 OPENAI_INPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_INPUT_USD_PER_MTOK", "0.05"))
 OPENAI_OUTPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_OUTPUT_USD_PER_MTOK", "0.40"))
+
+# --- Auth ---
+AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")
+AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))

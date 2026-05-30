@@ -14,10 +14,18 @@ CREATE TABLE IF NOT EXISTS sources (
   rss_url        TEXT,                           -- проставляется discover-rss
   enabled        BOOLEAN DEFAULT TRUE,
   parse_strategy TEXT,                           -- rss / request / telegram / none
+  listing_url    TEXT,                           -- страница со списком новостей для request-источников
+  listing_strategy TEXT,                         -- auto / links / cards (пока auto)
+  listing_selector TEXT,                         -- CSS/XPath-подсказка для карточек листинга
+  article_link_selector TEXT,                    -- CSS/XPath-подсказка для ссылок на статью
+  article_date_selector TEXT,                    -- CSS/XPath-подсказка для даты публикации
   category       TEXT,
   update_frequency TEXT,                         -- Excel «Частота мониторинга»
   priority       NUMERIC DEFAULT 1.0,            -- из Excel «Рейтинг источника» (1..3)
   last_parsed_at TIMESTAMPTZ,
+  last_seen_article_url TEXT,
+  last_seen_published_at TIMESTAMPTZ,
+  last_listing_hash TEXT,
   created_at     TIMESTAMPTZ DEFAULT now(),
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
@@ -25,6 +33,16 @@ CREATE TABLE IF NOT EXISTS sources (
 -- именем, но разным типом — это разные источники. Поэтому уникальность по (name, source_type).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_name_type ON sources(name, source_type);
 CREATE INDEX IF NOT EXISTS idx_sources_enabled_strategy ON sources(enabled, parse_strategy);
+
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS listing_url TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS listing_strategy TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS listing_selector TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS article_link_selector TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS article_date_selector TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_seen_article_url TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_seen_published_at TIMESTAMPTZ;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_listing_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_sources_last_seen_published_at ON sources(last_seen_published_at DESC);
 
 -- =========================================================================
 -- Статьи (сырые, до обработки)
@@ -38,6 +56,10 @@ CREATE TABLE IF NOT EXISTS articles (
   collected_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   raw_text       TEXT,
   text_truncated BOOLEAN DEFAULT FALSE,           -- RSS отдал обрезанный/сокращённый текст
+  full_text_fetched_at TIMESTAMPTZ,
+  full_text_status TEXT,                          -- ok / failed / too_short / blocked / paywall
+  full_text_error TEXT,
+  extraction_method TEXT,                         -- rss / lxml / trafilatura / selector
   language       TEXT,
   content_hash   TEXT,
   created_at     TIMESTAMPTZ DEFAULT now(),
@@ -179,6 +201,29 @@ CREATE TABLE IF NOT EXISTS export_jobs (
 );
 
 -- =========================================================================
+-- Пользователи и сессии админки
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS users (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email          TEXT NOT NULL UNIQUE,
+  password_salt  TEXT NOT NULL,
+  password_hash  TEXT NOT NULL,
+  created_at     TIMESTAMPTZ DEFAULT now(),
+  updated_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_token  TEXT NOT NULL UNIQUE,
+  expires_at     TIMESTAMPTZ NOT NULL,
+  created_at     TIMESTAMPTZ DEFAULT now(),
+  last_seen_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+
+-- =========================================================================
 -- Метрики AI-обработки (для Issue #10)
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS ai_processing_runs (
@@ -211,3 +256,7 @@ ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS relevant BOOLEAN;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS relevance_reason TEXT;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS relevance_model TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS text_truncated BOOLEAN DEFAULT FALSE;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_fetched_at TIMESTAMPTZ;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_status TEXT;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_error TEXT;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS extraction_method TEXT;

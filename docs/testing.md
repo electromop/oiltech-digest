@@ -1,21 +1,49 @@
 # Тестирование OilTech Digest
 
-Этот чеклист нужен перед привязкой backend к frontend.
+Этот документ описывает, как проверять проект по слоям: код, БД, ingestion,
+AI и UI/API.
 
-## 1. Локальные unit-тесты
+## 1. Unit-тесты
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest -q
+pytest -q
 ```
 
-Ожидаемо: все тесты зелёные.
+Что покрыто сейчас:
 
-## 2. Smoke test БД без OpenAI
+- full-text fetcher;
+- deterministic relevance prefilter;
+- HTML rendering дайджеста.
 
-Нужен запущенный Docker daemon.
+## 2. Быстрый smoke через Docker
+
+Самый короткий сценарий:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose logs -f scheduler
+```
+
+Ожидаемо:
+
+- `db`, `app`, `scheduler` стартуют;
+- scheduler проходит `init-db`, `seed-sources`, `seed-tags`, `seed-scoring`;
+- дальше начинается цикл `discover-rss -> parse -> fetch-full-text -> process -> stats`.
+
+Проверка:
+
+```bash
+docker compose ps
+curl http://127.0.0.1:8000/api/health
+```
+
+## 3. Локальный smoke без OpenAI
+
+Подходит, если нужно проверить связность системы без расходов на API.
 
 ```bash
 cp .env.example .env
@@ -31,35 +59,51 @@ python -m oiltech_digest.cli stats
 
 Ожидаемо:
 
-- схема создаётся без ошибок;
-- `seed-sources` загружает каталог источников;
-- `seed-tags` создаёт 18 верхнеуровневых тегов D01-D18;
-- `seed-scoring` создаёт 4 критерия, сумма весов 100.
+- схема создается без ошибок;
+- каталог источников загружен;
+- теги и критерии появились;
+- `stats` показывает источники и статьи без падений.
 
-## 3. Smoke test ingestion
+## 4. Проверка ingestion
+
+### RSS discovery
 
 ```bash
 python -m oiltech_digest.cli discover-rss --workers 10 --timeout 4
+```
+
+Проверить:
+
+- у части источников появился `rss_url`;
+- `parse_strategy` распределяется по `rss / request / telegram / none`;
+- команда не падает на SSL fallback и 404.
+
+### Парсинг RSS
+
+```bash
 python -m oiltech_digest.cli parse --workers 10
 python -m oiltech_digest.cli stats
 ```
 
-Если нужно проверить пайплайн быстро, можно идти батчами:
+Проверить:
+
+- статьи появляются в `articles`;
+- повторный запуск в основном дает дубли, а не лавинообразный рост;
+- в выводе `parse` есть поле `отсеяно как шум`.
+
+### Дозагрузка полного текста
 
 ```bash
-python -m oiltech_digest.cli discover-rss --limit 20 --timeout 3
-python -m oiltech_digest.cli parse --workers 10
+python -m oiltech_digest.cli fetch-full-text --limit 50 --min-chars 800
 ```
 
-Ожидаемо:
+Проверить:
 
-- есть RSS-источники с `parse_strategy=rss`;
-- статьи появляются в `articles`;
-- повторный `parse` добавляет 0 или мало новых статей из-за дедупликации URL.
+- часть статей получает `full_text_status=ok`;
+- слишком короткие страницы получают `too_short`;
+- команда не ломает уже хорошие тексты.
 
-## 4. Offline AI smoke test
-
-Проверяет связи таблиц без расходов OpenAI.
+## 5. Offline AI smoke
 
 ```bash
 python -m oiltech_digest.cli process --offline --limit 5
@@ -69,25 +113,19 @@ python -m oiltech_digest.cli ai-article-cost-report
 
 Ожидаемо:
 
-- появляются записи в `article_cards`;
-- появляются `article_tags`;
+- появляются `article_cards`;
+- появляются записи `article_tags`;
 - появляются `article_scores` и `article_score_items`;
-- `ai-cost-report` показывает этапы `summary`, `tagging`, `scoring`.
-- `ai-article-cost-report` показывает стоимость полного цикла на 1 статью.
+- в `ai_processing_runs` есть этапы `summary`, `relevance`, `tagging`, `scoring`;
+- `ai-cost-report` и `ai-article-cost-report` читаются без ошибок.
 
-## 5. OpenAI API pilot
+## 6. OpenAI pilot
 
-Перед запуском вписать в `.env`:
-
-```bash
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5-nano
-```
-
-Пилотный прогон:
+Перед этим в `.env` должен быть задан `OPENAI_API_KEY`.
 
 ```bash
 python -m oiltech_digest.cli summarize --limit 3
+python -m oiltech_digest.cli relevance --limit 3
 python -m oiltech_digest.cli tag --limit 3
 python -m oiltech_digest.cli score --limit 3
 python -m oiltech_digest.cli ai-cost-report
@@ -96,28 +134,96 @@ python -m oiltech_digest.cli ai-article-cost-report
 
 Проверить вручную:
 
-- summary: 2-3 русских предложения, без выдуманных фактов;
-- tag: тег соответствует D01-D18;
-- score: объяснение не противоречит статье;
-- токены и стоимость записались в `ai_processing_runs`.
-- средняя стоимость полного прогона 1 статьи понятна и зафиксирована.
+- summary написан по-русски и не выглядит выдуманным;
+- relevance отсеивает явный офтоп;
+- tag соответствует теме статьи;
+- score и explanation не противоречат содержанию;
+- токены и стоимость записываются в `ai_processing_runs`.
 
-## 6. RU/EN проверка для issues #3 и #10
-
-Сделать две выборки по `articles.language`: `ru` и `en`, прогнать одинаковый лимит
-через `summarize`, `tag`, `score`, затем сравнить `ai-cost-report`.
-Для оценки экономики одной статьи использовать `ai-article-cost-report`.
-
-Минимальный критерий готовности:
-
-- для RU и EN есть успешные записи всех трёх этапов;
-- нет систематического смещения тегов в один и тот же D-код;
-- средние токены/стоимость по RU и EN записаны и понятны.
-
-## 7. Черновик дайджеста
+## 7. Проверка полного пайплайна одной командой
 
 ```bash
-python -m oiltech_digest.cli digest-content 2026-05 --output digest_content.generated.json
+python -m oiltech_digest.cli process --limit 20
 ```
 
-Ожидаемо: JSON содержит `month`, `title`, `items[]` с title/source/url/tag/score/summary.
+Проверить по выводу:
+
+- `summary` обработан;
+- `relevance` показал число отклоненных статей;
+- `tagging` и `scoring` отработали только по релевантным статьям.
+
+## 8. Проверка digest
+
+### CLI
+
+```bash
+python -m oiltech_digest.cli digest-content 2026-05 \
+  --output /tmp/digest.json \
+  --html-output /tmp/digest.html \
+  --limit 5 \
+  --min-score 0
+```
+
+Проверить:
+
+- JSON содержит `issue`, `hero`, `news`, `footer`;
+- HTML открывается как email-ready шаблон;
+- у карточек есть title, source, summary, score и ссылка на источник.
+
+### API
+
+```bash
+curl "http://127.0.0.1:8000/api/digest-content?month=2026-05&limit=5&min_score=0"
+curl "http://127.0.0.1:8000/api/digest-email?month=2026-05&limit=5&min_score=0"
+curl -OJ "http://127.0.0.1:8000/api/digest-export?month=2026-05&limit=5&min_score=0&export_format=html"
+curl -OJ "http://127.0.0.1:8000/api/digest-export?month=2026-05&limit=5&min_score=0&export_format=doc"
+```
+
+## 9. Проверка UI
+
+Запуск:
+
+```bash
+uvicorn oiltech_digest.api:app --reload --host 127.0.0.1 --port 8000
+```
+
+Проверить руками в браузере:
+
+- `Все статьи`: список, фильтры, статусы, AI processing;
+- `Месячный дайджест`: открывается HTML и копируется JSON;
+- `Источники`: список, включение/выключение, изменение RSS, добавление RSS;
+- `Теги`: редактирование и сохранение;
+- `Скоринг`: редактирование весов и сохранение.
+
+## 10. Полезные диагностики
+
+### Compose
+
+```bash
+docker compose config -q
+docker compose build
+```
+
+### Код
+
+```bash
+python -m compileall oiltech_digest
+git diff --check
+```
+
+### API
+
+```bash
+curl http://127.0.0.1:8000/api/health
+```
+
+## 11. Минимальный чек готовности
+
+Считаем систему в рабочем состоянии, если:
+
+- unit-тесты зеленые;
+- Docker Compose собирается;
+- `init-db`, `seed-*`, `discover-rss`, `parse`, `fetch-full-text` работают;
+- `process` дает summary/relevance/tag/score без системных ошибок;
+- UI открывается и читает реальные данные;
+- `digest-content` и `digest-email` успешно генерируются.

@@ -1,10 +1,11 @@
-"""CRUD для sources и articles. На Issue #1 — только эти две таблицы."""
+"""CRUD and query helpers for sources, articles, auth and AI processing."""
 
 from __future__ import annotations
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from oiltech_digest import auth, config
 from oiltech_digest.db.connection import get_connection
 
 # ---------------------------------------------------------------------------
@@ -129,9 +130,9 @@ def list_sources(search: str | None = None, limit: int = 50) -> list[dict]:
     query = "SELECT * FROM sources"
     params: list = []
     if search:
-        query += " WHERE name ILIKE %s OR url ILIKE %s OR rss_url ILIKE %s"
+        query += " WHERE name ILIKE %s OR url ILIKE %s OR rss_url ILIKE %s OR listing_url ILIKE %s"
         like = f"%{search}%"
-        params.extend([like, like, like])
+        params.extend([like, like, like, like])
     query += " ORDER BY enabled DESC, parse_strategy NULLS LAST, id LIMIT %s"
     params.append(limit)
     with get_connection() as conn:
@@ -140,10 +141,166 @@ def list_sources(search: str | None = None, limit: int = 50) -> list[dict]:
         return cur.fetchall()
 
 
+def get_source(source_id: int) -> dict | None:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT * FROM sources WHERE id = %s", (source_id,))
+        return cur.fetchone()
+
+
 def touch_last_parsed(source_id: int) -> None:
     with get_connection() as conn:
         conn.execute(
             "UPDATE sources SET last_parsed_at = now() WHERE id = %s", (source_id,)
+        )
+        conn.commit()
+
+
+def article_exists(url: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM articles WHERE url = %s", (url,)).fetchone()
+        return row is not None
+
+
+def update_source_request_state(
+    source_id: int,
+    *,
+    last_seen_article_url: str | None = None,
+    last_seen_published_at=None,
+    last_listing_hash: str | None = None,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE sources
+            SET last_seen_article_url = COALESCE(%s, last_seen_article_url),
+                last_seen_published_at = COALESCE(%s, last_seen_published_at),
+                last_listing_hash = COALESCE(%s, last_listing_hash),
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (last_seen_article_url, last_seen_published_at, last_listing_hash, source_id),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+#  auth
+# ---------------------------------------------------------------------------
+
+def create_user(email: str, password: str) -> dict:
+    email = auth.normalize_email(email)
+    salt_hex, password_hash = auth.hash_password(password)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        if cur.fetchone() is not None:
+            raise ValueError("Пользователь с таким email уже существует")
+        cur.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash)
+            VALUES (%s, %s, %s)
+            RETURNING id, email, created_at
+            """,
+            (email, salt_hex, password_hash),
+        )
+        user = cur.fetchone()
+        conn.commit()
+        return user
+
+
+def authenticate_user(email: str, password: str) -> dict | None:
+    email = auth.normalize_email(email)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT id, email, password_salt, password_hash, created_at FROM users WHERE email = %s",
+            (email,),
+        )
+        user = cur.fetchone()
+        if user is None:
+            return None
+        if not auth.verify_password(password, user["password_salt"], user["password_hash"]):
+            return None
+        return user
+
+
+def create_user_session(user_id: int) -> str:
+    token = auth.create_session_token()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_sessions (user_id, session_token, expires_at)
+            VALUES (%s, %s, now() + %s::interval)
+            """,
+            (user_id, token, f"{config.AUTH_SESSION_DAYS} days"),
+        )
+        conn.commit()
+    return token
+
+
+def get_user_by_session(session_token: str) -> dict | None:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT u.id, u.email, u.created_at
+            FROM user_sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.session_token = %s
+              AND s.expires_at > now()
+            """,
+            (session_token,),
+        )
+        user = cur.fetchone()
+        if user is not None:
+            conn.execute(
+                "UPDATE user_sessions SET last_seen_at = now() WHERE session_token = %s",
+                (session_token,),
+            )
+            conn.commit()
+        return user
+
+
+def delete_user_session(session_token: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM user_sessions WHERE session_token = %s", (session_token,))
+        conn.commit()
+
+
+def count_users() -> int:
+    with get_connection() as conn:
+        return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+
+def create_export_job(export_type: str, export_format: str) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO export_jobs (export_type, format, status, started_at)
+            VALUES (%s, %s, 'running', now())
+            RETURNING id
+            """,
+            (export_type, export_format),
+        )
+        job_id = cur.fetchone()[0]
+        conn.commit()
+        return job_id
+
+
+def finish_export_job(job_id: int, status: str, file_path: str | None = None,
+                      error_message: str | None = None) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE export_jobs
+            SET status = %s,
+                file_path = COALESCE(%s, file_path),
+                error_message = %s,
+                finished_at = now()
+            WHERE id = %s
+            """,
+            (status, file_path, error_message, job_id),
         )
         conn.commit()
 
@@ -170,6 +327,66 @@ def insert_article(rec: dict) -> bool:
         row = cur.fetchone()
         conn.commit()
     return row is not None
+
+
+def get_articles_needing_full_text(limit: int = 50) -> list[dict]:
+    """Articles whose RSS body is likely only a teaser and needs URL extraction."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.*, s.name AS source_name, s.priority AS source_priority,
+                   s.category AS source_category
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            WHERE a.url IS NOT NULL
+              AND a.full_text_status IS NULL
+              AND (
+                COALESCE(a.text_truncated, FALSE) = TRUE
+                OR length(COALESCE(a.raw_text, '')) < 800
+              )
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def update_article_full_text(article_id: int, raw_text: str | None, text_truncated: bool,
+                             status: str, method: str, error: str | None = None) -> None:
+    """Store full-text extraction result without losing the RSS teaser on failure."""
+    with get_connection() as conn:
+        if raw_text is not None:
+            conn.execute(
+                """
+                UPDATE articles
+                SET raw_text = %s,
+                    text_truncated = %s,
+                    full_text_fetched_at = now(),
+                    full_text_status = %s,
+                    full_text_error = %s,
+                    extraction_method = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (raw_text, text_truncated, status, error, method, article_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE articles
+                SET text_truncated = %s,
+                    full_text_fetched_at = now(),
+                    full_text_status = %s,
+                    full_text_error = %s,
+                    extraction_method = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (text_truncated, status, error, method, article_id),
+            )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -796,13 +1013,12 @@ def digest_candidates(month: str, limit: int = 20, min_score: float = 60) -> lis
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             WHERE to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %s
-              AND COALESCE(c.status, 'new') <> 'rejected'
+              AND COALESCE(c.status, 'new') = 'digest'
               AND c.relevant IS NOT FALSE
-              AND (c.selected_for_digest = TRUE OR COALESCE(sc.total_score, 0) >= %s)
-            ORDER BY c.selected_for_digest DESC, sc.total_score DESC NULLS LAST,
+            ORDER BY sc.total_score DESC NULLS LAST,
                      a.published_at DESC NULLS LAST
             LIMIT %s
             """,
-            (month, min_score, limit),
+            (month, limit),
         )
         return cur.fetchall()

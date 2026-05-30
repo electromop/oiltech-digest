@@ -7,13 +7,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from oiltech_digest import auth, config
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import repository
@@ -24,6 +25,8 @@ from oiltech_digest.processing.pipeline import (
     process_summary_articles,
     process_tag_articles,
 )
+from oiltech_digest.ingestion import request_parser
+from oiltech_digest.processing.digest import build_digest_content, render_digest_email, write_digest_export
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -43,6 +46,11 @@ class SourcePatch(BaseModel):
     rss_url: str | None = None
     parse_strategy: str | None = None
     update_frequency: str | None = None
+    listing_url: str | None = None
+    listing_strategy: str | None = None
+    listing_selector: str | None = None
+    article_link_selector: str | None = None
+    article_date_selector: str | None = None
 
 
 class SourceCreate(BaseModel):
@@ -82,9 +90,81 @@ class ProcessRequest(BaseModel):
     offline: bool = False
 
 
+class DigestRequest(BaseModel):
+    month: str
+    limit: int = 20
+    min_score: float = 60
+
+
+class AuthPayload(BaseModel):
+    email: str
+    password: str
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(WEB_DIR / "app.html")
+
+
+def require_user(session_token: str | None = Cookie(default=None, alias=config.AUTH_COOKIE_NAME)) -> dict[str, Any]:
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user = repository.get_user_by_session(session_token)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def _set_session_cookie(response: Response, session_token: str) -> None:
+    response.set_cookie(
+        key=config.AUTH_COOKIE_NAME,
+        value=session_token,
+        httponly=True,
+        samesite="lax",
+        max_age=config.AUTH_SESSION_DAYS * 24 * 60 * 60,
+    )
+
+
+@app.get("/api/auth/me")
+def auth_me(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    return {"ok": True, "user": _clean(user)}
+
+
+@app.post("/api/auth/register")
+def auth_register(payload: AuthPayload, response: Response) -> dict[str, Any]:
+    email = auth.normalize_email(payload.email)
+    if not auth.validate_email(email):
+        raise HTTPException(status_code=400, detail="Некорректный email")
+    if not auth.validate_password(payload.password):
+        raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
+    try:
+        user = repository.create_user(email, payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    session_token = repository.create_user_session(int(user["id"]))
+    _set_session_cookie(response, session_token)
+    return {"ok": True, "user": _clean(user)}
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: AuthPayload, response: Response) -> dict[str, Any]:
+    user = repository.authenticate_user(payload.email, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    session_token = repository.create_user_session(int(user["id"]))
+    _set_session_cookie(response, session_token)
+    return {"ok": True, "user": _clean(user)}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(
+    response: Response,
+    session_token: str | None = Cookie(default=None, alias=config.AUTH_COOKIE_NAME),
+) -> dict[str, Any]:
+    if session_token:
+        repository.delete_user_session(session_token)
+    response.delete_cookie(config.AUTH_COOKIE_NAME)
+    return {"ok": True}
 
 
 @app.get("/api/health")
@@ -102,6 +182,7 @@ def list_articles(
     status: str | None = None,
     min_score: float | None = None,
     limit: int = Query(200, ge=1, le=1000),
+    user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
     clauses = []
     params: list[Any] = []
@@ -156,7 +237,10 @@ def list_articles(
 
 
 @app.patch("/api/articles/{article_id}")
-def update_article(article_id: int, patch: ArticlePatch) -> dict[str, Any]:
+def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    selected_for_digest = patch.selected_for_digest
+    if patch.status is not None:
+        selected_for_digest = patch.status == "digest"
     with get_connection() as conn:
         exists = conn.execute("SELECT 1 FROM articles WHERE id = %s", (article_id,)).fetchone()
         if not exists:
@@ -171,19 +255,23 @@ def update_article(article_id: int, patch: ArticlePatch) -> dict[str, Any]:
               analyst_comment = COALESCE(EXCLUDED.analyst_comment, article_cards.analyst_comment),
               updated_at = now()
             """,
-            (article_id, patch.status, patch.selected_for_digest, patch.analyst_comment),
+            (article_id, patch.status, selected_for_digest, patch.analyst_comment),
         )
         conn.commit()
     return {"ok": True}
 
 
 @app.get("/api/sources")
-def list_sources(search: str | None = None, limit: int = Query(300, ge=1, le=1000)) -> list[dict[str, Any]]:
+def list_sources(
+    search: str | None = None,
+    limit: int = Query(300, ge=1, le=1000),
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.list_sources(search=search, limit=limit)]
 
 
 @app.post("/api/sources")
-def create_source(payload: SourceCreate) -> dict[str, Any]:
+def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     source_id = repository.add_rss_source(
         name=payload.name,
         rss_url=payload.rss_url,
@@ -196,11 +284,22 @@ def create_source(payload: SourceCreate) -> dict[str, Any]:
 
 
 @app.patch("/api/sources/{source_id}")
-def update_source(source_id: int, patch: SourcePatch) -> dict[str, Any]:
+def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     updates = patch.model_dump(exclude_unset=True)
     if not updates:
         return {"ok": True}
-    allowed = {"enabled", "url", "rss_url", "parse_strategy", "update_frequency"}
+    allowed = {
+        "enabled",
+        "url",
+        "rss_url",
+        "parse_strategy",
+        "update_frequency",
+        "listing_url",
+        "listing_strategy",
+        "listing_selector",
+        "article_link_selector",
+        "article_date_selector",
+    }
     fields = [key for key in updates if key in allowed]
     if not fields:
         return {"ok": True}
@@ -217,30 +316,41 @@ def update_source(source_id: int, patch: SourcePatch) -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.post("/api/sources/{source_id}/scrape")
+def scrape_source(source_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    source = repository.get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if source.get("parse_strategy") != "request":
+        raise HTTPException(status_code=400, detail="Скраппер доступен только для request-источников")
+    stats = request_parser.parse_source(source)
+    return {"ok": True, "stats": _clean(stats)}
+
+
 @app.get("/api/tags")
-def list_tags() -> list[dict[str, Any]]:
+def list_tags(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.list_enabled_tags()]
 
 
 @app.put("/api/tags")
-def save_tags(items: list[TagIn]) -> dict[str, Any]:
+def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     result = repository.save_tags([i.model_dump() for i in items])
     return {"ok": True, **result}
 
 
 @app.delete("/api/tags/{tag_id}")
-def delete_tag(tag_id: int) -> dict[str, Any]:
+def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     repository.delete_tag(tag_id)
     return {"ok": True}
 
 
 @app.get("/api/scoring-criteria")
-def list_scoring_criteria() -> list[dict[str, Any]]:
+def list_scoring_criteria(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.list_enabled_scoring_criteria()]
 
 
 @app.put("/api/scoring-criteria")
-def save_scoring_criteria(items: list[ScoringCriterionIn]) -> dict[str, Any]:
+def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     try:
         result = repository.save_scoring_criteria([i.model_dump() for i in items])
     except ValueError as exc:
@@ -249,23 +359,69 @@ def save_scoring_criteria(items: list[ScoringCriterionIn]) -> dict[str, Any]:
 
 
 @app.delete("/api/scoring-criteria/{criterion_id}")
-def delete_scoring_criterion(criterion_id: int) -> dict[str, Any]:
+def delete_scoring_criterion(criterion_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     repository.delete_scoring_criterion(criterion_id)
     return {"ok": True}
 
 
 @app.get("/api/reports/ai-cost")
-def ai_cost() -> list[dict[str, Any]]:
+def ai_cost(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.ai_cost_report()]
 
 
 @app.get("/api/reports/ai-article-cost")
-def ai_article_cost(limit: int = Query(20, ge=1, le=200), include_partial: bool = False) -> list[dict[str, Any]]:
+def ai_article_cost(
+    limit: int = Query(20, ge=1, le=200),
+    include_partial: bool = False,
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.ai_article_cost_report(limit=limit, complete_only=not include_partial)]
 
 
+@app.get("/api/digest-content")
+def digest_content(month: str, limit: int = Query(20, ge=1, le=100),
+                   min_score: float = 60,
+                   user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    return _clean(build_digest_content(month=month, limit=limit, min_score=min_score))
+
+
+@app.get("/api/digest-email", response_class=HTMLResponse)
+def digest_email(month: str, limit: int = Query(20, ge=1, le=100),
+                 min_score: float = 60,
+                 user: dict[str, Any] = Depends(require_user)) -> HTMLResponse:
+    content = build_digest_content(month=month, limit=limit, min_score=min_score)
+    return HTMLResponse(render_digest_email(content))
+
+
+@app.get("/api/digest-export")
+def digest_export(
+    month: str,
+    export_format: str = Query("html", pattern="^(html|doc|json)$"),
+    limit: int = Query(20, ge=1, le=100),
+    min_score: float = 60,
+    user: dict[str, Any] = Depends(require_user),
+) -> FileResponse:
+    job_id = repository.create_export_job("monthly_digest", export_format)
+    try:
+        result = write_digest_export(
+            month=month,
+            export_format=export_format,
+            limit=limit,
+            min_score=min_score,
+        )
+        repository.finish_export_job(job_id, "ok", result["path"])
+    except Exception as exc:  # noqa: BLE001
+        repository.finish_export_job(job_id, "failed", error_message=str(exc))
+        raise
+    return FileResponse(
+        result["path"],
+        media_type=result["media_type"],
+        filename=result["filename"],
+    )
+
+
 @app.post("/api/process")
-def process_articles(payload: ProcessRequest) -> dict[str, Any]:
+def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     client = make_client(payload.offline)
     if payload.article_ids:
         articles = repository.get_articles_by_ids(payload.article_ids, include_summary=False)
@@ -312,7 +468,7 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         "score": float(row["total_score"]) if row.get("total_score") is not None else 0,
         "rating": row.get("score_label") or "Без оценки",
         "status": row.get("status") or "new",
-        "digest": bool(row.get("selected_for_digest")),
+        "digest": (row.get("status") or "new") == "digest",
         "tag_confidence": float(row["tag_confidence"]) if row.get("tag_confidence") is not None else None,
         "tag_rationale": row.get("tag_rationale"),
         "score_explanation": row.get("score_explanation"),
@@ -345,4 +501,3 @@ def _date(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
-

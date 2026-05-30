@@ -9,6 +9,5 @@ data/
 *.db-*
 tests/
 docs/
-*.xlsx
 *.zip
 .DS_Store

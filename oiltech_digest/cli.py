@@ -68,7 +68,18 @@ def cmd_parse(args: argparse.Namespace) -> None:
     print(
         f"parse: добавлено={stats['added']}, дублей={stats['duplicates']}, "
         f"пропущено по возрасту={stats['skipped_old']}, "
+        f"отсеяно как шум={stats['skipped_irrelevant']}, "
         f"источников ок={stats['sources_ok']}, ошибок={stats['errors']}"
+    )
+
+
+def cmd_fetch_full_text(args: argparse.Namespace) -> None:
+    from oiltech_digest.ingestion.article_fetcher import fetch_full_text
+
+    stats = fetch_full_text(limit=args.limit, min_chars=args.min_chars)
+    print(
+        f"fetch-full-text: проверено={stats['processed']}, обновлено={stats['updated']}, "
+        f"слишком коротких={stats['too_short']}, ошибок={stats['failed']}"
     )
 
 
@@ -281,8 +292,10 @@ def cmd_digest_content(args: argparse.Namespace) -> None:
         month=args.month,
         limit=args.limit,
         min_score=args.min_score,
+        html_path=args.html_output,
     )
-    print(f"digest-content: файл={stats['path']}, статей={stats['items']}")
+    suffix = f", html={stats['html_path']}" if stats.get("html_path") else ""
+    print(f"digest-content: файл={stats['path']}, статей={stats['items']}{suffix}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -307,6 +320,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_parse.add_argument("--source-id", type=int, default=None)
     p_parse.add_argument("--workers", type=int, default=10)
     p_parse.set_defaults(func=cmd_parse)
+
+    p_full = sub.add_parser("fetch-full-text", help="дозагрузить полный текст статей по URL")
+    p_full.add_argument("--limit", type=int, default=50)
+    p_full.add_argument("--min-chars", type=int, default=800)
+    p_full.set_defaults(func=cmd_fetch_full_text)
 
     sub.add_parser("stats", help="диагностика БД").set_defaults(func=cmd_stats)
 
@@ -376,6 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_digest = sub.add_parser("digest-content", help="собрать digest_content.json из обработанных статей")
     p_digest.add_argument("month", help="YYYY-MM")
     p_digest.add_argument("--output", default="digest_content.generated.json")
+    p_digest.add_argument("--html-output", default=None, help="дополнительно собрать email-ready HTML")
     p_digest.add_argument("--limit", type=int, default=20)
     p_digest.add_argument("--min-score", type=float, default=60)
     p_digest.set_defaults(func=cmd_digest_content)
