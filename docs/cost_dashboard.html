@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OilTech Digest — дашборд стоимости AI</title>
+<style>
+  :root{--bg:#f0f3f8;--panel:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--accent:#0369a1;--green:#0d9488;--amber:#b45309;--red:#dc2626;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--font);padding:28px;}
+  h1{font-size:24px;margin:0 0 4px;}
+  .sub{color:var(--muted);margin:0 0 22px;}
+  .grid{display:grid;gap:16px;}
+  .kpis{grid-template-columns:repeat(4,1fr);}
+  .two{grid-template-columns:1fr 1fr;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;box-shadow:0 1px 2px rgba(15,23,42,.05);}
+  .kpi .v{font-size:25px;font-weight:900;letter-spacing:-.02em;}
+  .kpi .l{color:var(--muted);font-size:12px;font-weight:700;margin-top:4px;}
+  .card h3{margin:0 0 14px;font-size:15px;}
+  .bar-row{display:grid;grid-template-columns:150px 1fr 96px;align-items:center;gap:10px;margin:9px 0;}
+  .bar-row .name{font-weight:700;font-size:13px;}
+  .track{background:#eef2f7;border-radius:999px;height:22px;overflow:hidden;}
+  .fill{height:100%;border-radius:999px;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;color:#fff;font-size:11px;font-weight:800;}
+  .val{text-align:right;font-weight:800;font-variant-numeric:tabular-nums;font-size:13px;}
+  .c-sum{background:linear-gradient(90deg,#38bdf8,#0369a1);}
+  .c-rel{background:linear-gradient(90deg,#2dd4bf,#0d9488);}
+  .c-tag{background:linear-gradient(90deg,#fbbf24,#b45309);}
+  .c-sco{background:linear-gradient(90deg,#fb7185,#dc2626);}
+  .grp{display:grid;grid-template-columns:130px 1fr;gap:10px;align-items:center;margin:10px 0;}
+  .mini{display:grid;grid-template-columns:34px 1fr 60px;align-items:center;gap:8px;font-size:12px;}
+  .mini .tag{font-weight:800;color:var(--muted);}
+  .en{background:linear-gradient(90deg,#93c5fd,#2563eb);height:16px;border-radius:999px;}
+  .ru{background:linear-gradient(90deg,#fca5a5,#dc2626);height:16px;border-radius:999px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);}
+  th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}
+  .funnel{display:flex;gap:10px;}
+  .stage{flex:1;border-radius:10px;padding:14px;color:#fff;text-align:center;}
+  .stage .n{font-size:26px;font-weight:900;}
+  .stage .t{font-size:12px;font-weight:700;opacity:.95;}
+  .note{color:var(--muted);font-size:12px;margin-top:10px;}
+  .foot{color:var(--muted);font-size:12px;margin-top:24px;border-top:1px solid var(--line);padding-top:12px;}
+  .pill{display:inline-block;background:#e0f2fe;color:#0369a1;border-radius:999px;padding:2px 10px;font-weight:800;font-size:12px;}
+  .banner{background:#fef3c7;border:1px solid #fcd34d;color:#92400e;border-radius:10px;padding:10px 14px;margin-bottom:18px;font-size:13px;font-weight:600;}
+</style>
+</head>
+<body>
+  <h1>OilTech Digest — дашборд стоимости AI-обработки</h1>
+  <p class="sub">Модель <span class="pill">gpt-5-nano</span> · реальный прогон по базе из 807 статей · цены: вход $0.05 / выход $0.40 за 1M токенов · снято 2026-05-22 13:43 МСК</p>
+
+  <div class="banner">Прогон остановлен по дедлайну на ~половине базы: суммаризация — 806/807, релевантность — 364 (45%), теги — 165, скоринг — 84. Цифры стоимости репрезентативны (сотни операций каждой функции).</div>
+
+  <div class="grid kpis" style="margin-bottom:16px">
+    <div class="card kpi"><div class="v">≈ $0.12</div><div class="l">Стоимость всей выполненной AI-обработки</div></div>
+    <div class="card kpi"><div class="v">≈ $0.00045</div><div class="l">Полный цикл 1 статьи (4 этапа)</div></div>
+    <div class="card kpi"><div class="v">27%</div><div class="l">Отсеяно фильтром релевантности (98 из 364)</div></div>
+    <div class="card kpi"><div class="v">≈ $0.39</div><div class="l">Проекция на 1000 статей (с отсевом)</div></div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <h3>Стоимость по функциям ($ за 1000 операций)</h3>
+      <div class="bar-row"><span class="name">Суть</span><div class="track"><div class="fill c-sum" style="width:39%">$0.074</div></div><span class="val">$0.074</span></div>
+      <div class="bar-row"><span class="name">Релевантность</span><div class="track"><div class="fill c-rel" style="width:34%">$0.064</div></div><span class="val">$0.064</span></div>
+      <div class="bar-row"><span class="name">Тегирование</span><div class="track"><div class="fill c-tag" style="width:67%">$0.126</div></div><span class="val">$0.126</span></div>
+      <div class="bar-row"><span class="name">Скоринг</span><div class="track"><div class="fill c-sco" style="width:100%">$0.188</div></div><span class="val">$0.188</span></div>
+      <p class="note">Скоринг — самый дорогой (объяснения по критериям). Релевантность — самая дешёвая, но экономит на следующих этапах.</p>
+    </div>
+
+    <div class="card">
+      <h3>Средний размер запроса (токенов на операцию)</h3>
+      <div class="bar-row"><span class="name">Суть</span><div class="track"><div class="fill c-sum" style="width:25%">~480</div></div><span class="val">~480</span></div>
+      <div class="bar-row"><span class="name">Релевантность</span><div class="track"><div class="fill c-rel" style="width:38%">~720</div></div><span class="val">~720</span></div>
+      <div class="bar-row"><span class="name">Тегирование</span><div class="track"><div class="fill c-tag" style="width:100%">~1880</div></div><span class="val">~1880</span></div>
+      <div class="bar-row"><span class="name">Скоринг</span><div class="track"><div class="fill c-sco" style="width:67%">~1260</div></div><span class="val">~1260</span></div>
+      <p class="note">Тегирование — больше всего входных токенов: в промпт уходит весь список 18 тегов с ключевыми словами.</p>
+    </div>
+  </div>
+
+  <div class="grid two" style="margin-top:16px">
+    <div class="card">
+      <h3>RU vs EN — средние токены на операцию</h3>
+      <div class="grp"><span class="name">Суть</span><div>
+        <div class="mini"><span class="tag">EN</span><div class="en" style="width:23%"></div><span class="val">439</span></div>
+        <div class="mini"><span class="tag">RU</span><div class="ru" style="width:26%"></div><span class="val">509</span></div></div></div>
+      <div class="grp"><span class="name">Релевантность</span><div>
+        <div class="mini"><span class="tag">EN</span><div class="en" style="width:33%"></div><span class="val">636</span></div>
+        <div class="mini"><span class="tag">RU</span><div class="ru" style="width:43%"></div><span class="val">836</span></div></div></div>
+      <div class="grp"><span class="name">Тегирование</span><div>
+        <div class="mini"><span class="tag">EN</span><div class="en" style="width:94%"></div><span class="val">1824</span></div>
+        <div class="mini"><span class="tag">RU</span><div class="ru" style="width:100%"></div><span class="val">1936</span></div></div></div>
+      <div class="grp"><span class="name">Скоринг</span><div>
+        <div class="mini"><span class="tag">EN</span><div class="en" style="width:69%"></div><span class="val">1335</span></div>
+        <div class="mini"><span class="tag">RU</span><div class="ru" style="width:62%"></div><span class="val">1209</span></div></div></div>
+      <p class="note">На большой выборке разница RU/EN невелика. По «Сути» RU даже чуть дороже по токенам (509 vs 439) — кириллица токенизируется дороже на символ. Это уточняет ранний вывод на малой выборке.</p>
+    </div>
+
+    <div class="card">
+      <h3>Воронка релевантности (364 проверено)</h3>
+      <div class="funnel">
+        <div class="stage" style="background:linear-gradient(135deg,#38bdf8,#0369a1)"><div class="n">364</div><div class="t">Проверено</div></div>
+        <div class="stage" style="background:linear-gradient(135deg,#fb7185,#dc2626)"><div class="n">98</div><div class="t">Отсеяно (27%)</div></div>
+        <div class="stage" style="background:linear-gradient(135deg,#2dd4bf,#0d9488)"><div class="n">266</div><div class="t">Релевантны → теги/скоринг</div></div>
+      </div>
+      <p class="note">Отсеяны: культура, мясная индустрия (Черкизово), геополитика, страхование, спорт-подобный офтоп. В дайджест попадают только релевантные нефтесервису.</p>
+      <h3 style="margin-top:18px">Стоимость статьи: релевантная vs отклонённая</h3>
+      <div class="bar-row"><span class="name">Релевантная</span><div class="track"><div class="fill c-sco" style="width:100%">$0.00045</div></div><span class="val">$0.00045</span></div>
+      <div class="bar-row"><span class="name">Отклонённая</span><div class="track"><div class="fill c-rel" style="width:31%">$0.00014</div></div><span class="val">$0.00014</span></div>
+      <p class="note">Отклонённая статья втрое дешевле: не доходит до тегирования и скоринга.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>Сводная таблица по функциям (фактический прогон)</h3>
+    <table>
+      <tr><th>Функция</th><th class="num">Операций</th><th class="num">Всего токенов</th><th class="num">Ср. токенов</th><th class="num">$ / операцию</th><th class="num">Стоимость</th></tr>
+      <tr><td>Суть (summary)</td><td class="num">808</td><td class="num">394 710</td><td class="num">~480</td><td class="num">$0.0000740</td><td class="num">$0.0598</td></tr>
+      <tr><td>Релевантность</td><td class="num">364</td><td class="num">265 436</td><td class="num">~720</td><td class="num">$0.0000640</td><td class="num">$0.0233</td></tr>
+      <tr><td>Тегирование</td><td class="num">165</td><td class="num">310 039</td><td class="num">~1 880</td><td class="num">$0.0001262</td><td class="num">$0.0208</td></tr>
+      <tr><td>Скоринг</td><td class="num">84</td><td class="num">105 090</td><td class="num">~1 260</td><td class="num">$0.0001880</td><td class="num">$0.0158</td></tr>
+      <tr style="font-weight:800;background:#f8fafc"><td>ИТОГО</td><td class="num">1 421</td><td class="num">~1.08 млн</td><td class="num">—</td><td class="num">—</td><td class="num">≈ $0.120</td></tr>
+    </table>
+    <p class="note">«Перевод» тегов на английский не тратит токены на статью — EN-названия/ключи берутся из Excel один раз при seed-tags.</p>
+  </div>
+
+  <div class="foot">OilTech Digest · реальный прогон OpenAI Responses API, остановлен по дедлайну · подробности — в <code>docs/work_report.md</code></div>
+</body>
+</html>

@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.git/
+.env
+data/
+*.db
+*.db-*
+tests/
+docs/
+*.zip
+.DS_Store

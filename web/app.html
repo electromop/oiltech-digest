@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OilTech Digest — интерфейс администратора</title>
+  <style>
+    :root {
+      --bg:#f0f3f8; --panel:#fff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0;
+      --accent:#0369a1; --accent-hover:#075985; --accent-soft:#e0f2fe; --ring:rgba(3,105,161,.25);
+      --green:#0d9488; --green-soft:#ccfbf1; --amber:#b45309; --amber-soft:#fef3c7; --red:#dc2626; --red-soft:#fee2e2;
+      --sidebar:#0c1929; --shadow:0 12px 40px rgba(15,23,42,.08); --radius:8px; --radius-sm:7px;
+      --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 var(--font); }
+    button,input,select,textarea { font:inherit; }
+    button { min-height:36px; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff; color:var(--ink); padding:8px 14px; font-weight:700; cursor:pointer; }
+    button:hover:not(:disabled) { background:#f8fafc; border-color:#cbd5e1; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .primary:hover:not(:disabled) { background:var(--accent-hover); border-color:var(--accent-hover); }
+    .btn-ghost { background:transparent; border-color:transparent; }
+    input,select,textarea { width:100%; border:1px solid var(--line); border-radius:var(--radius-sm); background:#fff; color:var(--ink); padding:0 12px; }
+    input:focus,select:focus,textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--ring); }
+    input,select { height:38px; }
+    textarea { min-height:72px; padding-top:9px; resize:vertical; }
+    input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); padding:0; }
+    [hidden] { display:none!important; }
+    label { display:block; margin-bottom:6px; color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .app { min-height:100vh; display:grid; grid-template-columns:220px minmax(0,1fr); }
+    .auth-shell { min-height:100vh; display:grid; place-items:center; padding:24px; background:radial-gradient(circle at top, #dbeafe 0%, #f0f3f8 38%, #eef2f7 100%); }
+    .auth-card { width:min(460px,100%); background:#fff; border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow); overflow:hidden; }
+    .auth-top { padding:28px 28px 18px; background:linear-gradient(145deg,#0c1929,#123b63); color:#f8fafc; }
+    .auth-top h1 { font-size:28px; margin:0 0 8px; }
+    .auth-top p { margin:0; color:rgba(248,250,252,.78); }
+    .auth-body { padding:24px 28px 28px; }
+    .auth-actions { display:flex; gap:8px; margin-top:16px; }
+    .auth-note { margin-top:12px; color:var(--muted); font-size:12px; }
+    .side-foot { margin-top:auto; padding:14px 8px 0; border-top:1px solid rgba(255,255,255,.08); }
+    .side-user { color:rgba(241,245,249,.74); font-size:12px; margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; }
+    .side { background:var(--sidebar); color:#f1f5f9; padding:16px 10px 20px; position:sticky; top:0; height:100vh; }
+    .brand { display:flex; gap:12px; align-items:center; padding:4px 8px 18px; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,.08); }
+    .brand-mark { width:40px; height:40px; border-radius:12px; background:linear-gradient(145deg,#38bdf8,#0369a1); display:grid; place-items:center; color:#fff; font-weight:900; }
+    .brand-name { font-weight:800; }
+    .brand-tag { color:rgba(241,245,249,.55); font-size:12px; }
+    .nav-section { padding:16px 10px 8px; color:rgba(241,245,249,.45); font-size:11px; font-weight:900; text-transform:uppercase; }
+    .icon { display:flex; align-items:center; gap:12px; width:100%; min-height:42px; border:0; background:transparent; color:rgba(241,245,249,.82); text-align:left; }
+    .icon:hover,.icon.active { background:rgba(255,255,255,.08); color:#fff; }
+    .icon.active { box-shadow:inset 0 0 0 1px rgba(56,189,248,.25); background:rgba(56,189,248,.18); }
+    .content { padding:28px 32px 40px; max-width:1680px; }
+    .screen { display:none; }
+    .screen.active { display:block; }
+    .page-head { margin-bottom:20px; }
+    .page-head-row { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+    h1 { margin:0; font-size:22px; line-height:1.2; }
+    .sub { color:var(--muted); margin-top:6px; max-width:70ch; }
+    .stats-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+    .stat-card,.panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow:0 1px 2px rgba(15,23,42,.05); }
+    .stat-card { padding:13px 15px; }
+    .stat-value { font-size:22px; line-height:1.15; font-weight:900; }
+    .stat-label { margin-top:4px; color:var(--muted); font-size:12px; font-weight:800; }
+    .panel + .panel { margin-top:16px; }
+    .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,#fafbfc 0%,#fff 100%); }
+    .panel-title { font-size:17px; font-weight:900; }
+    .panel-body { padding:20px; }
+    .tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .filters { display:grid; grid-template-columns:minmax(210px,1.2fr) minmax(160px,.82fr) minmax(200px,.92fr) minmax(140px,.68fr) minmax(140px,.7fr); gap:8px; margin-bottom:12px; align-items:end; }
+    .filter-row-secondary { display:grid; grid-template-columns:260px 260px minmax(0,1fr) 120px; gap:8px; margin-bottom:12px; align-items:end; }
+    .advanced-toggle { display:flex; justify-content:flex-end; margin:10px 0 12px; }
+    .range-pair { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .range-field { position:relative; }
+    .range-field span { position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:12px; font-weight:900; pointer-events:none; }
+    .range-field input { padding-left:32px; }
+    .source-combo { position:relative; }
+    .source-popover { display:none; position:absolute; z-index:8; left:0; right:0; top:calc(100% + 6px); max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:9px; background:#fff; box-shadow:var(--shadow); padding:8px; }
+    .source-combo.open .source-popover { display:block; }
+    .source-option { display:flex; justify-content:space-between; gap:10px; padding:8px 9px; border-radius:7px; font-weight:800; cursor:pointer; }
+    .source-option:hover { background:var(--accent-soft); }
+    .table { border:1px solid var(--line); border-radius:9px; overflow:auto; background:#fff; }
+    .tag-group { min-width:1020px; border-top:1px solid var(--line); }
+    .tag-group:first-child { border-top:0; }
+    .group-head { display:flex; align-items:center; gap:10px; min-height:40px; padding:8px 12px; background:#f8fafc; font-weight:900; }
+    .row { display:grid; grid-template-columns:34px 44px minmax(430px,2fr) 112px 92px 136px 128px; align-items:center; min-height:52px; border-top:1px solid var(--line); }
+    .row.header { min-height:34px; background:#fff; color:var(--muted); font-weight:900; font-size:12px; }
+    .row > div { padding:8px 11px; min-width:0; }
+    .article-row { cursor:pointer; }
+    .article-row:hover { background:#fbfdff; }
+    .expand { width:30px; height:30px; min-height:30px; padding:0; display:grid; place-items:center; color:var(--muted); }
+    .article-row.open .expand svg { transform:rotate(180deg); }
+    .title { display:block; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .meta { margin-top:3px; color:var(--muted); font-size:12px; }
+    .article-detail { display:none; grid-column:1/-1; border-top:1px solid var(--line); background:#fbfcfe; padding:12px 14px; }
+    .article-row.open + .article-detail { display:block; }
+    .detail-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr); gap:14px; }
+    .summary-box,.digest-card,.criterion,.source-card { border:1px solid var(--line); border-radius:9px; padding:10px; background:#fff; }
+    .pill { display:inline-flex; align-items:center; justify-content:center; min-height:25px; border-radius:999px; padding:3px 9px; font-weight:900; white-space:nowrap; font-size:12px; }
+    .score { background:var(--accent-soft); color:var(--accent); }
+    .score.high { background:var(--green-soft); color:var(--green); }
+    .score.mid { background:var(--amber-soft); color:var(--amber); }
+    .score.low { background:var(--red-soft); color:var(--red); }
+    .tag { background:#e8efff; color:#194185; }
+    .status { background:#edf2f7; color:#475467; }
+    .selected { background:var(--green-soft); color:var(--green); }
+    .criterion { margin-top:8px; }
+    .criterion-top { display:flex; justify-content:space-between; gap:10px; font-weight:900; }
+    .bar { height:7px; margin-top:8px; border-radius:999px; background:#edf2f7; overflow:hidden; }
+    .bar span { display:block; height:100%; background:var(--accent); }
+    .digest-grid { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; align-items:start; }
+    .download-menu { position:relative; }
+    .download-options { display:none; position:absolute; right:0; top:calc(100% + 6px); min-width:170px; border:1px solid var(--line); border-radius:9px; background:#fff; box-shadow:var(--shadow); padding:7px; z-index:10; }
+    .download-menu.open .download-options { display:grid; gap:5px; }
+    .download-options button { text-align:left; width:100%; }
+    .pick-row { display:grid; grid-template-columns:30px minmax(0,1fr); gap:10px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+    .pick-row:first-child { border-top:0; }
+    .empty { min-height:120px; display:grid; place-items:center; color:var(--muted); text-align:center; border:1px dashed var(--line); border-radius:9px; background:#fbfcfe; }
+    .settings-row { display:grid; grid-template-columns:minmax(170px,.8fr) 80px minmax(220px,1.1fr) minmax(220px,1.1fr) minmax(200px,1fr) 86px; gap:10px; align-items:end; padding:11px 0; border-top:1px solid var(--line); }
+    .remove-btn { min-height:34px; color:var(--red); border-color:#f3b8b3; background:#fff7f7; }
+    .weight-total.bad { color:var(--red); background:var(--red-soft); }
+    .tag-row { display:grid; grid-template-columns:84px minmax(180px,.85fr) minmax(300px,1.5fr) 86px; gap:10px; align-items:end; padding:10px 0; border-top:1px solid var(--line); }
+    .source-filters { display:grid; grid-template-columns:minmax(260px,1fr) 180px 180px 140px; gap:8px; margin-bottom:12px; align-items:end; }
+    .source-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .source-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start; }
+    .source-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
+    .source-add-form { display:grid; grid-template-columns:minmax(180px,1fr) minmax(240px,1.2fr) minmax(160px,.75fr) 120px; gap:8px; align-items:end; margin-bottom:14px; padding:12px; border:1px solid var(--line); border-radius:9px; background:#fbfcfe; }
+    .source-name { font-weight:900; font-size:15px; }
+    .source-line { color:var(--muted); font-size:12px; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .cost-list > div { padding:9px 0; border-top:1px solid var(--line); }
+    .cost-list > div:first-child { border-top:0; }
+    .toast { position:fixed; right:20px; bottom:20px; z-index:20; display:none; max-width:420px; border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:var(--radius-sm); background:#fff; box-shadow:var(--shadow); padding:14px 18px; font-weight:700; }
+    .toast.show { display:block; }
+    .toast.error { border-left-color:var(--red); }
+    @media (max-width:1180px) { .filters,.filter-row-secondary,.digest-grid,.detail-grid,.settings-row,.tag-row,.source-filters,.source-grid,.source-add-form { grid-template-columns:1fr; } .tag-group,.row { min-width:920px; } .content { padding:20px 16px 32px; } .stats-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:760px) { .app { display:block; } .side { position:static; height:auto; } .content { padding:14px 12px 28px; } .icon { width:auto; display:inline-flex; } .nav-section { display:none; } .row { min-width:760px; } }
+  </style>
+</head>
+<body>
+  <div class="auth-shell" id="authShell" hidden>
+    <div class="auth-card">
+      <div class="auth-top">
+        <h1>OilTech Digest</h1>
+        <p>Вход в рабочую панель и управление пайплайном новостей.</p>
+      </div>
+      <div class="auth-body">
+        <label for="authEmail">Email</label>
+        <input id="authEmail" type="email" placeholder="you@example.com">
+        <div style="height:12px"></div>
+        <label for="authPassword">Пароль</label>
+        <input id="authPassword" type="password" placeholder="Не короче 8 символов">
+        <div class="auth-actions">
+          <button class="primary" id="loginBtn">Войти</button>
+          <button id="registerBtn">Зарегистрироваться</button>
+        </div>
+        <div class="auth-note">После регистрации сессия создаётся автоматически.</div>
+      </div>
+    </div>
+  </div>
+  <div class="app" id="appShell" hidden>
+    <aside class="side">
+      <div class="brand"><div class="brand-mark">OT</div><div><div class="brand-name">OilTech Digest</div><div class="brand-tag">Сбор · скоринг · дайджест</div></div></div>
+      <div class="nav-section">Работа</div>
+      <button class="icon active" data-screen="articles">Все статьи</button>
+      <button class="icon" data-screen="digest">Месячный дайджест</button>
+      <button class="icon" data-screen="sources">Источники</button>
+      <div class="nav-section">Настройки</div>
+      <button class="icon" data-screen="scoring">Скоринг</button>
+      <button class="icon" data-screen="tags">Теги</button>
+      <div class="side-foot">
+        <div class="side-user" id="sideUserEmail"></div>
+        <button class="icon" id="logoutBtn" style="width:100%">Выйти</button>
+      </div>
+    </aside>
+    <main class="content">
+      <section class="screen active" id="articles">
+        <header class="page-head"><div class="page-head-row"><div><h1>Все статьи</h1><p class="sub">Отфильтруйте поток, отметьте нужные статьи и добавьте их в месячный дайджест.</p></div><button class="primary" id="processSelected">Обработать выбранные</button></div></header>
+        <div class="stats-grid"><div class="stat-card"><div class="stat-value" id="statArticles">0</div><div class="stat-label">Карточек в базе</div></div><div class="stat-card"><div class="stat-value" id="statProcessed">0</div><div class="stat-label">С AI-сутью</div></div><div class="stat-card"><div class="stat-value" id="statDigest">0</div><div class="stat-label">Выбрано в дайджест</div></div><div class="stat-card"><div class="stat-value" id="statAvgScore">0</div><div class="stat-label">Средний AI-score</div></div><div class="stat-card"><div class="stat-value" id="statSources">0</div><div class="stat-label">Источников</div></div></div>
+        <div class="panel"><div class="panel-head"><div class="panel-title">Каталог карточек</div><div class="tabs"><span class="pill status" id="articleCount">0 статей</span><button id="reloadData">Обновить</button></div></div><div class="panel-body">
+          <div class="filters"><div><label>Поиск</label><input id="articleSearch" placeholder="Название, суть, ключевые слова"></div><div><label>Тег</label><select id="tagFilter"></select></div><div class="source-combo" id="sourceCombo"><label>Источник</label><input id="sourceFilterInput" placeholder="Начните вводить источник"><div class="source-popover" id="sourceOptions"></div></div><div><label>Статус</label><select id="statusFilter"></select></div><div><label>Сортировка</label><select id="sortFilter"><option value="score_desc">Score: по убыванию</option><option value="score_asc">Score: по возрастанию</option><option value="date_desc">Сначала новые</option></select></div></div>
+          <div class="advanced-toggle"><button id="advancedFiltersBtn" aria-expanded="false">Расширенные фильтры</button></div>
+          <div class="filter-row-secondary" id="advancedFilters" hidden><div><label>Скоринг</label><div class="range-pair"><div class="range-field"><span>от</span><input id="scoreMin" type="number" value="0"></div><div class="range-field"><span>до</span><input id="scoreMax" type="number" value="100"></div></div></div><div><label>Дата попадания</label><div class="range-pair"><div class="range-field"><span>от</span><input id="dateFrom" type="date"></div><div class="range-field"><span>до</span><input id="dateTo" type="date"></div></div></div><div><label>Язык</label><select id="languageFilter"><option value="">Любой</option><option value="ru">ru</option><option value="en">en</option></select></div><div><button id="resetFilters">Сбросить</button></div></div>
+          <div class="table" id="articleTable"></div>
+        </div></div>
+      </section>
+
+      <section class="screen" id="digest"><header class="page-head"><h1>Месячный дайджест</h1><p class="sub">В дайджест попадают статьи со статусом «В дайджест». Здесь можно проверить итоговую выборку за месяц и скачать тестовый экспорт. Шаблон потом просто подменим.</p></header><div class="panel"><div class="panel-head"><div class="panel-title">Выборка дайджеста</div><span class="pill tag">status = digest</span></div><div class="panel-body"><div class="filters" style="grid-template-columns:minmax(200px,1fr) 180px 180px 180px"><div><label>Поиск</label><input id="digestSearch" placeholder="Найти статью"></div><div><label>Тег</label><select id="digestTagFilter"></select></div><div><label>Месяц</label><select id="digestMonth"></select></div><div><label>Скоринг</label><div class="range-pair"><div class="range-field"><span>от</span><input id="digestScoreMin" type="number" value="0"></div><div class="range-field"><span>до</span><input id="digestScoreMax" type="number" value="100"></div></div></div></div><div class="tabs" style="margin-bottom:14px"><button id="openDigestEmail">Открыть HTML</button><button id="copyDigestJson">Скопировать JSON</button><div class="download-menu" id="downloadMenu"><button class="primary" id="downloadDigestBtn">Скачать экспорт</button><div class="download-options"><button data-download-format="html">HTML</button><button data-download-format="doc">DOC</button><button data-download-format="json">JSON</button></div></div></div><div id="digestPickList"></div><div id="digestPreview" style="margin-top:16px"></div></div></div></section>
+
+      <section class="screen" id="sources"><header class="page-head"><h1>Источники</h1><p class="sub">Для non-RSS источников настраивается listing-страница: оттуда мониторинг берет новые ссылки на статьи, сравнивает их с уже известными URL и забирает только свежие публикации.</p></header><div class="panel"><div class="panel-head"><div class="panel-title">Каталог источников</div><span class="pill status" id="sourceCount">0 источников</span></div><div class="panel-body"><div class="source-add-form"><div><label>Название</label><input id="newSourceName" placeholder="Название источника"></div><div><label>RSS URL</label><input id="newSourceRss" placeholder="https://example.com/rss.xml"></div><div><label>Частота</label><input id="newSourceFrequency" placeholder="ежедневно"></div><button class="primary" id="addRssSource">Добавить RSS</button></div><div class="source-filters"><div><label>Поиск</label><input id="sourceSearch" placeholder="Название или URL"></div><div><label>Стратегия</label><select id="sourceStrategy"><option value="">Все</option><option value="rss">rss</option><option value="request">request</option><option value="telegram">telegram</option><option value="none">none</option></select></div><div><label>Статус</label><select id="sourceEnabled"><option value="">Все</option><option value="on">Включены</option><option value="off">Выключены</option></select></div><div><button id="resetSourceFilters">Сбросить</button></div></div><div class="source-grid" id="sourceGrid"></div></div></div></section>
+
+      <section class="screen" id="scoring"><header class="page-head"><h1>Скоринг</h1><p class="sub">Активный профиль критериев: веса суммируются в 100%. Русские ключевые слова нормализуются в английские подсказки для зарубежных источников. Сохранение доступно только при сумме весов 100%.</p></header><div class="panel settings-wide"><div class="panel-head"><div class="panel-title">Критерии оценки</div><div class="tabs"><span class="pill weight-total" id="weightTotal">Сумма весов: 100%</span><button id="normalizeWeights">Нормализовать</button><button class="primary" id="saveScoring">Сохранить</button></div></div><div class="panel-body"><div id="criteriaList"></div><button id="addCriterion" style="margin-top:12px">Добавить параметр</button></div></div></section>
+      <section class="screen" id="tags"><header class="page-head"><h1>Теги</h1><p class="sub">Иерархия тегов: родительские группы и подтеги. Кнопка «+» добавляет подтег, переключатель — вкл/выкл.</p></header><div class="panel settings-wide"><div class="panel-head"><div class="panel-title">Иерархия тегов</div><button class="primary" id="saveTags">Сохранить</button></div><div class="panel-body"><div id="tagSettings"></div><button id="addTag" style="margin-top:12px">Добавить родительский тег</button></div></div></section>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => [...document.querySelectorAll(s)];
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const state = { user:null, articles:[], sources:[], tags:[], criteria:[], costs:[], articleCosts:[], selected:new Set(), expanded:new Set(), selectedSource:'' };
+    const statuses = ['new','review','digest','archive'];
+    const statusLabels = {new:'Новая',review:'На проверке',digest:'В дайджест',archive:'Архив'};
+    const ARTICLE_RENDER_LIMIT = 180;
+    async function api(path, options={}) {
+      const headers = {'Content-Type':'application/json', ...(options.headers||{})};
+      const r = await fetch(path, {...options, headers, credentials:'same-origin'});
+      if (r.status === 401) {
+        showAuth();
+        throw new Error('Нужна авторизация');
+      }
+      if(!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+    function showToast(text, variant='default') { const n=$('#toast'); n.textContent=text; n.className='toast show'+(variant==='error'?' error':''); clearTimeout(window.toastTimer); window.toastTimer=setTimeout(()=>n.className='toast',2600); }
+    function formatDate(v){ return v ? new Date(`${v}T00:00:00`).toLocaleDateString('ru-RU') : '—'; }
+    function scoreClass(s){ return s>=80?'high':s>=60?'mid':s<25?'low':''; }
+    function topTag(a){ return (a.tag || 'Без тега').split(' / ')[0]; }
+    function tagOptions(selected=''){ const names=[...new Set(state.articles.map(a=>a.tag).filter(Boolean))].sort(); const parents=[...new Set(names.map(n=>n.split(' / ')[0]))]; return '<option value="">Все теги</option>'+parents.map(p=>{ const children=names.filter(n=>n.startsWith(`${p} /`)); return `<optgroup label="${esc(p)}"><option value="${esc(p)}" ${selected===p?'selected':''}>Все: ${esc(p)}</option>${children.map(n=>`<option value="${esc(n)}" ${selected===n?'selected':''}>${esc(n.split(' / ').pop())}</option>`).join('')}</optgroup>`; }).join(''); }
+    function showAuth(){ $('#authShell').hidden=false; $('#appShell').hidden=true; }
+    function showApp(){ $('#authShell').hidden=true; $('#appShell').hidden=false; $('#sideUserEmail').textContent=state.user?.email||''; }
+    async function loadSession(){ const payload=await api('/api/auth/me'); state.user=payload.user; showApp(); }
+    async function submitAuth(mode){
+      const email=$('#authEmail').value.trim();
+      const password=$('#authPassword').value;
+      const path=mode==='register'?'/api/auth/register':'/api/auth/login';
+      const payload=await api(path,{method:'POST',body:JSON.stringify({email,password})});
+      state.user=payload.user;
+      showApp();
+      await loadAll();
+      showToast(mode==='register'?'Регистрация завершена':'Вход выполнен');
+    }
+    async function loadAll(){ const [articles,sources,tags,criteria]=await Promise.all([api('/api/articles?limit=1000'),api('/api/sources?limit=500'),api('/api/tags'),api('/api/scoring-criteria')]); Object.assign(state,{articles,sources,tags,criteria}); rerenderAll(); }
+    function rerenderAll(){ renderFilters(); renderArticles(); renderStats(); renderDigest(); renderSources(); renderCriteria(); renderTags(); }
+    function renderFilters(){ $('#tagFilter').innerHTML=tagOptions($('#tagFilter').value); const dtf=$('#digestTagFilter'); if(dtf) dtf.innerHTML=tagOptions(dtf.value); $('#statusFilter').innerHTML=['',...statuses].map(s=>`<option value="${esc(s)}">${esc(s?statusLabels[s]:'Любой статус')}</option>`).join(''); const dm=$('#digestMonth'); if(dm){ const cur=dm.value; const months=[...new Set(state.articles.filter(a=>a.digest).map(a=>String(a.date||'').slice(0,7)).filter(Boolean))].sort().reverse(); dm.innerHTML='<option value="">Все месяцы</option>'+months.map(m=>`<option value="${m}" ${cur===m?'selected':''}>${m}</option>`).join(''); } renderSourceOptions(); }
+    function renderSourceOptions(){ const q=$('#sourceFilterInput').value.trim().toLowerCase(); const items=state.sources.filter(s=>!q||s.name.toLowerCase().includes(q)).slice(0,10); $('#sourceOptions').innerHTML=`<div class="source-option" data-source-pick=""><span>Все источники</span><span class="meta">сброс</span></div>`+items.map(s=>`<div class="source-option" data-source-pick="${esc(s.name)}"><span>${esc(s.name)}</span><span class="meta">${esc(s.parse_strategy||s.source_type||'')}</span></div>`).join(''); }
+    function filteredArticles(){ const q=$('#articleSearch').value.trim().toLowerCase(); const tag=$('#tagFilter').value; const status=$('#statusFilter').value; const min=Number($('#scoreMin').value||0); const max=Number($('#scoreMax').value||100); const from=$('#dateFrom').value; const to=$('#dateTo').value; const lang=$('#languageFilter').value; let items=state.articles.filter(a=>{ const hay=[a.title,a.summary,a.source,a.tag].join(' ').toLowerCase(); return (!q||hay.includes(q))&&(!tag||a.tag===tag||a.tag.startsWith(`${tag} /`))&&(!status||a.status===status)&&(!state.selectedSource||a.source===state.selectedSource)&&a.score>=min&&a.score<=max&&(!from||a.date>=from)&&(!to||a.date<=to)&&(!lang||a.language===lang); }); const sort=$('#sortFilter').value; items.sort((a,b)=>sort==='score_asc'?a.score-b.score:sort==='date_desc'?String(b.date).localeCompare(String(a.date)):b.score-a.score); return items; }
+    function renderStats(){ const avg=state.articles.length?Math.round(state.articles.reduce((s,a)=>s+Number(a.score||0),0)/state.articles.length):0; $('#statArticles').textContent=state.articles.length; $('#statProcessed').textContent=state.articles.filter(a=>a.summary).length; $('#statDigest').textContent=state.articles.filter(a=>a.digest).length; $('#statAvgScore').textContent=avg; $('#statSources').textContent=state.sources.length; }
+    function renderArticles(){ const items=filteredArticles(); const visible=items.slice(0,ARTICLE_RENDER_LIMIT); $('#articleCount').textContent=items.length>visible.length?`${items.length} статей · показаны ${visible.length}`:`${items.length} статей`; const groups=Object.fromEntries([...new Set(visible.map(topTag))].map(g=>[g,[]])); visible.forEach(a=>{ const g=topTag(a); if(!groups[g]) groups[g]=[]; groups[g].push(a); }); $('#articleTable').innerHTML=visible.length?Object.entries(groups).map(([group,arts])=>`<div class="tag-group"><div class="group-head"><span class="pill tag">${esc(group)}</span><span class="meta">${arts.length} статей · средний score ${Math.round(arts.reduce((s,a)=>s+Number(a.score||0),0)/arts.length)}</span></div><div class="row header"><div></div><div></div><div>Статья</div><div>Дата попадания</div><div>Скоринг</div><div>Оценка</div><div>Статус</div></div>${arts.map(articleRow).join('')}</div>`).join(''):'<div class="empty">По текущим фильтрам ничего не найдено.</div>'; }
+    function articleRow(a){ const open=state.expanded.has(a.id); const criteria=[['Score',Math.round(a.score||0)],['Тег',a.tag_confidence?Math.round(a.tag_confidence*100):0],['Текст',Math.min(100,Math.round((a.raw_text_chars||0)/30))]]; return `<div class="row article-row ${open?'open':''}" data-article-id="${a.id}"><div><input class="article-check" type="checkbox" data-check-article="${a.id}" ${state.selected.has(a.id)?'checked':''}></div><div><button class="expand" data-expand="${a.id}" title="${open?'Свернуть':'Раскрыть'}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M6 9l6 6 6-6"/></svg></button></div><div><a class="title" href="${esc(a.url)}" target="_blank">${esc(a.title)}</a><div class="meta">${esc(a.source)} · ${esc(a.tag)} · ${esc(a.language||'unknown')} · ${a.raw_text_chars||0} симв.${a.text_truncated?' · <span class="pill" style="background:var(--amber-soft);color:var(--amber);font-size:11px">неполный текст</span>':''}${a.relevant===false?' · <span class="pill" style="background:var(--red-soft);color:var(--red);font-size:11px">нерелевантно</span>':''}${a.digest?' · <span class="pill" style="background:var(--green-soft);color:var(--green);font-size:11px">в дайджесте</span>':''}</div></div><div>${formatDate(a.date)}</div><div><span class="pill score ${scoreClass(a.score)}">${Math.round(a.score||0)}</span></div><div><span class="pill selected">${esc(a.rating)}</span></div><div><select data-status="${a.id}">${statuses.map(s=>`<option value="${s}" ${a.status===s?'selected':''}>${esc(statusLabels[s])}</option>`).join('')}</select></div></div><div class="article-detail"><div class="detail-grid"><div class="summary-box"><b>Суть:</b> ${esc(a.summary||'AI-суть ещё не сформирована.')}<div class="meta" style="margin-top:10px">${a.relevant===false?'Отклонено фильтром релевантности: '+esc(a.relevance_reason||''):esc(a.score_explanation||a.tag_rationale||'Оригинал открывается кликом по названию.')}</div></div><div>${criteria.map(([n,v])=>`<div class="criterion"><div class="criterion-top"><span>${esc(n)}</span><span>${v}/100</span></div><div class="bar"><span style="width:${Math.max(0,Math.min(100,v))}%"></span></div></div>`).join('')}</div></div></div>`; }
+    function renderDigest(){ const q=($('#digestSearch')?.value||'').trim().toLowerCase(); const tag=$('#digestTagFilter')?.value||''; const min=Number($('#digestScoreMin')?.value||0); const max=Number($('#digestScoreMax')?.value||100); const month=$('#digestMonth')?.value||''; const chosen=state.articles.filter(a=>a.digest&&(!q||[a.title,a.tag,a.summary].join(' ').toLowerCase().includes(q))&&(!tag||a.tag===tag||String(a.tag).startsWith(tag+' /'))&&Number(a.score||0)>=min&&Number(a.score||0)<=max&&(!month||String(a.date||'').startsWith(month))); $('#digestPickList').innerHTML=chosen.length?chosen.map(a=>`<div class="pick-row"><div><a href="${esc(a.url)}" target="_blank"><b>${esc(a.title)}</b></a><div class="meta">${esc(a.tag)} · score ${Math.round(a.score||0)} · ${formatDate(a.date)}</div></div></div>`).join(''):'<div class="empty">Нет статей со статусом «В дайджест» по текущим фильтрам.</div>'; $('#digestPreview').innerHTML=chosen.length?chosen.map((a,i)=>`<div class="digest-card"><b>${i+1}. ${esc(a.tag)}</b><div>${esc(a.title)}</div><div class="meta">${esc(a.summary||'')}</div></div>`).join(''):'<div class="empty">Пока нет статей со статусом «В дайджест».</div>'; }
+    function currentDigestParams(){ const month=$('#digestMonth')?.value||String(new Date().toISOString()).slice(0,7); return `month=${encodeURIComponent(month)}&limit=50&min_score=0`; }
+    function renderSources(){ const q=$('#sourceSearch')?.value?.trim().toLowerCase()||''; const strategy=$('#sourceStrategy')?.value||''; const enabled=$('#sourceEnabled')?.value||''; const items=state.sources.filter(s=>(!q||[s.name,s.url,s.rss_url,s.listing_url,s.source_type].join(' ').toLowerCase().includes(q))&&(!strategy||s.parse_strategy===strategy)&&(!enabled||(enabled==='on'?s.enabled:!s.enabled))); $('#sourceCount').textContent=`${items.length} источников`; $('#sourceGrid').innerHTML=items.map(s=>`<div class="source-card" data-source="${s.id}"><div><div class="source-name">${esc(s.name)}</div><div class="source-line">${esc(s.source_type||'')} · ${esc(s.update_frequency||'частота не задана')} · ${esc(s.parse_strategy||'—')}</div><div class="source-config-grid"><div><label>Основной URL</label><input data-src-field="url" value="${esc(s.url||'')}" placeholder="https://example.com"></div><div><label>RSS URL</label><input data-src-field="rss_url" value="${esc(s.rss_url||'')}" placeholder="RSS URL"></div>${s.parse_strategy==='request'?`<div><label>Listing URL</label><input data-src-field="listing_url" value="${esc(s.listing_url||'')}" placeholder="Страница новостей"></div><div><label>Listing strategy</label><input data-src-field="listing_strategy" value="${esc(s.listing_strategy||'auto')}" placeholder="auto"></div><div><label>Listing selector</label><input data-src-field="listing_selector" value="${esc(s.listing_selector||'')}" placeholder=".news-card or //article"></div><div><label>Article link selector</label><input data-src-field="article_link_selector" value="${esc(s.article_link_selector||'')}" placeholder="a or .headline a"></div><div><label>Article date selector</label><input data-src-field="article_date_selector" value="${esc(s.article_date_selector||'')}" placeholder="time or .date"></div><div><label>Последняя статья</label><input value="${esc(s.last_seen_article_url||'')}" placeholder="пока пусто" disabled></div>`:''}</div><div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><button class="btn-ghost" data-save-source="${s.id}">Сохранить</button>${s.parse_strategy==='request'?'<button class="btn-ghost" data-scrape-source="'+s.id+'">Проверить listing</button>':''}${s.last_seen_published_at?`<span class="meta">последняя дата: ${esc(String(s.last_seen_published_at).slice(0,10))}</span>`:''}</div></div><div style="text-align:right;white-space:nowrap"><label style="display:inline-flex;align-items:center;gap:6px;font-weight:800;text-transform:none;color:var(--ink)"><input type="checkbox" data-toggle-source="${s.id}" ${s.enabled?'checked':''}>${s.enabled?'вкл':'выкл'}</label></div></div>`).join('')||'<div class="empty">Источники не найдены.</div>'; }
+    function renderCriteria(){ const total=state.criteria.reduce((s,c)=>s+Number(c.weight||0),0); const tEl=$('#weightTotal'); tEl.textContent=`Сумма весов: ${total}%`; tEl.classList.toggle('bad',total!==100); const sv=$('#saveScoring'); if(sv) sv.disabled=total!==100; $('#criteriaList').innerHTML=state.criteria.map((c,i)=>`<div class="settings-row" data-criterion="${i}"><div><label>Параметр</label><input data-cf="name" value="${esc(c.name||'')}"></div><div><label>Вес</label><input type="number" min="0" max="100" data-cf="weight" value="${esc(c.weight||0)}"></div><div><label>Описание для AI</label><textarea data-cf="description">${esc(c.description||'')}</textarea></div><div><label>Ключевые слова RU / любые</label><textarea data-cf="keywords_json">${esc((c.keywords_json||[]).join(', '))}</textarea></div><div><label>EN-нормализация (в БД)</label><textarea data-cf="keywords_en_json">${esc((c.keywords_en_json||[]).join(', '))}</textarea></div><div><button class="remove-btn" data-remove-criterion="${i}">Удалить</button></div></div>`).join(''); }
+    function renderTags(){ const parents=state.tags.filter(t=>!t.parent_name); $('#tagSettings').innerHTML=parents.map(p=>{ const pi=state.tags.indexOf(p); const kids=state.tags.filter(t=>t.parent_name===p.name); return `<div class="tag-parent"><div class="tag-row" data-tag="${pi}" style="background:#f8fafc"><div style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-tf="enabled" ${p.enabled?'checked':''} title="вкл/выкл"><button class="btn-ghost" data-add-subtag="${esc(p.name)}" title="Добавить подтег" style="padding:2px 9px">+</button></div><div><label>Родительский тег</label><input data-tf="name" value="${esc(p.name||'')}"></div><div><label>Описание для AI</label><input data-tf="description" value="${esc(p.description||'')}"></div><button class="remove-btn" data-remove-tag="${pi}">Удалить</button></div>${kids.map(c=>{const ci=state.tags.indexOf(c);return `<div class="tag-row" data-tag="${ci}" style="padding-left:30px"><label style="display:inline-flex;align-items:center"><input type="checkbox" data-tf="enabled" ${c.enabled?'checked':''}></label><div><label>Подтег</label><input data-tf="name" value="${esc(c.name||'')}"></div><div><label>Описание для AI</label><input data-tf="description" value="${esc(c.description||'')}"></div><button class="remove-btn" data-remove-tag="${ci}">Удалить</button></div>`;}).join('')}</div>`; }).join('')||'<div class="empty">Тегов нет.</div>'; }
+    function renderCosts(){ $('#costRows').innerHTML=state.costs.map(c=>`<div><b>${esc(c.stage)} · ${esc(c.language)}</b><div class="meta">runs ${c.runs} · tokens ${c.total_tokens} · cost $${Number(c.cost_usd||0).toFixed(6)}</div></div>`).join('')||'<div class="empty">Метрик пока нет.</div>'; $('#articleCostRows').innerHTML=state.articleCosts.map(c=>`<div><b>#${c.article_id} · $${Number(c.cost_usd||0).toFixed(6)}</b><div class="meta">${esc(c.title)} · tokens ${c.total_tokens||0}</div></div>`).join('')||'<div class="empty">Полных циклов пока нет.</div>'; }
+    function setAdvanced(open){ $('#advancedFilters').hidden=!open; $('#advancedFiltersBtn').setAttribute('aria-expanded',String(open)); $('#advancedFiltersBtn').textContent=open?'Скрыть фильтры':'Расширенные фильтры'; }
+    document.addEventListener('click', async e=>{ const nav=e.target.closest('[data-screen]'); if(nav){ $$('[data-screen]').forEach(b=>b.classList.toggle('active',b===nav)); $$('.screen').forEach(s=>s.classList.toggle('active',s.id===nav.dataset.screen)); } const exp=e.target.closest('[data-expand]'); if(exp){ const id=Number(exp.dataset.expand); state.expanded.has(id)?state.expanded.delete(id):state.expanded.add(id); renderArticles(); } const pick=e.target.closest('[data-source-pick]'); if(pick){ state.selectedSource=pick.dataset.sourcePick; $('#sourceFilterInput').value=state.selectedSource; $('#sourceCombo').classList.remove('open'); renderArticles(); } if(e.target.id==='advancedFiltersBtn') setAdvanced($('#advancedFilters').hidden); if(e.target.id==='resetFilters'){ ['articleSearch','sourceFilterInput','dateFrom','dateTo'].forEach(id=>$('#'+id).value=''); state.selectedSource=''; $('#tagFilter').value=''; $('#statusFilter').value=''; $('#scoreMin').value=0; $('#scoreMax').value=100; $('#languageFilter').value=''; renderArticles(); } if(e.target.id==='reloadData') await loadAll(); if(e.target.id==='processSelected'){ const ids=[...state.selected]; if(!ids.length) return showToast('Выберите статьи для обработки','error'); showToast('AI-обработка запущена'); await api('/api/process',{method:'POST',body:JSON.stringify({article_ids:ids})}); state.selected.clear(); await loadAll(); showToast('AI-обработка завершена'); } if(e.target.id==='openDigestEmail'){ window.open(`/api/digest-email?${currentDigestParams()}`,'_blank'); } if(e.target.id==='copyDigestJson'){ const content=await api(`/api/digest-content?${currentDigestParams()}`); await navigator.clipboard.writeText(JSON.stringify(content,null,2)); showToast('JSON дайджеста скопирован'); } if(e.target.id==='downloadDigestBtn'){ $('#downloadMenu').classList.toggle('open'); } const dlf=e.target.closest('[data-download-format]'); if(dlf){ $('#downloadMenu').classList.remove('open'); window.open(`/api/digest-export?${currentDigestParams()}&export_format=${encodeURIComponent(dlf.dataset.downloadFormat)}`,'_blank'); showToast(`Экспорт запущен: ${dlf.dataset.downloadFormat.toUpperCase()}`); } if(e.target.id==='resetSourceFilters'){ $('#sourceSearch').value=''; $('#sourceStrategy').value=''; $('#sourceEnabled').value=''; renderSources(); } if(e.target.id==='addRssSource'){ const name=$('#newSourceName').value.trim(); const rss=$('#newSourceRss').value.trim(); const frequency=$('#newSourceFrequency').value.trim(); if(!name||!rss) return showToast('Введите название и RSS URL','error'); await api('/api/sources',{method:'POST',body:JSON.stringify({name,rss_url:rss,url:rss,update_frequency:frequency||null,category:'manual',priority:1})}); $('#newSourceName').value=''; $('#newSourceRss').value=''; $('#newSourceFrequency').value=''; showToast('RSS-источник добавлен'); await loadAll(); } if(e.target.id==='loginBtn'){ try{ await submitAuth('login'); }catch(err){ showToast(err.message,'error'); } } if(e.target.id==='registerBtn'){ try{ await submitAuth('register'); }catch(err){ showToast(err.message,'error'); } } if(e.target.id==='logoutBtn'){ try{ await api('/api/auth/logout',{method:'POST'}); state.user=null; state.selected.clear(); showAuth(); showToast('Сессия завершена'); }catch(err){ showToast(err.message,'error'); } } if(e.target.id==='addCriterion'){ state.criteria.push({name:'Новый критерий',weight:0,description:'',keywords_json:[],keywords_en_json:[],sort_order:(state.criteria.length+1)*10}); renderCriteria(); } const rmc=e.target.closest('[data-remove-criterion]'); if(rmc){ state.criteria.splice(Number(rmc.dataset.removeCriterion),1); renderCriteria(); } if(e.target.id==='normalizeWeights'){ const n=state.criteria.length; if(n){ const each=Math.floor(100/n); let rest=100; state.criteria.forEach((c,idx)=>{ c.weight=idx===n-1?rest:each; rest-=each; }); renderCriteria(); showToast('Веса нормализованы до 100%'); } } if(e.target.id==='saveScoring'){ try{ await api('/api/scoring-criteria',{method:'PUT',body:JSON.stringify(state.criteria.map(c=>({id:c.id||null,name:c.name,description:c.description||'',weight:Number(c.weight||0),keywords_json:c.keywords_json||[],keywords_en_json:c.keywords_en_json||[],sort_order:c.sort_order||0})))}); showToast('Скоринг сохранён'); await loadAll(); }catch(err){ showToast(err.message,'error'); } } const svs=e.target.closest('[data-save-source]'); if(svs){ const card=e.target.closest('[data-source]'); const payload={}; ['url','rss_url','listing_url','listing_strategy','listing_selector','article_link_selector','article_date_selector'].forEach(field=>{ const el=card.querySelector('[data-src-field="'+field+'"]'); if(el){ const value=el.value.trim(); payload[field]=value||null; } }); try{ await api('/api/sources/'+svs.dataset.saveSource,{method:'PATCH',body:JSON.stringify(payload)}); showToast('Источник сохранён'); await loadAll(); }catch(err){ showToast(err.message,'error'); } } const scs=e.target.closest('[data-scrape-source]'); if(scs){ try{ const result=await api('/api/sources/'+scs.dataset.scrapeSource+'/scrape',{method:'POST'}); showToast(`Скрапинг: добавлено ${result.stats.added}, дублей ${result.stats.attempted-result.stats.added}`); await loadAll(); }catch(err){ showToast(err.message,'error'); } } if(e.target.id==='addTag'){ state.tags.push({id:null,parent_name:null,name:'Новый тег',description:'',keywords_json:[],keywords_en_json:[],enabled:true,sort_order:(state.tags.length+1)*10}); renderTags(); } const ast=e.target.closest('[data-add-subtag]'); if(ast){ state.tags.push({id:null,parent_name:ast.dataset.addSubtag,name:'Новый подтег',description:'',keywords_json:[],keywords_en_json:[],enabled:true,sort_order:(state.tags.length+1)*10}); renderTags(); } const rmt=e.target.closest('[data-remove-tag]'); if(rmt){ state.tags.splice(Number(rmt.dataset.removeTag),1); renderTags(); } if(e.target.id==='saveTags'){ try{ await api('/api/tags',{method:'PUT',body:JSON.stringify(state.tags.map(t=>({id:t.id||null,parent_name:t.parent_name||null,name:t.name,name_en:t.name_en||'',description:t.description||'',keywords_json:t.keywords_json||[],keywords_en_json:t.keywords_en_json||[],enabled:t.enabled!==false,sort_order:t.sort_order||0})))}); showToast('Теги сохранены'); await loadAll(); }catch(err){ showToast(err.message,'error'); } } if(!e.target.closest('#downloadMenu') && e.target.id!=='downloadDigestBtn'){ $('#downloadMenu')?.classList.remove('open'); } });
+    document.addEventListener('input', e=>{ if(['articleSearch','scoreMin','scoreMax','dateFrom','dateTo'].includes(e.target.id)) renderArticles(); if(['digestSearch','digestScoreMin','digestScoreMax'].includes(e.target.id)) renderDigest(); if(e.target.id==='sourceFilterInput'){ $('#sourceCombo').classList.add('open'); renderSourceOptions(); } if(e.target.id==='sourceSearch') renderSources(); if(e.target.dataset.cf){ const row=e.target.closest('[data-criterion]'); const i=Number(row.dataset.criterion); const f=e.target.dataset.cf; const v=e.target.value; state.criteria[i][f]=f==='weight'?Number(v||0):((f==='keywords_json'||f==='keywords_en_json')?v.split(',').map(x=>x.trim()).filter(Boolean):v); if(f==='weight'){ const total=state.criteria.reduce((s,c)=>s+Number(c.weight||0),0); const tEl=$('#weightTotal'); tEl.textContent=`Сумма весов: ${total}%`; tEl.classList.toggle('bad',total!==100); $('#saveScoring').disabled=total!==100; } } if(e.target.dataset.tf && e.target.type!=='checkbox'){ const row=e.target.closest('[data-tag]'); const i=Number(row.dataset.tag); const f=e.target.dataset.tf; state.tags[i][f]=(f==='keywords_json'||f==='keywords_en_json')?e.target.value.split(',').map(x=>x.trim()).filter(Boolean):e.target.value; } });
+    document.addEventListener('change', async e=>{ if(['tagFilter','statusFilter','sortFilter','languageFilter'].includes(e.target.id)) renderArticles(); if(['digestTagFilter','digestMonth'].includes(e.target.id)) renderDigest(); if(['sourceStrategy','sourceEnabled'].includes(e.target.id)) renderSources(); if(e.target.dataset.status){ await api(`/api/articles/${e.target.dataset.status}`,{method:'PATCH',body:JSON.stringify({status:e.target.value})}); await loadAll(); } if(e.target.dataset.checkArticle){ const id=Number(e.target.dataset.checkArticle); e.target.checked?state.selected.add(id):state.selected.delete(id); renderArticles(); } if(e.target.dataset.toggleSource){ try{ await api('/api/sources/'+e.target.dataset.toggleSource,{method:'PATCH',body:JSON.stringify({enabled:e.target.checked})}); showToast(e.target.checked?'Источник включён':'Источник выключен'); await loadAll(); }catch(err){ showToast(err.message,'error'); } } if(e.target.dataset.tf==='enabled'){ const row=e.target.closest('[data-tag]'); if(row){ state.tags[Number(row.dataset.tag)].enabled=e.target.checked; } } });
+    $('#sourceFilterInput').addEventListener('focus',()=>{$('#sourceCombo').classList.add('open'); renderSourceOptions();}); document.addEventListener('click',e=>{ if(!e.target.closest('#sourceCombo')) $('#sourceCombo').classList.remove('open'); }); setAdvanced(false); loadSession().then(loadAll).catch(()=>showAuth());
+  </script>
+</body>
+</html>
