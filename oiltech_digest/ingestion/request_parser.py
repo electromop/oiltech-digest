@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit
 from dateutil import parser as dateparser
 from lxml import html
 
+from oiltech_digest.config import REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.ingestion.article_fetcher import extract_main_text
@@ -42,7 +43,7 @@ class CandidateLink:
     published_at: datetime | None = None
 
 
-def parse_source(source: dict, max_age_days: int | None = None, article_limit: int = 12) -> dict:
+def parse_source(source: dict, max_age_days: int | None = None, article_limit: int = REQUEST_ARTICLE_LIMIT) -> dict:
     listing_url = source.get("listing_url") or source.get("url")
     if not listing_url:
         return _empty_stats()
@@ -53,6 +54,15 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
 
     candidates = extract_candidate_links(source, listing_url, content, limit=article_limit)
     listing_hash = _listing_hash(candidates)
+    if candidates and source.get("last_listing_hash") and listing_hash == source.get("last_listing_hash"):
+        repository.touch_last_parsed(source["id"])
+        return {
+            "added": 0,
+            "attempted": 0,
+            "skipped_old": 0,
+            "skipped_irrelevant": 0,
+            "skipped_known": len(candidates),
+        }
     cutoff = None
     if max_age_days is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)

@@ -27,6 +27,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-oiltech}:${POSTGRES_PASSWORD:-oiltech_local_dev}@db:5432/${POSTGRES_DB:-oiltech_digest}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     command:
       [
         "sh",
@@ -46,6 +49,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-oiltech}:${POSTGRES_PASSWORD:-oiltech_local_dev}@db:5432/${POSTGRES_DB:-oiltech_digest}
       PYTHONUNBUFFERED: "1"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - "8000:8000"
     volumes:
@@ -70,15 +76,22 @@ services:
       PYTHONUNBUFFERED: "1"
       CYCLE_INTERVAL_SECONDS: ${CYCLE_INTERVAL_SECONDS:-21600}
       RUN_DISCOVER_ON_START: ${RUN_DISCOVER_ON_START:-1}
-      DISCOVER_EVERY_CYCLES: ${DISCOVER_EVERY_CYCLES:-4}
+      DISCOVER_EVERY_CYCLES: ${DISCOVER_EVERY_CYCLES:-24}
       DISCOVER_TIMEOUT: ${DISCOVER_TIMEOUT:-4}
-      DISCOVER_WORKERS: ${DISCOVER_WORKERS:-10}
-      PARSE_WORKERS: ${PARSE_WORKERS:-10}
-      FULL_TEXT_LIMIT: ${FULL_TEXT_LIMIT:-200}
+      DISCOVER_WORKERS: ${DISCOVER_WORKERS:-2}
+      PARSE_WORKERS: ${PARSE_WORKERS:-3}
+      FULL_TEXT_LIMIT: ${FULL_TEXT_LIMIT:-80}
       FULL_TEXT_MIN_CHARS: ${FULL_TEXT_MIN_CHARS:-800}
-      AI_PROCESS_LIMIT: ${AI_PROCESS_LIMIT:-100}
+      AI_PROCESS_LIMIT: ${AI_PROCESS_LIMIT:-50}
       AI_OFFLINE: ${AI_OFFLINE:-0}
       SKIP_BOOTSTRAP: "1"
+      HTTP_MIN_INTERVAL_SECONDS: ${HTTP_MIN_INTERVAL_SECONDS:-1.5}
+      HTTP_JITTER_SECONDS: ${HTTP_JITTER_SECONDS:-0.4}
+      HTTP_BLOCK_COOLDOWN_SECONDS: ${HTTP_BLOCK_COOLDOWN_SECONDS:-900}
+      REQUEST_ARTICLE_LIMIT: ${REQUEST_ARTICLE_LIMIT:-6}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     command: ["./scripts/docker-scheduler.sh"]
     volumes:
       - exports:/app/exports

@@ -29,6 +29,10 @@ RSS_PROBE_TIMEOUT = int(os.environ.get("RSS_PROBE_TIMEOUT", "4"))
 MAX_WORKERS = 10              # параллелизм при обходе лент / автообнаружении
 RETRY_ATTEMPTS = 3            # попыток HTTP с экспоненциальным backoff
 RETRY_BACKOFF_BASE = 1.0      # базовая задержка backoff (1с, 2с, 4с)
+HTTP_MIN_INTERVAL_SECONDS = float(os.environ.get("HTTP_MIN_INTERVAL_SECONDS", "1.5"))
+HTTP_JITTER_SECONDS = float(os.environ.get("HTTP_JITTER_SECONDS", "0.4"))
+HTTP_BLOCK_COOLDOWN_SECONDS = int(os.environ.get("HTTP_BLOCK_COOLDOWN_SECONDS", "900"))
+REQUEST_ARTICLE_LIMIT = int(os.environ.get("REQUEST_ARTICLE_LIMIT", "6"))
 
 # --- OpenAI / AI processing ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

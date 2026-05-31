@@ -97,3 +97,39 @@ def test_parse_source_uses_listing_page_and_updates_last_seen(monkeypatch):
     assert inserted[0]["url"] == "https://example.com/news/2026/05/field-automation-rollout"
     assert state["source_id"] == 7
     assert state["last_seen_article_url"] == "https://example.com/news/2026/05/field-automation-rollout"
+
+
+def test_parse_source_skips_article_fetch_when_listing_hash_unchanged(monkeypatch):
+    touched = {}
+
+    monkeypatch.setattr(request_parser, "fetch", lambda url: HOME_HTML)
+    monkeypatch.setattr(
+        request_parser,
+        "extract_candidate_links",
+        lambda source, listing_url, content, limit=12: [
+            request_parser.CandidateLink(
+                url="https://example.com/news/2026/05/field-automation-rollout",
+                title="Field automation rollout improves wellsite performance",
+                score=8,
+                published_at=None,
+            )
+        ],
+    )
+    monkeypatch.setattr(request_parser.repository, "touch_last_parsed", lambda source_id: touched.setdefault("id", source_id))
+    monkeypatch.setattr(request_parser.repository, "insert_article", lambda article: (_ for _ in ()).throw(AssertionError("insert_article should not be called")))
+    monkeypatch.setattr(request_parser.repository, "article_exists", lambda url: False)
+
+    source = {"id": 9, "url": "https://example.com/news", "last_listing_hash": request_parser._listing_hash([
+        request_parser.CandidateLink(
+            url="https://example.com/news/2026/05/field-automation-rollout",
+            title="Field automation rollout improves wellsite performance",
+            score=8,
+            published_at=None,
+        )
+    ])}
+
+    stats = request_parser.parse_source(source)
+
+    assert stats["added"] == 0
+    assert stats["skipped_known"] == 1
+    assert touched["id"] == 9

@@ -119,9 +119,14 @@ CYCLE_INTERVAL_SECONDS=21600
 
 ```env
 RUN_DISCOVER_ON_START=1       # искать RSS при первом запуске контейнера
-DISCOVER_EVERY_CYCLES=4       # повторять discover каждый 4-й цикл
-FULL_TEXT_LIMIT=200           # сколько статей за цикл дозагружать полным текстом
-AI_PROCESS_LIMIT=100          # сколько статей за цикл отправлять в AI pipeline
+DISCOVER_EVERY_CYCLES=24      # повторять discover редко, чтобы не долбить сайты
+DISCOVER_WORKERS=2            # низкий параллелизм для discovery
+PARSE_WORKERS=3               # низкий параллелизм для parse
+HTTP_MIN_INTERVAL_SECONDS=1.5 # пауза между запросами к одному хосту
+HTTP_BLOCK_COOLDOWN_SECONDS=900 # cooldown после 403/429
+REQUEST_ARTICLE_LIMIT=6       # сколько статей брать с одного request-listing за цикл
+FULL_TEXT_LIMIT=80            # сколько статей за цикл дозагружать полным текстом
+AI_PROCESS_LIMIT=50           # сколько статей за цикл отправлять в AI pipeline
 AI_OFFLINE=0                  # 1 = тестовый режим без OpenAI API
 ```
 
