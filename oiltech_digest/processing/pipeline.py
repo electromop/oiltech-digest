@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from oiltech_digest.db import repository
+from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, OfflineAIClient, OpenAIResponsesClient
 from oiltech_digest.processing.prompts import (
     RELEVANCE_INSTRUCTIONS,
@@ -125,6 +126,85 @@ def process_score_articles(articles: list[dict], client) -> dict:
             stats["processed"] += 1
         except Exception as exc:  # noqa: BLE001
             _record_error(article, "scoring", client, exc)
+            stats["errors"] += 1
+    return stats
+
+
+def process_full(limit: int = 20, offline: bool = False) -> dict:
+    """Запустить по-статейный конвейер на статьях, у которых ещё нет сути."""
+    client = make_client(offline)
+    return process_pipeline_articles(repository.get_articles_needing_summary(limit), client)
+
+
+def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = True) -> dict:
+    """Полный конвейер по одной статье целиком: full-text → суть → релевантность → тег → скоринг.
+
+    Каждая статья проходит все этапы до конца, прежде чем берётся следующая, —
+    готовые карточки появляются по мере обработки, не нужно ждать прогона всего
+    батча на каждом этапе. Нерелевантные дальше не тегируются и не скорятся.
+    """
+    tags = repository.list_enabled_tags()
+    if not tags:
+        raise ValueError("Нет активных тегов. Запустите seed-tags.")
+    criteria = repository.list_enabled_scoring_criteria()
+    _validate_weights(criteria)
+    stats = {"processed": 0, "fulltext": 0, "summary": 0, "relevant": 0,
+             "rejected": 0, "tagged": 0, "scored": 0, "errors": 0}
+    for article in articles:
+        stats["processed"] += 1
+        try:
+            # 1. Полный текст из HTML, если RSS отдал только сниппет.
+            if fetch_full and article.get("text_truncated") and article.get("url"):
+                result = article_fetcher.fetch_article_text(article)
+                if result.status == "ok":
+                    repository.update_article_full_text(
+                        int(article["id"]), raw_text=result.text, text_truncated=False,
+                        status="ok", method=result.method, error=None,
+                    )
+                    article["raw_text"] = result.text
+                    article["text_truncated"] = False
+                    stats["fulltext"] += 1
+
+            # 2. Суть.
+            summary_resp = summarize_article(article, client)
+            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
+            _record_run(article, "summary", client, summary_resp)
+            article["summary"] = summary_resp.data["summary"]
+            stats["summary"] += 1
+
+            # 3. Релевантность.
+            rel_resp = relevance_article(article, client)
+            relevant = bool(rel_resp.data.get("relevant"))
+            repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
+            _record_run(article, "relevance", client, rel_resp)
+            stats["relevant" if relevant else "rejected"] += 1
+            if not relevant:
+                continue
+
+            # 4. Тег.
+            tag_resp = tag_article(article, tags, client)
+            tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
+            if tag_id == 0:
+                tag_id = keyword_tag(article, tags)["tag_id"]
+            repository.upsert_article_tag(
+                article["id"], tag_id,
+                _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
+                tag_resp.data.get("rationale"), tag_resp.model,
+            )
+            _record_run(article, "tagging", client, tag_resp)
+            stats["tagged"] += 1
+
+            # 5. Скоринг.
+            score_resp = score_article(article, criteria, client)
+            payload = normalize_score_payload(article, criteria, score_resp.data)
+            repository.replace_article_score(
+                article["id"], payload["total_score"], payload["score_label"],
+                payload["explanation"], payload["items"], score_resp.model,
+            )
+            _record_run(article, "scoring", client, score_resp)
+            stats["scored"] += 1
+        except Exception as exc:  # noqa: BLE001 - batch should continue
+            _record_error(article, "pipeline", client, exc)
             stats["errors"] += 1
     return stats
 

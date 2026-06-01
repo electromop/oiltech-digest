@@ -151,17 +151,21 @@ def extract_main_text(content: bytes | str) -> str:
 
 def _node_text(node) -> str:
     chunks = []
-    paragraphs = node.xpath(".//p|.//li|.//h2|.//h3|.//blockquote")
-    if not paragraphs:
-        paragraphs = [node]
-    for item in paragraphs:
+    for item in node.xpath(".//p|.//li|.//h2|.//h3|.//blockquote"):
         class_id = " ".join(filter(None, [item.get("class"), item.get("id")]))
         if _BAD_CLASS_RE.search(class_id):
             continue
         text = normalize.clean_html(item.text_content())
         if len(text) >= 30:
             chunks.append(text)
-    return "\n\n".join(_dedupe_preserve_order(chunks))
+    text = "\n\n".join(_dedupe_preserve_order(chunks))
+    if len(text) < 200:
+        # Вёрстка без значимых <p> (текст лежит в <div>/таблицах — частый случай
+        # у CMS вроде EnergyLand): берём очищенный текст самого узла-кандидата.
+        node_text = normalize.clean_html(node.text_content())
+        if len(node_text) > len(text):
+            text = node_text
+    return text
 
 
 def _score_node(node, text: str) -> float:

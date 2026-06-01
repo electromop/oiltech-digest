@@ -133,6 +133,17 @@ def cmd_score(args: argparse.Namespace) -> None:
     print(f"scoring: обработано={stats['processed']}, ошибок={stats['errors']}")
 
 
+def cmd_process_full(args: argparse.Namespace) -> None:
+    from oiltech_digest.processing.pipeline import process_full
+
+    stats = process_full(limit=args.limit, offline=args.offline)
+    print(
+        f"pipeline: статей={stats['processed']}, full-text={stats['fulltext']}, "
+        f"суть={stats['summary']}, релевантно={stats['relevant']}, отсев={stats['rejected']}, "
+        f"теги={stats['tagged']}, скоринг={stats['scored']}, ошибок={stats['errors']}"
+    )
+
+
 def cmd_relevance(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.pipeline import process_relevance
 
@@ -354,6 +365,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_process = sub.add_parser("process", help="summary → tagging → scoring")
     add_ai_args(p_process)
     p_process.set_defaults(func=cmd_process)
+
+    p_process_full = sub.add_parser("process-full", help="по-статейный конвейер: full-text→суть→релевантность→тег→скоринг")
+    add_ai_args(p_process_full)
+    p_process_full.set_defaults(func=cmd_process_full)
 
     p_process_articles = sub.add_parser("process-articles", help="summary → tagging → scoring для выбранных article_id")
     p_process_articles.add_argument("article_id", nargs="+", type=int)

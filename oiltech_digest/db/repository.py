@@ -222,7 +222,7 @@ def authenticate_user(email: str, password: str) -> dict | None:
             return None
         if not auth.verify_password(password, user["password_salt"], user["password_hash"]):
             return None
-        return user
+        return {"id": user["id"], "email": user["email"], "created_at": user["created_at"]}
 
 
 def create_user_session(user_id: int) -> str:

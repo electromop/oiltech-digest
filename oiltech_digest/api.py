@@ -233,7 +233,11 @@ def list_articles(
             params,
         )
         rows = cur.fetchall()
-    return [_article_payload(row) for row in rows]
+        score_items = _score_items_by_article(conn, [row["id"] for row in rows])
+    payloads = [_article_payload(row) for row in rows]
+    for payload in payloads:
+        payload["score_items"] = score_items.get(payload["id"], [])
+    return payloads
 
 
 @app.patch("/api/articles/{article_id}")
@@ -449,6 +453,38 @@ def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(req
         with_summary = repository.get_articles_needing_scores(payload.limit)
     scores = process_score_articles(with_summary, client)
     return {"summary": summaries, "relevance": relevance, "tagging": tags, "scoring": scores}
+
+
+def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """Per-criterion scoring breakdown grouped by article id."""
+    if not article_ids:
+        return {}
+    cur = conn.cursor(row_factory=dict_row)
+    cur.execute(
+        """
+        SELECT s.article_id, sc.name, sc.weight, asi.final_score, asi.ai_score,
+               asi.keyword_score, asi.rationale
+        FROM article_score_items asi
+        JOIN article_scores s ON s.id = asi.article_score_id
+        JOIN scoring_criteria sc ON sc.id = asi.criterion_id
+        WHERE s.article_id = ANY(%s)
+        ORDER BY sc.sort_order, sc.id
+        """,
+        (article_ids,),
+    )
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in cur.fetchall():
+        grouped.setdefault(int(row["article_id"]), []).append(
+            {
+                "name": row["name"],
+                "weight": float(row["weight"]) if row["weight"] is not None else 0.0,
+                "final_score": float(row["final_score"]) if row["final_score"] is not None else 0.0,
+                "ai_score": float(row["ai_score"]) if row["ai_score"] is not None else None,
+                "keyword_score": float(row["keyword_score"]) if row["keyword_score"] is not None else None,
+                "rationale": row["rationale"],
+            }
+        )
+    return grouped
 
 
 def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
