@@ -22,6 +22,9 @@ from oiltech_digest.config import (
     HTTP_BLOCK_COOLDOWN_SECONDS,
     HTTP_JITTER_SECONDS,
     HTTP_MIN_INTERVAL_SECONDS,
+    PROXY_HOST_OVERRIDES,
+    PROXY_TIMEOUT,
+    PROXY_URL,
     REQUEST_TIMEOUT,
     RETRY_ATTEMPTS,
     RETRY_BACKOFF_BASE,
@@ -63,6 +66,11 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
         logger.debug("HTTP %s — host cooldown active, skip", url)
         return None
 
+    proxies = _proxy_for(host)
+    if proxies:
+        timeout = max(timeout, PROXY_TIMEOUT)
+        _maybe_log_proxy(proxies)
+
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):
         _wait_for_host_slot(host)
@@ -72,14 +80,21 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
                 timeout=timeout,
                 headers=_DEFAULT_HEADERS,
                 allow_redirects=True,
+                proxies=proxies,
             )
             if resp.status_code in {403, 429, 503}:
                 _register_block(host, resp)
+                # 403/429: хост сам попросил паузу — cooldown уже выставлен, поэтому
+                # повторять в этом же запросе бессмысленно (иначе следующая попытка
+                # залипнет в _wait_for_host_slot на весь cooldown). 503 (временная
+                # ошибка сервера) — оставляем на обычные ретраи.
+                if resp.status_code in {403, 429}:
+                    return None
             resp.raise_for_status()
             return resp.content
         except requests.exceptions.SSLError as exc:
             last_err = exc
-            content = _fetch_insecure(url, timeout, quiet=quiet)
+            content = _fetch_insecure(url, timeout, quiet=quiet, proxies=proxies)
             if content is not None:
                 return content
             break
@@ -95,7 +110,9 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
     return None
 
 
-def _fetch_insecure(url: str, timeout: int, quiet: bool = False) -> bytes | None:
+def _fetch_insecure(
+    url: str, timeout: int, quiet: bool = False, proxies: dict[str, str] | None = None
+) -> bytes | None:
     """Fallback GET without certificate validation, only after SSLError."""
     try:
         import urllib3
@@ -107,6 +124,7 @@ def _fetch_insecure(url: str, timeout: int, quiet: bool = False) -> bytes | None
             headers=_DEFAULT_HEADERS,
             allow_redirects=True,
             verify=False,
+            proxies=proxies,
         )
         if resp.status_code in {403, 429, 503}:
             _register_block(_host(url), resp)
@@ -134,6 +152,46 @@ def _get_session() -> requests.Session:
 
 def _host(url: str) -> str:
     return (urlsplit(url).netloc or "").lower()
+
+
+def _proxy_for(host: str) -> dict[str, str] | None:
+    """requests-style proxies mapping for a host, or None for a direct request.
+
+    Per-host overrides win over the global PROXY_URL — this is the hook for the
+    future RU/INTL routing task (PROXY_HOST_OVERRIDES is empty for now).
+    """
+    url = ""
+    if host:
+        for suffix, override in PROXY_HOST_OVERRIDES.items():
+            if host == suffix or host.endswith("." + suffix):
+                url = override
+                break
+    url = url or PROXY_URL
+    if not url:
+        return None
+    return {"http": url, "https": url}
+
+
+_proxy_logged = False
+
+
+def _maybe_log_proxy(proxies: dict[str, str]) -> None:
+    """Log proxy activation once per process, with credentials masked."""
+    global _proxy_logged
+    if not _proxy_logged:
+        _proxy_logged = True
+        logger.info("HTTP — запросы идут через прокси %s", _mask_proxy(next(iter(proxies.values()))))
+
+
+def _mask_proxy(url: str) -> str:
+    """Hide credentials in a proxy URL so it is safe to log."""
+    try:
+        parts = urlsplit(url)
+        cred = "***@" if (parts.username or parts.password) else ""
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{cred}{parts.hostname or ''}{port}"
+    except Exception:  # noqa: BLE001
+        return "***"
 
 
 def _wait_for_host_slot(host: str) -> None:

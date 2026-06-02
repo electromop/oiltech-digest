@@ -34,6 +34,24 @@ HTTP_JITTER_SECONDS = float(os.environ.get("HTTP_JITTER_SECONDS", "0.4"))
 HTTP_BLOCK_COOLDOWN_SECONDS = int(os.environ.get("HTTP_BLOCK_COOLDOWN_SECONDS", "900"))
 REQUEST_ARTICLE_LIMIT = int(os.environ.get("REQUEST_ARTICLE_LIMIT", "6"))
 
+# --- Прокси для парсинга (residential, напр. 2captcha) ---
+# PROXY_URL — полная строка подключения: "http://user:pass@host:port"
+# (у 2captcha HTTP/HTTPS-прокси с авторизацией порт обычно 8080).
+# Если переменная задана, ВЕСЬ парсинг (RSS discovery, ленты, full-text статей)
+# идёт через прокси. Пусто (по умолчанию) — прямые запросы, как при локальной
+# разработке. OpenAI через прокси НЕ ходит (у него отдельный клиент) — намеренно:
+# чтобы не жечь платный трафик и не ловить блок OpenAI за подозрительный IP.
+PROXY_URL = os.environ.get("PROXY_URL", "").strip()
+
+# Таймаут (сек) для запросов через прокси: residential заметно медленнее прямого,
+# поэтому при активном прокси берём max(обычный таймаут, PROXY_TIMEOUT).
+PROXY_TIMEOUT = int(os.environ.get("PROXY_TIMEOUT", "40"))
+
+# Крючок для будущей задачи "разделение РФ / иностранные источники": карта
+# "домен → строка прокси". Совпавший суффикс хоста имеет приоритет над PROXY_URL.
+# Пока пусто; заполнится, когда заведём отдельные RU/INTL endpoint'ы.
+PROXY_HOST_OVERRIDES: dict[str, str] = {}
+
 # --- OpenAI / AI processing ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-nano")
