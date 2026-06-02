@@ -98,3 +98,11 @@ def test_mask_proxy_hides_credentials():
     assert "secret" not in masked
     assert "user" not in masked
     assert "proxy.local:8080" in masked
+
+
+def test_tally_counts_statuses():
+    http_client._status_counts.clear()
+    http_client._tally(200)
+    http_client._tally(200)
+    http_client._tally(403)
+    assert http_client._status_counts == {"200": 2, "403": 1}

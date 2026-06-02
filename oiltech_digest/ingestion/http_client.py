@@ -10,6 +10,7 @@ The goal is reliability from a server environment without looking overly aggress
 
 from __future__ import annotations
 
+import atexit
 import logging
 import random
 import threading
@@ -49,6 +50,11 @@ _host_lock = threading.Lock()
 _host_next_allowed: dict[str, float] = {}
 _host_cooldown_until: dict[str, float] = {}
 
+# Подсчёт HTTP-ответов по статусам — для итоговой строки в конце процесса.
+# Помогает видеть реальное соотношение OK/403 в логах scheduler, а не только WARNING'и.
+_counts_lock = threading.Lock()
+_status_counts: dict[str, int] = {}
+
 
 def fetch(url: str, timeout: int = REQUEST_TIMEOUT) -> bytes | None:
     """GET with retries, soft pacing and cooldown handling."""
@@ -82,6 +88,7 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
                 allow_redirects=True,
                 proxies=proxies,
             )
+            _tally(resp.status_code)
             if resp.status_code in {403, 429, 503}:
                 _register_block(host, resp)
                 # 403/429: хост сам попросил паузу — cooldown уже выставлен, поэтому
@@ -126,6 +133,7 @@ def _fetch_insecure(
             verify=False,
             proxies=proxies,
         )
+        _tally(resp.status_code)
         if resp.status_code in {403, 429, 503}:
             _register_block(_host(url), resp)
         resp.raise_for_status()
@@ -246,3 +254,25 @@ def _retry_after_seconds(response: requests.Response) -> int:
 def _retry_delay(attempt: int) -> float:
     base = RETRY_BACKOFF_BASE * (2 ** (attempt - 1))
     return base + random.uniform(0, HTTP_JITTER_SECONDS)
+
+
+def _tally(status: object) -> None:
+    """Count one HTTP response by status code for the end-of-process summary."""
+    key = str(status)
+    with _counts_lock:
+        _status_counts[key] = _status_counts.get(key, 0) + 1
+
+
+def _log_http_summary() -> None:
+    """Log the tally of HTTP statuses once, at process exit (registered via atexit)."""
+    with _counts_lock:
+        if not _status_counts:
+            return
+        total = sum(_status_counts.values())
+        parts = ", ".join(
+            f"{k}×{v}" for k, v in sorted(_status_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+    logger.info("HTTP итог за процесс: %s (всего %d запросов)", parts, total)
+
+
+atexit.register(_log_http_summary)
