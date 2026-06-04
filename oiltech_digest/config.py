@@ -47,10 +47,25 @@ PROXY_URL = os.environ.get("PROXY_URL", "").strip()
 # поэтому при активном прокси берём max(обычный таймаут, PROXY_TIMEOUT).
 PROXY_TIMEOUT = int(os.environ.get("PROXY_TIMEOUT", "40"))
 
-# Крючок для будущей задачи "разделение РФ / иностранные источники": карта
-# "домен → строка прокси". Совпавший суффикс хоста имеет приоритет над PROXY_URL.
-# Пока пусто; заполнится, когда заведём отдельные RU/INTL endpoint'ы.
-PROXY_HOST_OVERRIDES: dict[str, str] = {}
+def _parse_proxy_host_overrides(raw: str) -> dict[str, str]:
+    """Parse 'host=proxy_url,host2=proxy_url2' from env into a suffix map."""
+    overrides: dict[str, str] = {}
+    for chunk in (raw or "").split(","):
+        if not chunk.strip() or "=" not in chunk:
+            continue
+        host, proxy_url = chunk.split("=", 1)
+        host = host.strip().lower().lstrip(".")
+        proxy_url = proxy_url.strip()
+        if host and proxy_url:
+            overrides[host] = proxy_url
+    return overrides
+
+
+# Карта "домен → строка прокси". Совпавший суффикс хоста имеет приоритет
+# над PROXY_URL: например, override для "rbc.ru" сработает и для "www.rbc.ru".
+PROXY_HOST_OVERRIDES: dict[str, str] = _parse_proxy_host_overrides(
+    os.environ.get("PROXY_HOST_OVERRIDES", "")
+)
 
 # --- OpenAI / AI processing ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

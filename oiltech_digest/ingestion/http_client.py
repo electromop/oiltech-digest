@@ -170,7 +170,7 @@ def _proxy_for(host: str) -> dict[str, str] | None:
     """
     url = ""
     if host:
-        for suffix, override in PROXY_HOST_OVERRIDES.items():
+        for suffix, override in sorted(PROXY_HOST_OVERRIDES.items(), key=lambda item: len(item[0]), reverse=True):
             if host == suffix or host.endswith("." + suffix):
                 url = override
                 break
