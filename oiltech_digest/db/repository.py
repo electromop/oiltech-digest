@@ -449,7 +449,7 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
             )
             SELECT *
             FROM verdicts
-            WHERE (%s IS NULL OR verdict = %s)
+            WHERE (%s::text IS NULL OR verdict = %s)
             ORDER BY
               CASE
                 WHEN NOT enabled THEN 4
