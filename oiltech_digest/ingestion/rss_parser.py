@@ -19,6 +19,8 @@ from oiltech_digest.db import repository
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.ingestion.http_client import fetch
 from oiltech_digest.ingestion import request_parser
+from oiltech_digest.ingestion import telegram_parser
+from oiltech_digest.ingestion import playwright_parser
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
 logger = logging.getLogger(__name__)
@@ -102,7 +104,7 @@ def parse_all(max_age_days: int | None = None, workers: int = MAX_WORKERS,
               source_id: int | None = None) -> dict:
     """Параллельно обойти RSS и request-источники. duplicates = attempted - added."""
     sources = repository.get_enabled_sources()
-    sources = [s for s in sources if s.get("parse_strategy") in {"rss", "request"}]
+    sources = [s for s in sources if s.get("parse_strategy") in {"rss", "request", "telegram", "playwright"}]
     if source_id is not None:
         sources = [s for s in sources if s["id"] == source_id]
 
@@ -120,6 +122,10 @@ def parse_all(max_age_days: int | None = None, workers: int = MAX_WORKERS,
         for source in sources:
             if source.get("parse_strategy") == "request":
                 future = pool.submit(request_parser.parse_source, source, max_age_days)
+            elif source.get("parse_strategy") == "telegram":
+                future = pool.submit(telegram_parser.parse_source, source, max_age_days)
+            elif source.get("parse_strategy") == "playwright":
+                future = pool.submit(playwright_parser.parse_source, source, max_age_days)
             else:
                 future = pool.submit(parse_source, source, max_age_days)
             futures[future] = source
