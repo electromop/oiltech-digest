@@ -1,5 +1,6 @@
 import requests
 
+from oiltech_digest import config
 from oiltech_digest.ingestion import http_client
 
 
@@ -69,6 +70,32 @@ def test_proxy_for_host_override_wins(monkeypatch):
     )
     expected = {"http": "http://ru:1@ru.proxy:8080", "https": "http://ru:1@ru.proxy:8080"}
     assert http_client._proxy_for("www.example.com") == expected
+
+
+def test_proxy_for_prefers_more_specific_host_override(monkeypatch):
+    monkeypatch.setattr(http_client, "PROXY_URL", "http://global:0@proxy.local:8080")
+    monkeypatch.setattr(
+        http_client,
+        "PROXY_HOST_OVERRIDES",
+        {
+            "example.com": "http://general:1@proxy.local:8080",
+            "news.example.com": "http://specific:1@proxy.local:8080",
+        },
+    )
+    expected = {
+        "http": "http://specific:1@proxy.local:8080",
+        "https": "http://specific:1@proxy.local:8080",
+    }
+    assert http_client._proxy_for("news.example.com") == expected
+
+
+def test_parse_proxy_host_overrides_from_env_string():
+    assert config._parse_proxy_host_overrides(
+        " rbc.ru = http://ru:1@proxy.local:8080, .shell.com=https://intl:2@proxy.local:8080,broken"
+    ) == {
+        "rbc.ru": "http://ru:1@proxy.local:8080",
+        "shell.com": "https://intl:2@proxy.local:8080",
+    }
 
 
 def test_request_passes_proxies_to_session(monkeypatch):

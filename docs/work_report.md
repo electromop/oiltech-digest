@@ -10,6 +10,7 @@
 - загрузка каталога источников из Excel;
 - автообнаружение RSS;
 - парсинг RSS в PostgreSQL;
+- парсинг открытых Telegram-каналов через публичный preview `t.me/s`;
 - дедупликация по `url`;
 - deterministic prefilter для очевидного нерелевантного шума;
 - дозагрузка полного текста статьи по ссылке.
@@ -27,6 +28,7 @@
 
 - Admin UI со списком статей;
 - экран источников с ручным добавлением RSS;
+- read-only диагностика источников в CLI/API и в экране источников;
 - редактирование тегов;
 - редактирование критериев скоринга;
 - месячный дайджест в виде JSON и HTML email-шаблона;
@@ -46,13 +48,14 @@
 | AI cost tracking | ✅ |
 | Digest JSON | ✅ |
 | Digest HTML template | ✅ |
+| Telegram public-preview ingestion | ✅ |
 
 Частично или на будущее:
 
 | Область | Статус |
 |---|---|
 | non-RSS request/web parser | ⏳ |
-| Telegram ingestion | ⏳ |
+| Telegram API / закрытые каналы | ⏳ |
 | persisted monthly digest workflow | ⏳ |
 | PDF/DOCX export pipeline | ⏳ |
 

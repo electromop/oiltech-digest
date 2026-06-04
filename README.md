@@ -125,6 +125,9 @@ PARSE_WORKERS=3               # низкий параллелизм для parse
 HTTP_MIN_INTERVAL_SECONDS=1.5 # пауза между запросами к одному хосту
 HTTP_BLOCK_COOLDOWN_SECONDS=900 # cooldown после 403/429
 REQUEST_ARTICLE_LIMIT=6       # сколько статей брать с одного request-listing за цикл
+PROXY_URL=                    # глобальный прокси для парсинга, если нужен
+PROXY_HOST_OVERRIDES=         # точечно: rbc.ru=http://...,shell.com=http://...
+PROXY_TIMEOUT=40              # таймаут при запросах через residential-прокси
 FULL_TEXT_LIMIT=80            # сколько статей за цикл дозагружать полным текстом
 AI_PROCESS_LIMIT=50           # сколько статей за цикл отправлять в AI pipeline
 AI_OFFLINE=0                  # 1 = тестовый режим без OpenAI API
@@ -188,7 +191,7 @@ python -m oiltech_digest.cli process --offline --limit 5
 | `init-db` | создать схему БД (идемпотентно) |
 | `seed-sources` | загрузить 120 источников из `1_Список_источников_для_дайджеста.xlsx` |
 | `discover-rss` | автообнаружение RSS по сайту источника; `--force`, `--dry-run`, `--source-id`, `--workers`, `--limit`, `--timeout` |
-| `parse` | спарсить ленты в `articles`, перед вставкой отсечь очевидный спорт/культуру/бытовые новости без доменного сигнала; `--max-age-days`, `--source-id`, `--workers` |
+| `parse` | спарсить включённые `rss`/`request`/`telegram`-источники в `articles`, перед вставкой отсечь очевидный спорт/культуру/бытовые новости без доменного сигнала; `--max-age-days`, `--source-id`, `--workers` |
 | `fetch-full-text` | скачать страницы статей по URL и заменить RSS-анонс на полный текст; `--limit`, `--min-chars` |
 | `stats` | количество источников/статей, распределение по стратегиям, кросс-дубли |
 | `seed-tags` | загрузить D01-D18 из `2_Направления_и_ключевые_слова.xlsx` в `tags`; EN-поля сохраняются только в БД |
@@ -202,10 +205,13 @@ python -m oiltech_digest.cli process --offline --limit 5
 | `ai-cost-report` | агрегировать токены/стоимость по этапам и языкам для Issue #10 |
 | `ai-article-cost-report` | посчитать стоимость полного AI-прогона одной статьи: summary + relevance + tagging + scoring |
 | `sources` | вывести источники; `--search`, `--limit` |
+| `source-health` | показать вердикты покрытия источников: `ok` / `stale` / `no_articles` / `disabled`; поддерживает `--verdict` |
 | `article-candidates` | быстро найти статьи-кандидаты по ключевым словам |
 | `source-enable` | включить/выключить источник: `source-enable 12 --no-enabled` |
 | `source-add-rss` | вручную добавить RSS-источник; поддерживает `--frequency` |
+| `source-diagnose` | read-only диагностика источника по `source_id`: HTTP-проба, кандидаты, извлечение статей/постов |
 | `digest-content` | собрать JSON-черновик дайджеста по месяцу и score; `--html-output` дополнительно пишет email-ready HTML по шаблону |
+| `digest-save` | сохранить draft в `monthly_digests` + `monthly_digest_items` из текущих digest-кандидатов |
 
 ## Источники и дайджест в UI/API
 

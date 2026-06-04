@@ -23,6 +23,7 @@
 - автообнаружение RSS для сайтов;
 - парсинг RSS в таблицу `articles`;
 - listing-based monitoring для `request`-источников без RSS;
+- Telegram public-preview ingestion для открытых каналов через `https://t.me/s/<channel>`;
 - предфильтр явного нерелевантного шума до записи в БД;
 - дозагрузка полного текста статьи по `url`, если RSS дал только анонс;
 - AI summary на русском;
@@ -36,7 +37,7 @@
 
 Пока не реализовано как рабочий продукт:
 
-- Telegram ingestion;
+- Telegram ingestion через Telegram API/авторизованную сессию для закрытых каналов;
 - автоматическая публикация PDF/DOCX;
 - сохранение редакторского дайджеста в `monthly_digests` как основного потока UI.
 
@@ -52,6 +53,7 @@
 sources
   -> discover-rss
   -> parse
+     (rss / request / public Telegram preview)
   -> deterministic relevance prefilter
   -> articles
   -> fetch-full-text
@@ -228,12 +230,15 @@ docker compose up -d --build
 ### Работа с источниками
 
 - `sources`
+- `source-health`
 - `source-enable`
 - `source-add-rss`
+- `source-diagnose`
 
 ### Дайджест
 
 - `digest-content`
+- `digest-save`
 
 ## 9. API-эндпоинты
 
@@ -246,16 +251,20 @@ docker compose up -d --build
 - `GET /api/articles` — список статей;
 - `PATCH /api/articles/{id}` — статус/отбор/комментарий статьи;
 - `GET /api/sources` — список источников;
+- `GET /api/source-health` — вердикты покрытия источников;
 - `POST /api/sources` — добавить RSS-источник;
 - `POST /api/auth/register` / `POST /api/auth/login` / `POST /api/auth/logout`;
 - `GET /api/auth/me`;
 - `POST /api/sources/{source_id}/scrape` — вручную проверить listing request-источника;
+- `GET/POST /api/sources/{source_id}/diagnose` — read-only диагностика источника; POST принимает временные селекторы без сохранения;
 - `PATCH /api/sources/{id}` — обновить источник;
 - `GET /api/tags`, `PUT /api/tags` — теги;
 - `GET /api/scoring-criteria`, `PUT /api/scoring-criteria` — критерии скоринга;
 - `GET /api/reports/ai-cost` — агрегированный cost report;
 - `GET /api/reports/ai-article-cost` — стоимость полного прогона статьи;
 - `GET /api/digest-content` — JSON дайджеста;
+- `POST /api/monthly-digests` — сохранить draft дайджеста за месяц;
+- `GET /api/monthly-digests/{month}` — получить сохраненный draft;
 - `GET /api/digest-email` — HTML email-шаблон;
 - `POST /api/process` — AI-обработка батча статей.
 
