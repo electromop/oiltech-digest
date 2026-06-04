@@ -35,6 +35,14 @@ FULL_TEXT_MIN_CHARS="${FULL_TEXT_MIN_CHARS:-800}"
 AI_PROCESS_LIMIT="${AI_PROCESS_LIMIT:-100}"
 AI_OFFLINE="${AI_OFFLINE:-0}"
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-0}"
+# STREAMING_PIPELINE=1 заменяет parse+fetch-full-text+process на единый parse-process.
+# На сервере с 1.9 ГБ RAM рекомендуется PARSE_WORKERS<=5 при стриминге.
+STREAMING_PIPELINE="${STREAMING_PIPELINE:-0}"
+STREAM_POLL_INTERVAL="${STREAM_POLL_INTERVAL:-10}"
+STREAM_PROCESS_BATCH="${STREAM_PROCESS_BATCH:-20}"
+# FULLTEXT_RETRY_TOO_SHORT=1 — повторять попытку для статей со статусом too_short
+# (полезно после добавления trafilatura — запустить один раз вручную).
+FULLTEXT_RETRY_TOO_SHORT="${FULLTEXT_RETRY_TOO_SHORT:-0}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -54,16 +62,35 @@ while true; do
     run_step "discover-rss" python -m oiltech_digest.cli discover-rss --workers "$DISCOVER_WORKERS" --timeout "$DISCOVER_TIMEOUT"
   fi
 
-  run_step "parse" python -m oiltech_digest.cli parse --workers "$PARSE_WORKERS"
-  run_step "fetch-full-text" python -m oiltech_digest.cli fetch-full-text --limit "$FULL_TEXT_LIMIT" --min-chars "$FULL_TEXT_MIN_CHARS"
-
-  if [ "$AI_PROCESS_LIMIT" -gt 0 ]; then
-    if [ "$AI_OFFLINE" = "1" ]; then
-      run_step "process-offline" python -m oiltech_digest.cli process --offline --limit "$AI_PROCESS_LIMIT"
-    elif [ -n "${OPENAI_API_KEY:-}" ]; then
-      run_step "process" python -m oiltech_digest.cli process --limit "$AI_PROCESS_LIMIT"
+  if [ "$STREAMING_PIPELINE" = "1" ]; then
+    # Стриминг: parse + AI-обработка параллельно в одном процессе.
+    if [ "$AI_PROCESS_LIMIT" -gt 0 ] && { [ "$AI_OFFLINE" = "1" ] || [ -n "${OPENAI_API_KEY:-}" ]; }; then
+      _offline_flag=""
+      [ "$AI_OFFLINE" = "1" ] && _offline_flag="--offline"
+      run_step "parse-process" python -m oiltech_digest.cli parse-process \
+        --workers "$PARSE_WORKERS" \
+        --process-limit "$STREAM_PROCESS_BATCH" \
+        --poll-interval "$STREAM_POLL_INTERVAL" \
+        ${_offline_flag}
     else
-      log "SKIP process: OPENAI_API_KEY is empty"
+      run_step "parse" python -m oiltech_digest.cli parse --workers "$PARSE_WORKERS"
+      log "SKIP process: OPENAI_API_KEY is empty and AI_OFFLINE!=1"
+    fi
+  else
+    # Классический последовательный режим.
+    run_step "parse" python -m oiltech_digest.cli parse --workers "$PARSE_WORKERS"
+    _retry_flag=""
+    [ "$FULLTEXT_RETRY_TOO_SHORT" = "1" ] && _retry_flag="--retry-too-short"
+    run_step "fetch-full-text" python -m oiltech_digest.cli fetch-full-text --limit "$FULL_TEXT_LIMIT" --min-chars "$FULL_TEXT_MIN_CHARS" ${_retry_flag}
+
+    if [ "$AI_PROCESS_LIMIT" -gt 0 ]; then
+      if [ "$AI_OFFLINE" = "1" ]; then
+        run_step "process-offline" python -m oiltech_digest.cli process --offline --limit "$AI_PROCESS_LIMIT"
+      elif [ -n "${OPENAI_API_KEY:-}" ]; then
+        run_step "process" python -m oiltech_digest.cli process --limit "$AI_PROCESS_LIMIT"
+      else
+        log "SKIP process: OPENAI_API_KEY is empty"
+      fi
     fi
   fi
 

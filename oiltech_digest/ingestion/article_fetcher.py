@@ -8,6 +8,7 @@ the extracted body is clearly better than the RSS snippet.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 import re
 
@@ -42,10 +43,15 @@ class ExtractionResult:
     error: str | None = None
 
 
-def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS) -> dict:
-    """Fetch and store full text for truncated articles."""
+def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
+                    retry_too_short: bool = False) -> dict:
+    """Fetch and store full text for truncated articles.
+
+    retry_too_short=True re-attempts articles previously marked too_short,
+    useful after adding a new extraction backend (e.g. trafilatura).
+    """
     stats = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0}
-    articles = repository.get_articles_needing_full_text(limit=limit)
+    articles = repository.get_articles_needing_full_text(limit=limit, retry_too_short=retry_too_short)
     for article in articles:
         stats["processed"] += 1
         try:
@@ -91,15 +97,24 @@ def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> E
     content = fetch(url)
     if content is None:
         return ExtractionResult("", "failed", error="download failed")
-    extracted = extract_main_text(content)
     current = article.get("raw_text") or ""
-    if not _is_better_text(extracted, current, min_chars=min_chars):
-        return ExtractionResult(
-            extracted,
-            "too_short",
-            error=f"extracted={len(extracted)} chars, current={len(current)} chars",
-        )
-    return ExtractionResult(extracted, "ok")
+
+    extracted = extract_main_text(content)
+    if _is_better_text(extracted, current, min_chars=min_chars):
+        return ExtractionResult(extracted, "ok", method="lxml")
+
+    # Fallback: trafilatura often handles cluttered pages better than lxml heuristics.
+    traf = _trafilatura_extract(content)
+    if traf and _is_better_text(traf, current, min_chars=min_chars):
+        return ExtractionResult(traf, "ok", method="trafilatura")
+
+    best = traf if len(traf) > len(extracted) else extracted
+    return ExtractionResult(
+        best,
+        "too_short",
+        method="trafilatura" if traf and len(traf) > len(extracted) else "lxml",
+        error=f"extracted={len(best)} chars, current={len(current)} chars",
+    )
 
 
 def extract_main_text(content: bytes | str) -> str:
@@ -115,6 +130,8 @@ def extract_main_text(content: bytes | str) -> str:
         doc = html.fromstring(content)
     except (ValueError, TypeError):
         return ""
+
+    structured_text = _json_ld_article_text(doc)
 
     for xpath in _DROP_XPATH:
         for node in doc.xpath(xpath):
@@ -136,8 +153,8 @@ def extract_main_text(content: bytes | str) -> str:
     if not candidates:
         candidates = [doc]
 
-    best_text = ""
-    best_score = -1
+    best_text = structured_text
+    best_score = len(structured_text) + 300 if len(structured_text) >= 120 else -1
     for node in candidates:
         text = _node_text(node)
         if len(text) < 120:
@@ -147,6 +164,43 @@ def extract_main_text(content: bytes | str) -> str:
             best_score = score
             best_text = text
     return best_text
+
+
+def _json_ld_article_text(doc) -> str:
+    """Extract articleBody/text from JSON-LD structured data when present."""
+    texts: list[str] = []
+    for node in doc.xpath("//script[contains(translate(@type, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'ld+json')]"):
+        raw = (node.text or "").strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        texts.extend(_json_ld_text_values(payload))
+    if not texts:
+        return ""
+    return max((normalize.clean_html(text) for text in texts), key=len, default="")
+
+
+def _json_ld_text_values(payload) -> list[str]:
+    if isinstance(payload, list):
+        values: list[str] = []
+        for item in payload:
+            values.extend(_json_ld_text_values(item))
+        return values
+    if not isinstance(payload, dict):
+        return []
+
+    values = []
+    for key in ("articleBody", "text"):
+        value = payload.get(key)
+        if isinstance(value, str) and len(value.strip()) >= 120:
+            values.append(value)
+    graph = payload.get("@graph")
+    if graph:
+        values.extend(_json_ld_text_values(graph))
+    return values
 
 
 def _node_text(node) -> str:
@@ -186,6 +240,23 @@ def _is_better_text(extracted: str, current: str, min_chars: int) -> bool:
     if current_len and extracted_len < current_len * MIN_GAIN_RATIO:
         return False
     return True
+
+
+def _trafilatura_extract(content: bytes | str) -> str:
+    try:
+        import trafilatura  # optional dep — not available in all envs
+    except ImportError:
+        return ""
+    try:
+        text = trafilatura.extract(
+            content,
+            include_comments=False,
+            include_tables=False,
+            no_fallback=False,
+        )
+        return (text or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:

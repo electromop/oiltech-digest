@@ -16,6 +16,24 @@ ARTICLE_HTML = b"""
 </html>
 """
 
+JSON_LD_HTML = """
+<html>
+  <head>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "NewsArticle",
+        "headline": "Structured data article",
+        "articleBody": "The oilfield services company introduced a drilling automation platform for well construction teams. The system improves equipment uptime, supports production engineers, and gives enough detailed operational context for downstream summary and scoring."
+      }
+    </script>
+  </head>
+  <body>
+    <div class="page-shell">Subscribe and follow us</div>
+  </body>
+</html>
+"""
+
 
 def test_extract_main_text_prefers_article_content():
     text = article_fetcher.extract_main_text(ARTICLE_HTML)
@@ -24,6 +42,14 @@ def test_extract_main_text_prefers_article_content():
     assert "field deployment" in text
     assert "Home Products Subscribe" not in text
     assert "Related links" not in text
+
+
+def test_extract_main_text_uses_json_ld_article_body():
+    text = article_fetcher.extract_main_text(JSON_LD_HTML)
+
+    assert "drilling automation platform" in text
+    assert "equipment uptime" in text
+    assert "Subscribe and follow us" not in text
 
 
 def test_is_better_text_requires_meaningful_gain():
