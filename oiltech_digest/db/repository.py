@@ -436,8 +436,8 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
               FROM sources s
               LEFT JOIN articles a ON a.source_id = s.id
               GROUP BY s.id
-            )
-            ), verdicts AS (
+            ),
+            verdicts AS (
               SELECT *,
                      CASE
                        WHEN NOT enabled THEN 'disabled'
