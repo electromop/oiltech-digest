@@ -26,7 +26,8 @@ from oiltech_digest.processing.pipeline import (
     process_tag_articles,
 )
 from oiltech_digest.ingestion import request_parser
-from oiltech_digest.processing.digest import build_digest_content, render_digest_email, write_digest_export
+from oiltech_digest.ingestion.source_diagnostics import diagnose_source
+from oiltech_digest.processing.digest import build_digest_content, render_digest_email, save_digest_draft, write_digest_export
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -274,6 +275,16 @@ def list_sources(
     return [_clean(row) for row in repository.list_sources(search=search, limit=limit)]
 
 
+@app.get("/api/source-health")
+def source_health(
+    stale_days: int = Query(3, ge=1, le=30),
+    limit: int = Query(500, ge=1, le=1000),
+    verdict: str | None = Query(None, pattern="^(ok|stale|no_articles|disabled)$"),
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
+    return [_clean(row) for row in repository.source_health_report(stale_days=stale_days, limit=limit, verdict=verdict)]
+
+
 @app.post("/api/sources")
 def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     source_id = repository.add_rss_source(
@@ -329,6 +340,32 @@ def scrape_source(source_id: int, user: dict[str, Any] = Depends(require_user)) 
         raise HTTPException(status_code=400, detail="Скраппер доступен только для request-источников")
     stats = request_parser.parse_source(source)
     return {"ok": True, "stats": _clean(stats)}
+
+
+@app.get("/api/sources/{source_id}/diagnose")
+def diagnose_source_endpoint(
+    source_id: int,
+    limit: int = Query(5, ge=1, le=20),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    source = repository.get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return _clean(diagnose_source(source, limit=limit))
+
+
+@app.post("/api/sources/{source_id}/diagnose")
+def diagnose_source_with_overrides(
+    source_id: int,
+    patch: SourcePatch,
+    limit: int = Query(5, ge=1, le=20),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    source = repository.get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    overrides = patch.model_dump(exclude_unset=True)
+    return _clean(diagnose_source({**source, **overrides}, limit=limit))
 
 
 @app.get("/api/tags")
@@ -387,6 +424,19 @@ def digest_content(month: str, limit: int = Query(20, ge=1, le=100),
                    min_score: float = 60,
                    user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     return _clean(build_digest_content(month=month, limit=limit, min_score=min_score))
+
+
+@app.post("/api/monthly-digests")
+def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    return _clean(save_digest_draft(month=payload.month, limit=payload.limit, min_score=payload.min_score))
+
+
+@app.get("/api/monthly-digests/{month}")
+def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    digest = repository.get_monthly_digest(month)
+    if digest is None:
+        raise HTTPException(status_code=404, detail="Digest not found")
+    return _clean(digest)
 
 
 @app.get("/api/digest-email", response_class=HTMLResponse)

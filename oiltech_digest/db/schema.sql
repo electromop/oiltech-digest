@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS monthly_digests (
   created_at  TIMESTAMPTZ DEFAULT now(),
   updated_at  TIMESTAMPTZ DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_digests_month ON monthly_digests(month);
 
 CREATE TABLE IF NOT EXISTS monthly_digest_items (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

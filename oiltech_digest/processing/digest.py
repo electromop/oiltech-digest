@@ -26,6 +26,7 @@ def build_digest_content(month: str, limit: int = 20, min_score: float = 60) -> 
         news.append(
             {
                 "category": tag,
+                "article_id": row["id"],
                 "title": row["title"],
                 "source": row["source_name"],
                 "url": row["url"],
@@ -159,6 +160,27 @@ def write_digest_content(path: str | Path, month: str, limit: int = 20,
         html_output_path.write_text(render_digest_email(content), encoding="utf-8")
         result["html_path"] = str(html_output_path)
     return result
+
+
+def save_digest_draft(month: str, limit: int = 20, min_score: float = 60) -> dict:
+    """Build digest content from current selected articles and persist it as a draft."""
+    content = build_digest_content(month=month, limit=limit, min_score=min_score)
+    items = [
+        {
+            "article_id": item["article_id"],
+            "section": item.get("category"),
+            "editor_note": item.get("summary"),
+        }
+        for item in content.get("items", [])
+        if item.get("article_id") is not None
+    ]
+    saved = repository.save_monthly_digest(
+        month=month,
+        title=content.get("title") or f"Нефтесервисный дайджест · {month}",
+        items=items,
+        status="draft",
+    )
+    return {**saved, "content_items": len(content.get("items", []))}
 
 
 def write_digest_export(month: str, export_format: str = "html", limit: int = 20,

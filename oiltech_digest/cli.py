@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import threading
+import time
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -76,7 +79,11 @@ def cmd_parse(args: argparse.Namespace) -> None:
 def cmd_fetch_full_text(args: argparse.Namespace) -> None:
     from oiltech_digest.ingestion.article_fetcher import fetch_full_text
 
-    stats = fetch_full_text(limit=args.limit, min_chars=args.min_chars)
+    stats = fetch_full_text(
+        limit=args.limit,
+        min_chars=args.min_chars,
+        retry_too_short=args.retry_too_short,
+    )
     print(
         f"fetch-full-text: проверено={stats['processed']}, обновлено={stats['updated']}, "
         f"слишком коротких={stats['too_short']}, ошибок={stats['failed']}"
@@ -261,6 +268,26 @@ def cmd_sources(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_source_health(args: argparse.Namespace) -> None:
+    from collections import Counter
+
+    from oiltech_digest.db import repository
+
+    rows = repository.source_health_report(stale_days=args.stale_days, limit=args.limit, verdict=args.verdict)
+    counts = Counter(row["verdict"] for row in rows)
+    print(
+        "source-health: "
+        + ", ".join(f"{name}={counts.get(name, 0)}" for name in ("no_articles", "stale", "ok", "disabled"))
+    )
+    for row in rows:
+        last = row.get("last_article_at")
+        last_s = last.date().isoformat() if hasattr(last, "date") else "—"
+        print(
+            f"{row['id']:>4} {row['verdict']:<11} {row.get('parse_strategy') or '-':<8} "
+            f"{int(row['articles'] or 0):>5} last={last_s} · {row['name']}"
+        )
+
+
 def cmd_article_candidates(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -295,6 +322,110 @@ def cmd_source_add_rss(args: argparse.Namespace) -> None:
     print(f"RSS-источник сохранён: id={source_id}")
 
 
+def cmd_source_diagnose(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+    from oiltech_digest.ingestion.source_diagnostics import diagnose_source
+
+    source = repository.get_source(args.source_id)
+    if source is None:
+        raise SystemExit(f"Источник не найден: {args.source_id}")
+    result = diagnose_source(source, limit=args.limit)
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+def cmd_parse_process(args: argparse.Namespace) -> None:
+    """Стриминг-пайплайн: parse идёт в фоне, process обрабатывает новые статьи по мере их появления."""
+    from oiltech_digest.db import repository
+    from oiltech_digest.ingestion.rss_parser import parse_all
+    from oiltech_digest.processing.pipeline import make_client, process_pipeline_articles
+
+    logger = logging.getLogger(__name__)
+    client = make_client(args.offline)
+
+    # Checkpoint: статьи с ID строго больше этого значения считаем «новыми».
+    checkpoint_id: int = repository.max_article_id() or 0
+    logger.info("parse-process: checkpoint article_id=%d", checkpoint_id)
+
+    parse_stats: dict = {}
+    parse_done = threading.Event()
+
+    def _run_parse() -> None:
+        parse_stats.update(
+            parse_all(
+                max_age_days=args.max_age_days,
+                workers=args.workers,
+                source_id=getattr(args, "source_id", None),
+            )
+        )
+        parse_done.set()
+
+    parse_thread = threading.Thread(target=_run_parse, daemon=True)
+    parse_thread.start()
+
+    process_totals = {"processed": 0, "fulltext": 0, "summary": 0,
+                      "relevant": 0, "rejected": 0, "tagged": 0, "scored": 0, "errors": 0}
+    poll_interval = getattr(args, "poll_interval", 10)
+    batch_limit = getattr(args, "process_limit", 20)
+
+    while not parse_done.is_set() or True:
+        new_articles = repository.get_articles_needing_summary_after(
+            after_id=checkpoint_id, limit=batch_limit
+        )
+        if new_articles:
+            logger.info("parse-process: обрабатываю %d новых статей", len(new_articles))
+            batch_stats = process_pipeline_articles(new_articles, client, fetch_full=True)
+            for key in process_totals:
+                process_totals[key] += batch_stats.get(key, 0)
+            # Двигаем checkpoint чтобы не перечитывать уже обработанные.
+            checkpoint_id = max(int(a["id"]) for a in new_articles)
+
+        if parse_done.is_set() and not new_articles:
+            break
+        if not parse_done.is_set():
+            time.sleep(poll_interval)
+
+    parse_thread.join(timeout=5)
+    print(
+        f"parse-process parse: добавлено={parse_stats.get('added', '?')}, "
+        f"ошибок={parse_stats.get('errors', '?')}"
+    )
+    print(
+        f"parse-process pipeline: статей={process_totals['processed']}, "
+        f"full-text={process_totals['fulltext']}, суть={process_totals['summary']}, "
+        f"релевантно={process_totals['relevant']}, отсев={process_totals['rejected']}, "
+        f"теги={process_totals['tagged']}, скоринг={process_totals['scored']}, "
+        f"ошибок={process_totals['errors']}"
+    )
+
+
+def cmd_source_retry(args: argparse.Namespace) -> None:
+    """Force-parse sources with verdict stale or no_articles."""
+    from oiltech_digest.db import repository
+    from oiltech_digest.ingestion.rss_parser import parse_all
+
+    verdicts = set(args.verdict) if args.verdict else {"stale", "no_articles"}
+    rows = repository.source_health_report(stale_days=args.stale_days, limit=1000)
+    source_ids = [r["id"] for r in rows if r["verdict"] in verdicts]
+    if not source_ids:
+        print("source-retry: нет источников с указанными вердиктами.")
+        return
+    print(f"source-retry: источников для повтора = {len(source_ids)} ({', '.join(sorted(verdicts))})")
+    total = {"added": 0, "duplicates": 0, "skipped_old": 0,
+             "skipped_irrelevant": 0, "sources_ok": 0, "errors": 0}
+    for sid in source_ids:
+        stats = parse_all(
+            max_age_days=args.max_age_days,
+            workers=1,
+            source_id=sid,
+        )
+        for key in total:
+            total[key] += stats.get(key, 0)
+    print(
+        f"source-retry итог: добавлено={total['added']}, дублей={total['duplicates']}, "
+        f"источников ок={total['sources_ok']}, ошибок={total['errors']}"
+    )
+
+
 def cmd_digest_content(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.digest import write_digest_content
 
@@ -307,6 +438,16 @@ def cmd_digest_content(args: argparse.Namespace) -> None:
     )
     suffix = f", html={stats['html_path']}" if stats.get("html_path") else ""
     print(f"digest-content: файл={stats['path']}, статей={stats['items']}{suffix}")
+
+
+def cmd_digest_save(args: argparse.Namespace) -> None:
+    from oiltech_digest.processing.digest import save_digest_draft
+
+    stats = save_digest_draft(month=args.month, limit=args.limit, min_score=args.min_score)
+    print(
+        f"digest-save: id={stats['id']}, month={stats['month']}, "
+        f"items={stats['items']}, status={stats['status']}"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -335,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_full = sub.add_parser("fetch-full-text", help="дозагрузить полный текст статей по URL")
     p_full.add_argument("--limit", type=int, default=50)
     p_full.add_argument("--min-chars", type=int, default=800)
+    p_full.add_argument("--retry-too-short", action="store_true",
+                        help="повторить попытку для статей с full_text_status='too_short'")
     p_full.set_defaults(func=cmd_fetch_full_text)
 
     sub.add_parser("stats", help="диагностика БД").set_defaults(func=cmd_stats)
@@ -387,6 +530,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_sources.add_argument("--limit", type=int, default=50)
     p_sources.set_defaults(func=cmd_sources)
 
+    p_source_health = sub.add_parser("source-health", help="вердикты покрытия источников: ok/stale/no_articles/disabled")
+    p_source_health.add_argument("--stale-days", type=int, default=3)
+    p_source_health.add_argument("--limit", type=int, default=300)
+    p_source_health.add_argument("--verdict", choices=["ok", "stale", "no_articles", "disabled"], default=None)
+    p_source_health.set_defaults(func=cmd_source_health)
+
     p_candidates = sub.add_parser("article-candidates", help="найти статьи-кандидаты по ключевым словам")
     p_candidates.add_argument("query", help="ключевые слова через пробел")
     p_candidates.add_argument("--limit", type=int, default=20)
@@ -406,6 +555,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_source_add.add_argument("--frequency", default=None, help="частота мониторинга")
     p_source_add.set_defaults(func=cmd_source_add_rss)
 
+    p_source_diag = sub.add_parser("source-diagnose", help="read-only диагностика источника по source_id")
+    p_source_diag.add_argument("source_id", type=int)
+    p_source_diag.add_argument("--limit", type=int, default=5, help="сколько кандидатов/постов проверить")
+    p_source_diag.set_defaults(func=cmd_source_diagnose)
+
     p_digest = sub.add_parser("digest-content", help="собрать digest_content.json из обработанных статей")
     p_digest.add_argument("month", help="YYYY-MM")
     p_digest.add_argument("--output", default="digest_content.generated.json")
@@ -413,6 +567,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_digest.add_argument("--limit", type=int, default=20)
     p_digest.add_argument("--min-score", type=float, default=60)
     p_digest.set_defaults(func=cmd_digest_content)
+
+    p_digest_save = sub.add_parser("digest-save", help="сохранить draft monthly_digest из текущих digest-кандидатов")
+    p_digest_save.add_argument("month", help="YYYY-MM")
+    p_digest_save.add_argument("--limit", type=int, default=20)
+    p_digest_save.add_argument("--min-score", type=float, default=60)
+    p_digest_save.set_defaults(func=cmd_digest_save)
+
+    p_source_retry = sub.add_parser(
+        "source-retry",
+        help="форс-парсинг источников с вердиктом stale/no_articles",
+    )
+    p_source_retry.add_argument(
+        "--verdict", nargs="+", choices=["stale", "no_articles"],
+        default=None, help="вердикты для обработки (по умолчанию: stale no_articles)",
+    )
+    p_source_retry.add_argument("--stale-days", type=int, default=3)
+    p_source_retry.add_argument("--max-age-days", type=int, default=None)
+    p_source_retry.set_defaults(func=cmd_source_retry)
+
+    p_pp = sub.add_parser(
+        "parse-process",
+        help="стриминг-пайплайн: parse + AI-обработка новых статей параллельно",
+    )
+    p_pp.add_argument("--max-age-days", type=int, default=None)
+    p_pp.add_argument("--source-id", type=int, default=None)
+    p_pp.add_argument("--workers", type=int, default=5, help="воркеры парсинга (осторожно с RAM)")
+    p_pp.add_argument("--process-limit", type=int, default=20, help="статей за один батч обработки")
+    p_pp.add_argument("--poll-interval", type=int, default=10, help="секунд между опросами новых статей")
+    p_pp.add_argument("--offline", action="store_true")
+    p_pp.set_defaults(func=cmd_parse_process)
+
     return parser
 
 

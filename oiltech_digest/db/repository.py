@@ -329,18 +329,27 @@ def insert_article(rec: dict) -> bool:
     return row is not None
 
 
-def get_articles_needing_full_text(limit: int = 50) -> list[dict]:
-    """Articles whose RSS body is likely only a teaser and needs URL extraction."""
+def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = False) -> list[dict]:
+    """Articles whose RSS body is likely only a teaser and needs URL extraction.
+
+    retry_too_short=True also includes articles previously marked too_short so they
+    can be re-attempted (e.g. after trafilatura is added to the extraction chain).
+    """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        status_filter = (
+            "AND (a.full_text_status IS NULL OR a.full_text_status = 'too_short')"
+            if retry_too_short
+            else "AND a.full_text_status IS NULL"
+        )
         cur.execute(
-            """
+            f"""
             SELECT a.*, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             WHERE a.url IS NOT NULL
-              AND a.full_text_status IS NULL
+              {status_filter}
               AND (
                 COALESCE(a.text_truncated, FALSE) = TRUE
                 OR length(COALESCE(a.raw_text, '')) < 800
@@ -409,6 +418,51 @@ def sources_by_strategy() -> list[dict]:
         cur.execute(
             "SELECT parse_strategy, COUNT(*) AS n FROM sources "
             "GROUP BY parse_strategy ORDER BY n DESC"
+        )
+        return cur.fetchall()
+
+
+def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | None = None) -> list[dict]:
+    """Per-source article coverage verdict for operations diagnostics."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH src AS (
+              SELECT s.id, s.name, s.enabled, s.parse_strategy, s.source_type,
+                     s.url, s.rss_url, s.listing_url,
+                     COUNT(a.id) AS articles,
+                     MAX(a.collected_at) AS last_article_at
+              FROM sources s
+              LEFT JOIN articles a ON a.source_id = s.id
+              GROUP BY s.id
+            )
+            ), verdicts AS (
+              SELECT *,
+                     CASE
+                       WHEN NOT enabled THEN 'disabled'
+                       WHEN articles = 0 THEN 'no_articles'
+                       WHEN last_article_at < now() - (%s::text || ' days')::interval THEN 'stale'
+                       ELSE 'ok'
+                     END AS verdict
+              FROM src
+            )
+            SELECT *
+            FROM verdicts
+            WHERE (%s IS NULL OR verdict = %s)
+            ORDER BY
+              CASE
+                WHEN NOT enabled THEN 4
+                WHEN articles = 0 THEN 1
+                WHEN last_article_at < now() - (%s::text || ' days')::interval THEN 2
+                ELSE 3
+              END,
+              articles ASC,
+              last_article_at NULLS FIRST,
+              name
+            LIMIT %s
+            """,
+            (stale_days, verdict, verdict, stale_days, limit),
         )
         return cur.fetchall()
 
@@ -1015,10 +1069,109 @@ def digest_candidates(month: str, limit: int = 20, min_score: float = 60) -> lis
             WHERE to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %s
               AND COALESCE(c.status, 'new') = 'digest'
               AND c.relevant IS NOT FALSE
+              AND COALESCE(sc.total_score, 0) >= %s
             ORDER BY sc.total_score DESC NULLS LAST,
                      a.published_at DESC NULLS LAST
             LIMIT %s
             """,
-            (month, limit),
+            (month, min_score, limit),
+        )
+        return cur.fetchall()
+
+
+def save_monthly_digest(month: str, title: str, items: list[dict], status: str = "draft") -> dict:
+    """Persist a monthly digest draft and replace its ordered item list."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO monthly_digests (month, title, status)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (month) DO UPDATE SET
+                title = EXCLUDED.title,
+                status = EXCLUDED.status,
+                updated_at = now()
+            RETURNING id, month, title, status
+            """,
+            (month, title, status),
+        )
+        digest = cur.fetchone()
+        digest_id = digest[0]
+        conn.execute("DELETE FROM monthly_digest_items WHERE digest_id = %s", (digest_id,))
+        for idx, item in enumerate(items, start=1):
+            conn.execute(
+                """
+                INSERT INTO monthly_digest_items (digest_id, article_id, sort_order, section, editor_note)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    digest_id,
+                    int(item["article_id"]),
+                    idx,
+                    item.get("section"),
+                    item.get("editor_note"),
+                ),
+            )
+        conn.commit()
+        return {
+            "id": digest[0],
+            "month": digest[1],
+            "title": digest[2],
+            "status": digest[3],
+            "items": len(items),
+        }
+
+
+def get_monthly_digest(month: str) -> dict | None:
+    """Fetch a persisted monthly digest draft with ordered item article ids."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT id, month, title, status, created_at, updated_at
+            FROM monthly_digests
+            WHERE month = %s
+            """,
+            (month,),
+        )
+        digest = cur.fetchone()
+        if digest is None:
+            return None
+        cur.execute(
+            """
+            SELECT article_id, sort_order, section, editor_note
+            FROM monthly_digest_items
+            WHERE digest_id = %s
+            ORDER BY sort_order, id
+            """,
+            (digest["id"],),
+        )
+        return {**digest, "items": cur.fetchall()}
+
+
+def max_article_id() -> int | None:
+    """Return the current maximum article id, or None if the table is empty."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(id) FROM articles")
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def get_articles_needing_summary_after(after_id: int, limit: int = 20) -> list[dict]:
+    """Articles that have no summary yet and whose id > after_id (streaming checkpoint)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.*, s.name AS source_name, s.priority AS source_priority,
+                   s.category AS source_category
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            WHERE a.id > %s AND c.summary IS NULL
+            ORDER BY a.id ASC
+            LIMIT %s
+            """,
+            (after_id, limit),
         )
         return cur.fetchall()
