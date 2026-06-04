@@ -312,13 +312,15 @@ def finish_export_job(job_id: int, status: str, file_path: str | None = None,
 def insert_article(rec: dict) -> bool:
     """Вставить статью. Дубликаты по url игнорируются (ON CONFLICT DO NOTHING).
     Возвращает True, если строка реально вставлена."""
+    rec = {**rec, "image_url": rec.get("image_url")}
     with get_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, published_at,
-                                  raw_text, text_truncated, language, content_hash)
+                                  raw_text, text_truncated, language, content_hash, image_url)
             VALUES (%(source_id)s, %(title)s, %(url)s, %(published_at)s,
-                    %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s, %(content_hash)s)
+                    %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s,
+                    %(content_hash)s, %(image_url)s)
             ON CONFLICT (url) DO NOTHING
             RETURNING id
             """,
@@ -363,9 +365,17 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
 
 
 def update_article_full_text(article_id: int, raw_text: str | None, text_truncated: bool,
-                             status: str, method: str, error: str | None = None) -> None:
+                             status: str, method: str, error: str | None = None,
+                             image_url: str | None = None) -> None:
     """Store full-text extraction result without losing the RSS teaser on failure."""
     with get_connection() as conn:
+        if image_url:
+            # Заполняем картинку, только если её ещё нет — RSS-media в приоритете.
+            conn.execute(
+                "UPDATE articles SET image_url = %s "
+                "WHERE id = %s AND COALESCE(image_url, '') = ''",
+                (image_url, article_id),
+            )
         if raw_text is not None:
             conn.execute(
                 """
@@ -410,6 +420,54 @@ def count_sources() -> int:
 def count_articles() -> int:
     with get_connection() as conn:
         return conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+
+
+def dashboard_stats() -> dict:
+    """Aggregate counters for the admin dashboard cards.
+
+    Computed over the FULL database (not the loaded page), so the numbers stay
+    correct regardless of how many articles the UI fetches. ``avg_score`` is the
+    mean over scored articles only — unscored articles do not drag it to zero.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM articles) AS total_articles,
+              (SELECT COUNT(*) FROM article_cards
+                 WHERE COALESCE(summary, '') <> '') AS with_summary,
+              (SELECT COUNT(*) FROM article_cards
+                 WHERE status = 'digest') AS selected_for_digest,
+              (SELECT ROUND(AVG(total_score)) FROM article_scores) AS avg_score,
+              (SELECT COUNT(*) FROM sources) AS sources
+            """
+        )
+        row = cur.fetchone()
+    return {
+        "total_articles": int(row["total_articles"] or 0),
+        "with_summary": int(row["with_summary"] or 0),
+        "selected_for_digest": int(row["selected_for_digest"] or 0),
+        "avg_score": int(row["avg_score"] or 0),
+        "sources": int(row["sources"] or 0),
+    }
+
+
+def clear_future_published_dates(tolerance_days: int = 2) -> int:
+    """Обнулить недостоверные даты публикации из будущего (анонсы-события календаря).
+
+    Статья сохраняется — убирается только ошибочная дата, после чего она
+    сортируется/показывается по реальному `collected_at` и перестаёт помечаться
+    как «дата в будущем». Идемпотентно. Возвращает число затронутых строк.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE articles SET published_at = NULL, updated_at = now() "
+            "WHERE published_at > now() + make_interval(days => %s)",
+            (tolerance_days,),
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 def sources_by_strategy() -> list[dict]:
@@ -1049,12 +1107,24 @@ def ai_article_cost_report(limit: int = 20, complete_only: bool = True) -> list[
         return cur.fetchall()
 
 
-def digest_candidates(month: str, limit: int = 20, min_score: float = 60) -> list[dict]:
+def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60) -> list[dict]:
+    """Articles selected for the digest (status='digest').
+
+    ``month`` is optional: when empty/None the period filter is dropped and every
+    selected article is returned, matching the on-screen selection. This is what
+    makes the file export agree with the preview instead of coming out empty.
+    Future-dated publications (event-calendar noise) are always excluded.
+    """
+    params: dict = {"min_score": min_score, "limit": limit}
+    month_clause = ""
+    if month:
+        month_clause = "AND to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %(month)s"
+        params["month"] = month
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
-            SELECT a.id, a.title, a.url, a.published_at, a.language,
+            f"""
+            SELECT a.id, a.title, a.url, a.published_at, a.language, a.image_url,
                    s.name AS source_name,
                    c.summary, c.selected_for_digest,
                    sc.total_score, sc.score_label,
@@ -1066,15 +1136,16 @@ def digest_candidates(month: str, limit: int = 20, min_score: float = 60) -> lis
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
-            WHERE to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %s
-              AND COALESCE(c.status, 'new') = 'digest'
+            WHERE COALESCE(c.status, 'new') = 'digest'
               AND c.relevant IS NOT FALSE
-              AND COALESCE(sc.total_score, 0) >= %s
+              AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
+              AND COALESCE(sc.total_score, 0) >= %(min_score)s
+              {month_clause}
             ORDER BY sc.total_score DESC NULLS LAST,
                      a.published_at DESC NULLS LAST
-            LIMIT %s
+            LIMIT %(limit)s
             """,
-            (month, min_score, limit),
+            params,
         )
         return cur.fetchall()
 

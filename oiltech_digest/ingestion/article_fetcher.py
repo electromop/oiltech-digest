@@ -41,6 +41,34 @@ class ExtractionResult:
     status: str
     method: str = "lxml"
     error: str | None = None
+    image_url: str = ""
+
+
+_OG_IMAGE_XPATHS = (
+    "//meta[@property='og:image']/@content",
+    "//meta[@property='og:image:url']/@content",
+    "//meta[@property='og:image:secure_url']/@content",
+    "//meta[@name='og:image']/@content",
+    "//meta[@name='twitter:image']/@content",
+    "//meta[@name='twitter:image:src']/@content",
+    "//link[@rel='image_src']/@href",
+)
+
+
+def extract_og_image(content: bytes | str) -> str:
+    """Best-effort lead image for a news card: og:image / twitter:image / image_src."""
+    if not content:
+        return ""
+    try:
+        doc = html.fromstring(content)
+    except (ValueError, TypeError):
+        return ""
+    for xpath in _OG_IMAGE_XPATHS:
+        for value in doc.xpath(xpath):
+            url = (value or "").strip()
+            if url.startswith("http"):
+                return url
+    return ""
 
 
 def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
@@ -64,6 +92,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
                     status=result.status,
                     method=result.method,
                     error=None,
+                    image_url=result.image_url,
                 )
                 stats["updated"] += 1
             else:
@@ -74,6 +103,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
                     status=result.status,
                     method=result.method,
                     error=result.error,
+                    image_url=result.image_url,
                 )
                 stats["too_short" if result.status == "too_short" else "failed"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
@@ -98,15 +128,16 @@ def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> E
     if content is None:
         return ExtractionResult("", "failed", error="download failed")
     current = article.get("raw_text") or ""
+    image_url = extract_og_image(content)
 
     extracted = extract_main_text(content)
     if _is_better_text(extracted, current, min_chars=min_chars):
-        return ExtractionResult(extracted, "ok", method="lxml")
+        return ExtractionResult(extracted, "ok", method="lxml", image_url=image_url)
 
     # Fallback: trafilatura often handles cluttered pages better than lxml heuristics.
     traf = _trafilatura_extract(content)
     if traf and _is_better_text(traf, current, min_chars=min_chars):
-        return ExtractionResult(traf, "ok", method="trafilatura")
+        return ExtractionResult(traf, "ok", method="trafilatura", image_url=image_url)
 
     best = traf if len(traf) > len(extracted) else extracted
     return ExtractionResult(
@@ -114,6 +145,7 @@ def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> E
         "too_short",
         method="trafilatura" if traf and len(traf) > len(extracted) else "lxml",
         error=f"extracted={len(best)} chars, current={len(current)} chars",
+        image_url=image_url,
     )
 
 

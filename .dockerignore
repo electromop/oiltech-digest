@@ -11,3 +11,7 @@ tests/
 docs/
 *.zip
 .DS_Store
+
+# data/ исключён выше (локальные БД), но seed-файлы нужны в образе для bootstrap
+!data/seed
+!data/seed/**

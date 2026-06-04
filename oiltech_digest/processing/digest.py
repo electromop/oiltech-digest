@@ -12,10 +12,9 @@ from oiltech_digest.db import repository
 
 TEMPLATE_DIR = Path(__file__).resolve().parent
 EMAIL_TEMPLATE = "digest_email_template.html"
-EXPORT_TEMPLATE = "digest_export_template.html"
 
 
-def build_digest_content(month: str, limit: int = 20, min_score: float = 60) -> dict:
+def build_digest_content(month: str | None = None, limit: int = 20, min_score: float = 60) -> dict:
     rows = repository.digest_candidates(month=month, limit=limit, min_score=min_score)
     news = []
     for row in rows:
@@ -35,22 +34,27 @@ def build_digest_content(month: str, limit: int = 20, min_score: float = 60) -> 
                 "score": float(row["total_score"]) if row.get("total_score") is not None else None,
                 "score_label": row.get("score_label"),
                 "summary": row.get("summary") or "",
-                "image_url": "",
+                "image_url": row.get("image_url") or "",
             }
         )
-    title = f"Нефтесервисный дайджест · {month}"
+    title = f"Нефтесервисный дайджест · {month}" if month else "Нефтесервисный дайджест"
+    intro = (
+        f"Уважаемые коллеги! Представляем ключевые новости и обзоры за {month}, "
+        "которые помогают отслеживать технологические тренды, рыночную динамику "
+        "и возможности для развития нефтесервисного бизнеса."
+    ) if month else (
+        "Уважаемые коллеги! Представляем ключевые новости и обзоры нефтесервисного рынка, "
+        "которые помогают отслеживать технологические тренды, рыночную динамику "
+        "и возможности для развития бизнеса."
+    )
     return {
         "month": month,
         "title": title,
         "issue": {
             "title": title,
-            "period": month,
+            "period": month or "за всё время",
             "preheader": "Ключевые новости и обзоры нефтесервисного рынка",
-            "intro": (
-                f"Уважаемые коллеги! Представляем ключевые новости и обзоры за {month}, "
-                "которые помогают отслеживать технологические тренды, рыночную динамику "
-                "и возможности для развития нефтесервисного бизнеса."
-            ),
+            "intro": intro,
         },
         "hero": {
             "badge": "НОВОСТИ",
@@ -69,12 +73,18 @@ def build_digest_content(month: str, limit: int = 20, min_score: float = 60) -> 
 
 
 def render_digest_email(content: dict) -> str:
+    """Render the branded Gazprom Neft digest HTML from issue/hero/news/footer.
+
+    The same render is used for the on-screen HTML, the file export and the PDF —
+    one template, identical to the reference (digest_email_claude_pack).
+    """
     template = (TEMPLATE_DIR / EMAIL_TEMPLATE).read_text(encoding="utf-8")
-    news_html = "\n".join(_render_news_item(item) for item in content.get("news", [])[:5])
+    news_html = "\n".join(_render_news_item(item) for item in content.get("news", []))
     values = {
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
         "issue_intro": _html(content.get("issue", {}).get("intro")),
+        "hero_image_url": _html(content.get("hero", {}).get("image_url")),
         "hero_badge": _html(content.get("hero", {}).get("badge")),
         "hero_headline": _html(content.get("hero", {}).get("headline")),
         "hero_subtitle": _html(content.get("hero", {}).get("subtitle")),
@@ -86,21 +96,9 @@ def render_digest_email(content: dict) -> str:
     return template.format(**values)
 
 
+# The export is the exact same branded document as the email — one source of truth.
 def render_digest_export_html(content: dict) -> str:
-    template = (TEMPLATE_DIR / EXPORT_TEMPLATE).read_text(encoding="utf-8")
-    news_html = "\n".join(_render_export_news_item(item, idx + 1) for idx, item in enumerate(content.get("news", [])))
-    values = {
-        "issue_title": _html(content.get("issue", {}).get("title")),
-        "issue_intro": _html(content.get("issue", {}).get("intro")),
-        "hero_badge": _html(content.get("hero", {}).get("badge")),
-        "hero_headline": _html(content.get("hero", {}).get("headline")),
-        "hero_subtitle": _html(content.get("hero", {}).get("subtitle")),
-        "footer_contact_text": _html(content.get("footer", {}).get("contact_text")),
-        "footer_contact_email": _html(content.get("footer", {}).get("contact_email")),
-        "footer_note": _html(content.get("footer", {}).get("note")),
-        "news_items": news_html,
-    }
-    return template.format(**values)
+    return render_digest_email(content)
 
 
 def _html(value: object) -> str:
@@ -108,45 +106,43 @@ def _html(value: object) -> str:
 
 
 def _render_news_item(item: dict) -> str:
-    published = item.get("published_at")
-    score = item.get("score")
-    meta = [_html(item.get("source"))]
-    if published:
-        meta.append(_html(published))
-    if score is not None:
-        meta.append(f"score {round(float(score))}")
+    """One news card in the reference layout: image (or branded placeholder) + text."""
+    image_url = item.get("image_url") or ""
+    if image_url:
+        media = (
+            f'<img src="{_html(image_url)}" width="210" height="118" alt="{_html(item.get("title"))}" '
+            'style="display:block;width:210px;height:118px;object-fit:cover;border-radius:6px;border:0;">'
+        )
+    else:
+        # SVG-заглушка вместо <img>: ведёт себя как картинка (фиксирует ширину ячейки
+        # 210×118 в табличной вёрстке — в отличие от <div>, который ужимается).
+        placeholder = (
+            "data:image/svg+xml;utf8,"
+            "<svg xmlns='http://www.w3.org/2000/svg' width='210' height='118'>"
+            "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+            "<stop offset='0' stop-color='%23003da6'/><stop offset='1' stop-color='%23001d50'/>"
+            "</linearGradient></defs><rect width='210' height='118' rx='6' fill='url(%23g)'/></svg>"
+        )
+        media = (
+            f'<img src="{placeholder}" width="210" height="118" alt="" '
+            'style="display:block;width:210px;height:118px;border-radius:6px;border:0;">'
+        )
     return f"""
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 22px 0;border:1px solid #d9e3f3;border-radius:8px;background:#ffffff;">
                 <tr>
-                  <td valign="top" style="padding:14px 16px 14px 16px;">
+                  <td width="230" valign="top" style="padding:10px 18px 10px 10px;">
+                    {media}
+                  </td>
+                  <td valign="top" style="padding:14px 16px 12px 0;">
                     <div style="font-size:12px;line-height:16px;color:#003da6;font-weight:bold;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{_html(item.get("category"))}</div>
-                    <div style="font-size:22px;line-height:26px;color:#003da6;font-weight:bold;letter-spacing:.03em;text-transform:uppercase;">{_html(item.get("title"))}</div>
+                    <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:26px;color:#003da6;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;">{_html(item.get("title"))}</div>
                     <div style="font-size:14px;line-height:20px;color:#333333;margin-top:10px;">{_html(item.get("summary"))}</div>
-                    <div style="font-size:12px;line-height:18px;color:#6b7280;margin-top:10px;">{" · ".join(meta)}</div>
-                    <div style="margin-top:12px;">
-                      <a href="{_html(item.get("url"))}" style="font-size:13px;line-height:18px;color:#e83d08;font-weight:bold;text-decoration:none;">Читать источник →</a>
+                    <div style="margin-top:10px;">
+                      <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
                     </div>
                   </td>
                 </tr>
               </table>"""
-
-
-def _render_export_news_item(item: dict, index: int) -> str:
-    published = item.get("published_at")
-    score = item.get("score")
-    meta = [_html(item.get("source"))]
-    if published:
-        meta.append(_html(published))
-    if score is not None:
-        meta.append(f"score {round(float(score))}")
-    return f"""
-    <div class="card">
-      <div class="category">{index}. {_html(item.get("category"))}</div>
-      <div class="title">{_html(item.get("title"))}</div>
-      <div class="summary">{_html(item.get("summary"))}</div>
-      <div class="meta">{" · ".join(meta)}</div>
-      <a class="link" href="{_html(item.get("url"))}">Открыть источник</a>
-    </div>"""
 
 
 def write_digest_content(path: str | Path, month: str, limit: int = 20,
@@ -183,27 +179,61 @@ def save_digest_draft(month: str, limit: int = 20, min_score: float = 60) -> dic
     return {**saved, "content_items": len(content.get("items", []))}
 
 
-def write_digest_export(month: str, export_format: str = "html", limit: int = 20,
-                        min_score: float = 60) -> dict:
+def render_digest_pdf(content: dict) -> bytes:
+    """Render the branded digest to PDF via headless Chromium (pixel-perfect).
+
+    Playwright/Chromium is an optional, server-side dependency (it is heavy and not
+    needed for tests or for the HTML/Word paths), so it is imported lazily and a
+    clear, actionable error is raised when it is missing.
+    """
+    html_str = render_digest_email(content)
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - depends on optional dep
+        raise RuntimeError(
+            "PDF-экспорт требует Playwright с Chromium. Установите на сервере: "
+            "pip install playwright && python -m playwright install --with-deps chromium"
+        ) from exc
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--no-sandbox"])
+        try:
+            page = browser.new_page()
+            page.set_content(html_str, wait_until="load")
+            pdf_bytes = page.pdf(
+                format="A4",
+                print_background=True,
+                margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
+            )
+        finally:
+            browser.close()
+    return pdf_bytes
+
+
+def write_digest_export(month: str | None = None, export_format: str = "pdf", limit: int = 100,
+                        min_score: float = 0) -> dict:
     content = build_digest_content(month=month, limit=limit, min_score=min_score)
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    base_name = f"digest-{month}-{stamp}"
+    base_name = f"digest-{month or 'all'}-{stamp}"
 
-    if export_format == "json":
-        path = EXPORTS_DIR / f"{base_name}.json"
-        payload = json.dumps(content, ensure_ascii=False, indent=2)
-        media_type = "application/json"
+    if export_format == "pdf":
+        path = EXPORTS_DIR / f"{base_name}.pdf"
+        path.write_bytes(render_digest_pdf(content))
+        media_type = "application/pdf"
     elif export_format == "doc":
         path = EXPORTS_DIR / f"{base_name}.doc"
-        payload = render_digest_export_html(content)
+        path.write_text(render_digest_export_html(content), encoding="utf-8")
         media_type = "application/msword"
-    else:
+    elif export_format == "json":
+        path = EXPORTS_DIR / f"{base_name}.json"
+        path.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+        media_type = "application/json"
+    else:  # html
         path = EXPORTS_DIR / f"{base_name}.html"
-        payload = render_digest_export_html(content)
+        path.write_text(render_digest_export_html(content), encoding="utf-8")
         media_type = "text/html; charset=utf-8"
 
-    path.write_text(payload, encoding="utf-8")
     return {
         "path": str(path),
         "filename": path.name,

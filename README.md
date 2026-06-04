@@ -1,273 +1,195 @@
 # OilTech Digest
 
-Система сбора нефтесервисных новостей с последующей AI-обработкой и формированием
-месячного дайджеста.
+**Система мониторинга нефтесервисных новостей: автоматический сбор → AI-обработка →
+фирменный месячный дайджест в PDF/Word.**
 
-Текущий рабочий pipeline:
+Сервис непрерывно собирает публикации из ~120 отраслевых источников (сайты, RSS,
+Telegram), очищает и оценивает их с помощью AI, а редактор через веб-интерфейс
+отбирает лучшие материалы и выгружает готовый дайджест в оформлении Блока развития
+бизнеса.
 
 ```text
-sources -> discover-rss -> parse -> fetch-full-text -> summary -> relevance -> tag -> score -> digest
+источники → поиск RSS → парсинг → полный текст → AI-суть → релевантность → теги → скоринг → дайджест
 ```
 
-## Документация
+---
 
-- [`docs/project_guide.md`](docs/project_guide.md) — главный гид по проекту: что работает, как все связано и с чего читать код;
-- [`docs/architecture.md`](docs/architecture.md) — техническая архитектура и поток данных;
-- [`docs/testing.md`](docs/testing.md) — сценарии проверки и smoke-тесты;
-- [`docs/work_report.md`](docs/work_report.md) — сводка по уже выполненной работе;
-- [`docs/cost_dashboard.html`](docs/cost_dashboard.html) — визуальный отчет по стоимости AI.
+## Возможности
 
-## Требования
-- Docker (движок; на macOS — например, через `colima`)
-- Python 3.11+
+- **Сбор без участия человека** — RSS, HTML-листинги и Telegram-каналы, с защитой от
+  банов (паузы между запросами, прокси, cooldown на 403/429).
+- **AI-конвейер** — краткая суть, фильтр релевантности, авто-тегирование по
+  направлениям и скоринг каждой статьи (0–100) по настраиваемым критериям.
+- **Веб-панель администратора** — каталог статей с фильтрами, ручная модерация,
+  здоровье источников, редактор тегов и весов скоринга.
+- **Фирменный дайджест** — выгрузка отобранных статей в **PDF** и **Word** в дизайне,
+  идентичном корпоративному референсу.
 
-## Быстрый старт через Docker
+---
 
-Этот режим поднимает всё сразу:
-
-- `db` — PostgreSQL;
-- `app` — FastAPI + Admin UI на порту `8000`;
-- `bootstrap` — одноразовая инициализация БД и seed данных;
-- `scheduler` — автоматический цикл: `discover-rss → parse → fetch-full-text → process`.
+## Быстрый старт (Docker)
 
 ```bash
 cp .env.example .env
 ```
 
-Откройте `.env` и задайте минимум:
+В `.env` задайте минимум:
 
 ```bash
 POSTGRES_PASSWORD=сложный_пароль
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=sk-...        # без ключа сбор работает, AI-обработка пропускается (AI_OFFLINE=1)
 ```
 
-Если хотите поднять весь стек без OpenAI API, можно сразу поставить:
-
-```bash
-AI_OFFLINE=1
-```
-
-Запуск:
+Запуск всего стека (БД, админка, авто-сбор по расписанию):
 
 ```bash
 docker compose up -d --build
 ```
 
-Что произойдет после запуска:
+Откройте интерфейс: **http://127.0.0.1:8000** (при первом входе зарегистрируйтесь —
+панель защищена `email + пароль`).
 
-1. `db` поднимет PostgreSQL;
-2. `bootstrap` создаст схему и прогонит `seed-sources`, `seed-tags`, `seed-scoring`;
-3. `app` поднимет админку;
-4. `scheduler` начнет циклический сбор и обработку статей.
+```bash
+docker compose ps               # db/app/scheduler = running, bootstrap = exited(0)
+docker compose logs -f scheduler # лог авто-сбора
+docker compose down             # остановить   (down -v — со сбросом БД)
+```
 
-Открыть интерфейс:
+> **PDF-экспорт** рендерится headless-Chromium (Playwright) — он ставится в образ при
+> сборке. На сервере с малым объёмом RAM собирайте образ при остановленном стеке
+> (`docker compose down` перед `build`), иначе возможен OOM.
+
+---
+
+## Как пользоваться интерфейсом
+
+Слева — пять разделов.
+
+### 📰 Все статьи
+Весь поток, прошедший pipeline. Фильтры по тексту, тегу, источнику, статусу, скорингу,
+дате и языку; сортировка по score/дате. Карточки сгруппированы по направлению; большие
+выборки подгружаются кнопкой **«Показать ещё»**. Раскрыв статью, видно AI-суть и разбор
+скоринга по критериям. Статус **«В дайджест»** добавляет статью в выпуск.
+
+- «Дата попадания» — это дата появления статьи в системе. Если у публикации стоит дата
+  из будущего (анонс события), статья помечается отдельным ярлыком и не попадает в дайджест.
+
+### 🗂 Месячный дайджест
+Итоговая выборка статей со статусом «В дайджест». Здесь можно отфильтровать выпуск,
+посмотреть превью и:
+
+- **Открыть HTML** — фирменное письмо в браузере;
+- **Скопировать JSON** — структуру выпуска;
+- **Сохранить draft** — зафиксировать выпуск месяца;
+- **Скачать экспорт → PDF или Word** — готовый дайджест в корпоративном оформлении.
+
+Если выбрать «Все месяцы», в экспорт попадут все отобранные статьи (а не только за один месяц).
+
+### 🌐 Источники
+Каталог из ~120 источников: тип, периодичность, RSS/listing-URL, вкл/выкл. Для
+non-RSS источников настраиваются селекторы листинга, есть **диагностика** (HTTP-проба и
+извлечение статей) и индикатор **здоровья** (ОК / застой / 0 статей / выкл).
+
+### ⚖️ Скоринг
+Критерии оценки и их веса (сумма строго 100%). Русские ключевые слова автоматически
+нормализуются в английские подсказки для зарубежных источников.
+
+### 🏷 Теги
+Иерархия направлений (родительские теги и подтеги) с описаниями для AI.
+
+---
+
+## Дайджест: оформление
+
+Дизайн дайджеста зафиксирован в фирменном шаблоне
+[`oiltech_digest/processing/digest_email_template.html`](oiltech_digest/processing/digest_email_template.html)
+(референс — `digest_email_claude_pack`). Один и тот же шаблон используется для HTML-превью,
+PDF и Word — выпуск везде выглядит одинаково. Картинки берутся из статей (og:image); если
+картинки нет — подставляется фирменная заглушка.
 
 ```text
-http://127.0.0.1:8000
+GET /api/digest-email?month=2026-05            # HTML-превью
+GET /api/digest-export?month=2026-05&export_format=pdf   # PDF
+GET /api/digest-export?export_format=doc                 # Word (все выбранные)
 ```
 
-Проверить состояние сервисов:
+---
+
+## Для разработчиков
+
+### Ручной запуск
 
 ```bash
-docker compose ps
-```
-
-Нормальная картина:
-
-- `db`, `app`, `scheduler` — `running`
-- `bootstrap` — `exited (0)`
-
-Посмотреть логи автопарсинга:
-
-```bash
-docker compose logs -f scheduler
-```
-
-Посмотреть bootstrap:
-
-```bash
-docker compose logs -f bootstrap
-```
-
-Посмотреть логи интерфейса:
-
-```bash
-docker compose logs -f app
-```
-
-Остановить:
-
-```bash
-docker compose down
-```
-
-Сбросить базу полностью:
-
-```bash
-docker compose down -v
-```
-
-### Настройка расписания
-
-По умолчанию scheduler запускает цикл каждые 6 часов:
-
-```env
-CYCLE_INTERVAL_SECONDS=21600
-```
-
-Полезные параметры `.env`:
-
-```env
-RUN_DISCOVER_ON_START=1       # искать RSS при первом запуске контейнера
-DISCOVER_EVERY_CYCLES=24      # повторять discover редко, чтобы не долбить сайты
-DISCOVER_WORKERS=2            # низкий параллелизм для discovery
-PARSE_WORKERS=3               # низкий параллелизм для parse
-HTTP_MIN_INTERVAL_SECONDS=1.5 # пауза между запросами к одному хосту
-HTTP_BLOCK_COOLDOWN_SECONDS=900 # cooldown после 403/429
-REQUEST_ARTICLE_LIMIT=6       # сколько статей брать с одного request-listing за цикл
-PROXY_URL=                    # глобальный прокси для парсинга, если нужен
-PROXY_HOST_OVERRIDES=         # точечно: rbc.ru=http://...,shell.com=http://...
-PROXY_TIMEOUT=40              # таймаут при запросах через residential-прокси
-FULL_TEXT_LIMIT=80            # сколько статей за цикл дозагружать полным текстом
-AI_PROCESS_LIMIT=50           # сколько статей за цикл отправлять в AI pipeline
-AI_OFFLINE=0                  # 1 = тестовый режим без OpenAI API
-```
-
-Если `OPENAI_API_KEY` пустой, scheduler всё равно будет собирать статьи и полный текст,
-но AI-обработку пропустит.
-
-PostgreSQL проброшен только на `127.0.0.1:5432`, наружу сервером не открыт.
-
-## Ручной локальный старт
-
-```bash
-# 1. Поднять PostgreSQL
-cp .env.example .env          # при необходимости поправить пароль
-docker-compose up -d db       # либо: docker compose up -d db
-
-# 2. Python-окружение
+docker compose up -d db                       # PostgreSQL
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+python -m playwright install chromium         # для PDF-экспорта
 
-# 3. Пайплайн сбора
-python -m oiltech_digest.cli init-db          # создать схему БД
-python -m oiltech_digest.cli seed-sources      # загрузить источники из Excel
-python -m oiltech_digest.cli discover-rss       # найти RSS-ленты (отчёт применимости)
-python -m oiltech_digest.cli parse              # спарсить ленты в articles + отсечь очевидный шум
-python -m oiltech_digest.cli fetch-full-text    # дозагрузить полный текст по URL, если RSS дал тизер
-python -m oiltech_digest.cli stats              # диагностика
+python -m oiltech_digest.cli init-db          # схема БД (идемпотентно)
+python -m oiltech_digest.cli seed-sources     # источники из Excel
+python -m oiltech_digest.cli parse            # собрать ленты в articles
+python -m oiltech_digest.cli fetch-full-text  # дозагрузить полный текст
+python -m oiltech_digest.cli process --limit 20  # summary → relevance → tag → score
 
-# 4. AI-обработка (OpenAI / ChatGPT API)
-python -m oiltech_digest.cli seed-tags          # D01-D18 → tags (+ name_en/keywords_en_json)
-python -m oiltech_digest.cli seed-scoring       # базовый профиль весов, сумма = 100
-python -m oiltech_digest.cli process --limit 20 # summary → tagging → scoring
-python -m oiltech_digest.cli ai-cost-report     # токены/стоимость по этапам и языкам
-python -m oiltech_digest.cli ai-article-cost-report # стоимость полного прогона 1 статьи
+uvicorn oiltech_digest.api:app --reload --port 8000
 ```
 
-## Admin UI
+Для прогона без OpenAI-ключа добавляйте `--offline`.
 
-После запуска PostgreSQL и seed/parse команд:
-
-```bash
-uvicorn oiltech_digest.api:app --reload --host 127.0.0.1 --port 8000
-```
-
-Откройте [`http://127.0.0.1:8000`](http://127.0.0.1:8000). Интерфейс работает с реальной БД:
-статьи, дайджест, источники, теги, критерии скоринга и отчёты по AI-стоимости.
-
-Добавьте `-v` для подробного лога: `python -m oiltech_digest.cli -v discover-rss`.
-
-Для локальной проверки без API-ключа используйте `--offline`:
-
-```bash
-python -m oiltech_digest.cli process --offline --limit 5
-```
-
-## Команды
+### Основные CLI-команды
 
 | Команда | Назначение |
 |---|---|
-| `init-db` | создать схему БД (идемпотентно) |
-| `seed-sources` | загрузить 120 источников из `1_Список_источников_для_дайджеста.xlsx` |
-| `discover-rss` | автообнаружение RSS по сайту источника; `--force`, `--dry-run`, `--source-id`, `--workers`, `--limit`, `--timeout` |
-| `parse` | спарсить включённые `rss`/`request`/`telegram`-источники в `articles`, перед вставкой отсечь очевидный спорт/культуру/бытовые новости без доменного сигнала; `--max-age-days`, `--source-id`, `--workers` |
-| `fetch-full-text` | скачать страницы статей по URL и заменить RSS-анонс на полный текст; `--limit`, `--min-chars` |
-| `stats` | количество источников/статей, распределение по стратегиям, кросс-дубли |
-| `seed-tags` | загрузить D01-D18 из `2_Направления_и_ключевые_слова.xlsx` в `tags`; EN-поля сохраняются только в БД |
-| `seed-scoring` | создать базовые критерии скоринга с суммой весов 100 |
-| `summarize` | сформировать краткую AI-суть в `article_cards.summary`; `--limit`, `--offline` |
-| `relevance` | AI-фильтр релевантности: отделить нефтесервисные статьи от офтопа; `--limit`, `--offline` |
-| `tag` | присвоить статьям один тег в `article_tags`; `--limit`, `--offline` |
-| `score` | рассчитать `article_scores` и детализацию `article_score_items`; `--limit`, `--offline` |
-| `process` | выполнить `summarize → relevance → tag → score` одной командой |
-| `process-articles` | прогнать `summary → relevance → tag → score` по выбранным `article_id` |
-| `ai-cost-report` | агрегировать токены/стоимость по этапам и языкам для Issue #10 |
-| `ai-article-cost-report` | посчитать стоимость полного AI-прогона одной статьи: summary + relevance + tagging + scoring |
-| `sources` | вывести источники; `--search`, `--limit` |
-| `source-health` | показать вердикты покрытия источников: `ok` / `stale` / `no_articles` / `disabled`; поддерживает `--verdict` |
-| `article-candidates` | быстро найти статьи-кандидаты по ключевым словам |
-| `source-enable` | включить/выключить источник: `source-enable 12 --no-enabled` |
-| `source-add-rss` | вручную добавить RSS-источник; поддерживает `--frequency` |
-| `source-diagnose` | read-only диагностика источника по `source_id`: HTTP-проба, кандидаты, извлечение статей/постов |
-| `digest-content` | собрать JSON-черновик дайджеста по месяцу и score; `--html-output` дополнительно пишет email-ready HTML по шаблону |
-| `digest-save` | сохранить draft в `monthly_digests` + `monthly_digest_items` из текущих digest-кандидатов |
+| `init-db` / `seed-sources` / `seed-tags` / `seed-scoring` | инициализация схемы и справочников |
+| `discover-rss` | автообнаружение RSS по сайту источника |
+| `parse` | собрать `rss`/`request`/`telegram`-источники в `articles` |
+| `fetch-full-text` | заменить RSS-анонс на полный текст статьи |
+| `process` | `summarize → relevance → tag → score` одной командой |
+| `digest-content` / `digest-save` | собрать/сохранить выпуск дайджеста |
+| `source-health` / `source-diagnose` | диагностика покрытия источников |
+| `stats` / `ai-cost-report` | статистика и стоимость AI |
 
-## Источники и дайджест в UI/API
+`python -m oiltech_digest.cli <команда> --help` — подробности по любой команде.
 
-В разделе **Источники** доступны список источников, тип, периодичность, RSS URL,
-включение/выключение, ручное добавление нового RSS-источника и настройка
-`listing_url`/селекторов для non-RSS request-источников. Для таких источников
-мониторинг идет по странице-списку публикаций и сохраняет только новые URL статей.
+### Тесты
 
-Также админка теперь требует вход по `email + password`.
+```bash
+PYTHONPATH=. python -m pytest          # весь набор
+```
 
-В разделе **Дайджест** можно:
-
-- открыть HTML-версию email-шаблона;
-- скопировать JSON;
-- скачать тестовый экспорт в `HTML`, `DOC` или `JSON`.
-
-Ручки:
+### Структура
 
 ```text
-GET /api/digest-content?month=2026-05&limit=20&min_score=60
-GET /api/digest-email?month=2026-05&limit=20&min_score=60
-GET /api/digest-export?month=2026-05&limit=20&min_score=60&export_format=html
-```
-
-CLI-пример:
-
-```bash
-python -m oiltech_digest.cli digest-content 2026-05 \
-  --output digest-2026-05.json \
-  --html-output digest-2026-05.html
-```
-
-## OpenAI API
-
-AI-функции используют OpenAI Responses API через переменные окружения:
-
-```bash
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5-nano
-OPENAI_INPUT_USD_PER_MTOK=0.05
-OPENAI_OUTPUT_USD_PER_MTOK=0.40
-```
-
-Модель и цены вынесены в `.env`, чтобы их можно было актуализировать без правки кода.
-По умолчанию выбран `gpt-5-nano` как недорогая модель для классификации,
-извлечения и ранжирования.
-
-## Структура
-
-```
 oiltech_digest/
   config.py          # пути, DATABASE_URL, константы парсера
   db/                # schema.sql, connection, repository
-  ingestion/         # excel_seed, rss_discovery, http_client, rss_parser, normalize
-  processing/        # OpenAI client, prompts, seed, summary/relevance/tagging/scoring, digest
-  api.py             # FastAPI backend + static admin UI
-  cli.py
-docker-compose.yml   # PostgreSQL 16
+  ingestion/         # сбор: rss/request/telegram, http_client, normalize, full-text, og:image
+  processing/        # AI-конвейер (OpenAI), seed, дайджест + фирменный шаблон
+  api.py             # FastAPI backend + статика админки
+  cli.py             # командная строка
+web/app.html         # одностраничная админ-панель
+tests/               # pytest
+docs/                # архитектура, гайд, тестирование
+docker-compose.yml   # PostgreSQL 16 + app + scheduler
 ```
+
+### Документация
+
+- [`docs/project_guide.md`](docs/project_guide.md) — главный гид по проекту и коду;
+- [`docs/architecture.md`](docs/architecture.md) — архитектура и поток данных;
+- [`docs/testing.md`](docs/testing.md) — сценарии проверки и smoke-тесты.
+
+### Настройка сбора (`.env`)
+
+| Переменная | Значение |
+|---|---|
+| `CYCLE_INTERVAL_SECONDS=21600` | период цикла scheduler (6 ч) |
+| `HTTP_MIN_INTERVAL_SECONDS=1.5` | пауза между запросами к одному хосту |
+| `HTTP_BLOCK_COOLDOWN_SECONDS=900` | cooldown после 403/429 |
+| `REQUEST_ARTICLE_LIMIT=6` | статей с одного listing за цикл |
+| `FULL_TEXT_LIMIT=80` / `AI_PROCESS_LIMIT=50` | объёмы дозагрузки и AI за цикл |
+| `PROXY_URL=` / `PROXY_HOST_OVERRIDES=` | глобальный / точечный прокси для парсинга |
+| `OPENAI_MODEL=gpt-5-nano` | модель и цены (`OPENAI_*_USD_PER_MTOK`) |
+| `AI_OFFLINE=0` | `1` = тестовый режим без OpenAI API |
+
+PostgreSQL проброшен только на `127.0.0.1:5432` и наружу не открыт.

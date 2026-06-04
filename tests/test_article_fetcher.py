@@ -58,3 +58,21 @@ def test_is_better_text_requires_meaningful_gain():
 
     assert not article_fetcher._is_better_text(extracted, current, min_chars=800)
     assert article_fetcher._is_better_text(extracted * 3, current, min_chars=800)
+
+
+def test_extract_og_image_prefers_open_graph():
+    html = b"""
+    <html><head>
+      <meta property="og:image" content="https://cdn.example.com/lead.jpg">
+      <meta name="twitter:image" content="https://cdn.example.com/tw.jpg">
+    </head><body></body></html>
+    """
+    assert article_fetcher.extract_og_image(html) == "https://cdn.example.com/lead.jpg"
+
+
+def test_extract_og_image_falls_back_to_twitter_and_handles_missing():
+    only_twitter = b'<html><head><meta name="twitter:image" content="https://c.example.com/t.png"></head></html>'
+    assert article_fetcher.extract_og_image(only_twitter) == "https://c.example.com/t.png"
+    # Нет картинок и относительный URL → пусто (в карточке будет фирменная заглушка)
+    assert article_fetcher.extract_og_image(b"<html><head></head></html>") == ""
+    assert article_fetcher.extract_og_image(b'<meta property="og:image" content="/local.png">') == ""

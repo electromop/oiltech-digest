@@ -31,3 +31,11 @@ Thumbs.db
 tmp/
 test_digest.pdf
 test_page_*.jpg
+
+# Generated digest exports (готовые выгрузки не версионируем)
+/exports/*
+!/exports/.gitkeep
+
+# Tooling / caches
+.pytest_cache/
+.claude-flow/

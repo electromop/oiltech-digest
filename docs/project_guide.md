@@ -95,8 +95,7 @@ sources
 
 ### `web/`
 
-- `app.html` — весь текущий Admin UI без отдельного frontend build step;
-- `product_mockups.html` — референс-мокапы интерфейса.
+- `app.html` — весь текущий Admin UI без отдельного frontend build step.
 
 ### `scripts/`
 
@@ -106,8 +105,8 @@ sources
 
 - `architecture.md` — техническая архитектура;
 - `testing.md` — как проверять систему;
-- `work_report.md` — что уже было сделано и какой текущий статус;
-- `cost_dashboard.html` — визуальный отчет по стоимости AI.
+- `reference/` — фирменный референс дайджеста (email_template + образец);
+- `archive/` — исторические отчёты и планы (work_report, handoff, status).
 
 ## 5. Режимы запуска
 

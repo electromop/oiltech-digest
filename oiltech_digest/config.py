@@ -18,8 +18,8 @@ DATABASE_URL = os.environ.get(
 )
 
 # --- Данные-источники ---
-SOURCES_XLSX = REPO_ROOT / "1_Список_источников_для_дайджеста.xlsx"
-DIRECTIONS_XLSX = REPO_ROOT / "2_Направления_и_ключевые_слова.xlsx"
+SOURCES_XLSX = REPO_ROOT / "data" / "seed" / "1_Список_источников_для_дайджеста.xlsx"
+DIRECTIONS_XLSX = REPO_ROOT / "data" / "seed" / "2_Направления_и_ключевые_слова.xlsx"
 SOURCES_SHEET = "Sources_Expanded"
 EXPORTS_DIR = REPO_ROOT / "exports"
 

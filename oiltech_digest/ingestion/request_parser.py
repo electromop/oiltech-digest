@@ -356,6 +356,8 @@ def _parse_datetime(raw: str) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
+    if normalize.is_future_date(parsed):
+        return None  # дата-анонс из будущего (календарь событий) — не дата публикации
     return parsed
 
 

@@ -105,6 +105,13 @@ def cmd_stats(args: argparse.Namespace) -> None:
             print(f"  {row['name']}: {row['n']}")
 
 
+def cmd_cleanup_future_dates(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    n = repository.clear_future_published_dates(tolerance_days=args.tolerance_days)
+    print(f"Обнулено будущих дат публикации (анонсы-события): {n}")
+
+
 def cmd_seed_tags(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.seed import seed_tags_from_directions
 
@@ -481,6 +488,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_full.set_defaults(func=cmd_fetch_full_text)
 
     sub.add_parser("stats", help="диагностика БД").set_defaults(func=cmd_stats)
+
+    p_cf = sub.add_parser("cleanup-future-dates",
+                          help="обнулить published_at из будущего (анонсы-события календаря)")
+    p_cf.add_argument("--tolerance-days", type=int, default=2,
+                      help="сколько дней вперёд считать допустимыми")
+    p_cf.set_defaults(func=cmd_cleanup_future_dates)
 
     sub.add_parser("seed-tags", help="загрузить теги из направлений D01-D18").set_defaults(func=cmd_seed_tags)
     sub.add_parser("seed-scoring", help="создать базовые критерии скоринга").set_defaults(func=cmd_seed_scoring)

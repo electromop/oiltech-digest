@@ -86,6 +86,7 @@ def parse_source(source: dict, max_age_days: int | None = None) -> dict:
             "text_truncated": normalize.is_truncated(summary or ""),
             "language": language,
             "content_hash": normalize.compute_content_hash(title, url),
+            "image_url": normalize.extract_image(entry) or None,
         }
         attempted += 1
         if repository.insert_article(rec):

@@ -25,7 +25,7 @@ from oiltech_digest.processing.pipeline import (
     process_summary_articles,
     process_tag_articles,
 )
-from oiltech_digest.ingestion import request_parser
+from oiltech_digest.ingestion import normalize, request_parser
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import build_digest_content, render_digest_email, save_digest_draft, write_digest_export
 
@@ -182,7 +182,7 @@ def list_articles(
     tag: str | None = None,
     status: str | None = None,
     min_score: float | None = None,
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(1000, ge=1, le=5000),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
     clauses = []
@@ -239,6 +239,12 @@ def list_articles(
     for payload in payloads:
         payload["score_items"] = score_items.get(payload["id"], [])
     return payloads
+
+
+@app.get("/api/stats")
+def dashboard_stats(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Authoritative dashboard counters, computed over the full database."""
+    return _clean(repository.dashboard_stats())
 
 
 @app.patch("/api/articles/{article_id}")
@@ -420,8 +426,8 @@ def ai_article_cost(
 
 
 @app.get("/api/digest-content")
-def digest_content(month: str, limit: int = Query(20, ge=1, le=100),
-                   min_score: float = 60,
+def digest_content(month: str = "", limit: int = Query(100, ge=1, le=500),
+                   min_score: float = 0,
                    user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     return _clean(build_digest_content(month=month, limit=limit, min_score=min_score))
 
@@ -440,8 +446,8 @@ def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user))
 
 
 @app.get("/api/digest-email", response_class=HTMLResponse)
-def digest_email(month: str, limit: int = Query(20, ge=1, le=100),
-                 min_score: float = 60,
+def digest_email(month: str = "", limit: int = Query(100, ge=1, le=500),
+                 min_score: float = 0,
                  user: dict[str, Any] = Depends(require_user)) -> HTMLResponse:
     content = build_digest_content(month=month, limit=limit, min_score=min_score)
     return HTMLResponse(render_digest_email(content))
@@ -449,10 +455,10 @@ def digest_email(month: str, limit: int = Query(20, ge=1, le=100),
 
 @app.get("/api/digest-export")
 def digest_export(
-    month: str,
-    export_format: str = Query("html", pattern="^(html|doc|json)$"),
-    limit: int = Query(20, ge=1, le=100),
-    min_score: float = 60,
+    month: str = "",
+    export_format: str = Query("pdf", pattern="^(pdf|doc|html|json)$"),
+    limit: int = Query(100, ge=1, le=500),
+    min_score: float = 0,
     user: dict[str, Any] = Depends(require_user),
 ) -> FileResponse:
     job_id = repository.create_export_job("monthly_digest", export_format)
@@ -464,9 +470,12 @@ def digest_export(
             min_score=min_score,
         )
         repository.finish_export_job(job_id, "ok", result["path"])
+    except RuntimeError as exc:  # PDF без Chromium и т.п. — понятное сообщение, не 500
+        repository.finish_export_job(job_id, "failed", error_message=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         repository.finish_export_job(job_id, "failed", error_message=str(exc))
-        raise
+        raise HTTPException(status_code=500, detail=str(exc))
     return FileResponse(
         result["path"],
         media_type=result["media_type"],
@@ -549,6 +558,8 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         "language": row.get("language"),
         "date": _date(row.get("published_at") or row.get("collected_at")),
         "published_at": _date(row.get("published_at")),
+        "collected": _date(row.get("collected_at")),
+        "future_date": normalize.is_future_date(row.get("published_at")),
         "summary": row.get("summary") or "",
         "tag": tag,
         "score": float(row["total_score"]) if row.get("total_score") is not None else 0,

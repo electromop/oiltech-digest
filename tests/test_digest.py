@@ -46,7 +46,8 @@ def test_render_digest_email_contains_news_and_escapes_html():
     )
 
     assert "НЕФТЕСЕРВИСНЫЙ ДАЙДЖЕСТ" in html
-    assert "Oil News" in html
+    assert "ГАЗПРОМ НЕФТЬ" in html  # фирменный шаблон-референс
+    assert "Добыча" in html  # категория новости
     assert "https://example.com/article" in html
     assert "Краткая суть статьи" in html
     assert "<script>" not in html
@@ -77,7 +78,7 @@ def test_render_digest_export_html_contains_cards():
         }
     )
 
-    assert "Тестовый экспорт дайджеста" in html
+    assert "ГАЗПРОМ НЕФТЬ" in html  # экспорт = тот же фирменный шаблон, что и письмо
     assert "Export article" in html
     assert "https://example.com/export-article" in html
 

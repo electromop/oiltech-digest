@@ -261,3 +261,4 @@ ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_fetched_at TIMESTAMPTZ;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_status TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_error TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS extraction_method TEXT;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;

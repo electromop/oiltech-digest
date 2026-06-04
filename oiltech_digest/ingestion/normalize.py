@@ -9,13 +9,28 @@ from __future__ import annotations
 import hashlib
 import html
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from dateutil import parser as dateparser
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+
+# Допуск на часовые пояса и опережающие публикации. Даты дальше этого порога в
+# будущем считаем недостоверными: типичный источник — анонсы событий из
+# «календаря» на сайте (напр. Equinor «Q3 results — analyst conference»),
+# которые скрапер ошибочно принимает за дату публикации.
+FUTURE_TOLERANCE_DAYS = 2
+
+
+def is_future_date(dt: datetime | None, tolerance_days: int = FUTURE_TOLERANCE_DAYS) -> bool:
+    """True, если дата заметно в будущем (вероятно, ошибочно распарсенное событие)."""
+    if dt is None:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt > datetime.now(timezone.utc) + timedelta(days=tolerance_days)
 
 
 def clean_html(text: str) -> str:
@@ -43,6 +58,8 @@ def parse_date(entry) -> datetime | None:
                 continue
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
+            if is_future_date(dt):
+                continue  # дата из будущего — не доверяем, пробуем следующее поле
             return dt
     return None
 

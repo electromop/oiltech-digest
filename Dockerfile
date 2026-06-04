@@ -6,12 +6,15 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Chromium для PDF-экспорта дайджеста (Playwright). Тяжёлый слой (~400 МБ): собирать
+# при остановленном стеке (`docker compose down` сначала) — на 1.9 ГБ RAM иначе OOM.
+RUN python -m playwright install --with-deps chromium
+
 # Код приложения и статика админки
 COPY oiltech_digest ./oiltech_digest
 COPY web ./web
 COPY scripts ./scripts
-COPY 1_Список_источников_для_дайджеста.xlsx .
-COPY 2_Направления_и_ключевые_слова.xlsx .
+COPY data/seed ./data/seed
 
 RUN mkdir -p /app/exports \
     && chmod +x ./scripts/docker-scheduler.sh
