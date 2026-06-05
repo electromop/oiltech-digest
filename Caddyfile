@@ -1,0 +1,13 @@
+# Reverse-proxy + авто-HTTPS для OilTech Digest.
+# Caddy сам получает и продлевает сертификат Let's Encrypt для домена и
+# редиректит http→https. Требуется: DNS A-запись oiltech-digest.ru → IP сервера
+# и открытые порты 80/443. Сертификаты хранятся в томе caddy_data (см. compose).
+
+oiltech-digest.ru {
+	reverse_proxy app:8000
+}
+
+# Если понадобится www — раскомментируй (и добавь DNS-запись для www):
+# www.oiltech-digest.ru {
+# 	redir https://oiltech-digest.ru{uri} permanent
+# }

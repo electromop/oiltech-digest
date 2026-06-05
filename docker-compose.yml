@@ -97,6 +97,22 @@ services:
       - exports:/app/exports
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    container_name: oiltech_caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:
   exports:
+  caddy_data:
+  caddy_config:
