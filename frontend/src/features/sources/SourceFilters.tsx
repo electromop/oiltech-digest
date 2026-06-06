@@ -1,0 +1,56 @@
+type Props = {
+  search: string;
+  strategy: string;
+  enabled: string;
+  healthVerdict: string;
+  onSearchChange: (value: string) => void;
+  onStrategyChange: (value: string) => void;
+  onEnabledChange: (value: string) => void;
+  onHealthChange: (value: string) => void;
+  onReset: () => void;
+};
+
+const STRATEGY_OPTIONS = ["rss", "request", "telegram", "none"];
+
+export function SourceFilters(props: Props) {
+  return (
+    <div className="sourceFiltersGrid">
+      <label className="field">
+        <span>Поиск</span>
+        <input value={props.search} onChange={(event) => props.onSearchChange(event.target.value)} placeholder="Название или URL" />
+      </label>
+      <label className="field">
+        <span>Стратегия</span>
+        <select value={props.strategy} onChange={(event) => props.onStrategyChange(event.target.value)}>
+          <option value="">Все</option>
+          {STRATEGY_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span>Статус</span>
+        <select value={props.enabled} onChange={(event) => props.onEnabledChange(event.target.value)}>
+          <option value="">Все</option>
+          <option value="on">Включены</option>
+          <option value="off">Выключены</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Покрытие</span>
+        <select value={props.healthVerdict} onChange={(event) => props.onHealthChange(event.target.value)}>
+          <option value="">Все</option>
+          <option value="ok">ОК</option>
+          <option value="stale">Застой</option>
+          <option value="no_articles">0 статей</option>
+          <option value="disabled">Выкл</option>
+        </select>
+      </label>
+      <button type="button" className="ghostButton" onClick={props.onReset}>
+        Сбросить
+      </button>
+    </div>
+  );
+}

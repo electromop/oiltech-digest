@@ -123,9 +123,21 @@
     .tag-row { display:grid; grid-template-columns:84px minmax(180px,.85fr) minmax(300px,1.5fr) 86px; gap:10px; align-items:end; padding:10px 0; border-top:1px solid var(--line); }
     .source-filters { display:grid; grid-template-columns:minmax(240px,1fr) 160px 160px 160px 120px; gap:8px; margin-bottom:12px; align-items:end; }
     .source-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
-    .source-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start; }
+    .source-card { display:grid; gap:12px; align-items:start; }
+    .source-top { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:start; }
+    .source-summary { display:grid; gap:8px; min-width:0; }
+    .source-meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    .source-link { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .source-link a { color:inherit; text-decoration:none; }
+    .source-link a:hover { text-decoration:underline; }
+    .source-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    .source-advanced { border-top:1px solid var(--line); padding-top:10px; }
+    .source-advanced summary { cursor:pointer; list-style:none; font-weight:800; color:var(--muted); }
+    .source-advanced summary::-webkit-details-marker { display:none; }
+    .source-advanced summary::after { content:'Показать настройку'; }
+    .source-advanced[open] summary::after { content:'Скрыть настройку'; }
     .source-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
-    .source-diagnostics { grid-column:1/-1; margin-top:10px; padding:10px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
+    .source-diagnostics { margin-top:10px; padding:10px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
     .source-diagnostics pre { margin:8px 0 0; white-space:pre-wrap; word-break:break-word; font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#334155; }
     .source-add-form { display:grid; grid-template-columns:minmax(180px,1fr) minmax(240px,1.2fr) minmax(160px,.75fr) 120px; gap:8px; align-items:end; margin-bottom:14px; padding:12px; border:1px solid var(--line); border-radius:9px; background:#fbfcfe; }
     .source-name { font-weight:900; font-size:15px; }
@@ -277,25 +289,38 @@
         const health=healthForSource(s.id);
         const diag=state.sourceDiagnostics[s.id];
         const diagHtml=diag?`<div class="source-diagnostics"><b>Диагностика:</b> <span class="pill ${diag.verdict==='ok'?'selected':'status'}">${esc(diag.verdict||'—')}</span><pre>${esc(sourceDiagnosticText(diag))}</pre></div>`:'';
+        const primaryUrl=s.url||s.rss_url||s.listing_url||'';
+        const articleCount=Number(health.articles||0);
+        const lastArticle=health.last_article_at?String(health.last_article_at).slice(0,10):'';
         return `<div class="source-card" data-source="${s.id}">
-          <div>
-            <div class="source-name">${esc(s.name)}</div>
-            <div class="source-line">${esc(s.source_type||'')} · ${esc(s.update_frequency||'частота не задана')} · ${esc(s.parse_strategy||'—')}</div>
-            <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="pill ${sourceHealthClass(health.verdict)}">${esc(sourceHealthLabel(health.verdict))}</span><span class="meta">${Number(health.articles||0)} статей${health.last_article_at?' · last '+esc(String(health.last_article_at).slice(0,10)):''}</span></div>
+          <div class="source-top">
+            <div class="source-summary">
+              <div class="source-name">${esc(s.name)}</div>
+              <div class="source-link">${primaryUrl?`<a href="${esc(primaryUrl)}" target="_blank" rel="noreferrer">${esc(primaryUrl)}</a>`:'URL не задан'}</div>
+              <div class="source-meta">
+                <span class="pill ${sourceHealthClass(health.verdict)}">${esc(sourceHealthLabel(health.verdict))}</span>
+                <span class="pill status">${articleCount} статей</span>
+                <span class="meta">${esc(s.parse_strategy||'—')} · ${esc(s.source_type||'')}</span>
+                ${lastArticle?`<span class="meta">последняя статья ${esc(lastArticle)}</span>`:''}
+              </div>
+            </div>
+            <div style="text-align:right;white-space:nowrap"><label style="display:inline-flex;align-items:center;gap:6px;font-weight:800;text-transform:none;color:var(--ink)"><input type="checkbox" data-toggle-source="${s.id}" ${s.enabled?'checked':''}>${s.enabled?'вкл':'выкл'}</label></div>
+          </div>
+          <div class="source-actions">
+              <button class="btn-ghost" data-save-source="${s.id}">Сохранить</button>
+              <button class="btn-ghost" data-diagnose-source="${s.id}">Диагностика</button>
+              ${s.parse_strategy==='request'?'<button class="btn-ghost" data-scrape-source="'+s.id+'">Проверить listing</button>':''}
+              ${s.last_seen_published_at?`<span class="meta">последний найденный материал ${esc(String(s.last_seen_published_at).slice(0,10))}</span>`:''}
+          </div>
+          <details class="source-advanced">
+            <summary></summary>
             <div class="source-config-grid">
               <div><label>Основной URL</label><input data-src-field="url" value="${esc(s.url||'')}" placeholder="https://example.com"></div>
               <div><label>RSS URL</label><input data-src-field="rss_url" value="${esc(s.rss_url||'')}" placeholder="RSS URL"></div>
               ${s.parse_strategy==='request'?`<div><label>Listing URL</label><input data-src-field="listing_url" value="${esc(s.listing_url||'')}" placeholder="Страница новостей"></div><div><label>Listing strategy</label><input data-src-field="listing_strategy" value="${esc(s.listing_strategy||'auto')}" placeholder="auto"></div><div><label>Listing selector</label><input data-src-field="listing_selector" value="${esc(s.listing_selector||'')}" placeholder=".news-card or //article"></div><div><label>Article link selector</label><input data-src-field="article_link_selector" value="${esc(s.article_link_selector||'')}" placeholder="a or .headline a"></div><div><label>Article date selector</label><input data-src-field="article_date_selector" value="${esc(s.article_date_selector||'')}" placeholder="time or .date"></div><div><label>Последняя статья</label><input value="${esc(s.last_seen_article_url||'')}" placeholder="пока пусто" disabled></div>`:''}
             </div>
-            <div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-              <button class="btn-ghost" data-save-source="${s.id}">Сохранить</button>
-              <button class="btn-ghost" data-diagnose-source="${s.id}">Диагностика</button>
-              ${s.parse_strategy==='request'?'<button class="btn-ghost" data-scrape-source="'+s.id+'">Проверить listing</button>':''}
-              ${s.last_seen_published_at?`<span class="meta">последняя дата: ${esc(String(s.last_seen_published_at).slice(0,10))}</span>`:''}
-            </div>
             ${diagHtml}
-          </div>
-          <div style="text-align:right;white-space:nowrap"><label style="display:inline-flex;align-items:center;gap:6px;font-weight:800;text-transform:none;color:var(--ink)"><input type="checkbox" data-toggle-source="${s.id}" ${s.enabled?'checked':''}>${s.enabled?'вкл':'выкл'}</label></div>
+          </details>
         </div>`;
       }).join('')||'<div class="empty">Источники не найдены.</div>';
     }

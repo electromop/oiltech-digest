@@ -437,6 +437,21 @@ def dashboard_stats() -> dict:
               (SELECT COUNT(*) FROM articles) AS total_articles,
               (SELECT COUNT(*) FROM article_cards
                  WHERE COALESCE(summary, '') <> '') AS with_summary,
+              (SELECT COUNT(*)
+                 FROM article_cards c
+                WHERE COALESCE(c.summary, '') <> ''
+                  AND c.relevant IS NOT NULL
+                  AND (
+                    c.relevant IS FALSE
+                    OR EXISTS (
+                      SELECT 1 FROM article_tags at
+                      WHERE at.article_id = c.article_id
+                    )
+                    OR EXISTS (
+                      SELECT 1 FROM article_scores sc
+                      WHERE sc.article_id = c.article_id
+                    )
+                  )) AS processed_articles,
               (SELECT COUNT(*) FROM article_cards
                  WHERE status = 'digest') AS selected_for_digest,
               (SELECT ROUND(AVG(total_score)) FROM article_scores) AS avg_score,
@@ -447,6 +462,7 @@ def dashboard_stats() -> dict:
     return {
         "total_articles": int(row["total_articles"] or 0),
         "with_summary": int(row["with_summary"] or 0),
+        "processed_articles": int(row["processed_articles"] or 0),
         "selected_for_digest": int(row["selected_for_digest"] or 0),
         "avg_score": int(row["avg_score"] or 0),
         "sources": int(row["sources"] or 0),

@@ -1,3 +1,18 @@
+FROM node:22-alpine AS frontend-build
+
+WORKDIR /frontend
+
+COPY frontend/package.json ./package.json
+COPY frontend/tsconfig.json ./tsconfig.json
+COPY frontend/tsconfig.node.json ./tsconfig.node.json
+COPY frontend/vite.config.ts ./vite.config.ts
+COPY frontend/index.html ./index.html
+COPY frontend/src ./src
+
+RUN npm install
+RUN npm run build
+
+
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -13,6 +28,7 @@ RUN python -m playwright install --with-deps chromium
 # Код приложения и статика админки
 COPY oiltech_digest ./oiltech_digest
 COPY web ./web
+COPY --from=frontend-build /frontend/dist ./frontend/dist
 COPY scripts ./scripts
 COPY data/seed ./data/seed
 

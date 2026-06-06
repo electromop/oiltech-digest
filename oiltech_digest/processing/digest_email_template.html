@@ -4,6 +4,42 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{issue_title}</title>
+  <style>
+    @page {{
+      size: A4;
+      margin: 0;
+    }}
+
+    body {{
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }}
+
+    .news-card,
+    .news-card-row,
+    .news-card-media,
+    .news-card-body {{
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }}
+
+    .news-card-title {{
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 20px;
+      line-height: 24px;
+      color: #003da6;
+      font-weight: bold;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }}
+
+    .news-card-summary {{
+      font-size: 13px;
+      line-height: 18px;
+      color: #333333;
+      margin-top: 8px;
+    }}
+  </style>
 </head>
 <body style="margin:0;padding:0;background:#f5f7fb;font-family:Arial,Helvetica,sans-serif;color:#262d3c;">
   <div style="display:none;max-height:0;overflow:hidden;color:#f5f7fb;">{issue_preheader}</div>

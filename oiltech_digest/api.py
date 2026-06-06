@@ -30,9 +30,12 @@ from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import build_digest_content, render_digest_email, save_digest_draft, write_digest_export
 
 WEB_DIR = REPO_ROOT / "web"
+FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 
 app = FastAPI(title="OilTech Digest API")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+if (FRONTEND_DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
 
 
 class ArticlePatch(BaseModel):
@@ -104,6 +107,8 @@ class AuthPayload(BaseModel):
 
 @app.get("/")
 def index() -> FileResponse:
+    if (FRONTEND_DIST_DIR / "index.html").exists():
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")
     return FileResponse(WEB_DIR / "app.html")
 
 

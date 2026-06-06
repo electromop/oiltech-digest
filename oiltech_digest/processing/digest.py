@@ -128,16 +128,16 @@ def _render_news_item(item: dict) -> str:
             'style="display:block;width:210px;height:118px;border-radius:6px;border:0;">'
         )
     return f"""
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 22px 0;border:1px solid #d9e3f3;border-radius:8px;background:#ffffff;">
-                <tr>
-                  <td width="230" valign="top" style="padding:10px 18px 10px 10px;">
+              <table class="news-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px 0;border:1px solid #d9e3f3;border-radius:8px;background:#ffffff;">
+                <tr class="news-card-row">
+                  <td class="news-card-media" width="230" valign="top" style="padding:10px 16px 10px 10px;">
                     {media}
                   </td>
-                  <td valign="top" style="padding:14px 16px 12px 0;">
+                  <td class="news-card-body" valign="top" style="padding:12px 14px 10px 0;">
                     <div style="font-size:12px;line-height:16px;color:#003da6;font-weight:bold;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{_html(item.get("category"))}</div>
-                    <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:26px;color:#003da6;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;">{_html(item.get("title"))}</div>
-                    <div style="font-size:14px;line-height:20px;color:#333333;margin-top:10px;">{_html(item.get("summary"))}</div>
-                    <div style="margin-top:10px;">
+                    <div class="news-card-title">{_html(item.get("title"))}</div>
+                    <div class="news-card-summary">{_html(item.get("summary"))}</div>
+                    <div style="margin-top:8px;">
                       <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
                     </div>
                   </td>

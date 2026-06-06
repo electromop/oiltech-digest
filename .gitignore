@@ -39,3 +39,5 @@ test_page_*.jpg
 # Tooling / caches
 .pytest_cache/
 .claude-flow/
+frontend/node_modules/
+frontend/dist/
