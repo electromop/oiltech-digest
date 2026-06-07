@@ -56,13 +56,20 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
     return insert_candidates(source, candidates, max_age_days=max_age_days)
 
 
-def insert_candidates(source: dict, candidates: list[CandidateLink],
-                      max_age_days: int | None = None) -> dict:
+def insert_candidates(
+    source: dict,
+    candidates: list[CandidateLink],
+    max_age_days: int | None = None,
+    article_fetcher=None,
+) -> dict:
     """Dedup, filter and insert a pre-fetched candidate list into the articles table.
 
     Extracted from parse_source so alternative fetch backends (e.g. Playwright)
     can reuse the same insertion logic after obtaining their own candidate list.
     """
+    if article_fetcher is None:
+        article_fetcher = fetch_article_candidate
+
     listing_hash = _listing_hash(candidates)
     if candidates and source.get("last_listing_hash") and listing_hash == source.get("last_listing_hash"):
         repository.touch_last_parsed(source["id"])
@@ -112,7 +119,7 @@ def insert_candidates(source: dict, candidates: list[CandidateLink],
             skipped_old += 1
             continue
 
-        article = fetch_article_candidate(candidate, source)
+        article = article_fetcher(candidate, source)
         if article is None:
             continue
         if cutoff is not None and article.get("published_at") and article["published_at"] < cutoff:

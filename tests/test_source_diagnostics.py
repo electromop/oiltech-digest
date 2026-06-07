@@ -111,3 +111,23 @@ def test_diagnose_rss_source_reports_entries(monkeypatch):
     assert result["verdict"] == "ok"
     assert result["entry_count"] == 1
     assert result["entries"][0]["title"] == "Automation news"
+
+
+def test_diagnose_playwright_source_reports_insertable_candidate(monkeypatch):
+    rendered = {
+        "https://example.com/news": LISTING_HTML,
+        "https://example.com/news/2026/06/drilling-automation-platform": ARTICLE_HTML,
+    }
+
+    monkeypatch.setattr(source_diagnostics.playwright_parser, "is_available", lambda: True)
+    monkeypatch.setattr(source_diagnostics.playwright_parser, "fetch_rendered", lambda url: rendered.get(url))
+
+    result = source_diagnostics.diagnose_source(
+        {"id": 11, "name": "Rendered", "parse_strategy": "playwright", "listing_url": "https://example.com/news"},
+        limit=3,
+    )
+
+    assert result["verdict"] == "ok"
+    assert result["strategy"] == "playwright"
+    assert result["candidate_count"] == 1
+    assert result["article_checks"][0]["article_probe"]["status"] == "rendered"

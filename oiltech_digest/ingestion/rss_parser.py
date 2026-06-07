@@ -118,15 +118,16 @@ def parse_all(max_age_days: int | None = None, workers: int = MAX_WORKERS,
         "errors": 0,
     }
 
+    threaded_sources = [s for s in sources if s.get("parse_strategy") != "playwright"]
+    playwright_sources = [s for s in sources if s.get("parse_strategy") == "playwright"]
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {}
-        for source in sources:
+        for source in threaded_sources:
             if source.get("parse_strategy") == "request":
                 future = pool.submit(request_parser.parse_source, source, max_age_days)
             elif source.get("parse_strategy") == "telegram":
                 future = pool.submit(telegram_parser.parse_source, source, max_age_days)
-            elif source.get("parse_strategy") == "playwright":
-                future = pool.submit(playwright_parser.parse_source, source, max_age_days)
             else:
                 future = pool.submit(parse_source, source, max_age_days)
             futures[future] = source
@@ -142,5 +143,17 @@ def parse_all(max_age_days: int | None = None, workers: int = MAX_WORKERS,
             except Exception as e:  # noqa: BLE001 - падение одного источника не валит прогон
                 logger.error("Ошибка парсинга %s: %s", src.get("name"), e)
                 stats["errors"] += 1
+
+    for source in playwright_sources:
+        try:
+            r = playwright_parser.parse_source(source, max_age_days)
+            stats["added"] += r["added"]
+            stats["duplicates"] += r["attempted"] - r["added"]
+            stats["skipped_old"] += r["skipped_old"]
+            stats["skipped_irrelevant"] += r["skipped_irrelevant"]
+            stats["sources_ok"] += 1
+        except Exception as e:  # noqa: BLE001 - падение одного источника не валит прогон
+            logger.error("Ошибка playwright-парсинга %s: %s", source.get("name"), e)
+            stats["errors"] += 1
 
     return stats

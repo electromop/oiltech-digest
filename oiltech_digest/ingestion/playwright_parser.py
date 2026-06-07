@@ -1,4 +1,4 @@
-"""Playwright-based parser for JS-rendered listing pages.
+"""Playwright-based parser for JS-rendered listing and article pages.
 
 Используется для источников с parse_strategy='playwright' — сайты, где контент
 рендерится JavaScript или стоит WAF-проверка (Cloudflare challenge и т.п.),
@@ -10,12 +10,8 @@
 На сервере с 1.9 ГБ RAM запускать строго последовательно (1 инстанс Chromium):
 достаточно выставить PLAYWRIGHT_WORKERS=1 и не включать в общий thread-pool.
 
-Статус: ЗАГОТОВКА. Логика извлечения ссылок и текста наследует request_parser,
-только fetch заменён на playwright. Для боевого использования нужно:
-  1. Добавить playwright в requirements.txt / Dockerfile.
-  2. Настроить per-source listing_selector / article_link_selector в БД.
-  3. Включить parse_strategy='playwright' нужным источникам.
-  4. Добавить ветку 'playwright' в rss_parser.parse_all (аналогично 'telegram').
+Логика извлечения ссылок и дедупликации наследует request_parser, но HTML
+листинга и самих статей получается через headless Chromium.
 """
 
 from __future__ import annotations
@@ -24,8 +20,8 @@ import logging
 from typing import Any
 
 from oiltech_digest.db import repository
+from oiltech_digest.config import REQUEST_ARTICLE_LIMIT
 from oiltech_digest.ingestion import normalize
-from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +62,7 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "networ
         return None
 
 
-def parse_source(source: dict, max_age_days: int | None = None) -> dict:
+def parse_source(source: dict, max_age_days: int | None = None, article_limit: int = REQUEST_ARTICLE_LIMIT) -> dict:
     """Parse a JS-rendered listing page via Playwright, insert new articles.
 
     Delegates link extraction and dedup logic to request_parser after fetching
@@ -82,8 +78,10 @@ def parse_source(source: dict, max_age_days: int | None = None) -> dict:
         return _empty_stats()
 
     from oiltech_digest.ingestion.request_parser import (
+        CandidateLink,
         extract_candidate_links,
-        parse_and_insert_candidates,
+        insert_candidates,
+        parse_article_page,
     )
 
     listing_url = source.get("listing_url") or source.get("url")
@@ -94,12 +92,36 @@ def parse_source(source: dict, max_age_days: int | None = None) -> dict:
     if content is None:
         return _empty_stats()
 
-    candidates = extract_candidate_links(source, listing_url, content)
+    candidates = extract_candidate_links(source, listing_url, content, limit=article_limit)
     if not candidates:
         logger.info("playwright: no candidates found for source %s (%s)", source.get("name"), listing_url)
         return _empty_stats()
 
-    stats = parse_and_insert_candidates(source, candidates, max_age_days=max_age_days)
+    def fetch_rendered_article(candidate: CandidateLink, source: dict) -> dict | None:
+        article_content = fetch_rendered(candidate.url)
+        if article_content is None:
+            return None
+        title, published_at, raw_text = parse_article_page(article_content, candidate.title)
+        final_published = published_at or candidate.published_at
+        if not title or len(raw_text) < 200:
+            return None
+        return {
+            "source_id": source["id"],
+            "title": title[:500],
+            "url": candidate.url,
+            "published_at": final_published,
+            "raw_text": raw_text,
+            "text_truncated": normalize.is_truncated(raw_text),
+            "language": _guess_language(source),
+            "content_hash": normalize.compute_content_hash(title, candidate.url),
+        }
+
+    stats = insert_candidates(
+        source,
+        candidates,
+        max_age_days=max_age_days,
+        article_fetcher=fetch_rendered_article,
+    )
     repository.touch_last_parsed(source["id"])
     return stats
 
@@ -107,3 +129,12 @@ def parse_source(source: dict, max_age_days: int | None = None) -> dict:
 def _empty_stats() -> dict[str, Any]:
     return {"added": 0, "attempted": 0, "skipped_old": 0,
             "skipped_irrelevant": 0, "skipped_known": 0}
+
+
+def _guess_language(source: dict) -> str | None:
+    category = (source.get("category") or "").lower()
+    if any(marker in category for marker in ("рф", "снг", "россий", "telegram")):
+        return "ru"
+    if "международ" in category:
+        return "en"
+    return None

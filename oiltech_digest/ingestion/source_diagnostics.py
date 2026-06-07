@@ -9,7 +9,7 @@ import feedparser
 import requests
 
 from oiltech_digest.config import REQUEST_TIMEOUT
-from oiltech_digest.ingestion import request_parser, telegram_parser
+from oiltech_digest.ingestion import playwright_parser, request_parser, telegram_parser
 from oiltech_digest.ingestion.http_client import _DEFAULT_HEADERS, _mask_proxy, _proxy_for
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
@@ -31,6 +31,8 @@ def diagnose_source(source: dict, limit: int = 5) -> dict:
         return diagnose_request_source(source, limit=limit)
     if strategy == "telegram":
         return diagnose_telegram_source(source, limit=limit)
+    if strategy == "playwright":
+        return diagnose_playwright_source(source, limit=limit)
     if strategy == "rss":
         return diagnose_rss_source(source, limit=limit)
     return {
@@ -72,6 +74,76 @@ def diagnose_request_source(source: dict, limit: int = 5) -> dict:
         check = {"candidate_url": candidate.url, "article_probe": asdict(article_probe)}
         if article_content is None:
             check["verdict"] = "article_fetch_failed"
+            article_checks.append(check)
+            continue
+
+        title, published_at, raw_text = request_parser.parse_article_page(article_content, candidate.title)
+        pre_filter = should_keep_article(title, raw_text, source)
+        check.update(
+            {
+                "verdict": "ok" if len(raw_text) >= 200 and pre_filter.keep else "article_not_insertable",
+                "title": title,
+                "published_at": published_at,
+                "text_chars": len(raw_text),
+                "prefilter_keep": pre_filter.keep,
+                "prefilter_noise": pre_filter.matched_noise[:5],
+                "prefilter_keywords": pre_filter.matched_keywords[:5],
+            }
+        )
+        article_checks.append(check)
+
+    return {
+        **payload,
+        "article_checks": article_checks,
+        "verdict": "ok" if any(item.get("verdict") == "ok" for item in article_checks) else "no_insertable_articles",
+    }
+
+
+def diagnose_playwright_source(source: dict, limit: int = 5) -> dict:
+    listing_url = source.get("listing_url") or source.get("url")
+    base = _base_payload(source, "playwright", listing_url)
+    if not listing_url:
+        return {**base, "verdict": "missing_listing_url"}
+    if not playwright_parser.is_available():
+        return {**base, "verdict": "playwright_unavailable", "candidates": []}
+
+    content = playwright_parser.fetch_rendered(listing_url)
+    listing_probe = {
+        "url": listing_url,
+        "status": "rendered" if content is not None else "ERR",
+        "bytes": len(content or b""),
+    }
+    payload = {**base, "listing_probe": listing_probe}
+    if content is None:
+        return {**payload, "verdict": "listing_render_failed", "candidates": []}
+
+    candidates = request_parser.extract_candidate_links(source, listing_url, content, limit=limit)
+    payload["candidate_count"] = len(candidates)
+    payload["candidates"] = [
+        {
+            "url": item.url,
+            "title": item.title,
+            "score": item.score,
+            "published_at": item.published_at,
+        }
+        for item in candidates
+    ]
+    if not candidates:
+        return {**payload, "verdict": "no_candidates"}
+
+    article_checks = []
+    for candidate in candidates[:limit]:
+        article_content = playwright_parser.fetch_rendered(candidate.url)
+        check = {
+            "candidate_url": candidate.url,
+            "article_probe": {
+                "url": candidate.url,
+                "status": "rendered" if article_content is not None else "ERR",
+                "bytes": len(article_content or b""),
+            },
+        }
+        if article_content is None:
+            check["verdict"] = "article_render_failed"
             article_checks.append(check)
             continue
 
