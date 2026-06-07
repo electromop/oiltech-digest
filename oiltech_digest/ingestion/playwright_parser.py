@@ -35,8 +35,19 @@ def is_available() -> bool:
         return False
 
 
-def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "networkidle") -> bytes | None:
-    """Загрузить страницу через headless Chromium, вернуть HTML как bytes."""
+_BLOCK_STATUSES = {403, 429, 503}
+
+
+def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcontentloaded",
+                   settle_ms: int = 3500) -> bytes | None:
+    """Загрузить страницу через headless Chromium, вернуть HTML как bytes.
+
+    wait_until='domcontentloaded' (НЕ 'networkidle'): networkidle зависает на сайтах
+    с постоянной сетевой активностью (аналитика/реклама/websockets) и упирается в
+    timeout (наблюдалось на bcg.com). После загрузки даём JS дорендериться фиксированной
+    паузой settle_ms (важно для JS-листингов и прохождения лёгких challenge).
+    Возвращает None при блокировке (403/429/503) — чтобы не разбирать challenge-страницу.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -45,17 +56,29 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "networ
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            page = browser.new_page(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                )
+            # --no-sandbox: Chromium под root в Docker; --disable-dev-shm-usage: малый /dev/shm
+            # на сервере 1.9 ГБ RAM (иначе краши вкладок). Те же флаги, что в PDF-экспорте.
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
-            page.goto(url, timeout=timeout_ms, wait_until=wait_until)
-            html_content = page.content()
-            browser.close()
+            try:
+                page = browser.new_page(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    )
+                )
+                response = page.goto(url, timeout=timeout_ms, wait_until=wait_until)
+                if response is not None and response.status in _BLOCK_STATUSES:
+                    logger.warning("playwright %s — статус %s (WAF/блок), пропуск", url, response.status)
+                    return None
+                if settle_ms:
+                    page.wait_for_timeout(settle_ms)
+                html_content = page.content()
+            finally:
+                browser.close()
         return html_content.encode("utf-8") if isinstance(html_content, str) else html_content
     except Exception as exc:  # noqa: BLE001
         logger.warning("playwright fetch failed for %s: %s", url, exc)
