@@ -15,12 +15,18 @@
       print-color-adjust: exact;
     }}
 
-    .news-card,
-    .news-card-row,
-    .news-card-media,
-    .news-card-body {{
+    .news-card {{
       break-inside: avoid;
       page-break-inside: avoid;
+    }}
+
+    .news-card-image {{
+      display: block;
+      width: 210px;
+      height: 118px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 0;
     }}
 
     .news-card-title {{
@@ -37,7 +43,17 @@
       font-size: 13px;
       line-height: 18px;
       color: #333333;
-      margin-top: 8px;
+      margin-top: 4px;
+    }}
+
+    .news-card-tag {{
+      display: inline-block;
+      color: #003da6;
+      font-size: 11px;
+      line-height: 16px;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: .06em;
     }}
   </style>
 </head>

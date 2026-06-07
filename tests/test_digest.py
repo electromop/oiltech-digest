@@ -104,6 +104,45 @@ def test_write_digest_export_json(monkeypatch, tmp_path):
     assert result["format"] == "json"
 
 
+def test_write_digest_export_html_and_doc(monkeypatch, tmp_path):
+    monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
+    monkeypatch.setattr(
+        "oiltech_digest.processing.digest.build_digest_content",
+        lambda month, limit=100, min_score=0: {
+            "issue": {"title": f"Digest {month}", "intro": "Test intro"},
+            "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
+            "news": [
+                {
+                    "category": "Drilling",
+                    "title": "Export article",
+                    "source": "World Oil",
+                    "url": "https://example.com/export-article",
+                    "published_at": "2026-05-20",
+                    "score": 91,
+                    "summary": "Useful export summary",
+                    "image_url": "",
+                }
+            ],
+            "items": [{"article_id": 1}],
+            "footer": {"contact_text": "", "contact_email": "", "note": ""},
+        },
+    )
+
+    html_result = write_digest_export("2026-05", export_format="html")
+    doc_result = write_digest_export("2026-05", export_format="doc")
+
+    html_path = Path(html_result["path"])
+    doc_path = Path(doc_result["path"])
+    assert html_path.exists()
+    assert doc_path.exists()
+    assert html_path.suffix == ".html"
+    assert doc_path.suffix == ".doc"
+    assert html_result["media_type"] == "text/html; charset=utf-8"
+    assert doc_result["media_type"] == "application/msword"
+    assert "Export article" in html_path.read_text(encoding="utf-8")
+    assert "Export article" in doc_path.read_text(encoding="utf-8")
+
+
 def test_build_digest_content_includes_article_ids(monkeypatch):
     class PublishedAt:
         def date(self):
@@ -134,6 +173,68 @@ def test_build_digest_content_includes_article_ids(monkeypatch):
 
     assert content["items"][0]["article_id"] == 123
     assert content["news"][0]["article_id"] == 123
+
+
+def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(monkeypatch):
+    long_summary = (
+        "Digest candidate: Wood Mackenzie развернула три сценария рынков СПГ после закрытия "
+        "Ормузского пролива, при котором мировая поставка сократилась на 80 млн т/год. "
+        "Вторая фраза не должна попадать в короткую карточку."
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.processing.digest.repository.digest_candidates",
+        lambda month, limit=20, min_score=60: [
+            {
+                "id": 123,
+                "title": "Digest candidate",
+                "source_name": "World Oil",
+                "url": "https://example.com/a",
+                "published_at": None,
+                "tag_name": "LNG",
+                "parent_tag_name": "Рынок",
+                "total_score": 88,
+                "score_label": "High",
+                "summary": long_summary,
+                "image_url": "",
+            }
+        ],
+    )
+
+    content = build_digest_content("2026-05")
+    summary = content["news"][0]["summary"]
+
+    assert not summary.startswith("Digest candidate:")
+    assert len(summary) <= 170
+    assert "Вторая фраза" not in summary
+    assert content["news"][0]["category"] == "Рынок / LNG"
+
+
+def test_render_digest_email_keeps_title_out_of_bottom_flow_and_places_tag_near_cta():
+    html = render_digest_email(
+        {
+            "issue": {"title": "Digest", "preheader": "Preheader", "intro": "Intro"},
+            "hero": {"badge": "NEWS", "headline": "DIGEST", "subtitle": "Subtitle", "image_url": ""},
+            "news": [
+                {
+                    "category": "Рынок / LNG",
+                    "title": "Very long article title that should remain in the right column",
+                    "source": "World Oil",
+                    "url": "https://example.com/article",
+                    "published_at": "2026-05-20",
+                    "score": 91,
+                    "summary": "Short summary",
+                    "image_url": "",
+                }
+            ],
+            "footer": {"contact_text": "Contact", "contact_email": "digest@example.com", "note": "Note"},
+        }
+    )
+
+    assert "colspan=\"2\"" in html
+    assert "ЧИТАТЬ ДАЛЕЕ" in html
+    assert "news-card-tag" in html
+    assert html.index("ЧИТАТЬ ДАЛЕЕ") < html.index("Рынок / LNG")
+    assert "Very long article title" in html
 
 
 def test_save_digest_draft_persists_ordered_items(monkeypatch):

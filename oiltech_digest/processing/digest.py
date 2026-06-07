@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from html import escape
 from pathlib import Path
 from datetime import datetime
@@ -33,7 +34,7 @@ def build_digest_content(month: str | None = None, limit: int = 20, min_score: f
                 "tag": tag,
                 "score": float(row["total_score"]) if row.get("total_score") is not None else None,
                 "score_label": row.get("score_label"),
-                "summary": row.get("summary") or "",
+                "summary": _compact_digest_summary(row.get("summary") or "", row.get("title") or ""),
                 "image_url": row.get("image_url") or "",
             }
         )
@@ -105,12 +106,35 @@ def _html(value: object) -> str:
     return escape("" if value is None else str(value), quote=True)
 
 
+def _compact_digest_summary(summary: str, title: str, max_chars: int = 170) -> str:
+    """Shorten AI summary for digest cards so layout stays tight and readable."""
+    text = re.sub(r"\s+", " ", (summary or "").strip())
+    if not text:
+        return ""
+
+    # Our summaries often start with the article title prefix. Remove it for the digest.
+    title_prefix = f"{(title or '').strip()}:"
+    if title and text.lower().startswith(title_prefix.lower()):
+        text = text[len(title_prefix):].strip()
+
+    # Prefer the first sentence if it is already compact enough.
+    first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
+    candidate = first_sentence or text
+    if len(candidate) <= max_chars:
+        return candidate
+
+    clipped = candidate[: max_chars - 1].rstrip(" ,;:-")
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return clipped + "…"
+
+
 def _render_news_item(item: dict) -> str:
-    """One news card in the reference layout: image (or branded placeholder) + text."""
+    """One news card: image/title row, summary below, actions and tag at bottom."""
     image_url = item.get("image_url") or ""
     if image_url:
         media = (
-            f'<img src="{_html(image_url)}" width="210" height="118" alt="{_html(item.get("title"))}" '
+            f'<img class="news-card-image" src="{_html(image_url)}" width="210" height="118" alt="{_html(item.get("title"))}" '
             'style="display:block;width:210px;height:118px;object-fit:cover;border-radius:6px;border:0;">'
         )
     else:
@@ -124,22 +148,32 @@ def _render_news_item(item: dict) -> str:
             "</linearGradient></defs><rect width='210' height='118' rx='6' fill='url(%23g)'/></svg>"
         )
         media = (
-            f'<img src="{placeholder}" width="210" height="118" alt="" '
+            f'<img class="news-card-image" src="{placeholder}" width="210" height="118" alt="" '
             'style="display:block;width:210px;height:118px;border-radius:6px;border:0;">'
         )
     return f"""
               <table class="news-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px 0;border:1px solid #d9e3f3;border-radius:8px;background:#ffffff;">
-                <tr class="news-card-row">
-                  <td class="news-card-media" width="230" valign="top" style="padding:10px 16px 10px 10px;">
+                <tr>
+                  <td width="230" valign="top" style="padding:10px 16px 8px 10px;">
                     {media}
                   </td>
-                  <td class="news-card-body" valign="top" style="padding:12px 14px 10px 0;">
-                    <div style="font-size:12px;line-height:16px;color:#003da6;font-weight:bold;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{_html(item.get("category"))}</div>
+                  <td valign="top" style="padding:12px 14px 8px 0;">
                     <div class="news-card-title">{_html(item.get("title"))}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td colspan="2" valign="top" style="padding:0 14px 12px 14px;">
                     <div class="news-card-summary">{_html(item.get("summary"))}</div>
-                    <div style="margin-top:8px;">
-                      <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
-                    </div>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;">
+                      <tr>
+                        <td align="left" valign="middle">
+                          <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
+                        </td>
+                        <td align="right" valign="middle">
+                          <span class="news-card-tag">{_html(item.get("category"))}</span>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>"""
