@@ -111,11 +111,14 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
     if not listing_url:
         return _empty_stats()
 
-    content = fetch_rendered(listing_url)
-    if content is None:
-        return _empty_stats()
-
-    candidates = extract_candidate_links(source, listing_url, content, limit=article_limit)
+    content = fetch_rendered(listing_url, settle_ms=5000)
+    candidates = extract_candidate_links(source, listing_url, content, limit=article_limit) if content else []
+    if not candidates:
+        # JS-листинг мог не успеть дорендерить ссылки за первый проход (наблюдалось на
+        # bakerhughes.com: «то 6, то 0 кандидатов»). Даём ещё одну попытку с большим settle.
+        logger.info("playwright: 0 кандидатов на первом проходе для %s — ретрай с большим settle", source.get("name"))
+        content = fetch_rendered(listing_url, settle_ms=12000)
+        candidates = extract_candidate_links(source, listing_url, content, limit=article_limit) if content else []
     if not candidates:
         logger.info("playwright: no candidates found for source %s (%s)", source.get("name"), listing_url)
         return _empty_stats()
