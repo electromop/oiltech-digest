@@ -468,6 +468,25 @@ def cmd_jobs_worker(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_bench_readiness(args: argparse.Namespace) -> None:
+    from oiltech_digest.benchmarks import format_benchmark_report, run_readiness_benchmark
+
+    report = run_readiness_benchmark(
+        iterations=args.iterations,
+        articles_limit=args.articles_limit,
+        source_limit=args.source_limit,
+        jobs_limit=args.jobs_limit,
+        month=args.month,
+        digest_limit=args.digest_limit,
+        min_score=args.min_score,
+        warn_ms=args.warn_ms,
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(format_benchmark_report(report))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oiltech_digest.cli", description="OilTech Digest — сбор RSS")
     parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (INFO)")
@@ -605,6 +624,21 @@ def build_parser() -> argparse.ArgumentParser:
                                help="очередь для обработки; можно указать несколько раз")
     p_jobs_worker.add_argument("--once", action="store_true", help="забрать одну доступную пачку и выйти, если задач нет")
     p_jobs_worker.set_defaults(func=cmd_jobs_worker)
+
+    p_bench = sub.add_parser(
+        "bench-readiness",
+        help="read-only benchmark основных prod-запросов без парсинга и AI",
+    )
+    p_bench.add_argument("--iterations", type=int, default=5)
+    p_bench.add_argument("--articles-limit", type=int, default=1000)
+    p_bench.add_argument("--source-limit", type=int, default=300)
+    p_bench.add_argument("--jobs-limit", type=int, default=100)
+    p_bench.add_argument("--month", default=None, help="YYYY-MM для digest_candidates; пусто = все")
+    p_bench.add_argument("--digest-limit", type=int, default=100)
+    p_bench.add_argument("--min-score", type=float, default=0)
+    p_bench.add_argument("--warn-ms", type=float, default=800)
+    p_bench.add_argument("--json", action="store_true", help="вывести машинно-читаемый JSON")
+    p_bench.set_defaults(func=cmd_bench_readiness)
 
     p_source_retry = sub.add_parser(
         "source-retry",
