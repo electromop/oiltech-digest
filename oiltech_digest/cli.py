@@ -126,6 +126,14 @@ def cmd_seed_scoring(args: argparse.Namespace) -> None:
     print(f"Seed критериев скоринга: {stats['criteria']}, сумма весов={stats['weight_sum']}")
 
 
+def cmd_apply_source_overrides(args: argparse.Namespace) -> None:
+    from oiltech_digest.ingestion.source_overrides import apply_overrides
+
+    stats = apply_overrides()
+    print(f"Оверрайды источников: изменено={stats['changed']}, без изменений={stats['unchanged']}, "
+          f"не найдено={stats['not_found']}")
+
+
 def cmd_summarize(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.pipeline import process_summaries
 
@@ -527,6 +535,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("seed-tags", help="загрузить теги из направлений D01-D18").set_defaults(func=cmd_seed_tags)
     sub.add_parser("seed-scoring", help="создать базовые критерии скоринга").set_defaults(func=cmd_seed_scoring)
+    sub.add_parser("apply-source-overrides", help="применить playwright/listing-оверрайды источников").set_defaults(func=cmd_apply_source_overrides)
 
     def add_ai_args(p):
         p.add_argument("--limit", type=int, default=20)

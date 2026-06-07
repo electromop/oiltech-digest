@@ -50,6 +50,7 @@ if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   run_required_step "seed-sources" python -m oiltech_digest.cli seed-sources
   run_required_step "seed-tags" python -m oiltech_digest.cli seed-tags
   run_required_step "seed-scoring" python -m oiltech_digest.cli seed-scoring
+  run_step "apply-source-overrides" python -m oiltech_digest.cli apply-source-overrides
 fi
 
 cycle=0

@@ -34,7 +34,7 @@ services:
       [
         "sh",
         "-c",
-        "python -m oiltech_digest.cli init-db && python -m oiltech_digest.cli seed-sources && python -m oiltech_digest.cli seed-tags && python -m oiltech_digest.cli seed-scoring"
+        "python -m oiltech_digest.cli init-db && python -m oiltech_digest.cli seed-sources && python -m oiltech_digest.cli seed-tags && python -m oiltech_digest.cli seed-scoring && (python -m oiltech_digest.cli apply-source-overrides || true)"
       ]
     restart: "no"
 
