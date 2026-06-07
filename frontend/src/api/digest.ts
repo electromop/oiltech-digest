@@ -1,5 +1,5 @@
-import { apiDownload, apiFetch } from "./client";
-import type { DigestContent, MonthlyDigestDraft } from "./types";
+import { apiFetch } from "./client";
+import type { BackgroundJob, DigestContent, MonthlyDigestDraft } from "./types";
 
 type SaveDigestPayload = {
   month: string;
@@ -27,12 +27,14 @@ export function getMonthlyDigest(month: string) {
   return apiFetch<MonthlyDigestDraft>(`/api/monthly-digests/${encodeURIComponent(month)}`);
 }
 
-export function downloadDigestExport(month: string, limit: number, minScore: number, format: "pdf" | "doc" | "html") {
-  const params = new URLSearchParams({
+export function enqueueDigestExport(month: string, limit: number, minScore: number, format: "pdf" | "doc" | "html") {
+  return apiFetch<{ ok: boolean; job: BackgroundJob }>("/api/jobs/digest-export", {
+    method: "POST",
+    body: JSON.stringify({
     month,
-    limit: String(limit),
-    min_score: String(minScore),
     export_format: format,
+      limit,
+      min_score: minScore,
+    }),
   });
-  return apiDownload(`/api/digest-export?${params.toString()}`);
 }

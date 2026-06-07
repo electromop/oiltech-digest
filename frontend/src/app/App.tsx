@@ -6,11 +6,12 @@ import { getDashboardStats } from "../api/stats";
 import type { Article, DashboardStats, User } from "../api/types";
 import { ArticlesPage } from "../features/articles/ArticlesPage";
 import { DigestPage } from "../features/digest/DigestPage";
+import { JobsPage } from "../features/jobs/JobsPage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 
-type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags";
+type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags" | "jobs";
 
 type ScreenDef = {
   id: ScreenId;
@@ -89,8 +90,13 @@ const navGroups: NavGroup[] = [
   },
 ];
 
+function initialScreenFromUrl(): ScreenId {
+  const value = new URLSearchParams(window.location.search).get("screen");
+  return value === "jobs" ? "jobs" : "articles";
+}
+
 export function App() {
-  const [activeScreen, setActiveScreen] = useState<ScreenId>("articles");
+  const [activeScreen, setActiveScreen] = useState<ScreenId>(initialScreenFromUrl);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -186,6 +192,21 @@ export function App() {
 
   if (activeScreen === "tags") {
     currentScreen = <TagsPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+  }
+
+  if (activeScreen === "jobs") {
+    currentScreen = <JobsPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+  }
+
+  function switchScreen(screenId: ScreenId) {
+    setActiveScreen(screenId);
+    if (screenId === "jobs") {
+      window.history.replaceState(null, "", "?screen=jobs");
+      return;
+    }
+    if (window.location.search.includes("screen=jobs")) {
+      window.history.replaceState(null, "", window.location.pathname || "/");
+    }
   }
 
   async function loadSession() {
@@ -315,7 +336,7 @@ export function App() {
                       key={screen.id}
                       type="button"
                       className={screen.id === activeScreen ? "navButton active" : "navButton"}
-                      onClick={() => setActiveScreen(screen.id)}
+                      onClick={() => switchScreen(screen.id)}
                       title={sidebarCollapsed ? screen.label : undefined}
                     >
                       <span className="navButtonIcon">
@@ -371,7 +392,7 @@ export function App() {
             key={screen.id}
             type="button"
             className={screen.id === activeScreen ? "mobileNavButton active" : "mobileNavButton"}
-            onClick={() => setActiveScreen(screen.id)}
+            onClick={() => switchScreen(screen.id)}
             aria-label={screen.label}
           >
             <span className="mobileNavIcon">

@@ -115,6 +115,23 @@ export type DashboardStats = {
   sources: number;
 };
 
+export type BackgroundJob = {
+  id: number;
+  kind: string;
+  queue: string;
+  status: "queued" | "running" | "ok" | "failed";
+  progress: number;
+  attempts: number;
+  max_attempts: number;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown>;
+  error: string | null;
+  run_after: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 export type ArticlePatch = {
   status?: "new" | "review" | "digest" | "archive";
   selected_for_digest?: boolean;

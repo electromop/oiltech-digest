@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { listArticles } from "../../api/articles";
-import { downloadDigestExport, getDigestContent, getMonthlyDigest, saveDigestDraft } from "../../api/digest";
-import type { Article } from "../../api/types";
+import { enqueueDigestExport, getDigestContent, getMonthlyDigest, saveDigestDraft } from "../../api/digest";
+import { downloadJobResult, getJob } from "../../api/jobs";
+import type { Article, BackgroundJob } from "../../api/types";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -22,6 +23,7 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
   const [scoreMin, setScoreMin] = useState(0);
   const [scoreMax, setScoreMax] = useState(100);
   const [draftInfo, setDraftInfo] = useState<string>("");
+  const [exportJobId, setExportJobId] = useState<number | null>(null);
 
   useEffect(() => {
     void reload();
@@ -142,14 +144,18 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
   async function handleDigestExport(format: "pdf" | "doc" | "html") {
     try {
       setBusy(true);
-      showToast(
-        format === "pdf"
-          ? "Готовим PDF…"
-          : format === "doc"
-            ? "Готовим DOCX…"
-            : "Готовим HTML-экспорт…",
-      );
-      const file = await downloadDigestExport(month, 200, scoreMin, format);
+      const queued = await enqueueDigestExport(month, 200, scoreMin, format);
+      setExportJobId(queued.job.id);
+      setDraftInfo(`export job #${queued.job.id}: ${statusLabel(queued.job.status)}`);
+      showToast(`Экспорт поставлен в очередь: job #${queued.job.id}`);
+
+      const finished = await waitForExportJob(queued.job.id);
+      setDraftInfo(`export job #${finished.id}: ${statusLabel(finished.status)}`);
+      if (finished.status !== "ok") {
+        throw new Error(finished.error || "Экспорт завершился ошибкой");
+      }
+
+      const file = await downloadJobResult(finished.id);
       const url = window.URL.createObjectURL(file.blob);
       const link = document.createElement("a");
       link.href = url;
@@ -166,6 +172,18 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
     }
   }
 
+  async function waitForExportJob(jobId: number) {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const job = await getJob(jobId);
+      setDraftInfo(`export job #${job.id}: ${statusLabel(job.status)} · ${Math.round(job.progress)}%`);
+      if (job.status === "ok" || job.status === "failed") {
+        return job;
+      }
+      await sleep(1500);
+    }
+    throw new Error(`Job #${jobId} не завершилась за отведённое время`);
+  }
+
   return (
     <section className="screenStack">
       <header className="screenHeader">
@@ -176,7 +194,7 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
       </header>
 
       <section className="panel">
-        {busy ? <InlineLoader label="Готовим и скачиваем дайджест…" /> : null}
+        {busy ? <InlineLoader label="Готовим экспорт в фоне…" /> : null}
         <div className="panelHeader">
           <h2>Выборка дайджеста</h2>
         </div>
@@ -293,7 +311,17 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
           </div>
         </div>
 
-        {draftInfo ? <div className="digestDraftInfo metaText">{draftInfo}</div> : null}
+        {draftInfo ? (
+          <div className="digestDraftInfo metaText">
+            {draftInfo}
+            {exportJobId ? (
+              <>
+                {" · "}
+                <a href="?screen=jobs">Открыть задачи</a>
+              </>
+            ) : null}
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="emptyState"><LoadingState label="Загружаем сигналы…" /></div>
@@ -325,6 +353,17 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
       </section>
     </section>
   );
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function statusLabel(status: BackgroundJob["status"]) {
+  if (status === "queued") return "в очереди";
+  if (status === "running") return "в работе";
+  if (status === "ok") return "готово";
+  return "ошибка";
 }
 
 function formatDate(value: string | null) {

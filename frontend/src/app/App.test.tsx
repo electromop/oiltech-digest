@@ -38,6 +38,23 @@ const article = {
   ],
 };
 
+const job = {
+  id: 17,
+  kind: "digest_export",
+  queue: "playwright",
+  status: "ok",
+  progress: 100,
+  attempts: 1,
+  max_attempts: 3,
+  payload: { month: "2026-06" },
+  result: { path: "/app/exports/digest.pdf", filename: "digest.pdf" },
+  error: null,
+  run_after: null,
+  created_at: "2026-06-07T06:00:00Z",
+  started_at: "2026-06-07T06:00:01Z",
+  finished_at: "2026-06-07T06:00:03Z",
+};
+
 function jsonResponse(payload: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(payload), {
     status: init.status ?? 200,
@@ -62,6 +79,7 @@ describe("App smoke", () => {
   const revokeObjectURLMock = vi.fn();
 
   beforeEach(() => {
+    window.history.replaceState(null, "", "/");
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -87,8 +105,17 @@ describe("App smoke", () => {
           }),
         );
       }
-      if (url.startsWith("/api/digest-export")) {
+      if (url === "/api/jobs/digest-export" && method === "POST") {
+        return Promise.resolve(jsonResponse({ ok: true, job }));
+      }
+      if (url === "/api/jobs/17") {
+        return Promise.resolve(jsonResponse(job));
+      }
+      if (url === "/api/jobs/17/download") {
         return Promise.resolve(downloadResponse());
+      }
+      if (url.startsWith("/api/jobs")) {
+        return Promise.resolve(jsonResponse([job]));
       }
 
       return Promise.resolve(jsonResponse({ ok: true }));
@@ -149,12 +176,34 @@ describe("App smoke", () => {
     expect(openMock).not.toHaveBeenCalled();
     expect(revokeObjectURLMock).toHaveBeenCalledWith("blob:test");
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/digest-export?"),
+      "/api/jobs/digest-export",
+      expect.objectContaining({ method: "POST", credentials: "same-origin" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/17/download",
       expect.objectContaining({ credentials: "same-origin" }),
     );
 
     const mobileNav = document.querySelector(".mobileNav");
     expect(mobileNav).not.toBeNull();
     expect(within(mobileNav as HTMLElement).getByRole("button", { name: "Сигналы" })).toBeInTheDocument();
+    expect(within(mobileNav as HTMLElement).queryByRole("button", { name: "Фоновые задачи" })).not.toBeInTheDocument();
+  });
+
+  it("opens hidden jobs page from query string without adding it to navigation", async () => {
+    window.history.replaceState(null, "", "/?screen=jobs");
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Фоновые задачи" })).toBeInTheDocument();
+    expect(screen.getByText("#17")).toBeInTheDocument();
+    expect(screen.getByText("digest_export")).toBeInTheDocument();
+    expect(screen.getAllByText("playwright").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole("button", { name: "Фоновые задачи" })).not.toBeInTheDocument();
   });
 });
