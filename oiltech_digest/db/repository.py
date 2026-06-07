@@ -66,8 +66,12 @@ def get_enabled_sources(strategy: str | None = None) -> list[dict]:
 def get_sources_for_discovery(only_missing: bool = True,
                               source_id: int | None = None,
                               limit: int | None = None) -> list[dict]:
-    """Источники-кандидаты на автообнаружение RSS (не Telegram)."""
-    query = "SELECT * FROM sources WHERE enabled = TRUE AND parse_strategy <> 'telegram'"
+    """Источники-кандидаты на автообнаружение RSS (не Telegram и не Playwright).
+
+    `playwright` — осознанно выставленная вручную стратегия (JS/WAF-сайты); discover-rss
+    НЕ должен её сбрасывать в request, иначе оверрайды откатываются на каждом цикле.
+    """
+    query = "SELECT * FROM sources WHERE enabled = TRUE AND parse_strategy NOT IN ('telegram', 'playwright')"
     params: list = []
     if only_missing:
         query += " AND (rss_url IS NULL OR rss_url = '')"
