@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
@@ -303,6 +307,226 @@ def finish_export_job(job_id: int, status: str, file_path: str | None = None,
             (status, file_path, error_message, job_id),
         )
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+#  background jobs
+# ---------------------------------------------------------------------------
+
+def create_background_job(
+    kind: str,
+    payload: dict | None = None,
+    *,
+    queue_name: str = "default",
+    max_attempts: int = 3,
+) -> dict:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            INSERT INTO background_jobs (kind, queue_name, status, progress, max_attempts, payload_json)
+            VALUES (%s, %s, 'queued', 0, %s, %s)
+            RETURNING *
+            """,
+            (kind, queue_name, max_attempts, Json(_jsonable(payload or {}))),
+        )
+        job = cur.fetchone()
+        conn.commit()
+        return job
+
+
+def get_background_job(job_id: int) -> dict | None:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT * FROM background_jobs WHERE id = %s", (job_id,))
+        return cur.fetchone()
+
+
+def claim_next_background_job(queue_names: list[str] | None = None) -> dict | None:
+    """Atomically claim the oldest queued job for an external worker."""
+    queue_names = queue_names or ["default"]
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH next_job AS (
+                SELECT id
+                FROM background_jobs
+                WHERE status = 'queued'
+                  AND queue_name = ANY(%s)
+                  AND run_after <= now()
+                ORDER BY created_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE background_jobs j
+            SET status = 'running',
+                progress = CASE WHEN j.progress < 10 THEN 10 ELSE j.progress END,
+                attempts = j.attempts + 1,
+                started_at = COALESCE(j.started_at, now()),
+                error_message = NULL
+            FROM next_job
+            WHERE j.id = next_job.id
+            RETURNING j.*
+            """,
+            (queue_names,),
+        )
+        job = cur.fetchone()
+        conn.commit()
+        return job
+
+
+def list_background_jobs(
+    *,
+    status: str | None = None,
+    kind: str | None = None,
+    queue_name: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    clauses = []
+    params: list = []
+    if status:
+        clauses.append("status = %s")
+        params.append(status)
+    if kind:
+        clauses.append("kind = %s")
+        params.append(kind)
+    if queue_name:
+        clauses.append("queue_name = %s")
+        params.append(queue_name)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT *
+            FROM background_jobs
+            {where}
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def mark_background_job_running(job_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'running',
+                progress = CASE WHEN progress < 10 THEN 10 ELSE progress END,
+                attempts = attempts + 1,
+                started_at = COALESCE(started_at, now()),
+                error_message = NULL
+            WHERE id = %s
+            """,
+            (job_id,),
+        )
+        conn.commit()
+
+
+def update_background_job_progress(job_id: int, progress: float) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET progress = %s WHERE id = %s",
+            (progress, job_id),
+        )
+        conn.commit()
+
+
+def finish_background_job(job_id: int, result: dict | None = None) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'ok',
+                progress = 100,
+                result_json = %s,
+                error_message = NULL,
+                finished_at = now()
+            WHERE id = %s
+            """,
+            (Json(_jsonable(result or {})), job_id),
+        )
+        conn.commit()
+
+
+def fail_background_job(job_id: int, error_message: str, *, retry_delay_seconds: int | None = None) -> None:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT attempts, max_attempts FROM background_jobs WHERE id = %s",
+            (job_id,),
+        )
+        row = cur.fetchone()
+        should_retry = (
+            retry_delay_seconds is not None
+            and row is not None
+            and int(row["attempts"] or 0) < int(row["max_attempts"] or 0)
+        )
+        if should_retry:
+            conn.execute(
+                """
+                UPDATE background_jobs
+                SET status = 'queued',
+                    progress = 0,
+                    run_after = now() + (%s::text || ' seconds')::interval,
+                    error_message = %s,
+                    started_at = NULL
+                WHERE id = %s
+                """,
+                (retry_delay_seconds, error_message, job_id),
+            )
+        else:
+            conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'failed',
+                error_message = %s,
+                finished_at = now()
+            WHERE id = %s
+            """,
+                (error_message, job_id),
+            )
+        conn.commit()
+
+
+def requeue_stale_background_jobs(stale_minutes: int) -> int:
+    """Move old running jobs back to queued after a worker crash/restart."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'queued',
+                progress = 0,
+                started_at = NULL,
+                error_message = 'Requeued after stale running timeout'
+            WHERE status = 'running'
+              AND started_at < now() - (%s::text || ' minutes')::interval
+            """,
+            (stale_minutes,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def _jsonable(value):
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 # ---------------------------------------------------------------------------

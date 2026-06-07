@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS sources (
   url            TEXT,                           -- Excel «Ссылка» (главный сайт)
   rss_url        TEXT,                           -- проставляется discover-rss
   enabled        BOOLEAN DEFAULT TRUE,
-  parse_strategy TEXT,                           -- rss / request / telegram / none
+  parse_strategy TEXT,                           -- rss / request / telegram / playwright / none
   listing_url    TEXT,                           -- страница со списком новостей для request-источников
   listing_strategy TEXT,                         -- auto / links / cards (пока auto)
   listing_selector TEXT,                         -- CSS/XPath-подсказка для карточек листинга
@@ -245,6 +245,29 @@ CREATE TABLE IF NOT EXISTS ai_processing_runs (
 CREATE INDEX IF NOT EXISTS idx_ai_runs_stage_language ON ai_processing_runs(stage, language);
 CREATE INDEX IF NOT EXISTS idx_ai_runs_article_id ON ai_processing_runs(article_id);
 
+-- =========================================================================
+-- Фоновые задачи API: тяжелые операции не должны блокировать web-request
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS background_jobs (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  kind          TEXT NOT NULL,                  -- digest_export / process_articles / scrape_source / diagnose_source
+  queue_name    TEXT NOT NULL DEFAULT 'default',
+  status        TEXT NOT NULL DEFAULT 'queued', -- queued / running / ok / failed
+  progress      NUMERIC NOT NULL DEFAULT 0,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  max_attempts  INTEGER NOT NULL DEFAULT 3,
+  run_after     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  payload_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result_json   JSONB,
+  error_message TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at    TIMESTAMPTZ,
+  finished_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_status_created ON background_jobs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_kind_created ON background_jobs(kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(queue_name, status, run_after, created_at);
+
 -- Idempotent upgrades for databases initialized before these columns existed.
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;
@@ -262,3 +285,7 @@ ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_status TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_error TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS extraction_method TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS queue_name TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS run_after TIMESTAMPTZ NOT NULL DEFAULT now();

@@ -457,6 +457,17 @@ def cmd_digest_save(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_jobs_worker(args: argparse.Namespace) -> None:
+    from oiltech_digest import background_jobs
+
+    background_jobs.worker_loop(
+        poll_seconds=args.poll_seconds,
+        once=args.once,
+        stale_minutes=args.stale_minutes,
+        queue_names=args.queue,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oiltech_digest.cli", description="OilTech Digest — сбор RSS")
     parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (INFO)")
@@ -586,6 +597,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_digest_save.add_argument("--limit", type=int, default=20)
     p_digest_save.add_argument("--min-score", type=float, default=60)
     p_digest_save.set_defaults(func=cmd_digest_save)
+
+    p_jobs_worker = sub.add_parser("jobs-worker", help="обрабатывать background_jobs из БД")
+    p_jobs_worker.add_argument("--poll-seconds", type=float, default=None)
+    p_jobs_worker.add_argument("--stale-minutes", type=int, default=None)
+    p_jobs_worker.add_argument("--queue", action="append", default=None,
+                               help="очередь для обработки; можно указать несколько раз")
+    p_jobs_worker.add_argument("--once", action="store_true", help="забрать одну доступную пачку и выйти, если задач нет")
+    p_jobs_worker.set_defaults(func=cmd_jobs_worker)
 
     p_source_retry = sub.add_parser(
         "source-retry",

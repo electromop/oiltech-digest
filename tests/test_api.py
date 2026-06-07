@@ -3,6 +3,71 @@ from fastapi.testclient import TestClient
 from oiltech_digest import api
 
 
+class FakeCursor:
+    def __init__(self, connection):
+        self.connection = connection
+        self.rows = []
+
+    def execute(self, sql, params=None):
+        self.connection.executed.append((sql, list(params or [])))
+        if "FROM article_score_items" in sql:
+            self.rows = [
+                {
+                    "article_id": 42,
+                    "name": "Технологическая значимость",
+                    "weight": 40,
+                    "final_score": 88,
+                    "ai_score": 90,
+                    "keyword_score": 80,
+                    "rationale": "Strong match",
+                }
+            ]
+        else:
+            self.rows = [
+                {
+                    "id": 42,
+                    "title": "Directional drilling automation",
+                    "url": "https://example.com/drilling",
+                    "language": "en",
+                    "raw_text": "Directional drilling automation improves well construction.",
+                    "published_at": None,
+                    "collected_at": None,
+                    "text_truncated": False,
+                    "source_name": "World Oil",
+                    "summary": "Compact AI summary",
+                    "status": "digest",
+                    "relevant": True,
+                    "relevance_reason": "Oilfield technology",
+                    "selected_for_digest": True,
+                    "total_score": 88,
+                    "score_label": "High",
+                    "score_explanation": "Relevant",
+                    "tag_name": "Бурение",
+                    "parent_tag_name": "Технологии",
+                    "tag_confidence": 0.91,
+                    "tag_rationale": "Keyword match",
+                }
+            ]
+        return self
+
+    def fetchall(self):
+        return self.rows
+
+
+class FakeConnection:
+    def __init__(self):
+        self.executed = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self, row_factory=None):
+        return FakeCursor(self)
+
+
 def test_source_diagnose_endpoint(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
@@ -139,3 +204,327 @@ def test_source_health_endpoint(monkeypatch):
     assert response.json() == [
         {"id": 7, "name": "Example", "verdict": "stale", "articles": 0, "stale_days": 5, "limit": 10}
     ]
+
+
+def test_list_articles_applies_filters_and_score_items(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(api, "get_connection", lambda: fake_conn)
+    try:
+        client = TestClient(app)
+        response = client.get(
+            "/api/articles",
+            params={
+                "search": "drilling",
+                "source": "World Oil",
+                "tag": "Бурение",
+                "status": "digest",
+                "min_score": 80,
+                "limit": 25,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["id"] == 42
+    assert payload[0]["tag"] == "Технологии / Бурение"
+    assert payload[0]["score"] == 88
+    assert payload[0]["digest"] is True
+    assert payload[0]["score_items"][0]["name"] == "Технологическая значимость"
+
+    articles_sql, articles_params = fake_conn.executed[0]
+    assert "LOWER(a.title" in articles_sql
+    assert "s.name = %s" in articles_sql
+    assert "(t.name = %s OR parent.name = %s)" in articles_sql
+    assert "COALESCE(c.status, 'new') = %s" in articles_sql
+    assert "COALESCE(sc.total_score, 0) >= %s" in articles_sql
+    assert articles_params == ["%drilling%", "World Oil", "Бурение", "Бурение", "digest", 80.0, 25]
+
+
+def test_update_source_persists_non_rss_scraper_fields(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    captured = {}
+
+    class UpdateConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params):
+            captured["sql"] = sql
+            captured["params"] = params
+
+            class Result:
+                def fetchone(self):
+                    return {"id": 9}
+
+            return Result()
+
+        def commit(self):
+            captured["committed"] = True
+
+    monkeypatch.setattr(api, "get_connection", lambda: UpdateConnection())
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            "/api/sources/9",
+            json={
+                "parse_strategy": "playwright",
+                "listing_url": "https://example.com/news",
+                "listing_selector": ".card",
+                "article_link_selector": ".card a",
+                "article_date_selector": "time",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert "parse_strategy = %s" in captured["sql"]
+    assert "listing_selector = %s" in captured["sql"]
+    assert captured["params"] == [
+        "playwright",
+        "https://example.com/news",
+        ".card",
+        ".card a",
+        "time",
+        9,
+    ]
+    assert captured["committed"] is True
+
+
+def test_scrape_source_endpoint_routes_request_strategy(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(
+        api.repository,
+        "get_source",
+        lambda source_id: {"id": source_id, "name": "Request Source", "parse_strategy": "request"},
+    )
+    monkeypatch.setattr(api.request_parser, "parse_source", lambda source: {"added": 2, "attempted": 3})
+    try:
+        client = TestClient(app)
+        response = client.post("/api/sources/12/scrape")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "stats": {"added": 2, "attempted": 3}}
+
+
+def test_scrape_source_endpoint_can_enqueue_background_job(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(
+        api.repository,
+        "get_source",
+        lambda source_id: {"id": source_id, "name": "Request Source", "parse_strategy": "request"},
+    )
+    monkeypatch.setattr(
+        api.background_jobs,
+        "enqueue",
+        lambda kind, payload, **kwargs: {
+            "id": 99,
+            "kind": kind,
+            "queue_name": kwargs.get("queue_name", "default"),
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    try:
+        client = TestClient(app)
+        response = client.post("/api/sources/12/scrape?background=true")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["job"] == {
+        "id": 99,
+        "kind": "scrape_source",
+        "queue": "default",
+        "status": "queued",
+        "progress": 0.0,
+        "attempts": 0,
+        "max_attempts": 3,
+        "payload": {"source_id": 12},
+        "result": {},
+        "error": None,
+        "run_after": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+
+def test_scrape_source_endpoint_routes_playwright_strategy(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(
+        api.repository,
+        "get_source",
+        lambda source_id: {"id": source_id, "name": "Rendered Source", "parse_strategy": "playwright"},
+    )
+    monkeypatch.setattr(api.playwright_parser, "parse_source", lambda source: {"added": 1, "attempted": 1})
+    try:
+        client = TestClient(app)
+        response = client.post("/api/sources/13/scrape")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "stats": {"added": 1, "attempted": 1}}
+
+
+def test_scrape_source_endpoint_rejects_non_scraper_strategy(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(
+        api.repository,
+        "get_source",
+        lambda source_id: {"id": source_id, "name": "RSS Source", "parse_strategy": "rss"},
+    )
+    try:
+        client = TestClient(app)
+        response = client.post("/api/sources/14/scrape")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "request/playwright" in response.json()["detail"]
+
+
+def test_auth_register_login_me_and_logout(monkeypatch):
+    app = api.app
+    sessions = {}
+    users = {"user@example.com": {"id": 1, "email": "user@example.com"}}
+
+    monkeypatch.setattr(api.repository, "create_user", lambda email, password: users[email])
+    monkeypatch.setattr(api.repository, "authenticate_user", lambda email, password: users.get(email))
+    monkeypatch.setattr(api.repository, "create_user_session", lambda user_id: f"session-{user_id}")
+    monkeypatch.setattr(api.repository, "get_user_by_session", lambda token: sessions.get(token))
+    monkeypatch.setattr(api.repository, "delete_user_session", lambda token: sessions.pop(token, None))
+
+    client = TestClient(app)
+    register_response = client.post("/api/auth/register", json={"email": " USER@example.com ", "password": "12345678"})
+    assert register_response.status_code == 200
+    assert register_response.json()["user"]["email"] == "user@example.com"
+
+    sessions["session-1"] = users["user@example.com"]
+    me_response = client.get("/api/auth/me")
+    assert me_response.status_code == 200
+    assert me_response.json()["user"]["email"] == "user@example.com"
+
+    login_response = client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"})
+    assert login_response.status_code == 200
+
+    logout_response = client.post("/api/auth/logout")
+    assert logout_response.status_code == 200
+    assert logout_response.json() == {"ok": True}
+
+
+def test_auth_rejects_invalid_payloads_and_missing_session(monkeypatch):
+    client = TestClient(api.app)
+
+    assert client.get("/api/auth/me").status_code == 401
+    assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 400
+    assert client.post("/api/auth/register", json={"email": "user@example.com", "password": "1234567"}).status_code == 400
+
+    monkeypatch.setattr(api.repository, "authenticate_user", lambda email, password: None)
+    assert client.post("/api/auth/login", json={"email": "user@example.com", "password": "12345678"}).status_code == 401
+
+
+def test_enqueue_digest_export_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    captured = {}
+
+    def fake_enqueue(kind, payload, **kwargs):
+        captured["kind"] = kind
+        captured["payload"] = payload
+        captured["kwargs"] = kwargs
+        return {
+            "id": 7,
+            "kind": kind,
+            "queue_name": kwargs.get("queue_name", "default"),
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    monkeypatch.setattr(api.background_jobs, "enqueue", fake_enqueue)
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/jobs/digest-export",
+            json={"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {
+        "kind": "digest_export",
+        "payload": {"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60.0},
+        "kwargs": {"queue_name": "playwright"},
+    }
+    assert response.json()["job"]["status"] == "queued"
+    assert response.json()["job"]["queue"] == "playwright"
+
+
+def test_enqueue_process_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(
+        api.background_jobs,
+        "enqueue",
+        lambda kind, payload, **kwargs: {
+            "id": 8,
+            "kind": kind,
+            "queue_name": kwargs.get("queue_name", "default"),
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    try:
+        client = TestClient(app)
+        response = client.post("/api/jobs/process", json={"article_ids": [1, 2], "offline": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["job"]["kind"] == "process_articles"
+    assert response.json()["job"]["queue"] == "ai"
+    assert response.json()["job"]["payload"]["article_ids"] == [1, 2]

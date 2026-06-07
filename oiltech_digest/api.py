@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, config
+from oiltech_digest import auth, background_jobs, config
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import repository
@@ -25,7 +25,7 @@ from oiltech_digest.processing.pipeline import (
     process_summary_articles,
     process_tag_articles,
 )
-from oiltech_digest.ingestion import normalize, request_parser
+from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import build_digest_content, render_digest_email, save_digest_draft, write_digest_export
 
@@ -98,6 +98,13 @@ class DigestRequest(BaseModel):
     month: str
     limit: int = 20
     min_score: float = 60
+
+
+class DigestExportJobRequest(BaseModel):
+    month: str = ""
+    export_format: str = "pdf"
+    limit: int = 100
+    min_score: float = 0
 
 
 class AuthPayload(BaseModel):
@@ -343,13 +350,22 @@ def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Dep
 
 
 @app.post("/api/sources/{source_id}/scrape")
-def scrape_source(source_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def scrape_source(
+    source_id: int,
+    background: bool = False,
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
     source = repository.get_source(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    if source.get("parse_strategy") != "request":
-        raise HTTPException(status_code=400, detail="Скраппер доступен только для request-источников")
-    stats = request_parser.parse_source(source)
+    strategy = source.get("parse_strategy")
+    if strategy not in {"request", "playwright"}:
+        raise HTTPException(status_code=400, detail="Скраппер доступен только для request/playwright-источников")
+    if background:
+        queue_name = "playwright" if strategy == "playwright" else "default"
+        job = background_jobs.enqueue("scrape_source", {"source_id": source_id}, queue_name=queue_name)
+        return {"ok": True, "job": _job_payload(job)}
+    stats = playwright_parser.parse_source(source) if strategy == "playwright" else request_parser.parse_source(source)
     return {"ok": True, "stats": _clean(stats)}
 
 
@@ -458,6 +474,65 @@ def digest_email(month: str = "", limit: int = Query(100, ge=1, le=500),
     return HTMLResponse(render_digest_email(content))
 
 
+@app.get("/api/jobs")
+def list_jobs(
+    status: str | None = Query(None, pattern="^(queued|running|ok|failed)$"),
+    kind: str | None = None,
+    queue_name: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
+    return [
+        _job_payload(row)
+        for row in repository.list_background_jobs(status=status, kind=kind, queue_name=queue_name, limit=limit)
+    ]
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    job = repository.get_background_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _job_payload(job)
+
+
+@app.get("/api/jobs/{job_id}/download")
+def download_job_result(job_id: int, user: dict[str, Any] = Depends(require_user)) -> FileResponse:
+    job = repository.get_background_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] != "ok":
+        raise HTTPException(status_code=409, detail="Job is not finished")
+    path = background_jobs.job_download_path(job)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="Job result file not found")
+    result = job.get("result_json") or {}
+    return FileResponse(
+        str(path),
+        media_type=result.get("media_type") or "application/octet-stream",
+        filename=result.get("filename") or path.name,
+    )
+
+
+@app.post("/api/jobs/digest-export")
+def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    if payload.export_format not in {"pdf", "doc", "html", "json"}:
+        raise HTTPException(status_code=400, detail="Unsupported export format")
+    if payload.limit < 1 or payload.limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    queue_name = "playwright" if payload.export_format == "pdf" else "default"
+    job = background_jobs.enqueue("digest_export", payload.model_dump(), queue_name=queue_name)
+    return {"ok": True, "job": _job_payload(job)}
+
+
+@app.post("/api/jobs/process")
+def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    if payload.limit < 1 or payload.limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    job = background_jobs.enqueue("process_articles", payload.model_dump(), queue_name="ai")
+    return {"ok": True, "job": _job_payload(job)}
+
+
 @app.get("/api/digest-export")
 def digest_export(
     month: str = "",
@@ -517,6 +592,25 @@ def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(req
         with_summary = repository.get_articles_needing_scores(payload.limit)
     scores = process_score_articles(with_summary, client)
     return {"summary": summaries, "relevance": relevance, "tagging": tags, "scoring": scores}
+
+
+def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "kind": row["kind"],
+        "queue": row.get("queue_name") or "default",
+        "status": row["status"],
+        "progress": float(row.get("progress") or 0),
+        "attempts": int(row.get("attempts") or 0),
+        "max_attempts": int(row.get("max_attempts") or 0),
+        "payload": _clean(row.get("payload_json") or {}),
+        "result": _clean(row.get("result_json") or {}),
+        "error": row.get("error_message"),
+        "run_after": _clean(row.get("run_after")),
+        "created_at": _clean(row.get("created_at")),
+        "started_at": _clean(row.get("started_at")),
+        "finished_at": _clean(row.get("finished_at")),
+    }
 
 
 def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
