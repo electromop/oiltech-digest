@@ -33,7 +33,7 @@ def test_parse_source_renders_listing_and_article_pages(monkeypatch):
     inserted = []
     state = {}
 
-    def fake_fetch_rendered(url):
+    def fake_fetch_rendered(url, **kwargs):
         rendered_urls.append(url)
         if url == "https://example.com/news":
             return LISTING_HTML
