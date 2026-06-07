@@ -157,6 +157,7 @@ uvicorn oiltech_digest.api:app --reload --port 8000
 
 ```bash
 PYTHONPATH=. python -m pytest          # весь набор
+docker compose run --rm test           # тот же набор в Docker с dev-зависимостями
 ```
 
 ### Структура

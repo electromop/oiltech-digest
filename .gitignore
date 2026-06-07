@@ -41,3 +41,6 @@ test_page_*.jpg
 .claude-flow/
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js

@@ -2,14 +2,14 @@ FROM node:22-alpine AS frontend-build
 
 WORKDIR /frontend
 
-COPY frontend/package.json ./package.json
+COPY frontend/package.json frontend/package-lock.json ./
 COPY frontend/tsconfig.json ./tsconfig.json
 COPY frontend/tsconfig.node.json ./tsconfig.node.json
 COPY frontend/vite.config.ts ./vite.config.ts
 COPY frontend/index.html ./index.html
 COPY frontend/src ./src
 
-RUN npm install
+RUN npm ci
 RUN npm run build
 
 
@@ -19,7 +19,10 @@ WORKDIR /app
 
 # Зависимости (отдельным слоем для кэша)
 COPY requirements.txt .
+COPY requirements-dev.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+ARG INSTALL_DEV=false
+RUN if [ "$INSTALL_DEV" = "true" ]; then pip install --no-cache-dir -r requirements-dev.txt; fi
 
 # Chromium для PDF-экспорта дайджеста (Playwright). Тяжёлый слой (~400 МБ): собирать
 # при остановленном стеке (`docker compose down` сначала) — на 1.9 ГБ RAM иначе OOM.

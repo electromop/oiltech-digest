@@ -12,6 +12,15 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
+Без локального Python-окружения можно прогнать тот же набор в Docker:
+
+```bash
+docker compose run --rm test
+```
+
+Фоновые API-задачи покрываются тестами `tests/test_background_jobs.py`,
+`tests/test_api.py` и `tests/test_api_integration.py`.
+
 Что покрыто сейчас:
 
 - full-text fetcher;
