@@ -99,37 +99,75 @@ def test_parse_source_uses_listing_page_and_updates_last_seen(monkeypatch):
     assert state["last_seen_article_url"] == "https://example.com/news/2026/05/field-automation-rollout"
 
 
-def test_parse_source_skips_article_fetch_when_listing_hash_unchanged(monkeypatch):
+def _field_automation_candidate():
+    return request_parser.CandidateLink(
+        url="https://example.com/news/2026/05/field-automation-rollout",
+        title="Field automation rollout improves wellsite performance",
+        score=8,
+        published_at=None,
+    )
+
+
+def test_parse_source_skips_known_candidate_via_article_exists(monkeypatch):
+    """Дедуп держится на article_exists (articles.url уникален), а не на listing_hash.
+    Кандидат, уже лежащий в БД, пропускается без фетча и вставки."""
     touched = {}
 
     monkeypatch.setattr(request_parser, "fetch", lambda url: HOME_HTML)
     monkeypatch.setattr(
         request_parser,
         "extract_candidate_links",
-        lambda source, listing_url, content, limit=12: [
-            request_parser.CandidateLink(
-                url="https://example.com/news/2026/05/field-automation-rollout",
-                title="Field automation rollout improves wellsite performance",
-                score=8,
-                published_at=None,
-            )
-        ],
+        lambda source, listing_url, content, limit=12: [_field_automation_candidate()],
     )
     monkeypatch.setattr(request_parser.repository, "touch_last_parsed", lambda source_id: touched.setdefault("id", source_id))
-    monkeypatch.setattr(request_parser.repository, "insert_article", lambda article: (_ for _ in ()).throw(AssertionError("insert_article should not be called")))
-    monkeypatch.setattr(request_parser.repository, "article_exists", lambda url: False)
+    monkeypatch.setattr(request_parser.repository, "update_source_request_state", lambda source_id, **kwargs: None)
+    monkeypatch.setattr(request_parser.repository, "insert_article", lambda article: (_ for _ in ()).throw(AssertionError("insert_article should not be called for a known candidate")))
+    # кандидат уже в БД → пропускаем без фетча/вставки
+    monkeypatch.setattr(request_parser.repository, "article_exists", lambda url: True)
 
-    source = {"id": 9, "url": "https://example.com/news", "last_listing_hash": request_parser._listing_hash([
-        request_parser.CandidateLink(
-            url="https://example.com/news/2026/05/field-automation-rollout",
-            title="Field automation rollout improves wellsite performance",
-            score=8,
-            published_at=None,
-        )
-    ])}
-
-    stats = request_parser.parse_source(source)
+    stats = request_parser.parse_source({"id": 9, "url": "https://example.com/news"})
 
     assert stats["added"] == 0
     assert stats["skipped_known"] == 1
     assert touched["id"] == 9
+
+
+def test_parse_source_not_frozen_when_listing_hash_unchanged(monkeypatch):
+    """Регресс на дедуп-заморозку: даже если listing_hash совпадает с прошлым
+    прогоном, новые статьи (которых нет в БД) обязаны добавляться. Раньше
+    short-circuit по listing_hash прятал их → источник застывал навсегда."""
+    candidate = _field_automation_candidate()
+    inserted = []
+
+    def fake_fetch(url):
+        if url == "https://example.com/news":
+            return HOME_HTML
+        if url == candidate.url:
+            return ARTICLE_HTML
+        return None
+
+    monkeypatch.setattr(request_parser, "fetch", fake_fetch)
+    monkeypatch.setattr(
+        request_parser,
+        "extract_candidate_links",
+        lambda source, listing_url, content, limit=12: [candidate],
+    )
+    monkeypatch.setattr(request_parser.repository, "article_exists", lambda url: False)
+    monkeypatch.setattr(request_parser.repository, "insert_article", lambda article: inserted.append(article) or True)
+    monkeypatch.setattr(request_parser.repository, "touch_last_parsed", lambda source_id: None)
+    monkeypatch.setattr(request_parser.repository, "update_source_request_state", lambda source_id, **kwargs: None)
+
+    # last_listing_hash намеренно совпадает с текущим листингом — старый код
+    # коротил бы на 0; новый обязан добавить незнакомую статью.
+    source = {
+        "id": 9,
+        "url": "https://example.com",
+        "listing_url": "https://example.com/news",
+        "category": "международные",
+        "last_listing_hash": request_parser._listing_hash([candidate]),
+    }
+
+    stats = request_parser.parse_source(source)
+
+    assert stats["added"] == 1
+    assert inserted[0]["url"] == candidate.url

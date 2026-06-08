@@ -70,28 +70,23 @@ def insert_candidates(
     if article_fetcher is None:
         article_fetcher = fetch_article_candidate
 
+    # Дедуп держится на articles.url (уникальный индекс + ON CONFLICT), а не на
+    # хрупких оптимизациях. Раньше здесь были три «замораживателя», из-за которых
+    # источники со структурно стабильным листингом (корпоративные newsroom без
+    # даты в URL → published_at=None → сортировка по score вырождается в алфавит,
+    # топ-N и его hash неизменны) навсегда застывали на первом улове:
+    #   1) short-circuit по last_listing_hash — пропускал ВЕСЬ источник;
+    #   2) break по last_seen_article_url — обрывал на первом же знакомом URL;
+    #   3) break по known_streak>=3 — обрывал, пряча новые статьи в хвосте списка.
+    # Теперь проходим всех кандидатов: знакомые (уже в БД) пропускаем без фетча,
+    # новые — добавляем. listing_hash по-прежнему пишем — для диагностики.
     listing_hash = _listing_hash(candidates)
-    if candidates and source.get("last_listing_hash") and listing_hash == source.get("last_listing_hash"):
-        repository.touch_last_parsed(source["id"])
-        return {
-            "added": 0,
-            "attempted": 0,
-            "skipped_old": 0,
-            "skipped_irrelevant": 0,
-            "skipped_known": len(candidates),
-        }
 
     cutoff = None
     if max_age_days is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
-    last_seen_url = source.get("last_seen_article_url") or ""
-    last_seen_published = source.get("last_seen_published_at")
-    if isinstance(last_seen_published, str):
-        last_seen_published = _parse_datetime(last_seen_published)
-
     added = attempted = skipped_old = skipped_irrelevant = skipped_known = 0
-    known_streak = 0
     newest_seen_url: str | None = None
     newest_seen_published: datetime | None = None
 
@@ -100,22 +95,11 @@ def insert_candidates(
             newest_seen_url = candidate.url
             newest_seen_published = candidate.published_at
 
-        if last_seen_url and candidate.url == last_seen_url:
-            known_streak += 1
-            skipped_known += 1
-            break
         if repository.article_exists(candidate.url):
-            known_streak += 1
             skipped_known += 1
-            if known_streak >= 3:
-                break
             continue
-        known_streak = 0
 
         if cutoff is not None and candidate.published_at and candidate.published_at < cutoff:
-            skipped_old += 1
-            continue
-        if last_seen_published and candidate.published_at and candidate.published_at <= last_seen_published:
             skipped_old += 1
             continue
 
