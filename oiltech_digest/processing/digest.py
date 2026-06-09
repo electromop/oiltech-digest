@@ -65,6 +65,7 @@ def build_digest_content(month: str | None = None, limit: int = 20, min_score: f
         },
         "news": news,
         "items": news,
+        "highlights": _digest_highlights(news),
         "footer": {
             "contact_text": "При возникновении вопросов обращайтесь в Блок развития бизнеса",
             "contact_email": "Rodionov.VVL@gazprom-neft.ru",
@@ -80,7 +81,18 @@ def render_digest_email(content: dict) -> str:
     one template, identical to the reference (digest_email_claude_pack).
     """
     template = (TEMPLATE_DIR / EMAIL_TEMPLATE).read_text(encoding="utf-8")
-    news_html = "\n".join(_render_news_item(item) for item in content.get("news", []))
+    news_items = content.get("news", [])
+    # PDF: по 3 карточки на A4-страницу — разрыв после каждой тройки (кроме последней).
+    parts: list[str] = []
+    for idx, item in enumerate(news_items):
+        parts.append(_render_news_item(item))
+        if (idx + 1) % 3 == 0 and (idx + 1) < len(news_items):
+            parts.append(
+                '<div style="page-break-after:always;break-after:page;height:0;'
+                'line-height:0;font-size:0;">&nbsp;</div>'
+            )
+    news_html = "\n".join(parts)
+    highlights = content.get("highlights") or _digest_highlights(news_items)
     values = {
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
@@ -89,6 +101,7 @@ def render_digest_email(content: dict) -> str:
         "hero_badge": _html(content.get("hero", {}).get("badge")),
         "hero_headline": _html(content.get("hero", {}).get("headline")),
         "hero_subtitle": _html(content.get("hero", {}).get("subtitle")),
+        "highlights_html": _render_highlights(highlights),
         "footer_contact_text": _html(content.get("footer", {}).get("contact_text")),
         "footer_contact_email": _html(content.get("footer", {}).get("contact_email")),
         "footer_note": _html(content.get("footer", {}).get("note")),
@@ -129,8 +142,84 @@ def _compact_digest_summary(summary: str, title: str, max_chars: int = 170) -> s
     return clipped + "…"
 
 
+_HL_ICONS = {
+    "doc": '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><line x1="10" y1="13" x2="15" y2="13"/><line x1="10" y1="17" x2="15" y2="17"/></svg>',
+    "chart": '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 16 9 11 13 14 20 6"/><polyline points="15 6 20 6 20 11"/></svg>',
+    "people": '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 7.5a3 3 0 0 1 0 5.5"/><path d="M15.5 14.5a5.5 5.5 0 0 1 5 5.5"/></svg>',
+}
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    """Русское склонение существительного по числу (1 новость / 2 новости / 5 новостей)."""
+    n = abs(int(n)) % 100
+    if 10 < n < 20:
+        return many
+    n1 = n % 10
+    if n1 == 1:
+        return one
+    if 2 <= n1 <= 4:
+        return few
+    return many
+
+
+def _digest_highlights(news: list[dict]) -> list[dict]:
+    """KPI выпуска для блока «Главное за период»: всего новостей, аналитических
+    материалов, бизнес-возможностей. Аналитику/возможности оцениваем эвристикой
+    по источнику/категории (правила можно уточнить позже)."""
+    def cat(n: dict) -> str:
+        return (n.get("category") or "").lower()
+
+    def src(n: dict) -> str:
+        return (n.get("source") or "").lower()
+
+    analytic_src = ("mckinsey", "wood mac", "woodmac", "wood mackenzie", "rystad",
+                    "deloitte", "iea", "eia", "bcg", "petroleum economist", "hart",
+                    "rigzone", "s&p", "ihs", "mit", "bloomberg")
+    analytic_kw = ("аналит", "обзор", "прогноз", "рынок", "исследов", "report")
+    business_kw = ("бизнес", "m&a", "сделк", "инвест", "контракт", "возможност",
+                   "партнёрств", "партнерств", "локализац", "экспорт")
+    analytics = sum(1 for n in news if any(k in cat(n) for k in analytic_kw)
+                    or any(s in src(n) for s in analytic_src))
+    business = sum(1 for n in news if any(k in cat(n) for k in business_kw))
+    total = len(news)
+    return [
+        {"value": total, "icon": "doc",
+         "label": _plural(total, "новость", "новости", "новостей")},
+        {"value": analytics, "icon": "chart",
+         "label": "аналитических " + _plural(analytics, "материал", "материала", "материалов")},
+        {"value": business, "icon": "people",
+         "label": _plural(business, "возможность", "возможности", "возможностей") + " для бизнеса"},
+    ]
+
+
+def _render_highlights(highlights: list[dict]) -> str:
+    """Три KPI-плашки: синий квадрат с иконкой + крупное число + подпись."""
+    if not highlights:
+        return ""
+    cells = []
+    for h in highlights:
+        icon = _HL_ICONS.get(h.get("icon", ""), "")
+        cells.append(
+            '<td width="33%" valign="top" style="padding:0 10px 0 0;">'
+            '<table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr>'
+            '<td valign="middle" width="58">'
+            '<div style="width:46px;height:46px;background:#003da6;border-radius:8px;text-align:center;line-height:46px;">'
+            f'{icon}</div></td>'
+            '<td valign="middle" style="padding-left:10px;">'
+            f'<div style="font-size:26px;line-height:28px;color:#003da6;font-weight:bold;">{_html(h.get("value"))}</div>'
+            '<div style="font-size:11px;line-height:14px;color:#262d3c;text-transform:uppercase;'
+            f'letter-spacing:.04em;font-weight:bold;">{_html(h.get("label"))}</div>'
+            '</td></tr></table></td>'
+        )
+    return (
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">'
+        f'<tr>{"".join(cells)}</tr></table>'
+    )
+
+
 def _render_news_item(item: dict) -> str:
-    """One news card: image/title row, summary below, actions and tag at bottom."""
+    """Карточка новости по референсу: фото слева; справа — категория (мелкая),
+    заголовок, краткое описание и «Читать далее»."""
     image_url = item.get("image_url") or ""
     if image_url:
         media = (
@@ -151,29 +240,25 @@ def _render_news_item(item: dict) -> str:
             f'<img class="news-card-image" src="{placeholder}" width="210" height="118" alt="" '
             'style="display:block;width:210px;height:118px;border-radius:6px;border:0;">'
         )
+    category = item.get("category")
+    category_html = (
+        '<div style="font-size:11px;line-height:15px;color:#003da6;font-weight:bold;'
+        f'text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{_html(category)}</div>'
+        if category else ""
+    )
     return f"""
               <table class="news-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px 0;border:1px solid #d9e3f3;border-radius:8px;background:#ffffff;">
                 <tr>
-                  <td width="230" valign="top" style="padding:10px 16px 8px 10px;">
+                  <td width="230" valign="top" style="padding:12px 16px 12px 12px;">
                     {media}
                   </td>
-                  <td valign="top" style="padding:12px 14px 8px 0;">
+                  <td valign="top" style="padding:14px 16px 14px 0;">
+                    {category_html}
                     <div class="news-card-title">{_html(item.get("title"))}</div>
-                  </td>
-                </tr>
-                <tr>
-                  <td colspan="2" valign="top" style="padding:0 14px 12px 14px;">
                     <div class="news-card-summary">{_html(item.get("summary"))}</div>
-                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;">
-                      <tr>
-                        <td align="left" valign="middle">
-                          <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
-                        </td>
-                        <td align="right" valign="middle">
-                          <span class="news-card-tag">{_html(item.get("category"))}</span>
-                        </td>
-                      </tr>
-                    </table>
+                    <div style="margin-top:10px;">
+                      <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
+                    </div>
                   </td>
                 </tr>
               </table>"""

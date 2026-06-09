@@ -209,7 +209,7 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     assert content["news"][0]["category"] == "Рынок / LNG"
 
 
-def test_render_digest_email_keeps_title_out_of_bottom_flow_and_places_tag_near_cta():
+def test_render_digest_email_card_category_above_title_with_cta_below():
     html = render_digest_email(
         {
             "issue": {"title": "Digest", "preheader": "Preheader", "intro": "Intro"},
@@ -230,11 +230,41 @@ def test_render_digest_email_keeps_title_out_of_bottom_flow_and_places_tag_near_
         }
     )
 
-    assert "colspan=\"2\"" in html
+    # По референсу: категория сверху карточки → заголовок → «Читать далее» внизу.
     assert "ЧИТАТЬ ДАЛЕЕ" in html
-    assert "news-card-tag" in html
-    assert html.index("ЧИТАТЬ ДАЛЕЕ") < html.index("Рынок / LNG")
     assert "Very long article title" in html
+    assert html.index("Рынок / LNG") < html.index("Very long article title")
+    assert html.index("Very long article title") < html.index("ЧИТАТЬ ДАЛЕЕ")
+
+
+def test_render_digest_email_renders_highlights_block():
+    html = render_digest_email(
+        {
+            "issue": {"title": "Digest", "preheader": "P", "intro": "Intro"},
+            "hero": {"badge": "NEWS", "headline": "DIGEST", "subtitle": "Sub", "image_url": ""},
+            "news": [
+                {"category": "Технологии", "title": "A", "source": "SLB",
+                 "url": "https://e.com/a", "summary": "s", "image_url": ""},
+            ],
+            "footer": {"contact_text": "C", "contact_email": "d@e.com", "note": "N"},
+        }
+    )
+    assert "Главное за период" in html  # заголовок KPI-блока (uppercase делает CSS)
+
+
+def test_digest_highlights_counts_and_plural():
+    from oiltech_digest.processing.digest import _digest_highlights
+
+    news = [
+        {"category": "Технологии", "source": "SLB"},
+        {"category": "Аналитика", "source": "X"},
+        {"category": "Бизнес-сигнал", "source": "Y"},
+        {"category": "Россия", "source": "Rystad"},
+    ]
+    hl = _digest_highlights(news)
+    assert hl[0]["value"] == 4 and hl[0]["label"] == "новости"
+    assert hl[1]["value"] == 2  # «Аналитика» (kw) + Rystad (analytic source)
+    assert hl[2]["value"] == 1  # «Бизнес-сигнал» (kw)
 
 
 def test_save_digest_draft_persists_ordered_items(monkeypatch):
