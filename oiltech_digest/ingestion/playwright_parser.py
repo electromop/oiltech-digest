@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from oiltech_digest.db import repository
 from oiltech_digest.config import REQUEST_ARTICLE_LIMIT
@@ -33,6 +34,37 @@ def is_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _playwright_proxy_for(url: str) -> dict[str, str] | None:
+    """Прокси в playwright-формате ({server, username, password}) для URL, или None.
+
+    Переиспользует логику http_client (PROXY_HOST_OVERRIDES имеет приоритет над
+    глобальным PROXY_URL): через прокси идут только хосты из overrides — это и есть
+    точечный канал для Hard-WAF (Cloudflare/Akamai), чтобы не гонять платный
+    резидентский трафик для всех playwright-источников. Headless Chromium с
+    резидентским IP нужен сайтам, блокирующим и по JS-challenge, и по IP-репутации.
+    """
+    from oiltech_digest.ingestion.http_client import _host, _proxy_for
+
+    proxies = _proxy_for(_host(url))
+    if not proxies:
+        return None
+    raw = proxies.get("https") or proxies.get("http")
+    if not raw:
+        return None
+    parts = urlsplit(raw)
+    if not parts.hostname:
+        return None
+    server = f"{parts.scheme or 'http'}://{parts.hostname}"
+    if parts.port:
+        server += f":{parts.port}"
+    pw_proxy: dict[str, str] = {"server": server}
+    if parts.username:
+        pw_proxy["username"] = unquote(parts.username)
+    if parts.password:
+        pw_proxy["password"] = unquote(parts.password)
+    return pw_proxy
 
 
 _BLOCK_STATUSES = {403, 429, 503}
@@ -58,10 +90,15 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
         with sync_playwright() as pw:
             # --no-sandbox: Chromium под root в Docker; --disable-dev-shm-usage: малый /dev/shm
             # на сервере 1.9 ГБ RAM (иначе краши вкладок). Те же флаги, что в PDF-экспорте.
-            browser = pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
+            launch_kwargs: dict[str, Any] = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+            }
+            proxy = _playwright_proxy_for(url)
+            if proxy:
+                launch_kwargs["proxy"] = proxy
+                logger.info("playwright %s — через прокси %s", url, proxy.get("server"))
+            browser = pw.chromium.launch(**launch_kwargs)
             try:
                 page = browser.new_page(
                     user_agent=(

@@ -86,3 +86,26 @@ def test_parse_source_reports_unavailable_without_rendering(monkeypatch):
 
     assert stats["added"] == 0
     assert stats["attempted"] == 0
+
+
+def test_playwright_proxy_for_only_overridden_hosts(monkeypatch):
+    """Через прокси идут только хосты из PROXY_HOST_OVERRIDES (точечно для Hard-WAF);
+    остальные playwright-источники — напрямую. PROXY_URL парсится в playwright-формат."""
+    from oiltech_digest.ingestion import http_client
+
+    monkeypatch.setattr(
+        http_client,
+        "_proxy_for",
+        lambda host: (
+            {"http": "http://u:p@eu.proxy.2captcha.com:2334",
+             "https": "http://u:p@eu.proxy.2captcha.com:2334"}
+            if host == "www.energyvoice.com" else None
+        ),
+    )
+
+    assert playwright_parser._playwright_proxy_for("https://www.energyvoice.com/news") == {
+        "server": "http://eu.proxy.2captcha.com:2334",
+        "username": "u",
+        "password": "p",
+    }
+    assert playwright_parser._playwright_proxy_for("https://www.slb.com/news-and-insights") is None
