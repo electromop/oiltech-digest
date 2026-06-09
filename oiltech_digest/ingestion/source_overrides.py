@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 #   parse_strategy — обязательно ('playwright' для JS/WAF-сайтов, 'rss' для лент);
 #   listing_url    — опционально; None = не трогать (берётся из url/сидера).
 #   rss_url        — опционально; для RSS-лент с нестандартным/сменившимся URL фида.
+#   url            — опционально; для telegram/прочих с исправленным каналом/адресом.
 SOURCE_OVERRIDES: dict[str, dict] = {
     # Проверено на проде:
     "Shell": {"parse_strategy": "playwright"},  # главная отдаёт пресс-релизы (+6 статей)
@@ -74,6 +75,12 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     #   Wood Mackenzie #16 (/press-releases/ → blogs/sign-up/topics)
     #   Deloitte #84 (/Industries/energy → навигация по индустриям, не новости; ценность спорна)
     #   Petroleum Economist #7 (SPA, extract даёт одинаковый текст-оболочку ~31k симв.)
+    # Telegram-каналы с исправленным username (в Excel-сидере были неверные → t.me/s/
+    # отдавал пустую ~9.6KB-страницу, posts=0). Правильные проверены на проде (17-20 постов):
+    "Газбатюшка": {"parse_strategy": "telegram", "url": "https://t.me/papagaz"},
+    "Агентство нефтегазовой информации": {"parse_strategy": "telegram", "url": "https://t.me/oilgasinform"},
+    "Новая Энергия": {"parse_strategy": "telegram", "url": "https://t.me/novayaenergiya"},
+    "Energy Today": {"parse_strategy": "telegram", "url": "https://t.me/energytodaygroup"},
     # Группа 🟡 (Playwright рендерит, нужен правильный news-URL) — добавляем после проверки:
     # "Weatherford": {"parse_strategy": "playwright", "listing_url": "..."},
     # "OPEC": {"parse_strategy": "playwright", "listing_url": "..."},
@@ -93,18 +100,20 @@ def apply_overrides() -> dict:
             new_strategy = fields["parse_strategy"]
             new_listing = fields.get("listing_url")
             new_rss = fields.get("rss_url")
+            new_url = fields.get("url")
             row = conn.execute(
-                "SELECT id, parse_strategy, listing_url, rss_url FROM sources WHERE name = %s",
+                "SELECT id, parse_strategy, listing_url, rss_url, url FROM sources WHERE name = %s",
                 (name,),
             ).fetchone()
             if row is None:
                 not_found += 1
                 logger.warning("source override: источник %r не найден в БД", name)
                 continue
-            source_id, cur_strategy, cur_listing, cur_rss = row
+            source_id, cur_strategy, cur_listing, cur_rss, cur_url = row
             listing_changed = new_listing is not None and (cur_listing or "") != new_listing
             rss_changed = new_rss is not None and (cur_rss or "") != new_rss
-            if cur_strategy == new_strategy and not listing_changed and not rss_changed:
+            url_changed = new_url is not None and (cur_url or "") != new_url
+            if cur_strategy == new_strategy and not listing_changed and not rss_changed and not url_changed:
                 unchanged += 1
                 continue
 
@@ -122,10 +131,14 @@ def apply_overrides() -> dict:
             if new_rss is not None:
                 sets.append("rss_url = %(rss_url)s")
                 params["rss_url"] = new_rss
+            if new_url is not None:
+                sets.append("url = %(url)s")
+                params["url"] = new_url
             conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = %(id)s", params)
             changed += 1
-            logger.info("source override: %s → %s%s%s", name, new_strategy,
+            logger.info("source override: %s → %s%s%s%s", name, new_strategy,
                         f" listing={new_listing}" if new_listing else "",
-                        f" rss={new_rss}" if new_rss else "")
+                        f" rss={new_rss}" if new_rss else "",
+                        f" url={new_url}" if new_url else "")
         conn.commit()
     return {"changed": changed, "unchanged": unchanged, "not_found": not_found}
