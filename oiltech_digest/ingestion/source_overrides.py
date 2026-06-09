@@ -56,18 +56,19 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # /news часто отдают JS-навигацию (0 статей у request). Поэтому request оставляем
     # ТОЛЬКО для проверенных живым parse на проде. Ниже — playwright-кандидаты: news-URL
     # найден, но listing рендерится через JS → нужен прод-тест с parse_strategy='playwright'
-    # (Chromium в образе), как делали с Shell/Baker Hughes:
-    #   TotalEnergies #73 → https://totalenergies.com/news/press-releases
-    #   ADNOC #62        → https://www.adnoc.ae/en/news-and-media
-    #   Aker Solutions #29 → https://www.akersolutions.com/news/
-    #   SLB #22          → https://www.slb.com/news-and-insights
-    #   Halliburton #23  → https://www.halliburton.com/en/about-us/press-release
-    #   Wood Mackenzie #16 → https://www.woodmac.com/press-releases/
-    #   Rystad #15       → https://www.rystadenergy.com/news
-    #   Deloitte #84     → https://www.deloitte.com/global/en/Industries/energy
-    #   SOCAR #97        → https://socar.az/socar/en/page/media
-    #   JPT #2           → https://jpt.spe.org/latest-news (на проде JS, 0 через request)
-    #   Petroleum Economist #7 → https://www.petroleum-economist.com/ (JS + неполная TLS)
+    # (Chromium в образе), как делали с Shell/Baker Hughes. ПОДТВЕРЖДЕНО на проде
+    # (playwright рендерит JS и извлекает валидные статьи; пробивает даже 403, на
+    # которых падали request/WebFetch — BP/TechnipFMC):
+    "SLB (Schlumberger)": {"parse_strategy": "playwright", "listing_url": "https://www.slb.com/news-and-insights"},  # рендер ✓, последние уже в БД
+    "ADNOC": {"parse_strategy": "playwright", "listing_url": "https://www.adnoc.ae/en/news-and-media"},  # рендер ✓
+    "SOCAR": {"parse_strategy": "playwright", "listing_url": "https://socar.az/socar/en/page/media"},  # +6
+    "BP": {"parse_strategy": "playwright", "listing_url": "https://www.bp.com/en/global/corporate/news-and-insights/press-releases.html"},  # +3 (был 403 для request)
+    "TechnipFMC": {"parse_strategy": "playwright", "listing_url": "https://www.technipfmc.com/en/media/press-releases/"},  # +6 (был 403)
+    "Halliburton": {"parse_strategy": "playwright", "listing_url": "https://www.halliburton.com/en/about-us/press-release"},  # +6
+    # На проде уже переведены в playwright (прописаны вручную), но parse дал added=0 —
+    # нет свежих публикаций ИЛИ нужен тюнинг listing_url/селектора. В реестр добавим
+    # после diagnose (следующая итерация): TotalEnergies #73, Aker Solutions #29,
+    # Wood Mackenzie #16, Rystad #15, Deloitte #84, JPT #2, Petroleum Economist #7.
     # Группа 🟡 (Playwright рендерит, нужен правильный news-URL) — добавляем после проверки:
     # "Weatherford": {"parse_strategy": "playwright", "listing_url": "..."},
     # "OPEC": {"parse_strategy": "playwright", "listing_url": "..."},
