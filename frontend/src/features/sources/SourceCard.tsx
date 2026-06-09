@@ -79,49 +79,16 @@ export function SourceCard(props: Props) {
             placeholder="RSS URL"
           />
           {source.parse_strategy === "request" ? (
-            <>
-              <InputField
-                label="Listing URL"
-                value={props.currentField("listing_url")}
-                onChange={(value) => props.onDraftChange("listing_url", value || null)}
-                placeholder="Страница новостей"
-              />
-              <InputField
-                label="Listing strategy"
-                value={props.currentField("listing_strategy")}
-                onChange={(value) => props.onDraftChange("listing_strategy", value || null)}
-                placeholder="auto"
-              />
-              <InputField
-                label="Listing selector"
-                value={props.currentField("listing_selector")}
-                onChange={(value) => props.onDraftChange("listing_selector", value || null)}
-                placeholder=".news-card or //article"
-              />
-              <InputField
-                label="Article link selector"
-                value={props.currentField("article_link_selector")}
-                onChange={(value) => props.onDraftChange("article_link_selector", value || null)}
-                placeholder="a or .headline a"
-              />
-              <InputField
-                label="Article date selector"
-                value={props.currentField("article_date_selector")}
-                onChange={(value) => props.onDraftChange("article_date_selector", value || null)}
-                placeholder="time or .date"
-              />
-              <InputField
-                label="Последняя статья"
-                value={source.last_seen_article_url || ""}
-                onChange={() => undefined}
-                placeholder="пока пусто"
-                disabled
-              />
-            </>
+            <InputField
+              label="Listing URL"
+              value={props.currentField("listing_url")}
+              onChange={(value) => props.onDraftChange("listing_url", value || null)}
+              placeholder="Страница новостей"
+            />
           ) : null}
         </div>
-        {diagnostic ? <DiagnosticsPanel diagnostic={diagnostic} /> : null}
       </details>
+      {diagnostic ? <DiagnosticsPanel diagnostic={diagnostic} /> : null}
     </article>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { listArticles } from "../../api/articles";
-import { enqueueDigestExport, getDigestContent, getMonthlyDigest, saveDigestDraft } from "../../api/digest";
+import { enqueueDigestExport } from "../../api/digest";
 import { downloadJobResult, getJob } from "../../api/jobs";
 import type { Article, BackgroundJob } from "../../api/types";
 
@@ -79,67 +79,6 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
     const q = tagQuery.trim().toLowerCase();
     return topTags.filter((option) => !q || option.toLowerCase().includes(q));
   }, [tagQuery, topTags]);
-
-  function currentDigestParams() {
-    const params = new URLSearchParams({
-      month,
-      limit: "200",
-      min_score: String(scoreMin),
-    });
-    return params.toString();
-  }
-
-  function currentDigestPayload() {
-    return {
-      month: month || String(new Date().toISOString()).slice(0, 7),
-      limit: 50,
-      min_score: scoreMin,
-    };
-  }
-
-  async function handleCopyJson() {
-    try {
-      setBusy(true);
-      const content = await getDigestContent(month, 200, scoreMin);
-      await navigator.clipboard.writeText(JSON.stringify(content, null, 2));
-      showToast("JSON дайджеста скопирован");
-    } catch (error) {
-      handleError(error, "Не удалось собрать JSON дайджеста");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleSaveDraft() {
-    try {
-      setBusy(true);
-      const result = await saveDigestDraft(currentDigestPayload());
-      setDraftInfo(`draft ${result.month}: ${result.items} статей`);
-      showToast(`Draft ${result.month} сохранён: ${result.items} статей`);
-    } catch (error) {
-      handleError(error, "Не удалось сохранить draft");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleLoadDraft() {
-    const targetMonth = month || String(new Date().toISOString()).slice(0, 7);
-    try {
-      setBusy(true);
-      const draft = await getMonthlyDigest(targetMonth);
-      setDraftInfo(`${draft.month} · ${draft.status} · ${draft.items.length} статей`);
-      showToast(`Загружен draft ${draft.month}`);
-    } catch (error) {
-      handleError(error, "Сохранённый draft не найден");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function openDigestEmail() {
-    window.open(`/api/digest-email?${currentDigestParams()}`, "_blank", "noopener,noreferrer");
-  }
 
   async function handleDigestExport(format: "pdf" | "doc" | "html") {
     try {
@@ -277,28 +216,8 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
         </div>
 
         <div className="digestToolbar">
-          <div className="digestActionGroup">
-            <span className="digestGroupLabel">Просмотр</span>
-            <button type="button" className="ghostButton" onClick={openDigestEmail}>
-              Открыть HTML
-            </button>
-            <button type="button" className="ghostButton" onClick={() => void handleCopyJson()}>
-              Скопировать JSON
-            </button>
-          </div>
-
-          <div className="digestActionGroup">
-            <span className="digestGroupLabel">Draft</span>
-            <button type="button" className="ghostButton" onClick={() => void handleSaveDraft()}>
-              Сохранить
-            </button>
-            <button type="button" className="ghostButton" onClick={() => void handleLoadDraft()}>
-              Проверить
-            </button>
-          </div>
-
           <div className="digestActionGroup digestActionGroupPrimary">
-            <span className="digestGroupLabel">Экспорт</span>
+            <span className="digestGroupLabel">Скачать дайджест</span>
             <button type="button" className="primaryButton" onClick={() => void handleDigestExport("pdf")}>
               PDF
             </button>

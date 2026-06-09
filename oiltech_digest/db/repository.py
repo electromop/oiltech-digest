@@ -109,25 +109,26 @@ def set_source_enabled(source_id: int, enabled: bool) -> None:
 def add_rss_source(name: str, rss_url: str, source_type: str = "RSS",
                    url: str | None = None, priority: float = 1.0,
                    category: str | None = None,
-                   update_frequency: str | None = None) -> int:
+                   update_frequency: str | None = None,
+                   parse_strategy: str = "rss") -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO sources (name, source_type, url, rss_url, enabled,
                                  parse_strategy, category, update_frequency, priority)
-            VALUES (%s, %s, %s, %s, TRUE, 'rss', %s, %s, %s)
+            VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s)
             ON CONFLICT (name, source_type) DO UPDATE SET
                 url = EXCLUDED.url,
                 rss_url = EXCLUDED.rss_url,
                 enabled = TRUE,
-                parse_strategy = 'rss',
+                parse_strategy = EXCLUDED.parse_strategy,
                 category = EXCLUDED.category,
                 update_frequency = EXCLUDED.update_frequency,
                 priority = EXCLUDED.priority,
                 updated_at = now()
             RETURNING id
             """,
-            (name, source_type, url, rss_url, category, update_frequency, priority),
+            (name, source_type, url, rss_url, parse_strategy, category, update_frequency, priority),
         )
         source_id = cur.fetchone()[0]
         conn.commit()

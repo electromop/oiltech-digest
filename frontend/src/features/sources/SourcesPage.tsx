@@ -33,8 +33,8 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   const [enabled, setEnabled] = useState("");
   const [healthVerdict, setHealthVerdict] = useState("");
   const [newSourceName, setNewSourceName] = useState("");
-  const [newSourceRss, setNewSourceRss] = useState("");
-  const [newSourceFrequency, setNewSourceFrequency] = useState("");
+  const [newSourceUrl, setNewSourceUrl] = useState("");
+  const [newSourceFrequency, setNewSourceFrequency] = useState("ежедневно");
 
   useEffect(() => {
     void reload();
@@ -138,24 +138,23 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   }
 
   async function handleCreateSource() {
-    if (!newSourceName.trim() || !newSourceRss.trim()) {
-      showToast("Введите название и RSS URL", "error");
+    if (!newSourceName.trim() || !newSourceUrl.trim()) {
+      showToast("Введите название и ссылку на источник", "error");
       return;
     }
     try {
       setBusy(true);
       await createSource({
         name: newSourceName.trim(),
-        rss_url: newSourceRss.trim(),
-        url: newSourceRss.trim(),
-        update_frequency: newSourceFrequency.trim() || null,
+        url: newSourceUrl.trim(),
+        update_frequency: newSourceFrequency || null,
         category: "manual",
         priority: 1,
       });
       setNewSourceName("");
-      setNewSourceRss("");
-      setNewSourceFrequency("");
-      showToast("RSS-источник добавлен");
+      setNewSourceUrl("");
+      setNewSourceFrequency("ежедневно");
+      showToast("Источник добавлен — система ищет RSS-ленту");
       await reload();
     } catch (error) {
       handleError(error, "Не удалось добавить источник");
@@ -235,24 +234,30 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
       <section className="panel">
         {busy ? <InlineLoader label="Обновляем источники…" /> : null}
         <div className="panelHeader">
-          <h2>Добавить RSS</h2>
-          <span className="badge">manual seed</span>
+          <h2>Добавить источник</h2>
         </div>
+        <p className="metaText" style={{ margin: "0 0 4px" }}>
+          Вставьте ссылку на сайт источника — система сама найдёт RSS-ленту. Если ленты нет, источник будет читаться со страницы новостей.
+        </p>
         <div className="sourceCreateGrid">
           <label className="field">
             <span>Название</span>
             <input value={newSourceName} onChange={(event) => setNewSourceName(event.target.value)} placeholder="Название источника" />
           </label>
           <label className="field">
-            <span>RSS URL</span>
-            <input value={newSourceRss} onChange={(event) => setNewSourceRss(event.target.value)} placeholder="https://example.com/rss.xml" />
+            <span>Ссылка на источник</span>
+            <input value={newSourceUrl} onChange={(event) => setNewSourceUrl(event.target.value)} placeholder="https://сайт.com" />
           </label>
           <label className="field">
             <span>Частота</span>
-            <input value={newSourceFrequency} onChange={(event) => setNewSourceFrequency(event.target.value)} placeholder="ежедневно" />
+            <select value={newSourceFrequency} onChange={(event) => setNewSourceFrequency(event.target.value)}>
+              <option value="ежечасно">Ежечасно</option>
+              <option value="ежедневно">Ежедневно</option>
+              <option value="еженедельно">Еженедельно</option>
+            </select>
           </label>
           <button type="button" className="primaryButton" onClick={() => void handleCreateSource()}>
-            Добавить RSS
+            Добавить
           </button>
         </div>
       </section>

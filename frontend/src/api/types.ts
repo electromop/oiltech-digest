@@ -195,8 +195,8 @@ export type Tag = {
 
 export type CreateSourcePayload = {
   name: string;
-  rss_url: string;
-  url?: string | null;
+  url: string;
+  rss_url?: string;
   priority?: number;
   category?: string | null;
   update_frequency?: string | null;

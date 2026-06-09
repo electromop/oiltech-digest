@@ -59,8 +59,8 @@ class SourcePatch(BaseModel):
 
 class SourceCreate(BaseModel):
     name: str
-    rss_url: str
     url: str | None = None
+    rss_url: str = ""
     priority: float = 1.0
     category: str | None = None
     update_frequency: str | None = None
@@ -306,15 +306,29 @@ def source_health(
 
 @app.post("/api/sources")
 def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    # Пользователь вставляет просто ссылку на источник — система сама ищет RSS-ленту.
+    # Нашла → parse_strategy='rss' с найденным фидом; не нашла → 'request' (скрейп
+    # страницы новостей). RSS можно передать и явно (тогда discover пропускается).
+    site_url = (payload.url or payload.rss_url or "").strip()
+    rss_url = (payload.rss_url or "").strip()
+    parse_strategy = "rss"
+    if not rss_url and site_url:
+        from oiltech_digest.ingestion.rss_discovery import discover_feed
+        found = discover_feed(site_url)
+        if found:
+            rss_url = found
+        else:
+            parse_strategy = "request"
     source_id = repository.add_rss_source(
         name=payload.name,
-        rss_url=payload.rss_url,
-        url=payload.url,
+        rss_url=rss_url,
+        url=site_url or rss_url,
         priority=payload.priority,
         category=payload.category,
         update_frequency=payload.update_frequency,
+        parse_strategy=parse_strategy,
     )
-    return {"ok": True, "id": source_id}
+    return {"ok": True, "id": source_id, "rss_url": rss_url or None, "parse_strategy": parse_strategy}
 
 
 @app.patch("/api/sources/{source_id}")
