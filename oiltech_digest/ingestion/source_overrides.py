@@ -65,10 +65,15 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "BP": {"parse_strategy": "playwright", "listing_url": "https://www.bp.com/en/global/corporate/news-and-insights/press-releases.html"},  # +3 (был 403 для request)
     "TechnipFMC": {"parse_strategy": "playwright", "listing_url": "https://www.technipfmc.com/en/media/press-releases/"},  # +6 (был 403)
     "Halliburton": {"parse_strategy": "playwright", "listing_url": "https://www.halliburton.com/en/about-us/press-release"},  # +6
-    # На проде уже переведены в playwright (прописаны вручную), но parse дал added=0 —
-    # нет свежих публикаций ИЛИ нужен тюнинг listing_url/селектора. В реестр добавим
-    # после diagnose (следующая итерация): TotalEnergies #73, Aker Solutions #29,
-    # Wood Mackenzie #16, Rystad #15, Deloitte #84, JPT #2, Petroleum Economist #7.
+    "TotalEnergies": {"parse_strategy": "playwright", "listing_url": "https://totalenergies.com/news/press-releases"},  # рендер ✓ (релизы с датами), нет свежее 28 мая
+    "Aker Solutions": {"parse_strategy": "playwright", "listing_url": "https://www.akersolutions.com/news/"},  # рендер ✓, нет свежее фев 2026
+    "Rystad Energy": {"parse_strategy": "playwright", "listing_url": "https://www.rystadenergy.com/news"},  # рендер ✓ (свежак 08 июня), scheduler собирает в фоне
+    "Journal of Petroleum Technology": {"parse_strategy": "playwright", "listing_url": "https://jpt.spe.org/latest-news"},  # рендер ✓ (свежак 09 июня, даты извлекаются)
+    # НЕ в реестре — listing отдаёт навигацию/SPA-оболочку вместо статей, нужен
+    # listing_selector или другой URL (тюнинг отдельной задачей):
+    #   Wood Mackenzie #16 (/press-releases/ → blogs/sign-up/topics)
+    #   Deloitte #84 (/Industries/energy → навигация по индустриям, не новости; ценность спорна)
+    #   Petroleum Economist #7 (SPA, extract даёт одинаковый текст-оболочку ~31k симв.)
     # Группа 🟡 (Playwright рендерит, нужен правильный news-URL) — добавляем после проверки:
     # "Weatherford": {"parse_strategy": "playwright", "listing_url": "..."},
     # "OPEC": {"parse_strategy": "playwright", "listing_url": "..."},
