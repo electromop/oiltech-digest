@@ -3,6 +3,8 @@
 .env.local
 *.pem
 *.key
+# Исключение: публичные промежуточные CA для TLS-fallback (НЕ секрет) — нужны в образе
+!oiltech_digest/ingestion/extra_ca.pem
 
 # Python
 __pycache__/
