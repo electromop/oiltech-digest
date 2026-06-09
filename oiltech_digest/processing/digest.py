@@ -82,16 +82,9 @@ def render_digest_email(content: dict) -> str:
     """
     template = (TEMPLATE_DIR / EMAIL_TEMPLATE).read_text(encoding="utf-8")
     news_items = content.get("news", [])
-    # PDF: по 3 карточки на A4-страницу — разрыв после каждой тройки (кроме последней).
-    parts: list[str] = []
-    for idx, item in enumerate(news_items):
-        parts.append(_render_news_item(item))
-        if (idx + 1) % 3 == 0 and (idx + 1) < len(news_items):
-            parts.append(
-                '<div style="page-break-after:always;break-after:page;height:0;'
-                'line-height:0;font-size:0;">&nbsp;</div>'
-            )
-    news_html = "\n".join(parts)
+    # Карточки идут единым потоком; разрыв страницы НЕ форсируем — за «карточка
+    # не рвётся между страницами» отвечает CSS .news-card { break-inside: avoid }.
+    news_html = "\n".join(_render_news_item(item) for item in news_items)
     highlights = content.get("highlights") or _digest_highlights(news_items)
     values = {
         "issue_title": _html(content.get("issue", {}).get("title")),
@@ -218,8 +211,9 @@ def _render_highlights(highlights: list[dict]) -> str:
 
 
 def _render_news_item(item: dict) -> str:
-    """Карточка новости по референсу: фото слева; справа — категория (мелкая),
-    заголовок, краткое описание и «Читать далее»."""
+    """Карточка новости (формат референса коллеги): фото + заголовок сверху,
+    ниже — краткое описание и строка «Читать далее | теги». Карточка не должна
+    разрываться между страницами (CSS .news-card { break-inside: avoid })."""
     image_url = item.get("image_url") or ""
     if image_url:
         media = (
@@ -240,25 +234,29 @@ def _render_news_item(item: dict) -> str:
             f'<img class="news-card-image" src="{placeholder}" width="210" height="118" alt="" '
             'style="display:block;width:210px;height:118px;border-radius:6px;border:0;">'
         )
-    category = item.get("category")
-    category_html = (
-        '<div style="font-size:11px;line-height:15px;color:#003da6;font-weight:bold;'
-        f'text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">{_html(category)}</div>'
-        if category else ""
-    )
     return f"""
               <table class="news-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px 0;border:1px solid #d9e3f3;border-radius:8px;background:#ffffff;">
                 <tr>
-                  <td width="230" valign="top" style="padding:12px 16px 12px 12px;">
+                  <td width="230" valign="top" style="padding:12px 16px 8px 12px;">
                     {media}
                   </td>
-                  <td valign="top" style="padding:14px 16px 14px 0;">
-                    {category_html}
+                  <td valign="top" style="padding:14px 16px 8px 0;">
                     <div class="news-card-title">{_html(item.get("title"))}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td colspan="2" valign="top" style="padding:0 16px 14px 16px;">
                     <div class="news-card-summary">{_html(item.get("summary"))}</div>
-                    <div style="margin-top:10px;">
-                      <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
-                    </div>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;">
+                      <tr>
+                        <td align="left" valign="middle">
+                          <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">ЧИТАТЬ ДАЛЕЕ &#8594;</a>
+                        </td>
+                        <td align="right" valign="middle">
+                          <span class="news-card-tag">{_html(item.get("category"))}</span>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>"""

@@ -209,7 +209,7 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     assert content["news"][0]["category"] == "Рынок / LNG"
 
 
-def test_render_digest_email_card_category_above_title_with_cta_below():
+def test_render_digest_email_card_tag_and_cta_at_bottom():
     html = render_digest_email(
         {
             "issue": {"title": "Digest", "preheader": "Preheader", "intro": "Intro"},
@@ -230,11 +230,12 @@ def test_render_digest_email_card_category_above_title_with_cta_below():
         }
     )
 
-    # По референсу: категория сверху карточки → заголовок → «Читать далее» внизу.
+    # Формат коллеги: заголовок сверху → описание → строка «Читать далее | тег» внизу.
     assert "ЧИТАТЬ ДАЛЕЕ" in html
+    assert "news-card-tag" in html
     assert "Very long article title" in html
-    assert html.index("Рынок / LNG") < html.index("Very long article title")
     assert html.index("Very long article title") < html.index("ЧИТАТЬ ДАЛЕЕ")
+    assert html.index("ЧИТАТЬ ДАЛЕЕ") < html.index("Рынок / LNG")
 
 
 def test_render_digest_email_renders_highlights_block():
