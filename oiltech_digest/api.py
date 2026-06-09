@@ -223,7 +223,8 @@ def list_articles(
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT a.id, a.title, a.url, a.language, a.raw_text, a.published_at,
+            SELECT a.id, a.title, a.url, a.language, length(a.raw_text) AS raw_text_chars,
+                   a.published_at,
                    a.collected_at, a.text_truncated, s.name AS source_name,
                    COALESCE(c.summary, '') AS summary,
                    COALESCE(c.status, 'new') AS status,
@@ -668,7 +669,7 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         "tag_confidence": float(row["tag_confidence"]) if row.get("tag_confidence") is not None else None,
         "tag_rationale": row.get("tag_rationale"),
         "score_explanation": row.get("score_explanation"),
-        "raw_text_chars": len(row.get("raw_text") or ""),
+        "raw_text_chars": int(row.get("raw_text_chars") or 0),
         "text_truncated": bool(row.get("text_truncated")),
         "relevant": row.get("relevant"),
         "relevance_reason": row.get("relevance_reason"),
