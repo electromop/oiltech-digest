@@ -90,6 +90,16 @@ def cmd_fetch_full_text(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_backfill_images(args: argparse.Namespace) -> None:
+    from oiltech_digest.ingestion.article_fetcher import backfill_images
+
+    stats = backfill_images(limit=args.limit)
+    print(
+        f"backfill-images: проверено={stats['processed']}, обновлено={stats['updated']}, "
+        f"без картинки={stats['no_image']}, ошибок={stats['failed']}"
+    )
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -524,6 +534,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_full.add_argument("--retry-too-short", action="store_true",
                         help="повторить попытку для статей с full_text_status='too_short'")
     p_full.set_defaults(func=cmd_fetch_full_text)
+
+    p_backfill_images = sub.add_parser("backfill-images", help="дозаполнить og:image у статей без картинки")
+    p_backfill_images.add_argument("--limit", type=int, default=200)
+    p_backfill_images.set_defaults(func=cmd_backfill_images)
 
     sub.add_parser("stats", help="диагностика БД").set_defaults(func=cmd_stats)
 

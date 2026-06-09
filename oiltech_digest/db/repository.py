@@ -560,6 +560,37 @@ def insert_article(rec: dict) -> bool:
     return row is not None
 
 
+def get_articles_missing_image(limit: int = 200) -> list[dict]:
+    """Статьи без картинки (image_url пуст) — для бэкфилла og:image в дайджест.
+    fetch-full-text трогает только статьи без полного текста, поэтому уже
+    обработанные статьи остаются без image_url, и их добирает эта выборка."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.id, a.url
+            FROM articles a
+            WHERE a.url IS NOT NULL AND COALESCE(a.image_url, '') = ''
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def set_article_image(article_id: int, image_url: str) -> bool:
+    """Проставить image_url, только если его ещё нет. True, если обновлено."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE articles SET image_url = %s, updated_at = now() "
+            "WHERE id = %s AND COALESCE(image_url, '') = ''",
+            (image_url, article_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = False) -> list[dict]:
     """Articles whose RSS body is likely only a teaser and needs URL extraction.
 

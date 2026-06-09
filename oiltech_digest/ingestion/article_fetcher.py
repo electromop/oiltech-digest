@@ -120,6 +120,33 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
     return stats
 
 
+def backfill_images(limit: int = 200) -> dict:
+    """Дозаполнить image_url (og:image) у статей без картинки — для дайджеста.
+
+    fetch-full-text обрабатывает только статьи без полного текста; уже обработанные
+    остаются без картинки. Здесь перефетчим страницу и берём og:image/twitter:image.
+    """
+    from oiltech_digest.ingestion.http_client import fetch
+
+    stats = {"processed": 0, "updated": 0, "no_image": 0, "failed": 0}
+    for article in repository.get_articles_missing_image(limit=limit):
+        stats["processed"] += 1
+        try:
+            content = fetch(article["url"])
+            if not content:
+                stats["failed"] += 1
+                continue
+            image_url = extract_og_image(content)
+            if image_url and repository.set_article_image(int(article["id"]), image_url):
+                stats["updated"] += 1
+            else:
+                stats["no_image"] += 1
+        except Exception as exc:  # noqa: BLE001 - batch should continue
+            logger.warning("backfill image failed for article %s: %s", article.get("id"), exc)
+            stats["failed"] += 1
+    return stats
+
+
 def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> ExtractionResult:
     url = article.get("url")
     if not url:
