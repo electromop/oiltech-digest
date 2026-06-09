@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import random
+import tempfile
 import threading
 import time
 from urllib.parse import urlsplit
@@ -117,10 +119,82 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
     return None
 
 
+_ext_bundle_lock = threading.Lock()
+# None = ещё не инициализирован; "" = extra_ca.pem отсутствует; иначе — путь к bundle.
+_ext_bundle_path: str | None = None
+
+
+def _extended_ca_bundle() -> str | None:
+    """Путь к объединённому CA-bundle (certifi + локальные промежуточные из
+    extra_ca.pem). Нужен для серверов, присылающих неполную цепочку (leaf без
+    intermediate): добавив недостающие промежуточные локально, мы достраиваем
+    цепочку и проходим верификацию ЧЕСТНО, без verify=False. Создаётся один раз
+    во временном файле. None — если extra_ca.pem отсутствует/не читается."""
+    global _ext_bundle_path
+    if _ext_bundle_path is not None:
+        return _ext_bundle_path or None
+    with _ext_bundle_lock:
+        if _ext_bundle_path is not None:
+            return _ext_bundle_path or None
+        extra = os.path.join(os.path.dirname(__file__), "extra_ca.pem")
+        if not os.path.exists(extra):
+            _ext_bundle_path = ""
+            return None
+        try:
+            import certifi
+
+            with open(certifi.where(), "rb") as f:
+                base = f.read()
+            with open(extra, "rb") as f:
+                extra_data = f.read()
+            fd, path = tempfile.mkstemp(suffix="-oiltech-ca.pem")
+            with os.fdopen(fd, "wb") as out:
+                out.write(base)
+                out.write(b"\n")
+                out.write(extra_data)
+            _ext_bundle_path = path
+            logger.info("extended CA-bundle готов: %s", path)
+        except Exception as exc:  # noqa: BLE001 - не должно ронять парсинг
+            logger.warning("extended CA-bundle не создан: %s", exc)
+            _ext_bundle_path = ""
+            return None
+    return _ext_bundle_path or None
+
+
 def _fetch_insecure(
     url: str, timeout: int, quiet: bool = False, proxies: dict[str, str] | None = None
 ) -> bytes | None:
-    """Fallback GET without certificate validation, only after SSLError."""
+    """Fallback после SSLError на обычном пути.
+
+    Шаг 1 — повтор с расширенным CA-bundle (certifi + недостающие промежуточные).
+    Верификация остаётся ВКЛючённой — просто подсовываем промежуточные локально.
+    Шаг 2 — только если и это не помогло, идём через verify=False (крайний случай).
+    """
+    bundle = _extended_ca_bundle()
+    if bundle:
+        try:
+            resp = _get_session().get(
+                url,
+                timeout=timeout,
+                headers=_DEFAULT_HEADERS,
+                allow_redirects=True,
+                verify=bundle,
+                proxies=proxies,
+            )
+            _tally(resp.status_code)
+            if resp.status_code in {403, 429, 503}:
+                _register_block(_host(url), resp)
+            resp.raise_for_status()
+            logger.info("HTTP %s — SSL достроен через extended CA-bundle", url)
+            return resp.content
+        except requests.exceptions.SSLError:
+            pass  # цепочка всё равно не строится → ниже verify=False
+        except requests.RequestException as exc:
+            # не-SSL ошибка (таймаут/connreset) — verify=False не поможет
+            if not quiet:
+                logger.warning("HTTP %s — fallback (CA-bundle) не удался: %s", url, exc)
+            return None
+
     try:
         import urllib3
 
@@ -137,7 +211,7 @@ def _fetch_insecure(
         if resp.status_code in {403, 429, 503}:
             _register_block(_host(url), resp)
         resp.raise_for_status()
-        logger.info("HTTP %s — SSL обойдён через verify=False (fallback)", url)
+        logger.info("HTTP %s — SSL обойдён через verify=False (крайний fallback)", url)
         return resp.content
     except requests.RequestException as exc:
         if quiet:
