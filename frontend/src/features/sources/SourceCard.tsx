@@ -1,11 +1,13 @@
 import type { Source, SourceDiagnostics, SourceHealth, SourcePatch } from "../../api/types";
-import { diagnosticText, healthClass, healthLabel } from "./sourceUtils";
+import { diagnosticText, diagnosticVerdictLabel, getSourceTriage, healthClass, healthLabel } from "./sourceUtils";
 
 type Props = {
   source: Source;
   health?: SourceHealth;
   diagnostic?: SourceDiagnostics;
   hasDraft: boolean;
+  pending?: boolean;
+  pendingLabel?: string | null;
   currentField: (field: keyof SourcePatch) => string;
   onDraftChange: (field: keyof SourcePatch, value: string | null) => void;
   onToggle: (enabled: boolean) => void;
@@ -15,8 +17,9 @@ type Props = {
 };
 
 export function SourceCard(props: Props) {
-  const { source, health, diagnostic, hasDraft } = props;
+  const { source, health, diagnostic, hasDraft, pending, pendingLabel } = props;
   const primaryUrl = source.url || source.rss_url || source.listing_url || "";
+  const triage = getSourceTriage(source, health, diagnostic);
 
   return (
     <article className="sourceCardReact">
@@ -38,6 +41,7 @@ export function SourceCard(props: Props) {
             <span className="metaText">{(source.parse_strategy || "—") + " · " + (source.source_type || "—")}</span>
             {health?.last_article_at ? <span className="metaText">последняя статья {String(health.last_article_at).slice(0, 10)}</span> : null}
             {hasDraft ? <span className="miniPill draft">есть правки</span> : null}
+            {pendingLabel ? <span className="miniPill muted">{pendingLabel}</span> : null}
           </div>
         </div>
         <label className="toggleLabel">
@@ -46,15 +50,24 @@ export function SourceCard(props: Props) {
         </label>
       </div>
 
+      <section className={`sourceTriagePanel ${triage.tone}`}>
+        <div className="sourceTriageHead">
+          <span className={`miniPill ${triage.tone}`}>{triage.label}</span>
+          {diagnostic?.verdict ? <span className="metaText">диагностика: {diagnosticVerdictLabel(diagnostic.verdict)}</span> : null}
+        </div>
+        <div className="sourceTriageTitle">{triage.title}</div>
+        <div className="sourceTriageAction">{triage.action}</div>
+      </section>
+
       <div className="sourceActions">
-        <button type="button" className="ghostButton" disabled={!hasDraft} onClick={props.onSave}>
+        <button type="button" className="ghostButton" disabled={!hasDraft || pending} onClick={props.onSave}>
           Сохранить
         </button>
-        <button type="button" className="ghostButton" onClick={props.onDiagnose}>
+        <button type="button" className="ghostButton" disabled={pending} onClick={props.onDiagnose}>
           Диагностика
         </button>
-        {source.parse_strategy === "request" ? (
-          <button type="button" className="ghostButton" onClick={props.onScrape}>
+        {source.parse_strategy === "request" || source.parse_strategy === "playwright" ? (
+          <button type="button" className="ghostButton" disabled={pending} onClick={props.onScrape}>
             Проверить listing
           </button>
         ) : null}
@@ -118,7 +131,7 @@ function DiagnosticsPanel({ diagnostic }: { diagnostic: SourceDiagnostics }) {
     <div className="diagnosticsPanel">
       <div className="diagnosticsHeader">
         <strong>Диагностика</strong>
-        <span className={`miniPill ${diagnostic.verdict === "ok" ? "ok" : "muted"}`}>{diagnostic.verdict || "—"}</span>
+        <span className={`miniPill ${diagnostic.verdict === "ok" ? "ok" : "muted"}`}>{diagnosticVerdictLabel(diagnostic.verdict)}</span>
       </div>
       <pre>{diagnosticText(diagnostic)}</pre>
     </div>

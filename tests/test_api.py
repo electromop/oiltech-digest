@@ -142,6 +142,71 @@ def test_source_diagnose_endpoint_accepts_unsaved_overrides(monkeypatch):
     assert captured["listing_selector"] == ".card"
 
 
+def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(
+        api.repository,
+        "get_source",
+        lambda source_id: {
+            "id": source_id,
+            "name": "Example",
+            "parse_strategy": "playwright",
+            "listing_url": "https://old.example.com/news",
+        },
+    )
+    monkeypatch.setattr(
+        api.background_jobs,
+        "enqueue",
+        lambda kind, payload, **kwargs: {
+            "id": 120,
+            "kind": kind,
+            "queue_name": kwargs.get("queue_name", "default"),
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/sources/7/diagnose?limit=4&background=true",
+            json={"listing_url": "https://new.example.com/news", "listing_selector": ".card"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["job"] == {
+        "id": 120,
+        "kind": "diagnose_source",
+        "queue": "playwright",
+        "status": "queued",
+        "progress": 0.0,
+        "attempts": 0,
+        "max_attempts": 3,
+        "payload": {
+            "source_id": 7,
+            "overrides": {"listing_url": "https://new.example.com/news", "listing_selector": ".card"},
+            "limit": 4,
+        },
+        "result": {},
+        "error": None,
+        "run_after": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+
 def test_create_monthly_digest_endpoint(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}

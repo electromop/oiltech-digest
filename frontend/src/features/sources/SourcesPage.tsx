@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   createSource,
-  diagnoseSource,
+  diagnoseSourceJob,
   listSourceHealth,
   listSources,
-  scrapeSource,
+  scrapeSourceJob,
   updateSource,
 } from "../../api/sources";
+import { getJob } from "../../api/jobs";
 import type { Source, SourceDiagnostics, SourceHealth, SourcePatch } from "../../api/types";
 import { SourceCard } from "./SourceCard";
 import { SourceFilters } from "./SourceFilters";
-import { normalizePatch } from "./sourceUtils";
+import { getSourceTriage, normalizePatch } from "./sourceUtils";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -20,18 +21,21 @@ type Props = {
 };
 
 type DraftMap = Record<number, SourcePatch>;
+type PendingJobMap = Record<number, { kind: "diagnose" | "scrape"; jobId: number; label: string }>;
 
 export function SourcesPage({ onUnauthorized, showToast }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [health, setHealth] = useState<SourceHealth[]>([]);
   const [diagnostics, setDiagnostics] = useState<Record<number, SourceDiagnostics>>({});
   const [drafts, setDrafts] = useState<DraftMap>({});
+  const [pendingJobs, setPendingJobs] = useState<PendingJobMap>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
   const [strategy, setStrategy] = useState("");
   const [enabled, setEnabled] = useState("");
   const [healthVerdict, setHealthVerdict] = useState("");
+  const [triageKey, setTriageKey] = useState("");
   const [newSourceName, setNewSourceName] = useState("");
   const [newSourceUrl, setNewSourceUrl] = useState("");
   const [newSourceFrequency, setNewSourceFrequency] = useState("ежедневно");
@@ -39,6 +43,77 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   useEffect(() => {
     void reload();
   }, []);
+
+  useEffect(() => {
+    const entries = Object.entries(pendingJobs);
+    if (!entries.length) return;
+
+    let cancelled = false;
+
+    async function poll() {
+      const results = await Promise.all(
+        entries.map(async ([sourceId, pending]) => {
+          try {
+            const job = await getJob(pending.jobId);
+            return { sourceId: Number(sourceId), pending, job };
+          } catch (error) {
+            return { sourceId: Number(sourceId), pending, error };
+          }
+        }),
+      );
+
+      if (cancelled) return;
+
+      let needsReload = false;
+
+      results.forEach((result) => {
+        if ("error" in result) {
+          clearPendingJob(result.sourceId);
+          handleError(result.error, "Не удалось получить статус фоновой задачи");
+          return;
+        }
+
+        if (result.job.status === "queued" || result.job.status === "running") {
+          const label = result.job.status === "running" ? `в работе ${Math.round(result.job.progress)}%` : "в очереди";
+          updatePendingJobLabel(result.sourceId, label);
+          return;
+        }
+
+        clearPendingJob(result.sourceId);
+
+        if (result.job.status === "failed") {
+          showToast(result.job.error || "Фоновая задача завершилась с ошибкой", "error");
+          return;
+        }
+
+        if (result.pending.kind === "diagnose") {
+          setDiagnostics((prev) => ({ ...prev, [result.sourceId]: result.job.result as SourceDiagnostics }));
+          showToast("Диагностика источника готова");
+          return;
+        }
+
+        if (result.pending.kind === "scrape") {
+          const stats = result.job.result?.stats as { added?: number; attempted?: number } | undefined;
+          showToast(`Скрапинг: добавлено ${stats?.added || 0}, дублей ${(stats?.attempted || 0) - (stats?.added || 0)}`);
+          needsReload = true;
+        }
+      });
+
+      if (needsReload) {
+        void reload();
+      }
+    }
+
+    void poll();
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pendingJobs]);
 
   async function reload() {
     try {
@@ -63,6 +138,29 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     showToast(message || fallback, "error");
   }
 
+  function setPendingJob(sourceId: number, kind: "diagnose" | "scrape", jobId: number, label: string) {
+    setPendingJobs((prev) => ({ ...prev, [sourceId]: { kind, jobId, label } }));
+  }
+
+  function clearPendingJob(sourceId: number) {
+    setPendingJobs((prev) => {
+      const next = { ...prev };
+      delete next[sourceId];
+      return next;
+    });
+  }
+
+  function updatePendingJobLabel(sourceId: number, label: string) {
+    setPendingJobs((prev) => {
+      const existing = prev[sourceId];
+      if (!existing || existing.label === label) return prev;
+      return {
+        ...prev,
+        [sourceId]: { ...existing, label },
+      };
+    });
+  }
+
   function getSourceHealth(sourceId: number) {
     return health.find((item) => Number(item.id) === Number(sourceId));
   }
@@ -76,6 +174,15 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     });
     return counts;
   }, [health]);
+
+  const triageCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    sources.forEach((source) => {
+      const triage = getSourceTriage(source, getSourceHealth(source.id), diagnostics[source.id]);
+      counts[triage.key] = (counts[triage.key] || 0) + 1;
+    });
+    return counts;
+  }, [diagnostics, health, sources]);
 
   const filteredSources = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -99,7 +206,8 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
           (!q || hay.includes(q)) &&
           (!strategy || source.parse_strategy === strategy) &&
           (!enabled || (enabled === "on" ? source.enabled : !source.enabled)) &&
-          (!healthVerdict || sourceHealth?.verdict === healthVerdict)
+          (!healthVerdict || sourceHealth?.verdict === healthVerdict) &&
+          (!triageKey || getSourceTriage(source, sourceHealth, diagnostics[source.id]).key === triageKey)
         );
       })
       .sort((left, right) => {
@@ -113,7 +221,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
         if (articleDelta !== 0) return articleDelta;
         return left.name.localeCompare(right.name, "ru");
       });
-  }, [enabled, health, healthVerdict, search, sources, strategy]);
+  }, [diagnostics, enabled, health, healthVerdict, search, sources, strategy, triageKey]);
 
   function currentPatch(source: Source) {
     return drafts[source.id] ?? {};
@@ -197,28 +305,22 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
 
   async function handleDiagnoseSource(source: Source) {
     try {
-      setBusy(true);
       const payload = normalizePatch(currentPatch(source));
-      const result = await diagnoseSource(source.id, payload);
-      setDiagnostics((prev) => ({ ...prev, [source.id]: result }));
-      showToast("Диагностика источника готова");
+      const response = await diagnoseSourceJob(source.id, payload);
+      setPendingJob(source.id, "diagnose", response.job.id, "диагностика в очереди");
+      showToast(`Диагностика поставлена в очередь: #${response.job.id}`);
     } catch (error) {
       handleError(error, "Не удалось выполнить диагностику");
-    } finally {
-      setBusy(false);
     }
   }
 
   async function handleScrapeSource(source: Source) {
     try {
-      setBusy(true);
-      const result = await scrapeSource(source.id);
-      showToast(`Скрапинг: добавлено ${result.stats.added}, дублей ${result.stats.attempted - result.stats.added}`);
-      await reload();
+      const response = await scrapeSourceJob(source.id);
+      setPendingJob(source.id, "scrape", response.job.id, "скрапинг в очереди");
+      showToast(`Скрапинг поставлен в очередь: #${response.job.id}`);
     } catch (error) {
       handleError(error, "Не удалось проверить listing");
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -314,20 +416,66 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
           </button>
         </div>
 
+        <div className="sourceTriageStats">
+          <button
+            type="button"
+            className={triageKey === "" ? "sourceStatCard active" : "sourceStatCard"}
+            onClick={() => setTriageKey("")}
+          >
+            <span className="sourceStatValue">{sources.length}</span>
+            <span className="sourceStatLabel">Все проблемы</span>
+          </button>
+          <button
+            type="button"
+            className={triageKey === "no_articles" ? "sourceStatCard active problem" : "sourceStatCard problem"}
+            onClick={() => setTriageKey("no_articles")}
+          >
+            <span className="sourceStatValue">{triageCounts.no_articles || 0}</span>
+            <span className="sourceStatLabel">0 статей</span>
+          </button>
+          <button
+            type="button"
+            className={triageKey === "stale" ? "sourceStatCard active warning" : "sourceStatCard warning"}
+            onClick={() => setTriageKey("stale")}
+          >
+            <span className="sourceStatValue">{triageCounts.stale || 0}</span>
+            <span className="sourceStatLabel">Застой</span>
+          </button>
+          <button
+            type="button"
+            className={triageKey === "access" ? "sourceStatCard active problem" : "sourceStatCard problem"}
+            onClick={() => setTriageKey("access")}
+          >
+            <span className="sourceStatValue">{triageCounts.access || 0}</span>
+            <span className="sourceStatLabel">Нет доступа</span>
+          </button>
+          <button
+            type="button"
+            className={triageKey === "content" ? "sourceStatCard active warning" : "sourceStatCard warning"}
+            onClick={() => setTriageKey("content")}
+          >
+            <span className="sourceStatValue">{triageCounts.content || 0}</span>
+            <span className="sourceStatLabel">Контент</span>
+          </button>
+        </div>
+
         <SourceFilters
           search={search}
           strategy={strategy}
           enabled={enabled}
           healthVerdict={healthVerdict}
+          triageKey={triageKey}
           onSearchChange={setSearch}
           onStrategyChange={setStrategy}
           onEnabledChange={setEnabled}
           onHealthChange={setHealthVerdict}
+          onTriageChange={setTriageKey}
           onReset={() => {
             setSearch("");
             setStrategy("");
             setEnabled("");
             setHealthVerdict("");
+            setTriageKey("");
           }}
         />
 
@@ -346,6 +494,8 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
                   health={sourceHealth}
                   diagnostic={diagnostic}
                   hasDraft={hasDraft}
+                  pending={Boolean(pendingJobs[source.id])}
+                  pendingLabel={pendingJobs[source.id]?.label || null}
                   currentField={(field) => String(currentField(source, field))}
                   onDraftChange={(field, value) => updateDraft(source.id, field, value)}
                   onToggle={(nextEnabled) => void handleToggleSource(source, nextEnabled)}

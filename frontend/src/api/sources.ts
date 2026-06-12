@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import type {
+  BackgroundJob,
   CreateSourcePayload,
   ScrapeResponse,
   Source,
@@ -37,8 +38,21 @@ export function diagnoseSource(sourceId: number, payload: SourcePatch) {
   });
 }
 
+export function diagnoseSourceJob(sourceId: number, payload: SourcePatch) {
+  return apiFetch<{ ok: boolean; job: BackgroundJob }>(`/api/sources/${sourceId}/diagnose?limit=5&background=true`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function scrapeSource(sourceId: number) {
   return apiFetch<ScrapeResponse>(`/api/sources/${sourceId}/scrape`, {
+    method: "POST",
+  });
+}
+
+export function scrapeSourceJob(sourceId: number) {
+  return apiFetch<{ ok: boolean; job: BackgroundJob }>(`/api/sources/${sourceId}/scrape?background=true`, {
     method: "POST",
   });
 }

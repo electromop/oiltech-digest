@@ -401,12 +401,21 @@ def diagnose_source_with_overrides(
     source_id: int,
     patch: SourcePatch,
     limit: int = Query(5, ge=1, le=20),
+    background: bool = False,
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     source = repository.get_source(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     overrides = patch.model_dump(exclude_unset=True)
+    if background:
+        queue_name = "playwright" if source.get("parse_strategy") == "playwright" else "default"
+        job = background_jobs.enqueue(
+            "diagnose_source",
+            {"source_id": source_id, "overrides": overrides, "limit": limit},
+            queue_name=queue_name,
+        )
+        return {"ok": True, "job": _job_payload(job)}
     return _clean(diagnose_source({**source, **overrides}, limit=limit))
 
 
