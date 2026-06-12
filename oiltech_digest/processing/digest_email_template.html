@@ -71,9 +71,9 @@
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                 <tr>
                   <td align="left" style="font-size:18px;line-height:20px;color:#003da6;font-weight:bold;">
-                    ГАЗПРОМ НЕФТЬ <span style="display:inline-block;color:#003da6;margin-left:12px;">/ ЭНЕРГИЯ В ЛЮДЯХ</span>
+                    {header_brand_text} <span style="display:inline-block;color:#003da6;margin-left:12px;">/ {header_brand_suffix}</span>
                   </td>
-                  <td align="right" style="font-size:14px;line-height:20px;color:#003da6;font-weight:bold;">БЛОК РАЗВИТИЯ БИЗНЕСА</td>
+                  <td align="right" style="font-size:14px;line-height:20px;color:#003da6;font-weight:bold;">{header_department_text}</td>
                 </tr>
               </table>
             </td>
@@ -108,7 +108,7 @@
           <!-- ГЛАВНОЕ ЗА ПЕРИОД: KPI-плашки выпуска -->
           <tr>
             <td style="padding:8px 36px 18px 36px;">
-              <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:28px;color:#003da6;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px;">Главное за период</div>
+              <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:28px;color:#003da6;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px;">{issue_highlights_title}</div>
               {highlights_html}
             </td>
           </tr>
@@ -116,7 +116,7 @@
           <!-- НОВОСТИ -->
           <tr>
             <td style="padding:0 36px 10px 36px;">
-              <div style="font-family:Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">НОВОСТИ</div>
+              <div style="font-family:Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{issue_news_title}</div>
               {news_items}
             </td>
           </tr>
@@ -129,12 +129,7 @@
                   <td align="center" style="padding-bottom:14px;">
                     <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
                       <tr>
-                        <td style="padding:0 7px;"><div style="width:36px;height:36px;background:#ffffff;border-radius:50%;text-align:center;line-height:36px;color:#0077ff;font-weight:bold;font-size:13px;font-family:Arial,Helvetica,sans-serif;">VK</div></td>
-                        <td style="padding:0 7px;"><div style="width:36px;height:36px;background:#ffffff;border-radius:50%;text-align:center;line-height:36px;color:#29a9eb;font-size:18px;">&#9992;</div></td>
-                        <td style="padding:0 7px;"><div style="width:36px;height:36px;background:#ffffff;border-radius:50%;text-align:center;line-height:36px;color:#ff0000;font-size:16px;">&#9658;</div></td>
-                        <td style="padding:0 7px;"><div style="width:36px;height:36px;background:#ffffff;border-radius:50%;text-align:center;line-height:36px;color:#262d3c;font-weight:bold;font-size:13px;font-family:Arial,Helvetica,sans-serif;">RT</div></td>
-                        <td style="padding:0 7px;"><div style="width:36px;height:36px;background:#ffffff;border-radius:50%;text-align:center;line-height:36px;color:#262d3c;font-weight:bold;font-size:15px;font-family:Arial,Helvetica,sans-serif;">&#1044;</div></td>
-                        <td style="padding:0 7px;"><div style="width:36px;height:36px;background:#ffffff;border-radius:50%;text-align:center;line-height:36px;color:#e83d08;font-weight:bold;font-size:13px;font-family:Arial,Helvetica,sans-serif;">&#1069;+</div></td>
+                        {footer_socials_html}
                       </tr>
                     </table>
                   </td>

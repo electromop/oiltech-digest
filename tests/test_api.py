@@ -271,6 +271,66 @@ def test_source_health_endpoint(monkeypatch):
     ]
 
 
+def test_digest_branding_endpoints(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    branding = {
+        "header": {
+            "brand_text": "Тест бренд",
+            "brand_suffix": "Тест слоган",
+            "department_text": "Тест департамент",
+        },
+        "hero": {
+            "badge": "ТЕСТ",
+            "headline": "Тестовый дайджест",
+            "subtitle": "Подзаголовок",
+            "image_url": "https://example.com/hero.jpg",
+        },
+        "issue": {
+            "title_template": "Дайджест",
+            "title_template_with_month": "Дайджест · {month}",
+            "period_label_all": "всё время",
+            "preheader": "Прехедер",
+            "intro_template": "Интро",
+            "intro_template_with_month": "Интро {month}",
+            "highlights_title": "Итоги",
+            "news_title": "Сигналы",
+            "read_more_label": "Открыть",
+            "empty_summary_text": "Нет сути",
+            "preview_empty_text": "Пусто",
+        },
+        "footer": {
+            "contact_text": "Пишите нам",
+            "contact_email": "digest@example.com",
+            "note": "Тест",
+            "socials": [{"label": "Portal", "accent": "#111111", "text": "P"}],
+        },
+        "highlights": {
+            "analytics_source_keywords": ["rystad"],
+            "analytics_category_keywords": ["аналит"],
+            "business_category_keywords": ["контракт"],
+            "cards": [
+                {"metric": "total", "icon": "doc", "prefix": "", "suffix": "", "noun_one": "новость", "noun_few": "новости", "noun_many": "новостей"},
+                {"metric": "analytics", "icon": "chart", "prefix": "аналитических", "suffix": "", "noun_one": "материал", "noun_few": "материала", "noun_many": "материалов"},
+                {"metric": "business", "icon": "people", "prefix": "", "suffix": "для бизнеса", "noun_one": "возможность", "noun_few": "возможности", "noun_many": "возможностей"},
+            ],
+        },
+    }
+    monkeypatch.setattr(api, "get_digest_branding", lambda: branding)
+    monkeypatch.setattr(api, "save_digest_branding", lambda payload: payload)
+    try:
+        client = TestClient(app)
+        get_response = client.get("/api/digest-branding")
+        put_response = client.put("/api/digest-branding", json=branding)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert get_response.status_code == 200
+    assert get_response.json() == branding
+    assert put_response.status_code == 200
+    assert put_response.json() == {"ok": True, "branding": branding}
+
+
 def test_list_articles_applies_filters_and_score_items(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}

@@ -155,6 +155,63 @@ export type DigestContent = {
   news: DigestContentItem[];
 };
 
+export type DigestBrandingSocial = {
+  label: string;
+  accent: string;
+  text: string;
+};
+
+export type DigestHighlightRules = {
+  analytics_source_keywords: string[];
+  analytics_category_keywords: string[];
+  business_category_keywords: string[];
+  cards: DigestHighlightCard[];
+};
+
+export type DigestHighlightCard = {
+  metric: "total" | "analytics" | "business";
+  icon: "doc" | "chart" | "people";
+  prefix: string;
+  suffix: string;
+  noun_one: string;
+  noun_few: string;
+  noun_many: string;
+};
+
+export type DigestBranding = {
+  header: {
+    brand_text: string;
+    brand_suffix: string;
+    department_text: string;
+  };
+  hero: {
+    badge: string;
+    headline: string;
+    subtitle: string;
+    image_url: string;
+  };
+  issue: {
+    title_template: string;
+    title_template_with_month: string;
+    period_label_all: string;
+    preheader: string;
+    intro_template: string;
+    intro_template_with_month: string;
+    highlights_title: string;
+    news_title: string;
+    read_more_label: string;
+    empty_summary_text: string;
+    preview_empty_text: string;
+  };
+  footer: {
+    contact_text: string;
+    contact_email: string;
+    note: string;
+    socials: DigestBrandingSocial[];
+  };
+  highlights: DigestHighlightRules;
+};
+
 export type MonthlyDigestDraft = {
   id: number;
   month: string;

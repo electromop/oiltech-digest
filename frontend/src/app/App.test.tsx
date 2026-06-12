@@ -55,6 +55,51 @@ const job = {
   finished_at: "2026-06-07T06:00:03Z",
 };
 
+const digestBranding = {
+  header: {
+    brand_text: "ГАЗПРОМ НЕФТЬ",
+    brand_suffix: "ЭНЕРГИЯ В ЛЮДЯХ",
+    department_text: "БЛОК РАЗВИТИЯ БИЗНЕСА",
+  },
+  hero: {
+    badge: "НОВОСТИ",
+    headline: "НЕФТЕСЕРВИСНЫЙ ДАЙДЖЕСТ",
+    subtitle: "Технологии, рынок и возможности для бизнеса",
+    image_url: "",
+  },
+  issue: {
+    title_template: "Нефтесервисный дайджест",
+    title_template_with_month: "Нефтесервисный дайджест · {month}",
+    period_label_all: "за всё время",
+    preheader: "Ключевые новости и обзоры нефтесервисного рынка",
+    intro_template:
+      "Уважаемые коллеги! Представляем ключевые новости и обзоры нефтесервисного рынка, которые помогают отслеживать технологические тренды, рыночную динамику и возможности для развития бизнеса.",
+    intro_template_with_month:
+      "Уважаемые коллеги! Представляем ключевые новости и обзоры за {month}, которые помогают отслеживать технологические тренды, рыночную динамику и возможности для развития нефтесервисного бизнеса.",
+    highlights_title: "Главное за период",
+    news_title: "Новости",
+    read_more_label: "ЧИТАТЬ ДАЛЕЕ",
+    empty_summary_text: "Суть ещё не сформирована.",
+    preview_empty_text: "В текущей выборке нет сигналов для превью.",
+  },
+  footer: {
+    contact_text: "При возникновении вопросов обращайтесь в Блок развития бизнеса",
+    contact_email: "Rodionov.VVL@gazprom-neft.ru",
+    note: "Внутренняя корпоративная рассылка",
+    socials: [{ label: "VK", accent: "#0077ff", text: "VK" }],
+  },
+  highlights: {
+    analytics_source_keywords: ["rystad"],
+    analytics_category_keywords: ["аналит"],
+    business_category_keywords: ["контракт"],
+    cards: [
+      { metric: "total", icon: "doc", prefix: "", suffix: "", noun_one: "новость", noun_few: "новости", noun_many: "новостей" },
+      { metric: "analytics", icon: "chart", prefix: "аналитических", suffix: "", noun_one: "материал", noun_few: "материала", noun_many: "материалов" },
+      { metric: "business", icon: "people", prefix: "", suffix: "для бизнеса", noun_one: "возможность", noun_few: "возможности", noun_many: "возможностей" },
+    ],
+  },
+};
+
 function jsonResponse(payload: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(payload), {
     status: init.status ?? 200,
@@ -104,6 +149,9 @@ describe("App smoke", () => {
             sources: 1,
           }),
         );
+      }
+      if (url === "/api/digest-branding") {
+        return Promise.resolve(jsonResponse(method === "PUT" ? { ok: true, branding: digestBranding } : digestBranding));
       }
       if (url === "/api/jobs/digest-export" && method === "POST") {
         return Promise.resolve(jsonResponse({ ok: true, job }));

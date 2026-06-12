@@ -27,7 +27,14 @@ from oiltech_digest.processing.pipeline import (
 )
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
-from oiltech_digest.processing.digest import build_digest_content, render_digest_email, save_digest_draft, write_digest_export
+from oiltech_digest.processing.digest import (
+    build_digest_content,
+    get_digest_branding,
+    render_digest_email,
+    save_digest_branding,
+    save_digest_draft,
+    write_digest_export,
+)
 
 WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -105,6 +112,61 @@ class DigestExportJobRequest(BaseModel):
     export_format: str = "pdf"
     limit: int = 100
     min_score: float = 0
+
+
+class DigestSocialIn(BaseModel):
+    label: str
+    accent: str
+    text: str
+
+
+class DigestHeaderBrandingIn(BaseModel):
+    brand_text: str
+    brand_suffix: str
+    department_text: str
+
+
+class DigestHeroBrandingIn(BaseModel):
+    badge: str
+    headline: str
+    subtitle: str
+    image_url: str = ""
+
+
+class DigestIssueBrandingIn(BaseModel):
+    title_template: str
+    title_template_with_month: str
+    period_label_all: str
+    preheader: str
+    intro_template: str
+    intro_template_with_month: str
+    highlights_title: str
+    news_title: str
+    read_more_label: str
+    empty_summary_text: str
+    preview_empty_text: str
+
+
+class DigestFooterBrandingIn(BaseModel):
+    contact_text: str
+    contact_email: str
+    note: str
+    socials: list[DigestSocialIn] = []
+
+
+class DigestHighlightsBrandingIn(BaseModel):
+    analytics_source_keywords: list[str] = []
+    analytics_category_keywords: list[str] = []
+    business_category_keywords: list[str] = []
+    cards: list[dict[str, str]] = []
+
+
+class DigestBrandingIn(BaseModel):
+    header: DigestHeaderBrandingIn
+    hero: DigestHeroBrandingIn
+    issue: DigestIssueBrandingIn
+    footer: DigestFooterBrandingIn
+    highlights: DigestHighlightsBrandingIn = DigestHighlightsBrandingIn()
 
 
 class AuthPayload(BaseModel):
@@ -477,6 +539,16 @@ def digest_content(month: str = "", limit: int = Query(100, ge=1, le=500),
     return _clean(build_digest_content(month=month, limit=limit, min_score=min_score))
 
 
+@app.get("/api/digest-branding")
+def digest_branding(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    return _clean(get_digest_branding())
+
+
+@app.put("/api/digest-branding")
+def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    return {"ok": True, "branding": _clean(save_digest_branding(payload.model_dump()))}
+
+
 @app.post("/api/monthly-digests")
 def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     return _clean(save_digest_draft(month=payload.month, limit=payload.limit, min_score=payload.min_score))
@@ -540,7 +612,7 @@ def download_job_result(job_id: int, user: dict[str, Any] = Depends(require_user
 
 @app.post("/api/jobs/digest-export")
 def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    if payload.export_format not in {"pdf", "doc", "html", "json"}:
+    if payload.export_format not in {"pdf", "doc", "docx", "html", "json"}:
         raise HTTPException(status_code=400, detail="Unsupported export format")
     if payload.limit < 1 or payload.limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
@@ -560,7 +632,7 @@ def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Dep
 @app.get("/api/digest-export")
 def digest_export(
     month: str = "",
-    export_format: str = Query("pdf", pattern="^(pdf|doc|html|json)$"),
+    export_format: str = Query("pdf", pattern="^(pdf|docx?|html|json)$"),
     limit: int = Query(100, ge=1, le=500),
     min_score: float = 0,
     user: dict[str, Any] = Depends(require_user),
