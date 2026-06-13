@@ -55,6 +55,46 @@ const job = {
   finished_at: "2026-06-07T06:00:03Z",
 };
 
+const maintenanceStatus = {
+  retention: {
+    stale_minutes: 60,
+    background_job_days: 30,
+    export_job_days: 14,
+  },
+  expired_sessions: 2,
+  stale_running_jobs: 1,
+  cleanup_candidates: {
+    background_jobs: 5,
+    export_jobs: 3,
+  },
+};
+
+const maintenanceBenchmark = {
+  iterations: 3,
+  warn_ms: 800,
+  params: {
+    articles_limit: 200,
+    source_limit: 150,
+    jobs_limit: 100,
+    month: null,
+    digest_limit: 100,
+    min_score: 0,
+  },
+  benchmarks: [
+    { name: "articles_list", runs: 3, rows: 120, p50_ms: 12.5, p95_ms: 28.4, max_ms: 30.1, status: "ok" },
+    { name: "source_health", runs: 3, rows: 60, p50_ms: 15.2, p95_ms: 812.3, max_ms: 820.0, status: "warn" },
+  ],
+  counts: {
+    sources: 120,
+    articles: 6000,
+    article_cards: 5800,
+    article_tags: 9200,
+    article_scores: 5700,
+    background_jobs: 84,
+  },
+  warnings: ["source_health"],
+};
+
 const digestBranding = {
   header: {
     brand_text: "ГАЗПРОМ НЕФТЬ",
@@ -162,6 +202,26 @@ describe("App smoke", () => {
       if (url === "/api/jobs/17/download") {
         return Promise.resolve(downloadResponse());
       }
+      if (url === "/api/maintenance/status") {
+        return Promise.resolve(jsonResponse(maintenanceStatus));
+      }
+      if (url === "/api/maintenance/cleanup" && method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            ok: true,
+            result: {
+              expired_sessions: 2,
+              background_jobs: 5,
+              background_job_days: 30,
+              export_jobs: 3,
+              export_job_days: 14,
+            },
+          }),
+        );
+      }
+      if (url === "/api/maintenance/benchmark?iterations=3") {
+        return Promise.resolve(jsonResponse(maintenanceBenchmark));
+      }
       if (url.startsWith("/api/jobs")) {
         return Promise.resolve(jsonResponse([job]));
       }
@@ -253,5 +313,27 @@ describe("App smoke", () => {
     expect(screen.getByText("digest_export")).toBeInTheDocument();
     expect(screen.getAllByText("playwright").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole("button", { name: "Фоновые задачи" })).not.toBeInTheDocument();
+  });
+
+  it("opens hidden maintenance page from query string without adding it to navigation", async () => {
+    window.history.replaceState(null, "", "/?screen=maintenance");
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Service maintenance" })).toBeInTheDocument();
+    expect(screen.getByText("Истекшие сессии")).toBeInTheDocument();
+    expect(screen.getByText("Background jobs к cleanup")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Service maintenance" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Запустить benchmark" }));
+
+    expect(await screen.findByText("articles_list")).toBeInTheDocument();
+    expect(screen.getAllByText("source_health").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
   });
 });

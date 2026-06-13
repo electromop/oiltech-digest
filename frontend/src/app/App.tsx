@@ -7,11 +7,12 @@ import type { Article, DashboardStats, User } from "../api/types";
 import { ArticlesPage } from "../features/articles/ArticlesPage";
 import { DigestPage } from "../features/digest/DigestPage";
 import { JobsPage } from "../features/jobs/JobsPage";
+import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 
-type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags" | "jobs";
+type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags" | "jobs" | "maintenance";
 
 type ScreenDef = {
   id: ScreenId;
@@ -92,7 +93,9 @@ const navGroups: NavGroup[] = [
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
-  return value === "jobs" ? "jobs" : "articles";
+  if (value === "jobs") return "jobs";
+  if (value === "maintenance") return "maintenance";
+  return "articles";
 }
 
 export function App() {
@@ -198,13 +201,17 @@ export function App() {
     currentScreen = <JobsPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
   }
 
+  if (activeScreen === "maintenance") {
+    currentScreen = <MaintenancePage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+  }
+
   function switchScreen(screenId: ScreenId) {
     setActiveScreen(screenId);
-    if (screenId === "jobs") {
-      window.history.replaceState(null, "", "?screen=jobs");
+    if (screenId === "jobs" || screenId === "maintenance") {
+      window.history.replaceState(null, "", `?screen=${screenId}`);
       return;
     }
-    if (window.location.search.includes("screen=jobs")) {
+    if (window.location.search.includes("screen=jobs") || window.location.search.includes("screen=maintenance")) {
       window.history.replaceState(null, "", window.location.pathname || "/");
     }
   }

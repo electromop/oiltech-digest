@@ -86,7 +86,12 @@ export function JobsPage({ onUnauthorized, showToast }: Props) {
         <div>
           <h1>Фоновые задачи</h1>
         </div>
-        <div className="statusPill">Скрытая страница</div>
+        <div className="panelActions">
+          <a className="ghostButton compactButton" href="?screen=maintenance">
+            Service maintenance
+          </a>
+          <div className="statusPill">Скрытая страница</div>
+        </div>
       </header>
 
       <section className="statsGridReact jobsStats">

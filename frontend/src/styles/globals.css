@@ -252,6 +252,13 @@ button {
   min-height: 32px;
 }
 
+.panelActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .pageHeader,
 .heroGrid,
 .panelHeader {
@@ -891,6 +898,89 @@ button {
   grid-template-columns: 180px 180px minmax(180px, 1fr) 140px;
   gap: 8px;
   align-items: end;
+}
+
+.maintenanceGrid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.maintenanceReadonly input {
+  background: rgba(248, 250, 252, 0.85);
+}
+
+.maintenanceActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.maintenanceResult {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(248, 250, 252, 0.85);
+}
+
+.maintenanceResultGrid {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--text-soft);
+}
+
+.panelHint {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+}
+
+.benchmarkStack {
+  margin-top: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.benchmarkTable {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.benchmarkRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) 90px 90px 90px 90px 70px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  font-size: 0.82rem;
+}
+
+.benchmarkRow:first-child {
+  border-top: 0;
+}
+
+.benchmarkHead {
+  background: rgba(248, 250, 252, 0.9);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.benchmarkOk {
+  color: #166534;
+  font-weight: 700;
+}
+
+.benchmarkWarn {
+  color: #b45309;
+  font-weight: 700;
 }
 
 .jobsTableWrap {
@@ -1576,6 +1666,20 @@ button {
   background: rgba(255, 255, 255, 0.68);
 }
 
+.emptyState {
+  padding: 20px;
+  text-align: center;
+}
+
+.emptyState strong,
+.emptyState span {
+  display: block;
+}
+
+.emptyState span {
+  margin-top: 6px;
+}
+
 .authShellReact {
   min-height: 100vh;
   display: grid;
@@ -1690,6 +1794,7 @@ button {
   .sourceCreateGrid,
   .sourceFiltersGrid,
   .jobsFilters,
+  .maintenanceGrid,
   .sourceHealthStats,
   .digestFiltersGrid,
   .digestFiltersRow,
@@ -1705,6 +1810,14 @@ button {
 
   .sourceTop {
     grid-template-columns: 1fr;
+  }
+
+  .benchmarkTable {
+    overflow-x: auto;
+  }
+
+  .benchmarkRow {
+    min-width: 620px;
   }
 
   .mobileNav {

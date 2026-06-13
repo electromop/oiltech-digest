@@ -132,6 +132,54 @@ export type BackgroundJob = {
   finished_at: string | null;
 };
 
+export type MaintenanceStatus = {
+  retention: {
+    stale_minutes: number;
+    background_job_days: number;
+    export_job_days: number;
+  };
+  expired_sessions: number;
+  stale_running_jobs: number;
+  cleanup_candidates: {
+    background_jobs: number;
+    export_jobs: number;
+  };
+};
+
+export type MaintenanceCleanupResult = {
+  expired_sessions: number;
+  background_jobs: number;
+  background_job_days: number;
+  export_jobs: number;
+  export_job_days: number;
+};
+
+export type ReadinessBenchmarkCheck = {
+  name: string;
+  runs: number;
+  rows: number;
+  p50_ms: number;
+  p95_ms: number;
+  max_ms: number;
+  status: "ok" | "warn";
+};
+
+export type ReadinessBenchmarkReport = {
+  iterations: number;
+  warn_ms: number;
+  params: {
+    articles_limit: number;
+    source_limit: number;
+    jobs_limit: number;
+    month: string | null;
+    digest_limit: number;
+    min_score: number;
+  };
+  benchmarks: ReadinessBenchmarkCheck[];
+  counts: Record<string, number>;
+  warnings: string[];
+};
+
 export type ArticlePatch = {
   status?: "new" | "review" | "digest" | "archive";
   selected_for_digest?: boolean;
