@@ -75,7 +75,14 @@ def worker_loop(
     poll_seconds = config.BACKGROUND_JOB_POLL_SECONDS if poll_seconds is None else poll_seconds
     stale_minutes = config.BACKGROUND_JOB_STALE_MINUTES if stale_minutes is None else stale_minutes
     queue_names = queue_names or config.BACKGROUND_JOB_QUEUES
-    repository.requeue_stale_background_jobs(stale_minutes)
+    requeued = repository.requeue_stale_background_jobs(stale_minutes)
+    if requeued:
+        logger.warning(
+            "jobs_requeued_stale count=%s stale_minutes=%s queues=%s",
+            requeued,
+            stale_minutes,
+            ",".join(queue_names),
+        )
 
     while True:
         job = repository.claim_next_background_job(queue_names=queue_names)
@@ -84,7 +91,13 @@ def worker_loop(
                 return
             time.sleep(poll_seconds)
             continue
-        logger.info("background job %s/%s started", job["id"], job["kind"])
+        logger.info(
+            "background_job_started job_id=%s kind=%s queue=%s attempts=%s",
+            job["id"],
+            job["kind"],
+            job.get("queue_name"),
+            job.get("attempts"),
+        )
         run_claimed(job)
 
 
@@ -101,11 +114,22 @@ def _execute(job: dict[str, Any], *, mark_running: bool) -> None:
             job = repository.get_background_job(job_id) or job
         result = handler(dict(job.get("payload_json") or {}), job_id)
         repository.finish_background_job(job_id, result)
-        logger.info("background job %s/%s finished", job["id"], job["kind"])
+        logger.info(
+            "background_job_finished job_id=%s kind=%s queue=%s",
+            job["id"],
+            job["kind"],
+            job.get("queue_name"),
+        )
     except Exception as exc:  # noqa: BLE001 - terminal job errors must be recorded
         retry_delay = _retry_delay_seconds(job)
         repository.fail_background_job(int(job["id"]), str(exc), retry_delay_seconds=retry_delay)
-        logger.exception("background job %s/%s failed", job["id"], job["kind"])
+        logger.exception(
+            "background_job_failed job_id=%s kind=%s queue=%s retry_delay_seconds=%s",
+            job["id"],
+            job["kind"],
+            job.get("queue_name"),
+            retry_delay,
+        )
 
 
 def _retry_delay_seconds(job: dict[str, Any]) -> int | None:

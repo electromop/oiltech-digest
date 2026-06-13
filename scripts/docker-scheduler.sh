@@ -27,6 +27,8 @@ run_required_step() {
 CYCLE_INTERVAL_SECONDS="${CYCLE_INTERVAL_SECONDS:-21600}"
 RUN_DISCOVER_ON_START="${RUN_DISCOVER_ON_START:-1}"
 DISCOVER_EVERY_CYCLES="${DISCOVER_EVERY_CYCLES:-4}"
+RUN_MAINTENANCE_ON_START="${RUN_MAINTENANCE_ON_START:-1}"
+MAINTENANCE_EVERY_CYCLES="${MAINTENANCE_EVERY_CYCLES:-24}"
 DISCOVER_TIMEOUT="${DISCOVER_TIMEOUT:-4}"
 DISCOVER_WORKERS="${DISCOVER_WORKERS:-10}"
 PARSE_WORKERS="${PARSE_WORKERS:-10}"
@@ -56,6 +58,12 @@ fi
 cycle=0
 while true; do
   log "Cycle ${cycle} started"
+
+  if [ "$RUN_MAINTENANCE_ON_START" = "1" ] && [ "$cycle" -eq 0 ]; then
+    run_step "maintenance-cleanup" python -m oiltech_digest.cli maintenance-cleanup
+  elif [ "$MAINTENANCE_EVERY_CYCLES" -gt 0 ] && [ $((cycle % MAINTENANCE_EVERY_CYCLES)) -eq 0 ]; then
+    run_step "maintenance-cleanup" python -m oiltech_digest.cli maintenance-cleanup
+  fi
 
   if [ "$RUN_DISCOVER_ON_START" = "1" ] && [ "$cycle" -eq 0 ]; then
     run_step "discover-rss" python -m oiltech_digest.cli discover-rss --workers "$DISCOVER_WORKERS" --timeout "$DISCOVER_TIMEOUT"

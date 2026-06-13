@@ -277,6 +277,18 @@ def delete_user_session(session_token: str) -> None:
         conn.commit()
 
 
+def delete_expired_user_sessions() -> int:
+    with get_connection() as conn:
+        cur = conn.execute("DELETE FROM user_sessions WHERE expires_at <= now()")
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def count_expired_user_sessions() -> int:
+    with get_connection() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM user_sessions WHERE expires_at <= now()").fetchone()[0])
+
+
 def count_users() -> int:
     with get_connection() as conn:
         return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -516,6 +528,83 @@ def requeue_stale_background_jobs(stale_minutes: int) -> int:
         )
         conn.commit()
         return cur.rowcount or 0
+
+
+def count_stale_running_background_jobs(stale_minutes: int) -> int:
+    with get_connection() as conn:
+        return int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM background_jobs
+                WHERE status = 'running'
+                  AND started_at < now() - (%s::text || ' minutes')::interval
+                """,
+                (stale_minutes,),
+            ).fetchone()[0]
+        )
+
+
+def cleanup_finished_background_jobs(retention_days: int) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM background_jobs
+            WHERE status IN ('ok', 'failed')
+              AND COALESCE(finished_at, started_at, created_at)
+                  < now() - (%s::text || ' days')::interval
+            """,
+            (retention_days,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def count_finished_background_jobs_eligible_for_cleanup(retention_days: int) -> int:
+    with get_connection() as conn:
+        return int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM background_jobs
+                WHERE status IN ('ok', 'failed')
+                  AND COALESCE(finished_at, started_at, created_at)
+                      < now() - (%s::text || ' days')::interval
+                """,
+                (retention_days,),
+            ).fetchone()[0]
+        )
+
+
+def cleanup_finished_export_jobs(retention_days: int) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM export_jobs
+            WHERE status IN ('ok', 'failed')
+              AND COALESCE(finished_at, started_at)
+                  < now() - (%s::text || ' days')::interval
+            """,
+            (retention_days,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def count_finished_export_jobs_eligible_for_cleanup(retention_days: int) -> int:
+    with get_connection() as conn:
+        return int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM export_jobs
+                WHERE status IN ('ok', 'failed')
+                  AND COALESCE(finished_at, started_at)
+                      < now() - (%s::text || ' days')::interval
+                """,
+                (retention_days,),
+            ).fetchone()[0]
+        )
 
 
 def _jsonable(value):

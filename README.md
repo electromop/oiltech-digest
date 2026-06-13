@@ -187,6 +187,8 @@ docker-compose.yml   # PostgreSQL 16 + app + scheduler
 | Переменная | Значение |
 |---|---|
 | `CYCLE_INTERVAL_SECONDS=21600` | период цикла scheduler (6 ч) |
+| `RUN_MAINTENANCE_ON_START=1` | запуск service-cleanup на первом цикле scheduler |
+| `MAINTENANCE_EVERY_CYCLES=24` | как часто scheduler повторяет service-cleanup |
 | `HTTP_MIN_INTERVAL_SECONDS=1.5` | пауза между запросами к одному хосту |
 | `HTTP_BLOCK_COOLDOWN_SECONDS=900` | cooldown после 403/429 |
 | `REQUEST_ARTICLE_LIMIT=6` | статей с одного listing за цикл |

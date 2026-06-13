@@ -150,3 +150,86 @@ def test_insert_article_is_idempotent_by_url_against_real_db(isolated_db):
         ).fetchone()
 
     assert row == (1, "First title")
+
+
+def test_repository_cleanup_removes_only_expired_and_old_terminal_records(isolated_db):
+    now = datetime.now(timezone.utc)
+
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash)
+            VALUES ('cleanup@example.com', 'salt', 'hash')
+            RETURNING id
+            """
+        ).fetchone()[0]
+
+        conn.execute(
+            """
+            INSERT INTO user_sessions (user_id, session_token, expires_at, created_at, last_seen_at)
+            VALUES
+              (%s, 'expired-session', %s, %s, %s),
+              (%s, 'active-session', %s, %s, %s)
+            """,
+            (
+                user_id,
+                now - timedelta(days=1),
+                now - timedelta(days=2),
+                now - timedelta(days=1),
+                user_id,
+                now + timedelta(days=10),
+                now,
+                now,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO background_jobs
+              (kind, status, progress, payload_json, finished_at, created_at)
+            VALUES
+              ('old_ok', 'ok', 100, '{}'::jsonb, %s, %s),
+              ('fresh_ok', 'ok', 100, '{}'::jsonb, %s, %s),
+              ('running_job', 'running', 20, '{}'::jsonb, NULL, %s)
+            """,
+            (
+                now - timedelta(days=40),
+                now - timedelta(days=40),
+                now - timedelta(days=5),
+                now - timedelta(days=5),
+                now - timedelta(days=40),
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO export_jobs (export_type, format, status, started_at, finished_at)
+            VALUES
+              ('monthly_digest', 'pdf', 'failed', %s, %s),
+              ('monthly_digest', 'html', 'ok', %s, %s)
+            """,
+            (
+                now - timedelta(days=50),
+                now - timedelta(days=50),
+                now - timedelta(days=3),
+                now - timedelta(days=3),
+            ),
+        )
+        conn.commit()
+
+    assert repository.delete_expired_user_sessions() == 1
+    assert repository.cleanup_finished_background_jobs(retention_days=30) == 1
+    assert repository.cleanup_finished_export_jobs(retention_days=30) == 1
+
+    with connection.get_connection() as conn:
+        session_tokens = conn.execute("SELECT session_token FROM user_sessions ORDER BY session_token").fetchall()
+        background_statuses = conn.execute(
+            "SELECT kind, status FROM background_jobs ORDER BY kind"
+        ).fetchall()
+        export_statuses = conn.execute(
+            "SELECT format, status FROM export_jobs ORDER BY format"
+        ).fetchall()
+
+    assert session_tokens == [("active-session",)]
+    assert background_statuses == [("fresh_ok", "ok"), ("running_job", "running")]
+    assert export_statuses == [("html", "ok")]

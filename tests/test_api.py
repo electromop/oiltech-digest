@@ -331,6 +331,59 @@ def test_digest_branding_endpoints(monkeypatch):
     assert put_response.json() == {"ok": True, "branding": branding}
 
 
+def test_readiness_endpoint_reports_ok(monkeypatch):
+    app = api.app
+    monkeypatch.setattr(
+        api,
+        "readiness_check",
+        lambda: {
+            "ok": True,
+            "database": {"ok": True},
+            "schema": {"ok": True, "missing_tables": []},
+            "jobs": {"queued_or_running": 0, "stale_running": 0, "stale_minutes": 60},
+            "articles": 10,
+        },
+    )
+    client = TestClient(app)
+    response = client.get("/api/readiness")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["jobs"]["stale_running"] == 0
+
+
+def test_readiness_endpoint_returns_503_for_not_ready(monkeypatch):
+    app = api.app
+    monkeypatch.setattr(
+        api,
+        "readiness_check",
+        lambda: {
+            "ok": False,
+            "database": {"ok": True},
+            "schema": {"ok": False, "missing_tables": ["background_jobs"]},
+            "jobs": {"queued_or_running": 3, "stale_running": 1, "stale_minutes": 60},
+            "articles": 10,
+        },
+    )
+    client = TestClient(app)
+    response = client.get("/api/readiness")
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["schema"]["missing_tables"] == ["background_jobs"]
+
+
+def test_readiness_endpoint_returns_503_for_db_error(monkeypatch):
+    app = api.app
+    monkeypatch.setattr(api, "readiness_check", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
+    client = TestClient(app)
+    response = client.get("/api/readiness")
+
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "database": {"ok": False}, "error": "db down"}
+
+
 def test_list_articles_applies_filters_and_score_items(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
@@ -653,3 +706,92 @@ def test_enqueue_process_endpoint(monkeypatch):
     assert response.json()["job"]["kind"] == "process_articles"
     assert response.json()["job"]["queue"] == "ai"
     assert response.json()["job"]["payload"]["article_ids"] == [1, 2]
+
+
+def test_maintenance_status_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(
+        api,
+        "maintenance_status",
+        lambda: {
+            "retention": {"stale_minutes": 60, "background_job_days": 30, "export_job_days": 14},
+            "expired_sessions": 2,
+            "stale_running_jobs": 1,
+            "cleanup_candidates": {"background_jobs": 5, "export_jobs": 3},
+        },
+    )
+    try:
+        client = TestClient(app)
+        response = client.get("/api/maintenance/status")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["expired_sessions"] == 2
+    assert response.json()["cleanup_candidates"]["background_jobs"] == 5
+
+
+def test_maintenance_cleanup_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    captured = {}
+
+    def fake_cleanup(**kwargs):
+        captured.update(kwargs)
+        return {"expired_sessions": 1, "background_jobs": 4, "background_job_days": 10, "export_jobs": 2, "export_job_days": 5}
+
+    monkeypatch.setattr(api, "maintenance_cleanup", fake_cleanup)
+    try:
+        client = TestClient(app)
+        response = client.post("/api/maintenance/cleanup", json={"background_job_days": 10, "export_job_days": 5})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {"background_job_days": 10, "export_job_days": 5}
+    assert response.json()["ok"] is True
+    assert response.json()["result"]["background_jobs"] == 4
+
+
+def test_maintenance_cleanup_endpoint_rejects_invalid_retention():
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    try:
+        client = TestClient(app)
+        response = client.post("/api/maintenance/cleanup", json={"background_job_days": 0})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "background_job_days" in response.json()["detail"]
+
+
+def test_maintenance_benchmark_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    captured = {}
+
+    def fake_benchmark(**kwargs):
+        captured.update(kwargs)
+        return {
+            "iterations": kwargs["iterations"],
+            "warn_ms": kwargs["warn_ms"],
+            "params": {"articles_limit": kwargs["articles_limit"]},
+            "benchmarks": [{"name": "articles_list", "status": "ok", "rows": 10, "p50_ms": 12.0, "p95_ms": 20.0, "max_ms": 25.0}],
+            "counts": {"articles": 42},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(api, "run_readiness_benchmark", fake_benchmark)
+    try:
+        client = TestClient(app)
+        response = client.get("/api/maintenance/benchmark?iterations=2&articles_limit=150")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured["iterations"] == 2
+    assert captured["articles_limit"] == 150
+    assert response.json()["counts"]["articles"] == 42
+    assert response.json()["benchmarks"][0]["name"] == "articles_list"

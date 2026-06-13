@@ -13,10 +13,9 @@ import time
 
 
 def _setup_logging(verbose: bool) -> None:
-    logging.basicConfig(
-        level=logging.INFO if verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    from oiltech_digest.logging_utils import setup_logging
+
+    setup_logging("cli", verbose=verbose, force=True)
 
 
 def cmd_init_db(args: argparse.Namespace) -> None:
@@ -26,6 +25,20 @@ def cmd_init_db(args: argparse.Namespace) -> None:
     print(f"БД инициализирована. Таблиц в схеме: {len(tables)}")
     for t in tables:
         print(f"  - {t}")
+
+
+def cmd_schema_check(args: argparse.Namespace) -> None:
+    from oiltech_digest.readiness import schema_check
+
+    report = schema_check()
+    if report["ok"]:
+        print(f"schema-check: ok, required_tables={len(report['required_tables'])}")
+        return
+    print(
+        "schema-check: missing tables: "
+        + ", ".join(report["missing_tables"])
+    )
+    raise SystemExit(1)
 
 
 def cmd_seed_sources(args: argparse.Namespace) -> None:
@@ -486,6 +499,46 @@ def cmd_jobs_worker(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_jobs_requeue_stale(args: argparse.Namespace) -> None:
+    from oiltech_digest import config
+    from oiltech_digest.db import repository
+
+    stale_minutes = (
+        config.BACKGROUND_JOB_STALE_MINUTES
+        if args.stale_minutes is None
+        else args.stale_minutes
+    )
+    requeued = repository.requeue_stale_background_jobs(stale_minutes)
+    print(f"jobs-requeue-stale: requeued={requeued}, stale_minutes={stale_minutes}")
+
+
+def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
+    from oiltech_digest import config
+    from oiltech_digest.db import repository
+
+    background_job_days = (
+        config.BACKGROUND_JOB_RETENTION_DAYS
+        if args.background_job_days is None
+        else args.background_job_days
+    )
+    export_job_days = (
+        config.EXPORT_JOB_RETENTION_DAYS
+        if args.export_job_days is None
+        else args.export_job_days
+    )
+    deleted_sessions = repository.delete_expired_user_sessions()
+    deleted_background_jobs = repository.cleanup_finished_background_jobs(background_job_days)
+    deleted_export_jobs = repository.cleanup_finished_export_jobs(export_job_days)
+    print(
+        "maintenance-cleanup: "
+        f"expired_sessions={deleted_sessions}, "
+        f"background_jobs={deleted_background_jobs}, "
+        f"background_job_days={background_job_days}, "
+        f"export_jobs={deleted_export_jobs}, "
+        f"export_job_days={export_job_days}"
+    )
+
+
 def cmd_bench_readiness(args: argparse.Namespace) -> None:
     from oiltech_digest.benchmarks import format_benchmark_report, run_readiness_benchmark
 
@@ -511,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="создать схему БД").set_defaults(func=cmd_init_db)
+    sub.add_parser("schema-check", help="проверить наличие обязательных таблиц").set_defaults(func=cmd_schema_check)
     sub.add_parser("seed-sources", help="загрузить источники из Excel").set_defaults(func=cmd_seed_sources)
 
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
@@ -647,6 +701,18 @@ def build_parser() -> argparse.ArgumentParser:
                                help="очередь для обработки; можно указать несколько раз")
     p_jobs_worker.add_argument("--once", action="store_true", help="забрать одну доступную пачку и выйти, если задач нет")
     p_jobs_worker.set_defaults(func=cmd_jobs_worker)
+
+    p_jobs_requeue = sub.add_parser("jobs-requeue-stale", help="вернуть зависшие running-задачи обратно в queued")
+    p_jobs_requeue.add_argument("--stale-minutes", type=int, default=None)
+    p_jobs_requeue.set_defaults(func=cmd_jobs_requeue_stale)
+
+    p_maintenance_cleanup = sub.add_parser(
+        "maintenance-cleanup",
+        help="удалить истекшие сессии и старые terminal-записи служебных таблиц",
+    )
+    p_maintenance_cleanup.add_argument("--background-job-days", type=int, default=None)
+    p_maintenance_cleanup.add_argument("--export-job-days", type=int, default=None)
+    p_maintenance_cleanup.set_defaults(func=cmd_maintenance_cleanup)
 
     p_bench = sub.add_parser(
         "bench-readiness",

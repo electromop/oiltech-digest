@@ -4,20 +4,25 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+import logging
 from pathlib import Path
+import time
 from typing import Any
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest import auth, background_jobs, config
+from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import repository
+from oiltech_digest.logging_utils import setup_logging
+from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_relevance_articles,
@@ -25,6 +30,7 @@ from oiltech_digest.processing.pipeline import (
     process_summary_articles,
     process_tag_articles,
 )
+from oiltech_digest.readiness import readiness_check
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import (
@@ -39,10 +45,33 @@ from oiltech_digest.processing.digest import (
 WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
 
+setup_logging("api")
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="OilTech Digest API")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 if (FRONTEND_DIST_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    if request.url.path.startswith("/static") or request.url.path.startswith("/assets"):
+        return await call_next(request)
+
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - started) * 1000
+    client = request.client.host if request.client else "-"
+    logger.info(
+        "request method=%s path=%s status=%s duration_ms=%.1f client=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+        client,
+    )
+    return response
 
 
 class ArticlePatch(BaseModel):
@@ -112,6 +141,11 @@ class DigestExportJobRequest(BaseModel):
     export_format: str = "pdf"
     limit: int = 100
     min_score: float = 0
+
+
+class MaintenanceCleanupRequest(BaseModel):
+    background_job_days: int | None = None
+    export_job_days: int | None = None
 
 
 class DigestSocialIn(BaseModel):
@@ -247,6 +281,18 @@ def health() -> dict[str, Any]:
     with get_connection() as conn:
         article_count = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
     return {"ok": True, "articles": article_count}
+
+
+@app.get("/api/readiness")
+def readiness() -> JSONResponse:
+    try:
+        payload = readiness_check()
+    except Exception as exc:  # noqa: BLE001 - readiness must return a clear 503 payload
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "database": {"ok": False}, "error": str(exc)},
+        )
+    return JSONResponse(status_code=200 if payload["ok"] else 503, content=_clean(payload))
 
 
 @app.get("/api/articles")
@@ -627,6 +673,47 @@ def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Dep
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
     job = background_jobs.enqueue("process_articles", payload.model_dump(), queue_name="ai")
     return {"ok": True, "job": _job_payload(job)}
+
+
+@app.get("/api/maintenance/status")
+def get_maintenance_status(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    return _clean(maintenance_status())
+
+
+@app.post("/api/maintenance/cleanup")
+def run_maintenance_cleanup(
+    payload: MaintenanceCleanupRequest,
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    if payload.background_job_days is not None and payload.background_job_days < 1:
+        raise HTTPException(status_code=400, detail="background_job_days must be >= 1")
+    if payload.export_job_days is not None and payload.export_job_days < 1:
+        raise HTTPException(status_code=400, detail="export_job_days must be >= 1")
+    return {"ok": True, "result": _clean(maintenance_cleanup(**payload.model_dump()))}
+
+
+@app.get("/api/maintenance/benchmark")
+def get_maintenance_benchmark(
+    iterations: int = Query(3, ge=1, le=10),
+    articles_limit: int = Query(200, ge=1, le=2000),
+    source_limit: int = Query(150, ge=1, le=1000),
+    jobs_limit: int = Query(100, ge=1, le=1000),
+    digest_limit: int = Query(100, ge=1, le=500),
+    min_score: float = 0,
+    warn_ms: float = Query(800, gt=0, le=10_000),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    return _clean(
+        run_readiness_benchmark(
+            iterations=iterations,
+            articles_limit=articles_limit,
+            source_limit=source_limit,
+            jobs_limit=jobs_limit,
+            digest_limit=digest_limit,
+            min_score=min_score,
+            warn_ms=warn_ms,
+        )
+    )
 
 
 @app.get("/api/digest-export")
