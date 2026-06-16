@@ -16,6 +16,12 @@ const baseSource: Source = {
   listing_selector: null,
   article_link_selector: null,
   article_date_selector: null,
+  network_region: "auto",
+  network_profile: "direct",
+  last_ru_probe_status: null,
+  last_external_probe_status: null,
+  external_required_reason: null,
+  external_cooldown_until: null,
   last_seen_article_url: null,
   last_seen_published_at: null,
 };

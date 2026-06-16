@@ -10,7 +10,7 @@ type Props = {
 };
 
 const statuses: Array<BackgroundJob["status"] | ""> = ["", "queued", "running", "ok", "failed"];
-const queues = ["", "default", "ai", "playwright"];
+const queues = ["", "default", "ai", "playwright", "ru-fetch", "ru-playwright", "external-ai", "external-fetch", "external-playwright"];
 
 const statusLabels: Record<BackgroundJob["status"], string> = {
   queued: "В очереди",
@@ -160,6 +160,7 @@ export function JobsPage({ onUnauthorized, showToast }: Props) {
                 <th>ID</th>
                 <th>Тип</th>
                 <th>Очередь</th>
+                <th>Регион</th>
                 <th>Статус</th>
                 <th>Попытки</th>
                 <th>Прогресс</th>
@@ -173,6 +174,7 @@ export function JobsPage({ onUnauthorized, showToast }: Props) {
                   <td>#{job.id}</td>
                   <td>{job.kind}</td>
                   <td>{job.queue}</td>
+                  <td>{job.execution_region}{job.capability ? ` / ${job.capability}` : ""}</td>
                   <td>
                     <span className={`jobStatus ${job.status}`}>{statusLabels[job.status]}</span>
                   </td>

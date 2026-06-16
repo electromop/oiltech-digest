@@ -109,6 +109,55 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
 
       <section className="panel">
         <div className="panelHeader">
+          <h2>External contour</h2>
+          <a className="ghostButton compactButton" href="?screen=jobs">
+            Все задачи
+          </a>
+        </div>
+        <section className="statsGridReact jobsStats externalStats">
+          <div className="statCardReact">
+            <strong>{status?.external_queues.totals.queued ?? "—"}</strong>
+            <span>External queued</span>
+          </div>
+          <div className="statCardReact">
+            <strong>{status?.external_queues.totals.running ?? "—"}</strong>
+            <span>External running</span>
+          </div>
+          <div className="statCardReact">
+            <strong>{status?.external_queues.totals.failed ?? "—"}</strong>
+            <span>External failed</span>
+          </div>
+          <div className="statCardReact">
+            <strong>{status?.external_queues.totals.expired_leases ?? "—"}</strong>
+            <span>Expired leases</span>
+          </div>
+        </section>
+        <div className="externalMeta">
+          <span>Oldest queued: {formatDate(status?.external_queues.totals.oldest_queued_at)}</span>
+          <span>Last heartbeat: {formatDate(status?.external_queues.totals.last_heartbeat_at)}</span>
+        </div>
+        {status?.external_queues.queues.length ? (
+          <div className="externalQueueList">
+            {status.external_queues.queues.map((queue) => (
+              <div key={queue.queue_name} className="externalQueueRow">
+                <strong>{queue.queue_name}</strong>
+                <span>queued {queue.queued}</span>
+                <span>running {queue.running}</span>
+                <span>failed {queue.failed}</span>
+                <span>heartbeat {formatDate(queue.last_heartbeat_at)}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="emptyState compactEmptyState">
+            <strong>External queues пустые</strong>
+            <span>Задачи появятся после включения `external-*` routing.</span>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panelHeader">
           <h2>Service cleanup</h2>
           <button type="button" className="ghostButton" onClick={() => void reload()} disabled={loading || running}>
             Обновить
@@ -236,4 +285,14 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
       </section>
     </section>
   );
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

@@ -17,6 +17,12 @@ export type Source = {
   listing_selector: string | null;
   article_link_selector: string | null;
   article_date_selector: string | null;
+  network_region: "auto" | "ru" | "external";
+  network_profile: "direct" | "proxy" | "browser";
+  last_ru_probe_status: string | null;
+  last_external_probe_status: string | null;
+  external_required_reason: string | null;
+  external_cooldown_until: string | null;
   last_seen_article_url: string | null;
   last_seen_published_at: string | null;
 };
@@ -72,6 +78,8 @@ export type SourcePatch = Partial<
     | "listing_selector"
     | "article_link_selector"
     | "article_date_selector"
+    | "network_region"
+    | "network_profile"
   >
 >;
 
@@ -119,6 +127,8 @@ export type BackgroundJob = {
   id: number;
   kind: string;
   queue: string;
+  execution_region: string;
+  capability: string | null;
   status: "queued" | "running" | "ok" | "failed";
   progress: number;
   attempts: number;
@@ -144,6 +154,30 @@ export type MaintenanceStatus = {
     background_jobs: number;
     export_jobs: number;
   };
+  external_queues: ExternalQueueStatus;
+};
+
+export type ExternalQueueRow = {
+  queue_name: string;
+  queued: number;
+  running: number;
+  failed: number;
+  ok: number;
+  oldest_queued_at: string | null;
+  last_heartbeat_at: string | null;
+};
+
+export type ExternalQueueStatus = {
+  totals: {
+    queued: number;
+    running: number;
+    failed: number;
+    ok: number;
+    oldest_queued_at: string | null;
+    last_heartbeat_at: string | null;
+    expired_leases: number;
+  };
+  queues: ExternalQueueRow[];
 };
 
 export type MaintenanceCleanupResult = {

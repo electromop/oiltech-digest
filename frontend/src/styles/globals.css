@@ -932,6 +932,48 @@ button {
   color: var(--text-soft);
 }
 
+.externalStats {
+  margin-top: 12px;
+}
+
+.externalMeta {
+  margin-top: 12px;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.externalQueueList {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.externalQueueRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) repeat(4, minmax(90px, 1fr));
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(248, 250, 252, 0.85);
+  font-size: 0.82rem;
+}
+
+.externalQueueRow span {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.compactEmptyState {
+  min-height: 92px;
+  margin-top: 12px;
+}
+
 .panelHint {
   margin: 10px 0 0;
   color: var(--text-muted);
@@ -1818,6 +1860,10 @@ button {
 
   .benchmarkRow {
     min-width: 620px;
+  }
+
+  .externalQueueRow {
+    grid-template-columns: 1fr 1fr;
   }
 
   .mobileNav {

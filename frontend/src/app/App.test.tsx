@@ -42,6 +42,8 @@ const job = {
   id: 17,
   kind: "digest_export",
   queue: "playwright",
+  execution_region: "ru",
+  capability: "playwright",
   status: "ok",
   progress: 100,
   attempts: 1,
@@ -66,6 +68,28 @@ const maintenanceStatus = {
   cleanup_candidates: {
     background_jobs: 5,
     export_jobs: 3,
+  },
+  external_queues: {
+    totals: {
+      queued: 4,
+      running: 1,
+      failed: 2,
+      ok: 7,
+      oldest_queued_at: "2026-06-07T06:00:00Z",
+      last_heartbeat_at: "2026-06-07T06:05:00Z",
+      expired_leases: 0,
+    },
+    queues: [
+      {
+        queue_name: "external-ai",
+        queued: 4,
+        running: 1,
+        failed: 2,
+        ok: 7,
+        oldest_queued_at: "2026-06-07T06:00:00Z",
+        last_heartbeat_at: "2026-06-07T06:05:00Z",
+      },
+    ],
   },
 };
 
@@ -328,6 +352,8 @@ describe("App smoke", () => {
     expect(await screen.findByRole("heading", { name: "Service maintenance" })).toBeInTheDocument();
     expect(screen.getByText("Истекшие сессии")).toBeInTheDocument();
     expect(screen.getByText("Background jobs к cleanup")).toBeInTheDocument();
+    expect(screen.getByText("External contour")).toBeInTheDocument();
+    expect(screen.getByText("external-ai")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Service maintenance" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Запустить benchmark" }));
