@@ -49,10 +49,12 @@ docker compose up -d --build
 ```
 
 Откройте интерфейс: **http://127.0.0.1:8000** (при первом входе зарегистрируйтесь —
-панель защищена `email + пароль`).
+панель защищена `email + пароль`). Через Caddy интерфейс также доступен на **http://127.0.0.1/**.
+
+Документация работает отдельным контейнером `docs` на MkDocs Material: **http://127.0.0.1/help** или напрямую **http://127.0.0.1:8081/help/**.
 
 ```bash
-docker compose ps               # db/app/scheduler = running, bootstrap = exited(0)
+docker compose ps               # db/app/docs/scheduler = running, bootstrap = exited(0)
 docker compose logs -f scheduler # лог авто-сбора
 docker compose down             # остановить   (down -v — со сбросом БД)
 ```

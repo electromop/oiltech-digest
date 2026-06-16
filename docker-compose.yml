@@ -148,6 +148,20 @@ services:
       - exports:/app/exports
     restart: unless-stopped
 
+  docs:
+    image: squidfunk/mkdocs-material:9
+    container_name: oiltech_docs
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8000"
+    volumes:
+      - ./docs/help:/docs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/help/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   test:
     build:
       context: .
@@ -177,6 +191,7 @@ services:
     restart: unless-stopped
     depends_on:
       - app
+      - docs
     ports:
       - "80:80"
       - "443:443"
