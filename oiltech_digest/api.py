@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+import hashlib
+import hmac
 import logging
 from pathlib import Path
+import secrets
 import time
 from typing import Any
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -23,6 +26,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
+from oiltech_digest import network_policy
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_relevance_articles,
@@ -32,6 +36,7 @@ from oiltech_digest.processing.pipeline import (
 )
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
+from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import (
     build_digest_content,
@@ -41,6 +46,7 @@ from oiltech_digest.processing.digest import (
     save_digest_draft,
     write_digest_export,
 )
+from oiltech_digest.processing import external_ai
 
 WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -91,6 +97,8 @@ class SourcePatch(BaseModel):
     listing_selector: str | None = None
     article_link_selector: str | None = None
     article_date_selector: str | None = None
+    network_region: str | None = None
+    network_profile: str | None = None
 
 
 class SourceCreate(BaseModel):
@@ -146,6 +154,36 @@ class DigestExportJobRequest(BaseModel):
 class MaintenanceCleanupRequest(BaseModel):
     background_job_days: int | None = None
     export_job_days: int | None = None
+
+
+class ExternalWorkerClaimRequest(BaseModel):
+    worker_id: str
+    queues: list[str] = []
+    capabilities: list[str] = []
+    max_lease_seconds: int | None = None
+
+
+class ExternalWorkerLeaseRequest(BaseModel):
+    lease_token: str
+
+
+class ExternalWorkerProgressRequest(ExternalWorkerLeaseRequest):
+    progress: float
+    lease_seconds: int | None = None
+
+
+class ExternalWorkerHeartbeatRequest(ExternalWorkerLeaseRequest):
+    lease_seconds: int | None = None
+
+
+class ExternalWorkerCompleteRequest(ExternalWorkerLeaseRequest):
+    result: dict[str, Any] = {}
+
+
+class ExternalWorkerFailRequest(ExternalWorkerLeaseRequest):
+    error: str
+    retryable: bool = True
+    retry_after_seconds: int | None = None
 
 
 class DigestSocialIn(BaseModel):
@@ -455,6 +493,8 @@ def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Dep
         "listing_selector",
         "article_link_selector",
         "article_date_selector",
+        "network_region",
+        "network_profile",
     }
     fields = [key for key in updates if key in allowed]
     if not fields:
@@ -485,8 +525,14 @@ def scrape_source(
     if strategy not in {"request", "playwright"}:
         raise HTTPException(status_code=400, detail="Скраппер доступен только для request/playwright-источников")
     if background:
-        queue_name = "playwright" if strategy == "playwright" else "default"
-        job = background_jobs.enqueue("scrape_source", {"source_id": source_id}, queue_name=queue_name)
+        decision = network_policy.route_source_task(source, task_kind="scrape")
+        job = background_jobs.enqueue(
+            "scrape_source",
+            {"source_id": source_id},
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
+        )
         return {"ok": True, "job": _job_payload(job)}
     stats = playwright_parser.parse_source(source) if strategy == "playwright" else request_parser.parse_source(source)
     return {"ok": True, "stats": _clean(stats)}
@@ -517,11 +563,13 @@ def diagnose_source_with_overrides(
         raise HTTPException(status_code=404, detail="Source not found")
     overrides = patch.model_dump(exclude_unset=True)
     if background:
-        queue_name = "playwright" if source.get("parse_strategy") == "playwright" else "default"
+        decision = network_policy.route_source_task({**source, **overrides}, task_kind="diagnose")
         job = background_jobs.enqueue(
             "diagnose_source",
             {"source_id": source_id, "overrides": overrides, "limit": limit},
-            queue_name=queue_name,
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
         )
         return {"ok": True, "job": _job_payload(job)}
     return _clean(diagnose_source({**source, **overrides}, limit=limit))
@@ -662,8 +710,14 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
         raise HTTPException(status_code=400, detail="Unsupported export format")
     if payload.limit < 1 or payload.limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
-    queue_name = "playwright" if payload.export_format == "pdf" else "default"
-    job = background_jobs.enqueue("digest_export", payload.model_dump(), queue_name=queue_name)
+    decision = network_policy.route_digest_export(payload.export_format)
+    job = background_jobs.enqueue(
+        "digest_export",
+        payload.model_dump(),
+        queue_name=decision.queue_name,
+        execution_region=decision.execution_region,
+        capability=decision.capability,
+    )
     return {"ok": True, "job": _job_payload(job)}
 
 
@@ -671,8 +725,133 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
 def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     if payload.limit < 1 or payload.limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
-    job = background_jobs.enqueue("process_articles", payload.model_dump(), queue_name="ai")
+    decision = network_policy.route_ai_processing()
+    job = background_jobs.enqueue(
+        "process_articles",
+        payload.model_dump(),
+        queue_name=decision.queue_name,
+        execution_region=decision.execution_region,
+        capability=decision.capability,
+    )
     return {"ok": True, "job": _job_payload(job)}
+
+
+def require_external_worker(authorization: str | None = Header(default=None)) -> None:
+    if not config.EXTERNAL_WORKER_TOKEN_HASH:
+        raise HTTPException(status_code=503, detail="External worker auth is not configured")
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="External worker token required")
+    if not hmac.compare_digest(_sha256_hex(token), config.EXTERNAL_WORKER_TOKEN_HASH):
+        raise HTTPException(status_code=401, detail="Invalid external worker token")
+
+
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _lease_seconds(value: int | None) -> int:
+    requested = value or config.EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS
+    return min(max(int(requested), 30), 3600)
+
+
+@app.post("/api/external-worker/claim")
+def external_worker_claim(
+    payload: ExternalWorkerClaimRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    repository.requeue_expired_external_leases()
+    lease_token = secrets.token_urlsafe(32)
+    job = repository.claim_external_background_job(
+        queue_names=payload.queues,
+        capabilities=payload.capabilities,
+        worker_id=payload.worker_id,
+        lease_token_hash=_sha256_hex(lease_token),
+        lease_seconds=_lease_seconds(payload.max_lease_seconds),
+    )
+    if job is None:
+        return {"job": None}
+    return {"job": {**_job_payload(job), "payload": _external_worker_payload(job), "lease_token": lease_token}}
+
+
+@app.post("/api/external-worker/jobs/{job_id}/progress")
+def external_worker_progress(
+    job_id: int,
+    payload: ExternalWorkerProgressRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    if payload.progress < 0 or payload.progress > 100:
+        raise HTTPException(status_code=400, detail="progress must be between 0 and 100")
+    ok = repository.update_external_background_job_progress(
+        job_id,
+        lease_token_hash=_sha256_hex(payload.lease_token),
+        progress=payload.progress,
+        lease_seconds=_lease_seconds(payload.lease_seconds) if payload.lease_seconds is not None else None,
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    return {"ok": True}
+
+
+@app.post("/api/external-worker/jobs/{job_id}/heartbeat")
+def external_worker_heartbeat(
+    job_id: int,
+    payload: ExternalWorkerHeartbeatRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    ok = repository.heartbeat_external_background_job(
+        job_id,
+        lease_token_hash=_sha256_hex(payload.lease_token),
+        lease_seconds=_lease_seconds(payload.lease_seconds),
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    return {"ok": True}
+
+
+@app.post("/api/external-worker/jobs/{job_id}/complete")
+def external_worker_complete(
+    job_id: int,
+    payload: ExternalWorkerCompleteRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    result = payload.result
+    job = repository.get_background_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    lease_token_hash = _sha256_hex(payload.lease_token)
+    if not repository.external_background_job_lease_is_active(job_id, lease_token_hash=lease_token_hash):
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    if job.get("kind") == "process_articles" and result.get("external_ai"):
+        result = {**result, "applied": external_ai.apply_process_result(result)}
+    if job.get("kind") == "scrape_source" and result.get("external_fetch"):
+        result = {**result, "applied": external_fetch.apply_scrape_result(result)}
+    ok = repository.finish_external_background_job(
+        job_id,
+        lease_token_hash=lease_token_hash,
+        result=result,
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    return {"ok": True}
+
+
+@app.post("/api/external-worker/jobs/{job_id}/fail")
+def external_worker_fail(
+    job_id: int,
+    payload: ExternalWorkerFailRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    ok = repository.fail_external_background_job(
+        job_id,
+        lease_token_hash=_sha256_hex(payload.lease_token),
+        error_message=payload.error,
+        retryable=payload.retryable,
+        retry_delay_seconds=payload.retry_after_seconds,
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    return {"ok": True}
 
 
 @app.get("/api/maintenance/status")
@@ -782,6 +961,8 @@ def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
         "id": int(row["id"]),
         "kind": row["kind"],
         "queue": row.get("queue_name") or "default",
+        "execution_region": row.get("execution_region") or "ru",
+        "capability": row.get("capability"),
         "status": row["status"],
         "progress": float(row.get("progress") or 0),
         "attempts": int(row.get("attempts") or 0),
@@ -794,6 +975,15 @@ def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
         "started_at": _clean(row.get("started_at")),
         "finished_at": _clean(row.get("finished_at")),
     }
+
+
+def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(row.get("payload_json") or {})
+    if row.get("kind") == "process_articles" and row.get("queue_name") == "external-ai":
+        return _clean(external_ai.build_process_articles_payload(payload))
+    if row.get("kind") == "scrape_source" and str(row.get("queue_name") or "").startswith("external-"):
+        return _clean(external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload))
+    return _clean(payload)
 
 
 def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:

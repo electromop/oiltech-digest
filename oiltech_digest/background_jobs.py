@@ -35,6 +35,8 @@ def enqueue(
     payload: dict[str, Any] | None = None,
     *,
     queue_name: str = "default",
+    execution_region: str = "ru",
+    capability: str | None = None,
     max_attempts: int = 3,
 ) -> dict[str, Any]:
     """Create a persistent job and submit it to the local executor."""
@@ -44,6 +46,8 @@ def enqueue(
         kind,
         payload or {},
         queue_name=queue_name,
+        execution_region=execution_region,
+        capability=capability,
         max_attempts=max_attempts,
     )
     if config.BACKGROUND_JOB_INLINE:

@@ -36,6 +36,7 @@ def maintenance_status(
             ),
             "export_jobs": repository.count_finished_export_jobs_eligible_for_cleanup(export_job_days),
         },
+        "external_queues": repository.external_queue_status(),
     }
 
 

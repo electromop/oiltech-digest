@@ -162,6 +162,8 @@ def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
             "id": 120,
             "kind": kind,
             "queue_name": kwargs.get("queue_name", "default"),
+            "execution_region": kwargs.get("execution_region", "ru"),
+            "capability": kwargs.get("capability"),
             "status": "queued",
             "progress": 0,
             "attempts": 0,
@@ -189,6 +191,8 @@ def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
         "id": 120,
         "kind": "diagnose_source",
         "queue": "playwright",
+        "execution_region": "ru",
+        "capability": "playwright",
         "status": "queued",
         "progress": 0.0,
         "attempts": 0,
@@ -512,6 +516,8 @@ def test_scrape_source_endpoint_can_enqueue_background_job(monkeypatch):
             "id": 99,
             "kind": kind,
             "queue_name": kwargs.get("queue_name", "default"),
+            "execution_region": kwargs.get("execution_region", "ru"),
+            "capability": kwargs.get("capability"),
             "status": "queued",
             "progress": 0,
             "attempts": 0,
@@ -536,6 +542,8 @@ def test_scrape_source_endpoint_can_enqueue_background_job(monkeypatch):
         "id": 99,
         "kind": "scrape_source",
         "queue": "default",
+        "execution_region": "ru",
+        "capability": "http_fetch",
         "status": "queued",
         "progress": 0.0,
         "attempts": 0,
@@ -640,6 +648,8 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
             "id": 7,
             "kind": kind,
             "queue_name": kwargs.get("queue_name", "default"),
+            "execution_region": kwargs.get("execution_region", "ru"),
+            "capability": kwargs.get("capability"),
             "status": "queued",
             "progress": 0,
             "attempts": 0,
@@ -667,7 +677,7 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
     assert captured == {
         "kind": "digest_export",
         "payload": {"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60.0},
-        "kwargs": {"queue_name": "playwright"},
+        "kwargs": {"queue_name": "playwright", "execution_region": "ru", "capability": "playwright"},
     }
     assert response.json()["job"]["status"] == "queued"
     assert response.json()["job"]["queue"] == "playwright"
@@ -683,6 +693,8 @@ def test_enqueue_process_endpoint(monkeypatch):
             "id": 8,
             "kind": kind,
             "queue_name": kwargs.get("queue_name", "default"),
+            "execution_region": kwargs.get("execution_region", "ru"),
+            "capability": kwargs.get("capability"),
             "status": "queued",
             "progress": 0,
             "attempts": 0,
@@ -705,7 +717,278 @@ def test_enqueue_process_endpoint(monkeypatch):
     assert response.status_code == 200
     assert response.json()["job"]["kind"] == "process_articles"
     assert response.json()["job"]["queue"] == "ai"
+    assert response.json()["job"]["execution_region"] == "ru"
+    assert response.json()["job"]["capability"] == "openai"
     assert response.json()["job"]["payload"]["article_ids"] == [1, 2]
+
+
+def test_enqueue_process_endpoint_can_route_to_external_ai(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    monkeypatch.setattr(api.network_policy.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(api.network_policy.config, "AI_EXECUTION_REGION", "external")
+    captured = {}
+
+    def fake_enqueue(kind, payload, **kwargs):
+        captured.update(kwargs)
+        return {
+            "id": 9,
+            "kind": kind,
+            "queue_name": kwargs.get("queue_name", "default"),
+            "execution_region": kwargs.get("execution_region", "ru"),
+            "capability": kwargs.get("capability"),
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    monkeypatch.setattr(api.background_jobs, "enqueue", fake_enqueue)
+    try:
+        client = TestClient(app)
+        response = client.post("/api/jobs/process", json={"limit": 10})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {"queue_name": "external-ai", "execution_region": "external", "capability": "openai"}
+    assert response.json()["job"]["queue"] == "external-ai"
+    assert response.json()["job"]["execution_region"] == "external"
+
+
+def test_external_worker_claim_requires_token(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    client = TestClient(api.app)
+
+    response = client.post("/api/external-worker/claim", json={"worker_id": "eu-1"})
+
+    assert response.status_code == 401
+
+
+def test_external_worker_claim_returns_leased_job(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
+    monkeypatch.setattr(
+        api.external_ai,
+        "build_process_articles_payload",
+        lambda payload: {"kind": "process_articles", "articles": [{"id": 1}], "tags": [], "criteria": []},
+    )
+    captured = {}
+
+    def fake_claim(**kwargs):
+        captured.update(kwargs)
+        return {
+            "id": 10,
+            "kind": "process_articles",
+            "queue_name": "external-ai",
+            "execution_region": "external",
+            "capability": "openai",
+            "status": "running",
+            "progress": 10,
+            "attempts": 1,
+            "max_attempts": 3,
+            "run_after": None,
+            "payload_json": {"limit": 5},
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    monkeypatch.setattr(api.repository, "claim_external_background_job", fake_claim)
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/claim",
+        headers={"Authorization": "Bearer secret"},
+        json={"worker_id": "eu-1", "queues": ["external-ai"], "capabilities": ["openai"], "max_lease_seconds": 300},
+    )
+
+    assert response.status_code == 200
+    assert captured["queue_names"] == ["external-ai"]
+    assert captured["capabilities"] == ["openai"]
+    assert captured["worker_id"] == "eu-1"
+    assert captured["lease_seconds"] == 300
+    assert captured["lease_token_hash"] != "secret"
+    assert response.json()["job"]["queue"] == "external-ai"
+    assert response.json()["job"]["payload"]["articles"] == [{"id": 1}]
+    assert response.json()["job"]["lease_token"]
+
+
+def test_external_worker_claim_hydrates_external_scrape_payload(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
+    monkeypatch.setattr(
+        api.external_fetch,
+        "build_scrape_source_payload",
+        lambda source_id, payload: {"kind": "scrape_source", "source": {"id": source_id, "parse_strategy": "request"}},
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "claim_external_background_job",
+        lambda **kwargs: {
+            "id": 11,
+            "kind": "scrape_source",
+            "queue_name": "external-fetch",
+            "execution_region": "external",
+            "capability": "http_fetch",
+            "status": "running",
+            "progress": 10,
+            "attempts": 1,
+            "max_attempts": 3,
+            "run_after": None,
+            "payload_json": {"source_id": 7},
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/claim",
+        headers={"Authorization": "Bearer secret"},
+        json={"worker_id": "eu-1", "queues": ["external-fetch"], "capabilities": ["http_fetch"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["payload"]["source"] == {"id": 7, "parse_strategy": "request"}
+
+
+def test_external_worker_progress_and_complete_validate_lease(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    progress_calls = []
+    complete_calls = []
+    monkeypatch.setattr(
+        api.repository,
+        "update_external_background_job_progress",
+        lambda job_id, **kwargs: progress_calls.append((job_id, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "finish_external_background_job",
+        lambda job_id, **kwargs: complete_calls.append((job_id, kwargs)) or True,
+    )
+    monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "digest_export"})
+    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
+    client = TestClient(api.app)
+
+    progress = client.post(
+        "/api/external-worker/jobs/10/progress",
+        headers={"Authorization": "Bearer secret"},
+        json={"lease_token": "lease", "progress": 55},
+    )
+    complete = client.post(
+        "/api/external-worker/jobs/10/complete",
+        headers={"Authorization": "Bearer secret"},
+        json={"lease_token": "lease", "result": {"summary": {"processed": 1}}},
+    )
+
+    assert progress.status_code == 200
+    assert complete.status_code == 200
+    assert progress_calls[0][0] == 10
+    assert progress_calls[0][1]["lease_token_hash"] == api._sha256_hex("lease")
+    assert complete_calls[0][1]["result"] == {"summary": {"processed": 1}}
+
+
+def test_external_worker_complete_applies_external_ai_result(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    applied = []
+    completed = []
+    monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "process_articles"})
+    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.external_ai, "apply_process_result", lambda result: applied.append(result) or {"articles": 1})
+    monkeypatch.setattr(
+        api.repository,
+        "finish_external_background_job",
+        lambda job_id, **kwargs: completed.append((job_id, kwargs)) or True,
+    )
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/jobs/10/complete",
+        headers={"Authorization": "Bearer secret"},
+        json={"lease_token": "lease", "result": {"external_ai": True, "articles": [{"article_id": 1}]}},
+    )
+
+    assert response.status_code == 200
+    assert applied == [{"external_ai": True, "articles": [{"article_id": 1}]}]
+    assert completed[0][1]["result"]["applied"] == {"articles": 1}
+
+
+def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    applied = []
+    completed = []
+    monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "scrape_source"})
+    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.external_fetch, "apply_scrape_result", lambda result: applied.append(result) or {"inserted": 1})
+    monkeypatch.setattr(
+        api.repository,
+        "finish_external_background_job",
+        lambda job_id, **kwargs: completed.append((job_id, kwargs)) or True,
+    )
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/jobs/10/complete",
+        headers={"Authorization": "Bearer secret"},
+        json={"lease_token": "lease", "result": {"external_fetch": True, "source_id": 1, "articles": []}},
+    )
+
+    assert response.status_code == 200
+    assert applied == [{"external_fetch": True, "source_id": 1, "articles": []}]
+    assert completed[0][1]["result"]["applied"] == {"inserted": 1}
+
+
+def test_external_worker_complete_rejects_inactive_lease(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "digest_export"})
+    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: False)
+    monkeypatch.setattr(api.repository, "finish_external_background_job", lambda job_id, **kwargs: False)
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/jobs/10/complete",
+        headers={"Authorization": "Bearer secret"},
+        json={"lease_token": "bad", "result": {}},
+    )
+
+    assert response.status_code == 409
+
+
+def test_external_worker_fail_passes_retry_policy(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "fail_external_background_job",
+        lambda job_id, **kwargs: captured.update({"job_id": job_id, **kwargs}) or True,
+    )
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/jobs/10/fail",
+        headers={"Authorization": "Bearer secret"},
+        json={"lease_token": "lease", "error": "timeout", "retryable": True, "retry_after_seconds": 120},
+    )
+
+    assert response.status_code == 200
+    assert captured["job_id"] == 10
+    assert captured["lease_token_hash"] == api._sha256_hex("lease")
+    assert captured["error_message"] == "timeout"
+    assert captured["retryable"] is True
+    assert captured["retry_delay_seconds"] == 120
 
 
 def test_maintenance_status_endpoint(monkeypatch):
@@ -719,6 +1002,10 @@ def test_maintenance_status_endpoint(monkeypatch):
             "expired_sessions": 2,
             "stale_running_jobs": 1,
             "cleanup_candidates": {"background_jobs": 5, "export_jobs": 3},
+            "external_queues": {
+                "totals": {"queued": 4, "running": 1, "failed": 0, "ok": 0, "oldest_queued_at": None, "last_heartbeat_at": None, "expired_leases": 0},
+                "queues": [],
+            },
         },
     )
     try:
@@ -730,6 +1017,7 @@ def test_maintenance_status_endpoint(monkeypatch):
     assert response.status_code == 200
     assert response.json()["expired_sessions"] == 2
     assert response.json()["cleanup_candidates"]["background_jobs"] == 5
+    assert response.json()["external_queues"]["totals"]["queued"] == 4
 
 
 def test_maintenance_cleanup_endpoint(monkeypatch):

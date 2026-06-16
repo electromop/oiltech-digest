@@ -1,0 +1,132 @@
+"""HTTP-pull worker for the non-RU execution contour."""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any
+
+import requests
+
+from oiltech_digest import config
+from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.processing import external_ai
+
+logger = logging.getLogger(__name__)
+
+
+def run_loop(
+    *,
+    core_api_url: str | None = None,
+    token: str | None = None,
+    worker_id: str | None = None,
+    queues: list[str] | None = None,
+    capabilities: list[str] | None = None,
+    poll_seconds: float | None = None,
+    once: bool = False,
+) -> None:
+    client = ExternalWorkerClient(
+        core_api_url=core_api_url or config.CORE_API_URL,
+        token=token or config.EXTERNAL_WORKER_TOKEN,
+        worker_id=worker_id or config.EXTERNAL_WORKER_ID,
+        queues=queues or config.EXTERNAL_WORKER_QUEUES,
+        capabilities=capabilities or config.EXTERNAL_WORKER_CAPABILITIES,
+    )
+    sleep_seconds = config.EXTERNAL_WORKER_POLL_SECONDS if poll_seconds is None else poll_seconds
+    while True:
+        job = client.claim()
+        if job is None:
+            if once:
+                return
+            time.sleep(sleep_seconds)
+            continue
+        _handle_job(client, job)
+
+
+class ExternalWorkerClient:
+    def __init__(
+        self,
+        *,
+        core_api_url: str,
+        token: str,
+        worker_id: str,
+        queues: list[str],
+        capabilities: list[str],
+    ) -> None:
+        if not core_api_url:
+            raise ValueError("CORE_API_URL is required for external-worker")
+        if not token:
+            raise ValueError("EXTERNAL_WORKER_TOKEN is required for external-worker")
+        self.core_api_url = core_api_url.rstrip("/")
+        self.worker_id = worker_id
+        self.queues = queues
+        self.capabilities = capabilities
+        self.session = requests.Session()
+        self.session.headers.update({"Authorization": f"Bearer {token}"})
+
+    def claim(self) -> dict[str, Any] | None:
+        response = self.session.post(
+            f"{self.core_api_url}/api/external-worker/claim",
+            json={
+                "worker_id": self.worker_id,
+                "queues": self.queues,
+                "capabilities": self.capabilities,
+                "max_lease_seconds": config.EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        return (response.json() or {}).get("job")
+
+    def progress(self, job: dict[str, Any], progress: float) -> None:
+        response = self.session.post(
+            f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/progress",
+            json={"lease_token": job["lease_token"], "progress": progress},
+            timeout=30,
+        )
+        response.raise_for_status()
+
+    def complete(self, job: dict[str, Any], result: dict[str, Any]) -> None:
+        response = self.session.post(
+            f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/complete",
+            json={"lease_token": job["lease_token"], "result": result},
+            timeout=60,
+        )
+        response.raise_for_status()
+
+    def fail(self, job: dict[str, Any], error: str, *, retryable: bool = True, retry_after_seconds: int = 300) -> None:
+        response = self.session.post(
+            f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/fail",
+            json={
+                "lease_token": job["lease_token"],
+                "error": error[:1000],
+                "retryable": retryable,
+                "retry_after_seconds": retry_after_seconds,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+
+
+def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
+    logger.info("external_job_started job_id=%s kind=%s queue=%s", job["id"], job.get("kind"), job.get("queue"))
+    try:
+        if job.get("kind") == "process_articles":
+            client.progress(job, 20)
+            result = external_ai.process_payload(job.get("payload") or {})
+            client.progress(job, 90)
+            client.complete(job, result)
+        elif job.get("kind") == "scrape_source":
+            client.progress(job, 20)
+            result = external_fetch.process_payload(job.get("payload") or {})
+            client.progress(job, 90)
+            client.complete(job, result)
+        else:
+            raise ValueError(f"Unsupported external job kind: {job.get('kind')}")
+        logger.info("external_job_finished job_id=%s kind=%s", job["id"], job.get("kind"))
+    except Exception as exc:  # noqa: BLE001 - external failures must be returned to core
+        logger.exception("external_job_failed job_id=%s kind=%s", job.get("id"), job.get("kind"))
+        try:
+            client.fail(job, str(exc), retryable=True)
+        except Exception:
+            logger.exception("external_job_fail_report_failed job_id=%s", job.get("id"))

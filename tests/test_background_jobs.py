@@ -118,6 +118,22 @@ def test_enqueue_can_skip_inline_execution(monkeypatch, isolated_db):
     assert submitted == []
 
 
+def test_background_job_records_execution_metadata(isolated_db):
+    job = repository.create_background_job(
+        "test_external",
+        {"value": 1},
+        queue_name="external-ai",
+        execution_region="external",
+        capability="openai",
+    )
+
+    stored = repository.get_background_job(int(job["id"]))
+
+    assert stored["queue_name"] == "external-ai"
+    assert stored["execution_region"] == "external"
+    assert stored["capability"] == "openai"
+
+
 def test_claim_next_background_job_marks_oldest_queued_job_running(isolated_db):
     first = repository.create_background_job("test_first", {}, queue_name="default")
     repository.create_background_job("test_second", {}, queue_name="playwright")
@@ -139,6 +155,140 @@ def test_claim_next_background_job_filters_by_queue(isolated_db):
 
     assert claimed["id"] == playwright["id"]
     assert claimed["queue_name"] == "playwright"
+
+
+def test_claim_external_background_job_sets_lease_metadata(isolated_db):
+    default = repository.create_background_job("test_default", {}, queue_name="default")
+    external = repository.create_background_job(
+        "test_external",
+        {},
+        queue_name="external-ai",
+        execution_region="external",
+        capability="openai",
+    )
+
+    claimed = repository.claim_external_background_job(
+        queue_names=["external-ai"],
+        capabilities=["openai"],
+        worker_id="eu-worker-1",
+        lease_token_hash="hash1",
+        lease_seconds=600,
+    )
+
+    assert claimed["id"] == external["id"]
+    assert claimed["status"] == "running"
+    assert claimed["claimed_by"] == "eu-worker-1"
+    assert claimed["lease_token_hash"] == "hash1"
+    assert claimed["lease_expires_at"] is not None
+    assert repository.get_background_job(int(default["id"]))["status"] == "queued"
+
+
+def test_external_job_progress_complete_and_wrong_lease(isolated_db):
+    job = repository.create_background_job(
+        "test_external",
+        {},
+        queue_name="external-ai",
+        execution_region="external",
+        capability="openai",
+    )
+    claimed = repository.claim_external_background_job(
+        queue_names=["external-ai"],
+        capabilities=["openai"],
+        worker_id="eu-worker-1",
+        lease_token_hash="hash1",
+        lease_seconds=600,
+    )
+
+    assert repository.update_external_background_job_progress(int(claimed["id"]), lease_token_hash="wrong", progress=50) is False
+    assert repository.external_background_job_lease_is_active(int(claimed["id"]), lease_token_hash="wrong") is False
+    assert repository.external_background_job_lease_is_active(int(claimed["id"]), lease_token_hash="hash1") is True
+    assert repository.update_external_background_job_progress(int(claimed["id"]), lease_token_hash="hash1", progress=50) is True
+    assert repository.finish_external_background_job(int(claimed["id"]), lease_token_hash="wrong", result={"ok": True}) is False
+    assert repository.finish_external_background_job(int(claimed["id"]), lease_token_hash="hash1", result={"ok": True}) is True
+
+    stored = repository.get_background_job(int(job["id"]))
+    assert stored["status"] == "ok"
+    assert stored["progress"] == 100
+    assert stored["result_json"] == {"ok": True}
+    assert stored["lease_token_hash"] is None
+
+
+def test_external_job_retryable_fail_requeues(isolated_db):
+    job = repository.create_background_job(
+        "test_external",
+        {},
+        queue_name="external-ai",
+        execution_region="external",
+        capability="openai",
+        max_attempts=3,
+    )
+    repository.claim_external_background_job(
+        queue_names=["external-ai"],
+        capabilities=["openai"],
+        worker_id="eu-worker-1",
+        lease_token_hash="hash1",
+        lease_seconds=600,
+    )
+
+    assert repository.fail_external_background_job(
+        int(job["id"]),
+        lease_token_hash="hash1",
+        error_message="temporary",
+        retryable=True,
+        retry_delay_seconds=120,
+    ) is True
+
+    stored = repository.get_background_job(int(job["id"]))
+    assert stored["status"] == "queued"
+    assert stored["error_message"] == "temporary"
+    assert stored["lease_token_hash"] is None
+
+
+def test_requeue_expired_external_leases(isolated_db):
+    job = repository.create_background_job(
+        "test_external",
+        {},
+        queue_name="external-ai",
+        execution_region="external",
+        capability="openai",
+    )
+    repository.claim_external_background_job(
+        queue_names=["external-ai"],
+        capabilities=["openai"],
+        worker_id="eu-worker-1",
+        lease_token_hash="hash1",
+        lease_seconds=600,
+    )
+    with connection.get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = %s",
+            (job["id"],),
+        )
+        conn.commit()
+
+    assert repository.requeue_expired_external_leases() == 1
+    stored = repository.get_background_job(int(job["id"]))
+    assert stored["status"] == "queued"
+    assert stored["claimed_by"] is None
+    assert stored["lease_token_hash"] is None
+
+
+def test_external_queue_status_summarizes_external_jobs(isolated_db):
+    repository.create_background_job(
+        "test_external",
+        {},
+        queue_name="external-ai",
+        execution_region="external",
+        capability="openai",
+    )
+    repository.create_background_job("test_local", {}, queue_name="default")
+
+    status = repository.external_queue_status()
+
+    assert status["totals"]["queued"] == 1
+    assert status["totals"]["running"] == 0
+    assert status["queues"][0]["queue_name"] == "external-ai"
+    assert status["queues"][0]["queued"] == 1
 
 
 def test_claim_next_background_job_skips_delayed_retry(isolated_db):

@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS sources (
   last_seen_article_url TEXT,
   last_seen_published_at TIMESTAMPTZ,
   last_listing_hash TEXT,
+  network_region TEXT NOT NULL DEFAULT 'auto',   -- auto / ru / external
+  network_profile TEXT NOT NULL DEFAULT 'direct',-- direct / proxy / browser
+  last_ru_probe_status TEXT,
+  last_external_probe_status TEXT,
+  external_required_reason TEXT,
+  external_cooldown_until TIMESTAMPTZ,
   created_at     TIMESTAMPTZ DEFAULT now(),
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
@@ -42,7 +48,14 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS article_date_selector TEXT;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_seen_article_url TEXT;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_seen_published_at TIMESTAMPTZ;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_listing_hash TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS network_region TEXT NOT NULL DEFAULT 'auto';
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS network_profile TEXT NOT NULL DEFAULT 'direct';
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_ru_probe_status TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_external_probe_status TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS external_required_reason TEXT;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS external_cooldown_until TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_sources_last_seen_published_at ON sources(last_seen_published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sources_network_region ON sources(network_region, enabled);
 
 -- =========================================================================
 -- Статьи (сырые, до обработки)
@@ -260,6 +273,12 @@ CREATE TABLE IF NOT EXISTS background_jobs (
   payload_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
   result_json   JSONB,
   error_message TEXT,
+  execution_region TEXT NOT NULL DEFAULT 'ru',
+  capability    TEXT,
+  claimed_by    TEXT,
+  lease_token_hash TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at    TIMESTAMPTZ,
   finished_at   TIMESTAMPTZ
@@ -289,3 +308,11 @@ ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS queue_name TEXT NOT NULL DE
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS run_after TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS execution_region TEXT NOT NULL DEFAULT 'ru';
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS capability TEXT;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS claimed_by TEXT;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_token_hash TEXT;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_background_jobs_external_ready ON background_jobs(execution_region, queue_name, status, run_after, created_at);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_lease_expires ON background_jobs(status, lease_expires_at);

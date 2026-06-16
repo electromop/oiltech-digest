@@ -47,6 +47,29 @@ BACKGROUND_JOB_RETRY_BASE_SECONDS = int(os.environ.get("BACKGROUND_JOB_RETRY_BAS
 EXPORT_JOB_RETENTION_DAYS = int(os.environ.get("EXPORT_JOB_RETENTION_DAYS", "30"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
+# --- Геораспределенное исполнение ---
+# По умолчанию внешний контур выключен: routing helper сохраняет старые локальные
+# очереди, чтобы обновление кода не остановило текущий single-server deployment.
+EXTERNAL_WORKERS_ENABLED = os.environ.get("EXTERNAL_WORKERS_ENABLED", "0").lower() in {"1", "true", "yes"}
+AI_EXECUTION_REGION = os.environ.get("AI_EXECUTION_REGION", "ru").strip().lower()
+FETCH_EXTERNAL_ENABLED = os.environ.get("FETCH_EXTERNAL_ENABLED", "0").lower() in {"1", "true", "yes"}
+EXTERNAL_WORKER_TOKEN_HASH = os.environ.get("EXTERNAL_WORKER_TOKEN_HASH", "").strip()
+EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS = int(os.environ.get("EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS", "600"))
+CORE_API_URL = os.environ.get("CORE_API_URL", "").strip().rstrip("/")
+EXTERNAL_WORKER_TOKEN = os.environ.get("EXTERNAL_WORKER_TOKEN", "").strip()
+EXTERNAL_WORKER_ID = os.environ.get("EXTERNAL_WORKER_ID", "external-worker-1").strip()
+EXTERNAL_WORKER_QUEUES = [
+    item.strip()
+    for item in os.environ.get("EXTERNAL_WORKER_QUEUES", "external-ai").split(",")
+    if item.strip()
+]
+EXTERNAL_WORKER_CAPABILITIES = [
+    item.strip()
+    for item in os.environ.get("EXTERNAL_WORKER_CAPABILITIES", "openai").split(",")
+    if item.strip()
+]
+EXTERNAL_WORKER_POLL_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_SECONDS", "3"))
+
 # --- Прокси для парсинга (residential, напр. 2captcha) ---
 # PROXY_URL — полная строка подключения: "http://user:pass@host:port"
 # (у 2captcha HTTP/HTTPS-прокси с авторизацией порт обычно 8080).

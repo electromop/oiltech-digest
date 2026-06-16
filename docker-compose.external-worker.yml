@@ -1,0 +1,12 @@
+services:
+  external-worker:
+    build: .
+    container_name: oiltech_external_worker
+    restart: unless-stopped
+    env_file:
+      - .env.external-worker
+    environment:
+      PYTHONUNBUFFERED: "1"
+      EXTERNAL_WORKER_QUEUES: ${EXTERNAL_WORKER_QUEUES:-external-ai,external-fetch,external-playwright}
+      EXTERNAL_WORKER_CAPABILITIES: ${EXTERNAL_WORKER_CAPABILITIES:-openai,http_fetch,playwright}
+    command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]

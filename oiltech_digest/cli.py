@@ -499,6 +499,20 @@ def cmd_jobs_worker(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_external_worker(args: argparse.Namespace) -> None:
+    from oiltech_digest import external_worker
+
+    external_worker.run_loop(
+        core_api_url=args.core_api_url,
+        token=args.token,
+        worker_id=args.worker_id,
+        queues=args.queue,
+        capabilities=args.capability,
+        poll_seconds=args.poll_seconds,
+        once=args.once,
+    )
+
+
 def cmd_jobs_requeue_stale(args: argparse.Namespace) -> None:
     from oiltech_digest import config
     from oiltech_digest.db import repository
@@ -510,6 +524,34 @@ def cmd_jobs_requeue_stale(args: argparse.Namespace) -> None:
     )
     requeued = repository.requeue_stale_background_jobs(stale_minutes)
     print(f"jobs-requeue-stale: requeued={requeued}, stale_minutes={stale_minutes}")
+
+
+def cmd_external_queues_status(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    status = repository.external_queue_status()
+    if args.json:
+        print(json.dumps(status, ensure_ascii=False, default=str, indent=2))
+        return
+    totals = status["totals"]
+    print(
+        "external-queues: "
+        f"queued={totals.get('queued') or 0}, "
+        f"running={totals.get('running') or 0}, "
+        f"failed={totals.get('failed') or 0}, "
+        f"expired_leases={totals.get('expired_leases') or 0}, "
+        f"oldest_queued_at={totals.get('oldest_queued_at') or '-'}, "
+        f"last_heartbeat_at={totals.get('last_heartbeat_at') or '-'}"
+    )
+    for row in status["queues"]:
+        print(
+            f"  {row['queue_name']}: "
+            f"queued={row.get('queued') or 0}, "
+            f"running={row.get('running') or 0}, "
+            f"failed={row.get('failed') or 0}, "
+            f"oldest_queued_at={row.get('oldest_queued_at') or '-'}, "
+            f"last_heartbeat_at={row.get('last_heartbeat_at') or '-'}"
+        )
 
 
 def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
@@ -702,9 +744,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_jobs_worker.add_argument("--once", action="store_true", help="забрать одну доступную пачку и выйти, если задач нет")
     p_jobs_worker.set_defaults(func=cmd_jobs_worker)
 
+    p_external_worker = sub.add_parser("external-worker", help="обрабатывать external-* задачи через HTTP API core")
+    p_external_worker.add_argument("--core-api-url", default=None)
+    p_external_worker.add_argument("--token", default=None)
+    p_external_worker.add_argument("--worker-id", default=None)
+    p_external_worker.add_argument("--queue", action="append", default=None)
+    p_external_worker.add_argument("--capability", action="append", default=None)
+    p_external_worker.add_argument("--poll-seconds", type=float, default=None)
+    p_external_worker.add_argument("--once", action="store_true")
+    p_external_worker.set_defaults(func=cmd_external_worker)
+
     p_jobs_requeue = sub.add_parser("jobs-requeue-stale", help="вернуть зависшие running-задачи обратно в queued")
     p_jobs_requeue.add_argument("--stale-minutes", type=int, default=None)
     p_jobs_requeue.set_defaults(func=cmd_jobs_requeue_stale)
+
+    p_external_status = sub.add_parser("external-queues-status", help="показать состояние external-* очередей")
+    p_external_status.add_argument("--json", action="store_true")
+    p_external_status.set_defaults(func=cmd_external_queues_status)
 
     p_maintenance_cleanup = sub.add_parser(
         "maintenance-cleanup",

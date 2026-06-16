@@ -335,17 +335,22 @@ def create_background_job(
     payload: dict | None = None,
     *,
     queue_name: str = "default",
+    execution_region: str = "ru",
+    capability: str | None = None,
     max_attempts: int = 3,
 ) -> dict:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            INSERT INTO background_jobs (kind, queue_name, status, progress, max_attempts, payload_json)
-            VALUES (%s, %s, 'queued', 0, %s, %s)
+            INSERT INTO background_jobs (
+                kind, queue_name, execution_region, capability,
+                status, progress, max_attempts, payload_json
+            )
+            VALUES (%s, %s, %s, %s, 'queued', 0, %s, %s)
             RETURNING *
             """,
-            (kind, queue_name, max_attempts, Json(_jsonable(payload or {}))),
+            (kind, queue_name, execution_region, capability, max_attempts, Json(_jsonable(payload or {}))),
         )
         job = cur.fetchone()
         conn.commit()
@@ -393,6 +398,77 @@ def claim_next_background_job(queue_names: list[str] | None = None) -> dict | No
         return job
 
 
+def requeue_expired_external_leases() -> int:
+    """Return external jobs with expired leases to the queue after worker loss."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'queued',
+                progress = 0,
+                started_at = NULL,
+                claimed_by = NULL,
+                lease_token_hash = NULL,
+                lease_expires_at = NULL,
+                error_message = 'Requeued after external worker lease expired'
+            WHERE status = 'running'
+              AND execution_region = 'external'
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at < now()
+            """
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def claim_external_background_job(
+    *,
+    queue_names: list[str],
+    capabilities: list[str],
+    worker_id: str,
+    lease_token_hash: str,
+    lease_seconds: int,
+) -> dict | None:
+    """Atomically lease the oldest queued external job for a remote worker."""
+    queue_names = queue_names or ["external-ai", "external-fetch", "external-playwright"]
+    capabilities = capabilities or []
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH next_job AS (
+                SELECT id
+                FROM background_jobs
+                WHERE status = 'queued'
+                  AND execution_region = 'external'
+                  AND queue_name = ANY(%s)
+                  AND (%s::text[] = '{}'::text[] OR capability IS NULL OR capability = ANY(%s))
+                  AND run_after <= now()
+                ORDER BY created_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE background_jobs j
+            SET status = 'running',
+                progress = CASE WHEN j.progress < 10 THEN 10 ELSE j.progress END,
+                attempts = j.attempts + 1,
+                started_at = COALESCE(j.started_at, now()),
+                claimed_by = %s,
+                lease_token_hash = %s,
+                lease_expires_at = now() + (%s::text || ' seconds')::interval,
+                last_heartbeat_at = now(),
+                error_message = NULL
+            FROM next_job
+            WHERE j.id = next_job.id
+            RETURNING j.*
+            """,
+            (queue_names, capabilities, capabilities, worker_id, lease_token_hash, lease_seconds),
+        )
+        job = cur.fetchone()
+        conn.commit()
+        return job
+
+
 def list_background_jobs(
     *,
     status: str | None = None,
@@ -428,6 +504,50 @@ def list_background_jobs(
         return cur.fetchall()
 
 
+def external_queue_status() -> dict:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+              COUNT(*) FILTER (WHERE status = 'running') AS running,
+              COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+              COUNT(*) FILTER (WHERE status = 'ok') AS ok,
+              MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
+              MAX(last_heartbeat_at) FILTER (WHERE status = 'running') AS last_heartbeat_at,
+              COUNT(*) FILTER (
+                WHERE status = 'running'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < now()
+              ) AS expired_leases
+            FROM background_jobs
+            WHERE execution_region = 'external'
+            """
+        )
+        totals = cur.fetchone() or {}
+        cur.execute(
+            """
+            SELECT queue_name,
+                   COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+                   COUNT(*) FILTER (WHERE status = 'running') AS running,
+                   COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+                   COUNT(*) FILTER (WHERE status = 'ok') AS ok,
+                   MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
+                   MAX(last_heartbeat_at) FILTER (WHERE status = 'running') AS last_heartbeat_at
+            FROM background_jobs
+            WHERE execution_region = 'external'
+            GROUP BY queue_name
+            ORDER BY queue_name
+            """
+        )
+        queues = cur.fetchall()
+    return {
+        "totals": dict(totals),
+        "queues": [dict(row) for row in queues],
+    }
+
+
 def mark_background_job_running(job_id: int) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -454,6 +574,83 @@ def update_background_job_progress(job_id: int, progress: float) -> None:
         conn.commit()
 
 
+def update_external_background_job_progress(
+    job_id: int,
+    *,
+    lease_token_hash: str,
+    progress: float,
+    lease_seconds: int | None = None,
+) -> bool:
+    with get_connection() as conn:
+        if lease_seconds is None:
+            cur = conn.execute(
+                """
+                UPDATE background_jobs
+                SET progress = %s,
+                    last_heartbeat_at = now()
+                WHERE id = %s
+                  AND status = 'running'
+                  AND execution_region = 'external'
+                  AND lease_token_hash = %s
+                  AND lease_expires_at > now()
+                """,
+                (progress, job_id, lease_token_hash),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE background_jobs
+                SET progress = %s,
+                    last_heartbeat_at = now(),
+                    lease_expires_at = now() + (%s::text || ' seconds')::interval
+                WHERE id = %s
+                  AND status = 'running'
+                  AND execution_region = 'external'
+                  AND lease_token_hash = %s
+                  AND lease_expires_at > now()
+                """,
+                (progress, lease_seconds, job_id, lease_token_hash),
+            )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
+def heartbeat_external_background_job(job_id: int, *, lease_token_hash: str, lease_seconds: int) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET last_heartbeat_at = now(),
+                lease_expires_at = now() + (%s::text || ' seconds')::interval
+            WHERE id = %s
+              AND status = 'running'
+              AND execution_region = 'external'
+              AND lease_token_hash = %s
+              AND lease_expires_at > now()
+            """,
+            (lease_seconds, job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
+def external_background_job_lease_is_active(job_id: int, *, lease_token_hash: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM background_jobs
+            WHERE id = %s
+              AND status = 'running'
+              AND execution_region = 'external'
+              AND lease_token_hash = %s
+              AND lease_expires_at > now()
+            """,
+            (job_id, lease_token_hash),
+        ).fetchone()
+        return row is not None
+
+
 def finish_background_job(job_id: int, result: dict | None = None) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -469,6 +666,31 @@ def finish_background_job(job_id: int, result: dict | None = None) -> None:
             (Json(_jsonable(result or {})), job_id),
         )
         conn.commit()
+
+
+def finish_external_background_job(job_id: int, *, lease_token_hash: str, result: dict | None = None) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'ok',
+                progress = 100,
+                result_json = %s,
+                error_message = NULL,
+                claimed_by = NULL,
+                lease_token_hash = NULL,
+                lease_expires_at = NULL,
+                finished_at = now()
+            WHERE id = %s
+              AND status = 'running'
+              AND execution_region = 'external'
+              AND lease_token_hash = %s
+              AND lease_expires_at > now()
+            """,
+            (Json(_jsonable(result or {})), job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
 
 
 def fail_background_job(job_id: int, error_message: str, *, retry_delay_seconds: int | None = None) -> None:
@@ -509,6 +731,67 @@ def fail_background_job(job_id: int, error_message: str, *, retry_delay_seconds:
                 (error_message, job_id),
             )
         conn.commit()
+
+
+def fail_external_background_job(
+    job_id: int,
+    *,
+    lease_token_hash: str,
+    error_message: str,
+    retryable: bool,
+    retry_delay_seconds: int | None = None,
+) -> bool:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT attempts, max_attempts
+            FROM background_jobs
+            WHERE id = %s
+              AND status = 'running'
+              AND execution_region = 'external'
+              AND lease_token_hash = %s
+              AND lease_expires_at > now()
+            """,
+            (job_id, lease_token_hash),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return False
+        should_retry = retryable and int(row["attempts"] or 0) < int(row["max_attempts"] or 0)
+        if should_retry:
+            delay = retry_delay_seconds if retry_delay_seconds is not None else 60
+            conn.execute(
+                """
+                UPDATE background_jobs
+                SET status = 'queued',
+                    progress = 0,
+                    run_after = now() + (%s::text || ' seconds')::interval,
+                    error_message = %s,
+                    started_at = NULL,
+                    claimed_by = NULL,
+                    lease_token_hash = NULL,
+                    lease_expires_at = NULL
+                WHERE id = %s
+                """,
+                (delay, error_message, job_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE background_jobs
+                SET status = 'failed',
+                    error_message = %s,
+                    claimed_by = NULL,
+                    lease_token_hash = NULL,
+                    lease_expires_at = NULL,
+                    finished_at = now()
+                WHERE id = %s
+                """,
+                (error_message, job_id),
+            )
+        conn.commit()
+        return True
 
 
 def requeue_stale_background_jobs(stale_minutes: int) -> int:

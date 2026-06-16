@@ -59,6 +59,40 @@ def test_jobs_requeue_stale_command_accepts_override(monkeypatch, capsys):
     assert "stale_minutes=120" in output
 
 
+def test_external_queues_status_command(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.external_queue_status",
+        lambda: {
+            "totals": {
+                "queued": 3,
+                "running": 1,
+                "failed": 2,
+                "ok": 0,
+                "expired_leases": 0,
+                "oldest_queued_at": None,
+                "last_heartbeat_at": None,
+            },
+            "queues": [
+                {
+                    "queue_name": "external-ai",
+                    "queued": 3,
+                    "running": 1,
+                    "failed": 2,
+                    "ok": 0,
+                    "oldest_queued_at": None,
+                    "last_heartbeat_at": None,
+                }
+            ],
+        },
+    )
+
+    cli.main(["external-queues-status"])
+
+    output = capsys.readouterr().out
+    assert "external-queues: queued=3" in output
+    assert "external-ai: queued=3" in output
+
+
 def test_maintenance_cleanup_command_uses_defaults(monkeypatch, capsys):
     monkeypatch.setattr("oiltech_digest.config.BACKGROUND_JOB_RETENTION_DAYS", 21)
     monkeypatch.setattr("oiltech_digest.config.EXPORT_JOB_RETENTION_DAYS", 14)
