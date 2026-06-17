@@ -7,8 +7,27 @@ import type { Article, ArticlePatch } from "./types";
 // нижние по релевантности сигналы в каталоге практически не нужны.
 export const DEFAULT_ARTICLE_LIMIT = 2000;
 
-export function listArticles(limit = DEFAULT_ARTICLE_LIMIT) {
-  return apiFetch<Article[]>(`/api/articles?limit=${limit}`);
+export type ArticleQuery = {
+  limit?: number;
+  search?: string;
+  source?: string;
+  tag?: string;
+  status?: string;
+  minScore?: number;
+};
+
+// Без фильтров возвращает дефолтный лёгкий топ-2000. С `search` (и др.) запрос
+// уходит в Postgres и покрывает ВСЮ базу — это снимает компромисс «поиск только
+// по загруженным 2000».
+export function listArticles(query: ArticleQuery = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(query.limit ?? DEFAULT_ARTICLE_LIMIT));
+  if (query.search) params.set("search", query.search);
+  if (query.source) params.set("source", query.source);
+  if (query.tag) params.set("tag", query.tag);
+  if (query.status) params.set("status", query.status);
+  if (query.minScore != null) params.set("min_score", String(query.minScore));
+  return apiFetch<Article[]>(`/api/articles?${params.toString()}`);
 }
 
 export function updateArticle(articleId: number, payload: ArticlePatch) {

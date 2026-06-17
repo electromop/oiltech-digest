@@ -42,8 +42,11 @@ export function ArticlesPage(props: Props) {
   const [showSourceOptions, setShowSourceOptions] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [renderLimit, setRenderLimit] = useState(200);
+  const [serverResults, setServerResults] = useState<Article[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
-  const articles = initialArticles;
+  // serverResults != null → активен серверный поиск по всей базе; иначе — дефолтный топ-2000.
+  const articles = serverResults ?? initialArticles;
   const stats = initialStats;
 
   function handleError(error: unknown, fallback: string) {
@@ -89,12 +92,43 @@ export function ArticlesPage(props: Props) {
     setRenderLimit(200);
   }, [dateFrom, dateTo, language, scoreMax, scoreMin, search, sort, source, status, tag]);
 
+  // Поиск уходит на сервер и покрывает ВСЮ базу (а не только загруженный топ-2000).
+  // Пустой запрос → возвращаемся к дефолтному набору. Debounce 400мс.
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) {
+      setServerResults(null);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      listArticles({ search: q, limit: 5000 })
+        .then((rows) => {
+          if (!cancelled) setServerResults(rows);
+        })
+        .catch((error) => {
+          if (!cancelled) handleError(error, "Не удалось выполнить поиск");
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [search]);
+
   const filteredArticles = useMemo(() => {
     const q = search.trim().toLowerCase();
     const items = articles.filter((article) => {
       const hay = [article.title, article.summary, article.source, article.tag].join(" ").toLowerCase();
       return (
-        (!q || hay.includes(q)) &&
+        // При серверном поиске текст уже отфильтрован в Postgres (включая raw_text,
+        // которого нет на клиенте) — не режем результат повторно по hay.
+        (serverResults !== null || !q || hay.includes(q)) &&
         (!tag || article.tag === tag || article.tag.startsWith(`${tag} /`)) &&
         (!status || article.status === status) &&
         (!source || article.source === source) &&
@@ -112,7 +146,7 @@ export function ArticlesPage(props: Props) {
       return Number(b.score || 0) - Number(a.score || 0);
     });
     return items;
-  }, [articles, dateFrom, dateTo, language, scoreMax, scoreMin, search, sort, source, status, tag]);
+  }, [articles, dateFrom, dateTo, language, scoreMax, scoreMin, search, serverResults, sort, source, status, tag]);
 
   const visibleArticles = filteredArticles.slice(0, renderLimit);
   const remaining = filteredArticles.length - visibleArticles.length;
@@ -184,6 +218,8 @@ export function ArticlesPage(props: Props) {
       const [refreshedArticles, refreshedStats] = await Promise.all([listArticles(), getDashboardStats()]);
       props.onArticlesReloaded(refreshedArticles);
       props.onStatsReloaded(refreshedStats);
+      // Держим в синхроне активный серверный поиск (его не перезагружаем целиком).
+      setServerResults((prev) => (prev ? prev.map((item) => (item.id === articleId ? { ...item, status: nextStatus } : item)) : prev));
       props.showToast("Статус статьи обновлён");
     } catch (error) {
       handleError(error, "Не удалось обновить статус статьи");
@@ -211,7 +247,15 @@ export function ArticlesPage(props: Props) {
         <div className="panelHeader">
           <h2>Каталог сигналов</h2>
           <div className="settingsActions">
-            <span className="badge">{remaining > 0 ? `${filteredArticles.length} сигналов · показаны ${visibleArticles.length}` : `${filteredArticles.length} сигналов`}</span>
+            <span className="badge">
+              {searching
+                ? "Поиск по всей базе…"
+                : serverResults !== null
+                  ? `Найдено по всей базе: ${filteredArticles.length}`
+                  : remaining > 0
+                    ? `${filteredArticles.length} сигналов · показаны ${visibleArticles.length}`
+                    : `${filteredArticles.length} сигналов`}
+            </span>
             <button type="button" className="ghostButton" onClick={() => void reload()}>
               Обновить
             </button>
@@ -221,7 +265,7 @@ export function ArticlesPage(props: Props) {
         <div className="articlesFiltersRow">
           <label className="field">
             <span>Поиск</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Название, суть, ключевые слова" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по всей базе: название, текст, суть" />
           </label>
           <div className="field sourceComboReact">
             <span>Тег</span>
