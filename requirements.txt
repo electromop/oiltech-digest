@@ -9,3 +9,4 @@ python-dotenv==1.0.1
 fastapi==0.125.0
 uvicorn[standard]==0.38.0
 playwright>=1.40  # PDF-экспорт дайджеста через headless Chromium (см. Dockerfile)
+python-docx==1.2.0

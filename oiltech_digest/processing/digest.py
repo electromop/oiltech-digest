@@ -527,151 +527,174 @@ def render_digest_pdf(content: dict) -> bytes:
     return pdf_bytes
 
 
-def render_digest_docx(content: dict) -> bytes:
-    """Render digest to a minimal OOXML .docx package without external deps."""
-    issue = content.get("issue") or {}
-    news_items = content.get("news") or []
-    highlights = content.get("highlights") or _digest_highlights(news_items)
+def _fetch_docx_image(url: str | None) -> bytes | None:
+    """Скачать картинку статьи для вставки в Word. Любая ошибка/неподходящий тип → None (пропуск)."""
+    if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return None
+    try:
+        import requests
 
-    def text_run(text: str, *, bold: bool = False) -> str:
-        if not text:
-            return ""
-        body = f"<w:t xml:space=\"preserve\">{xml_escape(text)}</w:t>"
-        if bold:
-            return f"<w:r><w:rPr><w:b/></w:rPr>{body}</w:r>"
-        return f"<w:r>{body}</w:r>"
+        resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 OilTechDigest"})
+        content_type = resp.headers.get("content-type", "")
+        if resp.ok and content_type.startswith("image/") and "svg" not in content_type:
+            data = resp.content
+            if 0 < len(data) <= 8_000_000:  # не тащим гигантские файлы в документ
+                return data
+    except Exception:
+        return None
+    return None
 
-    def paragraph(text: str = "", *, style: str | None = None, bold: bool = False, page_break: bool = False) -> str:
-        props = f"<w:pPr><w:pStyle w:val=\"{style}\"/></w:pPr>" if style else ""
-        if page_break:
-            run = "<w:r><w:br w:type=\"page\"/></w:r>"
-        else:
-            run = text_run(text, bold=bold) if text else ""
-        return f"<w:p>{props}{run}</w:p>"
 
-    body_parts = [
-        paragraph(issue.get("title") or "Нефтесервисный дайджест", style="Title"),
-        paragraph(issue.get("intro") or ""),
-        paragraph("Главное за период", style="Heading1"),
-    ]
-    for item in highlights:
-        body_parts.append(paragraph(f"{item.get('value', 0)} — {item.get('label', '')}"))
+def _add_docx_hyperlink(paragraph, url: str, text: str, color_hex: str | None = None) -> None:
+    """Вставить кликабельную ссылку в параграф python-docx (нативной поддержки нет)."""
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
 
-    body_parts.append(paragraph("Новости", style="Heading1"))
-    for index, item in enumerate(news_items, start=1):
-        body_parts.append(paragraph(item.get("title") or f"Материал {index}", style="Heading2"))
-        meta = " | ".join(part for part in [item.get("category"), item.get("source"), item.get("published_at")] if part)
-        if meta:
-            body_parts.append(paragraph(meta))
-        if item.get("summary"):
-            body_parts.append(paragraph(item["summary"]))
-        if item.get("url"):
-            body_parts.append(paragraph(f"Читать далее: {item['url']}"))
-        if index != len(news_items):
-            body_parts.append(paragraph())
-
-    document_xml = (
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
-        "<w:document xmlns:wpc=\"http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas\" "
-        "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" "
-        "xmlns:o=\"urn:schemas-microsoft-com:office:office\" "
-        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
-        "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\" "
-        "xmlns:v=\"urn:schemas-microsoft-com:vml\" "
-        "xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing\" "
-        "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
-        "xmlns:w10=\"urn:schemas-microsoft-com:office:word\" "
-        "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
-        "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" "
-        "xmlns:wpg=\"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup\" "
-        "xmlns:wpi=\"http://schemas.microsoft.com/office/word/2010/wordprocessingInk\" "
-        "xmlns:wne=\"http://schemas.microsoft.com/office/word/2006/wordml\" "
-        "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" "
-        "mc:Ignorable=\"w14 wp14\">"
-        f"<w:body>{''.join(body_parts)}"
-        "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1134\" w:right=\"1134\" w:bottom=\"1134\" w:left=\"1134\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr>"
-        "</w:body></w:document>"
+    r_id = paragraph.part.relate_to(
+        url,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
     )
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+    run = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    if color_hex:
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), color_hex)
+        rpr.append(color)
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    rpr.append(underline)
+    run.append(rpr)
+    text_el = OxmlElement("w:t")
+    text_el.text = text
+    run.append(text_el)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
 
-    styles_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
-    <w:name w:val="Normal"/>
-    <w:qFormat/>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Title">
-    <w:name w:val="Title"/>
-    <w:basedOn w:val="Normal"/>
-    <w:qFormat/>
-    <w:rPr><w:b/><w:sz w:val="36"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Heading1">
-    <w:name w:val="Heading 1"/>
-    <w:basedOn w:val="Normal"/>
-    <w:qFormat/>
-    <w:rPr><w:b/><w:sz w:val="28"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Heading2">
-    <w:name w:val="Heading 2"/>
-    <w:basedOn w:val="Normal"/>
-    <w:qFormat/>
-    <w:rPr><w:b/><w:color w:val="003DA6"/><w:sz w:val="24"/></w:rPr>
-  </w:style>
-</w:styles>"""
 
-    content_types_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
-  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-</Types>"""
+def render_digest_docx(content: dict) -> bytes:
+    """Render the branded digest to a rich .docx via python-docx.
 
-    root_rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
-</Relationships>"""
-
-    document_rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-</Relationships>"""
-
-    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    core_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
- xmlns:dc="http://purl.org/dc/elements/1.1/"
- xmlns:dcterms="http://purl.org/dc/terms/"
- xmlns:dcmitype="http://purl.org/dc/dcmitype/"
- xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>{xml_escape(issue.get("title") or "Нефтесервисный дайджест")}</dc:title>
-  <dc:creator>OilTech Digest</dc:creator>
-  <cp:lastModifiedBy>OilTech Digest</cp:lastModifiedBy>
-  <dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
-</cp:coreProperties>"""
-
-    app_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
- xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>OilTech Digest</Application>
-</Properties>"""
-
+    Включает шапку бренда, hero, «Главное за период», новости с фото, кликабельные
+    ссылки «Читать далее» и футер — в отличие от прежней урезанной выгрузки.
+    """
     from io import BytesIO
 
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+
+    issue = content.get("issue") or {}
+    hero = content.get("hero") or {}
+    news_items = content.get("news") or content.get("items") or []
+    highlights = content.get("highlights") or _digest_highlights(news_items)
+    footer = content.get("footer") or {}
+    header = (content.get("branding") or {}).get("header") or {}
+
+    BRAND_HEX = "003DA6"
+    ACCENT_HEX = "E83D08"
+    BRAND = RGBColor(0x00, 0x3D, 0xA6)
+    ACCENT = RGBColor(0xE8, 0x3D, 0x08)
+    GREY = RGBColor(0x66, 0x66, 0x66)
+
+    doc = Document()
+    section = doc.sections[0]
+    section.top_margin = section.bottom_margin = Inches(0.6)
+    section.left_margin = section.right_margin = Inches(0.7)
+
+    # --- Шапка бренда ---
+    if header.get("brand_text"):
+        p = doc.add_paragraph()
+        run = p.add_run(header.get("brand_text", ""))
+        run.bold = True
+        run.font.size = Pt(15)
+        run.font.color.rgb = BRAND
+        if header.get("brand_suffix"):
+            suffix = p.add_run("   " + header["brand_suffix"])
+            suffix.font.size = Pt(9)
+            suffix.font.color.rgb = GREY
+    if header.get("department_text"):
+        p = doc.add_paragraph()
+        run = p.add_run(header["department_text"])
+        run.font.size = Pt(9)
+        run.font.color.rgb = GREY
+
+    # --- Hero ---
+    if hero.get("badge"):
+        p = doc.add_paragraph()
+        run = p.add_run(hero["badge"])
+        run.bold = True
+        run.font.size = Pt(9)
+        run.font.color.rgb = ACCENT
+    doc.add_heading(hero.get("headline") or issue.get("title") or "Нефтесервисный дайджест", level=0)
+    if hero.get("subtitle"):
+        p = doc.add_paragraph()
+        run = p.add_run(hero["subtitle"])
+        run.italic = True
+        run.font.size = Pt(11)
+    if issue.get("intro"):
+        doc.add_paragraph(issue["intro"])
+
+    # --- Главное за период ---
+    if highlights:
+        doc.add_heading(issue.get("highlights_title") or "Главное за период", level=1)
+        for hl in highlights:
+            p = doc.add_paragraph(style="List Bullet")
+            value = p.add_run(f"{hl.get('value', 0)} ")
+            value.bold = True
+            value.font.color.rgb = BRAND
+            p.add_run(str(hl.get("label", "")))
+
+    # --- Новости ---
+    doc.add_heading(issue.get("news_title") or "Новости", level=1)
+    read_more = issue.get("read_more_label") or "Читать далее"
+    for index, item in enumerate(news_items, start=1):
+        doc.add_heading(item.get("title") or f"Материал {index}", level=2)
+        image = _fetch_docx_image(item.get("image_url"))
+        if image:
+            try:
+                doc.add_picture(BytesIO(image), width=Inches(2.8))
+            except Exception:
+                pass
+        meta = " · ".join(
+            part for part in [item.get("category"), item.get("source"), item.get("published_at")] if part
+        )
+        if meta:
+            p = doc.add_paragraph()
+            run = p.add_run(meta)
+            run.font.size = Pt(9)
+            run.font.color.rgb = GREY
+        if item.get("summary"):
+            doc.add_paragraph(item["summary"])
+        if item.get("url"):
+            p = doc.add_paragraph()
+            _add_docx_hyperlink(p, str(item["url"]), f"{read_more} →", ACCENT_HEX)
+
+    # --- Футер ---
+    doc.add_paragraph()
+    if footer.get("contact_text") or footer.get("contact_email"):
+        p = doc.add_paragraph()
+        if footer.get("contact_text"):
+            p.add_run(footer["contact_text"] + " ")
+        if footer.get("contact_email"):
+            _add_docx_hyperlink(p, f"mailto:{footer['contact_email']}", str(footer["contact_email"]), BRAND_HEX)
+    socials = footer.get("socials") or []
+    labels = " · ".join(s.get("label", "") for s in socials if s.get("label"))
+    if labels:
+        p = doc.add_paragraph()
+        run = p.add_run(labels)
+        run.font.size = Pt(9)
+        run.font.color.rgb = GREY
+    if footer.get("note"):
+        p = doc.add_paragraph()
+        run = p.add_run(footer["note"])
+        run.italic = True
+        run.font.size = Pt(8)
+        run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+
     buffer = BytesIO()
-    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", content_types_xml)
-        archive.writestr("_rels/.rels", root_rels_xml)
-        archive.writestr("word/document.xml", document_xml)
-        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
-        archive.writestr("word/styles.xml", styles_xml)
-        archive.writestr("docProps/core.xml", core_xml)
-        archive.writestr("docProps/app.xml", app_xml)
+    doc.save(buffer)
     return buffer.getvalue()
 
 
