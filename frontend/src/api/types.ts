@@ -328,6 +328,7 @@ export type Tag = {
   description: string | null;
   keywords_json: string[];
   keywords_en_json: string[];
+  negative_keywords_json?: string[];
   enabled: boolean;
   sort_order: number;
 };

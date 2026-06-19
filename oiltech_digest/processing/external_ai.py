@@ -7,6 +7,7 @@ from typing import Any
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.pipeline import (
+    _negative_keyword_block,
     keyword_tag,
     make_client,
     normalize_score_payload,
@@ -56,6 +57,22 @@ def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         try:
+            # Стоп-слова родительских тегов: отсекаем статью ДО любых AI-вызовов (бэклог #6).
+            blocked_reason = _negative_keyword_block(article, tags)
+            if blocked_reason:
+                item["relevance"] = {
+                    "relevant": False,
+                    "reason": blocked_reason,
+                    "model": "negative-keyword",
+                    "provider": "offline",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "cost_usd": 0.0,
+                }
+                result["stats"]["rejected"] += 1
+                result["articles"].append(item)
+                continue
             summary_resp = summarize_article(article, client)
             item["summary"] = _response_payload(summary_resp, {"summary": summary_resp.data["summary"]})
             article["summary"] = summary_resp.data["summary"]

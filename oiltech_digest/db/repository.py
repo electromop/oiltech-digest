@@ -1472,6 +1472,7 @@ def save_tags(items: list[dict]) -> dict:
                 "description": it.get("description"),
                 "keywords_json": Json(it.get("keywords_json") or []),
                 "keywords_en_json": Json(it.get("keywords_en_json") or []),
+                "negative_keywords_json": Json(it.get("negative_keywords_json") or []),
                 "enabled": bool(it.get("enabled", True)),
                 "sort_order": it.get("sort_order") or 0,
             }
@@ -1480,8 +1481,8 @@ def save_tags(items: list[dict]) -> dict:
                     """
                     UPDATE tags SET parent_id=%(parent_id)s, name=%(name)s, name_en=%(name_en)s,
                         description=%(description)s, keywords_json=%(keywords_json)s,
-                        keywords_en_json=%(keywords_en_json)s, enabled=%(enabled)s,
-                        sort_order=%(sort_order)s, updated_at=now()
+                        keywords_en_json=%(keywords_en_json)s, negative_keywords_json=%(negative_keywords_json)s,
+                        enabled=%(enabled)s, sort_order=%(sort_order)s, updated_at=now()
                     WHERE id=%(id)s
                     """,
                     {**payload, "id": int(it["id"])},
@@ -1491,9 +1492,9 @@ def save_tags(items: list[dict]) -> dict:
                 cur = conn.execute(
                     """
                     INSERT INTO tags (parent_id, name, name_en, description, keywords_json,
-                                      keywords_en_json, enabled, sort_order)
+                                      keywords_en_json, negative_keywords_json, enabled, sort_order)
                     VALUES (%(parent_id)s, %(name)s, %(name_en)s, %(description)s,
-                            %(keywords_json)s, %(keywords_en_json)s, %(enabled)s, %(sort_order)s)
+                            %(keywords_json)s, %(keywords_en_json)s, %(negative_keywords_json)s, %(enabled)s, %(sort_order)s)
                     RETURNING id
                     """,
                     payload,

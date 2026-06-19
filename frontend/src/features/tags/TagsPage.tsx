@@ -61,6 +61,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
         description: "",
         keywords_json: [],
         keywords_en_json: [],
+        negative_keywords_json: [],
         enabled: true,
         sort_order: (prev.length + 1) * 10,
       },
@@ -158,6 +159,20 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                     <label className="field fieldWide">
                       <span>Описание для AI</span>
                       <input value={parent.description || ""} onChange={(event) => updateTag(parentIndex, "description", event.target.value)} />
+                    </label>
+                    <label className="field fieldWide">
+                      <span>Стоп-слова (исключают статью; через запятую)</span>
+                      <input
+                        value={(parent.negative_keywords_json || []).join(", ")}
+                        onChange={(event) =>
+                          updateTag(
+                            parentIndex,
+                            "negative_keywords_json",
+                            event.target.value.split(",").map((word) => word.trim()).filter(Boolean),
+                          )
+                        }
+                        placeholder="напр.: футбол, банкротство, вакансия"
+                      />
                     </label>
                     <div className="settingsActions">
                       <button type="button" className="ghostButton" onClick={() => addSubtag(parent.name)}>

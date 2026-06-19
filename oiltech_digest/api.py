@@ -128,6 +128,7 @@ class TagIn(BaseModel):
     description: str | None = None
     keywords_json: list[str] = []
     keywords_en_json: list[str] = []
+    negative_keywords_json: list[str] = []
     enabled: bool = True
     sort_order: int = 0
 

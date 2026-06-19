@@ -163,6 +163,8 @@ CREATE TABLE IF NOT EXISTS tags (
   updated_at    TIMESTAMPTZ DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_parent ON tags(name, (COALESCE(parent_id, 0)));
+-- Стоп-слова (negative keywords) у родительских тегов: статья со стоп-словом исключается на этапе релевантности.
+ALTER TABLE tags ADD COLUMN IF NOT EXISTS negative_keywords_json JSONB;
 
 CREATE TABLE IF NOT EXISTS article_tags (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

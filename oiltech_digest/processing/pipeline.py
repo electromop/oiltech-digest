@@ -52,10 +52,18 @@ def process_relevance(limit: int = 20, offline: bool = False) -> dict:
 
 def process_relevance_articles(articles: list[dict], client) -> dict:
     """AI-фильтр: помечает статьи как релевантные/нерелевантные нефтесервису.
-    Нерелевантные получают status='rejected' и дальше не тегируются/не скорятся."""
+    Нерелевантные получают status='rejected' и дальше не тегируются/не скорятся.
+    Перед AI-вызовом отсекаем статьи со стоп-словами родительских тегов (бэклог #6)."""
+    tags = repository.list_enabled_tags()
     stats = {"processed": 0, "relevant": 0, "rejected": 0, "errors": 0}
     for article in articles:
         try:
+            blocked_reason = _negative_keyword_block(article, tags)
+            if blocked_reason:
+                repository.set_article_relevance(article["id"], False, blocked_reason, "negative-keyword")
+                stats["processed"] += 1
+                stats["rejected"] += 1
+                continue
             response = relevance_article(article, client)
             relevant = bool(response.data.get("relevant"))
             repository.set_article_relevance(
@@ -331,6 +339,19 @@ def _article_prompt(article: dict) -> str:
             f"text: {_compact(article.get('raw_text') or '', 6000)}",
         ]
     )
+
+
+def _negative_keyword_block(article: dict, tags: list[dict]) -> str | None:
+    """Если текст статьи содержит стоп-слово родительского тега — вернуть причину, иначе None.
+    Стоп-слова задаются только у родительских тегов (parent_id IS NULL) — бэклог заказчика #6."""
+    text = _search_text(article)
+    for tag in tags:
+        if tag.get("parent_id"):
+            continue
+        for keyword in tag.get("negative_keywords_json") or []:
+            if _contains_keyword(text, keyword):
+                return f"стоп-слово «{keyword}» (тег «{tag.get('name')}»)"
+    return None
 
 
 def _search_text(article: dict) -> str:
