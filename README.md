@@ -16,16 +16,34 @@ Telegram), очищает и оценивает их с помощью AI, а р
 
 ---
 
+## Архитектура (гео-распределённая)
+
+Продукт работает на **двух серверах** — это решает две географические границы одновременно: РФ-госсайты недоступны из-за рубежа, а OpenAI не работает с РФ-IP.
+
+- **🇷🇺 РФ-сервер (core)** — БД (PostgreSQL), веб-админка, домен, планировщик, парсинг РФ-источников. Пользователи работают с ним **локально, без VPN**; данные — в РФ.
+- **🌍 Зарубежный сервер (external worker)** — stateless-воркер: OpenAI-обработка и парсинг заблокированных из РФ источников. Без БД и UI.
+
+Связь — **не прямой коннект к БД и не VPN** (их режут блокировки), а **HTTPS-очередь задач**: core кладёт задачу, зарубежный воркер забирает её по HTTPS (`/api/external-worker/claim`), выполняет и возвращает результат.
+
+```text
+Пользователи → 🇷🇺 РФ-core (БД + UI + РФ-парсинг)  ⇄ HTTPS task-API ⇄  🌍 NL-воркер (OpenAI + иностранные сайты)
+```
+
+Всё за флагами (`EXTERNAL_WORKERS_ENABLED`, `AI_EXECUTION_REGION`, `FETCH_EXTERNAL_ENABLED`) — по умолчанию **single-server** режим, когда один сервер делает всё. Детали: [`docs/geodistributed_architecture_plan.md`](docs/geodistributed_architecture_plan.md), [`docs/external_worker_deploy.md`](docs/external_worker_deploy.md).
+
+---
+
 ## Возможности
 
 - **Сбор без участия человека** — RSS, HTML-листинги и Telegram-каналы, с защитой от
   банов (паузы между запросами, прокси, cooldown на 403/429).
 - **AI-конвейер** — краткая суть, фильтр релевантности, авто-тегирование по
   направлениям и скоринг каждой статьи (0–100) по настраиваемым критериям.
-- **Веб-панель администратора** — каталог статей с фильтрами, ручная модерация,
-  здоровье источников, редактор тегов и весов скоринга.
-- **Фирменный дайджест** — выгрузка отобранных статей в **PDF** и **Word** в дизайне,
-  идентичном корпоративному референсу.
+- **Веб-панель администратора** (React) — каталог статей с серверным поиском по всей
+  базе, фильтрами и вкладкой «Со статусом», ручная модерация, здоровье источников,
+  редактор тегов (со **стоп-словами** для исключения ненужных статей) и весов скоринга.
+- **Фирменный дайджест** — выгрузка отобранных статей в **PDF** и **Word** (с фото,
+  кликабельными ссылками, шапкой и футером) в дизайне корпоративного референса.
 
 ---
 
@@ -148,7 +166,10 @@ uvicorn oiltech_digest.api:app --reload --port 8000
 | `discover-rss` | автообнаружение RSS по сайту источника |
 | `parse` | собрать `rss`/`request`/`telegram`-источники в `articles` |
 | `fetch-full-text` | заменить RSS-анонс на полный текст статьи |
-| `process` | `summarize → relevance → tag → score` одной командой |
+| `process` | `summarize → relevance → tag → score` одной командой (локально) |
+| `enqueue-process` | поставить AI-обработку в очередь зарубежного воркера (гео-режим) |
+| `external-worker` | клиент-воркер на зарубежном сервере (берёт задачи по HTTPS) |
+| `external-queues-status` | состояние внешних очередей и heartbeat воркера |
 | `digest-content` / `digest-save` | собрать/сохранить выпуск дайджеста |
 | `source-health` / `source-diagnose` | диагностика покрытия источников |
 | `stats` / `ai-cost-report` | статистика и стоимость AI |
@@ -166,16 +187,19 @@ docker compose run --rm test           # тот же набор в Docker с dev
 
 ```text
 oiltech_digest/
-  config.py          # пути, DATABASE_URL, константы парсера
+  config.py          # пути, DATABASE_URL, флаги гео-контура, константы парсера
   db/                # schema.sql, connection, repository
-  ingestion/         # сбор: rss/request/telegram, http_client, normalize, full-text, og:image
-  processing/        # AI-конвейер (OpenAI), seed, дайджест + фирменный шаблон
-  api.py             # FastAPI backend + статика админки
+  ingestion/         # сбор: rss/request/telegram, http_client, full-text, external_fetch
+  processing/        # AI-конвейер (OpenAI), дайджест (PDF/Word), external_ai
+  network_policy.py  # маршрутизация задач: локально (РФ) или внешний воркер
+  external_worker.py # клиент-воркер для зарубежного сервера (HTTP-pull)
+  api.py             # FastAPI backend + external-worker task-API + статика
   cli.py             # командная строка
-web/app.html         # одностраничная админ-панель
+frontend/            # React-админка (Vite + TS); web/app.html — fallback
 tests/               # pytest
-docs/                # архитектура, гайд, тестирование
-docker-compose.yml   # PostgreSQL 16 + app + scheduler
+docs/                # архитектура, гайды, runbook'и
+docker-compose.yml                   # РФ-core: db + app + worker + scheduler + caddy
+docker-compose.external-worker.yml   # зарубежный stateless-воркер
 ```
 
 ### Документация
