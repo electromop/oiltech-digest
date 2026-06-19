@@ -93,7 +93,11 @@ while true; do
     run_step "fetch-full-text" python -m oiltech_digest.cli fetch-full-text --limit "$FULL_TEXT_LIMIT" --min-chars "$FULL_TEXT_MIN_CHARS" ${_retry_flag}
 
     if [ "$AI_PROCESS_LIMIT" -gt 0 ]; then
-      if [ "$AI_OFFLINE" = "1" ]; then
+      if [ "${AI_EXECUTION_REGION:-ru}" = "external" ]; then
+        # Внешний контур: РФ-core не зовёт OpenAI сам, а ставит задачу в external-ai —
+        # её заберёт зарубежный worker.
+        run_step "enqueue-process" python -m oiltech_digest.cli enqueue-process --limit "$AI_PROCESS_LIMIT"
+      elif [ "$AI_OFFLINE" = "1" ]; then
         run_step "process-offline" python -m oiltech_digest.cli process --offline --limit "$AI_PROCESS_LIMIT"
       elif [ -n "${OPENAI_API_KEY:-}" ]; then
         run_step "process" python -m oiltech_digest.cli process --limit "$AI_PROCESS_LIMIT"

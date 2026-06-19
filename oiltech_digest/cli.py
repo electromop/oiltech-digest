@@ -248,6 +248,33 @@ def cmd_process_articles(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_enqueue_process(args: argparse.Namespace) -> None:
+    """Поставить AI-обработку в очередь, НЕ выполняя её локально.
+
+    route_ai_processing() решает куда: при AI_EXECUTION_REGION=external и включённом
+    внешнем контуре — в очередь external-ai (её разбирает зарубежный worker), иначе —
+    в локальную очередь ai. Пустой article_ids → worker берёт следующие N статей без
+    суммы (выбор делается на стороне core в момент claim). Используется scheduler'ом,
+    чтобы РФ-core не звал OpenAI напрямую.
+    """
+    from oiltech_digest import network_policy
+    from oiltech_digest.db import repository
+
+    decision = network_policy.route_ai_processing()
+    payload = {"limit": int(args.limit), "offline": bool(args.offline)}
+    job = repository.create_background_job(
+        "process_articles",
+        payload,
+        queue_name=decision.queue_name,
+        execution_region=decision.execution_region,
+        capability=decision.capability,
+    )
+    print(
+        f"enqueue-process: job id={job['id']} queue={decision.queue_name} "
+        f"region={decision.execution_region} limit={args.limit} ({decision.reason})"
+    )
+
+
 def cmd_ai_cost_report(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -679,6 +706,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_process_articles.add_argument("article_id", nargs="+", type=int)
     p_process_articles.add_argument("--offline", action="store_true", help="детерминированная локальная заглушка без OpenAI API")
     p_process_articles.set_defaults(func=cmd_process_articles)
+
+    p_enqueue_process = sub.add_parser("enqueue-process", help="поставить AI-обработку в очередь (external-ai при внешнем контуре), не выполняя локально")
+    add_ai_args(p_enqueue_process)
+    p_enqueue_process.set_defaults(func=cmd_enqueue_process)
 
     sub.add_parser("ai-cost-report", help="отчёт по токенам/стоимости AI-этапов").set_defaults(func=cmd_ai_cost_report)
 
