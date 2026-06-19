@@ -9,9 +9,10 @@ type ToastWriter = (text: string, tone?: "default" | "error") => void;
 type Props = {
   onUnauthorized: () => void;
   showToast: ToastWriter;
+  onArticlesChanged?: () => void;
 };
 
-export function DigestPage({ onUnauthorized, showToast }: Props) {
+export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
   const [branding, setBranding] = useState<DigestBranding | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,6 +80,7 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
       setBusy(true);
       await updateArticle(articleId, { status: "review" });
       await reload();
+      onArticlesChanged?.();
       showToast("Статья убрана из дайджеста");
     } catch (error) {
       handleError(error, "Не удалось убрать статью из дайджеста");

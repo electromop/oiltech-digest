@@ -186,7 +186,7 @@ export function App() {
   }
 
   if (activeScreen === "digest") {
-    currentScreen = <DigestPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+    currentScreen = <DigestPage onUnauthorized={() => setUser(null)} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} />;
   }
 
   if (activeScreen === "scoring") {
