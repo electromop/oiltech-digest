@@ -175,15 +175,6 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     return counts;
   }, [health]);
 
-  const triageCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    sources.forEach((source) => {
-      const triage = getSourceTriage(source, getSourceHealth(source.id), diagnostics[source.id]);
-      counts[triage.key] = (counts[triage.key] || 0) + 1;
-    });
-    return counts;
-  }, [diagnostics, health, sources]);
-
   const filteredSources = useMemo(() => {
     const q = search.trim().toLowerCase();
     const verdictRank: Record<string, number> = { no_articles: 0, stale: 1, disabled: 2, ok: 3 };
@@ -413,49 +404,6 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
           >
             <span className="sourceStatValue">{healthCounts.disabled}</span>
             <span className="sourceStatLabel">Выкл</span>
-          </button>
-        </div>
-
-        <div className="sourceTriageStats">
-          <button
-            type="button"
-            className={triageKey === "" ? "sourceStatCard active" : "sourceStatCard"}
-            onClick={() => setTriageKey("")}
-          >
-            <span className="sourceStatValue">{sources.length}</span>
-            <span className="sourceStatLabel">Все проблемы</span>
-          </button>
-          <button
-            type="button"
-            className={triageKey === "no_articles" ? "sourceStatCard active problem" : "sourceStatCard problem"}
-            onClick={() => setTriageKey("no_articles")}
-          >
-            <span className="sourceStatValue">{triageCounts.no_articles || 0}</span>
-            <span className="sourceStatLabel">0 статей</span>
-          </button>
-          <button
-            type="button"
-            className={triageKey === "stale" ? "sourceStatCard active warning" : "sourceStatCard warning"}
-            onClick={() => setTriageKey("stale")}
-          >
-            <span className="sourceStatValue">{triageCounts.stale || 0}</span>
-            <span className="sourceStatLabel">Застой</span>
-          </button>
-          <button
-            type="button"
-            className={triageKey === "access" ? "sourceStatCard active problem" : "sourceStatCard problem"}
-            onClick={() => setTriageKey("access")}
-          >
-            <span className="sourceStatValue">{triageCounts.access || 0}</span>
-            <span className="sourceStatLabel">Нет доступа</span>
-          </button>
-          <button
-            type="button"
-            className={triageKey === "content" ? "sourceStatCard active warning" : "sourceStatCard warning"}
-            onClick={() => setTriageKey("content")}
-          >
-            <span className="sourceStatValue">{triageCounts.content || 0}</span>
-            <span className="sourceStatLabel">Контент</span>
           </button>
         </div>
 

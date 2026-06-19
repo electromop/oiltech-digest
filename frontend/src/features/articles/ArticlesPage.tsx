@@ -44,10 +44,13 @@ export function ArticlesPage(props: Props) {
   const [renderLimit, setRenderLimit] = useState(200);
   const [serverResults, setServerResults] = useState<Article[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [viewTab, setViewTab] = useState<"all" | "withStatus">("all");
 
   // serverResults != null → активен серверный поиск по всей базе; иначе — дефолтный топ-2000.
   const articles = serverResults ?? initialArticles;
   const stats = initialStats;
+  // Вкладка «Со статусом»: статьи, у которых статус сменили (review/digest/archive).
+  const statusChangedCount = articles.filter((article) => article.status !== "new").length;
 
   function handleError(error: unknown, fallback: string) {
     const statusCode = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
@@ -90,7 +93,7 @@ export function ArticlesPage(props: Props) {
 
   useEffect(() => {
     setRenderLimit(200);
-  }, [dateFrom, dateTo, language, scoreMax, scoreMin, search, sort, source, status, tag]);
+  }, [dateFrom, dateTo, language, scoreMax, scoreMin, search, sort, source, status, tag, viewTab]);
 
   // Поиск уходит на сервер и покрывает ВСЮ базу (а не только загруженный топ-2000).
   // Пустой запрос → возвращаемся к дефолтному набору. Debounce 400мс.
@@ -126,6 +129,8 @@ export function ArticlesPage(props: Props) {
     const items = articles.filter((article) => {
       const hay = [article.title, article.summary, article.source, article.tag].join(" ").toLowerCase();
       return (
+        // Вкладка «Со статусом» оставляет только статьи с изменённым статусом.
+        (viewTab === "all" || article.status !== "new") &&
         // При серверном поиске текст уже отфильтрован в Postgres (включая raw_text,
         // которого нет на клиенте) — не режем результат повторно по hay.
         (serverResults !== null || !q || hay.includes(q)) &&
@@ -146,7 +151,7 @@ export function ArticlesPage(props: Props) {
       return Number(b.score || 0) - Number(a.score || 0);
     });
     return items;
-  }, [articles, dateFrom, dateTo, language, scoreMax, scoreMin, search, serverResults, sort, source, status, tag]);
+  }, [articles, dateFrom, dateTo, language, scoreMax, scoreMin, search, serverResults, sort, source, status, tag, viewTab]);
 
   const visibleArticles = filteredArticles.slice(0, renderLimit);
   const remaining = filteredArticles.length - visibleArticles.length;
@@ -241,6 +246,15 @@ export function ArticlesPage(props: Props) {
           <StatCard key={card.label} label={card.label} value={card.value} />
         ))}
       </section>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+        <button type="button" className={viewTab === "all" ? "primaryButton" : "ghostButton"} onClick={() => setViewTab("all")}>
+          Все
+        </button>
+        <button type="button" className={viewTab === "withStatus" ? "primaryButton" : "ghostButton"} onClick={() => setViewTab("withStatus")}>
+          Со статусом{statusChangedCount > 0 ? ` (${statusChangedCount})` : ""}
+        </button>
+      </div>
 
       <section className="panel">
         {busy ? <InlineLoader label="Обновляем сигналы…" /> : null}

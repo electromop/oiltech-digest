@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { listArticles } from "../../api/articles";
+import { listArticles, updateArticle } from "../../api/articles";
 import { enqueueDigestExport, getDigestBranding, saveDigestBranding } from "../../api/digest";
 import { downloadJobResult, getJob } from "../../api/jobs";
 import type { Article, BackgroundJob, DigestBranding, DigestBrandingSocial, DigestHighlightCard, DigestHighlightRules } from "../../api/types";
@@ -34,7 +34,12 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
   async function reload() {
     try {
       setLoading(true);
-      const [articleRows, brandingPayload] = await Promise.all([listArticles(), getDigestBranding()]);
+      // Грузим ВСЕ статьи со статусом «digest» с сервера (а не топ-2000 по score),
+      // иначе низкоскоринговые материалы выпадают из дайджеста и их не убрать.
+      const [articleRows, brandingPayload] = await Promise.all([
+        listArticles({ status: "digest", limit: 5000 }),
+        getDigestBranding(),
+      ]);
       setArticles(articleRows);
       setBranding({
         ...brandingPayload,
@@ -66,6 +71,19 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
       handleError(error, "Не удалось загрузить статьи для дайджеста");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function removeFromDigest(articleId: number) {
+    try {
+      setBusy(true);
+      await updateArticle(articleId, { status: "review" });
+      await reload();
+      showToast("Статья убрана из дайджеста");
+    } catch (error) {
+      handleError(error, "Не удалось убрать статью из дайджеста");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -680,6 +698,9 @@ export function DigestPage({ onUnauthorized, showToast }: Props) {
                     <strong>{article.title}</strong>
                   </a>
                   <div className="metaText">{article.tag} · score {Math.round(Number(article.score || 0))} · {formatDate(article.date)}</div>
+                  <button type="button" className="ghostButton" disabled={busy} onClick={() => void removeFromDigest(article.id)}>
+                    Убрать из дайджеста
+                  </button>
                 </div>
               ))}
             </div>
