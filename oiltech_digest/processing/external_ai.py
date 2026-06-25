@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse
@@ -37,8 +37,14 @@ def build_process_articles_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Run the AI pipeline without direct database access."""
+def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
+    """Run the AI pipeline without direct database access.
+
+    ``heartbeat`` (если передан) вызывается перед обработкой КАЖДОЙ статьи — это
+    продлевает lease задачи у core. Без него длинный батч на медленной модели
+    (gpt-5.5) истекает по lease (600с) ещё до завершения, и задача бесконечно
+    переотдаётся/ретраится, не закоммитив ничего. Колбэк не должен ронять обработку.
+    """
     client = make_client(bool(payload.get("offline", False)))
     tags = payload.get("tags") or []
     criteria = payload.get("criteria") or []
@@ -54,6 +60,11 @@ def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "articles": [],
     }
     for article in payload.get("articles") or []:
+        if heartbeat is not None:
+            try:
+                heartbeat()
+            except Exception:  # noqa: BLE001 - heartbeat не должен ломать обработку батча
+                pass
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         try:

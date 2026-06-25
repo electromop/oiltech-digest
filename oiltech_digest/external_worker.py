@@ -86,6 +86,15 @@ class ExternalWorkerClient:
         )
         response.raise_for_status()
 
+    def heartbeat(self, job: dict[str, Any]) -> None:
+        """Продлить lease задачи (без lease_seconds core берёт дефолт 600с)."""
+        response = self.session.post(
+            f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/heartbeat",
+            json={"lease_token": job["lease_token"]},
+            timeout=30,
+        )
+        response.raise_for_status()
+
     def complete(self, job: dict[str, Any], result: dict[str, Any]) -> None:
         response = self.session.post(
             f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/complete",
@@ -108,12 +117,24 @@ class ExternalWorkerClient:
         response.raise_for_status()
 
 
+def _safe_heartbeat(client: "ExternalWorkerClient", job: dict[str, Any]) -> None:
+    try:
+        client.heartbeat(job)
+    except Exception:  # noqa: BLE001 - сбой heartbeat не должен прерывать обработку
+        logger.warning("external_heartbeat_failed job_id=%s", job.get("id"))
+
+
 def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
     logger.info("external_job_started job_id=%s kind=%s queue=%s", job["id"], job.get("kind"), job.get("queue"))
     try:
         if job.get("kind") == "process_articles":
             client.progress(job, 20)
-            result = external_ai.process_payload(job.get("payload") or {})
+            # Heartbeat по каждой статье продлевает lease — большой батч на медленной
+            # модели (gpt-5.5) больше не истекает по lease и не уходит в ретрай-петлю.
+            result = external_ai.process_payload(
+                job.get("payload") or {},
+                heartbeat=lambda: _safe_heartbeat(client, job),
+            )
             client.progress(job, 90)
             client.complete(job, result)
         elif job.get("kind") == "scrape_source":

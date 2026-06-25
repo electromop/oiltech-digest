@@ -52,6 +52,37 @@ def test_external_ai_process_payload_offline_returns_structured_result():
     assert article["scoring"]["items"][0]["criterion_id"] == 20
 
 
+def test_external_ai_process_payload_heartbeats_per_article():
+    article = {
+        "id": 1,
+        "title": "Directional drilling automation",
+        "url": "https://example.com/a",
+        "language": "en",
+        "raw_text": "Automation improves drilling efficiency and well construction quality.",
+        "source_name": "Example",
+        "source_category": "Drilling",
+    }
+    payload = {
+        "offline": True,
+        "articles": [dict(article, id=1), dict(article, id=2), dict(article, id=3)],
+        "tags": [{"id": 10, "name": "Бурение", "parent_name": "Технологии", "name_en": "Drilling",
+                  "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}],
+        "criteria": [{"id": 20, "name": "Значимость", "weight": 100, "description": "x",
+                      "keywords_json": [], "keywords_en_json": ["automation"]}],
+    }
+    beats = []
+    # Колбэк, который один раз бросает — обработка не должна падать (heartbeat защищён).
+    def heartbeat():
+        beats.append(1)
+        if len(beats) == 2:
+            raise RuntimeError("transient heartbeat failure")
+
+    result = external_ai.process_payload(payload, heartbeat=heartbeat)
+
+    assert len(beats) == 3              # по разу на каждую из 3 статей
+    assert result["stats"]["processed"] == 3   # сбой heartbeat не прервал батч
+
+
 def test_external_ai_apply_process_result_calls_repository(monkeypatch):
     calls = []
 
