@@ -1,6 +1,38 @@
+/* Корпоративная типографика Газпром нефти — GPN Din (бэклог заказчика #17/#10).
+   Веса диапазонами (400 600 / 700 900): шрифт имеет только Regular и Bold, а в UI
+   используются 800/900 — диапазон отдаёт им реальный Bold (font-synthesis: none). */
+@font-face {
+  font-family: "GPN Din";
+  src: url("/fonts/GPN_DIN-Regular.ttf") format("truetype");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "GPN Din";
+  src: url("/fonts/GPN_DIN-Bold.ttf") format("truetype");
+  font-weight: 700 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "GPN Din Condensed";
+  src: url("/fonts/GPN_DIN_Condensed-Regular.ttf") format("truetype");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "GPN Din Condensed";
+  src: url("/fonts/GPN_DIN_Condensed-Bold.ttf") format("truetype");
+  font-weight: 700 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
-  font-family: Inter, "Segoe UI", sans-serif;
+  font-family: "GPN Din", Inter, "Segoe UI", sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: #0f172a;
@@ -113,6 +145,15 @@ button {
 .brandTitle {
   font-size: 0.95rem;
   font-weight: 800;
+}
+
+/* Фирменный «узкий» GPN Din Condensed — на крупных дисплейных заголовках. */
+.brandTitle,
+.screenHeader h1,
+.pageHeader h1,
+.statValueReact {
+  font-family: "GPN Din Condensed", "GPN Din", Inter, sans-serif;
+  letter-spacing: 0.005em;
 }
 
 .brandSubtitle,
@@ -1396,9 +1437,22 @@ button {
   background: rgba(255, 255, 255, 0.9);
 }
 
+.articleSummaryBox > strong {
+  display: inline-block;
+  margin-bottom: 2px;
+  font-family: "GPN Din Condensed", "GPN Din", sans-serif;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .articleSummaryBox p {
   margin: 6px 0 10px;
-  line-height: 1.4;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #1e293b;
 }
 
 .criterionCardReact + .criterionCardReact {
