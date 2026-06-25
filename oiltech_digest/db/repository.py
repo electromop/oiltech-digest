@@ -197,8 +197,9 @@ def update_source_request_state(
 #  auth
 # ---------------------------------------------------------------------------
 
-def create_user(email: str, password: str) -> dict:
+def create_user(email: str, password: str, role: str = "user") -> dict:
     email = auth.normalize_email(email)
+    role = role if role in ("admin", "user") else "user"
     salt_hex, password_hash = auth.hash_password(password)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -207,11 +208,11 @@ def create_user(email: str, password: str) -> dict:
             raise ValueError("Пользователь с таким email уже существует")
         cur.execute(
             """
-            INSERT INTO users (email, password_salt, password_hash)
-            VALUES (%s, %s, %s)
-            RETURNING id, email, created_at
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, email, role, created_at
             """,
-            (email, salt_hex, password_hash),
+            (email, salt_hex, password_hash, role),
         )
         user = cur.fetchone()
         conn.commit()
@@ -223,7 +224,7 @@ def authenticate_user(email: str, password: str) -> dict | None:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            "SELECT id, email, password_salt, password_hash, created_at FROM users WHERE email = %s",
+            "SELECT id, email, role, password_salt, password_hash, created_at FROM users WHERE email = %s",
             (email,),
         )
         user = cur.fetchone()
@@ -231,7 +232,7 @@ def authenticate_user(email: str, password: str) -> dict | None:
             return None
         if not auth.verify_password(password, user["password_salt"], user["password_hash"]):
             return None
-        return {"id": user["id"], "email": user["email"], "created_at": user["created_at"]}
+        return {"id": user["id"], "email": user["email"], "role": user["role"], "created_at": user["created_at"]}
 
 
 def create_user_session(user_id: int) -> str:
@@ -253,7 +254,7 @@ def get_user_by_session(session_token: str) -> dict | None:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            SELECT u.id, u.email, u.created_at
+            SELECT u.id, u.email, u.role, u.created_at
             FROM user_sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.session_token = %s
@@ -292,6 +293,64 @@ def count_expired_user_sessions() -> int:
 def count_users() -> int:
     with get_connection() as conn:
         return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+
+def list_users() -> list[dict]:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT id, email, role, created_at FROM users ORDER BY id")
+        return cur.fetchall()
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT id, email, role, created_at FROM users WHERE id = %s", (user_id,))
+        return cur.fetchone()
+
+
+def set_user_role(user_id: int, role: str) -> None:
+    role = role if role in ("admin", "user") else "user"
+    with get_connection() as conn:
+        conn.execute("UPDATE users SET role = %s, updated_at = now() WHERE id = %s", (role, user_id))
+        conn.commit()
+
+
+def set_user_password(user_id: int, password: str) -> None:
+    salt_hex, password_hash = auth.hash_password(password)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE users SET password_salt = %s, password_hash = %s, updated_at = now() WHERE id = %s",
+            (salt_hex, password_hash, user_id),
+        )
+        conn.commit()
+
+
+def delete_user(user_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM user_sessions WHERE user_id = %s", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
+
+
+def count_admins() -> int:
+    with get_connection() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0])
+
+
+def ensure_admin_bootstrap() -> int | None:
+    """Если админов нет, а пользователи есть — назначить админом самого первого
+    (по id). Возвращает id назначенного админа или None. Идемпотентно."""
+    with get_connection() as conn:
+        has_admin = conn.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
+        if has_admin:
+            return None
+        row = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+        if not row:
+            return None
+        conn.execute("UPDATE users SET role = 'admin', updated_at = now() WHERE id = %s", (row[0],))
+        conn.commit()
+        return int(row[0])
 
 
 def create_export_job(export_type: str, export_format: str) -> int:

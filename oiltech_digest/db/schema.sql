@@ -225,9 +225,22 @@ CREATE TABLE IF NOT EXISTS users (
   email          TEXT NOT NULL UNIQUE,
   password_salt  TEXT NOT NULL,
   password_hash  TEXT NOT NULL,
+  role           TEXT NOT NULL DEFAULT 'user',  -- 'admin' (всё+пользователи) | 'user' (свой срез, без настроек)
   created_at     TIMESTAMPTZ DEFAULT now(),
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
+
+-- Личное состояние пользователя: свои статусы статей и свой дайджест (срез на юзера).
+-- Сами статьи/AI/теги/скоринг/источники — общие; пер-юзерный только рабочий статус.
+CREATE TABLE IF NOT EXISTS user_article_states (
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  article_id      BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL DEFAULT 'new',  -- new / review / digest / archive
+  analyst_comment TEXT,
+  updated_at      TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (user_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_article_states_user_status ON user_article_states(user_id, status);
 
 CREATE TABLE IF NOT EXISTS user_sessions (
   id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -294,6 +307,7 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(qu
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS title_ru TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
 ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE tags ADD COLUMN IF NOT EXISTS name_en TEXT;
 ALTER TABLE tags ADD COLUMN IF NOT EXISTS keywords_en_json JSONB;
