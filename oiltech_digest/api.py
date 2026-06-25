@@ -430,6 +430,9 @@ def list_articles(
     if min_score is not None:
         clauses.append("COALESCE(sc.total_score, 0) >= %s")
         params.append(min_score)
+    # Скрываем отклонённые гейтом релевантности статьи (relevant=false), как это уже
+    # делает дайджест. relevant IS NULL (ещё не проверенные) остаются видны.
+    clauses.append("c.relevant IS NOT FALSE")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     # user_id — первый %s (для LEFT JOIN user_article_states), затем where-параметры, затем limit.
     params.insert(0, int(user["id"]))
@@ -886,6 +889,11 @@ def external_worker_complete(
         raise HTTPException(status_code=409, detail="Job lease is not active")
     if job.get("kind") == "process_articles" and result.get("external_ai"):
         result = {**result, "applied": external_ai.apply_process_result(result)}
+    if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
+        force = bool((job.get("payload") or {}).get("force", False))
+        result = {**result, "applied": external_ai.apply_recheck_result(result, force=force)}
+    if job.get("kind") == "translate_titles" and result.get("translate_titles"):
+        result = {**result, "applied": external_ai.apply_translate_result(result)}
     if job.get("kind") == "scrape_source" and result.get("external_fetch"):
         result = {**result, "applied": external_fetch.apply_scrape_result(result)}
     ok = repository.finish_external_background_job(
@@ -1044,6 +1052,10 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
     payload = dict(row.get("payload_json") or {})
     if row.get("kind") == "process_articles" and row.get("queue_name") == "external-ai":
         return _clean(external_ai.build_process_articles_payload(payload))
+    if row.get("kind") == "recheck_relevance" and row.get("queue_name") == "external-ai":
+        return _clean(external_ai.build_recheck_payload(payload))
+    if row.get("kind") == "translate_titles" and row.get("queue_name") == "external-ai":
+        return _clean(external_ai.build_translate_payload(payload))
     if row.get("kind") == "scrape_source" and str(row.get("queue_name") or "").startswith("external-"):
         return _clean(external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload))
     return _clean(payload)

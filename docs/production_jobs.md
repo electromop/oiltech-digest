@@ -39,8 +39,42 @@ PDF-экспорт и Playwright scrape попадают в `playwright`; AI pro
 
 - `digest_export`;
 - `process_articles`;
+- `recheck_relevance` (перепрогон гейта + удаление нерелевантных);
+- `translate_titles` (бэкфилл перевода заголовков);
 - `scrape_source`;
 - `diagnose_source`.
+
+## Пред-релизная чистка (через внешний NL-воркер)
+
+OpenAI доступен только на NL-воркере, поэтому массовые AI-операции ставятся в очередь
+`external-ai` на core, а исполняет их воркер. Перед запуском убедитесь, что воркер жив
+и в его `.env.external-worker` заданы модели (`OPENAI_RELEVANCE_MODEL=gpt-5.5` и т.д.).
+
+Перепрогон релевантности по ВСЕЙ базе с физическим удалением нерелевантных
+(статьи из сохранённых дайджестов пропускаются, если без `--force`):
+
+```bash
+docker compose exec app python -m oiltech_digest.cli enqueue-recheck --batch-size 100
+```
+
+Бэкфилл перевода заголовков (только статьи без `title_ru`; AI лишь для иностранных):
+
+```bash
+docker compose exec app python -m oiltech_digest.cli enqueue-translate --batch-size 100
+```
+
+Мониторинг разбора очереди:
+
+```bash
+docker compose exec app python -m oiltech_digest.cli external-queues-status
+```
+
+Аудит источников — какая ссылка установлена и почему не парсится (read-only, гонять
+на проде ради верного гео; для иностранных WAF — с NL-хоста, где есть playwright):
+
+```bash
+docker compose exec app python -m oiltech_digest.cli source-audit --json > source_audit.json
+```
 
 ## API
 

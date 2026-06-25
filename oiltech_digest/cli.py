@@ -208,6 +208,16 @@ def cmd_summarize(args: argparse.Namespace) -> None:
     print(f"summary: обработано={stats['processed']}, ошибок={stats['errors']}")
 
 
+def cmd_translate(args: argparse.Namespace) -> None:
+    from oiltech_digest.processing.pipeline import process_translations
+
+    stats = process_translations(limit=args.limit, offline=args.offline)
+    print(
+        f"translate-titles: обработано={stats['processed']}, переведено AI={stats['ai']}, "
+        f"ошибок={stats['errors']}"
+    )
+
+
 def cmd_tag(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.pipeline import process_tags
 
@@ -249,18 +259,21 @@ def cmd_process(args: argparse.Namespace) -> None:
         process_scores,
         process_summaries,
         process_tags,
+        process_translations,
     )
 
-    # Порядок: суть → релевантность (отсев) → теги → скоринг.
+    # Порядок: суть → релевантность (отсев) → перевод заголовка → теги → скоринг.
     # tag/score автоматически пропускают нерелевантные (см. get_articles_needing_*).
     summaries = process_summaries(limit=args.limit, offline=args.offline)
     relevance = process_relevance(limit=args.limit, offline=args.offline)
+    translations = process_translations(limit=args.limit, offline=args.offline)
     tags = process_tags(limit=args.limit, offline=args.offline)
     scores = process_scores(limit=args.limit, offline=args.offline)
     print(
         "process: "
         f"summary={summaries['processed']}/{summaries['errors']} err, "
         f"relevance={relevance['processed']} (отклонено={relevance['rejected']})/{relevance['errors']} err, "
+        f"translate={translations['processed']} (AI={translations['ai']})/{translations['errors']} err, "
         f"tagging={tags['processed']}/{tags['errors']} err, "
         f"scoring={scores['processed']}/{scores['errors']} err"
     )
@@ -316,6 +329,78 @@ def cmd_enqueue_process(args: argparse.Namespace) -> None:
     print(
         f"enqueue-process: job id={job['id']} queue={decision.queue_name} "
         f"region={decision.execution_region} limit={args.limit} ({decision.reason})"
+    )
+
+
+def cmd_enqueue_recheck(args: argparse.Namespace) -> None:
+    """Поставить в очередь перепрогон релевантности по всей базе батчами.
+
+    Нерелевантные статьи будут УДАЛЕНЫ физически при применении результата на core
+    (статьи из сохранённых дайджестов пропускаются, если не задан --force). На проде
+    задачи разбирает внешний NL-воркер (OpenAI). limit — опциональный потолок числа статей."""
+    from oiltech_digest import network_policy
+    from oiltech_digest.db import repository
+
+    decision = network_policy.route_ai_processing()
+    ids = repository.all_article_ids()
+    if args.limit:
+        ids = ids[: args.limit]
+    batch = max(1, args.batch_size)
+    chunks = [ids[i : i + batch] for i in range(0, len(ids), batch)]
+    job_ids = []
+    for chunk in chunks:
+        job = repository.create_background_job(
+            "recheck_relevance",
+            {"article_ids": chunk, "force": bool(args.force)},
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
+        )
+        job_ids.append(job["id"])
+    print(
+        f"enqueue-recheck: статей={len(ids)}, задач={len(job_ids)}, батч={batch}, "
+        f"queue={decision.queue_name} region={decision.execution_region} force={bool(args.force)} ({decision.reason})"
+    )
+
+
+def cmd_enqueue_translate(args: argparse.Namespace) -> None:
+    """Поставить в очередь бэкфилл перевода заголовков (статьи без title_ru) батчами."""
+    from oiltech_digest import network_policy
+    from oiltech_digest.db import repository
+
+    decision = network_policy.route_ai_processing()
+    ids = repository.article_ids_needing_title_ru()
+    if args.limit:
+        ids = ids[: args.limit]
+    batch = max(1, args.batch_size)
+    chunks = [ids[i : i + batch] for i in range(0, len(ids), batch)]
+    job_ids = []
+    for chunk in chunks:
+        job = repository.create_background_job(
+            "translate_titles",
+            {"article_ids": chunk},
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
+        )
+        job_ids.append(job["id"])
+    print(
+        f"enqueue-translate: без перевода={len(ids)}, задач={len(job_ids)}, батч={batch}, "
+        f"queue={decision.queue_name} region={decision.execution_region} ({decision.reason})"
+    )
+
+
+def cmd_recheck_relevance(args: argparse.Namespace) -> None:
+    """Локальный перепрогон релевантности (для тестов/дампа; на проде — enqueue-recheck)."""
+    from oiltech_digest.processing.pipeline import process_recheck
+
+    stats = process_recheck(
+        limit=args.limit, offline=args.offline, force=args.force, max_articles=args.max_articles
+    )
+    print(
+        f"recheck-relevance: проверено={stats['checked']}, оставлено={stats['kept']}, "
+        f"удалено={stats['deleted']}, пропущено(в дайджесте)={stats['skipped_in_digest']}, "
+        f"ошибок={stats['errors']}"
     )
 
 
@@ -440,6 +525,79 @@ def cmd_source_diagnose(args: argparse.Namespace) -> None:
         raise SystemExit(f"Источник не найден: {args.source_id}")
     result = diagnose_source(source, limit=args.limit)
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+def _audit_row(source: dict, diag: dict) -> dict:
+    """Нормализовать вывод diagnose_source в одну компактную строку аудита."""
+    probe = (diag.get("listing_probe") or diag.get("rss_probe")
+             or diag.get("preview_probe") or {})
+    count = (diag.get("candidate_count") if diag.get("candidate_count") is not None
+             else diag.get("entry_count") if diag.get("entry_count") is not None
+             else diag.get("post_count") or 0)
+    error = diag.get("error") or probe.get("error")
+    if not error:
+        for check in diag.get("article_checks") or []:
+            ap = check.get("article_probe") or {}
+            if ap.get("error"):
+                error = ap["error"]
+                break
+    return {
+        "id": source.get("id"),
+        "name": source.get("name"),
+        "enabled": bool(source.get("enabled")),
+        "strategy": source.get("parse_strategy") or "—",
+        "link": diag.get("url") or source.get("listing_url") or source.get("rss_url") or source.get("url"),
+        "verdict": diag.get("verdict"),
+        "count": count or 0,
+        "probe_status": probe.get("status"),
+        "probe_bytes": probe.get("bytes"),
+        "error": (error or "")[:200] or None,
+    }
+
+
+def cmd_source_audit(args: argparse.Namespace) -> None:
+    """Аудит ВСЕХ источников: какая ссылка установлена сейчас и почему не парсится.
+
+    По каждому источнику — read-only diagnose_source (живая проба + кандидаты). Запускать
+    там, где правильное гео и установлен playwright (прод), иначе иностранные/JS-источники
+    дадут ложные вердикты. Сетевые пробы идут параллельно."""
+    from collections import Counter
+    from concurrent.futures import ThreadPoolExecutor
+
+    from oiltech_digest.db import repository
+    from oiltech_digest.ingestion.source_diagnostics import diagnose_source
+
+    sources = repository.list_sources(limit=args.limit)
+    if args.strategy:
+        sources = [s for s in sources if (s.get("parse_strategy") or "") == args.strategy]
+    if args.enabled_only:
+        sources = [s for s in sources if s.get("enabled")]
+
+    def run(source: dict) -> dict:
+        try:
+            diag = diagnose_source(source, limit=args.probe_limit)
+        except Exception as exc:  # noqa: BLE001 - одна поломка не валит аудит
+            diag = {"verdict": "diagnose_error", "url": source.get("url"), "error": str(exc)}
+        return _audit_row(source, diag)
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        rows = list(pool.map(run, sources))
+
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
+        return
+
+    counts = Counter(row["verdict"] for row in rows)
+    print("source-audit: " + ", ".join(f"{verdict}={n}" for verdict, n in counts.most_common()))
+    for row in sorted(rows, key=lambda r: (r["verdict"] or "", r["id"])):
+        flag = "on " if row["enabled"] else "off"
+        probe = f"{row['probe_status']}/{row['probe_bytes']}b" if row["probe_status"] is not None else "—"
+        line = (f"{row['id']:>4} {flag} {row['strategy']:<10} {str(row['verdict']):<22} "
+                f"cand={row['count']:<3} probe={probe:<14} {row['name']}")
+        print(line)
+        print(f"      link: {row['link'] or '—'}")
+        if row["error"]:
+            print(f"      err:  {row['error']}")
 
 
 def cmd_parse_process(args: argparse.Namespace) -> None:
@@ -747,6 +905,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_ai_args(p_relevance)
     p_relevance.set_defaults(func=cmd_relevance)
 
+    p_translate = sub.add_parser("translate-titles", help="перевести заголовки на русский (отдельная стадия, AI только для иностранных)")
+    add_ai_args(p_translate)
+    p_translate.set_defaults(func=cmd_translate)
+
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)
     p_tag.set_defaults(func=cmd_tag)
@@ -771,6 +933,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_process = sub.add_parser("enqueue-process", help="поставить AI-обработку в очередь (external-ai при внешнем контуре), не выполняя локально")
     add_ai_args(p_enqueue_process)
     p_enqueue_process.set_defaults(func=cmd_enqueue_process)
+
+    p_enqueue_recheck = sub.add_parser("enqueue-recheck", help="перепрогон релевантности по всей базе батчами через воркер (нерелевантные удаляются)")
+    p_enqueue_recheck.add_argument("--batch-size", type=int, default=100, help="статей в одной задаче")
+    p_enqueue_recheck.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = вся база)")
+    p_enqueue_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из сохранённых дайджестов")
+    p_enqueue_recheck.set_defaults(func=cmd_enqueue_recheck)
+
+    p_enqueue_translate = sub.add_parser("enqueue-translate", help="бэкфилл перевода заголовков (title_ru) по всей базе батчами через воркер")
+    p_enqueue_translate.add_argument("--batch-size", type=int, default=100, help="статей в одной задаче")
+    p_enqueue_translate.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = все без перевода)")
+    p_enqueue_translate.set_defaults(func=cmd_enqueue_translate)
+
+    p_recheck = sub.add_parser("recheck-relevance", help="локальный перепрогон релевантности (тесты/дамп; на проде — enqueue-recheck)")
+    add_ai_args(p_recheck)
+    p_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из сохранённых дайджестов")
+    p_recheck.add_argument("--max-articles", type=int, default=None, help="ограничить число проверенных статей")
+    p_recheck.set_defaults(func=cmd_recheck_relevance)
 
     sub.add_parser("ai-cost-report", help="отчёт по токенам/стоимости AI-этапов").set_defaults(func=cmd_ai_cost_report)
 
@@ -808,6 +987,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_source_add.add_argument("--category", default=None)
     p_source_add.add_argument("--frequency", default=None, help="частота мониторинга")
     p_source_add.set_defaults(func=cmd_source_add_rss)
+
+    p_source_audit = sub.add_parser("source-audit", help="аудит ВСЕХ источников: текущая ссылка + почему не парсится (read-only)")
+    p_source_audit.add_argument("--limit", type=int, default=1000, help="максимум источников")
+    p_source_audit.add_argument("--probe-limit", type=int, default=3, help="сколько статей-кандидатов пробовать на источник")
+    p_source_audit.add_argument("--workers", type=int, default=8, help="параллельных проб")
+    p_source_audit.add_argument("--strategy", help="фильтр по стратегии (request/rss/playwright/telegram)")
+    p_source_audit.add_argument("--enabled-only", action="store_true", help="только включённые источники")
+    p_source_audit.add_argument("--json", action="store_true", help="полный JSON-отчёт")
+    p_source_audit.set_defaults(func=cmd_source_audit)
 
     p_source_diag = sub.add_parser("source-diagnose", help="read-only диагностика источника по source_id")
     p_source_diag.add_argument("source_id", type=int)

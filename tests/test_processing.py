@@ -207,6 +207,11 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     )
     monkeypatch.setattr(
         pipeline.repository,
+        "set_article_title_ru",
+        lambda article_id, title_ru: state.update({"title_ru": title_ru}),
+    )
+    monkeypatch.setattr(
+        pipeline.repository,
         "set_article_relevance",
         lambda article_id, relevant, reason, model=None: state.update(
             {"relevant": relevant, "relevance_reason": reason, "relevance_model": model}
@@ -244,16 +249,19 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
         "relevant": 1,
         "rejected": 0,
         "tagged": 1,
+        "translated": 1,
         "scored": 1,
         "errors": 0,
     }
     assert state["summary"].startswith(article["title"])
     assert state["relevant"] is True
+    assert state["title_ru"]  # иностранный заголовок переведён отдельной стадией
     assert state["tag_id"] == 10
     assert state["total_score"] >= 65
     assert state["score_label"] in {"Выше средней", "Высокая"}
     # Релевантность идёт ПЕРВОЙ — гейт до суммаризации (фикс «мусор в выборке» 2026-06).
-    assert [run["stage"] for run in state["runs"]] == ["relevance", "summary", "tagging", "scoring"]
+    # Перевод заголовка — отдельная стадия после сути.
+    assert [run["stage"] for run in state["runs"]] == ["relevance", "summary", "translation", "tagging", "scoring"]
     assert all(run["provider"] == "offline" and run["status"] == "ok" for run in state["runs"])
 
     class PublishedAt:

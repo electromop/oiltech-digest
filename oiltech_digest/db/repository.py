@@ -1340,6 +1340,81 @@ def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -
         return cur.fetchall()
 
 
+def delete_article(article_id: int, *, force: bool = False) -> bool:
+    """Физически удалить статью и все её зависимые строки. Возвращает True, если удалена.
+
+    FK на articles в основном БЕЗ ON DELETE CASCADE, поэтому удаляем детей вручную
+    в правильном порядке (user_article_states каскадится сам). По умолчанию НЕ удаляем
+    статью, входящую в сохранённый месячный дайджест (monthly_digest_items) — чтобы не
+    рвать историю; force=True снимает защиту (удалит и ссылки дайджеста)."""
+    with get_connection() as conn:
+        if not force:
+            in_digest = conn.execute(
+                "SELECT 1 FROM monthly_digest_items WHERE article_id = %s LIMIT 1",
+                (article_id,),
+            ).fetchone()
+            if in_digest:
+                return False
+        conn.execute(
+            """
+            DELETE FROM article_score_items
+            WHERE article_score_id IN (SELECT id FROM article_scores WHERE article_id = %s)
+            """,
+            (article_id,),
+        )
+        conn.execute("DELETE FROM article_scores WHERE article_id = %s", (article_id,))
+        conn.execute("DELETE FROM article_tags WHERE article_id = %s", (article_id,))
+        conn.execute("DELETE FROM ai_processing_runs WHERE article_id = %s", (article_id,))
+        conn.execute("DELETE FROM article_cards WHERE article_id = %s", (article_id,))
+        if force:
+            conn.execute("DELETE FROM monthly_digest_items WHERE article_id = %s", (article_id,))
+        cur = conn.execute("DELETE FROM articles WHERE id = %s RETURNING id", (article_id,))
+        deleted = cur.fetchone() is not None
+        conn.commit()
+    return deleted
+
+
+def all_article_ids() -> list[int]:
+    """Все id статей по возрастанию — для батч-перепрогона релевантности."""
+    with get_connection() as conn:
+        cur = conn.execute("SELECT id FROM articles ORDER BY id ASC")
+        return [row[0] for row in cur.fetchall()]
+
+
+def article_ids_needing_title_ru() -> list[int]:
+    """id статей без русского заголовка — для батч-бэкфилла перевода через воркер."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT a.id FROM articles a
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            WHERE c.title_ru IS NULL
+            ORDER BY a.id ASC
+            """
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def get_articles_for_recheck(after_id: int = 0, limit: int = 100) -> list[dict]:
+    """Все статьи по возрастанию id после чекпоинта — для локального перепрогона
+    релевантности на сыром тексте (независимо от наличия карточки)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.*, s.name AS source_name, s.priority AS source_priority,
+                   s.category AS source_category
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            WHERE a.id > %s
+            ORDER BY a.id ASC
+            LIMIT %s
+            """,
+            (after_id, limit),
+        )
+        return cur.fetchall()
+
+
 def get_articles_needing_summary(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -1381,19 +1456,25 @@ def get_articles_needing_relevance(limit: int = 20) -> list[dict]:
 
 def set_article_relevance(article_id: int, relevant: bool, reason: str | None,
                           model: str | None = None) -> None:
-    """Записать вердикт релевантности. Нерелевантные → status='rejected'."""
+    """Записать вердикт релевантности (UPSERT). Нерелевантные → status='rejected'.
+
+    Раньше был чистый UPDATE — но после перестановки «релевантность ПЕРВОЙ» у
+    отклонённой статьи карточки ещё нет (она создаётся на этапе суммаризации),
+    и UPDATE по 0 строк терял вердикт. UPSERT создаёт карточку при необходимости."""
     with get_connection() as conn:
         conn.execute(
             """
-            UPDATE article_cards
-            SET relevant = %s,
-                relevance_reason = %s,
-                relevance_model = %s,
-                status = CASE WHEN %s THEN status ELSE 'rejected' END,
+            INSERT INTO article_cards (article_id, relevant, relevance_reason, relevance_model, status)
+            VALUES (%(id)s, %(rel)s, %(reason)s, %(model)s,
+                    CASE WHEN %(rel)s THEN 'new' ELSE 'rejected' END)
+            ON CONFLICT (article_id) DO UPDATE SET
+                relevant = EXCLUDED.relevant,
+                relevance_reason = EXCLUDED.relevance_reason,
+                relevance_model = EXCLUDED.relevance_model,
+                status = CASE WHEN EXCLUDED.relevant THEN article_cards.status ELSE 'rejected' END,
                 updated_at = now()
-            WHERE article_id = %s
             """,
-            (relevant, reason, model, relevant, article_id),
+            {"id": article_id, "rel": relevant, "reason": reason, "model": model},
         )
         conn.commit()
 
@@ -1483,6 +1564,44 @@ def upsert_article_card(article_id: int, summary: str, model: str | None = None,
             (article_id, summary, model, title_ru),
         )
         conn.commit()
+
+
+def set_article_title_ru(article_id: int, title_ru: str) -> None:
+    """Проставить русский заголовок отдельной стадией перевода. Создаёт карточку,
+    если её ещё нет (статья могла не пройти суммаризацию), не трогая summary."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO article_cards (article_id, title_ru)
+            VALUES (%s, %s)
+            ON CONFLICT (article_id) DO UPDATE SET
+                title_ru = EXCLUDED.title_ru,
+                updated_at = now()
+            """,
+            (article_id, title_ru),
+        )
+        conn.commit()
+
+
+def get_articles_needing_title_ru(limit: int = 20) -> list[dict]:
+    """Статьи без русского заголовка (card.title_ru IS NULL ИЛИ карточки ещё нет).
+    Бэкфилл отдельной стадии перевода по всей базе."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.*, s.name AS source_name, s.priority AS source_priority,
+                   s.category AS source_category
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            WHERE c.title_ru IS NULL
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
 
 
 def upsert_tag(rec: dict) -> int:
