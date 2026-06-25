@@ -70,7 +70,7 @@ class FakeConnection:
 
 def test_source_diagnose_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.repository,
         "get_source",
@@ -105,7 +105,7 @@ def test_source_diagnose_endpoint(monkeypatch):
 
 def test_source_diagnose_endpoint_accepts_unsaved_overrides(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
     monkeypatch.setattr(
         api.repository,
@@ -144,7 +144,7 @@ def test_source_diagnose_endpoint_accepts_unsaved_overrides(monkeypatch):
 
 def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.repository,
         "get_source",
@@ -213,7 +213,7 @@ def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
 
 def test_create_monthly_digest_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api,
         "save_digest_draft",
@@ -248,7 +248,7 @@ def test_create_monthly_digest_endpoint(monkeypatch):
 
 def test_source_health_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.repository,
         "source_health_report",
@@ -277,7 +277,7 @@ def test_source_health_endpoint(monkeypatch):
 
 def test_digest_branding_endpoints(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     branding = {
         "header": {
             "brand_text": "Тест бренд",
@@ -390,7 +390,7 @@ def test_readiness_endpoint_returns_503_for_db_error(monkeypatch):
 
 def test_list_articles_applies_filters_and_score_items(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     fake_conn = FakeConnection()
     monkeypatch.setattr(api, "get_connection", lambda: fake_conn)
     try:
@@ -428,7 +428,7 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
 
 def test_update_source_persists_non_rss_scraper_fields(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
 
     class UpdateConnection:
@@ -484,7 +484,7 @@ def test_update_source_persists_non_rss_scraper_fields(monkeypatch):
 
 def test_scrape_source_endpoint_routes_request_strategy(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.repository,
         "get_source",
@@ -503,7 +503,7 @@ def test_scrape_source_endpoint_routes_request_strategy(monkeypatch):
 
 def test_scrape_source_endpoint_can_enqueue_background_job(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.repository,
         "get_source",
@@ -560,7 +560,7 @@ def test_scrape_source_endpoint_can_enqueue_background_job(monkeypatch):
 
 def test_scrape_source_endpoint_routes_playwright_strategy(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.repository,
         "get_source",
@@ -579,7 +579,7 @@ def test_scrape_source_endpoint_routes_playwright_strategy(monkeypatch):
 
 def test_scrape_source_endpoint_rejects_non_scraper_strategy(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.repository,
         "get_source",
@@ -637,7 +637,7 @@ def test_auth_rejects_invalid_payloads_and_missing_session(monkeypatch):
 
 def test_enqueue_digest_export_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
 
     def fake_enqueue(kind, payload, **kwargs):
@@ -685,7 +685,7 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
 
 def test_enqueue_process_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api.background_jobs,
         "enqueue",
@@ -724,7 +724,7 @@ def test_enqueue_process_endpoint(monkeypatch):
 
 def test_enqueue_process_endpoint_can_route_to_external_ai(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(api.network_policy.config, "EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr(api.network_policy.config, "AI_EXECUTION_REGION", "external")
     captured = {}
@@ -993,7 +993,7 @@ def test_external_worker_fail_passes_retry_policy(monkeypatch):
 
 def test_maintenance_status_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(
         api,
         "maintenance_status",
@@ -1022,7 +1022,7 @@ def test_maintenance_status_endpoint(monkeypatch):
 
 def test_maintenance_cleanup_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
 
     def fake_cleanup(**kwargs):
@@ -1044,7 +1044,7 @@ def test_maintenance_cleanup_endpoint(monkeypatch):
 
 def test_maintenance_cleanup_endpoint_rejects_invalid_retention():
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     try:
         client = TestClient(app)
         response = client.post("/api/maintenance/cleanup", json={"background_job_days": 0})
@@ -1057,7 +1057,7 @@ def test_maintenance_cleanup_endpoint_rejects_invalid_retention():
 
 def test_maintenance_benchmark_endpoint(monkeypatch):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
 
     def fake_benchmark(**kwargs):

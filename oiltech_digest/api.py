@@ -247,6 +247,17 @@ class AuthPayload(BaseModel):
     password: str
 
 
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    role: str = "user"
+
+
+class UserUpdate(BaseModel):
+    role: str | None = None
+    password: str | None = None
+
+
 @app.get("/")
 def index() -> FileResponse:
     if (FRONTEND_DIST_DIR / "index.html").exists():
@@ -260,6 +271,13 @@ def require_user(session_token: str | None = Cookie(default=None, alias=config.A
     user = repository.get_user_by_session(session_token)
     if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def require_admin(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Доступ только администратору (настройка тегов/скоринга/источников, пользователи)."""
+    if (user.get("role") or "user") != "admin":
+        raise HTTPException(status_code=403, detail="Требуются права администратора")
     return user
 
 
@@ -312,6 +330,55 @@ def auth_logout(
     if session_token:
         repository.delete_user_session(session_token)
     response.delete_cookie(config.AUTH_COOKIE_NAME)
+    return {"ok": True}
+
+
+@app.get("/api/users")
+def list_users_endpoint(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    return {"users": [_clean(u) for u in repository.list_users()]}
+
+
+@app.post("/api/users")
+def create_user_endpoint(payload: UserCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    email = auth.normalize_email(payload.email)
+    if not auth.validate_email(email):
+        raise HTTPException(status_code=400, detail="Некорректный email")
+    if not auth.validate_password(payload.password):
+        raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
+    try:
+        created = repository.create_user(email, payload.password, payload.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "user": _clean(created)}
+
+
+@app.patch("/api/users/{user_id}")
+def update_user_endpoint(user_id: int, payload: UserUpdate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    target = repository.get_user_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if payload.role is not None:
+        new_role = payload.role if payload.role in ("admin", "user") else "user"
+        if target["role"] == "admin" and new_role != "admin" and repository.count_admins() <= 1:
+            raise HTTPException(status_code=400, detail="Нельзя снять роль у последнего администратора")
+        repository.set_user_role(user_id, new_role)
+    if payload.password is not None:
+        if not auth.validate_password(payload.password):
+            raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
+        repository.set_user_password(user_id, payload.password)
+    return {"ok": True, "user": _clean(repository.get_user_by_id(user_id))}
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user_endpoint(user_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    target = repository.get_user_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if int(user["id"]) == user_id:
+        raise HTTPException(status_code=400, detail="Нельзя удалить собственную учётную запись")
+    if target["role"] == "admin" and repository.count_admins() <= 1:
+        raise HTTPException(status_code=400, detail="Нельзя удалить последнего администратора")
+    repository.delete_user(user_id)
     return {"ok": True}
 
 
@@ -452,7 +519,7 @@ def source_health(
 
 
 @app.post("/api/sources")
-def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     # Пользователь вставляет просто ссылку на источник — система сама ищет RSS-ленту.
     # Нашла → parse_strategy='rss' с найденным фидом; не нашла → 'request' (скрейп
     # страницы новостей). RSS можно передать и явно (тогда discover пропускается).
@@ -479,7 +546,7 @@ def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_
 
 
 @app.patch("/api/sources/{source_id}")
-def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     updates = patch.model_dump(exclude_unset=True)
     if not updates:
         return {"ok": True}
@@ -517,7 +584,7 @@ def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Dep
 def scrape_source(
     source_id: int,
     background: bool = False,
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     source = repository.get_source(source_id)
     if source is None:
@@ -543,7 +610,7 @@ def scrape_source(
 def diagnose_source_endpoint(
     source_id: int,
     limit: int = Query(5, ge=1, le=20),
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     source = repository.get_source(source_id)
     if source is None:
@@ -557,7 +624,7 @@ def diagnose_source_with_overrides(
     patch: SourcePatch,
     limit: int = Query(5, ge=1, le=20),
     background: bool = False,
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     source = repository.get_source(source_id)
     if source is None:
@@ -582,13 +649,13 @@ def list_tags(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, An
 
 
 @app.put("/api/tags")
-def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     result = repository.save_tags([i.model_dump() for i in items])
     return {"ok": True, **result}
 
 
 @app.delete("/api/tags/{tag_id}")
-def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     repository.delete_tag(tag_id)
     return {"ok": True}
 
@@ -599,7 +666,7 @@ def list_scoring_criteria(user: dict[str, Any] = Depends(require_user)) -> list[
 
 
 @app.put("/api/scoring-criteria")
-def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     try:
         result = repository.save_scoring_criteria([i.model_dump() for i in items])
     except ValueError as exc:
@@ -608,7 +675,7 @@ def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] 
 
 
 @app.delete("/api/scoring-criteria/{criterion_id}")
-def delete_scoring_criterion(criterion_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def delete_scoring_criterion(criterion_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     repository.delete_scoring_criterion(criterion_id)
     return {"ok": True}
 

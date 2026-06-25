@@ -19,12 +19,42 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def cmd_init_db(args: argparse.Namespace) -> None:
-    from oiltech_digest.db import connection
+    from oiltech_digest.db import connection, repository
 
     tables = connection.init_db()
     print(f"БД инициализирована. Таблиц в схеме: {len(tables)}")
     for t in tables:
         print(f"  - {t}")
+    # Если админов нет, а пользователи есть — назначить админом первого (бутстрап #12).
+    admin_id = repository.ensure_admin_bootstrap()
+    if admin_id is not None:
+        print(f"Бутстрап ролей: пользователь id={admin_id} назначен администратором")
+
+
+def cmd_create_user(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    role = "admin" if args.admin else "user"
+    user = repository.create_user(args.email, args.password, role)
+    print(f"Создан пользователь id={user['id']} {user['email']} роль={user['role']}")
+
+
+def cmd_set_role(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    target = next((u for u in repository.list_users() if u["email"].lower() == args.email.strip().lower()), None)
+    if target is None:
+        print(f"Пользователь {args.email} не найден")
+        return
+    repository.set_user_role(int(target["id"]), args.role)
+    print(f"Роль пользователя {args.email} → {args.role}")
+
+
+def cmd_list_users(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    for u in repository.list_users():
+        print(f"  id={u['id']:>3}  {u['role']:<6}  {u['email']}")
 
 
 def cmd_schema_check(args: argparse.Namespace) -> None:
@@ -635,6 +665,19 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init-db", help="создать схему БД").set_defaults(func=cmd_init_db)
     sub.add_parser("schema-check", help="проверить наличие обязательных таблиц").set_defaults(func=cmd_schema_check)
     sub.add_parser("seed-sources", help="загрузить источники из Excel").set_defaults(func=cmd_seed_sources)
+
+    p_cu = sub.add_parser("create-user", help="создать пользователя админки")
+    p_cu.add_argument("--email", required=True)
+    p_cu.add_argument("--password", required=True)
+    p_cu.add_argument("--admin", action="store_true", help="назначить администратором")
+    p_cu.set_defaults(func=cmd_create_user)
+
+    p_sr = sub.add_parser("set-role", help="сменить роль пользователя (admin|user)")
+    p_sr.add_argument("--email", required=True)
+    p_sr.add_argument("--role", choices=["admin", "user"], required=True)
+    p_sr.set_defaults(func=cmd_set_role)
+
+    sub.add_parser("list-users", help="список пользователей и ролей").set_defaults(func=cmd_list_users)
 
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
     p_disc.add_argument("--force", action="store_true", help="перепроверить все, а не только без rss_url")
