@@ -50,12 +50,12 @@ def test_render_digest_email_contains_news_and_escapes_html():
         }
     )
 
-    assert "НЕФТЕСЕРВИСНЫЙ ДАЙДЖЕСТ" in html
-    assert "ГАЗПРОМ НЕФТЬ" in html  # фирменный шаблон-референс
+    # Hero-баннер (логотип/заголовок запечены в картинке) — проверяем <img> и alt.
+    assert "технологии, рынок и возможности для бизнеса" in html  # alt утверждённого hero
     assert "Добыча" in html  # категория новости
     assert "https://example.com/article" in html
     assert "Краткая суть статьи" in html
-    assert "https://example.com/hero.jpg" in html
+    assert 'src="https://example.com/hero.jpg"' in html  # внешний hero_image_url → src баннера
     assert "ОТКРЫТЬ" in html
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
@@ -142,9 +142,10 @@ def test_render_digest_email_renders_branding_from_content():
         }
     )
 
-    assert "ТЕСТ БРЕНД" in html
-    assert "ТЕСТ СЛОГАН" in html
-    assert "ТЕСТ ДЕПАРТАМЕНТ" in html
+    # Шапка-бренд теперь запечена в hero-картинке (не HTML); при пустом image_url
+    # подставляется встроенный баннер data-URI, а соцсети из content рендерятся.
+    assert 'src="data:image/png;base64,' in html
+    assert "технологии, рынок и возможности для бизнеса" in html  # alt баннера
     assert 'title="Portal"' in html
 
 

@@ -22,15 +22,15 @@
 
     .news-card-image {{
       display: block;
-      width: 210px;
-      height: 118px;
+      width: 130px;
+      height: 86px;
       object-fit: cover;
       border-radius: 6px;
       border: 0;
     }}
 
     .news-card-title {{
-      font-family: Arial, Helvetica, sans-serif;
+      font-family: 'GPN Din Condensed', 'GPN Din', Arial, Helvetica, sans-serif;
       font-size: 20px;
       line-height: 24px;
       color: #003da6;
@@ -57,44 +57,19 @@
     }}
   </style>
 </head>
-<body style="margin:0;padding:0;background:#f5f7fb;font-family:Arial,Helvetica,sans-serif;color:#262d3c;">
-  <div style="display:none;max-height:0;overflow:hidden;color:#f5f7fb;">{issue_preheader}</div>
+<body style="margin:0;padding:0;background:#F3F5F8;font-family:'GPN Din',Arial,Helvetica,sans-serif;color:#262d3c;">
+  <div style="display:none;max-height:0;overflow:hidden;color:#F3F5F8;">{issue_preheader}</div>
 
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f5f7fb;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#F3F5F8;">
     <tr>
       <td align="center" style="padding:24px 12px;">
         <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#ffffff;">
 
-          <!-- ВЕРХНИЙ КОЛОНТИТУЛ -->
+          <!-- HERO: утверждённый баннер 600×360 (логотип ГАЗПРОМ НЕФТЬ, бейдж, заголовок
+               и подзаголовок запечены в картинке). <img>, а не background — надёжно в Outlook. -->
           <tr>
-            <td style="padding:28px 36px 22px 36px;background:#ffffff;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td align="left" style="font-size:18px;line-height:20px;color:#003da6;font-weight:bold;">
-                    {header_brand_text} <span style="display:inline-block;color:#003da6;margin-left:12px;">/ {header_brand_suffix}</span>
-                  </td>
-                  <td align="right" style="font-size:14px;line-height:20px;color:#003da6;font-weight:bold;">{header_department_text}</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- HERO: фоновая картинка из digest_content; при пустой — фирменный синий -->
-          <tr>
-            <td background="{hero_image_url}" style="background:#003da6;background-image:url('{hero_image_url}');background-size:cover;background-position:center;width:600px;height:360px;">
-              <table role="presentation" width="600" height="360" cellspacing="0" cellpadding="0" border="0" style="width:600px;height:360px;background:linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(0,29,80,0.78) 100%);">
-                <tr>
-                  <td valign="top" style="padding:0 36px;">
-                    <div style="display:inline-block;background:#e83d08;color:#ffffff;font-size:16px;line-height:20px;font-weight:bold;letter-spacing:.04em;padding:14px 34px;border-radius:0 0 12px 12px;">{hero_badge}</div>
-                  </td>
-                </tr>
-                <tr>
-                  <td valign="bottom" style="padding:0 36px 34px 36px;">
-                    <div style="font-family:Arial,Helvetica,sans-serif;font-size:40px;line-height:46px;color:#ffffff;font-weight:bold;letter-spacing:.04em;text-transform:uppercase;">{hero_headline}</div>
-                    <div style="font-size:22px;line-height:28px;color:#ffffff;margin-top:12px;">{hero_subtitle}</div>
-                  </td>
-                </tr>
-              </table>
+            <td style="padding:0;margin:0;font-size:0;line-height:0;">
+              <img src="{hero_img_src}" width="600" height="360" alt="{hero_alt}" style="display:block;width:600px;height:360px;border:0;outline:none;text-decoration:none;">
             </td>
           </tr>
 
@@ -108,7 +83,7 @@
           <!-- ГЛАВНОЕ ЗА ПЕРИОД: KPI-плашки выпуска -->
           <tr>
             <td style="padding:8px 36px 18px 36px;">
-              <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;line-height:28px;color:#003da6;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px;">{issue_highlights_title}</div>
+              <div style="font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;font-size:22px;line-height:28px;color:#003da6;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px;">{issue_highlights_title}</div>
               {highlights_html}
             </td>
           </tr>
@@ -116,7 +91,7 @@
           <!-- НОВОСТИ -->
           <tr>
             <td style="padding:0 36px 10px 36px;">
-              <div style="font-family:Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{issue_news_title}</div>
+              <div style="font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{issue_news_title}</div>
               {news_items}
             </td>
           </tr>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from html import escape
@@ -16,6 +17,44 @@ from oiltech_digest.db import repository
 TEMPLATE_DIR = Path(__file__).resolve().parent
 EMAIL_TEMPLATE = "digest_email_template.html"
 BRANDING_CONFIG = "digest_branding.json"
+ASSETS_DIR = TEMPLATE_DIR / "assets"
+HERO_ASSET = "oiltech_digest_hero_600x360.png"
+HERO_ALT = "Нефтесервисный дайджест — технологии, рынок и возможности для бизнеса"
+
+# Корпоративный шрифт GPN Din для PDF (Chromium рендерит @font-face). В email
+# оставляем Arial-фолбэк (почтовые клиенты вырезают кастомные шрифты).
+_PDF_FONT_FILES = {
+    "GPN Din": [("GPN_DIN-Regular.ttf", 400), ("GPN_DIN-Bold.ttf", 700)],
+    "GPN Din Condensed": [("GPN_DIN_Condensed-Bold.ttf", 700)],
+}
+
+
+def _asset_bytes(name: str) -> bytes | None:
+    path = ASSETS_DIR / name
+    return path.read_bytes() if path.exists() else None
+
+
+def _hero_data_uri() -> str:
+    """Утверждённый hero-баннер (600×360) как self-contained data-URI: работает и в
+    email, и в PDF (Chromium рендерит из строки, без сервера), и оффлайн."""
+    data = _asset_bytes(HERO_ASSET)
+    return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else ""
+
+
+def _pdf_font_face_style() -> str:
+    """<style> с GPN Din в base64 — вставляется только в PDF-рендер."""
+    faces = []
+    for family, files in _PDF_FONT_FILES.items():
+        for fname, weight in files:
+            data = _asset_bytes(fname)
+            if not data:
+                continue
+            b64 = base64.b64encode(data).decode("ascii")
+            faces.append(
+                f"@font-face{{font-family:'{family}';font-style:normal;font-weight:{weight};"
+                f"src:url(data:font/ttf;base64,{b64}) format('truetype');}}"
+            )
+    return "<style>" + "".join(faces) + "</style>" if faces else ""
 
 
 def _load_digest_branding() -> dict:
@@ -243,10 +282,9 @@ def render_digest_email(content: dict) -> str:
         "issue_intro": _html(content.get("issue", {}).get("intro")),
         "issue_highlights_title": _html(content.get("issue", {}).get("highlights_title") or "Главное за период"),
         "issue_news_title": _html(content.get("issue", {}).get("news_title") or "Новости"),
-        "hero_image_url": _html(content.get("hero", {}).get("image_url")),
-        "hero_badge": _html(content.get("hero", {}).get("badge")),
-        "hero_headline": _html(content.get("hero", {}).get("headline")),
-        "hero_subtitle": _html(content.get("hero", {}).get("subtitle")),
+        # Hero — утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
+        "hero_img_src": _html(content.get("hero", {}).get("image_url")) or _hero_data_uri(),
+        "hero_alt": _html(HERO_ALT),
         "highlights_html": _render_highlights(highlights),
         "footer_contact_text": _html(content.get("footer", {}).get("contact_text")),
         "footer_contact_email": _html(content.get("footer", {}).get("contact_email")),
@@ -400,27 +438,27 @@ def _render_news_item(item: dict, issue: dict | None = None) -> str:
     read_more_label = issue.get("read_more_label") or "ЧИТАТЬ ДАЛЕЕ"
     if image_url:
         media = (
-            f'<img class="news-card-image" src="{_html(image_url)}" width="210" height="118" alt="{_html(item.get("title"))}" '
-            'style="display:block;width:210px;height:118px;object-fit:cover;border-radius:6px;border:0;">'
+            f'<img class="news-card-image" src="{_html(image_url)}" width="130" height="86" alt="{_html(item.get("title"))}" '
+            'style="display:block;width:130px;height:86px;object-fit:cover;border-radius:6px;border:0;">'
         )
     else:
         # SVG-заглушка вместо <img>: ведёт себя как картинка (фиксирует ширину ячейки
-        # 210×118 в табличной вёрстке — в отличие от <div>, который ужимается).
+        # 130×86 в табличной вёрстке — в отличие от <div>, который ужимается).
         placeholder = (
             "data:image/svg+xml;utf8,"
-            "<svg xmlns='http://www.w3.org/2000/svg' width='210' height='118'>"
+            "<svg xmlns='http://www.w3.org/2000/svg' width='130' height='86'>"
             "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
             "<stop offset='0' stop-color='%23003da6'/><stop offset='1' stop-color='%23001d50'/>"
-            "</linearGradient></defs><rect width='210' height='118' rx='6' fill='url(%23g)'/></svg>"
+            "</linearGradient></defs><rect width='130' height='86' rx='6' fill='url(%23g)'/></svg>"
         )
         media = (
-            f'<img class="news-card-image" src="{placeholder}" width="210" height="118" alt="" '
-            'style="display:block;width:210px;height:118px;border-radius:6px;border:0;">'
+            f'<img class="news-card-image" src="{placeholder}" width="130" height="86" alt="" '
+            'style="display:block;width:130px;height:86px;border-radius:6px;border:0;">'
         )
     return f"""
               <table class="news-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px 0;border:1px solid #d9e3f3;border-radius:8px;background:#ffffff;">
                 <tr>
-                  <td width="230" valign="top" style="padding:12px 16px 8px 12px;">
+                  <td width="158" valign="top" style="padding:12px 14px 8px 12px;">
                     {media}
                   </td>
                   <td valign="top" style="padding:14px 16px 8px 0;">
@@ -504,6 +542,11 @@ def render_digest_pdf(content: dict) -> bytes:
     clear, actionable error is raised when it is missing.
     """
     html_str = render_digest_email(content)
+    # Вшиваем GPN Din только в PDF: Chromium рендерит @font-face, корпоративный шрифт
+    # попадает в PDF (в email он не нужен — клиенты вырезают кастомные шрифты).
+    font_style = _pdf_font_face_style()
+    if font_style:
+        html_str = html_str.replace("</head>", font_style + "</head>", 1)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - depends on optional dep
