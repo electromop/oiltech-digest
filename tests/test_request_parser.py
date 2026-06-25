@@ -29,12 +29,41 @@ ARTICLE_HTML = b"""
 """
 
 
+QUERY_HOME_HTML = b"""
+<html>
+  <body>
+    <a href="/news.php?id=12345&utm_source=rss">Field automation rollout improves wellsite performance metrics</a>
+    <a href="/?p=678">Drilling analytics platform expands to offshore assets across the region</a>
+    <a href="/?utm_source=newsletter">Subscribe to our newsletter for the latest updates</a>
+  </body>
+</html>
+"""
+
+
 def test_extract_candidate_links_prefers_article_like_paths():
     items = request_parser.extract_candidate_links("https://example.com", HOME_HTML, limit=10)
 
     assert len(items) == 2
     assert items[0].url.startswith("https://example.com/")
     assert all("about" not in item.url for item in items)
+
+
+def test_extract_candidate_links_preserves_query_id_and_strips_tracking():
+    # Бэклог #3: ID статьи в query больше не теряется (иначе ссылка вела на раздел/сайт).
+    items = request_parser.extract_candidate_links("https://example.com", QUERY_HOME_HTML, limit=10)
+    urls = [item.url for item in items]
+
+    assert "https://example.com/news.php?id=12345" in urls   # query сохранён, utm отрезан
+    assert "https://example.com?p=678" in urls               # query-only статья не схлопнулась в главную
+    assert all("newsletter" not in url for url in urls)      # трекинг-ссылка на корень отброшена
+    assert "https://example.com" not in urls                 # чистая главная не попадает в кандидаты
+
+
+def test_clean_query_keeps_meaningful_strips_tracking():
+    assert request_parser._clean_query("id=42&utm_source=x&utm_medium=y") == "id=42"
+    assert request_parser._clean_query("utm_source=x&fbclid=z") == ""
+    assert request_parser._clean_query("") == ""
+    assert request_parser._clean_query("p=7&ref=home") == "p=7&ref=home"
 
 
 def test_parse_article_page_extracts_title_date_and_body():

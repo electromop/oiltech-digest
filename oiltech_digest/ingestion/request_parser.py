@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import re
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from dateutil import parser as dateparser
 from lxml import html
@@ -251,6 +251,24 @@ def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> li
     return candidates
 
 
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fbclid", "gclid", "yclid", "ymclid", "_openstat", "igshid", "mc_cid", "mc_eid",
+}
+
+
+def _clean_query(query: str) -> str:
+    """Оставить значимые query-параметры, выкинув рекламно-трекинговые."""
+    if not query:
+        return ""
+    kept = [
+        (key, value)
+        for key, value in parse_qsl(query, keep_blank_values=True)
+        if key.lower() not in _TRACKING_PARAMS
+    ]
+    return urlencode(kept)
+
+
 def _build_candidate_from_anchor(home_url: str, base_host: str, node) -> CandidateLink | None:
     href = (node.get("href") or "").strip()
     if not href or _BAD_LINK_RE.search(href):
@@ -261,8 +279,17 @@ def _build_candidate_from_anchor(home_url: str, base_host: str, node) -> Candida
         return None
     if (parts.netloc or "").lower() != base_host:
         return None
-    clean_url = f"{parts.scheme}://{parts.netloc}{parts.path}".rstrip("/")
-    if not clean_url or parts.path in {"", "/"}:
+    # Сохраняем значимую query-строку: у части источников идентификатор статьи именно
+    # в ней (?id=, ?p=, ?article=). Раньше query отбрасывалась → разные статьи
+    # схлопывались в URL раздела, и «Читать далее» в дайджесте вёл на сайт, а не на
+    # конкретную новость (бэклог заказчика #3). Трекинговые параметры отсекаем.
+    query = _clean_query(parts.query)
+    path = parts.path.rstrip("/")
+    clean_url = f"{parts.scheme}://{parts.netloc}{path}"
+    if query:
+        clean_url += f"?{query}"
+    # Главная/раздел без статейного таргета (нет ни пути, ни query) — не статья.
+    if not path and not query:
         return None
     title = normalize.clean_html(node.text_content())
     if len(title) < 18:
