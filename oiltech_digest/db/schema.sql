@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS article_cards (
   summary             TEXT,
   summary_model       TEXT,
   summary_generated_at TIMESTAMPTZ,
+  title_ru            TEXT,                       -- русский заголовок (перевод иностранных при суммаризации)
   relevant            BOOLEAN,                    -- AI-фильтр релевантности (Issue: AI-gate)
   relevance_reason    TEXT,
   relevance_model     TEXT,
@@ -292,6 +293,7 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(qu
 -- Idempotent upgrades for databases initialized before these columns existed.
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;
+ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE tags ADD COLUMN IF NOT EXISTS name_en TEXT;
 ALTER TABLE tags ADD COLUMN IF NOT EXISTS keywords_en_json JSONB;

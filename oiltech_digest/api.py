@@ -370,7 +370,7 @@ def list_articles(
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT a.id, a.title, a.url, a.language, length(a.raw_text) AS raw_text_chars,
+            SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.language, length(a.raw_text) AS raw_text_chars,
                    a.published_at,
                    a.collected_at, a.text_truncated, s.name AS source_name,
                    COALESCE(c.summary, '') AS summary,

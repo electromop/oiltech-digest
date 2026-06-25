@@ -37,7 +37,7 @@ def process_summary_articles(articles: list[dict], client) -> dict:
     for article in articles:
         try:
             response = summarize_article(article, client)
-            repository.upsert_article_card(article["id"], response.data["summary"], response.model)
+            repository.upsert_article_card(article["id"], response.data["summary"], response.model, response.data.get("title_ru"))
             _record_run(article, "summary", client, response)
             stats["processed"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
@@ -186,7 +186,7 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
             # 3. Суть.
             summary_resp = summarize_article(article, client)
-            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
+            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model, summary_resp.data.get("title_ru"))
             _record_run(article, "summary", client, summary_resp)
             article["summary"] = summary_resp.data["summary"]
             stats["summary"] += 1

@@ -47,6 +47,7 @@ def test_external_ai_process_payload_offline_returns_structured_result():
     article = result["articles"][0]
     assert article["article_id"] == 1
     assert article["summary"]["summary"]
+    assert article["summary"]["title_ru"]  # #2: русский заголовок течёт через суммаризацию
     assert article["relevance"]["relevant"] is True
     assert article["tagging"]["tag_id"] == 10
     assert article["scoring"]["items"][0]["criterion_id"] == 20

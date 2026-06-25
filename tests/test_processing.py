@@ -201,8 +201,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     monkeypatch.setattr(
         pipeline.repository,
         "upsert_article_card",
-        lambda article_id, summary, model=None: state.update(
-            {"article_id": article_id, "summary": summary, "summary_model": model}
+        lambda article_id, summary, model=None, title_ru=None: state.update(
+            {"article_id": article_id, "summary": summary, "summary_model": model, "title_ru": title_ru}
         ),
     )
     monkeypatch.setattr(

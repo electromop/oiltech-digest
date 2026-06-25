@@ -1368,19 +1368,21 @@ def find_article_candidates(query: str, limit: int = 20) -> list[dict]:
         return cur.fetchall()
 
 
-def upsert_article_card(article_id: int, summary: str, model: str | None = None) -> None:
+def upsert_article_card(article_id: int, summary: str, model: str | None = None,
+                        title_ru: str | None = None) -> None:
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO article_cards (article_id, summary, summary_model, summary_generated_at)
-            VALUES (%s, %s, %s, now())
+            INSERT INTO article_cards (article_id, summary, summary_model, title_ru, summary_generated_at)
+            VALUES (%s, %s, %s, %s, now())
             ON CONFLICT (article_id) DO UPDATE SET
                 summary = EXCLUDED.summary,
                 summary_model = EXCLUDED.summary_model,
+                title_ru = COALESCE(EXCLUDED.title_ru, article_cards.title_ru),
                 summary_generated_at = now(),
                 updated_at = now()
             """,
-            (article_id, summary, model),
+            (article_id, summary, model, title_ru),
         )
         conn.commit()
 
@@ -1773,7 +1775,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT a.id, a.title, a.url, a.published_at, a.language, a.image_url,
+            SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.published_at, a.language, a.image_url,
                    s.name AS source_name,
                    c.summary, c.selected_for_digest,
                    sc.total_score, sc.score_label,

@@ -117,7 +117,7 @@ class OfflineAIClient:
             title = _field(user_input, "title") or "Материал"
             body = _field(user_input, "text") or text
             summary = _trim_sentences(body, 2) or title
-            data = {"summary": f"{title}: {summary}"[:900]}
+            data = {"summary": f"{title}: {summary}"[:900], "title_ru": title[:200]}
         elif name == "article_relevance":
             data = {"relevant": True, "reason": "offline fallback (релевантность не проверяется без API)"}
         elif name == "article_tag":

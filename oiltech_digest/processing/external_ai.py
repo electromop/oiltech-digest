@@ -98,7 +98,10 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | Non
                 continue
 
             summary_resp = summarize_article(article, client)
-            item["summary"] = _response_payload(summary_resp, {"summary": summary_resp.data["summary"]})
+            item["summary"] = _response_payload(
+                summary_resp,
+                {"summary": summary_resp.data["summary"], "title_ru": summary_resp.data.get("title_ru")},
+            )
             article["summary"] = summary_resp.data["summary"]
             result["stats"]["summary"] += 1
 
@@ -135,7 +138,7 @@ def apply_process_result(result: dict[str, Any]) -> dict[str, Any]:
         stats["articles"] += 1
         if item.get("summary"):
             summary = item["summary"]
-            repository.upsert_article_card(article_id, summary["summary"], summary.get("model"))
+            repository.upsert_article_card(article_id, summary["summary"], summary.get("model"), summary.get("title_ru"))
             _insert_run(article_id, "summary", summary)
             stats["summary"] += 1
         if item.get("relevance"):
