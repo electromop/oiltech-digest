@@ -98,6 +98,23 @@ def test_relevance_article_uses_relevance_model_and_reasoning(monkeypatch):
     assert "S" not in call["input"]  # суть не в промпте гейта
 
 
+def test_reasoning_effort_across_gpt5_generations():
+    from oiltech_digest.processing.openai_client import _reasoning_effort
+
+    # Исходный GPT-5: minimal валиден, none → minimal.
+    assert _reasoning_effort("gpt-5-mini", "minimal") == "minimal"
+    assert _reasoning_effort("gpt-5-mini", "none") == "minimal"
+    assert _reasoning_effort("gpt-5-nano", "") == "minimal"
+    # 5.1+ (включая 5.4/5.5 с датой): minimal невалиден → none; пустое → none.
+    assert _reasoning_effort("gpt-5.5-2026-04-23", "minimal") == "none"
+    assert _reasoning_effort("gpt-5.5", "") == "none"
+    assert _reasoning_effort("gpt-5.4-mini", "") == "none"
+    assert _reasoning_effort("gpt-5.1-codex", "minimal") == "none"
+    # Явные low/medium/high проходят как есть на любом поколении.
+    assert _reasoning_effort("gpt-5.5", "medium") == "medium"
+    assert _reasoning_effort("gpt-5-mini", "low") == "low"
+
+
 def test_extract_output_text_from_responses_shape():
     raw = {
         "output": [

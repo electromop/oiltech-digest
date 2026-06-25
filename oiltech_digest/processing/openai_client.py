@@ -165,16 +165,22 @@ def _extract_output_text(raw: dict[str, Any]) -> str:
 
 
 def _reasoning_effort(model: str, configured: str | None) -> str | None:
-    """Normalize reasoning effort across GPT-5 model generations.
+    """Normalize reasoning effort across GPT-5 generations.
 
-    GPT-5.1+ supports `none`; older GPT-5 models do not and default to `medium`,
-    which is wasteful for JSON extraction/classification. Use `minimal` there.
+    GPT-5.1 и новее (5.1, 5.2, 5.3, 5.4, 5.5, …) поддерживают `none` и НЕ принимают
+    `minimal`; исходный GPT-5 (gpt-5/-mini/-nano) — наоборот: принимает `minimal`,
+    но не `none`. Подбираем эффективный дефолт под поколение и переводим
+    несовместимые значения, чтобы не ловить 400 при апгрейде модели.
     """
     value = (configured or "").strip().lower()
     model_name = (model or "").lower()
+    match = re.match(r"gpt-5\.(\d+)", model_name)
+    supports_none = bool(match and int(match.group(1)) >= 1)  # семейство 5.1+
     if not value:
-        value = "none" if model_name.startswith(("gpt-5.1", "gpt-5.2")) else "minimal"
-    if value == "none" and model_name.startswith(("gpt-5-", "gpt-5")) and not model_name.startswith(("gpt-5.1", "gpt-5.2")):
+        return "none" if supports_none else "minimal"
+    if supports_none and value == "minimal":
+        return "none"
+    if not supports_none and value == "none" and model_name.startswith("gpt-5"):
         return "minimal"
     return value or None
 
