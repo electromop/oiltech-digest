@@ -198,10 +198,11 @@ def save_digest_branding(payload: dict) -> dict:
     return merged
 
 
-def build_digest_content(month: str | None = None, limit: int = 20, min_score: float = 60) -> dict:
+def build_digest_content(month: str | None = None, limit: int = 20, min_score: float = 60,
+                         user_id: int | None = None) -> dict:
     branding = _load_digest_branding()
     issue_cfg = branding["issue"]
-    rows = repository.digest_candidates(month=month, limit=limit, min_score=min_score)
+    rows = repository.digest_candidates(month=month, limit=limit, min_score=min_score, user_id=user_id)
     news = []
     for row in rows:
         tag = row.get("tag_name") or "Без тега"
@@ -501,8 +502,9 @@ def _render_footer_socials(socials: list[dict]) -> str:
 
 
 def write_digest_content(path: str | Path, month: str, limit: int = 20,
-                         min_score: float = 60, html_path: str | Path | None = None) -> dict:
-    content = build_digest_content(month=month, limit=limit, min_score=min_score)
+                         min_score: float = 60, html_path: str | Path | None = None,
+                         user_id: int | None = None) -> dict:
+    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=user_id)
     output_path = Path(path)
     output_path.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
     result = {"path": str(output_path), "items": len(content["items"])}
@@ -513,9 +515,9 @@ def write_digest_content(path: str | Path, month: str, limit: int = 20,
     return result
 
 
-def save_digest_draft(month: str, limit: int = 20, min_score: float = 60) -> dict:
+def save_digest_draft(month: str, limit: int = 20, min_score: float = 60, user_id: int | None = None) -> dict:
     """Build digest content from current selected articles and persist it as a draft."""
-    content = build_digest_content(month=month, limit=limit, min_score=min_score)
+    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=user_id)
     items = [
         {
             "article_id": item["article_id"],
@@ -742,8 +744,8 @@ def render_digest_docx(content: dict) -> bytes:
 
 
 def write_digest_export(month: str | None = None, export_format: str = "pdf", limit: int = 100,
-                        min_score: float = 0) -> dict:
-    content = build_digest_content(month=month, limit=limit, min_score=min_score)
+                        min_score: float = 0, user_id: int | None = None) -> dict:
+    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=user_id)
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     base_name = f"digest-{month or 'all'}-{stamp}"

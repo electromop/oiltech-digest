@@ -57,6 +57,20 @@ def cmd_list_users(args: argparse.Namespace) -> None:
         print(f"  id={u['id']:>3}  {u['role']:<6}  {u['email']}")
 
 
+def cmd_migrate_digest_to_user(args: argparse.Namespace) -> None:
+    """Разовый перенос текущих глобальных статусов (article_cards.status != 'new')
+    в личное состояние пользователя — чтобы его дайджест сохранился при переходе на
+    пер-юзерную модель (#12)."""
+    from oiltech_digest.db import repository
+
+    target = next((u for u in repository.list_users() if u["email"].lower() == args.email.strip().lower()), None)
+    if target is None:
+        print(f"Пользователь {args.email} не найден")
+        return
+    n = repository.migrate_global_status_to_user(int(target["id"]))
+    print(f"Перенесено статусов: {n} → {args.email}")
+
+
 def cmd_schema_check(args: argparse.Namespace) -> None:
     from oiltech_digest.readiness import schema_check
 
@@ -678,6 +692,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_sr.set_defaults(func=cmd_set_role)
 
     sub.add_parser("list-users", help="список пользователей и ролей").set_defaults(func=cmd_list_users)
+
+    p_md = sub.add_parser("migrate-digest-to-user", help="перенести текущий глобальный дайджест/статусы на пользователя (#12)")
+    p_md.add_argument("--email", required=True)
+    p_md.set_defaults(func=cmd_migrate_digest_to_user)
 
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
     p_disc.add_argument("--force", action="store_true", help="перепроверить все, а не только без rss_url")

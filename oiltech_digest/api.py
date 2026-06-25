@@ -425,12 +425,14 @@ def list_articles(
         clauses.append("(t.name = %s OR parent.name = %s)")
         params.extend([tag, tag])
     if status:
-        clauses.append("COALESCE(c.status, 'new') = %s")
+        clauses.append("COALESCE(uas.status, 'new') = %s")
         params.append(status)
     if min_score is not None:
         clauses.append("COALESCE(sc.total_score, 0) >= %s")
         params.append(min_score)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    # user_id — первый %s (для LEFT JOIN user_article_states), затем where-параметры, затем limit.
+    params.insert(0, int(user["id"]))
     params.append(limit)
 
     with get_connection() as conn:
@@ -441,14 +443,15 @@ def list_articles(
                    a.published_at,
                    a.collected_at, a.text_truncated, s.name AS source_name,
                    COALESCE(c.summary, '') AS summary,
-                   COALESCE(c.status, 'new') AS status,
+                   COALESCE(uas.status, 'new') AS status,
                    c.relevant, c.relevance_reason,
-                   COALESCE(c.selected_for_digest, FALSE) AS selected_for_digest,
+                   (COALESCE(uas.status, 'new') = 'digest') AS selected_for_digest,
                    sc.total_score, sc.score_label, sc.explanation AS score_explanation,
                    t.name AS tag_name, parent.name AS parent_tag_name,
                    at.confidence AS tag_confidence, at.rationale AS tag_rationale
             FROM articles a
             JOIN sources s ON s.id = a.source_id
+            LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
@@ -471,31 +474,22 @@ def list_articles(
 @app.get("/api/stats")
 def dashboard_stats(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Authoritative dashboard counters, computed over the full database."""
-    return _clean(repository.dashboard_stats())
+    return _clean(repository.dashboard_stats(int(user["id"])))
 
 
 @app.patch("/api/articles/{article_id}")
 def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    selected_for_digest = patch.selected_for_digest
-    if patch.status is not None:
-        selected_for_digest = patch.status == "digest"
+    # Статус и выбор в дайджест — ПЕР-ЮЗЕРНЫЕ (#12). selected_for_digest сводится к статусу.
+    target_status = patch.status
+    if target_status is None and patch.selected_for_digest is not None:
+        target_status = "digest" if patch.selected_for_digest else "review"
     with get_connection() as conn:
         exists = conn.execute("SELECT 1 FROM articles WHERE id = %s", (article_id,)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Article not found")
-        conn.execute(
-            """
-            INSERT INTO article_cards (article_id, status, selected_for_digest, analyst_comment)
-            VALUES (%s, COALESCE(%s, 'new'), COALESCE(%s, FALSE), %s)
-            ON CONFLICT (article_id) DO UPDATE SET
-              status = COALESCE(EXCLUDED.status, article_cards.status),
-              selected_for_digest = COALESCE(EXCLUDED.selected_for_digest, article_cards.selected_for_digest),
-              analyst_comment = COALESCE(EXCLUDED.analyst_comment, article_cards.analyst_comment),
-              updated_at = now()
-            """,
-            (article_id, patch.status, selected_for_digest, patch.analyst_comment),
-        )
-        conn.commit()
+    repository.set_user_article_status(
+        int(user["id"]), article_id, status=target_status, analyst_comment=patch.analyst_comment
+    )
     return {"ok": True}
 
 
@@ -698,7 +692,7 @@ def ai_article_cost(
 def digest_content(month: str = "", limit: int = Query(100, ge=1, le=500),
                    min_score: float = 0,
                    user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return _clean(build_digest_content(month=month, limit=limit, min_score=min_score))
+    return _clean(build_digest_content(month=month, limit=limit, min_score=min_score, user_id=int(user["id"])))
 
 
 @app.get("/api/digest-branding")
@@ -713,7 +707,7 @@ def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Dep
 
 @app.post("/api/monthly-digests")
 def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return _clean(save_digest_draft(month=payload.month, limit=payload.limit, min_score=payload.min_score))
+    return _clean(save_digest_draft(month=payload.month, limit=payload.limit, min_score=payload.min_score, user_id=int(user["id"])))
 
 
 @app.get("/api/monthly-digests/{month}")
@@ -728,7 +722,7 @@ def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user))
 def digest_email(month: str = "", limit: int = Query(100, ge=1, le=500),
                  min_score: float = 0,
                  user: dict[str, Any] = Depends(require_user)) -> HTMLResponse:
-    content = build_digest_content(month=month, limit=limit, min_score=min_score)
+    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=int(user["id"]))
     return HTMLResponse(render_digest_email(content))
 
 
@@ -781,7 +775,7 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
     decision = network_policy.route_digest_export(payload.export_format)
     job = background_jobs.enqueue(
         "digest_export",
-        payload.model_dump(),
+        {**payload.model_dump(), "user_id": int(user["id"])},  # дайджест пер-юзерный (#12)
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
         capability=decision.capability,
@@ -978,6 +972,7 @@ def digest_export(
             export_format=export_format,
             limit=limit,
             min_score=min_score,
+            user_id=int(user["id"]),
         )
         repository.finish_export_job(job_id, "ok", result["path"])
     except RuntimeError as exc:  # PDF без Chromium и т.п. — понятное сообщение, не 500

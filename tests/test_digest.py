@@ -103,7 +103,7 @@ def test_build_digest_content_uses_branding_config(monkeypatch):
             },
         },
     )
-    monkeypatch.setattr("oiltech_digest.processing.digest.repository.digest_candidates", lambda month, limit=20, min_score=60: [])
+    monkeypatch.setattr("oiltech_digest.processing.digest.repository.digest_candidates", lambda month, limit=20, min_score=60, user_id=None: [])
 
     content = build_digest_content("2026-05")
 
@@ -182,7 +182,7 @@ def test_write_digest_export_json(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=20, min_score=60: {
+        lambda month, limit=20, min_score=60, user_id=None: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [],
@@ -203,7 +203,7 @@ def test_write_digest_export_html_and_docx(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=100, min_score=0: {
+        lambda month, limit=100, min_score=0, user_id=None: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [
@@ -244,7 +244,7 @@ def test_write_digest_export_doc_alias_writes_real_docx(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=100, min_score=0: {
+        lambda month, limit=100, min_score=0, user_id=None: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [],
@@ -299,7 +299,7 @@ def test_build_digest_content_includes_article_ids(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60: [
+        lambda month, limit=20, min_score=60, user_id=None: [
             {
                 "id": 123,
                 "title": "Digest candidate",
@@ -329,7 +329,7 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60: [
+        lambda month, limit=20, min_score=60, user_id=None: [
             {
                 "id": 123,
                 "title": "Digest candidate",
@@ -481,7 +481,7 @@ def test_save_digest_draft_persists_ordered_items(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=20, min_score=60: {
+        lambda month, limit=20, min_score=60, user_id=None: {
             "month": month,
             "title": f"Digest {month}",
             "items": [

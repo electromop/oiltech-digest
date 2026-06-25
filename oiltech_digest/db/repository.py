@@ -338,6 +338,43 @@ def count_admins() -> int:
         return int(conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0])
 
 
+def set_user_article_status(user_id: int, article_id: int, status: str | None = None,
+                            analyst_comment: str | None = None) -> None:
+    """Пер-юзерный рабочий статус статьи. status=None — не трогаем (только коммент)."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_article_states (user_id, article_id, status, analyst_comment)
+            VALUES (%s, %s, COALESCE(%s, 'new'), %s)
+            ON CONFLICT (user_id, article_id) DO UPDATE SET
+              status = COALESCE(%s, user_article_states.status),
+              analyst_comment = COALESCE(%s, user_article_states.analyst_comment),
+              updated_at = now()
+            """,
+            (user_id, article_id, status, analyst_comment, status, analyst_comment),
+        )
+        conn.commit()
+
+
+def migrate_global_status_to_user(user_id: int) -> int:
+    """Разовый перенос текущих ГЛОБАЛЬНЫХ статусов (article_cards.status != 'new')
+    в личное состояние указанного пользователя — чтобы его дайджест/работа сохранились
+    при переходе на пер-юзерную модель. Идемпотентно (не перетирает уже заданные)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO user_article_states (user_id, article_id, status, analyst_comment)
+            SELECT %s, c.article_id, c.status, c.analyst_comment
+            FROM article_cards c
+            WHERE COALESCE(c.status, 'new') <> 'new'
+            ON CONFLICT (user_id, article_id) DO NOTHING
+            """,
+            (user_id,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
 def ensure_admin_bootstrap() -> int | None:
     """Если админов нет, а пользователи есть — назначить админом самого первого
     (по id). Возвращает id назначенного админа или None. Идемпотентно."""
@@ -1113,12 +1150,13 @@ def count_articles() -> int:
         return conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
 
 
-def dashboard_stats() -> dict:
+def dashboard_stats(user_id: int | None = None) -> dict:
     """Aggregate counters for the admin dashboard cards.
 
     Computed over the FULL database (not the loaded page), so the numbers stay
     correct regardless of how many articles the UI fetches. ``avg_score`` is the
     mean over scored articles only — unscored articles do not drag it to zero.
+    ``selected_for_digest`` — ПЕР-ЮЗЕРНО (выбор в дайджест личный, #12).
     """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -1143,11 +1181,12 @@ def dashboard_stats() -> dict:
                       WHERE sc.article_id = c.article_id
                     )
                   )) AS processed_articles,
-              (SELECT COUNT(*) FROM article_cards
-                 WHERE status = 'digest') AS selected_for_digest,
+              (SELECT COUNT(*) FROM user_article_states
+                 WHERE user_id = %(user_id)s AND status = 'digest') AS selected_for_digest,
               (SELECT ROUND(AVG(total_score)) FROM article_scores) AS avg_score,
               (SELECT COUNT(*) FROM sources) AS sources
-            """
+            """,
+            {"user_id": user_id},
         )
         row = cur.fetchone()
     return {
@@ -1817,15 +1856,14 @@ def ai_article_cost_report(limit: int = 20, complete_only: bool = True) -> list[
         return cur.fetchall()
 
 
-def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60) -> list[dict]:
-    """Articles selected for the digest (status='digest').
+def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60,
+                      user_id: int | None = None) -> list[dict]:
+    """Статьи, выбранные в дайджест КОНКРЕТНЫМ пользователем (его user_article_states.status='digest').
 
-    ``month`` is optional: when empty/None the period filter is dropped and every
-    selected article is returned, matching the on-screen selection. This is what
-    makes the file export agree with the preview instead of coming out empty.
-    Future-dated publications (event-calendar noise) are always excluded.
+    ``month`` опционален: пусто/None — фильтр периода снимается, возвращаются все
+    выбранные (превью совпадает с экспортом). Будущие публикации всегда исключены.
     """
-    params: dict = {"min_score": min_score, "limit": limit}
+    params: dict = {"min_score": min_score, "limit": limit, "user_id": user_id}
     month_clause = ""
     if month:
         month_clause = "AND to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %(month)s"
@@ -1836,17 +1874,18 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             f"""
             SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.published_at, a.language, a.image_url,
                    s.name AS source_name,
-                   c.summary, c.selected_for_digest,
+                   c.summary, TRUE AS selected_for_digest,
                    sc.total_score, sc.score_label,
                    t.name AS tag_name, parent.name AS parent_tag_name
             FROM articles a
             JOIN sources s ON s.id = a.source_id
-            JOIN article_cards c ON c.article_id = a.id
+            JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %(user_id)s
+            LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
-            WHERE COALESCE(c.status, 'new') = 'digest'
+            WHERE uas.status = 'digest'
               AND c.relevant IS NOT FALSE
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
               AND COALESCE(sc.total_score, 0) >= %(min_score)s

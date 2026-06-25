@@ -266,7 +266,7 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     monkeypatch.setattr(
         digest.repository,
         "digest_candidates",
-        lambda month=None, limit=20, min_score=60: [
+        lambda month=None, limit=20, min_score=60, user_id=None: [
             {
                 "id": article["id"],
                 "title": article["title"],

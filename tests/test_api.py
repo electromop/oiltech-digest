@@ -217,7 +217,7 @@ def test_create_monthly_digest_endpoint(monkeypatch):
     monkeypatch.setattr(
         api,
         "save_digest_draft",
-        lambda month, limit=20, min_score=60: {
+        lambda month, limit=20, min_score=60, user_id=None: {
             "id": 9,
             "month": month,
             "title": f"Digest {month}",
@@ -421,9 +421,11 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert "LOWER(a.title" in articles_sql
     assert "s.name = %s" in articles_sql
     assert "(t.name = %s OR parent.name = %s)" in articles_sql
-    assert "COALESCE(c.status, 'new') = %s" in articles_sql
+    assert "user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s" in articles_sql  # пер-юзерный статус (#12)
+    assert "COALESCE(uas.status, 'new') = %s" in articles_sql
     assert "COALESCE(sc.total_score, 0) >= %s" in articles_sql
-    assert articles_params == ["%drilling%", "World Oil", "Бурение", "Бурение", "digest", 80.0, 25]
+    # user_id — первый параметр (LEFT JOIN), затем фильтры, затем limit.
+    assert articles_params == [1, "%drilling%", "World Oil", "Бурение", "Бурение", "digest", 80.0, 25]
 
 
 def test_update_source_persists_non_rss_scraper_fields(monkeypatch):
@@ -676,7 +678,7 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
     assert response.status_code == 200
     assert captured == {
         "kind": "digest_export",
-        "payload": {"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60.0},
+        "payload": {"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60.0, "user_id": 1},
         "kwargs": {"queue_name": "playwright", "execution_region": "ru", "capability": "playwright"},
     }
     assert response.json()["job"]["status"] == "queued"
