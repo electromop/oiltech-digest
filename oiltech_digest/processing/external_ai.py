@@ -73,11 +73,8 @@ def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 result["stats"]["rejected"] += 1
                 result["articles"].append(item)
                 continue
-            summary_resp = summarize_article(article, client)
-            item["summary"] = _response_payload(summary_resp, {"summary": summary_resp.data["summary"]})
-            article["summary"] = summary_resp.data["summary"]
-            result["stats"]["summary"] += 1
-
+            # Гейт релевантности ПЕРВЫМ — на сыром тексте, до суммаризации.
+            # Нерелевантное дальше не суммируем/не тегируем/не скорим (чистота + экономия).
             relevance_resp = relevance_article(article, client)
             relevant = bool(relevance_resp.data.get("relevant"))
             item["relevance"] = _response_payload(
@@ -88,6 +85,11 @@ def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if not relevant:
                 result["articles"].append(item)
                 continue
+
+            summary_resp = summarize_article(article, client)
+            item["summary"] = _response_payload(summary_resp, {"summary": summary_resp.data["summary"]})
+            article["summary"] = summary_resp.data["summary"]
+            result["stats"]["summary"] += 1
 
             tag_resp = tag_article(article, tags, client)
             tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)

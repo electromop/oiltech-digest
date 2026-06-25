@@ -47,12 +47,14 @@ class OpenAIResponsesClient:
         self.model = model or config.OPENAI_MODEL
 
     def complete_json(self, instructions: str, user_input: str,
-                      schema: dict[str, Any], max_output_tokens: int = 900) -> AIResponse:
+                      schema: dict[str, Any], max_output_tokens: int = 900,
+                      model: str | None = None, reasoning_effort: str | None = None) -> AIResponse:
         if not self.api_key:
             raise AIClientError("OPENAI_API_KEY is empty")
 
+        used_model = model or self.model
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": used_model,
             "instructions": instructions,
             "input": user_input,
             "store": False,
@@ -67,7 +69,7 @@ class OpenAIResponsesClient:
                 }
             },
         }
-        effort = _reasoning_effort(self.model, config.OPENAI_REASONING_EFFORT)
+        effort = _reasoning_effort(used_model, reasoning_effort or config.OPENAI_REASONING_EFFORT)
         if effort:
             payload["reasoning"] = {"effort": effort}
 
@@ -93,7 +95,7 @@ class OpenAIResponsesClient:
         usage = raw.get("usage") or {}
         return AIResponse(
             data=data,
-            model=raw.get("model") or self.model,
+            model=raw.get("model") or used_model,
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
         )
@@ -106,7 +108,8 @@ class OfflineAIClient:
     model = "offline-deterministic"
 
     def complete_json(self, instructions: str, user_input: str,
-                      schema: dict[str, Any], max_output_tokens: int = 900) -> AIResponse:
+                      schema: dict[str, Any], max_output_tokens: int = 900,
+                      model: str | None = None, reasoning_effort: str | None = None) -> AIResponse:
         text = re.sub(r"\s+", " ", user_input).strip()
         approx_input = max(1, len(text) // 4)
         name = schema["name"]

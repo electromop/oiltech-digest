@@ -1,7 +1,101 @@
 from oiltech_digest.processing import pipeline
 from oiltech_digest.processing import digest
+from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient, _extract_output_text
 from oiltech_digest.processing.seed import DEFAULT_SCORING_CRITERIA, _split_keywords
+
+
+class _RecordingClient:
+    """Фейк AI-клиент: пишет порядок вызовов по имени схемы + переданные model/effort/вход."""
+
+    model = "fake"
+
+    def __init__(self, relevant: bool = True) -> None:
+        self.calls: list[dict] = []
+        self.relevant = relevant
+
+    def complete_json(self, instructions, user_input, schema, max_output_tokens=900,
+                      model=None, reasoning_effort=None):
+        name = schema["name"]
+        self.calls.append({"name": name, "model": model, "reasoning": reasoning_effort, "input": user_input})
+        if name == "article_relevance":
+            return AIResponse(data={"relevant": self.relevant, "reason": "x"}, model=model or "fake")
+        if name == "article_summary":
+            return AIResponse(data={"summary": "s"}, model="fake")
+        if name == "article_tag":
+            return AIResponse(data={"tag_id": 10, "confidence": 0.5, "rationale": "r"}, model="fake")
+        if name == "article_score":
+            return AIResponse(
+                data={"total_score": 50, "score_label": "Средняя", "explanation": "e", "items": []},
+                model="fake",
+            )
+        return AIResponse(data={}, model="fake")
+
+
+def _external_payload(article_extra: dict | None = None) -> dict:
+    article = {
+        "id": 1,
+        "title": "Война: удары по городу, есть жертвы",
+        "url": "https://example.com/a",
+        "language": "ru",
+        "raw_text": "Военная сводка без отношения к нефтегазу.",
+        "source_name": "Интерфакс ТЭК",
+        "source_category": "Новости",
+    }
+    article.update(article_extra or {})
+    return {
+        "articles": [article],
+        "tags": [{"id": 10, "name": "Бурение", "parent_name": "Технологии", "name_en": "Drilling",
+                  "keywords_json": [], "keywords_en_json": []}],
+        "criteria": [{"id": 20, "name": "Значимость", "weight": 100, "description": "",
+                      "keywords_json": [], "keywords_en_json": []}],
+    }
+
+
+def test_external_ai_irrelevant_skips_summary_tag_score(monkeypatch):
+    """Гейт релевантности первым: нерелевантную статью НЕ суммируем/тегируем/скорим."""
+    client = _RecordingClient(relevant=False)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+
+    result = external_ai.process_payload(_external_payload())
+
+    assert [c["name"] for c in client.calls] == ["article_relevance"]
+    assert result["stats"]["rejected"] == 1
+    assert result["stats"]["summary"] == 0
+    item = result["articles"][0]
+    assert item["relevance"]["relevant"] is False
+    assert "summary" not in item and "scoring" not in item
+
+
+def test_external_ai_relevance_runs_first_and_ignores_summary(monkeypatch):
+    """Гейт идёт ПЕРВЫМ и судит по сырому тексту — AI-суть не попадает ему на вход."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+
+    result = external_ai.process_payload(_external_payload({"summary": "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ"}))
+
+    names = [c["name"] for c in client.calls]
+    assert names[0] == "article_relevance"
+    assert names == ["article_relevance", "article_summary", "article_tag", "article_score"]
+    rel_input = next(c["input"] for c in client.calls if c["name"] == "article_relevance")
+    assert "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ" not in rel_input
+    assert "summary:" not in rel_input
+    assert result["stats"]["relevant"] == 1
+
+
+def test_relevance_article_uses_relevance_model_and_reasoning(monkeypatch):
+    """Гейт зовётся с отдельной (более сильной) моделью и повышенным reasoning."""
+    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_MODEL", "strong-model")
+    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_REASONING", "high")
+    client = _RecordingClient(relevant=True)
+
+    pipeline.relevance_article({"title": "t", "raw_text": "x", "summary": "S"}, client)
+
+    call = client.calls[-1]
+    assert call["name"] == "article_relevance"
+    assert call["model"] == "strong-model"
+    assert call["reasoning"] == "high"
+    assert "S" not in call["input"]  # суть не в промпте гейта
 
 
 def test_extract_output_text_from_responses_shape():
@@ -141,7 +235,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     assert state["tag_id"] == 10
     assert state["total_score"] >= 65
     assert state["score_label"] in {"Выше средней", "Высокая"}
-    assert [run["stage"] for run in state["runs"]] == ["summary", "relevance", "tagging", "scoring"]
+    # Релевантность идёт ПЕРВОЙ — гейт до суммаризации (фикс «мусор в выборке» 2026-06).
+    assert [run["stage"] for run in state["runs"]] == ["relevance", "summary", "tagging", "scoring"]
     assert all(run["provider"] == "offline" and run["status"] == "ok" for run in state["runs"])
 
     class PublishedAt:

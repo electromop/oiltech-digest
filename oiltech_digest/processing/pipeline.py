@@ -7,6 +7,7 @@ import math
 import re
 from typing import Any
 
+from oiltech_digest import config
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, OfflineAIClient, OpenAIResponsesClient
@@ -173,14 +174,8 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
                     article["text_truncated"] = False
                     stats["fulltext"] += 1
 
-            # 2. Суть.
-            summary_resp = summarize_article(article, client)
-            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
-            _record_run(article, "summary", client, summary_resp)
-            article["summary"] = summary_resp.data["summary"]
-            stats["summary"] += 1
-
-            # 3. Релевантность.
+            # 2. Релевантность ПЕРВОЙ — на сыром тексте, до сути (без bias и без лишних
+            #    AI-вызовов на нерелевантном).
             rel_resp = relevance_article(article, client)
             relevant = bool(rel_resp.data.get("relevant"))
             repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
@@ -188,6 +183,13 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
             stats["relevant" if relevant else "rejected"] += 1
             if not relevant:
                 continue
+
+            # 3. Суть.
+            summary_resp = summarize_article(article, client)
+            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
+            _record_run(article, "summary", client, summary_resp)
+            article["summary"] = summary_resp.data["summary"]
+            stats["summary"] += 1
 
             # 4. Тег.
             tag_resp = tag_article(article, tags, client)
@@ -227,11 +229,17 @@ def summarize_article(article: dict, client) -> AIResponse:
 
 
 def relevance_article(article: dict, client) -> AIResponse:
+    # Гейт судит по СЫРОМУ тексту (title+source+text), БЕЗ AI-сути: суммаризатор
+    # обязан притягивать любую статью к нефтегазу, и подача его сути на вход гейта
+    # давала самосбывающуюся релевантность (мусор проходил). Модель/effort — отдельные,
+    # обычно сильнее основных: вызов дешёвый, цена ошибки высокая.
     return client.complete_json(
         RELEVANCE_INSTRUCTIONS,
-        _article_prompt(article),
+        _relevance_prompt(article),
         RELEVANCE_SCHEMA,
         max_output_tokens=400,
+        model=config.OPENAI_RELEVANCE_MODEL,
+        reasoning_effort=config.OPENAI_RELEVANCE_REASONING,
     )
 
 
@@ -336,6 +344,21 @@ def _article_prompt(article: dict) -> str:
             f"language: {article.get('language') or 'unknown'}",
             f"published_at: {article.get('published_at') or ''}",
             f"summary: {article.get('summary') or ''}",
+            f"text: {_compact(article.get('raw_text') or '', 6000)}",
+        ]
+    )
+
+
+def _relevance_prompt(article: dict) -> str:
+    """Вход гейта релевантности — БЕЗ AI-сути (намеренно): только сырые поля статьи,
+    чтобы суждение шло по реальному содержанию, а не по подкрученной нефтегаз-сути."""
+    return "\n".join(
+        [
+            f"title: {article.get('title') or ''}",
+            f"source: {article.get('source_name') or ''}",
+            f"url: {article.get('url') or ''}",
+            f"language: {article.get('language') or 'unknown'}",
+            f"published_at: {article.get('published_at') or ''}",
             f"text: {_compact(article.get('raw_text') or '', 6000)}",
         ]
     )

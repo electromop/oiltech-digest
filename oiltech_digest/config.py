@@ -110,6 +110,14 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "60"))
 OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "minimal")
 
+# Гейт релевантности — критическая защита от мусора в выборке. Ему можно дать
+# модель сильнее основной и больше reasoning: вызов дешёвый (короткий ответ),
+# а цена ошибки высокая. Если переменные не заданы — откат на основную модель/effort.
+# ВАЖНО (инцидент 2026-06): эти override'ы НЕ в git — прописывать в .env воркера,
+# где реально вызывается OpenAI, иначе гейт тихо откатится на слабую модель.
+OPENAI_RELEVANCE_MODEL = os.environ.get("OPENAI_RELEVANCE_MODEL", "").strip() or OPENAI_MODEL
+OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").strip() or "medium"
+
 # USD per 1M tokens. Defaults follow the model docs snapshot used when this code
 # was written; override in .env if pricing changes or another model is selected.
 OPENAI_INPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_INPUT_USD_PER_MTOK", "0.05"))
