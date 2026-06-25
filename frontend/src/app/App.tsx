@@ -11,8 +11,12 @@ import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
+import { UsersPage } from "../features/users/UsersPage";
 
-type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags" | "jobs" | "maintenance";
+type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance";
+
+// Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
+const ADMIN_SCREENS = new Set<ScreenId>(["sources", "scoring", "tags", "users", "jobs", "maintenance"]);
 
 type ScreenDef = {
   id: ScreenId;
@@ -69,6 +73,14 @@ const screens: ScreenDef[] = [
     description: "Parent/subtag структура, включение, редактирование и сохранение теперь тоже в новом интерфейсе.",
     status: "Экран активен",
   },
+  {
+    id: "users",
+    label: "Пользователи",
+    eyebrow: "Access",
+    title: "Пользователи",
+    description: "Управление учётными записями и ролями (только для администратора).",
+    status: "Экран активен",
+  },
 ];
 
 const appHighlights = [
@@ -83,11 +95,15 @@ const appHighlights = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["articles", "digest", "sources"],
+    screens: ["articles", "digest"],
   },
   {
     label: "Настройки",
-    screens: ["scoring", "tags"],
+    screens: ["sources", "scoring", "tags"],
+  },
+  {
+    label: "Администрирование",
+    screens: ["users"],
   },
 ];
 
@@ -110,6 +126,7 @@ export function App() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const active = screens.find((screen) => screen.id === activeScreen) ?? screens[0];
+  const isAdmin = (user?.role ?? "user") === "admin";
 
   useEffect(() => {
     void loadSession();
@@ -203,6 +220,24 @@ export function App() {
 
   if (activeScreen === "maintenance") {
     currentScreen = <MaintenancePage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+  }
+
+  if (activeScreen === "users") {
+    currentScreen = <UsersPage onUnauthorized={() => setUser(null)} showToast={showToast} currentUserId={Number(user?.id ?? 0)} />;
+  }
+
+  // Защита: не-админ не должен видеть админ-экраны даже по прямой ссылке ?screen=.
+  if (!isAdmin && ADMIN_SCREENS.has(activeScreen)) {
+    currentScreen = (
+      <section className="screenStack">
+        <header className="screenHeader">
+          <div><h1>Нет доступа</h1></div>
+        </header>
+        <section className="panel">
+          <div className="emptyState">Раздел доступен только администратору. Обратитесь к администратору системы.</div>
+        </section>
+      </section>
+    );
   }
 
   function switchScreen(screenId: ScreenId) {
@@ -331,11 +366,14 @@ export function App() {
         <div className="brandMobileDivider" />
 
         <div className="sidebarGroups">
-          {navGroups.map((group) => (
+          {navGroups.map((group) => {
+            const visibleScreens = group.screens.filter((sid) => isAdmin || !ADMIN_SCREENS.has(sid));
+            if (!visibleScreens.length) return null;
+            return (
             <section className="sidebarGroup" key={group.label}>
               <div className="sidebarSection">{group.label}</div>
               <nav className="nav">
-                {group.screens.map((screenId) => {
+                {visibleScreens.map((screenId) => {
                   const screen = screens.find((item) => item.id === screenId);
                   if (!screen) return null;
                   return (
@@ -355,7 +393,8 @@ export function App() {
                 })}
               </nav>
             </section>
-          ))}
+            );
+          })}
         </div>
 
         <div className="sidebarBottom">
@@ -394,7 +433,7 @@ export function App() {
 
       <main className="content">{currentScreen}</main>
       <nav className="mobileNav">
-        {screens.map((screen) => (
+        {screens.filter((screen) => isAdmin || !ADMIN_SCREENS.has(screen.id)).map((screen) => (
           <button
             key={screen.id}
             type="button"
@@ -470,6 +509,17 @@ function ScreenIcon(props: { screenId: ScreenId }) {
       <svg {...common}>
         <path d="M3 12.5 6.2 8.5l2.2 2.2L13 5.5" />
         <path d="M10.5 5.5H13v2.5" />
+      </svg>
+    );
+  }
+
+  if (props.screenId === "users") {
+    return (
+      <svg {...common}>
+        <circle cx="6" cy="6" r="2.3" />
+        <path d="M2.5 13c0-2.2 1.6-3.4 3.5-3.4s3.5 1.2 3.5 3.4" />
+        <path d="M10.5 5.4c1.3 0 2.2 1 2.2 2.2s-.9 2.1-2.2 2.1" />
+        <path d="M11.4 9.9c1.4.2 2.3 1.3 2.3 3.1" />
       </svg>
     );
   }

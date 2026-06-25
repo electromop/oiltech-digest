@@ -197,7 +197,7 @@ describe("App smoke", () => {
         return Promise.resolve(jsonResponse({ detail: "Not authenticated" }, { status: 401 }));
       }
       if (url === "/api/auth/login" && method === "POST") {
-        return Promise.resolve(jsonResponse({ ok: true, user: { id: 1, email: "user@example.com" } }));
+        return Promise.resolve(jsonResponse({ ok: true, user: { id: 1, email: "user@example.com", role: "admin" } }));
       }
       if (url.startsWith("/api/articles")) {
         return Promise.resolve(jsonResponse([article]));
