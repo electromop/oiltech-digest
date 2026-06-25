@@ -1247,6 +1247,47 @@ button {
   border-bottom: 1px solid rgba(148, 163, 184, 0.18);
 }
 
+/* #9: шапка группы-тега как кнопка-аккордеон */
+.articleGroupToggle {
+  width: 100%;
+  justify-content: space-between;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  appearance: none;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  transition: background-color 160ms ease;
+}
+
+.articleGroupToggle:hover {
+  background: rgba(241, 245, 249, 0.96);
+}
+
+.articleGroupToggle:not(.open) {
+  border-bottom-color: transparent;
+}
+
+.articleGroupHeadMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.groupChevron {
+  flex: none;
+  color: var(--text-muted);
+  transition: transform 220ms ease;
+  transform: rotate(-90deg);
+}
+
+.articleGroupToggle.open .groupChevron {
+  transform: rotate(0deg);
+}
+
 .articleRows {
   display: grid;
 }

@@ -285,8 +285,11 @@ describe("App smoke", () => {
 
     expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Каталог сигналов" })).toBeInTheDocument();
-    expect(screen.getAllByText("Directional drilling automation").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("1 сигналов")).toBeInTheDocument();
+
+    // #9: группы-теги свёрнуты по умолчанию — сначала раскрываем группу, потом сам сигнал.
+    await user.click(screen.getByRole("button", { name: /Раскрыть группу/ }));
+    expect(screen.getAllByText("Directional drilling automation").length).toBeGreaterThanOrEqual(1);
 
     await user.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
     expect(screen.getByText("AI summary for drilling automation")).toBeInTheDocument();
@@ -349,14 +352,14 @@ describe("App smoke", () => {
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
-    expect(await screen.findByRole("heading", { name: "Service maintenance" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Обслуживание сервиса" })).toBeInTheDocument();
     expect(screen.getByText("Истекшие сессии")).toBeInTheDocument();
-    expect(screen.getByText("Background jobs к cleanup")).toBeInTheDocument();
-    expect(screen.getByText("External contour")).toBeInTheDocument();
+    expect(screen.getByText("Фоновые задачи к очистке")).toBeInTheDocument();
+    expect(screen.getByText("Внешний контур")).toBeInTheDocument();
     expect(screen.getByText("external-ai")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Service maintenance" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Обслуживание сервиса" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Запустить benchmark" }));
+    await user.click(screen.getByRole("button", { name: "Запустить замер" }));
 
     expect(await screen.findByText("articles_list")).toBeInTheDocument();
     expect(screen.getAllByText("source_health").length).toBeGreaterThanOrEqual(1);

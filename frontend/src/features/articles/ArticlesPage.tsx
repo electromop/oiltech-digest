@@ -35,7 +35,7 @@ export function ArticlesPage(props: Props) {
   const [scoreMax, setScoreMax] = useState(100);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [sort, setSort] = useState("score_desc");
+  const [sort, setSort] = useState("date_desc");
   const [tagQuery, setTagQuery] = useState("");
   const [showTagOptions, setShowTagOptions] = useState(false);
   const [sourceQuery, setSourceQuery] = useState("");
@@ -45,6 +45,8 @@ export function ArticlesPage(props: Props) {
   const [serverResults, setServerResults] = useState<Article[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [viewTab, setViewTab] = useState<"all" | "withStatus">("all");
+  // #9: группы-теги свёрнуты по умолчанию. Храним РАСКРЫТЫЕ (пустой набор = всё скрыто).
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   // serverResults != null → активен серверный поиск по всей базе; иначе — дефолтный топ-2000.
   const articles = serverResults ?? initialArticles;
@@ -203,7 +205,7 @@ export function ArticlesPage(props: Props) {
     setScoreMax(100);
     setDateFrom("");
     setDateTo("");
-    setSort("score_desc");
+    setSort("date_desc");
     setRenderLimit(200);
   }
 
@@ -212,6 +214,15 @@ export function ArticlesPage(props: Props) {
       const next = new Set(prev);
       if (next.has(articleId)) next.delete(articleId);
       else next.add(articleId);
+      return next;
+    });
+  }
+
+  function toggleGroup(group: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
       return next;
     });
   }
@@ -270,6 +281,16 @@ export function ArticlesPage(props: Props) {
                     ? `${filteredArticles.length} сигналов · показаны ${visibleArticles.length}`
                     : `${filteredArticles.length} сигналов`}
             </span>
+            {grouped.length ? (
+              <>
+                <button type="button" className="ghostButton" onClick={() => setExpandedGroups(new Set(grouped.map(([group]) => group)))}>
+                  Развернуть всё
+                </button>
+                <button type="button" className="ghostButton" onClick={() => setExpandedGroups(new Set())}>
+                  Свернуть всё
+                </button>
+              </>
+            ) : null}
             <button type="button" className="ghostButton" onClick={() => void reload()}>
               Обновить
             </button>
@@ -394,9 +415,9 @@ export function ArticlesPage(props: Props) {
           <label className="field">
             <span>Сортировка</span>
             <select value={sort} onChange={(event) => setSort(event.target.value)}>
-              <option value="score_desc">Score: по убыванию</option>
-              <option value="score_asc">Score: по возрастанию</option>
               <option value="date_desc">Сначала новые</option>
+              <option value="score_desc">Оценка: по убыванию</option>
+              <option value="score_asc">Оценка: по возрастанию</option>
             </select>
           </label>
         </div>
@@ -410,11 +431,11 @@ export function ArticlesPage(props: Props) {
         {showAdvancedFilters ? (
           <div className="articlesAdvancedGrid">
             <label className="field">
-              <span>Score от</span>
+              <span>Оценка от</span>
               <input type="number" value={scoreMin} onChange={(event) => setScoreMin(Number(event.target.value || 0))} />
             </label>
             <label className="field">
-              <span>Score до</span>
+              <span>Оценка до</span>
               <input type="number" value={scoreMax} onChange={(event) => setScoreMax(Number(event.target.value || 100))} />
             </label>
             <label className="field">
@@ -444,14 +465,29 @@ export function ArticlesPage(props: Props) {
 
         {visibleArticles.length ? (
           <div className="articleGroupsStack">
-            {grouped.map(([group, groupArticles]) => (
+            {grouped.map(([group, groupArticles]) => {
+              // Свёрнуто по умолчанию; авто-раскрытие при активном поиске или выбранном этом теге.
+              const groupOpen = expandedGroups.has(group) || Boolean(search.trim()) || tag === group;
+              return (
               <section className="articleGroupCard" key={group}>
-                <div className="articleGroupHead">
-                  <span className="miniPill muted">{group}</span>
-                  <span className="metaText">
-                    {groupArticles.length} сигналов · средний score {Math.round(groupArticles.reduce((sum, article) => sum + Number(article.score || 0), 0) / groupArticles.length)}
+                <button
+                  type="button"
+                  className={groupOpen ? "articleGroupHead articleGroupToggle open" : "articleGroupHead articleGroupToggle"}
+                  onClick={() => toggleGroup(group)}
+                  aria-expanded={groupOpen}
+                  aria-label={groupOpen ? `Свернуть группу ${group}` : `Раскрыть группу ${group}`}
+                >
+                  <span className="articleGroupHeadMain">
+                    <svg className="groupChevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <path d="M4 6.5 8 10l4-3.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <span className="miniPill muted">{group}</span>
                   </span>
-                </div>
+                  <span className="metaText">
+                    {groupArticles.length} сигналов · средняя оценка {Math.round(groupArticles.reduce((sum, article) => sum + Number(article.score || 0), 0) / groupArticles.length)}
+                  </span>
+                </button>
+                {groupOpen ? (
                 <div className="articleRows">
                   {groupArticles.map((article) => {
                     const open = expanded.has(article.id);
@@ -473,7 +509,7 @@ export function ArticlesPage(props: Props) {
                               {article.title}
                             </a>
                             <div className="metaText">
-                              {article.source} · {article.tag} · {article.language || "unknown"} · {article.raw_text_chars || 0} симв.
+                              {article.source} · {article.tag} · {article.language || "язык не определён"} · {article.raw_text_chars || 0} симв.
                               {article.text_truncated ? " · неполный текст" : ""}
                               {article.relevant === false ? " · нерелевантно" : ""}
                               {article.digest ? " · в дайджесте" : ""}
@@ -535,8 +571,10 @@ export function ArticlesPage(props: Props) {
                     );
                   })}
                 </div>
+                ) : null}
               </section>
-            ))}
+              );
+            })}
             {remaining > 0 ? (
               <div className="showMoreWrap">
                 <button type="button" className="ghostButton" onClick={() => setRenderLimit((prev) => prev + 200)}>

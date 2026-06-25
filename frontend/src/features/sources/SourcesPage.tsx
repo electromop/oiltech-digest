@@ -94,7 +94,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
 
         if (result.pending.kind === "scrape") {
           const stats = result.job.result?.stats as { added?: number; attempted?: number } | undefined;
-          showToast(`Скрапинг: добавлено ${stats?.added || 0}, дублей ${(stats?.attempted || 0) - (stats?.added || 0)}`);
+          showToast(`Сбор статей: добавлено ${stats?.added || 0}, дублей ${(stats?.attempted || 0) - (stats?.added || 0)}`);
           needsReload = true;
         }
       });
@@ -308,10 +308,10 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   async function handleScrapeSource(source: Source) {
     try {
       const response = await scrapeSourceJob(source.id);
-      setPendingJob(source.id, "scrape", response.job.id, "скрапинг в очереди");
-      showToast(`Скрапинг поставлен в очередь: #${response.job.id}`);
+      setPendingJob(source.id, "scrape", response.job.id, "сбор статей в очереди");
+      showToast(`Сбор статей поставлен в очередь: #${response.job.id}`);
     } catch (error) {
-      handleError(error, "Не удалось проверить listing");
+      handleError(error, "Не удалось проверить страницу новостей");
     }
   }
 

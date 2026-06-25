@@ -88,7 +88,7 @@ export function JobsPage({ onUnauthorized, showToast }: Props) {
         </div>
         <div className="panelActions">
           <a className="ghostButton compactButton" href="?screen=maintenance">
-            Service maintenance
+            Обслуживание
           </a>
           <div className="statusPill">Скрытая страница</div>
         </div>
@@ -157,7 +157,7 @@ export function JobsPage({ onUnauthorized, showToast }: Props) {
           <table className="jobsTable">
             <thead>
               <tr>
-                <th>ID</th>
+                <th>№</th>
                 <th>Тип</th>
                 <th>Очередь</th>
                 <th>Регион</th>

@@ -53,7 +53,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
       };
       const response = await runMaintenanceCleanup(payload);
       setLastResult(response.result);
-      showToast("Service cleanup завершен");
+      showToast("Очистка сервиса завершена");
       await reload();
     } catch (error) {
       handleError(error, "Не удалось выполнить service cleanup");
@@ -66,9 +66,9 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
     try {
       setBenchmarkLoading(true);
       setBenchmark(await getReadinessBenchmark());
-      showToast("Read-only benchmark завершен");
+      showToast("Замер в режиме чтения завершён");
     } catch (error) {
-      handleError(error, "Не удалось выполнить benchmark");
+      handleError(error, "Не удалось выполнить замер");
     } finally {
       setBenchmarkLoading(false);
     }
@@ -78,7 +78,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
     <section className="screenStack">
       <header className="screenHeader">
         <div>
-          <h1>Service maintenance</h1>
+          <h1>Обслуживание сервиса</h1>
         </div>
         <div className="panelActions">
           <a className="ghostButton compactButton" href="?screen=jobs">
@@ -95,21 +95,21 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
         </div>
         <div className="statCardReact">
           <strong>{status?.stale_running_jobs ?? "—"}</strong>
-          <span>Зависшие running jobs</span>
+          <span>Зависшие задачи</span>
         </div>
         <div className="statCardReact">
           <strong>{status?.cleanup_candidates.background_jobs ?? "—"}</strong>
-          <span>Background jobs к cleanup</span>
+          <span>Фоновые задачи к очистке</span>
         </div>
         <div className="statCardReact">
           <strong>{status?.cleanup_candidates.export_jobs ?? "—"}</strong>
-          <span>Export jobs к cleanup</span>
+          <span>Задачи экспорта к очистке</span>
         </div>
       </section>
 
       <section className="panel">
         <div className="panelHeader">
-          <h2>External contour</h2>
+          <h2>Внешний контур</h2>
           <a className="ghostButton compactButton" href="?screen=jobs">
             Все задачи
           </a>
@@ -117,48 +117,48 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
         <section className="statsGridReact jobsStats externalStats">
           <div className="statCardReact">
             <strong>{status?.external_queues.totals.queued ?? "—"}</strong>
-            <span>External queued</span>
+            <span>Внешние в очереди</span>
           </div>
           <div className="statCardReact">
             <strong>{status?.external_queues.totals.running ?? "—"}</strong>
-            <span>External running</span>
+            <span>Внешние выполняются</span>
           </div>
           <div className="statCardReact">
             <strong>{status?.external_queues.totals.failed ?? "—"}</strong>
-            <span>External failed</span>
+            <span>Внешние с ошибкой</span>
           </div>
           <div className="statCardReact">
             <strong>{status?.external_queues.totals.expired_leases ?? "—"}</strong>
-            <span>Expired leases</span>
+            <span>Истёкшие блокировки</span>
           </div>
         </section>
         <div className="externalMeta">
-          <span>Oldest queued: {formatDate(status?.external_queues.totals.oldest_queued_at)}</span>
-          <span>Last heartbeat: {formatDate(status?.external_queues.totals.last_heartbeat_at)}</span>
+          <span>Самая старая в очереди: {formatDate(status?.external_queues.totals.oldest_queued_at)}</span>
+          <span>Последний сигнал: {formatDate(status?.external_queues.totals.last_heartbeat_at)}</span>
         </div>
         {status?.external_queues.queues.length ? (
           <div className="externalQueueList">
             {status.external_queues.queues.map((queue) => (
               <div key={queue.queue_name} className="externalQueueRow">
                 <strong>{queue.queue_name}</strong>
-                <span>queued {queue.queued}</span>
-                <span>running {queue.running}</span>
-                <span>failed {queue.failed}</span>
-                <span>heartbeat {formatDate(queue.last_heartbeat_at)}</span>
+                <span>в очереди {queue.queued}</span>
+                <span>выполняется {queue.running}</span>
+                <span>с ошибкой {queue.failed}</span>
+                <span>сигнал {formatDate(queue.last_heartbeat_at)}</span>
               </div>
             ))}
           </div>
         ) : (
           <div className="emptyState compactEmptyState">
-            <strong>External queues пустые</strong>
-            <span>Задачи появятся после включения `external-*` routing.</span>
+            <strong>Внешние очереди пусты</strong>
+            <span>Задачи появятся после включения маршрутизации `external-*`.</span>
           </div>
         )}
       </section>
 
       <section className="panel">
         <div className="panelHeader">
-          <h2>Service cleanup</h2>
+          <h2>Очистка сервиса</h2>
           <button type="button" className="ghostButton" onClick={() => void reload()} disabled={loading || running}>
             Обновить
           </button>
@@ -166,7 +166,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
 
         <div className="maintenanceGrid">
           <label className="field">
-            <span>Background jobs retention, days</span>
+            <span>Хранение фоновых задач, дней</span>
             <input
               value={backgroundJobDays}
               onChange={(event) => setBackgroundJobDays(event.target.value)}
@@ -175,7 +175,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
             />
           </label>
           <label className="field">
-            <span>Export jobs retention, days</span>
+            <span>Хранение задач экспорта, дней</span>
             <input
               value={exportJobDays}
               onChange={(event) => setExportJobDays(event.target.value)}
@@ -184,12 +184,12 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
             />
           </label>
           <label className="field maintenanceReadonly">
-            <span>Stale minutes</span>
+            <span>Порог зависания, мин</span>
             <input value={String(status?.retention.stale_minutes ?? "—")} readOnly />
           </label>
           <div className="maintenanceActions">
             <button type="button" className="primaryButton" onClick={() => void handleCleanup()} disabled={running}>
-              {running ? "Выполняем..." : "Запустить cleanup"}
+              {running ? "Выполняем..." : "Запустить очистку"}
             </button>
           </div>
         </div>
@@ -206,8 +206,8 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
             <div className="metaLabel">Последний запуск</div>
             <div className="maintenanceResultGrid">
               <span>Истекшие сессии: {lastResult.expired_sessions}</span>
-              <span>Background jobs: {lastResult.background_jobs}</span>
-              <span>Export jobs: {lastResult.export_jobs}</span>
+              <span>Фоновые задачи: {lastResult.background_jobs}</span>
+              <span>Задачи экспорта: {lastResult.export_jobs}</span>
             </div>
           </div>
         ) : null}
@@ -215,26 +215,26 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
 
       <section className="panel">
         <div className="panelHeader">
-          <h2>Read-only benchmark</h2>
+          <h2>Замер в режиме чтения</h2>
           <button
             type="button"
             className="ghostButton"
             onClick={() => void handleBenchmarkRun()}
             disabled={benchmarkLoading}
           >
-            {benchmarkLoading ? "Замеряем..." : "Запустить benchmark"}
+            {benchmarkLoading ? "Замеряем..." : "Запустить замер"}
           </button>
         </div>
 
         <p className="panelHint">
-          Прогоняет безопасные read-only запросы по основным экранным данным: каталог сигналов, digest candidates,
-          health источников и очереди задач.
+          Прогоняет безопасные запросы только на чтение по основным экранным данным: каталог сигналов, кандидаты в дайджест,
+          состояние источников и очереди задач.
         </p>
 
         {benchmark ? (
           <div className="benchmarkStack">
             <div className="maintenanceResult">
-              <div className="metaLabel">Снимок датасета</div>
+              <div className="metaLabel">Снимок набора данных</div>
               <div className="maintenanceResultGrid">
                 {Object.entries(benchmark.counts).map(([key, value]) => (
                   <span key={key}>
@@ -246,12 +246,12 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
 
             <div className="benchmarkTable">
               <div className="benchmarkRow benchmarkHead">
-                <span>Check</span>
-                <span>Status</span>
+                <span>Проверка</span>
+                <span>Статус</span>
                 <span>P50</span>
                 <span>P95</span>
                 <span>Max</span>
-                <span>Rows</span>
+                <span>Строки</span>
               </div>
               {benchmark.benchmarks.map((item) => (
                 <div key={item.name} className="benchmarkRow">
@@ -267,7 +267,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
 
             {benchmark.warnings.length ? (
               <div className="maintenanceResult">
-                <div className="metaLabel">Warnings</div>
+                <div className="metaLabel">Предупреждения</div>
                 <div className="maintenanceResultGrid">
                   {benchmark.warnings.map((item) => (
                     <span key={item}>{item}</span>
@@ -278,8 +278,8 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
           </div>
         ) : (
           <div className="emptyState">
-            <strong>Benchmark еще не запускался</strong>
-            <span>Запуск идет через backend API и не создает новых задач или AI-вызовов.</span>
+            <strong>Замер ещё не запускался</strong>
+            <span>Запуск идёт через серверный API и не создаёт новых задач или вызовов ИИ.</span>
           </div>
         )}
       </section>

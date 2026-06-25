@@ -32,7 +32,7 @@ export function SourceCard(props: Props) {
                 {primaryUrl}
               </a>
             ) : (
-              "URL не задан"
+              "Ссылка не задана"
             )}
           </div>
           <div className="sourceMeta">
@@ -68,7 +68,7 @@ export function SourceCard(props: Props) {
         </button>
         {source.parse_strategy === "request" || source.parse_strategy === "playwright" ? (
           <button type="button" className="ghostButton" disabled={pending} onClick={props.onScrape}>
-            Проверить listing
+            Проверить страницу новостей
           </button>
         ) : null}
         {source.last_seen_published_at ? (
@@ -80,20 +80,20 @@ export function SourceCard(props: Props) {
         <summary>{`Настройка ${source.parse_strategy === "request" ? "и диагностика" : ""}`}</summary>
         <div className="sourceConfigGridReact">
           <InputField
-            label="Основной URL"
+            label="Основная ссылка"
             value={props.currentField("url")}
             onChange={(value) => props.onDraftChange("url", value || null)}
             placeholder="https://example.com"
           />
           <InputField
-            label="RSS URL"
+            label="Адрес RSS"
             value={props.currentField("rss_url")}
             onChange={(value) => props.onDraftChange("rss_url", value || null)}
-            placeholder="RSS URL"
+            placeholder="Адрес RSS-ленты"
           />
           {source.parse_strategy === "request" ? (
             <InputField
-              label="Listing URL"
+              label="Ссылка на страницу новостей"
               value={props.currentField("listing_url")}
               onChange={(value) => props.onDraftChange("listing_url", value || null)}
               placeholder="Страница новостей"

@@ -239,11 +239,11 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
       setBusy(true);
       const queued = await enqueueDigestExport(month, 200, scoreMin, format);
       setExportJobId(queued.job.id);
-      setDraftInfo(`export job #${queued.job.id}: ${statusLabel(queued.job.status)}`);
-      showToast(`Экспорт поставлен в очередь: job #${queued.job.id}`);
+      setDraftInfo(`задача экспорта №${queued.job.id}: ${statusLabel(queued.job.status)}`);
+      showToast(`Экспорт поставлен в очередь: задача №${queued.job.id}`);
 
       const finished = await waitForExportJob(queued.job.id);
-      setDraftInfo(`export job #${finished.id}: ${statusLabel(finished.status)}`);
+      setDraftInfo(`задача экспорта №${finished.id}: ${statusLabel(finished.status)}`);
       if (finished.status !== "ok") {
         throw new Error(finished.error || "Экспорт завершился ошибкой");
       }
@@ -268,7 +268,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   async function waitForExportJob(jobId: number) {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       const job = await getJob(jobId);
-      setDraftInfo(`export job #${job.id}: ${statusLabel(job.status)} · ${Math.round(job.progress)}%`);
+      setDraftInfo(`задача экспорта №${job.id}: ${statusLabel(job.status)} · ${Math.round(job.progress)}%`);
       if (job.status === "ok" || job.status === "failed") {
         return job;
       }
@@ -360,11 +360,11 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
             </select>
           </label>
           <label className="field">
-            <span>Score от</span>
+            <span>Оценка от</span>
             <input type="number" value={scoreMin} onChange={(event) => setScoreMin(Number(event.target.value || 0))} />
           </label>
           <label className="field">
-            <span>Score до</span>
+            <span>Оценка до</span>
             <input type="number" value={scoreMax} onChange={(event) => setScoreMax(Number(event.target.value || 100))} />
           </label>
         </div>
@@ -427,28 +427,28 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
                 />
               </label>
               <label className="field">
-                <span>Hero badge</span>
+                <span>Плашка шапки</span>
                 <input
                   value={branding.hero.badge}
                   onChange={(event) => updateBrandingSection("hero", { ...branding.hero, badge: event.target.value })}
                 />
               </label>
               <label className="field">
-                <span>Hero headline</span>
+                <span>Заголовок шапки</span>
                 <input
                   value={branding.hero.headline}
                   onChange={(event) => updateBrandingSection("hero", { ...branding.hero, headline: event.target.value })}
                 />
               </label>
               <label className="field fieldWide">
-                <span>Hero subtitle</span>
+                <span>Подзаголовок шапки</span>
                 <input
                   value={branding.hero.subtitle}
                   onChange={(event) => updateBrandingSection("hero", { ...branding.hero, subtitle: event.target.value })}
                 />
               </label>
               <label className="field fieldWide">
-                <span>Hero image URL</span>
+                <span>Ссылка на изображение шапки</span>
                 <input
                   value={branding.hero.image_url}
                   onChange={(event) => updateBrandingSection("hero", { ...branding.hero, image_url: event.target.value })}
@@ -456,21 +456,21 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
                 />
               </label>
               <label className="field">
-                <span>Preheader</span>
+                <span>Текст предпросмотра письма</span>
                 <input
                   value={branding.issue.preheader}
                   onChange={(event) => updateBrandingSection("issue", { ...branding.issue, preheader: event.target.value })}
                 />
               </label>
               <label className="field">
-                <span>Title template</span>
+                <span>Шаблон заголовка</span>
                 <input
                   value={branding.issue.title_template}
                   onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template: event.target.value })}
                 />
               </label>
               <label className="field">
-                <span>Title with month</span>
+                <span>Шаблон заголовка с месяцем</span>
                 <input
                   value={branding.issue.title_template_with_month}
                   onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template_with_month: event.target.value })}
@@ -491,14 +491,14 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
                 />
               </label>
               <label className="field">
-                <span>CTA</span>
+                <span>Призыв к действию</span>
                 <input
                   value={branding.issue.read_more_label}
                   onChange={(event) => updateBrandingSection("issue", { ...branding.issue, read_more_label: event.target.value })}
                 />
               </label>
               <label className="field">
-                <span>Fallback сути</span>
+                <span>Запасной текст сути</span>
                 <input
                   value={branding.issue.empty_summary_text}
                   onChange={(event) => updateBrandingSection("issue", { ...branding.issue, empty_summary_text: event.target.value })}
@@ -519,14 +519,14 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
                 />
               </label>
               <label className="field fieldWide">
-                <span>Intro template</span>
+                <span>Шаблон вступления</span>
                 <textarea
                   value={branding.issue.intro_template}
                   onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template: event.target.value })}
                 />
               </label>
               <label className="field fieldWide">
-                <span>Intro with month</span>
+                <span>Шаблон вступления с месяцем</span>
                 <textarea
                   value={branding.issue.intro_template_with_month}
                   onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template_with_month: event.target.value })}
@@ -541,7 +541,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
                 />
               </label>
               <label className="field">
-                <span>Email</span>
+                <span>Эл. почта</span>
                 <input
                   value={branding.footer.contact_email}
                   onChange={(event) => updateBrandingSection("footer", { ...branding.footer, contact_email: event.target.value })}
@@ -681,8 +681,8 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
             </div>
             <div className="digestPreviewLive">
               <div className="panelHeader">
-                <h3>Live preview</h3>
-                <span className="metaText">Показывает текущие поля branding и первые сигналы выборки</span>
+                <h3>Предпросмотр в реальном времени</h3>
+                <span className="metaText">Показывает текущие поля оформления и первые сигналы выборки</span>
               </div>
               <DigestBrandingPreview branding={branding} articles={digestCandidates.slice(0, 3)} />
             </div>
@@ -699,7 +699,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
                   <a href={article.url} target="_blank" rel="noreferrer">
                     <strong>{article.title}</strong>
                   </a>
-                  <div className="metaText">{article.tag} · score {Math.round(Number(article.score || 0))} · {formatDate(article.date)}</div>
+                  <div className="metaText">{article.tag} · оценка {Math.round(Number(article.score || 0))} · {formatDate(article.date)}</div>
                   <button type="button" className="ghostButton" disabled={busy} onClick={() => void removeFromDigest(article.id)}>
                     Убрать из дайджеста
                   </button>
@@ -852,7 +852,7 @@ function DigestBrandingPreview(props: { branding: DigestBranding; articles: Arti
               <div className="digestPreviewLiveSummary">{article.summary || branding.issue.empty_summary_text}</div>
               <div className="digestPreviewLiveFooter">
                 <span>{branding.issue.read_more_label}</span>
-                <span>score {Math.round(Number(article.score || 0))}</span>
+                <span>оценка {Math.round(Number(article.score || 0))}</span>
               </div>
             </article>
           ))

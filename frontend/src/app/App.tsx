@@ -282,7 +282,7 @@ export function App() {
               : "Войдите в аккаунт, чтобы продолжить работу с редакторской панелью."}
           </p>
           <label className="field">
-            <span>Email</span>
+            <span>Эл. почта</span>
             <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" />
           </label>
           <label className="field">
@@ -323,7 +323,7 @@ export function App() {
             <div className="brandMark">OT</div>
             <div className="brandText">
               <div className="brandTitle">OilTech Digest</div>
-              <div className="brandSubtitle">Admin</div>
+              <div className="brandSubtitle">Админ-панель</div>
             </div>
           </div>
         </div>

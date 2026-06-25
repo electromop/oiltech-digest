@@ -16,12 +16,19 @@ type Props = {
 
 const STRATEGY_OPTIONS = ["rss", "request", "telegram", "none"];
 
+const STRATEGY_LABELS: Record<string, string> = {
+  rss: "RSS",
+  request: "Запрос",
+  telegram: "Telegram",
+  none: "Нет",
+};
+
 export function SourceFilters(props: Props) {
   return (
     <div className="sourceFiltersGrid">
       <label className="field">
         <span>Поиск</span>
-        <input value={props.search} onChange={(event) => props.onSearchChange(event.target.value)} placeholder="Название или URL" />
+        <input value={props.search} onChange={(event) => props.onSearchChange(event.target.value)} placeholder="Название или ссылка" />
       </label>
       <label className="field">
         <span>Стратегия</span>
@@ -29,7 +36,7 @@ export function SourceFilters(props: Props) {
           <option value="">Все</option>
           {STRATEGY_OPTIONS.map((option) => (
             <option key={option} value={option}>
-              {option}
+              {STRATEGY_LABELS[option] ?? option}
             </option>
           ))}
         </select>
