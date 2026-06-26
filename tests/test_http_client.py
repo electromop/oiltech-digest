@@ -133,3 +133,22 @@ def test_tally_counts_statuses():
     http_client._tally(200)
     http_client._tally(403)
     assert http_client._status_counts == {"200": 2, "403": 1}
+
+
+def test_legacy_tls_adapter_enables_renegotiation_and_skips_verify():
+    import ssl
+
+    adapter = http_client._LegacyTLSAdapter()
+    ctx = adapter.poolmanager.connection_pool_kw.get("ssl_context")
+    assert ctx is not None
+    assert ctx.verify_mode == ssl.CERT_NONE
+    assert ctx.check_hostname is False
+    assert ctx.options & getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+
+
+def test_fetch_legacy_tls_returns_none_on_error(monkeypatch):
+    def boom(*args, **kwargs):
+        raise requests.exceptions.SSLError("renegotiation")
+
+    monkeypatch.setattr(http_client, "_get_legacy_session", lambda: type("S", (), {"get": boom})())
+    assert http_client._fetch_legacy_tls("https://legacy.example", 5) is None

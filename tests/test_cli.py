@@ -28,6 +28,42 @@ def test_schema_check_command_exits_non_zero_when_missing_tables(monkeypatch, ca
     assert "background_jobs" in capsys.readouterr().out
 
 
+def test_enqueue_external_scrape_is_noop_when_contour_disabled(monkeypatch, capsys):
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", False)
+    monkeypatch.setattr("oiltech_digest.config.FETCH_EXTERNAL_ENABLED", True)
+    created = []
+    monkeypatch.setattr("oiltech_digest.db.repository.create_background_job",
+                        lambda *a, **k: created.append((a, k)))
+
+    cli.cmd_enqueue_external_scrape(argparse.Namespace(max_age_days=None))
+
+    assert created == []
+    assert "выключен" in capsys.readouterr().out
+
+
+def test_enqueue_external_scrape_enqueues_only_external_sources(monkeypatch, capsys):
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr("oiltech_digest.config.FETCH_EXTERNAL_ENABLED", True)
+    sources = [
+        {"id": 22, "parse_strategy": "playwright", "network_region": "external"},
+        {"id": 4, "parse_strategy": "rss", "network_region": "external"},
+        {"id": 50, "parse_strategy": "request", "network_region": "auto"},      # локальный — пропуск
+        {"id": 60, "parse_strategy": "telegram", "network_region": "external"}, # telegram — не трогаем
+    ]
+    monkeypatch.setattr("oiltech_digest.db.repository.get_enabled_sources", lambda: sources)
+    jobs = []
+    monkeypatch.setattr("oiltech_digest.db.repository.create_background_job",
+                        lambda kind, payload, **k: jobs.append((kind, payload, k)))
+
+    cli.cmd_enqueue_external_scrape(argparse.Namespace(max_age_days=7))
+
+    enqueued_ids = {payload["source_id"] for _, payload, _ in jobs}
+    assert enqueued_ids == {22, 4}
+    queues = {k["queue_name"] for _, _, k in jobs}
+    assert queues == {"external-playwright", "external-fetch"}
+    assert "задач=2" in capsys.readouterr().out
+
+
 def test_jobs_requeue_stale_command_uses_config_default(monkeypatch, capsys):
     monkeypatch.setattr("oiltech_digest.config.BACKGROUND_JOB_STALE_MINUTES", 75)
     called = {}

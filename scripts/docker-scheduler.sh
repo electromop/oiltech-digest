@@ -45,6 +45,10 @@ STREAM_PROCESS_BATCH="${STREAM_PROCESS_BATCH:-20}"
 # FULLTEXT_RETRY_TOO_SHORT=1 — повторять попытку для статей со статусом too_short
 # (полезно после добавления trafilatura — запустить один раз вручную).
 FULLTEXT_RETRY_TOO_SHORT="${FULLTEXT_RETRY_TOO_SHORT:-0}"
+# FETCH_EXTERNAL_ENABLED=1 — источники network_region='external' (западные WAF/таймаут
+# с РФ-сервера) фетчатся через зарубежный воркер. Шаг enqueue-external-scrape ставит
+# их в external-fetch/external-playwright; команда сама no-op при выключенном контуре.
+FETCH_EXTERNAL_ENABLED="${FETCH_EXTERNAL_ENABLED:-0}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -105,6 +109,12 @@ while true; do
         log "SKIP process: OPENAI_API_KEY is empty"
       fi
     fi
+  fi
+
+  if [ "$FETCH_EXTERNAL_ENABLED" = "1" ]; then
+    # Западные источники (network_region='external') фетчим через зарубежный воркер —
+    # с РФ-сервера к ним нет доступа. Задачи разберёт NL external-worker.
+    run_step "enqueue-external-scrape" python -m oiltech_digest.cli enqueue-external-scrape
   fi
 
   run_step "stats" python -m oiltech_digest.cli stats

@@ -29,6 +29,8 @@ def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return _process_playwright(source, payload)
     if strategy == "request":
         return _process_request(source, payload)
+    if strategy == "rss":
+        return _process_rss(source, payload)
     raise ValueError(f"Unsupported external scrape strategy: {strategy}")
 
 
@@ -58,6 +60,41 @@ def _process_request(source: dict[str, Any], payload: dict[str, Any]) -> dict[st
     content = fetch(listing_url) if listing_url else None
     candidates = extract_candidate_links(source, listing_url, content, limit=int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)) if content else []
     return _articles_from_candidates(source, candidates, payload, fetch_article_candidate, _listing_hash)
+
+
+def _process_rss(source: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    from oiltech_digest.ingestion.http_client import fetch
+    from oiltech_digest.ingestion import rss_parser
+
+    rss_url = source.get("rss_url")
+    content = fetch(rss_url) if rss_url else None
+    max_age_days = payload.get("max_age_days")
+    recs, feed_stats = (
+        rss_parser.extract_articles_from_feed(source, content, max_age_days)
+        if content else ([], {"skipped_old": 0, "skipped_irrelevant": 0})
+    )
+    articles = [
+        _jsonable_dict({k: v for k, v in rec.items() if k != "source_id"})
+        for rec in recs
+    ]
+    return {
+        "external_fetch": True,
+        "kind": "scrape_source",
+        "source_id": int(source["id"]),
+        "strategy": "rss",
+        "stats": {
+            "attempted": len(articles),
+            "skipped_old": feed_stats.get("skipped_old", 0),
+            "skipped_irrelevant": feed_stats.get("skipped_irrelevant", 0),
+            "failed_fetch": 0,
+        },
+        "articles": articles,
+        # RSS дедупится по article_exists (articles.url уникален) — listing-hash и
+        # last_seen для лент не нужны (нет проблемы дедуп-заморозки request-парсера).
+        "last_seen_article_url": articles[0]["url"] if articles else None,
+        "last_seen_published_at": articles[0].get("published_at") if articles else None,
+        "last_listing_hash": None,
+    }
 
 
 def _process_playwright(source: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

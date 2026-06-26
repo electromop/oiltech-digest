@@ -37,6 +37,33 @@ def test_source_task_routes_external_source_when_enabled(monkeypatch):
     assert decision.capability == "playwright"
 
 
+def test_source_task_routes_rss_external_to_fetch_queue(monkeypatch):
+    monkeypatch.setattr(network_policy.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(network_policy.config, "FETCH_EXTERNAL_ENABLED", True)
+
+    decision = network_policy.route_source_task(
+        {"parse_strategy": "rss", "network_region": "external"},
+        task_kind="scrape",
+    )
+
+    assert decision.queue_name == "external-fetch"
+    assert decision.execution_region == "external"
+    assert decision.capability == "http_fetch"
+
+
+def test_source_task_auto_region_stays_local_even_when_enabled(monkeypatch):
+    monkeypatch.setattr(network_policy.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(network_policy.config, "FETCH_EXTERNAL_ENABLED", True)
+
+    decision = network_policy.route_source_task(
+        {"parse_strategy": "request", "network_region": "auto"},
+        task_kind="scrape",
+    )
+
+    assert decision.execution_region == "ru"
+    assert decision.queue_name == "default"
+
+
 def test_source_task_falls_back_to_local_when_external_disabled(monkeypatch):
     monkeypatch.setattr(network_policy.config, "EXTERNAL_WORKERS_ENABLED", False)
     monkeypatch.setattr(network_policy.config, "FETCH_EXTERNAL_ENABLED", False)

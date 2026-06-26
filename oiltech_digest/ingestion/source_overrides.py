@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 #   listing_url    — опционально; None = не трогать (берётся из url/сидера).
 #   rss_url        — опционально; для RSS-лент с нестандартным/сменившимся URL фида.
 #   url            — опционально; для telegram/прочих с исправленным каналом/адресом.
+#   network_region — опционально ('external' = фетчить через зарубежный воркер).
+#     Нужен для западных сайтов, к которым с РФ-сервера нет доступа (WAF/таймаут), но
+#     которые открываются из NL. Действует ТОЛЬКО при FETCH_EXTERNAL_ENABLED=1 —
+#     иначе источник парсится локально как обычно (флаг проверяется в parse_all и
+#     enqueue-external-scrape). Каптча/hard-WAF (Cloudflare/Akamai) сюда НЕ помечаем —
+#     они 403 и из NL (нужен challenge-solver, отдельный проект).
 SOURCE_OVERRIDES: dict[str, dict] = {
     # Проверено на проде:
     "Shell": {"parse_strategy": "playwright"},  # главная отдаёт пресс-релизы (+6 статей)
@@ -75,6 +81,10 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     #   Wood Mackenzie #16 (/press-releases/ → blogs/sign-up/topics)
     #   Deloitte #84 (/Industries/energy → навигация по индустриям, не новости; ценность спорна)
     #   Petroleum Economist #7 (SPA, extract даёт одинаковый текст-оболочку ~31k симв.)
+    # network_region='external' (фетч через NL-воркер) НЕ прописываем в реестре: по
+    # source-health большинство западных playwright-источников парсятся с РФ (свежие
+    # статьи), а live-аудит у них флапает таймаутом. Реальные кандидаты на external
+    # помечаются осознанно по id через `set-source-region` и A/B-тестятся (см. CLI).
     # Telegram-каналы с исправленным username (в Excel-сидере были неверные → t.me/s/
     # отдавал пустую ~9.6KB-страницу, posts=0). Правильные проверены на проде (17-20 постов):
     "Газбатюшка": {"parse_strategy": "telegram", "url": "https://t.me/papagaz"},
@@ -101,19 +111,22 @@ def apply_overrides() -> dict:
             new_listing = fields.get("listing_url")
             new_rss = fields.get("rss_url")
             new_url = fields.get("url")
+            new_region = fields.get("network_region")
             row = conn.execute(
-                "SELECT id, parse_strategy, listing_url, rss_url, url FROM sources WHERE name = %s",
+                "SELECT id, parse_strategy, listing_url, rss_url, url, network_region FROM sources WHERE name = %s",
                 (name,),
             ).fetchone()
             if row is None:
                 not_found += 1
                 logger.warning("source override: источник %r не найден в БД", name)
                 continue
-            source_id, cur_strategy, cur_listing, cur_rss, cur_url = row
+            source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region = row
             listing_changed = new_listing is not None and (cur_listing or "") != new_listing
             rss_changed = new_rss is not None and (cur_rss or "") != new_rss
             url_changed = new_url is not None and (cur_url or "") != new_url
-            if cur_strategy == new_strategy and not listing_changed and not rss_changed and not url_changed:
+            region_changed = new_region is not None and (cur_region or "auto") != new_region
+            if (cur_strategy == new_strategy and not listing_changed and not rss_changed
+                    and not url_changed and not region_changed):
                 unchanged += 1
                 continue
 
@@ -134,11 +147,15 @@ def apply_overrides() -> dict:
             if new_url is not None:
                 sets.append("url = %(url)s")
                 params["url"] = new_url
+            if new_region is not None:
+                sets.append("network_region = %(network_region)s")
+                params["network_region"] = new_region
             conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = %(id)s", params)
             changed += 1
-            logger.info("source override: %s → %s%s%s%s", name, new_strategy,
+            logger.info("source override: %s → %s%s%s%s%s", name, new_strategy,
                         f" listing={new_listing}" if new_listing else "",
                         f" rss={new_rss}" if new_rss else "",
-                        f" url={new_url}" if new_url else "")
+                        f" url={new_url}" if new_url else "",
+                        f" region={new_region}" if new_region else "")
         conn.commit()
     return {"changed": changed, "unchanged": unchanged, "not_found": not_found}

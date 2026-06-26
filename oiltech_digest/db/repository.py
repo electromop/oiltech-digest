@@ -165,6 +165,24 @@ def touch_last_parsed(source_id: int) -> None:
         conn.commit()
 
 
+def set_sources_network_region(ids: list[int], region: str) -> int:
+    """Проставить network_region (auto|ru|external) источникам по списку id.
+
+    При уходе в/из external сбрасываем request-состояние (last_seen/hash), чтобы
+    смена пути парсинга не коротила на старом хэше. Возвращает число обновлённых строк."""
+    if not ids:
+        return 0
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE sources SET network_region = %s, last_listing_hash = NULL, "
+            "last_seen_article_url = NULL, last_seen_published_at = NULL, updated_at = now() "
+            "WHERE id = ANY(%s)",
+            (region, list(ids)),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def article_exists(url: str) -> bool:
     with get_connection() as conn:
         row = conn.execute("SELECT 1 FROM articles WHERE url = %s", (url,)).fetchone()
