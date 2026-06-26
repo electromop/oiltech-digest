@@ -64,6 +64,35 @@ def test_enqueue_external_scrape_enqueues_only_external_sources(monkeypatch, cap
     assert "задач=2" in capsys.readouterr().out
 
 
+def test_source_dump_listing_prints_anchors_with_container(monkeypatch, capsys):
+    html = (
+        b"<html><body>"
+        b'<nav><a href="/about">About</a></nav>'
+        b'<div class="news-list"><a href="/news/oil-deal">Big oil deal 2026</a></div>'
+        b"</body></html>"
+    )
+    monkeypatch.setattr("oiltech_digest.db.repository.get_source",
+                        lambda sid: {"id": 35, "name": "IoT World", "parse_strategy": "request",
+                                     "listing_url": "https://example.com/news"})
+    monkeypatch.setattr("oiltech_digest.ingestion.http_client.fetch", lambda url: html)
+
+    cli.cmd_source_dump_listing(argparse.Namespace(source_id=35, limit=40))
+
+    out = capsys.readouterr().out
+    assert "news-list" in out                                  # контейнер статей виден
+    assert "https://example.com/news/oil-deal" in out          # ссылки абсолютизированы
+    assert "Big oil deal 2026" in out
+
+
+def test_source_dump_listing_exits_when_listing_unavailable(monkeypatch):
+    monkeypatch.setattr("oiltech_digest.db.repository.get_source",
+                        lambda sid: {"id": 9, "parse_strategy": "request", "url": "https://x.test"})
+    monkeypatch.setattr("oiltech_digest.ingestion.http_client.fetch", lambda url: None)
+
+    with pytest.raises(SystemExit):
+        cli.cmd_source_dump_listing(argparse.Namespace(source_id=9, limit=10))
+
+
 def test_jobs_requeue_stale_command_uses_config_default(monkeypatch, capsys):
     monkeypatch.setattr("oiltech_digest.config.BACKGROUND_JOB_STALE_MINUTES", 75)
     called = {}

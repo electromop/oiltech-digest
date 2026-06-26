@@ -447,6 +447,52 @@ def cmd_set_source_region(args: argparse.Namespace) -> None:
     print(f"set-source-region: обновлено={n}, region={region}, ids={ids}")
 
 
+def cmd_source_dump_listing(args: argparse.Namespace) -> None:
+    """Выгрузить анкеры листинга источника — для подбора listing_selector у no_candidates.
+
+    Уважает стратегию (playwright → рендер, иначе http_client.fetch с боевыми SSL-фоллбэками).
+    Печатает href + текст + контейнер (тег.class родителя) — этого достаточно, чтобы понять,
+    каким селектором цеплять ссылки на статьи."""
+    from lxml import html as lxml_html
+
+    from oiltech_digest.db import repository
+    from oiltech_digest.ingestion import http_client
+
+    source = repository.get_source(args.source_id)
+    if source is None:
+        raise SystemExit(f"источник {args.source_id} не найден")
+    listing_url = source.get("listing_url") or source.get("rss_url") or source.get("url")
+    strategy = (source.get("parse_strategy") or "").lower()
+    print(f"#{source['id']} {source.get('name')} [{strategy}] → {listing_url}")
+    if strategy == "playwright":
+        from oiltech_digest.ingestion.playwright_parser import fetch_rendered
+        content = fetch_rendered(listing_url)
+    else:
+        content = http_client.fetch(listing_url)
+    if not content:
+        raise SystemExit("листинг не получен (см. логи fetch выше)")
+    print(f"получено байт: {len(content)}")
+
+    doc = lxml_html.fromstring(content)
+    try:
+        doc.make_links_absolute(listing_url)
+    except Exception:  # noqa: BLE001 — относительные ссылки тоже информативны
+        pass
+    anchors = doc.xpath("//a[@href]")
+    print(f"всего <a> с href: {len(anchors)}; показываю до {args.limit} с непустым текстом:")
+    shown = 0
+    for a in anchors:
+        text = " ".join(a.text_content().split())[:70]
+        if not text:
+            continue
+        parent = a.getparent()
+        ctx = f"{parent.tag}.{(parent.get('class') or '')[:45]}" if parent is not None else "?"
+        print(f"  [{ctx}] {text}  →  {a.get('href')}")
+        shown += 1
+        if shown >= args.limit:
+            break
+
+
 def cmd_recheck_relevance(args: argparse.Namespace) -> None:
     """Локальный перепрогон релевантности (для тестов/дампа; на проде — enqueue-recheck)."""
     from oiltech_digest.processing.pipeline import process_recheck
@@ -1010,6 +1056,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_set_region.add_argument("--ids", required=True, help="список id через запятую, напр. 16,84,64")
     p_set_region.add_argument("--region", required=True, help="auto|ru|external")
     p_set_region.set_defaults(func=cmd_set_source_region)
+
+    p_dump_listing = sub.add_parser("source-dump-listing", help="выгрузить анкеры листинга источника (для подбора listing_selector у no_candidates)")
+    p_dump_listing.add_argument("source_id", type=int, help="id источника")
+    p_dump_listing.add_argument("--limit", type=int, default=40, help="сколько анкеров показать")
+    p_dump_listing.set_defaults(func=cmd_source_dump_listing)
 
     p_recheck = sub.add_parser("recheck-relevance", help="локальный перепрогон релевантности (тесты/дамп; на проде — enqueue-recheck)")
     add_ai_args(p_recheck)
