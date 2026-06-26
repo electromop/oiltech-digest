@@ -342,11 +342,18 @@ def cmd_enqueue_recheck(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
     decision = network_policy.route_ai_processing()
-    ids = repository.all_article_ids()
-    if args.limit:
-        ids = ids[: args.limit]
-    batch = max(1, args.batch_size)
     dry_run = bool(getattr(args, "dry_run", False))
+    ids = repository.all_article_ids()
+    if args.limit and len(ids) > args.limit:
+        if dry_run:
+            # dry-run: представительная СЛУЧАЙНАЯ выборка по всей базе. Первые id —
+            # уже выжившие после реального recheck (нерелевантное удалено) → дали бы 0
+            # отклонений. Случайная выборка ловит и ещё не перепроверенные «сырые» статьи.
+            import random
+            ids = random.sample(ids, args.limit)
+        else:
+            ids = ids[: args.limit]
+    batch = max(1, args.batch_size)
     chunks = [ids[i : i + batch] for i in range(0, len(ids), batch)]
     job_ids = []
     for chunk in chunks:
@@ -374,12 +381,16 @@ def cmd_recheck_dry_show(args: argparse.Namespace) -> None:
     if job is None:
         raise SystemExit(f"задача {args.job_id} не найдена")
     applied = ((job.get("result") or {}).get("applied")) or {}
-    preview = applied.get("rejected_preview")
-    if preview is None:
-        raise SystemExit(f"у задачи {args.job_id} нет dry-run превью (status={job.get('status')}; "
-                         "это dry-run задача и она завершена?)")
+    if "checked" not in applied:
+        raise SystemExit(f"у задачи {args.job_id} нет применённого результата "
+                         f"(status={job.get('status')}; это завершённая dry-run задача?)")
+    preview = applied.get("rejected_preview") or []
     print(f"DRY-RUN job {args.job_id}: проверено={applied.get('checked')}, "
           f"оставили={applied.get('kept')}, СРЕЗАЛОСЬ БЫ={applied.get('deleted')}, ошибок={applied.get('errors')}")
+    if not preview:
+        print("  В этой выборке гейт ничего не срезал (0 отклонено) — вероятно, это уже "
+              "выжившие статьи. Запусти dry-run заново (теперь выборка случайная по всей базе).")
+        return
     print("--- что бы удалилось (заголовок · источник · причина) ---")
     for r in preview[: args.limit]:
         title = (r.get("title") or "")[:90]
