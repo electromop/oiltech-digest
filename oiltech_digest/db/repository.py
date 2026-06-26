@@ -1392,6 +1392,68 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
     return deleted
 
 
+def mark_article_for_deletion(article_id: int, reason: str | None, *, force: bool = False) -> str:
+    """Пометить статью на удаление (мягко, без физического DELETE). Возвращает
+    'marked' либо 'skipped_in_digest' (статья в сохранённом дайджесте, force=False)."""
+    with get_connection() as conn:
+        if not force:
+            in_digest = conn.execute(
+                "SELECT 1 FROM monthly_digest_items WHERE article_id = %s LIMIT 1", (article_id,)
+            ).fetchone()
+            if in_digest:
+                return "skipped_in_digest"
+        conn.execute(
+            "UPDATE articles SET pending_deletion = TRUE, deletion_reason = %s, "
+            "marked_for_deletion_at = now(), updated_at = now() WHERE id = %s",
+            (reason, article_id),
+        )
+        conn.commit()
+    return "marked"
+
+
+def count_pending_deletion() -> int:
+    with get_connection() as conn:
+        return conn.execute("SELECT count(*) FROM articles WHERE pending_deletion").fetchone()[0]
+
+
+def list_pending_deletion(limit: int = 100) -> list[dict]:
+    """Помеченные на удаление — заголовок/источник/причина (для просмотра перед purge)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT a.id, a.title, s.name AS source_name, a.deletion_reason "
+            "FROM articles a JOIN sources s ON s.id = a.source_id "
+            "WHERE a.pending_deletion ORDER BY a.id LIMIT %s",
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def purge_pending_deletion(*, force: bool = False) -> int:
+    """Физически удалить все помеченные (pending_deletion) статьи. Возвращает число удалённых.
+    Использует delete_article (тот же каскад + защита дайджеста при force=False)."""
+    with get_connection() as conn:
+        ids = [row[0] for row in conn.execute(
+            "SELECT id FROM articles WHERE pending_deletion ORDER BY id"
+        ).fetchall()]
+    deleted = 0
+    for article_id in ids:
+        if delete_article(article_id, force=force):
+            deleted += 1
+    return deleted
+
+
+def unmark_all_pending_deletion() -> int:
+    """Снять пометку «на удаление» со всех статей (вернуть в строй). Возвращает число."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE articles SET pending_deletion = FALSE, deletion_reason = NULL, "
+            "marked_for_deletion_at = NULL, updated_at = now() WHERE pending_deletion"
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def all_article_ids() -> list[int]:
     """Все id статей по возрастанию — для батч-перепрогона релевантности."""
     with get_connection() as conn:

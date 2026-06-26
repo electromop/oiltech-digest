@@ -109,6 +109,53 @@ def test_apply_recheck_result_skips_digest_member(monkeypatch):
     assert stats["deleted"] == 0 and stats["skipped_in_digest"] == 1
 
 
+def test_apply_recheck_result_dry_run_deletes_nothing_and_previews(monkeypatch):
+    calls = {"delete": 0, "relevance": 0}
+    monkeypatch.setattr(external_ai.repository, "delete_article",
+                        lambda *a, **k: calls.__setitem__("delete", calls["delete"] + 1) or True)
+    monkeypatch.setattr(external_ai.repository, "set_article_relevance",
+                        lambda *a: calls.__setitem__("relevance", calls["relevance"] + 1))
+    monkeypatch.setattr(external_ai.repository, "insert_ai_run", lambda rec: None)
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids",
+                        lambda ids: [{"id": 2, "title": "Война и БПЛА", "source_name": "Интерфакс ТЭК"}])
+
+    stats = external_ai.apply_recheck_result({
+        "recheck_relevance": True,
+        "articles": [
+            {"article_id": 1, "relevance": {"relevant": True, "reason": "ok", "model": "gpt"}, "errors": []},
+            {"article_id": 2, "relevance": {"relevant": False, "reason": "боевые действия", "model": "gpt"}, "errors": []},
+        ],
+    }, dry_run=True)
+
+    assert calls["delete"] == 0 and calls["relevance"] == 0       # dry-run ничего не трогает
+    assert stats["kept"] == 1 and stats["deleted"] == 1           # deleted = «сколько бы срезали»
+    assert stats["rejected_preview"][0]["title"] == "Война и БПЛА"
+    assert stats["rejected_preview"][0]["reason"] == "боевые действия"
+    assert stats["rejected_preview"][0]["source"] == "Интерфакс ТЭК"
+
+
+def test_apply_recheck_result_mark_marks_instead_of_deleting(monkeypatch):
+    calls = {"delete": 0, "mark": []}
+    monkeypatch.setattr(external_ai.repository, "delete_article",
+                        lambda *a, **k: calls.__setitem__("delete", calls["delete"] + 1) or True)
+    monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *a: None)
+    monkeypatch.setattr(external_ai.repository, "insert_ai_run", lambda rec: None)
+    monkeypatch.setattr(external_ai.repository, "mark_article_for_deletion",
+                        lambda aid, reason, force=False: calls["mark"].append((aid, reason)) or "marked")
+
+    stats = external_ai.apply_recheck_result({
+        "recheck_relevance": True,
+        "articles": [
+            {"article_id": 1, "relevance": {"relevant": True, "reason": "ok", "model": "gpt"}, "errors": []},
+            {"article_id": 2, "relevance": {"relevant": False, "reason": "война", "model": "gpt"}, "errors": []},
+        ],
+    }, mark=True)
+
+    assert calls["delete"] == 0                     # mark-режим НЕ удаляет физически
+    assert calls["mark"] == [(2, "война")]          # нерелевантная помечена
+    assert stats["kept"] == 1 and stats["marked"] == 1 and stats["deleted"] == 0
+
+
 # --- внешний бэкфилл перевода ------------------------------------------------
 
 def test_process_translate_payload_translates_foreign_only():

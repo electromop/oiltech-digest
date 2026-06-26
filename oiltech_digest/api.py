@@ -433,6 +433,9 @@ def list_articles(
     # Скрываем отклонённые гейтом релевантности статьи (relevant=false), как это уже
     # делает дайджест. relevant IS NULL (ещё не проверенные) остаются видны.
     clauses.append("c.relevant IS NOT FALSE")
+    # Скрываем помеченные на удаление (recheck --mark): исчезают из ленты, но физически
+    # ещё в БД (восстановимы recheck-unmark до recheck-purge).
+    clauses.append("NOT a.pending_deletion")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     # user_id — первый %s (для LEFT JOIN user_article_states), затем where-параметры, затем limit.
     params.insert(0, int(user["id"]))
@@ -890,8 +893,11 @@ def external_worker_complete(
     if job.get("kind") == "process_articles" and result.get("external_ai"):
         result = {**result, "applied": external_ai.apply_process_result(result)}
     if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
-        force = bool((job.get("payload") or {}).get("force", False))
-        result = {**result, "applied": external_ai.apply_recheck_result(result, force=force)}
+        job_payload = job.get("payload") or {}
+        force = bool(job_payload.get("force", False))
+        dry_run = bool(job_payload.get("dry_run", False))
+        mark = bool(job_payload.get("mark", False))
+        result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark)}
     if job.get("kind") == "translate_titles" and result.get("translate_titles"):
         result = {**result, "applied": external_ai.apply_translate_result(result)}
     if job.get("kind") == "scrape_source" and result.get("external_fetch"):
