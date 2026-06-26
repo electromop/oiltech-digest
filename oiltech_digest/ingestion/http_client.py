@@ -213,11 +213,75 @@ def _fetch_insecure(
         resp.raise_for_status()
         logger.info("HTTP %s — SSL обойдён через verify=False (крайний fallback)", url)
         return resp.content
+    except requests.exceptions.SSLError:
+        # verify=False НЕ лечит UNSAFE_LEGACY_RENEGOTIATION_DISABLED (это не сертификат,
+        # а рукопожатие): OpenSSL 3 рвёт старые серверы без RFC 5746 (напр. belorusneft.by).
+        # Последний шаг — отдельная сессия с OP_LEGACY_SERVER_CONNECT.
+        content = _fetch_legacy_tls(url, timeout, proxies=proxies)
+        if content is not None:
+            return content
+        if not quiet:
+            logger.warning("HTTP %s — SSL-fallback (incl. legacy TLS) не удался", url)
+        return None
     except requests.RequestException as exc:
         if quiet:
             logger.debug("HTTP %s — SSL-fallback не удался: %s", url, exc)
         else:
             logger.warning("HTTP %s — SSL-fallback не удался: %s", url, exc)
+        return None
+
+
+class _LegacyTLSAdapter(requests.adapters.HTTPAdapter):
+    """Крайний fallback для старых серверов: разрешает unsafe legacy renegotiation
+    (OP_LEGACY_SERVER_CONNECT) и отключает верификацию. Нужен там, где OpenSSL 3 рвёт
+    рукопожатие с UNSAFE_LEGACY_RENEGOTIATION_DISABLED, а verify=False не помогает (это
+    не проблема сертификата). Применяется ТОЛЬКО после провала обычного verify=False."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        import ssl
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
+_legacy_session: requests.Session | None = None
+
+
+def _get_legacy_session() -> requests.Session:
+    global _legacy_session
+    if _legacy_session is None:
+        with _ext_bundle_lock:
+            if _legacy_session is None:
+                session = requests.Session()
+                session.mount("https://", _LegacyTLSAdapter())
+                _legacy_session = session
+    return _legacy_session
+
+
+def _fetch_legacy_tls(url: str, timeout: int, proxies: dict[str, str] | None = None) -> bytes | None:
+    try:
+        import urllib3
+
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        resp = _get_legacy_session().get(
+            url,
+            timeout=timeout,
+            headers=_DEFAULT_HEADERS,
+            allow_redirects=True,
+            verify=False,
+            proxies=proxies,
+        )
+        _tally(resp.status_code)
+        if resp.status_code in {403, 429, 503}:
+            _register_block(_host(url), resp)
+        resp.raise_for_status()
+        logger.info("HTTP %s — взят через legacy-TLS renegotiation fallback", url)
+        return resp.content
+    except requests.RequestException:
         return None
 
 
