@@ -463,10 +463,15 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
         raise SystemExit(f"источник {args.source_id} не найден")
     listing_url = source.get("listing_url") or source.get("rss_url") or source.get("url")
     strategy = (source.get("parse_strategy") or "").lower()
-    print(f"#{source['id']} {source.get('name')} [{strategy}] → {listing_url}")
-    if strategy == "playwright":
-        from oiltech_digest.ingestion.playwright_parser import fetch_rendered
-        content = fetch_rendered(listing_url)
+    render = getattr(args, "render", False)
+    mode = "playwright-render" if (render or strategy == "playwright") else strategy
+    print(f"#{source['id']} {source.get('name')} [{mode}] → {listing_url}")
+    if render or strategy == "playwright":
+        from oiltech_digest.ingestion import playwright_parser
+        if not playwright_parser.is_available():
+            raise SystemExit("playwright недоступен в этом контейнере")
+        # больший settle — JS-SPA успевают дорисовать листинг
+        content = playwright_parser.fetch_rendered(listing_url, settle_ms=8000)
     else:
         content = http_client.fetch(listing_url)
     if not content:
@@ -1060,6 +1065,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_dump_listing = sub.add_parser("source-dump-listing", help="выгрузить анкеры листинга источника (для подбора listing_selector у no_candidates)")
     p_dump_listing.add_argument("source_id", type=int, help="id источника")
     p_dump_listing.add_argument("--limit", type=int, default=40, help="сколько анкеров показать")
+    p_dump_listing.add_argument("--render", action="store_true", help="форсить playwright-рендер (проверить, даёт ли JS-SPA статьи)")
     p_dump_listing.set_defaults(func=cmd_source_dump_listing)
 
     p_recheck = sub.add_parser("recheck-relevance", help="локальный перепрогон релевантности (тесты/дамп; на проде — enqueue-recheck)")

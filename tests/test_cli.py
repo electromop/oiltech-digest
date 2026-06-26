@@ -84,6 +84,28 @@ def test_source_dump_listing_prints_anchors_with_container(monkeypatch, capsys):
     assert "Big oil deal 2026" in out
 
 
+def test_source_dump_listing_render_uses_playwright(monkeypatch, capsys):
+    html = b'<html><body><div class="news"><a href="/n/1">Rendered SPA article</a></div></body></html>'
+    monkeypatch.setattr("oiltech_digest.db.repository.get_source",
+                        lambda sid: {"id": 99, "name": "Узбекнефтегаз", "parse_strategy": "request",
+                                     "url": "https://www.ung.uz"})
+    monkeypatch.setattr("oiltech_digest.ingestion.playwright_parser.is_available", lambda: True)
+    rendered = {}
+    def fake_render(url, settle_ms=3500):
+        rendered["url"] = url
+        rendered["settle"] = settle_ms
+        return html
+    monkeypatch.setattr("oiltech_digest.ingestion.playwright_parser.fetch_rendered", fake_render)
+
+    cli.cmd_source_dump_listing(argparse.Namespace(source_id=99, limit=40, render=True))
+
+    out = capsys.readouterr().out
+    assert "playwright-render" in out
+    assert "Rendered SPA article" in out
+    assert rendered["url"] == "https://www.ung.uz"
+    assert rendered["settle"] == 8000          # увеличенный settle для SPA
+
+
 def test_source_dump_listing_exits_when_listing_unavailable(monkeypatch):
     monkeypatch.setattr("oiltech_digest.db.repository.get_source",
                         lambda sid: {"id": 9, "parse_strategy": "request", "url": "https://x.test"})
