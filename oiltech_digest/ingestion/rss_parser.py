@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import feedparser
 
+from oiltech_digest import config
 from oiltech_digest.config import MAX_WORKERS
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import normalize
@@ -36,6 +37,61 @@ def _guess_language(source: dict) -> str | None:
     return None  # неизвестно → NULL
 
 
+def extract_articles_from_feed(
+    source: dict, content: bytes, max_age_days: int | None = None
+) -> tuple[list[dict], dict]:
+    """Распарсить байты ленты в список article-rec'ов (без вставки в БД).
+
+    Чистая функция — переиспользуется и локальным `parse_source` (вставляет сам),
+    и внешним фетчем `external_fetch._process_rss` (статьи едут на core, там и
+    вставляются). Возвращает (recs, stats), где stats — skipped_old/irrelevant.
+    """
+    feed = feedparser.parse(content)
+    cutoff = None
+    if max_age_days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+    language = _guess_language(source)
+    recs: list[dict] = []
+    stats = {"skipped_old": 0, "skipped_irrelevant": 0}
+
+    for entry in feed.entries:
+        title = normalize.clean_html(entry.get("title", ""))
+        url = entry.get("link", "")
+        if not title or not url:
+            continue
+
+        published = normalize.parse_date(entry)
+        if cutoff is not None and published is not None and published < cutoff:
+            stats["skipped_old"] += 1
+            continue
+
+        summary = normalize.clean_html(entry.get("summary", entry.get("description", "")))
+        pre_filter = should_keep_article(title, summary, source)
+        if not pre_filter.keep:
+            stats["skipped_irrelevant"] += 1
+            logger.info(
+                "RSS pre-filter skipped %s: %s (%s)",
+                source.get("name"),
+                title,
+                ", ".join(pre_filter.matched_noise[:5]),
+            )
+            continue
+
+        recs.append({
+            "source_id": source["id"],
+            "title": title[:500],
+            "url": url,
+            "published_at": published,
+            "raw_text": summary or None,
+            "text_truncated": normalize.is_truncated(summary or ""),
+            "language": language,
+            "content_hash": normalize.compute_content_hash(title, url),
+            "image_url": normalize.extract_image(entry) or None,
+        })
+    return recs, stats
+
+
 def parse_source(source: dict, max_age_days: int | None = None) -> dict:
     """Скачать и распарсить одну ленту, вставить новые статьи. Вернуть метрики источника."""
     rss_url = source.get("rss_url")
@@ -46,48 +102,9 @@ def parse_source(source: dict, max_age_days: int | None = None) -> dict:
     if content is None:
         return {"added": 0, "attempted": 0, "skipped_old": 0, "skipped_irrelevant": 0}
 
-    feed = feedparser.parse(content)
-    cutoff = None
-    if max_age_days is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-
-    language = _guess_language(source)
-    added = attempted = skipped_old = skipped_irrelevant = 0
-
-    for entry in feed.entries:
-        title = normalize.clean_html(entry.get("title", ""))
-        url = entry.get("link", "")
-        if not title or not url:
-            continue
-
-        published = normalize.parse_date(entry)
-        if cutoff is not None and published is not None and published < cutoff:
-            skipped_old += 1
-            continue
-
-        summary = normalize.clean_html(entry.get("summary", entry.get("description", "")))
-        pre_filter = should_keep_article(title, summary, source)
-        if not pre_filter.keep:
-            skipped_irrelevant += 1
-            logger.info(
-                "RSS pre-filter skipped %s: %s (%s)",
-                source.get("name"),
-                title,
-                ", ".join(pre_filter.matched_noise[:5]),
-            )
-            continue
-
-        rec = {
-            "source_id": source["id"],
-            "title": title[:500],
-            "url": url,
-            "published_at": published,
-            "raw_text": summary or None,
-            "text_truncated": normalize.is_truncated(summary or ""),
-            "language": language,
-            "content_hash": normalize.compute_content_hash(title, url),
-            "image_url": normalize.extract_image(entry) or None,
-        }
+    recs, stats = extract_articles_from_feed(source, content, max_age_days)
+    added = attempted = 0
+    for rec in recs:
         attempted += 1
         if repository.insert_article(rec):
             added += 1
@@ -96,8 +113,8 @@ def parse_source(source: dict, max_age_days: int | None = None) -> dict:
     return {
         "added": added,
         "attempted": attempted,
-        "skipped_old": skipped_old,
-        "skipped_irrelevant": skipped_irrelevant,
+        "skipped_old": stats["skipped_old"],
+        "skipped_irrelevant": stats["skipped_irrelevant"],
     }
 
 
@@ -106,6 +123,13 @@ def parse_all(max_age_days: int | None = None, workers: int = MAX_WORKERS,
     """Параллельно обойти RSS и request-источники. duplicates = attempted - added."""
     sources = repository.get_enabled_sources()
     sources = [s for s in sources if s.get("parse_strategy") in {"rss", "request", "telegram", "playwright"}]
+    # Гео-роутинг: при включённом внешнем фетч-контуре источники с
+    # network_region='external' парсятся не здесь (с РФ-сервера к ним нет доступа —
+    # WAF/таймаут), а на зарубежном воркере через enqueue-external-scrape. Чтобы не
+    # дублировать работу и не засорять логи их 403/таймаутами — выкидываем из локального
+    # прогона. Флаг выключен → ведём себя как раньше (всё локально).
+    if config.FETCH_EXTERNAL_ENABLED and config.EXTERNAL_WORKERS_ENABLED:
+        sources = [s for s in sources if str(s.get("network_region") or "auto").strip().lower() != "external"]
     if source_id is not None:
         sources = [s for s in sources if s["id"] == source_id]
 

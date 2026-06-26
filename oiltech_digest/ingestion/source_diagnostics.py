@@ -10,6 +10,7 @@ import requests
 
 from oiltech_digest.config import REQUEST_TIMEOUT
 from oiltech_digest.ingestion import playwright_parser, request_parser, telegram_parser
+from oiltech_digest.ingestion import http_client
 from oiltech_digest.ingestion.http_client import _DEFAULT_HEADERS, _mask_proxy, _proxy_for
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
@@ -243,6 +244,25 @@ def probe_url(url: str, timeout: int = REQUEST_TIMEOUT) -> tuple[ProbeResult, by
         if response.status_code >= 400:
             return result, None
         return result, response.content
+    except requests.exceptions.SSLError as exc:
+        # Сырой probe не повторяет боевой SSL-фоллбэк (extended CA-bundle → verify=False),
+        # поэтому РФ-гос/корп сайты на «Российском CA» падают тут, хотя в проде fetch()
+        # их достаёт. Повторяем боевым путём, чтобы вердикт аудита отражал реальность.
+        content = http_client.fetch(url, timeout=timeout)
+        if content is not None:
+            return (
+                ProbeResult(url=url, status="OK*", bytes=len(content), proxy=proxy_label),
+                content,
+            )
+        return (
+            ProbeResult(
+                url=url,
+                status="ERR",
+                error=f"{type(exc).__name__}: {str(exc)[:160]}",
+                proxy=proxy_label,
+            ),
+            None,
+        )
     except requests.RequestException as exc:
         return (
             ProbeResult(

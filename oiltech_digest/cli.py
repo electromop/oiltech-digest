@@ -390,6 +390,63 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
+    """Поставить в очередь фетч источников network_region='external' через зарубежный воркер.
+
+    Эти источники недоступны с РФ-сервера (WAF/таймаут/гео-блок) — их рендер/фетч идёт
+    из NL. Действует ТОЛЬКО при EXTERNAL_WORKERS_ENABLED=1 и FETCH_EXTERNAL_ENABLED=1,
+    иначе no-op (источники парсятся локально как обычно). Вызывается планировщиком
+    каждый цикл; можно и руками для разового прогона."""
+    from oiltech_digest import config, network_policy
+    from oiltech_digest.db import repository
+
+    if not (config.EXTERNAL_WORKERS_ENABLED and config.FETCH_EXTERNAL_ENABLED):
+        print("enqueue-external-scrape: внешний фетч-контур выключен "
+              "(нужны EXTERNAL_WORKERS_ENABLED=1 и FETCH_EXTERNAL_ENABLED=1) — пропуск")
+        return
+
+    sources = [
+        s for s in repository.get_enabled_sources()
+        if str(s.get("network_region") or "auto").strip().lower() == "external"
+        and s.get("parse_strategy") in {"request", "playwright", "rss"}
+    ]
+    enq = 0
+    queues: dict[str, int] = {}
+    for source in sources:
+        decision = network_policy.route_source_task(source, task_kind="scrape")
+        if decision.execution_region != "external":
+            continue
+        repository.create_background_job(
+            "scrape_source",
+            {"source_id": source["id"], "max_age_days": args.max_age_days},
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
+        )
+        enq += 1
+        queues[decision.queue_name] = queues.get(decision.queue_name, 0) + 1
+    detail = ", ".join(f"{q}={n}" for q, n in sorted(queues.items())) or "—"
+    print(f"enqueue-external-scrape: external-источников={len(sources)}, задач={enq} ({detail})")
+
+
+def cmd_set_source_region(args: argparse.Namespace) -> None:
+    """Проставить network_region (auto|ru|external) источникам по списку id.
+
+    Для гео-падающих западных источников из source-audit, чьи имена в БД неточны для
+    реестра (Deloitte/QatarEnergy/Weatherford и т.п.). external берётся в работу
+    enqueue-external-scrape при включённом внешнем контуре."""
+    from oiltech_digest.db import repository
+
+    region = args.region.strip().lower()
+    if region not in {"auto", "ru", "external"}:
+        raise SystemExit("region должен быть auto|ru|external")
+    ids = [int(x) for x in str(args.ids).split(",") if x.strip()]
+    if not ids:
+        raise SystemExit("укажите --ids 1,2,3")
+    n = repository.set_sources_network_region(ids, region)
+    print(f"set-source-region: обновлено={n}, region={region}, ids={ids}")
+
+
 def cmd_recheck_relevance(args: argparse.Namespace) -> None:
     """Локальный перепрогон релевантности (для тестов/дампа; на проде — enqueue-recheck)."""
     from oiltech_digest.processing.pipeline import process_recheck
@@ -944,6 +1001,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_translate.add_argument("--batch-size", type=int, default=100, help="статей в одной задаче")
     p_enqueue_translate.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = все без перевода)")
     p_enqueue_translate.set_defaults(func=cmd_enqueue_translate)
+
+    p_enqueue_external = sub.add_parser("enqueue-external-scrape", help="фетч источников network_region=external через зарубежный воркер (no-op без FETCH_EXTERNAL_ENABLED)")
+    p_enqueue_external.add_argument("--max-age-days", type=int, default=None, help="окно свежести статей (по умолчанию без ограничения)")
+    p_enqueue_external.set_defaults(func=cmd_enqueue_external_scrape)
+
+    p_set_region = sub.add_parser("set-source-region", help="проставить network_region (auto|ru|external) источникам по id")
+    p_set_region.add_argument("--ids", required=True, help="список id через запятую, напр. 16,84,64")
+    p_set_region.add_argument("--region", required=True, help="auto|ru|external")
+    p_set_region.set_defaults(func=cmd_set_source_region)
 
     p_recheck = sub.add_parser("recheck-relevance", help="локальный перепрогон релевантности (тесты/дамп; на проде — enqueue-recheck)")
     add_ai_args(p_recheck)
