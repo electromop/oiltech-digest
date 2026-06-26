@@ -137,6 +137,22 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
             )
             client.progress(job, 90)
             client.complete(job, result)
+        elif job.get("kind") == "recheck_relevance":
+            client.progress(job, 20)
+            result = external_ai.process_recheck_payload(
+                job.get("payload") or {},
+                heartbeat=lambda: _safe_heartbeat(client, job),
+            )
+            client.progress(job, 90)
+            client.complete(job, result)
+        elif job.get("kind") == "translate_titles":
+            client.progress(job, 20)
+            result = external_ai.process_translate_payload(
+                job.get("payload") or {},
+                heartbeat=lambda: _safe_heartbeat(client, job),
+            )
+            client.progress(job, 90)
+            client.complete(job, result)
         elif job.get("kind") == "scrape_source":
             client.progress(job, 20)
             result = external_fetch.process_payload(job.get("payload") or {})

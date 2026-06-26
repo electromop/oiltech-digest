@@ -47,7 +47,8 @@ def test_external_ai_process_payload_offline_returns_structured_result():
     article = result["articles"][0]
     assert article["article_id"] == 1
     assert article["summary"]["summary"]
-    assert article["summary"]["title_ru"]  # #2: русский заголовок течёт через суммаризацию
+    assert result["stats"]["translated"] == 1                # #2: перевод — отдельная стадия
+    assert article["translation"]["title_ru"]                # иностранный заголовок переведён
     assert article["relevance"]["relevant"] is True
     assert article["tagging"]["tag_id"] == 10
     assert article["scoring"]["items"][0]["criterion_id"] == 20
@@ -115,7 +116,7 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
         }
     )
 
-    assert stats == {"articles": 1, "summary": 1, "relevance": 1, "tagging": 1, "scoring": 1, "errors": 0}
+    assert stats == {"articles": 1, "summary": 1, "relevance": 1, "translation": 0, "tagging": 1, "scoring": 1, "errors": 0}
     assert [item[0] for item in calls[:4]] == ["summary", "run", "relevance", "run"]
     assert ("run", "scoring") in calls
 

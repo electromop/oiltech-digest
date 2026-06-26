@@ -20,6 +20,8 @@ from oiltech_digest.processing.prompts import (
     SUMMARY_SCHEMA,
     TAG_SCHEMA,
     TAGGING_INSTRUCTIONS,
+    TRANSLATE_INSTRUCTIONS,
+    TRANSLATE_SCHEMA,
 )
 
 
@@ -37,11 +39,40 @@ def process_summary_articles(articles: list[dict], client) -> dict:
     for article in articles:
         try:
             response = summarize_article(article, client)
-            repository.upsert_article_card(article["id"], response.data["summary"], response.model, response.data.get("title_ru"))
+            repository.upsert_article_card(article["id"], response.data["summary"], response.model)
             _record_run(article, "summary", client, response)
             stats["processed"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
             _record_error(article, "summary", client, exc)
+            stats["errors"] += 1
+    return stats
+
+
+def process_translations(limit: int = 20, offline: bool = False) -> dict:
+    client = make_client(offline)
+    return process_translation_articles(repository.get_articles_needing_title_ru(limit), client)
+
+
+def process_translation_articles(articles: list[dict], client) -> dict:
+    """Отдельная стадия перевода заголовков: проставляет title_ru статьям без него.
+
+    Русские заголовки переводить не нужно — берём их как есть (без AI-вызова). AI
+    дёргается ТОЛЬКО для иностранных заголовков. Так бэкфилл по всей базе дешёвый:
+    платим лишь за реальный перевод. `ai` в статистике — сколько раз ходили в модель."""
+    stats = {"processed": 0, "ai": 0, "errors": 0}
+    for article in articles:
+        try:
+            title_ru, response = title_ru_for_article(article, client)
+            if title_ru is None:
+                stats["processed"] += 1
+                continue
+            repository.set_article_title_ru(article["id"], title_ru)
+            if response is not None:
+                _record_run(article, "translation", client, response)
+                stats["ai"] += 1
+            stats["processed"] += 1
+        except Exception as exc:  # noqa: BLE001 - batch should continue
+            _record_error(article, "translation", client, exc)
             stats["errors"] += 1
     return stats
 
@@ -74,6 +105,55 @@ def process_relevance_articles(articles: list[dict], client) -> dict:
             stats["processed"] += 1
             stats["relevant" if relevant else "rejected"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
+            _record_error(article, "relevance", client, exc)
+            stats["errors"] += 1
+    return stats
+
+
+def process_recheck(limit: int = 100, offline: bool = False, force: bool = False,
+                    max_articles: int | None = None) -> dict:
+    """Локальный перепрогон релевантности по ВСЕЙ базе (для тестов/дампа; на проде
+    OpenAI доступен только через воркер — там используется enqueue-recheck).
+    Идёт по возрастанию id с чекпоинтом; нерелевантные удаляются физически."""
+    client = make_client(offline)
+    totals = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
+    after_id = 0
+    while True:
+        batch = repository.get_articles_for_recheck(after_id, limit)
+        if not batch:
+            break
+        after_id = max(int(article["id"]) for article in batch)
+        stats = recheck_relevance_articles(batch, client, force=force)
+        for key in totals:
+            totals[key] += stats[key]
+        if max_articles is not None and totals["checked"] >= max_articles:
+            break
+    return totals
+
+
+def recheck_relevance_articles(articles: list[dict], client, *, force: bool = False) -> dict:
+    """Прогнать гейт релевантности по сырому тексту; релевантные — персист,
+    нерелевантные — УДАЛИТЬ физически (delete_article защищает сохранённые дайджесты)."""
+    tags = repository.list_enabled_tags()
+    stats = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
+    for article in articles:
+        stats["checked"] += 1
+        try:
+            blocked_reason = _negative_keyword_block(article, tags)
+            if blocked_reason:
+                relevant, reason, model = False, blocked_reason, "negative-keyword"
+            else:
+                resp = relevance_article(article, client)
+                relevant = bool(resp.data.get("relevant"))
+                reason, model = resp.data.get("reason"), resp.model
+                _record_run(article, "relevance", client, resp)
+            if relevant:
+                repository.set_article_relevance(article["id"], True, reason, model)
+                stats["kept"] += 1
+            else:
+                deleted = repository.delete_article(int(article["id"]), force=force)
+                stats["deleted" if deleted else "skipped_in_digest"] += 1
+        except Exception as exc:  # noqa: BLE001 - одна плохая статья не валит батч
             _record_error(article, "relevance", client, exc)
             stats["errors"] += 1
     return stats
@@ -158,7 +238,7 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
     criteria = repository.list_enabled_scoring_criteria()
     _validate_weights(criteria)
     stats = {"processed": 0, "fulltext": 0, "summary": 0, "relevant": 0,
-             "rejected": 0, "tagged": 0, "scored": 0, "errors": 0}
+             "rejected": 0, "tagged": 0, "translated": 0, "scored": 0, "errors": 0}
     for article in articles:
         stats["processed"] += 1
         try:
@@ -186,10 +266,18 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
             # 3. Суть.
             summary_resp = summarize_article(article, client)
-            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model, summary_resp.data.get("title_ru"))
+            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
             _record_run(article, "summary", client, summary_resp)
             article["summary"] = summary_resp.data["summary"]
             stats["summary"] += 1
+
+            # 3b. Перевод заголовка — отдельная стадия (AI только для иностранных).
+            title_ru, translate_resp = title_ru_for_article(article, client)
+            if title_ru is not None:
+                repository.set_article_title_ru(article["id"], title_ru)
+                if translate_resp is not None:
+                    _record_run(article, "translation", client, translate_resp)
+                    stats["translated"] += 1
 
             # 4. Тег.
             tag_resp = tag_article(article, tags, client)
@@ -241,6 +329,41 @@ def relevance_article(article: dict, client) -> AIResponse:
         model=config.OPENAI_RELEVANCE_MODEL,
         reasoning_effort=config.OPENAI_RELEVANCE_REASONING,
     )
+
+
+def translate_article(article: dict, client) -> AIResponse:
+    """AI-перевод заголовка на русский. Отдельная стадия (раньше был частью summary).
+    Модель/effort — собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
+    return client.complete_json(
+        TRANSLATE_INSTRUCTIONS,
+        _title_prompt(article),
+        TRANSLATE_SCHEMA,
+        max_output_tokens=300,
+        model=config.OPENAI_TRANSLATE_MODEL,
+        reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
+    )
+
+
+def title_ru_for_article(article: dict, client) -> tuple[str | None, AIResponse | None]:
+    """Вернуть (title_ru, ai_response). Русский заголовок не переводим (ai_response=None);
+    иностранный — переводим через AI. Пустой заголовок → (None, None)."""
+    title = (article.get("title") or "").strip()
+    if not title:
+        return None, None
+    if not _needs_translation(title):
+        return title[:200], None
+    response = translate_article(article, client)
+    translated = (response.data.get("title_ru") or title).strip()
+    return (translated or title)[:200], response
+
+
+def _needs_translation(title: str) -> bool:
+    """Заголовок считаем требующим перевода, если кириллицы в нём меньше половины букв."""
+    letters = [ch for ch in title if ch.isalpha()]
+    if not letters:
+        return False
+    cyrillic = sum(1 for ch in letters if "Ѐ" <= ch <= "ӿ")
+    return cyrillic / len(letters) < 0.5
 
 
 def tag_article(article: dict, tags: list[dict], client) -> AIResponse:
@@ -360,6 +483,17 @@ def _relevance_prompt(article: dict) -> str:
             f"language: {article.get('language') or 'unknown'}",
             f"published_at: {article.get('published_at') or ''}",
             f"text: {_compact(article.get('raw_text') or '', 6000)}",
+        ]
+    )
+
+
+def _title_prompt(article: dict) -> str:
+    """Вход переводчика — только заголовок и контекст источника (дёшево, без полного текста)."""
+    return "\n".join(
+        [
+            f"title: {article.get('title') or ''}",
+            f"source: {article.get('source_name') or ''}",
+            f"language: {article.get('language') or 'unknown'}",
         ]
     )
 

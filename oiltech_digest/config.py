@@ -118,6 +118,12 @@ OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "minimal")
 OPENAI_RELEVANCE_MODEL = os.environ.get("OPENAI_RELEVANCE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").strip() or "medium"
 
+# Переводчик заголовков — отдельная стадия. Ответ короткий (один заголовок), поэтому
+# по умолчанию хватает основной (дешёвой) модели и минимального reasoning. Можно
+# переопределить в .env воркера, если потребуется качество посильнее.
+OPENAI_TRANSLATE_MODEL = os.environ.get("OPENAI_TRANSLATE_MODEL", "").strip() or OPENAI_MODEL
+OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+
 # USD per 1M tokens. Defaults follow the model docs snapshot used when this code
 # was written; override in .env if pricing changes or another model is selected.
 OPENAI_INPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_INPUT_USD_PER_MTOK", "0.05"))
