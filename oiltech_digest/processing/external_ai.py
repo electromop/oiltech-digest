@@ -198,10 +198,15 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], Non
     return result
 
 
-def apply_recheck_result(result: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run: bool = False) -> dict[str, Any]:
     """Применить вердикты к core: релевантные — персист, нерелевантные — УДАЛИТЬ.
-    Статьи в сохранённом дайджесте по умолчанию пропускаются (force=False)."""
+    Статьи в сохранённом дайджесте по умолчанию пропускаются (force=False).
+
+    dry_run=True — НИЧЕГО не менять/не удалять: только посчитать и собрать превью
+    отклонённого (заголовок+источник+причина) для просмотра «что бы срезалось»."""
     stats = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
+    rejected_ids: list[int] = []
+    reason_by_id: dict[int, str | None] = {}
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
         relevance = item.get("relevance")
@@ -210,13 +215,26 @@ def apply_recheck_result(result: dict[str, Any], *, force: bool = False) -> dict
             continue
         stats["checked"] += 1
         if bool(relevance.get("relevant")):
-            repository.set_article_relevance(article_id, True, relevance.get("reason"), relevance.get("model"))
-            if relevance.get("model") and relevance.get("model") != "negative-keyword":
-                _insert_run(article_id, "relevance", {**relevance, "provider": "openai"})
+            if not dry_run:
+                repository.set_article_relevance(article_id, True, relevance.get("reason"), relevance.get("model"))
+                if relevance.get("model") and relevance.get("model") != "negative-keyword":
+                    _insert_run(article_id, "relevance", {**relevance, "provider": "openai"})
             stats["kept"] += 1
+        elif dry_run:
+            stats["deleted"] += 1  # сколько БЫ удалили
+            rejected_ids.append(article_id)
+            reason_by_id[article_id] = relevance.get("reason")
         else:
             deleted = repository.delete_article(article_id, force=force)
             stats["deleted" if deleted else "skipped_in_digest"] += 1
+    if dry_run and rejected_ids:
+        # подтянуть заголовок/источник для просмотра (статьи ещё на месте)
+        rows = repository.get_articles_by_ids(rejected_ids)
+        stats["rejected_preview"] = [
+            {"id": int(r["id"]), "title": r.get("title"), "source": r.get("source_name"),
+             "reason": reason_by_id.get(int(r["id"]))}
+            for r in rows
+        ]
     return stats
 
 

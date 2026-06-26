@@ -346,21 +346,44 @@ def cmd_enqueue_recheck(args: argparse.Namespace) -> None:
     if args.limit:
         ids = ids[: args.limit]
     batch = max(1, args.batch_size)
+    dry_run = bool(getattr(args, "dry_run", False))
     chunks = [ids[i : i + batch] for i in range(0, len(ids), batch)]
     job_ids = []
     for chunk in chunks:
         job = repository.create_background_job(
             "recheck_relevance",
-            {"article_ids": chunk, "force": bool(args.force)},
+            {"article_ids": chunk, "force": bool(args.force), "dry_run": dry_run},
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,
         )
         job_ids.append(job["id"])
+    suffix = "  ← DRY-RUN: ничего не удаляется, смотри `recheck-dry-show <job_id>`" if dry_run else ""
     print(
-        f"enqueue-recheck: статей={len(ids)}, задач={len(job_ids)}, батч={batch}, "
-        f"queue={decision.queue_name} region={decision.execution_region} force={bool(args.force)} ({decision.reason})"
+        f"enqueue-recheck: статей={len(ids)}, задач={len(job_ids)} {job_ids if dry_run else ''}, батч={batch}, "
+        f"queue={decision.queue_name} region={decision.execution_region} force={bool(args.force)} dry_run={dry_run} ({decision.reason}){suffix}"
     )
+
+
+def cmd_recheck_dry_show(args: argparse.Namespace) -> None:
+    """Показать вердикты dry-run recheck-задачи: что БЫ срезалось (заголовок + причина).
+    Ничего не меняет — читает result уже выполненной задачи из background_jobs."""
+    from oiltech_digest.db import repository
+
+    job = repository.get_background_job(args.job_id)
+    if job is None:
+        raise SystemExit(f"задача {args.job_id} не найдена")
+    applied = ((job.get("result") or {}).get("applied")) or {}
+    preview = applied.get("rejected_preview")
+    if preview is None:
+        raise SystemExit(f"у задачи {args.job_id} нет dry-run превью (status={job.get('status')}; "
+                         "это dry-run задача и она завершена?)")
+    print(f"DRY-RUN job {args.job_id}: проверено={applied.get('checked')}, "
+          f"оставили={applied.get('kept')}, СРЕЗАЛОСЬ БЫ={applied.get('deleted')}, ошибок={applied.get('errors')}")
+    print("--- что бы удалилось (заголовок · источник · причина) ---")
+    for r in preview[: args.limit]:
+        title = (r.get("title") or "")[:90]
+        print(f"  [{r.get('source') or '—'}] {title}\n      причина: {r.get('reason') or '—'}")
 
 
 def cmd_enqueue_translate(args: argparse.Namespace) -> None:
@@ -1046,7 +1069,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_recheck.add_argument("--batch-size", type=int, default=100, help="статей в одной задаче")
     p_enqueue_recheck.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = вся база)")
     p_enqueue_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из сохранённых дайджестов")
+    p_enqueue_recheck.add_argument("--dry-run", action="store_true", help="НЕ удалять — только посчитать и собрать превью отклонённого (recheck-dry-show)")
     p_enqueue_recheck.set_defaults(func=cmd_enqueue_recheck)
+
+    p_dry_show = sub.add_parser("recheck-dry-show", help="показать вердикты dry-run recheck-задачи (что бы срезалось)")
+    p_dry_show.add_argument("job_id", type=int, help="id выполненной dry-run задачи")
+    p_dry_show.add_argument("--limit", type=int, default=80, help="сколько отклонённых показать")
+    p_dry_show.set_defaults(func=cmd_recheck_dry_show)
 
     p_enqueue_translate = sub.add_parser("enqueue-translate", help="бэкфилл перевода заголовков (title_ru) по всей базе батчами через воркер")
     p_enqueue_translate.add_argument("--batch-size", type=int, default=100, help="статей в одной задаче")
