@@ -85,6 +85,12 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # source-health большинство западных playwright-источников парсятся с РФ (свежие
     # статьи), а live-аудит у них флапает таймаутом. Реальные кандидаты на external
     # помечаются осознанно по id через `set-source-region` и A/B-тестятся (см. CLI).
+    # JS-SPA, ПОДТВЕРЖДЕНЫ playwright-рендером 2026-06-26 (source-dump-listing --render с
+    # РФ-core дал реальные ссылки на статьи; request-стратегия давала пустой shell →
+    # no_candidates). Гео-доступны с РФ, рендер локальный, роутинг не нужен:
+    "OilCapital": {"parse_strategy": "playwright", "listing_url": "https://oilcapital.ru/news"},  # много свежих РФ-нефтегаз новостей (/news/<дата>/<slug>)
+    "Узбекнефтегаз": {"parse_strategy": "playwright", "listing_url": "https://www.ung.uz/press"},  # пресс-релизы (/press/page/<id>)
+    "Spears & Associates": {"parse_strategy": "playwright", "listing_url": "https://spearsresearch.com/news"},  # drilling research (/news/<slug>)
     # Telegram-каналы с исправленным username (в Excel-сидере были неверные → t.me/s/
     # отдавал пустую ~9.6KB-страницу, posts=0). Правильные проверены на проде (17-20 постов):
     "Газбатюшка": {"parse_strategy": "telegram", "url": "https://t.me/papagaz"},
