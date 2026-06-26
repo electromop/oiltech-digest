@@ -322,6 +322,12 @@ ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_status TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS full_text_error TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS extraction_method TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;
+-- Мягкое удаление: recheck в режиме --mark помечает нерелевантные сюда (не удаляя
+-- физически), затем разовый recheck-purge удаляет помеченные (или recheck-unmark вернёт).
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS pending_deletion BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS deletion_reason TEXT;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS marked_for_deletion_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_articles_pending_deletion ON articles(pending_deletion) WHERE pending_deletion;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS queue_name TEXT NOT NULL DEFAULT 'default';
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;

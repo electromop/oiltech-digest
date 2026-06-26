@@ -198,13 +198,16 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], Non
     return result
 
 
-def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run: bool = False) -> dict[str, Any]:
+def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run: bool = False,
+                         mark: bool = False) -> dict[str, Any]:
     """Применить вердикты к core: релевантные — персист, нерелевантные — УДАЛИТЬ.
     Статьи в сохранённом дайджесте по умолчанию пропускаются (force=False).
 
-    dry_run=True — НИЧЕГО не менять/не удалять: только посчитать и собрать превью
-    отклонённого (заголовок+источник+причина) для просмотра «что бы срезалось»."""
-    stats = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
+    dry_run=True — НИЧЕГО не менять/не удалять: только посчитать и собрать превью.
+    mark=True — нерелевантные НЕ удалять физически, а ПОМЕТИТЬ на удаление
+    (pending_deletion): исчезают из ленты, но в БД (восстановимы recheck-unmark,
+    физически удаляются разом recheck-purge). Безопасный режим по умолчанию для чистки."""
+    stats = {"checked": 0, "kept": 0, "deleted": 0, "marked": 0, "skipped_in_digest": 0, "errors": 0}
     rejected_ids: list[int] = []
     reason_by_id: dict[int, str | None] = {}
     for item in result.get("articles") or []:
@@ -224,6 +227,9 @@ def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run
             stats["deleted"] += 1  # сколько БЫ удалили
             rejected_ids.append(article_id)
             reason_by_id[article_id] = relevance.get("reason")
+        elif mark:
+            outcome = repository.mark_article_for_deletion(article_id, relevance.get("reason"), force=force)
+            stats["marked" if outcome == "marked" else "skipped_in_digest"] += 1
         else:
             deleted = repository.delete_article(article_id, force=force)
             stats["deleted" if deleted else "skipped_in_digest"] += 1
