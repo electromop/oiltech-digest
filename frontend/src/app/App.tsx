@@ -151,18 +151,18 @@ export function App() {
 
       <section className="heroGrid">
         <article className="panel accentPanel">
-          <div className="panelKicker">Admin UI</div>
-          <h2>Новая админка уже собрана вокруг текущего API</h2>
+          <div className="panelKicker">Админ-панель</div>
+          <h2>Новая админ-панель уже собрана вокруг текущего API</h2>
           <p>
             Новый интерфейс уже покрывает ключевые редакторские и конфигурационные сценарии.
-            `app.html` пока остаётся как запасной fallback, но основной каркас интерфейса уже здесь.
+            Старая страница пока остаётся как запасной вариант, но основной каркас интерфейса уже здесь.
           </p>
         </article>
 
         <article className="panel">
           <div className="panelKicker">Что уже есть</div>
           <p>
-            Мы переехали без смены backend-контрактов: это упрощает проверку parity и даёт
+            Мы переехали без смены серверных контрактов: это упрощает проверку соответствия и даёт
             возможность спокойно дотягивать поведение экран за экраном.
           </p>
         </article>
@@ -203,7 +203,7 @@ export function App() {
   }
 
   if (activeScreen === "digest") {
-    currentScreen = <DigestPage onUnauthorized={() => setUser(null)} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} />;
+    currentScreen = <DigestPage onUnauthorized={() => setUser(null)} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} isAdmin={isAdmin} />;
   }
 
   if (activeScreen === "scoring") {
@@ -310,7 +310,7 @@ export function App() {
       <div className="authShellReact">
         <div className="authCardReact">
           <div className="eyebrow">OilTech Digest</div>
-          <h1>{authMode === "register" ? "Регистрация" : "Вход в админку"}</h1>
+          <h1>{authMode === "register" ? "Регистрация" : "Вход в админ-панель"}</h1>
           <p>
             {authMode === "register"
               ? "Создайте аккаунт, чтобы работать с сигналами, дайджестами и источниками."
@@ -400,7 +400,7 @@ export function App() {
         <div className="sidebarBottom">
           <div className="sidebarFoot">
             <div className="footLabel">{user.email}</div>
-            <div className="footValue">Админка активна</div>
+            <div className="footValue">Сессия активна</div>
           </div>
 
           <div className="sidebarUtilityActions">

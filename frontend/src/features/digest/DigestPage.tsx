@@ -10,9 +10,10 @@ type Props = {
   onUnauthorized: () => void;
   showToast: ToastWriter;
   onArticlesChanged?: () => void;
+  isAdmin?: boolean;
 };
 
-export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Props) {
+export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdmin = false }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
   const [branding, setBranding] = useState<DigestBranding | null>(null);
   const [loading, setLoading] = useState(true);
@@ -396,7 +397,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
           </div>
         ) : null}
 
-        {branding ? (
+        {isAdmin && branding ? (
           <div className="settingsCard digestBrandingCard">
             <div className="panelHeader">
               <h2>Оформление выпуска</h2>
@@ -621,9 +622,9 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
                     <label className="field">
                       <span>Иконка</span>
                       <select value={item.icon} onChange={(event) => updateHighlightCard(index, { icon: event.target.value as DigestHighlightCard["icon"] })}>
-                        <option value="doc">Doc</option>
-                        <option value="chart">Chart</option>
-                        <option value="people">People</option>
+                        <option value="doc">Документ</option>
+                        <option value="chart">График</option>
+                        <option value="people">Люди</option>
                       </select>
                     </label>
                     <label className="field">

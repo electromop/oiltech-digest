@@ -122,7 +122,7 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
         <div className="panelHeader">
           <h2>Добавить пользователя</h2>
         </div>
-        <div className="articlesFiltersRow">
+        <div className="userAddGrid">
           <label className="field">
             <span>Эл. почта</span>
             <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="user@gpn.ru" />
@@ -138,12 +138,9 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
               <option value="admin">Администратор</option>
             </select>
           </label>
-          <div className="field">
-            <span>&nbsp;</span>
-            <button type="button" className="primaryButton" disabled={busy} onClick={() => void handleCreate()}>
-              Создать
-            </button>
-          </div>
+          <button type="button" className="primaryButton userAddButton" disabled={busy} onClick={() => void handleCreate()}>
+            Создать
+          </button>
         </div>
       </section>
 
@@ -162,7 +159,7 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
               const isSelf = target.id === currentUserId;
               return (
                 <div className="tagGroupCard" key={target.id}>
-                  <div className="tagRowRoot">
+                  <div className="userRow">
                     <label className="field">
                       <span>Эл. почта</span>
                       <input value={target.email} readOnly />

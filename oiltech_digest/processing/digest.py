@@ -494,7 +494,7 @@ def _render_footer_socials(socials: list[dict]) -> str:
             '<div style="width:36px;height:36px;background:#ffffff;border-radius:50%;'
             'text-align:center;line-height:36px;'
             f'color:{_html(item.get("accent") or "#262d3c")};'
-            'font-weight:bold;font-size:13px;font-family:Arial,Helvetica,sans-serif;"'
+            "font-weight:bold;font-size:13px;font-family:'GPN Din',Arial,Helvetica,sans-serif;\""
             f' title="{_html(item.get("label"))}">{_html(item.get("text"))}</div>'
             "</td>"
         )
@@ -644,6 +644,9 @@ def render_digest_docx(content: dict) -> bytes:
     GREY = RGBColor(0x66, 0x66, 0x66)
 
     doc = Document()
+    # Корпоративный шрифт во всём документе (рендерится у получателей с установленным
+    # GPN Din; иначе Word подставит замену). Базовый стиль Normal наследуют все абзацы.
+    doc.styles["Normal"].font.name = "GPN Din"
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.6)
     section.left_margin = section.right_margin = Inches(0.7)

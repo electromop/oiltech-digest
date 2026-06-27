@@ -273,7 +273,7 @@ describe("App smoke", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "Вход в админку" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Зарегистрироваться" }));
     expect(screen.getByRole("heading", { name: "Регистрация" })).toBeInTheDocument();

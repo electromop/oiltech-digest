@@ -30,6 +30,17 @@
   font-display: swap;
 }
 
+/* Форм-контролы по умолчанию НЕ наследуют шрифт страницы — из-за этого текст в
+   полях/кнопках/списках был системным, а не GPN. Принудительно наследуем корпоративный
+   шрифт во всех инпутах/селектах/textarea/кнопках по всей платформе. */
+input,
+select,
+textarea,
+button,
+option {
+  font-family: inherit;
+}
+
 :root {
   color-scheme: light;
   font-family: "GPN Din", Inter, "Segoe UI", sans-serif;
@@ -1630,6 +1641,26 @@ button {
   border: 1px solid var(--line);
 }
 
+/* Пользователи (админ): форма добавления + строки списка — выровнены по сетке,
+   единый стиль с тегами/скорингом (никакого переиспользования тег-сетки). */
+.userAddGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(150px, 0.6fr) auto;
+  gap: 12px 16px;
+  align-items: end;
+}
+
+.userAddButton {
+  white-space: nowrap;
+}
+
+.userRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(150px, 0.5fr) auto;
+  gap: 12px 16px;
+  align-items: end;
+}
+
 .sourceCardGrid {
   margin-top: 12px;
   display: grid;
@@ -1949,6 +1980,8 @@ button {
   .settingsGrid,
   .tagRowRoot,
   .tagRowChild,
+  .userAddGrid,
+  .userRow,
   .articleDetailGrid {
     grid-template-columns: 1fr;
   }

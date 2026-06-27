@@ -107,7 +107,7 @@ function diagnosticTriage(source: Source, verdict?: string): SourceTriage | null
       return {
         tone: "warn",
         key: "content",
-        label: "контент",
+        label: "содержимое",
         title: "Материалы находятся, но не проходят до вставки в базу.",
         action: "Проверьте шаблон статьи, шум и длину текста в диагностике.",
       };
@@ -141,7 +141,7 @@ function diagnosticTriage(source: Source, verdict?: string): SourceTriage | null
         key: "rss",
         label: "rss",
         title: "RSS открывается, но лента пустая.",
-        action: "Проверьте актуальность RSS URL и наличие новых записей в фиде.",
+        action: "Проверьте актуальность ссылки RSS и наличие новых записей в ленте.",
       };
     case "playwright_unavailable":
       return {
@@ -214,7 +214,7 @@ export const TRIAGE_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "stale", label: "Застой" },
   { value: "access", label: "Нет доступа" },
   { value: "extraction", label: "Не извлекаются ссылки" },
-  { value: "content", label: "Не вставляется контент" },
+  { value: "content", label: "Не вставляется содержимое" },
   { value: "rss", label: "Проблема RSS" },
   { value: "telegram", label: "Проблема Telegram" },
   { value: "config", label: "Нужна настройка" },
