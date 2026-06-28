@@ -182,12 +182,13 @@ export function ArticlesPage(props: Props) {
     }).length;
     const processedCount = stats?.processed_articles ?? processedFallback;
 
+    // Порядок: общие по базе (всего, обработано) → затем по пользователю (его статусы).
     return [
       { label: "Всего сигналов", value: total },
+      { label: "Обработано", value: processedCount },
       { label: "Новые", value: newCount },
       { label: "На проверке", value: reviewCount },
       { label: "В дайджест", value: digestCount },
-      { label: "Обработано", value: processedCount },
     ];
   }, [articles, stats]);
 

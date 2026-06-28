@@ -151,7 +151,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
         ) : (
           <div className="emptyState compactEmptyState">
             <strong>Внешние очереди пусты</strong>
-            <span>Задачи появятся после включения маршрутизации `external-*`.</span>
+            <span>Задачи появятся после включения внешнего контура обработки.</span>
           </div>
         )}
       </section>
@@ -197,7 +197,7 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
         {loading ? (
           <div className="inlineLoader jobsLoader">
             <span className="loaderDot" />
-            <span>Загружаем maintenance-статус…</span>
+            <span>Загружаем статус обслуживания…</span>
           </div>
         ) : null}
 

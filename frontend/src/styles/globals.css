@@ -30,6 +30,17 @@
   font-display: swap;
 }
 
+/* Форм-контролы по умолчанию НЕ наследуют шрифт страницы — из-за этого текст в
+   полях/кнопках/списках был системным, а не GPN. Принудительно наследуем корпоративный
+   шрифт во всех инпутах/селектах/textarea/кнопках по всей платформе. */
+input,
+select,
+textarea,
+button,
+option {
+  font-family: inherit;
+}
+
 :root {
   color-scheme: light;
   font-family: "GPN Din", Inter, "Segoe UI", sans-serif;
@@ -1425,8 +1436,12 @@ button {
 
 .criteriaScrollReact {
   max-height: 360px;
-  overflow: auto;
-  padding-right: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Скроллбар в стабильном жёлобе — не «съедает» контент и не оставляет белый срез
+     справа; листалка выровнена с отступами карточек, контент не клипается. */
+  scrollbar-gutter: stable;
+  min-width: 0;
 }
 
 .articleSummaryBox,
@@ -1435,6 +1450,8 @@ button {
   border-radius: 12px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.9);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .articleSummaryBox > strong {
@@ -1453,6 +1470,10 @@ button {
   font-size: 0.95rem;
   line-height: 1.6;
   color: #1e293b;
+  /* Перенос по ширине блока — длинный текст/слова не вылезают за правый край. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
 }
 
 .criterionCardReact + .criterionCardReact {
@@ -1530,10 +1551,23 @@ button {
 
 .settingsCard,
 .tagGroupCard {
-  padding: 18px;
+  padding: 16px 18px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.05);
+  transition: box-shadow 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.settingsCard:hover,
+.tagGroupCard:hover {
+  border-color: rgba(37, 99, 235, 0.28);
+  box-shadow: 0 14px 32px rgba(37, 99, 235, 0.1);
+}
+
+/* Карточка критерия скоринга: тонкий бренд-акцент слева для визуальной опоры. */
+.settingsCard {
+  border-left: 3px solid var(--brand);
 }
 
 .settingsGrid {
@@ -1578,19 +1612,53 @@ button {
 .tagRowRoot,
 .tagRowChild {
   display: grid;
-  grid-template-columns: 90px minmax(180px, 0.8fr) minmax(280px, 1.4fr) auto;
-  gap: 10px;
+  grid-template-columns: 64px minmax(160px, 0.8fr) minmax(240px, 1.6fr) auto;
+  gap: 12px;
   align-items: end;
 }
 
+/* Родительский тег — выделенная «шапка» группы с бренд-акцентом (видно иерархию). */
+.tagRowRoot {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  border: 1px solid rgba(37, 99, 235, 0.16);
+}
+
+/* Дети — с визуальной направляющей (рельсой) и отступом: явная вложенность. */
 .tagChildrenList {
-  margin-top: 12px;
+  margin: 12px 0 0 18px;
+  padding-left: 16px;
   display: grid;
   gap: 10px;
+  border-left: 2px dashed rgba(37, 99, 235, 0.22);
 }
 
 .tagRowChild {
-  padding-left: 22px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid var(--line);
+}
+
+/* Пользователи (админ): форма добавления + строки списка — выровнены по сетке,
+   единый стиль с тегами/скорингом (никакого переиспользования тег-сетки). */
+.userAddGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(150px, 0.6fr) auto;
+  gap: 12px 16px;
+  align-items: end;
+}
+
+.userAddButton {
+  white-space: nowrap;
+}
+
+.userRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(150px, 0.5fr) auto;
+  gap: 12px 16px;
+  align-items: end;
 }
 
 .sourceCardGrid {
@@ -1912,6 +1980,8 @@ button {
   .settingsGrid,
   .tagRowRoot,
   .tagRowChild,
+  .userAddGrid,
+  .userRow,
   .articleDetailGrid {
     grid-template-columns: 1fr;
   }
