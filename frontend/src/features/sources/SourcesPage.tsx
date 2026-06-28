@@ -69,32 +69,33 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
       results.forEach((result) => {
         if ("error" in result) {
           clearPendingJob(result.sourceId);
-          handleError(result.error, "Не удалось получить статус фоновой задачи");
+          handleError(result.error, "Не удалось получить результат");
           return;
         }
 
         if (result.job.status === "queued" || result.job.status === "running") {
-          const label = result.job.status === "running" ? `в работе ${Math.round(result.job.progress)}%` : "в очереди";
-          updatePendingJobLabel(result.sourceId, label);
+          // Держим нейтральную метку («Собираем статьи…» / «Проверяем источник…»),
+          // без процентов прогресса и номеров задач.
           return;
         }
 
         clearPendingJob(result.sourceId);
 
         if (result.job.status === "failed") {
-          showToast(result.job.error || "Фоновая задача завершилась с ошибкой", "error");
+          showToast(result.pending.kind === "scrape" ? "Не удалось собрать статьи" : "Не удалось проверить источник", "error");
           return;
         }
 
         if (result.pending.kind === "diagnose") {
           setDiagnostics((prev) => ({ ...prev, [result.sourceId]: result.job.result as SourceDiagnostics }));
-          showToast("Диагностика источника готова");
+          showToast("Источник проверен");
           return;
         }
 
         if (result.pending.kind === "scrape") {
           const stats = result.job.result?.stats as { added?: number; attempted?: number } | undefined;
-          showToast(`Сбор статей: добавлено ${stats?.added || 0}, дублей ${(stats?.attempted || 0) - (stats?.added || 0)}`);
+          const added = stats?.added || 0;
+          showToast(added ? `Добавлено статей: ${added}` : "Новых статей не найдено");
           needsReload = true;
         }
       });
@@ -107,7 +108,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     void poll();
     const timer = window.setInterval(() => {
       void poll();
-    }, 1500);
+    }, 2500);
 
     return () => {
       cancelled = true;
@@ -147,17 +148,6 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
       const next = { ...prev };
       delete next[sourceId];
       return next;
-    });
-  }
-
-  function updatePendingJobLabel(sourceId: number, label: string) {
-    setPendingJobs((prev) => {
-      const existing = prev[sourceId];
-      if (!existing || existing.label === label) return prev;
-      return {
-        ...prev,
-        [sourceId]: { ...existing, label },
-      };
     });
   }
 
@@ -298,8 +288,8 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     try {
       const payload = normalizePatch(currentPatch(source));
       const response = await diagnoseSourceJob(source.id, payload);
-      setPendingJob(source.id, "diagnose", response.job.id, "диагностика в очереди");
-      showToast(`Диагностика поставлена в очередь: #${response.job.id}`);
+      setPendingJob(source.id, "diagnose", response.job.id, "Проверяем источник…");
+      showToast("Проверяем источник…");
     } catch (error) {
       handleError(error, "Не удалось выполнить диагностику");
     }
@@ -308,10 +298,10 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   async function handleScrapeSource(source: Source) {
     try {
       const response = await scrapeSourceJob(source.id);
-      setPendingJob(source.id, "scrape", response.job.id, "сбор статей в очереди");
-      showToast(`Сбор статей поставлен в очередь: #${response.job.id}`);
+      setPendingJob(source.id, "scrape", response.job.id, "Собираем статьи…");
+      showToast("Собираем статьи…");
     } catch (error) {
-      handleError(error, "Не удалось проверить страницу новостей");
+      handleError(error, "Не удалось собрать статьи");
     }
   }
 

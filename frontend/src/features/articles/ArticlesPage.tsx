@@ -22,8 +22,12 @@ const STATUS_LABELS: Record<Article["status"], string> = {
   archive: "Архив",
 };
 
+// Интервал фонового обновления ленты. Консервативно: /api/articles и /api/stats —
+// тяжёлые запросы, а прод-сервер слабый. 40с дают «живость» без лишней нагрузки.
+const AUTO_REFRESH_MS = 40000;
+
 export function ArticlesPage(props: Props) {
-  const { initialArticles, initialStats } = props;
+  const { initialArticles, initialStats, onArticlesReloaded, onStatsReloaded } = props;
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
@@ -96,6 +100,35 @@ export function ArticlesPage(props: Props) {
   useEffect(() => {
     setRenderLimit(200);
   }, [dateFrom, dateTo, language, scoreMax, scoreMin, search, sort, source, status, tag, viewTab]);
+
+  // Реалтайм без перезагрузки: тихо подтягиваем свежие сигналы и счётчики.
+  // Без тостов; пауза в фоновой вкладке, во время загрузки и при серверном поиске
+  // (его не перетираем). При возврате на вкладку — обновляем сразу.
+  useEffect(() => {
+    let inFlight = false;
+    async function refresh() {
+      if (inFlight || document.hidden || busy || searching || serverResults !== null) return;
+      inFlight = true;
+      try {
+        const [rows, statsPayload] = await Promise.all([listArticles(), getDashboardStats()]);
+        onArticlesReloaded(rows);
+        onStatsReloaded(statsPayload);
+      } catch {
+        // Фоновое обновление молчит об ошибках, чтобы не мешать работе.
+      } finally {
+        inFlight = false;
+      }
+    }
+    const timer = window.setInterval(() => void refresh(), AUTO_REFRESH_MS);
+    function onVisible() {
+      if (!document.hidden) void refresh();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [busy, searching, serverResults, onArticlesReloaded, onStatsReloaded]);
 
   // Поиск уходит на сервер и покрывает ВСЮ базу (а не только загруженный топ-2000).
   // Пустой запрос → возвращаемся к дефолтному набору. Debounce 400мс.
@@ -259,7 +292,7 @@ export function ArticlesPage(props: Props) {
         ))}
       </section>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+      <div className="viewTabs">
         <button type="button" className={viewTab === "all" ? "primaryButton" : "ghostButton"} onClick={() => setViewTab("all")}>
           Все
         </button>
@@ -469,6 +502,7 @@ export function ArticlesPage(props: Props) {
             {grouped.map(([group, groupArticles]) => {
               // Свёрнуто по умолчанию; авто-раскрытие при активном поиске или выбранном этом теге.
               const groupOpen = expandedGroups.has(group) || Boolean(search.trim()) || tag === group;
+              const groupAvg = Math.round(groupArticles.reduce((sum, article) => sum + Number(article.score || 0), 0) / groupArticles.length);
               return (
               <section className="articleGroupCard" key={group}>
                 <button
@@ -484,8 +518,9 @@ export function ArticlesPage(props: Props) {
                     </svg>
                     <span className="miniPill muted">{group}</span>
                   </span>
-                  <span className="metaText">
-                    {groupArticles.length} сигналов · средняя оценка {Math.round(groupArticles.reduce((sum, article) => sum + Number(article.score || 0), 0) / groupArticles.length)}
+                  <span className="articleGroupHeadMeta">
+                    <span className="metaText">{groupArticles.length} сигналов · средняя</span>
+                    <span className={`miniPill ${scoreClass(groupAvg)}`}>{groupAvg}</span>
                   </span>
                 </button>
                 {groupOpen ? (
@@ -511,26 +546,34 @@ export function ArticlesPage(props: Props) {
                             </a>
                             <div className="metaText">
                               {article.source} · {article.tag} · {article.language || "язык не определён"} · {article.raw_text_chars || 0} симв.
-                              {article.text_truncated ? " · неполный текст" : ""}
-                              {article.relevant === false ? " · нерелевантно" : ""}
                               {article.digest ? " · в дайджесте" : ""}
-                              {article.future_date ? ` · публикация ${article.published_at || ""} (в будущем)` : ""}
                             </div>
+                            {article.relevant === false || article.text_truncated || article.future_date ? (
+                              <div className="articleFlags">
+                                {article.relevant === false ? <span className="miniPill bad">нерелевантно</span> : null}
+                                {article.text_truncated ? <span className="miniPill warn">неполный текст</span> : null}
+                                {article.future_date ? <span className="miniPill warn">дата в будущем</span> : null}
+                              </div>
+                            ) : null}
                           </div>
-                          <div className="articleMetric">{formatDate(article.collected || article.date)}</div>
-                          <div className={`miniPill ${scoreClass(article.score)}`}>{Math.round(article.score || 0)}</div>
-                          <div className="miniPill ok">{article.rating || "—"}</div>
-                          <label className="field">
-                            <span>Статус</span>
-                            <select value={article.status} onChange={(event) => void handleStatusChange(article.id, event.target.value as Article["status"])}>
-                              {STATUSES.map((option) => (
-                                <option key={option} value={option}>
-                                  {STATUS_LABELS[option]}
-                                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+                          <div className="articleCardMetrics">
+                            <div className="articleMetric">{formatDate(article.collected || article.date)}</div>
+                            <div className={`miniPill ${ratingClass(article.rating)}`} title="Итоговая оценка релевантности">
+                              {Math.round(article.score || 0)}
+                            </div>
+                            <div className={`miniPill ${ratingClass(article.rating)}`}>{article.rating || "—"}</div>
+                            <label className="field">
+                              <span>Статус</span>
+                              <select value={article.status} onChange={(event) => void handleStatusChange(article.id, event.target.value as Article["status"])}>
+                                {STATUSES.map((option) => (
+                                  <option key={option} value={option}>
+                                    {STATUS_LABELS[option]}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                        </div>
                         {open ? (
                           <div className="articleDetailReact">
                             <div className="articleDetailGrid">
@@ -550,9 +593,11 @@ export function ArticlesPage(props: Props) {
                                       <div className="criterionCardReact" key={item.name}>
                                         <div className="criterionTopReact">
                                           <span>{item.name}</span>
-                                          <span>{Math.round(Number(item.final_score || 0))}/100</span>
+                                          <span className={`miniPill ${scoreClass(Number(item.final_score || 0))}`}>
+                                            {Math.round(Number(item.final_score || 0))}/100
+                                          </span>
                                         </div>
-                                        <div className="barReact">
+                                        <div className={`barReact ${scoreClass(Number(item.final_score || 0))}`}>
                                           <span style={{ width: `${Math.max(0, Math.min(100, Number(item.final_score || 0)))}%` }} />
                                         </div>
                                         {item.rationale ? <div className="metaText">{item.rationale}</div> : null}
@@ -601,11 +646,30 @@ function StatCard(props: { label: string; value: number }) {
   );
 }
 
+// Шкала цвета согласована с backend score_label (pipeline.py: пороги 80/65/40):
+// «Высокая»/«Выше средней» (>=65) → зелёный, «Средняя» (>=40) → оранжевый,
+// «Низкая» (<40) → красный, нет оценки → нейтральный серый.
 function scoreClass(score: number) {
-  if (score >= 80) return "ok";
-  if (score >= 60) return "warn";
-  if (score < 25) return "bad";
-  return "muted";
+  if (!score) return "muted";
+  if (score >= 65) return "ok";
+  if (score >= 40) return "warn";
+  return "bad";
+}
+
+// Текстовый рейтинг (score_label) красим в тот же тон, что и число, — чтобы
+// метка и оценка совпадали по цвету.
+function ratingClass(rating: string) {
+  switch ((rating || "").trim()) {
+    case "Высокая":
+    case "Выше средней":
+      return "ok";
+    case "Средняя":
+      return "warn";
+    case "Низкая":
+      return "bad";
+    default:
+      return "muted";
+  }
 }
 
 function formatDate(value: string | null) {

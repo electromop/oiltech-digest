@@ -53,6 +53,26 @@ export function diagnosticVerdictLabel(verdict?: string) {
   return diagnosticVerdictLabels[verdict] || verdict;
 }
 
+// Тон пилюли диагностики по серьёзности вердикта: жёсткие сбои доступа/конфига —
+// красный (bad), «нашли, но не извлекли» — оранжевый (warn), ok — зелёный.
+const DIAGNOSTIC_BAD_VERDICTS = new Set([
+  "missing_listing_url",
+  "listing_fetch_failed",
+  "listing_render_failed",
+  "preview_fetch_failed",
+  "rss_fetch_failed",
+  "missing_or_invalid_channel_url",
+  "missing_rss_url",
+  "playwright_unavailable",
+  "article_fetch_failed",
+  "article_render_failed",
+]);
+
+export function diagnosticVerdictClass(verdict?: string): "ok" | "warn" | "bad" {
+  if (!verdict || verdict === "ok") return "ok";
+  return DIAGNOSTIC_BAD_VERDICTS.has(verdict) ? "bad" : "warn";
+}
+
 export function normalizePatch(patch: SourcePatch): SourcePatch {
   const payload: Partial<Record<keyof SourcePatch, SourcePatch[keyof SourcePatch]>> = {};
   Object.entries(patch).forEach(([key, value]) => {

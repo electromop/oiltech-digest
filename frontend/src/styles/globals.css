@@ -64,6 +64,23 @@ option {
   --brand: #1d4ed8;
   --brand-soft: rgba(29, 78, 216, 0.12);
   --radius: 16px;
+  /* Единая семантика статусов — один источник правды для всех плашек/пилюль.
+     Шкала: ok=хорошо/высокий скор, warn=средне/внимание, bad=плохо/низкий скор,
+     muted=нейтрально/нет данных, info=требует действия (например «есть правки»).
+     Пороги скора согласованы с backend score_label (pipeline.py: 80/65/40). */
+  --sem-ok-fg: #166534;
+  --sem-ok-bg: rgba(34, 197, 94, 0.14);
+  --sem-ok-border: rgba(34, 197, 94, 0.22);
+  --sem-warn-fg: #b45309;
+  --sem-warn-bg: rgba(245, 158, 11, 0.16);
+  --sem-warn-border: rgba(245, 158, 11, 0.24);
+  --sem-bad-fg: #b91c1c;
+  --sem-bad-bg: rgba(239, 68, 68, 0.14);
+  --sem-bad-border: rgba(239, 68, 68, 0.24);
+  --sem-muted-fg: var(--text-muted);
+  --sem-muted-bg: rgba(226, 232, 240, 0.7);
+  --sem-info-fg: var(--brand);
+  --sem-info-bg: var(--brand-soft);
 }
 
 * {
@@ -281,10 +298,10 @@ button {
 }
 
 .content {
-  padding: 14px 16px 20px;
+  padding: 16px clamp(14px, 2vw, 22px) 24px;
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 14px;
 }
 
 .mobileNav {
@@ -293,14 +310,15 @@ button {
 
 .screenStack {
   display: grid;
-  gap: 10px;
+  gap: 14px;
 }
 
 .screenHeader {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
   align-items: start;
+  flex-wrap: wrap;
   min-height: 32px;
 }
 
@@ -316,8 +334,15 @@ button {
 .panelHeader {
   display: flex;
   gap: 12px;
+  row-gap: 10px;
   justify-content: space-between;
-  align-items: start;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* heroGrid — это сетка из двух панелей, не строка действий: align по верху. */
+.heroGrid {
+  align-items: stretch;
 }
 
 .pageHeader h1,
@@ -363,7 +388,7 @@ button {
   background: var(--surface);
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow);
-  padding: 12px;
+  padding: clamp(14px, 1.6vw, 18px);
 }
 
 .field {
@@ -443,7 +468,7 @@ button {
 .stepList {
   margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
 }
 
@@ -529,15 +554,15 @@ button {
 .sourceHealthStats {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
 }
 
 .sourceTriageStats {
   margin-top: 8px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
 }
 
 .sourceStatCard {
@@ -582,6 +607,19 @@ button {
   font-weight: 900;
 }
 
+/* Число несёт цвет смысла — иначе бледные фоны фильтров неразличимы. */
+.sourceStatCard.problem .sourceStatValue {
+  color: var(--sem-bad-fg);
+}
+
+.sourceStatCard.warning .sourceStatValue {
+  color: var(--sem-warn-fg);
+}
+
+.sourceStatCard.success .sourceStatValue {
+  color: var(--sem-ok-fg);
+}
+
 .sourceStatLabel {
   font-size: 0.74rem;
   color: var(--text-muted);
@@ -619,10 +657,10 @@ button {
 .digestActionGroup {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
   min-height: 54px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(248, 250, 252, 0.82);
@@ -770,7 +808,7 @@ button {
 .digestPreviewHighlights {
   padding: 12px 18px 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
 }
 
@@ -909,8 +947,8 @@ button {
 
 .statsGridReact {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
 }
 
 .statCardReact {
@@ -928,7 +966,7 @@ button {
 }
 
 .jobsStats {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .jobsStats .statCardReact strong {
@@ -1068,12 +1106,12 @@ button {
 }
 
 .benchmarkOk {
-  color: #166534;
+  color: var(--sem-ok-fg);
   font-weight: 700;
 }
 
 .benchmarkWarn {
-  color: #b45309;
+  color: var(--sem-warn-fg);
   font-weight: 700;
 }
 
@@ -1115,23 +1153,23 @@ button {
 }
 
 .jobStatus.queued {
-  color: #1d4ed8;
-  background: rgba(37, 99, 235, 0.12);
+  color: var(--sem-info-fg);
+  background: var(--sem-info-bg);
 }
 
 .jobStatus.running {
-  color: #b45309;
-  background: rgba(245, 158, 11, 0.16);
+  color: var(--sem-warn-fg);
+  background: var(--sem-warn-bg);
 }
 
 .jobStatus.ok {
-  color: #166534;
-  background: rgba(34, 197, 94, 0.14);
+  color: var(--sem-ok-fg);
+  background: var(--sem-ok-bg);
 }
 
 .jobStatus.failed {
-  color: #b91c1c;
-  background: rgba(239, 68, 68, 0.14);
+  color: var(--sem-bad-fg);
+  background: var(--sem-bad-bg);
 }
 
 .jobError {
@@ -1268,6 +1306,12 @@ button {
   margin-top: 8px;
 }
 
+.viewTabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .articlesAdvancedGrid {
   margin-top: 8px;
   display: grid;
@@ -1353,11 +1397,19 @@ button {
 }
 
 .articleCardTop {
-  display: grid;
-  grid-template-columns: 40px minmax(320px, 1.7fr) 112px 92px 136px 160px;
-  gap: 6px;
+  display: flex;
   align-items: center;
-  padding: 8px 10px;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+}
+
+.articleCardMetrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .expandButtonReact {
@@ -1383,7 +1435,22 @@ button {
 }
 
 .articleCardMain {
+  flex: 1 1 260px;
   min-width: 0;
+}
+
+.articleFlags {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.articleGroupHeadMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .articleTitleReact {
@@ -1412,7 +1479,8 @@ button {
 
 .articleCardTop .field {
   gap: 4px;
-  max-width: 150px;
+  min-width: 132px;
+  max-width: 160px;
 }
 
 .articleCardTop .field span {
@@ -1501,6 +1569,19 @@ button {
   background: linear-gradient(90deg, #1d4ed8, #38bdf8);
 }
 
+/* Заливка бара отражает уровень критерия (та же шкала, что у пилюль скора). */
+.barReact.ok span {
+  background: linear-gradient(90deg, #15803d, #22c55e);
+}
+
+.barReact.warn span {
+  background: linear-gradient(90deg, #b45309, #f59e0b);
+}
+
+.barReact.bad span {
+  background: linear-gradient(90deg, #b91c1c, #ef4444);
+}
+
 .loadingOverlay {
   position: absolute;
   inset: 0;
@@ -1572,7 +1653,7 @@ button {
 
 .settingsGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px 16px;
   align-items: start;
 }
@@ -1599,14 +1680,14 @@ button {
 }
 
 .dangerButton {
-  color: #b91c1c;
+  color: var(--sem-bad-fg);
   border-color: rgba(239, 68, 68, 0.26);
   background: rgba(254, 242, 242, 0.92);
 }
 
 .warningPill {
-  color: #b45309;
-  background: rgba(245, 158, 11, 0.12);
+  color: var(--sem-warn-fg);
+  background: var(--sem-warn-bg);
 }
 
 .tagRowRoot,
@@ -1664,8 +1745,8 @@ button {
 .sourceCardGrid {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
 }
 
 .sourceCardReact {
@@ -1717,7 +1798,7 @@ button {
 .diagnosticsHeader,
 .authActions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -1788,28 +1869,42 @@ button {
 }
 
 .miniPill.ok {
-  color: #166534;
-  background: rgba(34, 197, 94, 0.14);
+  color: var(--sem-ok-fg);
+  background: var(--sem-ok-bg);
 }
 
 .miniPill.warn {
-  color: #b45309;
-  background: rgba(245, 158, 11, 0.16);
+  color: var(--sem-warn-fg);
+  background: var(--sem-warn-bg);
 }
 
 .miniPill.bad {
-  color: #b91c1c;
-  background: rgba(239, 68, 68, 0.14);
+  color: var(--sem-bad-fg);
+  background: var(--sem-bad-bg);
 }
 
 .miniPill.muted {
-  color: var(--text-muted);
-  background: rgba(226, 232, 240, 0.7);
+  color: var(--sem-muted-fg);
+  background: var(--sem-muted-bg);
 }
 
-.miniPill.draft {
-  color: #0f172a;
-  background: rgba(125, 211, 252, 0.22);
+/* draft/info = намеренный «info»-токен (требует действия), не случайный цвет. */
+.miniPill.draft,
+.miniPill.info {
+  color: var(--sem-info-fg);
+  background: var(--sem-info-bg);
+}
+
+/* Плашка «идёт работа» с живой пульсирующей точкой (без процентов и номеров). */
+.pendingPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pendingPill .loaderDot {
+  width: 7px;
+  height: 7px;
 }
 
 .metaText {
@@ -1954,11 +2049,11 @@ button {
   border-left-color: #dc2626;
 }
 
+/* ≤1100px: сайдбар прячется — и сразу появляется нижняя навигация (раньше в
+   диапазоне 721–1100px не было ни того, ни другого). Карточные/статистические
+   сетки текучи через auto-fit, поэтому форсим 1fr только у разнородных раскладок. */
 @media (max-width: 1100px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-
+  .shell,
   .shell.sidebarCollapsed {
     grid-template-columns: 1fr;
   }
@@ -1967,17 +2062,16 @@ button {
     display: none;
   }
 
+  /* Запас снизу под фиксированную нижнюю навигацию. */
+  .content {
+    padding-bottom: 96px;
+  }
+
   .heroGrid,
-  .stepList,
-  .statsGridReact,
-  .sourceCardGrid,
-  .jobsStats,
   .sourceConfigGridReact,
   .digestToolbar,
   .digestSocialRow,
-  .digestPreviewHighlights,
   .digestLayout,
-  .settingsGrid,
   .tagRowRoot,
   .tagRowChild,
   .userAddGrid,
@@ -1985,50 +2079,16 @@ button {
   .articleDetailGrid {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 720px) {
-  .content {
-    padding: 14px 12px 88px;
-  }
-
-  .pageHeader,
-  .panelHeader,
-  .screenHeader {
-    flex-direction: column;
-  }
-
+  /* Фикс-колоночные формы фильтров на десктопе (>1100px) сохраняют утверждённую
+     раскладку, но в планшетной полосе текут в авто-сетку, а не вылезают за вьюпорт
+     (на ≤720px ниже они уже сворачиваются в одну колонку). */
   .sourceCreateGrid,
   .sourceFiltersGrid,
-  .jobsFilters,
-  .maintenanceGrid,
-  .sourceHealthStats,
   .digestFiltersGrid,
-  .digestFiltersRow,
-  .digestFiltersRowSecondary,
-  .digestToolbar,
-  .articlesAdvancedGrid,
-  .articlesFiltersRow,
-  .articlesFiltersRowSecondary,
   .articlesFiltersGrid,
-  .articleCardTop {
-    grid-template-columns: 1fr;
-  }
-
-  .sourceTop {
-    grid-template-columns: 1fr;
-  }
-
-  .benchmarkTable {
-    overflow-x: auto;
-  }
-
-  .benchmarkRow {
-    min-width: 620px;
-  }
-
-  .externalQueueRow {
-    grid-template-columns: 1fr 1fr;
+  .jobsFilters {
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   }
 
   .mobileNav {
@@ -2037,8 +2097,7 @@ button {
     right: 10px;
     bottom: 10px;
     z-index: 50;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    display: flex;
     gap: 6px;
     padding: 8px;
     border-radius: 18px;
@@ -2046,10 +2105,14 @@ button {
     background: rgba(255, 255, 255, 0.94);
     backdrop-filter: blur(18px);
     box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+    overflow-x: auto;
   }
 
+  /* flex с равными долями адаптирует панель под любое число пунктов
+     (2 у обычного пользователя, до 6 у администратора). */
   .mobileNavButton {
-    min-width: 0;
+    flex: 1 1 0;
+    min-width: 56px;
     display: grid;
     justify-items: center;
     gap: 5px;
@@ -2079,5 +2142,50 @@ button {
     line-height: 1.1;
     font-weight: 800;
     text-align: center;
+  }
+}
+
+/* ≤720px: телефоны — заголовки в столбик, фильтры в одну колонку, узкие таблицы
+   со скроллом. Карточка статьи уже flex и переносится сама, грид не форсим. */
+@media (max-width: 720px) {
+  .content {
+    padding-inline: 12px;
+  }
+
+  .pageHeader,
+  .panelHeader,
+  .screenHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .sourceCreateGrid,
+  .sourceFiltersGrid,
+  .jobsFilters,
+  .maintenanceGrid,
+  .digestFiltersGrid,
+  .digestFiltersRow,
+  .digestFiltersRowSecondary,
+  .articlesAdvancedGrid,
+  .articlesFiltersRow,
+  .articlesFiltersRowSecondary,
+  .articlesFiltersGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sourceTop {
+    grid-template-columns: 1fr;
+  }
+
+  .benchmarkTable {
+    overflow-x: auto;
+  }
+
+  .benchmarkRow {
+    min-width: 620px;
+  }
+
+  .externalQueueRow {
+    grid-template-columns: 1fr 1fr;
   }
 }

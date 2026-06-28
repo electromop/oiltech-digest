@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listArticles, updateArticle } from "../../api/articles";
 import { enqueueDigestExport, getDigestBranding, saveDigestBranding } from "../../api/digest";
 import { downloadJobResult, getJob } from "../../api/jobs";
-import type { Article, BackgroundJob, DigestBranding, DigestBrandingSocial, DigestHighlightCard, DigestHighlightRules } from "../../api/types";
+import type { Article, DigestBranding, DigestBrandingSocial, DigestHighlightCard, DigestHighlightRules } from "../../api/types";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -26,8 +26,9 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   const [month, setMonth] = useState("");
   const [scoreMin, setScoreMin] = useState(0);
   const [scoreMax, setScoreMax] = useState(100);
-  const [draftInfo, setDraftInfo] = useState<string>("");
-  const [exportJobId, setExportJobId] = useState<number | null>(null);
+  // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML») — без понятий
+  // «задача/очередь/№N»: пользователь видит процесс и результат, а не job-runner.
+  const [exporting, setExporting] = useState<string | null>(null);
 
   useEffect(() => {
     void reload();
@@ -238,15 +239,12 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   async function handleDigestExport(format: "pdf" | "docx" | "html") {
     try {
       setBusy(true);
+      setExporting(format.toUpperCase());
+      // Документ собирается на сервере; для пользователя это просто ожидание файла.
       const queued = await enqueueDigestExport(month, 200, scoreMin, format);
-      setExportJobId(queued.job.id);
-      setDraftInfo(`задача экспорта №${queued.job.id}: ${statusLabel(queued.job.status)}`);
-      showToast(`Экспорт поставлен в очередь: задача №${queued.job.id}`);
-
       const finished = await waitForExportJob(queued.job.id);
-      setDraftInfo(`задача экспорта №${finished.id}: ${statusLabel(finished.status)}`);
       if (finished.status !== "ok") {
-        throw new Error(finished.error || "Экспорт завершился ошибкой");
+        throw new Error(finished.error || "Не удалось подготовить документ");
       }
 
       const file = await downloadJobResult(finished.id);
@@ -258,24 +256,26 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      showToast(`Экспорт готов: ${file.filename}`);
+      showToast(`Документ готов: ${file.filename}`);
     } catch (error) {
-      handleError(error, "Не удалось скачать экспорт");
+      handleError(error, "Не удалось подготовить документ");
     } finally {
       setBusy(false);
+      setExporting(null);
     }
   }
 
+  // Ждём готовности файла, опрашивая сервер. Прогресс/номер наружу не показываем —
+  // только нейтральный спиннер «Готовим документ…».
   async function waitForExportJob(jobId: number) {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       const job = await getJob(jobId);
-      setDraftInfo(`задача экспорта №${job.id}: ${statusLabel(job.status)} · ${Math.round(job.progress)}%`);
       if (job.status === "ok" || job.status === "failed") {
         return job;
       }
-      await sleep(1500);
+      await sleep(2000);
     }
-    throw new Error(`Job #${jobId} не завершилась за отведённое время`);
+    throw new Error("Документ готовится дольше обычного — попробуйте ещё раз чуть позже");
   }
 
   return (
@@ -288,7 +288,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
       </header>
 
       <section className="panel">
-        {busy ? <InlineLoader label="Готовим экспорт в фоне…" /> : null}
+        {busy ? <InlineLoader label={exporting ? `Готовим документ ${exporting}…` : "Готовим документ…"} /> : null}
         <div className="panelHeader">
           <h2>Выборка дайджеста</h2>
         </div>
@@ -384,18 +384,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
             </button>
           </div>
         </div>
-
-        {draftInfo ? (
-          <div className="digestDraftInfo metaText">
-            {draftInfo}
-            {exportJobId ? (
-              <>
-                {" · "}
-                <a href="?screen=jobs">Открыть задачи</a>
-              </>
-            ) : null}
-          </div>
-        ) : null}
 
         {isAdmin && branding ? (
           <div className="settingsCard digestBrandingCard">
@@ -727,13 +715,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function statusLabel(status: BackgroundJob["status"]) {
-  if (status === "queued") return "в очереди";
-  if (status === "running") return "в работе";
-  if (status === "ok") return "готово";
-  return "ошибка";
 }
 
 function parseKeywordList(value: string) {

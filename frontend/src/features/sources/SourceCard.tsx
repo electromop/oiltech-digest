@@ -1,5 +1,5 @@
 import type { Source, SourceDiagnostics, SourceHealth, SourcePatch } from "../../api/types";
-import { diagnosticText, diagnosticVerdictLabel, getSourceTriage, healthClass, healthLabel } from "./sourceUtils";
+import { diagnosticText, diagnosticVerdictClass, diagnosticVerdictLabel, getSourceTriage, healthClass, healthLabel } from "./sourceUtils";
 
 type Props = {
   source: Source;
@@ -41,7 +41,12 @@ export function SourceCard(props: Props) {
             <span className="metaText">{(source.parse_strategy || "—") + " · " + (source.source_type || "—")}</span>
             {health?.last_article_at ? <span className="metaText">последняя статья {String(health.last_article_at).slice(0, 10)}</span> : null}
             {hasDraft ? <span className="miniPill draft">есть правки</span> : null}
-            {pendingLabel ? <span className="miniPill muted">{pendingLabel}</span> : null}
+            {pendingLabel ? (
+              <span className="miniPill info pendingPill">
+                <span className="loaderDot" />
+                {pendingLabel}
+              </span>
+            ) : null}
           </div>
         </div>
         <label className="toggleLabel">
@@ -131,7 +136,7 @@ function DiagnosticsPanel({ diagnostic }: { diagnostic: SourceDiagnostics }) {
     <div className="diagnosticsPanel">
       <div className="diagnosticsHeader">
         <strong>Диагностика</strong>
-        <span className={`miniPill ${diagnostic.verdict === "ok" ? "ok" : "muted"}`}>{diagnosticVerdictLabel(diagnostic.verdict)}</span>
+        <span className={`miniPill ${diagnosticVerdictClass(diagnostic.verdict)}`}>{diagnosticVerdictLabel(diagnostic.verdict)}</span>
       </div>
       <pre>{diagnosticText(diagnostic)}</pre>
     </div>
