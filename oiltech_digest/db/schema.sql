@@ -317,7 +317,10 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 CREATE INDEX IF NOT EXISTS idx_background_jobs_status_created ON background_jobs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_kind_created ON background_jobs(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(queue_name, status, run_after, created_at);
-CREATE INDEX IF NOT EXISTS idx_background_jobs_user_created ON background_jobs(user_id, created_at DESC);
+-- ВНИМАНИЕ: индекс по user_id создаётся НИЖЕ, в идемпотентной секции — ПОСЛЕ
+-- `ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS user_id`. Здесь (в CREATE-секции)
+-- его держать нельзя: на существующей БД `CREATE TABLE IF NOT EXISTS` — no-op, колонки
+-- user_id ещё нет → init-db падает `column "user_id" does not exist`.
 
 -- Idempotent upgrades for databases initialized before these columns existed.
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
