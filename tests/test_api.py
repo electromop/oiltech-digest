@@ -214,10 +214,14 @@ def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
 def test_create_monthly_digest_endpoint(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
     monkeypatch.setattr(
         api,
         "save_digest_draft",
-        lambda month, limit=20, min_score=60, user_id=None: {
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: captured.update(
+            {"month": month, "limit": limit, "min_score": min_score, "user_id": user_id, **kwargs}
+        )
+        or {
             "id": 9,
             "month": month,
             "title": f"Digest {month}",
@@ -230,7 +234,7 @@ def test_create_monthly_digest_endpoint(monkeypatch):
         client = TestClient(app)
         response = client.post(
             "/api/monthly-digests",
-            json={"month": "2026-05", "limit": 7, "min_score": 65},
+            json={"month": "2026-05", "limit": 7, "min_score": 65, "max_score": 90, "search": "drilling", "top_tag": "Бурение"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -243,6 +247,165 @@ def test_create_monthly_digest_endpoint(monkeypatch):
         "status": "draft",
         "items": 7,
         "min_score": 65,
+    }
+    assert captured == {
+        "month": "2026-05",
+        "limit": 7,
+        "min_score": 65.0,
+        "max_score": 90.0,
+        "search": "drilling",
+        "top_tag": "Бурение",
+        "user_id": 1,
+    }
+
+
+def test_digest_content_endpoint_passes_filters(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api,
+        "build_digest_content",
+        lambda month="", limit=100, min_score=0, user_id=None, **kwargs: captured.update(
+            {"month": month, "limit": limit, "min_score": min_score, "user_id": user_id, **kwargs}
+        )
+        or {"issue": {"title": "Digest"}, "news": [], "items": []},
+    )
+    try:
+        client = TestClient(app)
+        response = client.get("/api/digest-content?month=2026-06&limit=30&min_score=55&max_score=88&search=drilling&top_tag=%D0%91%D1%83%D1%80%D0%B5%D0%BD%D0%B8%D0%B5")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {
+        "month": "2026-06",
+        "limit": 30,
+        "min_score": 55.0,
+        "max_score": 88.0,
+        "search": "drilling",
+        "top_tag": "Бурение",
+        "user_id": 1,
+    }
+
+
+def test_update_monthly_digest_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "save_monthly_digest",
+        lambda month, title, items, status="draft", user_id=None: captured.update(
+            {"month": month, "title": title, "items": items, "status": status, "user_id": user_id}
+        )
+        or {"id": 12, "user_id": user_id, "month": month, "title": title, "status": status, "items": len(items)},
+    )
+    try:
+        client = TestClient(app)
+        response = client.put(
+            "/api/monthly-digests/2026-06",
+            json={
+                "title": "Digest 2026-06",
+                "status": "draft",
+                "items": [
+                    {"article_id": 42, "section": "Технологии / Бурение", "editor_note": "First"},
+                    {"article_id": 43, "section": "Рынок / ОФС", "editor_note": "Second"},
+                ],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 12,
+        "user_id": 1,
+        "month": "2026-06",
+        "title": "Digest 2026-06",
+        "status": "draft",
+        "items": 2,
+    }
+    assert captured == {
+        "month": "2026-06",
+        "title": "Digest 2026-06",
+        "status": "draft",
+        "user_id": 1,
+        "items": [
+            {"article_id": 42, "section": "Технологии / Бурение", "editor_note": "First"},
+            {"article_id": 43, "section": "Рынок / ОФС", "editor_note": "Second"},
+        ],
+    }
+
+
+def test_get_monthly_digest_endpoint_scopes_to_user(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "test@example.com", "role": "user"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "get_monthly_digest",
+        lambda month, user_id=None: captured.update({"month": month, "user_id": user_id})
+        or {
+            "id": 14,
+            "user_id": user_id,
+            "month": month,
+            "title": f"Digest {month}",
+            "status": "draft",
+            "items": [],
+        },
+    )
+    try:
+        client = TestClient(app)
+        response = client.get("/api/monthly-digests/2026-06")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {"month": "2026-06", "user_id": 7}
+    assert response.json()["user_id"] == 7
+
+
+def test_update_monthly_digest_endpoint_allows_empty_issue(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "save_monthly_digest",
+        lambda month, title, items, status="draft", user_id=None: captured.update(
+            {"month": month, "title": title, "items": items, "status": status, "user_id": user_id}
+        )
+        or {"id": 13, "user_id": user_id, "month": month, "title": title, "status": status, "items": len(items)},
+    )
+    try:
+        client = TestClient(app)
+        response = client.put(
+            "/api/monthly-digests/2026-07",
+            json={
+                "title": "Digest 2026-07",
+                "status": "draft",
+                "items": [],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 13,
+        "user_id": 1,
+        "month": "2026-07",
+        "title": "Digest 2026-07",
+        "status": "draft",
+        "items": 0,
+    }
+    assert captured == {
+        "month": "2026-07",
+        "title": "Digest 2026-07",
+        "status": "draft",
+        "user_id": 1,
+        "items": [],
     }
 
 
@@ -402,7 +565,13 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
                 "source": "World Oil",
                 "tag": "Бурение",
                 "status": "digest",
+                "language": "en",
                 "min_score": 80,
+                "max_score": 95,
+                "date_from": "2026-06-01",
+                "date_to": "2026-06-30",
+                "sort": "date_desc",
+                "changed_only": True,
                 "limit": 25,
             },
         )
@@ -423,9 +592,15 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert "(t.name = %s OR parent.name = %s)" in articles_sql
     assert "user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s" in articles_sql  # пер-юзерный статус (#12)
     assert "COALESCE(uas.status, 'new') = %s" in articles_sql
+    assert "COALESCE(uas.status, 'new') <> 'new'" in articles_sql
+    assert "a.language = %s" in articles_sql
     assert "COALESCE(sc.total_score, 0) >= %s" in articles_sql
+    assert "COALESCE(sc.total_score, 0) <= %s" in articles_sql
+    assert "COALESCE(a.published_at::date, a.collected_at::date) >= %s" in articles_sql
+    assert "COALESCE(a.published_at::date, a.collected_at::date) <= %s" in articles_sql
     # user_id — первый параметр (LEFT JOIN), затем фильтры, затем limit.
-    assert articles_params == [1, "%drilling%", "World Oil", "Бурение", "Бурение", "digest", 80.0, 25]
+    assert "ORDER BY a.published_at DESC NULLS LAST" in articles_sql
+    assert articles_params == [1, "%drilling%", "World Oil", "Бурение", "Бурение", "digest", "en", 80.0, 95.0, "2026-06-01", "2026-06-30", 25]
 
 
 def test_update_source_persists_non_rss_scraper_fields(monkeypatch):
@@ -670,7 +845,7 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
         client = TestClient(app)
         response = client.post(
             "/api/jobs/digest-export",
-            json={"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60},
+            json={"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60, "max_score": 95, "search": "drilling", "top_tag": "Бурение"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -678,8 +853,17 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
     assert response.status_code == 200
     assert captured == {
         "kind": "digest_export",
-        "payload": {"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60.0, "user_id": 1},
-        "kwargs": {"queue_name": "playwright", "execution_region": "ru", "capability": "playwright"},
+        "payload": {
+            "month": "2026-06",
+            "export_format": "pdf",
+            "limit": 25,
+            "min_score": 60.0,
+            "max_score": 95.0,
+            "search": "drilling",
+            "top_tag": "Бурение",
+            "user_id": 1,
+        },
+        "kwargs": {"user_id": 1, "queue_name": "playwright", "execution_region": "ru", "capability": "playwright"},
     }
     assert response.json()["job"]["status"] == "queued"
     assert response.json()["job"]["queue"] == "playwright"
@@ -760,9 +944,82 @@ def test_enqueue_process_endpoint_can_route_to_external_ai(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert captured == {"queue_name": "external-ai", "execution_region": "external", "capability": "openai"}
+    assert captured == {"user_id": 1, "queue_name": "external-ai", "execution_region": "external", "capability": "openai"}
     assert response.json()["job"]["queue"] == "external-ai"
     assert response.json()["job"]["execution_region"] == "external"
+
+
+def test_jobs_endpoints_scope_non_admin_to_own_jobs(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "user@example.com", "role": "user"}
+    captured = {}
+
+    def fake_list_background_jobs(**kwargs):
+        captured["list"] = kwargs
+        return []
+
+    def fake_get_background_job(job_id, **kwargs):
+        captured["get"] = {"job_id": job_id, **kwargs}
+        return None
+
+    monkeypatch.setattr(api.repository, "list_background_jobs", fake_list_background_jobs)
+    monkeypatch.setattr(api.repository, "get_background_job", fake_get_background_job)
+    try:
+        client = TestClient(app)
+        list_response = client.get("/api/jobs?kind=digest_export")
+        get_response = client.get("/api/jobs/42")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert list_response.status_code == 200
+    assert captured["list"]["user_id"] == 7
+    assert get_response.status_code == 404
+    assert captured["get"] == {"job_id": 42, "user_id": 7}
+
+
+def test_jobs_endpoints_allow_admin_to_see_all_jobs(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "admin@example.com", "role": "admin"}
+    captured = {}
+
+    def fake_list_background_jobs(**kwargs):
+        captured["list"] = kwargs
+        return []
+
+    def fake_get_background_job(job_id, **kwargs):
+        captured["get"] = {"job_id": job_id, **kwargs}
+        return {
+            "id": job_id,
+            "kind": "digest_export",
+            "queue_name": "default",
+            "execution_region": "ru",
+            "capability": None,
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": 3,
+            "run_after": None,
+            "payload_json": {},
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    monkeypatch.setattr(api.repository, "list_background_jobs", fake_list_background_jobs)
+    monkeypatch.setattr(api.repository, "get_background_job", fake_get_background_job)
+    try:
+        client = TestClient(app)
+        list_response = client.get("/api/jobs")
+        get_response = client.get("/api/jobs/42")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert list_response.status_code == 200
+    assert captured["list"]["user_id"] is None
+    assert get_response.status_code == 200
+    assert captured["get"] == {"job_id": 42}
 
 
 def test_external_worker_claim_requires_token(monkeypatch):
@@ -882,7 +1139,7 @@ def test_external_worker_progress_and_complete_validate_lease(monkeypatch):
         lambda job_id, **kwargs: complete_calls.append((job_id, kwargs)) or True,
     )
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "digest_export"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
     client = TestClient(api.app)
 
     progress = client.post(
@@ -908,8 +1165,8 @@ def test_external_worker_complete_applies_external_ai_result(monkeypatch):
     applied = []
     completed = []
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "process_articles"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
-    monkeypatch.setattr(api.external_ai, "apply_process_result", lambda result: applied.append(result) or {"articles": 1})
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.external_ai, "apply_process_result", lambda result, **kwargs: applied.append(result) or {"articles": 1})
     monkeypatch.setattr(
         api.repository,
         "finish_external_background_job",
@@ -933,7 +1190,7 @@ def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
     applied = []
     completed = []
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "scrape_source"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
     monkeypatch.setattr(api.external_fetch, "apply_scrape_result", lambda result: applied.append(result) or {"inserted": 1})
     monkeypatch.setattr(
         api.repository,
@@ -956,7 +1213,7 @@ def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
 def test_external_worker_complete_rejects_inactive_lease(monkeypatch):
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "digest_export"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: False)
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: False)
     monkeypatch.setattr(api.repository, "finish_external_background_job", lambda job_id, **kwargs: False)
     client = TestClient(api.app)
 

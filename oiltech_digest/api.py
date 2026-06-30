@@ -143,6 +143,21 @@ class DigestRequest(BaseModel):
     month: str
     limit: int = 20
     min_score: float = 60
+    max_score: float | None = None
+    search: str = ""
+    top_tag: str = ""
+
+
+class MonthlyDigestItemIn(BaseModel):
+    article_id: int
+    section: str | None = None
+    editor_note: str | None = None
+
+
+class MonthlyDigestUpdateRequest(BaseModel):
+    title: str | None = None
+    status: str = "draft"
+    items: list[MonthlyDigestItemIn]
 
 
 class DigestExportJobRequest(BaseModel):
@@ -150,6 +165,9 @@ class DigestExportJobRequest(BaseModel):
     export_format: str = "pdf"
     limit: int = 100
     min_score: float = 0
+    max_score: float | None = None
+    search: str = ""
+    top_tag: str = ""
 
 
 class MaintenanceCleanupRequest(BaseModel):
@@ -407,7 +425,13 @@ def list_articles(
     source: str | None = None,
     tag: str | None = None,
     status: str | None = None,
+    language: str | None = None,
     min_score: float | None = None,
+    max_score: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sort: str = Query("score_desc", pattern="^(date_desc|score_desc|score_asc)$"),
+    changed_only: bool = False,
     limit: int = Query(1000, ge=1, le=5000),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
@@ -427,9 +451,23 @@ def list_articles(
     if status:
         clauses.append("COALESCE(uas.status, 'new') = %s")
         params.append(status)
+    if changed_only:
+        clauses.append("COALESCE(uas.status, 'new') <> 'new'")
+    if language:
+        clauses.append("a.language = %s")
+        params.append(language)
     if min_score is not None:
         clauses.append("COALESCE(sc.total_score, 0) >= %s")
         params.append(min_score)
+    if max_score is not None:
+        clauses.append("COALESCE(sc.total_score, 0) <= %s")
+        params.append(max_score)
+    if date_from:
+        clauses.append("COALESCE(a.published_at::date, a.collected_at::date) >= %s")
+        params.append(date_from)
+    if date_to:
+        clauses.append("COALESCE(a.published_at::date, a.collected_at::date) <= %s")
+        params.append(date_to)
     # Скрываем отклонённые гейтом релевантности статьи (relevant=false), как это уже
     # делает дайджест. relevant IS NULL (ещё не проверенные) остаются видны.
     clauses.append("c.relevant IS NOT FALSE")
@@ -437,6 +475,11 @@ def list_articles(
     # ещё в БД (восстановимы recheck-unmark до recheck-purge).
     clauses.append("NOT a.pending_deletion")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    order_by = {
+        "date_desc": "a.published_at DESC NULLS LAST, COALESCE(sc.total_score, 0) DESC, a.id DESC",
+        "score_asc": "COALESCE(sc.total_score, 0) ASC, a.published_at DESC NULLS LAST, a.id DESC",
+        "score_desc": "COALESCE(sc.total_score, 0) DESC, a.published_at DESC NULLS LAST, a.id DESC",
+    }[sort]
     # user_id — первый %s (для LEFT JOIN user_article_states), затем where-параметры, затем limit.
     params.insert(0, int(user["id"]))
     params.append(limit)
@@ -464,7 +507,7 @@ def list_articles(
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             {where}
-            ORDER BY COALESCE(sc.total_score, 0) DESC, a.published_at DESC NULLS LAST, a.id DESC
+            ORDER BY {order_by}
             LIMIT %s
             """,
             params,
@@ -597,6 +640,7 @@ def scrape_source(
         job = background_jobs.enqueue(
             "scrape_source",
             {"source_id": source_id},
+            user_id=int(user["id"]),
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,
@@ -635,6 +679,7 @@ def diagnose_source_with_overrides(
         job = background_jobs.enqueue(
             "diagnose_source",
             {"source_id": source_id, "overrides": overrides, "limit": limit},
+            user_id=int(user["id"]),
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,
@@ -697,8 +742,21 @@ def ai_article_cost(
 @app.get("/api/digest-content")
 def digest_content(month: str = "", limit: int = Query(100, ge=1, le=500),
                    min_score: float = 0,
+                   max_score: float | None = None,
+                   search: str = "",
+                   top_tag: str = "",
                    user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return _clean(build_digest_content(month=month, limit=limit, min_score=min_score, user_id=int(user["id"])))
+    return _clean(
+        build_digest_content(
+            month=month,
+            limit=limit,
+            min_score=min_score,
+            max_score=max_score,
+            search=search.strip() or None,
+            top_tag=top_tag.strip() or None,
+            user_id=int(user["id"]),
+        )
+    )
 
 
 @app.get("/api/digest-branding")
@@ -713,42 +771,82 @@ def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Dep
 
 @app.post("/api/monthly-digests")
 def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return _clean(save_digest_draft(month=payload.month, limit=payload.limit, min_score=payload.min_score, user_id=int(user["id"])))
+    return _clean(
+        save_digest_draft(
+            month=payload.month,
+            limit=payload.limit,
+            min_score=payload.min_score,
+            max_score=payload.max_score,
+            search=payload.search.strip() or None,
+            top_tag=payload.top_tag.strip() or None,
+            user_id=int(user["id"]),
+        )
+    )
 
 
 @app.get("/api/monthly-digests/{month}")
 def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    digest = repository.get_monthly_digest(month)
+    digest = repository.get_monthly_digest(month, user_id=int(user["id"]))
     if digest is None:
         raise HTTPException(status_code=404, detail="Digest not found")
     return _clean(digest)
 
 
+@app.put("/api/monthly-digests/{month}")
+def update_monthly_digest(month: str, payload: MonthlyDigestUpdateRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    saved = repository.save_monthly_digest(
+        month=month,
+        title=payload.title or f"Нефтесервисный дайджест · {month}",
+        items=[item.model_dump() for item in payload.items],
+        status=payload.status,
+        user_id=int(user["id"]),
+    )
+    return _clean(saved)
+
+
 @app.get("/api/digest-email", response_class=HTMLResponse)
 def digest_email(month: str = "", limit: int = Query(100, ge=1, le=500),
                  min_score: float = 0,
+                 max_score: float | None = None,
+                 search: str = "",
+                 top_tag: str = "",
                  user: dict[str, Any] = Depends(require_user)) -> HTMLResponse:
-    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=int(user["id"]))
+    content = build_digest_content(
+        month=month,
+        limit=limit,
+        min_score=min_score,
+        max_score=max_score,
+        search=search.strip() or None,
+        top_tag=top_tag.strip() or None,
+        user_id=int(user["id"]),
+    )
     return HTMLResponse(render_digest_email(content))
 
 
 @app.get("/api/jobs")
 def list_jobs(
-    status: str | None = Query(None, pattern="^(queued|running|ok|failed)$"),
+    status: str | None = Query(None, pattern="^(queued|running|finalizing|ok|failed)$"),
     kind: str | None = None,
     queue_name: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
+    user_id = None if (user.get("role") or "user") == "admin" else int(user["id"])
     return [
         _job_payload(row)
-        for row in repository.list_background_jobs(status=status, kind=kind, queue_name=queue_name, limit=limit)
+        for row in repository.list_background_jobs(
+            status=status,
+            kind=kind,
+            queue_name=queue_name,
+            user_id=user_id,
+            limit=limit,
+        )
     ]
 
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    job = repository.get_background_job(job_id)
+    job = _get_scoped_background_job(job_id, user)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_payload(job)
@@ -756,7 +854,7 @@ def get_job(job_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[s
 
 @app.get("/api/jobs/{job_id}/download")
 def download_job_result(job_id: int, user: dict[str, Any] = Depends(require_user)) -> FileResponse:
-    job = repository.get_background_job(job_id)
+    job = _get_scoped_background_job(job_id, user)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] != "ok":
@@ -782,6 +880,7 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
     job = background_jobs.enqueue(
         "digest_export",
         {**payload.model_dump(), "user_id": int(user["id"])},  # дайджест пер-юзерный (#12)
+        user_id=int(user["id"]),
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
         capability=decision.capability,
@@ -797,6 +896,7 @@ def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Dep
     job = background_jobs.enqueue(
         "process_articles",
         payload.model_dump(),
+        user_id=int(user["id"]),
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
         capability=decision.capability,
@@ -888,20 +988,29 @@ def external_worker_complete(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     lease_token_hash = _sha256_hex(payload.lease_token)
-    if not repository.external_background_job_lease_is_active(job_id, lease_token_hash=lease_token_hash):
+    # Баг T2 (двойной AI-расход): застолбить завершение АТОМАРНО до применения результата.
+    # Пока идёт apply (запись карточек/скоринга + биллинг ai_processing_runs), задача в статусе
+    # 'finalizing', и requeue_expired_external_leases (только status='running') её НЕ переотдаст —
+    # значит другой воркер не прогонит AI повторно. Лиз истёк/переотдан → 409, ничего не применяем.
+    if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
         raise HTTPException(status_code=409, detail="Job lease is not active")
-    if job.get("kind") == "process_articles" and result.get("external_ai"):
-        result = {**result, "applied": external_ai.apply_process_result(result)}
-    if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
-        job_payload = job.get("payload") or {}
-        force = bool(job_payload.get("force", False))
-        dry_run = bool(job_payload.get("dry_run", False))
-        mark = bool(job_payload.get("mark", False))
-        result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark)}
-    if job.get("kind") == "translate_titles" and result.get("translate_titles"):
-        result = {**result, "applied": external_ai.apply_translate_result(result)}
-    if job.get("kind") == "scrape_source" and result.get("external_fetch"):
-        result = {**result, "applied": external_fetch.apply_scrape_result(result)}
+    try:
+        if job.get("kind") == "process_articles" and result.get("external_ai"):
+            result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id)}
+        if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
+            job_payload = job.get("payload") or {}
+            force = bool(job_payload.get("force", False))
+            dry_run = bool(job_payload.get("dry_run", False))
+            mark = bool(job_payload.get("mark", False))
+            result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark, job_id=job_id)}
+        if job.get("kind") == "translate_titles" and result.get("translate_titles"):
+            result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
+        if job.get("kind") == "scrape_source" and result.get("external_fetch"):
+            result = {**result, "applied": external_fetch.apply_scrape_result(result)}
+    except Exception:
+        # apply упал — снять 'finalizing', чтобы задача не залипла (вернётся в очередь по лизу/stale)
+        repository.release_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash)
+        raise
     ok = repository.finish_external_background_job(
         job_id,
         lease_token_hash=lease_token_hash,
@@ -977,6 +1086,9 @@ def digest_export(
     export_format: str = Query("pdf", pattern="^(pdf|docx?|html|json)$"),
     limit: int = Query(100, ge=1, le=500),
     min_score: float = 0,
+    max_score: float | None = None,
+    search: str = "",
+    top_tag: str = "",
     user: dict[str, Any] = Depends(require_user),
 ) -> FileResponse:
     job_id = repository.create_export_job("monthly_digest", export_format)
@@ -986,6 +1098,9 @@ def digest_export(
             export_format=export_format,
             limit=limit,
             min_score=min_score,
+            max_score=max_score,
+            search=search.strip() or None,
+            top_tag=top_tag.strip() or None,
             user_id=int(user["id"]),
         )
         repository.finish_export_job(job_id, "ok", result["path"])
@@ -1052,6 +1167,12 @@ def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
         "started_at": _clean(row.get("started_at")),
         "finished_at": _clean(row.get("finished_at")),
     }
+
+
+def _get_scoped_background_job(job_id: int, user: dict[str, Any]) -> dict[str, Any] | None:
+    if (user.get("role") or "user") == "admin":
+        return repository.get_background_job(job_id)
+    return repository.get_background_job(job_id, user_id=int(user["id"]))
 
 
 def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:

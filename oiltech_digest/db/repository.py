@@ -448,6 +448,7 @@ def create_background_job(
     kind: str,
     payload: dict | None = None,
     *,
+    user_id: int | None = None,
     queue_name: str = "default",
     execution_region: str = "ru",
     capability: str | None = None,
@@ -458,23 +459,37 @@ def create_background_job(
         cur.execute(
             """
             INSERT INTO background_jobs (
-                kind, queue_name, execution_region, capability,
+                user_id, kind, queue_name, execution_region, capability,
                 status, progress, max_attempts, payload_json
             )
-            VALUES (%s, %s, %s, %s, 'queued', 0, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, 'queued', 0, %s, %s)
             RETURNING *
             """,
-            (kind, queue_name, execution_region, capability, max_attempts, Json(_jsonable(payload or {}))),
+            (
+                user_id,
+                kind,
+                queue_name,
+                execution_region,
+                capability,
+                max_attempts,
+                Json(_jsonable(payload or {})),
+            ),
         )
         job = cur.fetchone()
         conn.commit()
         return job
 
 
-def get_background_job(job_id: int) -> dict | None:
+def get_background_job(job_id: int, *, user_id: int | None = None) -> dict | None:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT * FROM background_jobs WHERE id = %s", (job_id,))
+        if user_id is None:
+            cur.execute("SELECT * FROM background_jobs WHERE id = %s", (job_id,))
+        else:
+            cur.execute(
+                "SELECT * FROM background_jobs WHERE id = %s AND user_id = %s",
+                (job_id, user_id),
+            )
         return cur.fetchone()
 
 
@@ -588,6 +603,7 @@ def list_background_jobs(
     status: str | None = None,
     kind: str | None = None,
     queue_name: str | None = None,
+    user_id: int | None = None,
     limit: int = 50,
 ) -> list[dict]:
     clauses = []
@@ -601,6 +617,9 @@ def list_background_jobs(
     if queue_name:
         clauses.append("queue_name = %s")
         params.append(queue_name)
+    if user_id is not None:
+        clauses.append("user_id = %s")
+        params.append(user_id)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     params.append(limit)
     with get_connection() as conn:
@@ -626,6 +645,7 @@ def external_queue_status() -> dict:
             SELECT
               COUNT(*) FILTER (WHERE status = 'queued') AS queued,
               COUNT(*) FILTER (WHERE status = 'running') AS running,
+              COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
               COUNT(*) FILTER (WHERE status = 'failed') AS failed,
               COUNT(*) FILTER (WHERE status = 'ok') AS ok,
               MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
@@ -645,6 +665,7 @@ def external_queue_status() -> dict:
             SELECT queue_name,
                    COUNT(*) FILTER (WHERE status = 'queued') AS queued,
                    COUNT(*) FILTER (WHERE status = 'running') AS running,
+                   COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
                    COUNT(*) FILTER (WHERE status = 'failed') AS failed,
                    COUNT(*) FILTER (WHERE status = 'ok') AS ok,
                    MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
@@ -782,6 +803,52 @@ def finish_background_job(job_id: int, result: dict | None = None) -> None:
         conn.commit()
 
 
+def begin_external_background_job_finalize(job_id: int, *, lease_token_hash: str) -> bool:
+    """Атомарно перевести внешнюю задачу running→finalizing под защитой лиза (баг T2).
+
+    Закрывает окно двойного AI-расхода: применять результат и биллить ai_processing_runs
+    можно ТОЛЬКО после успешного перехода в 'finalizing'. Пока задача 'finalizing',
+    requeue_expired_external_leases (он трогает лишь status='running') её НЕ переотдаст,
+    поэтому другой воркер не прогонит AI повторно. Возвращает True, если лиз ещё валиден
+    и задача застолблена именно за этим воркером (его lease_token_hash)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'finalizing',
+                last_heartbeat_at = now()
+            WHERE id = %s
+              AND status = 'running'
+              AND execution_region = 'external'
+              AND lease_token_hash = %s
+              AND lease_expires_at > now()
+            """,
+            (job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
+def release_external_background_job_finalize(job_id: int, *, lease_token_hash: str) -> bool:
+    """Откатить finalizing→running, если применение результата упало (баг T2, восстановление).
+
+    Без отката задача залипла бы в 'finalizing' навсегда. После отката её подберёт обычный
+    путь восстановления (requeue_expired по истечении лиза / requeue_stale)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'running'
+            WHERE id = %s
+              AND status = 'finalizing'
+              AND lease_token_hash = %s
+            """,
+            (job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
 def finish_external_background_job(job_id: int, *, lease_token_hash: str, result: dict | None = None) -> bool:
     with get_connection() as conn:
         cur = conn.execute(
@@ -796,10 +863,10 @@ def finish_external_background_job(job_id: int, *, lease_token_hash: str, result
                 lease_expires_at = NULL,
                 finished_at = now()
             WHERE id = %s
-              AND status = 'running'
               AND execution_region = 'external'
               AND lease_token_hash = %s
-              AND lease_expires_at > now()
+              AND (status = 'finalizing'
+                   OR (status = 'running' AND lease_expires_at > now()))
             """,
             (Json(_jsonable(result or {})), job_id, lease_token_hash),
         )
@@ -908,8 +975,16 @@ def fail_external_background_job(
         return True
 
 
-def requeue_stale_background_jobs(stale_minutes: int) -> int:
-    """Move old running jobs back to queued after a worker crash/restart."""
+def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: int | None = None) -> int:
+    """Move old running/finalizing jobs back to queued after a worker/core crash/restart.
+
+    'finalizing' (баг T2) — переходный статус на время применения результата внешней задачи.
+    В норме он живёт секунды; если задача в нём дольше finalizing_stale_minutes (по
+    last_heartbeat_at, выставленному при входе в finalize), значит core упал между
+    застолблением и финишем — возвращаем в очередь. Отдельный (короткий) таймаут: apply
+    не должен длиться как обычный running. lease-поля чистим, чтобы задачу переотдать заново."""
+    if finalizing_stale_minutes is None:
+        finalizing_stale_minutes = stale_minutes
     with get_connection() as conn:
         cur = conn.execute(
             """
@@ -917,11 +992,16 @@ def requeue_stale_background_jobs(stale_minutes: int) -> int:
             SET status = 'queued',
                 progress = 0,
                 started_at = NULL,
-                error_message = 'Requeued after stale running timeout'
-            WHERE status = 'running'
-              AND started_at < now() - (%s::text || ' minutes')::interval
+                claimed_by = NULL,
+                lease_token_hash = NULL,
+                lease_expires_at = NULL,
+                error_message = 'Requeued after stale running/finalizing timeout'
+            WHERE (status = 'running'
+                   AND started_at < now() - (%s::text || ' minutes')::interval)
+               OR (status = 'finalizing'
+                   AND last_heartbeat_at < now() - (%s::text || ' minutes')::interval)
             """,
-            (stale_minutes,),
+            (stale_minutes, finalizing_stale_minutes),
         )
         conn.commit()
         return cur.rowcount or 0
@@ -1986,15 +2066,20 @@ def replace_article_score(article_id: int, total_score: float, score_label: str,
 
 
 def insert_ai_run(rec: dict) -> None:
+    # job_id по умолчанию NULL — для локального пути и старых вызовов (не дедуплицируются).
+    # ON CONFLICT DO NOTHING (баг H1/T2): повторное применение результата задачи не двоит
+    # биллинг — одна строка на (job_id, article_id, stage).
+    rec = {"job_id": None, **rec}
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO ai_processing_runs
-              (article_id, stage, provider, model, language, input_tokens, output_tokens,
+              (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
                total_tokens, cost_usd, status, error_message)
-            VALUES (%(article_id)s, %(stage)s, %(provider)s, %(model)s, %(language)s,
+            VALUES (%(job_id)s, %(article_id)s, %(stage)s, %(provider)s, %(model)s, %(language)s,
                     %(input_tokens)s, %(output_tokens)s, %(total_tokens)s, %(cost_usd)s,
                     %(status)s, %(error_message)s)
+            ON CONFLICT (job_id, article_id, stage) DO NOTHING
             """,
             rec,
         )
@@ -2056,7 +2141,8 @@ def ai_article_cost_report(limit: int = 20, complete_only: bool = True) -> list[
 
 
 def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60,
-                      user_id: int | None = None) -> list[dict]:
+                      user_id: int | None = None, max_score: float | None = None,
+                      search: str | None = None, top_tag: str | None = None) -> list[dict]:
     """Статьи, выбранные в дайджест КОНКРЕТНЫМ пользователем (его user_article_states.status='digest').
 
     ``month`` опционален: пусто/None — фильтр периода снимается, возвращаются все
@@ -2064,9 +2150,33 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
     """
     params: dict = {"min_score": min_score, "limit": limit, "user_id": user_id}
     month_clause = ""
+    max_score_clause = ""
+    search_clause = ""
+    tag_clause = ""
     if month:
         month_clause = "AND to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %(month)s"
         params["month"] = month
+    if max_score is not None:
+        max_score_clause = "AND COALESCE(sc.total_score, 0) <= %(max_score)s"
+        params["max_score"] = max_score
+    if search:
+        search_clause = """
+              AND (
+                   COALESCE(c.title_ru, a.title) ILIKE %(search)s
+                OR COALESCE(c.summary, '') ILIKE %(search)s
+                OR COALESCE(t.name, '') ILIKE %(search)s
+                OR COALESCE(parent.name, '') ILIKE %(search)s
+              )
+        """
+        params["search"] = f"%{search}%"
+    if top_tag:
+        tag_clause = """
+              AND (
+                   t.name = %(top_tag)s
+                OR parent.name = %(top_tag)s
+              )
+        """
+        params["top_tag"] = top_tag
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -2088,7 +2198,10 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               AND c.relevant IS NOT FALSE
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
               AND COALESCE(sc.total_score, 0) >= %(min_score)s
+              {max_score_clause}
               {month_clause}
+              {search_clause}
+              {tag_clause}
             ORDER BY sc.total_score DESC NULLS LAST,
                      a.published_at DESC NULLS LAST
             LIMIT %(limit)s
@@ -2098,21 +2211,41 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         return cur.fetchall()
 
 
-def save_monthly_digest(month: str, title: str, items: list[dict], status: str = "draft") -> dict:
+def save_monthly_digest(
+    month: str,
+    title: str,
+    items: list[dict],
+    status: str = "draft",
+    user_id: int | None = None,
+) -> dict:
     """Persist a monthly digest draft and replace its ordered item list."""
     with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO monthly_digests (month, title, status)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (month) DO UPDATE SET
-                title = EXCLUDED.title,
-                status = EXCLUDED.status,
-                updated_at = now()
-            RETURNING id, month, title, status
-            """,
-            (month, title, status),
-        )
+        if user_id is None:
+            cur = conn.execute(
+                """
+                INSERT INTO monthly_digests (user_id, month, title, status)
+                VALUES (NULL, %s, %s, %s)
+                ON CONFLICT (month) WHERE user_id IS NULL DO UPDATE SET
+                    title = EXCLUDED.title,
+                    status = EXCLUDED.status,
+                    updated_at = now()
+                RETURNING id, user_id, month, title, status
+                """,
+                (month, title, status),
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO monthly_digests (user_id, month, title, status)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, month) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    status = EXCLUDED.status,
+                    updated_at = now()
+                RETURNING id, user_id, month, title, status
+                """,
+                (user_id, month, title, status),
+            )
         digest = cur.fetchone()
         digest_id = digest[0]
         conn.execute("DELETE FROM monthly_digest_items WHERE digest_id = %s", (digest_id,))
@@ -2133,25 +2266,38 @@ def save_monthly_digest(month: str, title: str, items: list[dict], status: str =
         conn.commit()
         return {
             "id": digest[0],
-            "month": digest[1],
-            "title": digest[2],
-            "status": digest[3],
+            "user_id": digest[1],
+            "month": digest[2],
+            "title": digest[3],
+            "status": digest[4],
             "items": len(items),
         }
 
 
-def get_monthly_digest(month: str) -> dict | None:
+def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
     """Fetch a persisted monthly digest draft with ordered item article ids."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            SELECT id, month, title, status, created_at, updated_at
-            FROM monthly_digests
-            WHERE month = %s
-            """,
-            (month,),
-        )
+        if user_id is None:
+            cur.execute(
+                """
+                SELECT id, user_id, month, title, status, created_at, updated_at
+                FROM monthly_digests
+                WHERE month = %s AND user_id IS NULL
+                """,
+                (month,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, user_id, month, title, status, created_at, updated_at
+                FROM monthly_digests
+                WHERE month = %s AND (user_id = %s OR user_id IS NULL)
+                ORDER BY (user_id = %s) DESC, updated_at DESC
+                LIMIT 1
+                """,
+                (month, user_id, user_id),
+            )
         digest = cur.fetchone()
         if digest is None:
             return None
@@ -2165,6 +2311,36 @@ def get_monthly_digest(month: str) -> dict | None:
             (digest["id"],),
         )
         return {**digest, "items": cur.fetchall()}
+
+
+def digest_items_by_article_ids(article_ids: list[int], user_id: int | None = None) -> list[dict]:
+    if not article_ids:
+        return []
+    order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.published_at, a.language, a.image_url,
+                   s.name AS source_name,
+                   c.summary,
+                   sc.total_score, sc.score_label,
+                   t.name AS tag_name, parent.name AS parent_tag_name
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            LEFT JOIN article_scores sc ON sc.article_id = a.id
+            LEFT JOIN article_tags at ON at.article_id = a.id
+            LEFT JOIN tags t ON t.id = at.tag_id
+            LEFT JOIN tags parent ON parent.id = t.parent_id
+            WHERE a.id = ANY(%s)
+              AND c.relevant IS NOT FALSE
+              AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
+            ORDER BY {order_case}
+            """,
+            [article_ids, *article_ids],
+        )
+        return cur.fetchall()
 
 
 def max_article_id() -> int | None:

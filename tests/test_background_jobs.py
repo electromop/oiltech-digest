@@ -323,7 +323,7 @@ def test_requeue_stale_background_jobs_recovers_stuck_running_job(isolated_db):
     assert stored["status"] == "queued"
     assert stored["progress"] == 0
     assert stored["started_at"] is None
-    assert stored["error_message"] == "Requeued after stale running timeout"
+    assert stored["error_message"] == "Requeued after stale running/finalizing timeout"
 
 
 def test_worker_loop_once_processes_queued_jobs(monkeypatch, isolated_db):

@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{issue_title}</title>
   <style>
+    {font_face_style}
+
     @page {{
       size: A4;
       margin: 0;
@@ -15,9 +17,33 @@
       print-color-adjust: exact;
     }}
 
+    .digest-frame {{
+      box-shadow: 0 12px 36px rgba(8, 33, 76, 0.10);
+    }}
+
     .news-card {{
       break-inside: avoid;
       page-break-inside: avoid;
+    }}
+
+    .highlights-card {{
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }}
+
+    .news-page {{
+      margin: 0 0 8px 0;
+    }}
+
+    .news-section-title {{
+      font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;
+      font-size:30px;
+      line-height:36px;
+      color:#003da6;
+      font-weight:bold;
+      letter-spacing:.10em;
+      text-transform:uppercase;
+      margin:0 0 18px 0;
     }}
 
     .news-card-image {{
@@ -43,7 +69,41 @@
       font-size: 13px;
       line-height: 18px;
       color: #333333;
-      margin-top: 4px;
+      margin-top: 6px;
+    }}
+
+    .news-card-meta {{
+      font-size: 11px;
+      line-height: 16px;
+      color: #68768f;
+      margin-top: 8px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      font-weight: bold;
+    }}
+
+    .intro-copy {{
+      max-width: 500px;
+    }}
+
+    .highlights-label {{
+      font-size: 11px;
+      line-height: 14px;
+      color: #262d3c;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      font-weight: bold;
+    }}
+
+    .footer-note {{
+      color:#d6e4f9;
+      font-size:12px;
+      line-height:18px;
+    }}
+
+    .footer-note a {{
+      color:#ffffff;
+      text-decoration:underline;
     }}
 
     .news-card-tag {{
@@ -63,7 +123,7 @@
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#F3F5F8;">
     <tr>
       <td align="center" style="padding:24px 12px;">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#ffffff;">
+        <table class="digest-frame" role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#ffffff;">
 
           <!-- HERO: утверждённый баннер 600×360 (логотип ГАЗПРОМ НЕФТЬ, бейдж, заголовок
                и подзаголовок запечены в картинке). <img>, а не background — надёжно в Outlook. -->
@@ -76,23 +136,17 @@
           <!-- ВСТУПЛЕНИЕ -->
           <tr>
             <td style="padding:26px 36px 14px 36px;">
-              <div style="font-size:16px;line-height:24px;color:#262d3c;">{issue_intro}</div>
+              <div class="intro-copy" style="font-size:16px;line-height:24px;color:#262d3c;">{issue_intro}</div>
             </td>
           </tr>
 
-          <!-- ГЛАВНОЕ ЗА ПЕРИОД: KPI-плашки выпуска -->
-          <tr>
-            <td style="padding:8px 36px 18px 36px;">
-              <div style="font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;font-size:22px;line-height:28px;color:#003da6;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px;">{issue_highlights_title}</div>
-              {highlights_html}
-            </td>
-          </tr>
+          <!-- ГЛАВНОЕ ЗА ПЕРИОД -->
+          {highlights_section}
 
           <!-- НОВОСТИ -->
           <tr>
-            <td style="padding:0 36px 10px 36px;">
-              <div style="font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{issue_news_title}</div>
-              {news_items}
+            <td style="padding:8px 36px 10px 36px;">
+              {news_sections}
             </td>
           </tr>
 
@@ -110,9 +164,9 @@
                   </td>
                 </tr>
                 <tr>
-                  <td align="center" style="color:#d6e4f9;font-size:12px;line-height:18px;">
+                  <td align="center" class="footer-note">
                     <span style="color:#ffffff;font-weight:bold;">{footer_contact_text}</span><br>
-                    <a href="mailto:{footer_contact_email}" style="color:#ffffff;text-decoration:underline;">{footer_contact_email}</a> &middot; {footer_note}
+                    <a href="mailto:{footer_contact_email}">{footer_contact_email}</a> &middot; {footer_note}
                   </td>
                 </tr>
               </table>

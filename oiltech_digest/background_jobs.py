@@ -34,6 +34,7 @@ def enqueue(
     kind: str,
     payload: dict[str, Any] | None = None,
     *,
+    user_id: int | None = None,
     queue_name: str = "default",
     execution_region: str = "ru",
     capability: str | None = None,
@@ -45,6 +46,7 @@ def enqueue(
     job = repository.create_background_job(
         kind,
         payload or {},
+        user_id=user_id,
         queue_name=queue_name,
         execution_region=execution_region,
         capability=capability,
@@ -79,16 +81,28 @@ def worker_loop(
     poll_seconds = config.BACKGROUND_JOB_POLL_SECONDS if poll_seconds is None else poll_seconds
     stale_minutes = config.BACKGROUND_JOB_STALE_MINUTES if stale_minutes is None else stale_minutes
     queue_names = queue_names or config.BACKGROUND_JOB_QUEUES
-    requeued = repository.requeue_stale_background_jobs(stale_minutes)
-    if requeued:
-        logger.warning(
-            "jobs_requeued_stale count=%s stale_minutes=%s queues=%s",
-            requeued,
-            stale_minutes,
-            ",".join(queue_names),
-        )
+    finalize_minutes = config.FINALIZE_STALE_MINUTES
+    sweep_interval = max(poll_seconds, 30.0)  # переочередь зависших — не чаще раза в ~30с
 
+    def _sweep_stale() -> None:
+        requeued = repository.requeue_stale_background_jobs(stale_minutes, finalize_minutes)
+        if requeued:
+            logger.warning(
+                "jobs_requeued_stale count=%s stale_minutes=%s finalize_minutes=%s queues=%s",
+                requeued,
+                stale_minutes,
+                finalize_minutes,
+                ",".join(queue_names),
+            )
+
+    last_sweep = 0.0
     while True:
+        # Периодически вытаскиваем зависшие running/finalizing (раньше — только разово на старте,
+        # из-за чего застрявший после краша 'finalizing' ждал рестарта воркача; баг T2/H2).
+        now_mono = time.monotonic()
+        if now_mono - last_sweep >= sweep_interval:
+            _sweep_stale()
+            last_sweep = now_mono
         job = repository.claim_next_background_job(queue_names=queue_names)
         if job is None:
             if once:
@@ -151,6 +165,9 @@ def _run_digest_export(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
         export_format=str(payload.get("export_format") or "pdf"),
         limit=int(payload.get("limit") or 100),
         min_score=float(payload.get("min_score") or 0),
+        max_score=float(payload["max_score"]) if payload.get("max_score") is not None else None,
+        search=str(payload.get("search") or "") or None,
+        top_tag=str(payload.get("top_tag") or "") or None,
         user_id=int(payload["user_id"]) if payload.get("user_id") is not None else None,
     )
     repository.update_background_job_progress(job_id, 90)

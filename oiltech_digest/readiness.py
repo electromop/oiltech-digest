@@ -45,7 +45,7 @@ def readiness_check() -> dict[str, Any]:
         article_count = int(conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0])
         queued_jobs = int(
             conn.execute(
-                "SELECT COUNT(*) FROM background_jobs WHERE status IN ('queued', 'running')"
+                "SELECT COUNT(*) FROM background_jobs WHERE status IN ('queued', 'running', 'finalizing')"
             ).fetchone()[0]
         )
         stale_running_jobs = int(
@@ -59,15 +59,30 @@ def readiness_check() -> dict[str, Any]:
                 (config.BACKGROUND_JOB_STALE_MINUTES,),
             ).fetchone()[0]
         )
+        # 'finalizing' (баг T2) завис дольше своего таймаута → core упал в момент применения
+        # результата. Считаем отдельно по last_heartbeat_at, чтобы /readyz это видел.
+        stale_finalizing_jobs = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM background_jobs
+                WHERE status = 'finalizing'
+                  AND last_heartbeat_at < now() - (%s::text || ' minutes')::interval
+                """,
+                (config.FINALIZE_STALE_MINUTES,),
+            ).fetchone()[0]
+        )
 
     return {
-        "ok": bool(schema["ok"] and stale_running_jobs == 0),
+        "ok": bool(schema["ok"] and stale_running_jobs == 0 and stale_finalizing_jobs == 0),
         "database": {"ok": True},
         "schema": schema,
         "jobs": {
             "queued_or_running": queued_jobs,
             "stale_running": stale_running_jobs,
+            "stale_finalizing": stale_finalizing_jobs,
             "stale_minutes": config.BACKGROUND_JOB_STALE_MINUTES,
+            "finalize_stale_minutes": config.FINALIZE_STALE_MINUTES,
         },
         "articles": article_count,
     }

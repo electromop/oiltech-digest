@@ -8,6 +8,7 @@ import re
 from html import escape
 from pathlib import Path
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -41,8 +42,8 @@ def _hero_data_uri() -> str:
     return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else ""
 
 
-def _pdf_font_face_style() -> str:
-    """<style> с GPN Din в base64 — вставляется только в PDF-рендер."""
+def _embedded_font_faces() -> str:
+    """@font-face с GPN Din в base64 для HTML/PDF-рендера без зависимости от ОС."""
     faces = []
     for family, files in _PDF_FONT_FILES.items():
         for fname, weight in files:
@@ -54,7 +55,13 @@ def _pdf_font_face_style() -> str:
                 f"@font-face{{font-family:'{family}';font-style:normal;font-weight:{weight};"
                 f"src:url(data:font/ttf;base64,{b64}) format('truetype');}}"
             )
-    return "<style>" + "".join(faces) + "</style>" if faces else ""
+    return "".join(faces)
+
+
+def _pdf_font_face_style() -> str:
+    """<style> с GPN Din в base64 — добавляется в PDF-рендер для Chromium."""
+    faces = _embedded_font_faces()
+    return "<style>" + faces + "</style>" if faces else ""
 
 
 def _load_digest_branding() -> dict:
@@ -198,11 +205,33 @@ def save_digest_branding(payload: dict) -> dict:
     return merged
 
 
-def build_digest_content(month: str | None = None, limit: int = 20, min_score: float = 60,
-                         user_id: int | None = None) -> dict:
+def build_digest_content(
+    month: str | None = None,
+    limit: int = 20,
+    min_score: float = 60,
+    user_id: int | None = None,
+    max_score: float | None = None,
+    search: str | None = None,
+    top_tag: str | None = None,
+) -> dict:
     branding = _load_digest_branding()
     issue_cfg = branding["issue"]
-    rows = repository.digest_candidates(month=month, limit=limit, min_score=min_score, user_id=user_id)
+    rows = []
+    if month and user_id is not None:
+        saved_digest = repository.get_monthly_digest(month, user_id=user_id)
+        saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
+        if saved_ids:
+            rows = repository.digest_items_by_article_ids(saved_ids[:limit], user_id=user_id)
+    if not rows:
+        rows = repository.digest_candidates(
+            month=month,
+            limit=limit,
+            min_score=min_score,
+            user_id=user_id,
+            max_score=max_score,
+            search=search,
+            top_tag=top_tag,
+        )
     news = []
     for row in rows:
         tag = row.get("tag_name") or "Без тега"
@@ -270,28 +299,24 @@ def render_digest_email(content: dict) -> str:
     template = (TEMPLATE_DIR / EMAIL_TEMPLATE).read_text(encoding="utf-8")
     news_items = content.get("news", [])
     branding = content.get("branding") or _load_digest_branding()
-    # Карточки идут единым потоком; разрыв страницы НЕ форсируем — за «карточка
-    # не рвётся между страницами» отвечает CSS .news-card { break-inside: avoid }.
-    news_html = "\n".join(_render_news_item(item, content.get("issue") or {}) for item in news_items)
-    highlights = content.get("highlights") or _digest_highlights(news_items)
+    news_sections = _render_news_sections(news_items, content.get("issue") or {})
     values = {
         "header_brand_text": _html(branding.get("header", {}).get("brand_text")),
         "header_brand_suffix": _html(branding.get("header", {}).get("brand_suffix")),
         "header_department_text": _html(branding.get("header", {}).get("department_text")),
+        "font_face_style": _embedded_font_faces(),
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
         "issue_intro": _html(content.get("issue", {}).get("intro")),
-        "issue_highlights_title": _html(content.get("issue", {}).get("highlights_title") or "Главное за период"),
-        "issue_news_title": _html(content.get("issue", {}).get("news_title") or "Новости"),
+        "highlights_section": "",
+        "news_sections": news_sections,
         # Hero — утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
         "hero_img_src": _html(content.get("hero", {}).get("image_url")) or _hero_data_uri(),
         "hero_alt": _html(HERO_ALT),
-        "highlights_html": _render_highlights(highlights),
         "footer_contact_text": _html(content.get("footer", {}).get("contact_text")),
         "footer_contact_email": _html(content.get("footer", {}).get("contact_email")),
         "footer_note": _html(content.get("footer", {}).get("note")),
         "footer_socials_html": _render_footer_socials(content.get("footer", {}).get("socials") or branding.get("footer", {}).get("socials") or []),
-        "news_items": news_html,
     }
     return template.format(**values)
 
@@ -419,14 +444,59 @@ def _render_highlights(highlights: list[dict]) -> str:
             f'{icon}</div></td>'
             '<td valign="middle" style="padding-left:10px;">'
             f'<div style="font-size:26px;line-height:28px;color:#003da6;font-weight:bold;">{_html(h.get("value"))}</div>'
-            '<div style="font-size:11px;line-height:14px;color:#262d3c;text-transform:uppercase;'
-            f'letter-spacing:.04em;font-weight:bold;">{_html(h.get("label"))}</div>'
+            f'<div class="highlights-label">{_html(h.get("label"))}</div>'
             '</td></tr></table></td>'
         )
     return (
         '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">'
         f'<tr>{"".join(cells)}</tr></table>'
     )
+
+
+def _render_highlights_section(issue: dict, highlights: list[dict]) -> str:
+    if not highlights:
+        return ""
+    title = issue.get("highlights_title") or "Главное за период"
+    highlights_html = _render_highlights(highlights)
+    return f"""
+          <tr>
+            <td style="padding:8px 36px 14px 36px;">
+              <table class="highlights-card" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #d9e3f3;border-radius:8px;background:#f7faff;">
+                <tr>
+                  <td style="padding:18px 18px 16px 18px;">
+                    <div style="font-family:'GPN Din Condensed','GPN Din',Arial,Helvetica,sans-serif;font-size:30px;line-height:36px;color:#003da6;font-weight:bold;letter-spacing:.10em;text-transform:uppercase;margin-bottom:16px;">{_html(title)}</div>
+                    {highlights_html}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>"""
+
+
+def _render_news_sections(news_items: list[dict], issue: dict) -> str:
+    title = issue.get("news_title") or "Новости"
+    if not news_items:
+        return f'<div class="news-section-title">{_html(title)}</div>'
+    # Новости постранично по 3 карточки (как в DOCX, см. _chunk_news_items): каждая
+    # «страница» — отдельный .news-page, со 2-й идёт принудительный разрыв (.news-page-break),
+    # заголовок раздела повторяется на каждой странице.
+    pages = []
+    for page_index, chunk in enumerate(_chunk_news_items(news_items, size=3)):
+        page_class = "news-page news-page-break" if page_index else "news-page"
+        items_html = "\n".join(_render_news_item(item, issue) for item in chunk)
+        pages.append(
+            f'<div class="{page_class}">'
+            f'<div class="news-section-title">{_html(title)}</div>'
+            f'{items_html}'
+            "</div>"
+        )
+    return "\n".join(pages)
+
+
+def _chunk_news_items(news_items: list[dict], size: int = 3) -> list[list[dict]]:
+    if size <= 0:
+        size = 3
+    return [news_items[index:index + size] for index in range(0, len(news_items), size)]
 
 
 def _render_news_item(item: dict, issue: dict | None = None) -> str:
@@ -437,21 +507,16 @@ def _render_news_item(item: dict, issue: dict | None = None) -> str:
     image_url = item.get("image_url") or ""
     summary = item.get("summary") or issue.get("empty_summary_text") or "Суть ещё не сформирована."
     read_more_label = issue.get("read_more_label") or "ЧИТАТЬ ДАЛЕЕ"
-    if image_url:
+    meta = _render_news_meta(item)
+    if image_url and not _is_unusable_digest_image_url(image_url):
         media = (
             f'<img class="news-card-image" src="{_html(image_url)}" width="130" height="86" alt="{_html(item.get("title"))}" '
             'style="display:block;width:130px;height:86px;object-fit:cover;border-radius:6px;border:0;">'
         )
     else:
-        # SVG-заглушка вместо <img>: ведёт себя как картинка (фиксирует ширину ячейки
-        # 130×86 в табличной вёрстке — в отличие от <div>, который ужимается).
-        placeholder = (
-            "data:image/svg+xml;utf8,"
-            "<svg xmlns='http://www.w3.org/2000/svg' width='130' height='86'>"
-            "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
-            "<stop offset='0' stop-color='%23003da6'/><stop offset='1' stop-color='%23001d50'/>"
-            "</linearGradient></defs><rect width='130' height='86' rx='6' fill='url(%23g)'/></svg>"
-        )
+        # Для статей без изображения рисуем стабильную заглушку по верхнему тегу:
+        # карточки одной рубрики всегда получают одинаковый фон/подпись.
+        placeholder = _news_placeholder_data_uri(item.get("category"))
         media = (
             f'<img class="news-card-image" src="{placeholder}" width="130" height="86" alt="" '
             'style="display:block;width:130px;height:86px;border-radius:6px;border:0;">'
@@ -469,6 +534,7 @@ def _render_news_item(item: dict, issue: dict | None = None) -> str:
                 <tr>
                   <td colspan="2" valign="top" style="padding:0 16px 14px 16px;">
                     <div class="news-card-summary">{_html(summary)}</div>
+                    {meta}
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;">
                       <tr>
                         <td align="left" valign="middle">
@@ -484,6 +550,19 @@ def _render_news_item(item: dict, issue: dict | None = None) -> str:
               </table>"""
 
 
+def _render_news_meta(item: dict) -> str:
+    parts = []
+    source = str(item.get("source") or "").strip()
+    if source:
+        parts.append(source)
+    published = _format_digest_date(item.get("published_at"))
+    if published:
+        parts.append(published)
+    if not parts:
+        return ""
+    return f'<div class="news-card-meta">{_html(" · ".join(parts))}</div>'
+
+
 def _render_footer_socials(socials: list[dict]) -> str:
     if not socials:
         return ""
@@ -494,17 +573,108 @@ def _render_footer_socials(socials: list[dict]) -> str:
             '<div style="width:36px;height:36px;background:#ffffff;border-radius:50%;'
             'text-align:center;line-height:36px;'
             f'color:{_html(item.get("accent") or "#262d3c")};'
-            "font-weight:bold;font-size:13px;font-family:'GPN Din',Arial,Helvetica,sans-serif;\""
-            f' title="{_html(item.get("label"))}">{_html(item.get("text"))}</div>'
+            "font-weight:bold;font-size:13px;font-family:'GPN Din',Arial,Helvetica,sans-serif;"
+            f'" title="{_html(item.get("label"))}">{_html(item.get("text"))}</div>'
             "</td>"
         )
     return "".join(cells)
 
 
+def _news_placeholder_data_uri(category: object) -> str:
+    raw = str(category or "Новости").strip()
+    top = raw.split(" / ", 1)[0].strip() or "Новости"
+    key = re.sub(r"[^a-zа-я0-9]+", "", top.lower(), flags=re.IGNORECASE)
+    palette = {
+        "технологии": ("#003DA6", "#0057D9"),
+        "рынок": ("#0A5C36", "#0F8A50"),
+        "бизнессигналы": ("#7A2E0B", "#E83D08"),
+        "россия": ("#3F3A8C", "#625CDA"),
+        "международноесотрудничество": ("#005B66", "#0097A7"),
+        "бурение": ("#004A99", "#1D74D1"),
+    }
+    start, end = palette.get(key, ("#003DA6", "#001D50"))
+    label = escape(top[:26], quote=True)
+    badge_label = label.upper()
+    if len(badge_label) > 12:
+        split_at = badge_label.rfind(" ", 0, 12)
+        if split_at < 5:
+            split_at = 12
+        badge_lines = [badge_label[:split_at].strip(), badge_label[split_at:].strip()]
+    else:
+        badge_lines = [badge_label]
+    badge_lines = [line[:13] for line in badge_lines if line]
+    badge_width = min(110, max(42, max(len(line) for line in badge_lines) * 6 + 16))
+    badge_height = 26 if len(badge_lines) > 1 else 17
+    label_y = 56 if len(badge_lines) > 1 else 50
+    badge_text = "".join(
+        f"<text x='14' y='{22 + idx * 10}' font-family='Arial,Helvetica,sans-serif' font-size='9' font-weight='700' fill='#ffffff'>{line}</text>"
+        for idx, line in enumerate(badge_lines)
+    )
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='130' height='86' viewBox='0 0 130 86'>"
+        "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+        f"<stop offset='0' stop-color='{start}'/><stop offset='1' stop-color='{end}'/>"
+        "</linearGradient></defs>"
+        "<rect width='130' height='86' rx='6' fill='url(#g)'/>"
+        f"<rect x='10' y='11' width='{badge_width}' height='{badge_height}' rx='8.5' fill='rgba(255,255,255,0.18)'/>"
+        f"{badge_text}"
+        f"<text x='14' y='{label_y}' font-family='Arial,Helvetica,sans-serif' font-size='13' font-weight='700' fill='#ffffff'>{label}</text>"
+        "</svg>"
+    )
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
+def _is_unusable_digest_image_url(url: object) -> bool:
+    """Явно тестовые/локальные/пустые адреса не рендерим как реальные картинки."""
+    if not isinstance(url, str) or not url.strip():
+        return True
+    raw = url.strip()
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https", "data"}:
+        return True
+    if parsed.scheme == "data":
+        return False
+    host = (parsed.hostname or "").lower()
+    if host in {"example.com", "www.example.com", "localhost", "127.0.0.1"}:
+        return True
+    return False
+
+
+def _format_digest_date(value: object) -> str:
+    if not value:
+        return ""
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            if len(raw) >= 10:
+                dt = datetime.fromisoformat(raw[:10])
+                return dt.strftime("%d.%m.%Y")
+        except ValueError:
+            return raw
+        return raw
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%d.%m.%Y")
+        except Exception:
+            return str(value)
+    return str(value)
+
+
 def write_digest_content(path: str | Path, month: str, limit: int = 20,
                          min_score: float = 60, html_path: str | Path | None = None,
-                         user_id: int | None = None) -> dict:
-    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=user_id)
+                         user_id: int | None = None, max_score: float | None = None,
+                         search: str | None = None, top_tag: str | None = None) -> dict:
+    content = build_digest_content(
+        month=month,
+        limit=limit,
+        min_score=min_score,
+        user_id=user_id,
+        max_score=max_score,
+        search=search,
+        top_tag=top_tag,
+    )
     output_path = Path(path)
     output_path.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
     result = {"path": str(output_path), "items": len(content["items"])}
@@ -515,9 +685,25 @@ def write_digest_content(path: str | Path, month: str, limit: int = 20,
     return result
 
 
-def save_digest_draft(month: str, limit: int = 20, min_score: float = 60, user_id: int | None = None) -> dict:
+def save_digest_draft(
+    month: str,
+    limit: int = 20,
+    min_score: float = 60,
+    user_id: int | None = None,
+    max_score: float | None = None,
+    search: str | None = None,
+    top_tag: str | None = None,
+) -> dict:
     """Build digest content from current selected articles and persist it as a draft."""
-    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=user_id)
+    content = build_digest_content(
+        month=month,
+        limit=limit,
+        min_score=min_score,
+        user_id=user_id,
+        max_score=max_score,
+        search=search,
+        top_tag=top_tag,
+    )
     items = [
         {
             "article_id": item["article_id"],
@@ -532,6 +718,7 @@ def save_digest_draft(month: str, limit: int = 20, min_score: float = 60, user_i
         title=content.get("title") or f"Нефтесервисный дайджест · {month}",
         items=items,
         status="draft",
+        user_id=user_id,
     )
     return {**saved, "content_items": len(content.get("items", []))}
 
@@ -590,6 +777,16 @@ def _fetch_docx_image(url: str | None) -> bytes | None:
     return None
 
 
+def _docx_hero_bytes(hero: dict | None = None) -> bytes | None:
+    hero = hero or {}
+    image_url = hero.get("image_url")
+    data = _fetch_docx_image(image_url) if image_url else None
+    if data:
+        return data
+    asset = _asset_bytes(HERO_ASSET)
+    return asset if asset else None
+
+
 def _add_docx_hyperlink(paragraph, url: str, text: str, color_hex: str | None = None) -> None:
     """Вставить кликабельную ссылку в параграф python-docx (нативной поддержки нет)."""
     from docx.oxml.ns import qn
@@ -622,8 +819,8 @@ def _add_docx_hyperlink(paragraph, url: str, text: str, color_hex: str | None = 
 def render_digest_docx(content: dict) -> bytes:
     """Render the branded digest to a rich .docx via python-docx.
 
-    Включает шапку бренда, hero, «Главное за период», новости с фото, кликабельные
-    ссылки «Читать далее» и футер — в отличие от прежней урезанной выгрузки.
+    Включает шапку бренда, hero, новости с фото, кликабельные ссылки
+    «Читать далее» и футер.
     """
     from io import BytesIO
 
@@ -633,7 +830,6 @@ def render_digest_docx(content: dict) -> bytes:
     issue = content.get("issue") or {}
     hero = content.get("hero") or {}
     news_items = content.get("news") or content.get("items") or []
-    highlights = content.get("highlights") or _digest_highlights(news_items)
     footer = content.get("footer") or {}
     header = (content.get("branding") or {}).get("header") or {}
 
@@ -647,6 +843,15 @@ def render_digest_docx(content: dict) -> bytes:
     # Корпоративный шрифт во всём документе (рендерится у получателей с установленным
     # GPN Din; иначе Word подставит замену). Базовый стиль Normal наследуют все абзацы.
     doc.styles["Normal"].font.name = "GPN Din"
+    if "Title" in doc.styles:
+        doc.styles["Title"].font.name = "GPN Din Condensed"
+        doc.styles["Title"].font.bold = True
+    if "Heading 1" in doc.styles:
+        doc.styles["Heading 1"].font.name = "GPN Din Condensed"
+        doc.styles["Heading 1"].font.bold = True
+    if "Heading 2" in doc.styles:
+        doc.styles["Heading 2"].font.name = "GPN Din Condensed"
+        doc.styles["Heading 2"].font.bold = True
     section = doc.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.6)
     section.left_margin = section.right_margin = Inches(0.7)
@@ -675,6 +880,12 @@ def render_digest_docx(content: dict) -> bytes:
         run.bold = True
         run.font.size = Pt(9)
         run.font.color.rgb = ACCENT
+    hero_bytes = _docx_hero_bytes(hero)
+    if hero_bytes:
+        try:
+            doc.add_picture(BytesIO(hero_bytes), width=Inches(6.0))
+        except Exception:
+            pass
     doc.add_heading(hero.get("headline") or issue.get("title") or "Нефтесервисный дайджест", level=0)
     if hero.get("subtitle"):
         p = doc.add_paragraph()
@@ -684,40 +895,39 @@ def render_digest_docx(content: dict) -> bytes:
     if issue.get("intro"):
         doc.add_paragraph(issue["intro"])
 
-    # --- Главное за период ---
-    if highlights:
-        doc.add_heading(issue.get("highlights_title") or "Главное за период", level=1)
-        for hl in highlights:
-            p = doc.add_paragraph(style="List Bullet")
-            value = p.add_run(f"{hl.get('value', 0)} ")
-            value.bold = True
-            value.font.color.rgb = BRAND
-            p.add_run(str(hl.get("label", "")))
-
     # --- Новости ---
-    doc.add_heading(issue.get("news_title") or "Новости", level=1)
     read_more = issue.get("read_more_label") or "Читать далее"
-    for index, item in enumerate(news_items, start=1):
-        doc.add_heading(item.get("title") or f"Материал {index}", level=2)
-        image = _fetch_docx_image(item.get("image_url"))
-        if image:
-            try:
-                doc.add_picture(BytesIO(image), width=Inches(2.8))
-            except Exception:
-                pass
-        meta = " · ".join(
-            part for part in [item.get("category"), item.get("source"), item.get("published_at")] if part
-        )
-        if meta:
-            p = doc.add_paragraph()
-            run = p.add_run(meta)
-            run.font.size = Pt(9)
-            run.font.color.rgb = GREY
-        if item.get("summary"):
-            doc.add_paragraph(item["summary"])
-        if item.get("url"):
-            p = doc.add_paragraph()
-            _add_docx_hyperlink(p, str(item["url"]), f"{read_more} →", ACCENT_HEX)
+    news_chunks = _chunk_news_items(news_items, size=3)
+    for chunk_index, chunk in enumerate(news_chunks):
+        if chunk_index:
+            doc.add_page_break()
+        doc.add_heading(issue.get("news_title") or "Новости", level=1)
+        for index, item in enumerate(chunk, start=1 + chunk_index * 3):
+            doc.add_heading(item.get("title") or f"Материал {index}", level=2)
+            image = _fetch_docx_image(item.get("image_url"))
+            if image:
+                try:
+                    doc.add_picture(BytesIO(image), width=Inches(2.8))
+                except Exception:
+                    pass
+            meta_parts = []
+            if item.get("category"):
+                meta_parts.append(str(item["category"]))
+            if item.get("source"):
+                meta_parts.append(str(item["source"]))
+            published = _format_digest_date(item.get("published_at"))
+            if published:
+                meta_parts.append(published)
+            if meta_parts:
+                p = doc.add_paragraph()
+                run = p.add_run(" · ".join(meta_parts))
+                run.font.size = Pt(9)
+                run.font.color.rgb = GREY
+            if item.get("summary"):
+                doc.add_paragraph(item["summary"])
+            if item.get("url"):
+                p = doc.add_paragraph()
+                _add_docx_hyperlink(p, str(item["url"]), f"{read_more} →", ACCENT_HEX)
 
     # --- Футер ---
     doc.add_paragraph()
@@ -746,9 +956,25 @@ def render_digest_docx(content: dict) -> bytes:
     return buffer.getvalue()
 
 
-def write_digest_export(month: str | None = None, export_format: str = "pdf", limit: int = 100,
-                        min_score: float = 0, user_id: int | None = None) -> dict:
-    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=user_id)
+def write_digest_export(
+    month: str | None = None,
+    export_format: str = "pdf",
+    limit: int = 100,
+    min_score: float = 0,
+    user_id: int | None = None,
+    max_score: float | None = None,
+    search: str | None = None,
+    top_tag: str | None = None,
+) -> dict:
+    content = build_digest_content(
+        month=month,
+        limit=limit,
+        min_score=min_score,
+        user_id=user_id,
+        max_score=max_score,
+        search=search,
+        top_tag=top_tag,
+    )
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     base_name = f"digest-{month or 'all'}-{stamp}"
