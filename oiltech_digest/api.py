@@ -888,20 +888,29 @@ def external_worker_complete(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     lease_token_hash = _sha256_hex(payload.lease_token)
-    if not repository.external_background_job_lease_is_active(job_id, lease_token_hash=lease_token_hash):
+    # Баг T2 (двойной AI-расход): застолбить завершение АТОМАРНО до применения результата.
+    # Пока идёт apply (запись карточек/скоринга + биллинг ai_processing_runs), задача в статусе
+    # 'finalizing', и requeue_expired_external_leases (только status='running') её НЕ переотдаст —
+    # значит другой воркер не прогонит AI повторно. Лиз истёк/переотдан → 409, ничего не применяем.
+    if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
         raise HTTPException(status_code=409, detail="Job lease is not active")
-    if job.get("kind") == "process_articles" and result.get("external_ai"):
-        result = {**result, "applied": external_ai.apply_process_result(result)}
-    if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
-        job_payload = job.get("payload") or {}
-        force = bool(job_payload.get("force", False))
-        dry_run = bool(job_payload.get("dry_run", False))
-        mark = bool(job_payload.get("mark", False))
-        result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark)}
-    if job.get("kind") == "translate_titles" and result.get("translate_titles"):
-        result = {**result, "applied": external_ai.apply_translate_result(result)}
-    if job.get("kind") == "scrape_source" and result.get("external_fetch"):
-        result = {**result, "applied": external_fetch.apply_scrape_result(result)}
+    try:
+        if job.get("kind") == "process_articles" and result.get("external_ai"):
+            result = {**result, "applied": external_ai.apply_process_result(result)}
+        if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
+            job_payload = job.get("payload") or {}
+            force = bool(job_payload.get("force", False))
+            dry_run = bool(job_payload.get("dry_run", False))
+            mark = bool(job_payload.get("mark", False))
+            result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark)}
+        if job.get("kind") == "translate_titles" and result.get("translate_titles"):
+            result = {**result, "applied": external_ai.apply_translate_result(result)}
+        if job.get("kind") == "scrape_source" and result.get("external_fetch"):
+            result = {**result, "applied": external_fetch.apply_scrape_result(result)}
+    except Exception:
+        # apply упал — снять 'finalizing', чтобы задача не залипла (вернётся в очередь по лизу/stale)
+        repository.release_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash)
+        raise
     ok = repository.finish_external_background_job(
         job_id,
         lease_token_hash=lease_token_hash,
