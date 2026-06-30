@@ -232,6 +232,20 @@ def cmd_score(args: argparse.Namespace) -> None:
     print(f"scoring: обработано={stats['processed']}, ошибок={stats['errors']}")
 
 
+def cmd_rescore_recompute(args: argparse.Namespace) -> None:
+    """Пересчитать баллы из УЖЕ сохранённых ai_score новым блендингом — без OpenAI и без воркера.
+    Гоняется на ядре (РФ) прямо по БД. Полезно, когда менялась только формула блендинга, а внешний
+    AI-воркер недоступен/дорог. Полный AI-перепрогон (новая модель+промпт) делается отдельно."""
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing.pipeline import SCORE_AI_WEIGHT, SCORE_KEYWORD_WEIGHT
+
+    updated = repository.recompute_total_scores_from_items(SCORE_KEYWORD_WEIGHT, SCORE_AI_WEIGHT)
+    print(json.dumps(
+        {"recomputed_article_scores": updated,
+         "keyword_weight": SCORE_KEYWORD_WEIGHT, "ai_weight": SCORE_AI_WEIGHT},
+        ensure_ascii=False))
+
+
 def cmd_process_full(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.pipeline import process_full
 
@@ -1104,6 +1118,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_score = sub.add_parser("score", help="рассчитать скоринг статей")
     add_ai_args(p_score)
     p_score.set_defaults(func=cmd_score)
+
+    p_rescore_recompute = sub.add_parser(
+        "rescore-recompute",
+        help="пересчитать total_score из сохранённых ai_score новым блендингом (без OpenAI/воркера, на ядре)")
+    p_rescore_recompute.set_defaults(func=cmd_rescore_recompute)
 
     p_process = sub.add_parser("process", help="summary → tagging → scoring")
     add_ai_args(p_process)

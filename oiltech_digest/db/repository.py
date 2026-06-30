@@ -2065,6 +2065,51 @@ def replace_article_score(article_id: int, total_score: float, score_label: str,
         conn.commit()
 
 
+def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -> int:
+    """Пересчитать total_score/score_label/final_score из УЖЕ сохранённых ai_score/keyword_score
+    (article_score_items) по текущему блендингу — БЕЗ повторного вызова OpenAI и без воркера.
+
+    Применяет НОВЫЙ блендинг к старым AI-баллам (полезно, когда менялась только формула, а
+    переспрашивать модель дорого/недоступно — напр. внешний воркер лежит). Формула синхронна
+    pipeline.normalize_score_payload: final = max(ai, kw*keyword_weight + ai*ai_weight);
+    total = Σ final*weight/100 (вес критерия из scoring_criteria). Пороги score_label синхронны
+    pipeline.score_label (80/65/40). ai_score/keyword_score не трогаются → можно гонять повторно
+    или поверх сделать полный AI-перепрогон. Возвращает число обновлённых статей."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE article_score_items
+            SET final_score = ROUND(
+                GREATEST(COALESCE(ai_score, 0),
+                         COALESCE(keyword_score, 0) * %s + COALESCE(ai_score, 0) * %s)::numeric, 2)
+            """,
+            (keyword_weight, ai_weight),
+        )
+        cur = conn.execute(
+            """
+            WITH recomputed AS (
+                SELECT i.article_score_id,
+                       SUM(i.final_score * c.weight / 100.0) AS total
+                FROM article_score_items i
+                JOIN scoring_criteria c ON c.id = i.criterion_id
+                GROUP BY i.article_score_id
+            )
+            UPDATE article_scores s
+            SET total_score = ROUND(LEAST(GREATEST(r.total, 0), 100)::numeric, 2),
+                score_label = CASE
+                    WHEN r.total >= 80 THEN 'Высокая'
+                    WHEN r.total >= 65 THEN 'Выше средней'
+                    WHEN r.total >= 40 THEN 'Средняя'
+                    ELSE 'Низкая' END,
+                updated_at = now()
+            FROM recomputed r
+            WHERE s.id = r.article_score_id
+            """
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
 def insert_ai_run(rec: dict) -> None:
     # job_id по умолчанию NULL — для локального пути и старых вызовов (не дедуплицируются).
     # ON CONFLICT DO NOTHING (баг H1/T2): повторное применение результата задачи не двоит
