@@ -104,6 +104,7 @@ def test_build_digest_content_uses_branding_config(monkeypatch):
         },
     )
     monkeypatch.setattr("oiltech_digest.processing.digest.repository.digest_candidates", lambda month, limit=20, min_score=60, user_id=None, **kwargs: [])
+    monkeypatch.setattr("oiltech_digest.processing.digest.repository.get_monthly_digest", lambda month, user_id=None: None)
 
     content = build_digest_content("2026-05", user_id=1)
 
@@ -155,7 +156,7 @@ def test_build_digest_content_prefers_saved_monthly_digest_order(monkeypatch):
         lambda month, limit=20, min_score=60, user_id=None, **kwargs: [],
     )
 
-    content = build_digest_content("2026-05")
+    content = build_digest_content("2026-05", user_id=1)
 
     assert [item["article_id"] for item in content["news"]] == [11, 10]
 

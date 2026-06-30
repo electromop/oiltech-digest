@@ -477,13 +477,20 @@ def _render_news_sections(news_items: list[dict], issue: dict) -> str:
     title = issue.get("news_title") or "Новости"
     if not news_items:
         return f'<div class="news-section-title">{_html(title)}</div>'
-    items_html = "\n".join(_render_news_item(item, issue) for item in news_items)
-    return (
-        '<div class="news-page">'
-        f'<div class="news-section-title">{_html(title)}</div>'
-        f'{items_html}'
-        "</div>"
-    )
+    # Новости постранично по 3 карточки (как в DOCX, см. _chunk_news_items): каждая
+    # «страница» — отдельный .news-page, со 2-й идёт принудительный разрыв (.news-page-break),
+    # заголовок раздела повторяется на каждой странице.
+    pages = []
+    for page_index, chunk in enumerate(_chunk_news_items(news_items, size=3)):
+        page_class = "news-page news-page-break" if page_index else "news-page"
+        items_html = "\n".join(_render_news_item(item, issue) for item in chunk)
+        pages.append(
+            f'<div class="{page_class}">'
+            f'<div class="news-section-title">{_html(title)}</div>'
+            f'{items_html}'
+            "</div>"
+        )
+    return "\n".join(pages)
 
 
 def _chunk_news_items(news_items: list[dict], size: int = 3) -> list[list[dict]]:
