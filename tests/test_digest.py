@@ -129,7 +129,7 @@ def test_build_digest_content_prefers_saved_monthly_digest_order(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.get_monthly_digest",
-        lambda month: {"id": 5, "month": month, "items": [{"article_id": 11}, {"article_id": 10}]},
+        lambda month, user_id=None: {"id": 5, "user_id": user_id, "month": month, "items": [{"article_id": 11}, {"article_id": 10}]},
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_items_by_article_ids",
@@ -327,7 +327,8 @@ def test_render_digest_docx_contains_digest_content():
     assert "word/styles.xml" in names
     assert "Digest title" in document_xml
     assert "Export article" in document_xml
-    assert "Итоги периода" in document_xml
+    assert "Итоги периода" not in document_xml
+    assert "новость" not in document_xml
     assert "World Oil" in document_xml
     assert "20.05.2026" in document_xml
 
@@ -447,7 +448,7 @@ def test_render_digest_email_card_tag_and_cta_at_bottom():
     assert html.index("ЧИТАТЬ ДАЛЕЕ") < html.index("Рынок / LNG")
 
 
-def test_render_digest_email_renders_highlights_block():
+def test_render_digest_email_omits_highlights_block():
     html = render_digest_email(
         {
             "issue": {"title": "Digest", "preheader": "P", "intro": "Intro", "highlights_title": "Итоги периода", "news_title": "Сигналы"},
@@ -459,9 +460,9 @@ def test_render_digest_email_renders_highlights_block():
             "footer": {"contact_text": "C", "contact_email": "d@e.com", "note": "N"},
         }
     )
-    assert "Итоги периода" in html
+    assert "Итоги периода" not in html
+    assert "Главное за период" not in html
     assert "news-card-tag" in html
-    assert "аналитических материалов" in html or "новость" in html or "новостей" in html
     assert "Сигналы" in html
 
 
@@ -620,6 +621,7 @@ def test_save_digest_draft_persists_ordered_items(monkeypatch):
 
     assert result["id"] == 5
     assert saved["month"] == "2026-05"
+    assert saved["user_id"] is None
     assert saved["items"] == [
         {"article_id": 10, "section": "Drilling", "editor_note": "First"},
         {"article_id": 11, "section": "Production", "editor_note": "Second"},

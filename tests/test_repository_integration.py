@@ -6,6 +6,40 @@ from oiltech_digest.db import connection
 from oiltech_digest.db import repository
 
 
+def test_monthly_digests_are_scoped_by_user(isolated_db):
+    with connection.get_connection() as conn:
+        user_rows = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES
+              ('first@example.com', 'salt', 'hash', 'user'),
+              ('second@example.com', 'salt', 'hash', 'user')
+            RETURNING id, email
+            """
+        ).fetchall()
+        conn.commit()
+    user_ids = {email: user_id for user_id, email in user_rows}
+
+    first = repository.save_monthly_digest(
+        "2026-06",
+        "Digest for first user",
+        [],
+        user_id=user_ids["first@example.com"],
+    )
+    second = repository.save_monthly_digest(
+        "2026-06",
+        "Digest for second user",
+        [],
+        user_id=user_ids["second@example.com"],
+    )
+
+    assert first["id"] != second["id"]
+    assert first["user_id"] == user_ids["first@example.com"]
+    assert second["user_id"] == user_ids["second@example.com"]
+    assert repository.get_monthly_digest("2026-06", user_id=user_ids["first@example.com"])["title"] == "Digest for first user"
+    assert repository.get_monthly_digest("2026-06", user_id=user_ids["second@example.com"])["title"] == "Digest for second user"
+
+
 def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated_db):
     now = datetime.now(timezone.utc)
 

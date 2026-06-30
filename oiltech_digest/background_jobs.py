@@ -34,6 +34,7 @@ def enqueue(
     kind: str,
     payload: dict[str, Any] | None = None,
     *,
+    user_id: int | None = None,
     queue_name: str = "default",
     execution_region: str = "ru",
     capability: str | None = None,
@@ -45,6 +46,7 @@ def enqueue(
     job = repository.create_background_job(
         kind,
         payload or {},
+        user_id=user_id,
         queue_name=queue_name,
         execution_region=execution_region,
         capability=capability,

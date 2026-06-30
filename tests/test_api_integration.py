@@ -185,7 +185,7 @@ def test_digest_export_endpoint_records_pdf_runtime_error(monkeypatch, isolated_
 
 def test_background_jobs_api_lists_status_and_downloads_result(tmp_path, isolated_db):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     exported = tmp_path / "digest.json"
     exported.write_text('{"ok": true}', encoding="utf-8")
 
@@ -223,9 +223,83 @@ def test_background_jobs_api_lists_status_and_downloads_result(tmp_path, isolate
     assert download_response.text == '{"ok": true}'
 
 
+def test_background_jobs_api_hides_other_users_jobs_and_downloads(tmp_path, isolated_db):
+    app = api.app
+    exported = tmp_path / "own-digest.json"
+    exported.write_text('{"owner": true}', encoding="utf-8")
+
+    with connection.get_connection() as conn:
+        first_user_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES ('first@example.com', 'salt', 'hash', 'user')
+            RETURNING id
+            """
+        ).fetchone()[0]
+        second_user_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES ('second@example.com', 'salt', 'hash', 'user')
+            RETURNING id
+            """
+        ).fetchone()[0]
+        own_job_id = conn.execute(
+            """
+            INSERT INTO background_jobs
+              (user_id, kind, status, progress, payload_json, result_json, started_at, finished_at)
+            VALUES
+              (%s, 'digest_export', 'ok', 100, '{"month":"2026-06"}'::jsonb,
+               %s::jsonb, now(), now())
+            RETURNING id
+            """,
+            (
+                first_user_id,
+                f'{{"path": "{exported}", "filename": "own-digest.json", '
+                '"media_type": "application/json"}',
+            ),
+        ).fetchone()[0]
+        other_job_id = conn.execute(
+            """
+            INSERT INTO background_jobs
+              (user_id, kind, status, progress, payload_json, result_json, started_at, finished_at)
+            VALUES
+              (%s, 'digest_export', 'ok', 100, '{"month":"2026-06"}'::jsonb,
+               '{"path": "/tmp/other-digest.json", "filename": "other-digest.json"}'::jsonb,
+               now(), now())
+            RETURNING id
+            """,
+            (second_user_id,),
+        ).fetchone()[0]
+        conn.commit()
+
+    app.dependency_overrides[api.require_user] = lambda: {
+        "id": first_user_id,
+        "email": "first@example.com",
+        "role": "user",
+    }
+    try:
+        client = TestClient(app)
+        list_response = client.get("/api/jobs?kind=digest_export")
+        own_status_response = client.get(f"/api/jobs/{own_job_id}")
+        other_status_response = client.get(f"/api/jobs/{other_job_id}")
+        own_download_response = client.get(f"/api/jobs/{own_job_id}/download")
+        other_download_response = client.get(f"/api/jobs/{other_job_id}/download")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert list_response.status_code == 200
+    assert [job["id"] for job in list_response.json()] == [own_job_id]
+    assert own_status_response.status_code == 200
+    assert own_status_response.json()["id"] == own_job_id
+    assert other_status_response.status_code == 404
+    assert own_download_response.status_code == 200
+    assert own_download_response.text == '{"owner": true}'
+    assert other_download_response.status_code == 404
+
+
 def test_background_job_download_rejects_unfinished_and_missing_files(isolated_db):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
 
     with connection.get_connection() as conn:
         queued_job_id = conn.execute(

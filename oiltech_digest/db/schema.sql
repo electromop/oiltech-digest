@@ -185,13 +185,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_article_tags_article_unique ON article_tag
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS monthly_digests (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id     BIGINT,
   month       TEXT NOT NULL,                  -- YYYY-MM
   title       TEXT,
   status      TEXT DEFAULT 'draft',
   created_at  TIMESTAMPTZ DEFAULT now(),
   updated_at  TIMESTAMPTZ DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_digests_month ON monthly_digests(month);
+ALTER TABLE monthly_digests ADD COLUMN IF NOT EXISTS user_id BIGINT;
+DROP INDEX IF EXISTS idx_monthly_digests_month;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_digests_user_month ON monthly_digests(user_id, month);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_digests_shared_month ON monthly_digests(month) WHERE user_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS monthly_digest_items (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -229,6 +233,15 @@ CREATE TABLE IF NOT EXISTS users (
   created_at     TIMESTAMPTZ DEFAULT now(),
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
+
+DO $$
+BEGIN
+  ALTER TABLE monthly_digests
+    ADD CONSTRAINT monthly_digests_user_id_fkey
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Личное состояние пользователя: свои статусы статей и свой дайджест (срез на юзера).
 -- Сами статьи/AI/теги/скоринг/источники — общие; пер-юзерный только рабочий статус.
@@ -279,6 +292,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_runs_article_id ON ai_processing_runs(article_
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS background_jobs (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
   kind          TEXT NOT NULL,                  -- digest_export / process_articles / scrape_source / diagnose_source
   queue_name    TEXT NOT NULL DEFAULT 'default',
   status        TEXT NOT NULL DEFAULT 'queued', -- queued / running / ok / failed
@@ -302,6 +316,7 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 CREATE INDEX IF NOT EXISTS idx_background_jobs_status_created ON background_jobs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_kind_created ON background_jobs(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(queue_name, status, run_after, created_at);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_user_created ON background_jobs(user_id, created_at DESC);
 
 -- Idempotent upgrades for databases initialized before these columns existed.
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
@@ -329,6 +344,7 @@ ALTER TABLE articles ADD COLUMN IF NOT EXISTS deletion_reason TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS marked_for_deletion_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_articles_pending_deletion ON articles(pending_deletion) WHERE pending_deletion;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS queue_name TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS user_id BIGINT;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS run_after TIMESTAMPTZ NOT NULL DEFAULT now();
@@ -338,5 +354,25 @@ ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS claimed_by TEXT;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_token_hash TEXT;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+UPDATE background_jobs bj
+SET user_id = u.id
+FROM users u
+WHERE bj.user_id IS NULL
+  AND bj.payload_json ? 'user_id'
+  AND (bj.payload_json->>'user_id') ~ '^[0-9]+$'
+  AND u.id = (bj.payload_json->>'user_id')::BIGINT;
+UPDATE background_jobs bj
+SET user_id = NULL
+WHERE bj.user_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = bj.user_id);
+DO $$
+BEGIN
+  ALTER TABLE background_jobs
+    ADD CONSTRAINT background_jobs_user_id_fkey
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_background_jobs_external_ready ON background_jobs(execution_region, queue_name, status, run_after, created_at);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_lease_expires ON background_jobs(status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_user_created ON background_jobs(user_id, created_at DESC);

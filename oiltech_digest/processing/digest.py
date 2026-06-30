@@ -42,8 +42,8 @@ def _hero_data_uri() -> str:
     return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else ""
 
 
-def _pdf_font_face_style() -> str:
-    """<style> с GPN Din в base64 — вставляется только в PDF-рендер."""
+def _embedded_font_faces() -> str:
+    """@font-face с GPN Din в base64 для HTML/PDF-рендера без зависимости от ОС."""
     faces = []
     for family, files in _PDF_FONT_FILES.items():
         for fname, weight in files:
@@ -55,7 +55,13 @@ def _pdf_font_face_style() -> str:
                 f"@font-face{{font-family:'{family}';font-style:normal;font-weight:{weight};"
                 f"src:url(data:font/ttf;base64,{b64}) format('truetype');}}"
             )
-    return "<style>" + "".join(faces) + "</style>" if faces else ""
+    return "".join(faces)
+
+
+def _pdf_font_face_style() -> str:
+    """<style> с GPN Din в base64 — добавляется в PDF-рендер для Chromium."""
+    faces = _embedded_font_faces()
+    return "<style>" + faces + "</style>" if faces else ""
 
 
 def _load_digest_branding() -> dict:
@@ -212,7 +218,7 @@ def build_digest_content(
     issue_cfg = branding["issue"]
     rows = []
     if month and user_id is not None:
-        saved_digest = repository.get_monthly_digest(month)
+        saved_digest = repository.get_monthly_digest(month, user_id=user_id)
         saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
         if saved_ids:
             rows = repository.digest_items_by_article_ids(saved_ids[:limit], user_id=user_id)
@@ -293,18 +299,16 @@ def render_digest_email(content: dict) -> str:
     template = (TEMPLATE_DIR / EMAIL_TEMPLATE).read_text(encoding="utf-8")
     news_items = content.get("news", [])
     branding = content.get("branding") or _load_digest_branding()
-    highlights = content.get("highlights")
-    if highlights is None:
-        highlights = _digest_highlights(news_items, branding.get("highlights"))
     news_sections = _render_news_sections(news_items, content.get("issue") or {})
     values = {
         "header_brand_text": _html(branding.get("header", {}).get("brand_text")),
         "header_brand_suffix": _html(branding.get("header", {}).get("brand_suffix")),
         "header_department_text": _html(branding.get("header", {}).get("department_text")),
+        "font_face_style": _embedded_font_faces(),
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
         "issue_intro": _html(content.get("issue", {}).get("intro")),
-        "highlights_section": _render_highlights_section(content.get("issue") or {}, highlights or []),
+        "highlights_section": "",
         "news_sections": news_sections,
         # Hero — утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
         "hero_img_src": _html(content.get("hero", {}).get("image_url")) or _hero_data_uri(),
@@ -473,18 +477,13 @@ def _render_news_sections(news_items: list[dict], issue: dict) -> str:
     title = issue.get("news_title") or "Новости"
     if not news_items:
         return f'<div class="news-section-title">{_html(title)}</div>'
-    chunks = _chunk_news_items(news_items, size=3)
-    sections = []
-    for index, chunk in enumerate(chunks):
-        chunk_html = "\n".join(_render_news_item(item, issue) for item in chunk)
-        section_class = "news-page news-page-break" if index else "news-page"
-        sections.append(
-            f'<div class="{section_class}">'
-            f'<div class="news-section-title">{_html(title)}</div>'
-            f'{chunk_html}'
-            "</div>"
+    items_html = "\n".join(_render_news_item(item, issue) for item in news_items)
+    return (
+        '<div class="news-page">'
+        f'<div class="news-section-title">{_html(title)}</div>'
+        f'{items_html}'
+        "</div>"
     )
-    return "\n".join(sections)
 
 
 def _chunk_news_items(news_items: list[dict], size: int = 3) -> list[list[dict]]:
@@ -568,7 +567,7 @@ def _render_footer_socials(socials: list[dict]) -> str:
             'text-align:center;line-height:36px;'
             f'color:{_html(item.get("accent") or "#262d3c")};'
             "font-weight:bold;font-size:13px;font-family:'GPN Din',Arial,Helvetica,sans-serif;"
-            f' title="{_html(item.get("label"))}">{_html(item.get("text"))}</div>'
+            f'" title="{_html(item.get("label"))}">{_html(item.get("text"))}</div>'
             "</td>"
         )
     return "".join(cells)
@@ -588,15 +587,31 @@ def _news_placeholder_data_uri(category: object) -> str:
     }
     start, end = palette.get(key, ("#003DA6", "#001D50"))
     label = escape(top[:26], quote=True)
+    badge_label = label.upper()
+    if len(badge_label) > 12:
+        split_at = badge_label.rfind(" ", 0, 12)
+        if split_at < 5:
+            split_at = 12
+        badge_lines = [badge_label[:split_at].strip(), badge_label[split_at:].strip()]
+    else:
+        badge_lines = [badge_label]
+    badge_lines = [line[:13] for line in badge_lines if line]
+    badge_width = min(110, max(42, max(len(line) for line in badge_lines) * 6 + 16))
+    badge_height = 26 if len(badge_lines) > 1 else 17
+    label_y = 56 if len(badge_lines) > 1 else 50
+    badge_text = "".join(
+        f"<text x='14' y='{22 + idx * 10}' font-family='Arial,Helvetica,sans-serif' font-size='9' font-weight='700' fill='#ffffff'>{line}</text>"
+        for idx, line in enumerate(badge_lines)
+    )
     svg = (
         "<svg xmlns='http://www.w3.org/2000/svg' width='130' height='86' viewBox='0 0 130 86'>"
         "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
         f"<stop offset='0' stop-color='{start}'/><stop offset='1' stop-color='{end}'/>"
         "</linearGradient></defs>"
         "<rect width='130' height='86' rx='6' fill='url(#g)'/>"
-        "<rect x='10' y='12' width='48' height='14' rx='7' fill='rgba(255,255,255,0.18)'/>"
-        f"<text x='14' y='22' font-family='Arial,Helvetica,sans-serif' font-size='8' font-weight='700' fill='#ffffff'>{label[:12].upper()}</text>"
-        f"<text x='14' y='50' font-family='Arial,Helvetica,sans-serif' font-size='13' font-weight='700' fill='#ffffff'>{label}</text>"
+        f"<rect x='10' y='11' width='{badge_width}' height='{badge_height}' rx='8.5' fill='rgba(255,255,255,0.18)'/>"
+        f"{badge_text}"
+        f"<text x='14' y='{label_y}' font-family='Arial,Helvetica,sans-serif' font-size='13' font-weight='700' fill='#ffffff'>{label}</text>"
         "</svg>"
     )
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
@@ -696,6 +711,7 @@ def save_digest_draft(
         title=content.get("title") or f"Нефтесервисный дайджест · {month}",
         items=items,
         status="draft",
+        user_id=user_id,
     )
     return {**saved, "content_items": len(content.get("items", []))}
 
@@ -807,9 +823,6 @@ def render_digest_docx(content: dict) -> bytes:
     issue = content.get("issue") or {}
     hero = content.get("hero") or {}
     news_items = content.get("news") or content.get("items") or []
-    highlights = content.get("highlights")
-    if highlights is None:
-        highlights = _digest_highlights(news_items, (content.get("branding") or {}).get("highlights"))
     footer = content.get("footer") or {}
     header = (content.get("branding") or {}).get("header") or {}
 
@@ -874,16 +887,6 @@ def render_digest_docx(content: dict) -> bytes:
         run.font.size = Pt(11)
     if issue.get("intro"):
         doc.add_paragraph(issue["intro"])
-
-    # --- Главное за период ---
-    if highlights:
-        doc.add_heading(issue.get("highlights_title") or "Главное за период", level=1)
-        for hl in highlights:
-            p = doc.add_paragraph(style="List Bullet")
-            value = p.add_run(f"{hl.get('value', 0)} ")
-            value.bold = True
-            value.font.color.rgb = BRAND
-            p.add_run(str(hl.get("label", "")))
 
     # --- Новости ---
     read_more = issue.get("read_more_label") or "Читать далее"

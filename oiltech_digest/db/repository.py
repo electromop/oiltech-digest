@@ -448,6 +448,7 @@ def create_background_job(
     kind: str,
     payload: dict | None = None,
     *,
+    user_id: int | None = None,
     queue_name: str = "default",
     execution_region: str = "ru",
     capability: str | None = None,
@@ -458,23 +459,37 @@ def create_background_job(
         cur.execute(
             """
             INSERT INTO background_jobs (
-                kind, queue_name, execution_region, capability,
+                user_id, kind, queue_name, execution_region, capability,
                 status, progress, max_attempts, payload_json
             )
-            VALUES (%s, %s, %s, %s, 'queued', 0, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, 'queued', 0, %s, %s)
             RETURNING *
             """,
-            (kind, queue_name, execution_region, capability, max_attempts, Json(_jsonable(payload or {}))),
+            (
+                user_id,
+                kind,
+                queue_name,
+                execution_region,
+                capability,
+                max_attempts,
+                Json(_jsonable(payload or {})),
+            ),
         )
         job = cur.fetchone()
         conn.commit()
         return job
 
 
-def get_background_job(job_id: int) -> dict | None:
+def get_background_job(job_id: int, *, user_id: int | None = None) -> dict | None:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT * FROM background_jobs WHERE id = %s", (job_id,))
+        if user_id is None:
+            cur.execute("SELECT * FROM background_jobs WHERE id = %s", (job_id,))
+        else:
+            cur.execute(
+                "SELECT * FROM background_jobs WHERE id = %s AND user_id = %s",
+                (job_id, user_id),
+            )
         return cur.fetchone()
 
 
@@ -588,6 +603,7 @@ def list_background_jobs(
     status: str | None = None,
     kind: str | None = None,
     queue_name: str | None = None,
+    user_id: int | None = None,
     limit: int = 50,
 ) -> list[dict]:
     clauses = []
@@ -601,6 +617,9 @@ def list_background_jobs(
     if queue_name:
         clauses.append("queue_name = %s")
         params.append(queue_name)
+    if user_id is not None:
+        clauses.append("user_id = %s")
+        params.append(user_id)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     params.append(limit)
     with get_connection() as conn:
@@ -2126,21 +2145,41 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         return cur.fetchall()
 
 
-def save_monthly_digest(month: str, title: str, items: list[dict], status: str = "draft") -> dict:
+def save_monthly_digest(
+    month: str,
+    title: str,
+    items: list[dict],
+    status: str = "draft",
+    user_id: int | None = None,
+) -> dict:
     """Persist a monthly digest draft and replace its ordered item list."""
     with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO monthly_digests (month, title, status)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (month) DO UPDATE SET
-                title = EXCLUDED.title,
-                status = EXCLUDED.status,
-                updated_at = now()
-            RETURNING id, month, title, status
-            """,
-            (month, title, status),
-        )
+        if user_id is None:
+            cur = conn.execute(
+                """
+                INSERT INTO monthly_digests (user_id, month, title, status)
+                VALUES (NULL, %s, %s, %s)
+                ON CONFLICT (month) WHERE user_id IS NULL DO UPDATE SET
+                    title = EXCLUDED.title,
+                    status = EXCLUDED.status,
+                    updated_at = now()
+                RETURNING id, user_id, month, title, status
+                """,
+                (month, title, status),
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO monthly_digests (user_id, month, title, status)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, month) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    status = EXCLUDED.status,
+                    updated_at = now()
+                RETURNING id, user_id, month, title, status
+                """,
+                (user_id, month, title, status),
+            )
         digest = cur.fetchone()
         digest_id = digest[0]
         conn.execute("DELETE FROM monthly_digest_items WHERE digest_id = %s", (digest_id,))
@@ -2161,25 +2200,38 @@ def save_monthly_digest(month: str, title: str, items: list[dict], status: str =
         conn.commit()
         return {
             "id": digest[0],
-            "month": digest[1],
-            "title": digest[2],
-            "status": digest[3],
+            "user_id": digest[1],
+            "month": digest[2],
+            "title": digest[3],
+            "status": digest[4],
             "items": len(items),
         }
 
 
-def get_monthly_digest(month: str) -> dict | None:
+def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
     """Fetch a persisted monthly digest draft with ordered item article ids."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            SELECT id, month, title, status, created_at, updated_at
-            FROM monthly_digests
-            WHERE month = %s
-            """,
-            (month,),
-        )
+        if user_id is None:
+            cur.execute(
+                """
+                SELECT id, user_id, month, title, status, created_at, updated_at
+                FROM monthly_digests
+                WHERE month = %s AND user_id IS NULL
+                """,
+                (month,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, user_id, month, title, status, created_at, updated_at
+                FROM monthly_digests
+                WHERE month = %s AND (user_id = %s OR user_id IS NULL)
+                ORDER BY (user_id = %s) DESC, updated_at DESC
+                LIMIT 1
+                """,
+                (month, user_id, user_id),
+            )
         digest = cur.fetchone()
         if digest is None:
             return None

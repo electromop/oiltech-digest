@@ -640,6 +640,7 @@ def scrape_source(
         job = background_jobs.enqueue(
             "scrape_source",
             {"source_id": source_id},
+            user_id=int(user["id"]),
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,
@@ -678,6 +679,7 @@ def diagnose_source_with_overrides(
         job = background_jobs.enqueue(
             "diagnose_source",
             {"source_id": source_id, "overrides": overrides, "limit": limit},
+            user_id=int(user["id"]),
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,
@@ -784,7 +786,7 @@ def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends
 
 @app.get("/api/monthly-digests/{month}")
 def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    digest = repository.get_monthly_digest(month)
+    digest = repository.get_monthly_digest(month, user_id=int(user["id"]))
     if digest is None:
         raise HTTPException(status_code=404, detail="Digest not found")
     return _clean(digest)
@@ -797,6 +799,7 @@ def update_monthly_digest(month: str, payload: MonthlyDigestUpdateRequest, user:
         title=payload.title or f"Нефтесервисный дайджест · {month}",
         items=[item.model_dump() for item in payload.items],
         status=payload.status,
+        user_id=int(user["id"]),
     )
     return _clean(saved)
 
@@ -828,15 +831,22 @@ def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
+    user_id = None if (user.get("role") or "user") == "admin" else int(user["id"])
     return [
         _job_payload(row)
-        for row in repository.list_background_jobs(status=status, kind=kind, queue_name=queue_name, limit=limit)
+        for row in repository.list_background_jobs(
+            status=status,
+            kind=kind,
+            queue_name=queue_name,
+            user_id=user_id,
+            limit=limit,
+        )
     ]
 
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    job = repository.get_background_job(job_id)
+    job = _get_scoped_background_job(job_id, user)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_payload(job)
@@ -844,7 +854,7 @@ def get_job(job_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[s
 
 @app.get("/api/jobs/{job_id}/download")
 def download_job_result(job_id: int, user: dict[str, Any] = Depends(require_user)) -> FileResponse:
-    job = repository.get_background_job(job_id)
+    job = _get_scoped_background_job(job_id, user)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] != "ok":
@@ -870,6 +880,7 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
     job = background_jobs.enqueue(
         "digest_export",
         {**payload.model_dump(), "user_id": int(user["id"])},  # дайджест пер-юзерный (#12)
+        user_id=int(user["id"]),
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
         capability=decision.capability,
@@ -885,6 +896,7 @@ def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Dep
     job = background_jobs.enqueue(
         "process_articles",
         payload.model_dump(),
+        user_id=int(user["id"]),
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
         capability=decision.capability,
@@ -1146,6 +1158,12 @@ def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
         "started_at": _clean(row.get("started_at")),
         "finished_at": _clean(row.get("finished_at")),
     }
+
+
+def _get_scoped_background_job(job_id: int, user: dict[str, Any]) -> dict[str, Any] | None:
+    if (user.get("role") or "user") == "admin":
+        return repository.get_background_job(job_id)
+    return repository.get_background_job(job_id, user_id=int(user["id"]))
 
 
 def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:

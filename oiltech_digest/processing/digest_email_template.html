@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{issue_title}</title>
   <style>
+    {font_face_style}
+
     @page {{
       size: A4;
       margin: 0;
@@ -30,15 +32,7 @@
     }}
 
     .news-page {{
-      break-inside: avoid;
-      page-break-inside: avoid;
       margin: 0 0 8px 0;
-    }}
-
-    .news-page-break {{
-      page-break-before: always;
-      break-before: page;
-      padding-top: 10px;
     }}
 
     .news-section-title {{
