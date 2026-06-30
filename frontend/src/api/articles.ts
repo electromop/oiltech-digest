@@ -13,7 +13,13 @@ export type ArticleQuery = {
   source?: string;
   tag?: string;
   status?: string;
+  language?: string;
   minScore?: number;
+  maxScore?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  sort?: "date_desc" | "score_desc" | "score_asc";
+  changedOnly?: boolean;
 };
 
 // Без фильтров возвращает дефолтный лёгкий топ-2000. С `search` (и др.) запрос
@@ -26,7 +32,13 @@ export function listArticles(query: ArticleQuery = {}) {
   if (query.source) params.set("source", query.source);
   if (query.tag) params.set("tag", query.tag);
   if (query.status) params.set("status", query.status);
+  if (query.language) params.set("language", query.language);
   if (query.minScore != null) params.set("min_score", String(query.minScore));
+  if (query.maxScore != null) params.set("max_score", String(query.maxScore));
+  if (query.dateFrom) params.set("date_from", query.dateFrom);
+  if (query.dateTo) params.set("date_to", query.dateTo);
+  if (query.sort) params.set("sort", query.sort);
+  if (query.changedOnly) params.set("changed_only", "1");
   return apiFetch<Article[]>(`/api/articles?${params.toString()}`);
 }
 

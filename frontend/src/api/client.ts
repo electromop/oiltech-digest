@@ -35,6 +35,29 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return (await response.json()) as T;
 }
 
+export async function apiFetchText(path: string, init: RequestInit = {}) {
+  const response = await fetch(path, {
+    ...init,
+    credentials: "same-origin",
+    headers: init.headers,
+  });
+
+  if (!response.ok) {
+    let message = response.statusText || "Request failed";
+    try {
+      const text = await response.text();
+      if (text) {
+        message = text;
+      }
+    } catch {
+      // ignore text parsing failure
+    }
+    throw new ApiError(response.status, message);
+  }
+
+  return response.text();
+}
+
 export async function apiDownload(path: string, init: RequestInit = {}) {
   const response = await fetch(path, {
     ...init,

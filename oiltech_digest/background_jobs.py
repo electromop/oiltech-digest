@@ -151,6 +151,9 @@ def _run_digest_export(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
         export_format=str(payload.get("export_format") or "pdf"),
         limit=int(payload.get("limit") or 100),
         min_score=float(payload.get("min_score") or 0),
+        max_score=float(payload["max_score"]) if payload.get("max_score") is not None else None,
+        search=str(payload.get("search") or "") or None,
+        top_tag=str(payload.get("top_tag") or "") or None,
         user_id=int(payload["user_id"]) if payload.get("user_id") is not None else None,
     )
     repository.update_background_job_progress(job_id, 90)

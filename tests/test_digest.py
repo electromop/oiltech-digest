@@ -103,21 +103,61 @@ def test_build_digest_content_uses_branding_config(monkeypatch):
             },
         },
     )
-    monkeypatch.setattr("oiltech_digest.processing.digest.repository.digest_candidates", lambda month, limit=20, min_score=60, user_id=None: [])
+    monkeypatch.setattr("oiltech_digest.processing.digest.repository.digest_candidates", lambda month, limit=20, min_score=60, user_id=None, **kwargs: [])
 
-    content = build_digest_content("2026-05")
+    content = build_digest_content("2026-05", user_id=1)
 
     assert content["branding"]["header"]["brand_text"] == "ТЕСТ БРЕНД"
     assert content["hero"]["headline"] == "ТЕСТОВЫЙ ДАЙДЖЕСТ"
     assert content["hero"]["image_url"] == "https://example.com/hero.jpg"
     assert content["issue"]["preheader"] == "Тестовый прехедер"
     assert content["issue"]["intro"] == "Интро за 2026-05"
-    assert content["issue"]["highlights_title"] == "Ключевое"
     assert content["issue"]["news_title"] == "Материалы"
     assert content["issue"]["read_more_label"] == "Открыть"
     assert content["issue"]["empty_summary_text"] == "Нет сути"
     assert content["footer"]["contact_email"] == "brand@example.com"
     assert content["footer"]["socials"][0]["text"] == "P"
+
+
+def test_build_digest_content_prefers_saved_monthly_digest_order(monkeypatch):
+    class PublishedAt:
+        def date(self):
+            return self
+
+        def isoformat(self):
+            return "2026-05-20"
+
+    monkeypatch.setattr(
+        "oiltech_digest.processing.digest.repository.get_monthly_digest",
+        lambda month: {"id": 5, "month": month, "items": [{"article_id": 11}, {"article_id": 10}]},
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.processing.digest.repository.digest_items_by_article_ids",
+        lambda article_ids, user_id=None: [
+            {
+                "id": article_id,
+                "title": f"Article {article_id}",
+                "source_name": "World Oil",
+                "url": f"https://example.com/{article_id}",
+                "published_at": PublishedAt(),
+                "tag_name": "Drilling",
+                "parent_tag_name": None,
+                "total_score": 80 + article_id,
+                "score_label": "High",
+                "summary": f"Summary {article_id}",
+                "image_url": "",
+            }
+            for article_id in article_ids
+        ],
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.processing.digest.repository.digest_candidates",
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [],
+    )
+
+    content = build_digest_content("2026-05")
+
+    assert [item["article_id"] for item in content["news"]] == [11, 10]
 
 
 def test_render_digest_email_renders_branding_from_content():
@@ -182,7 +222,7 @@ def test_write_digest_export_json(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=20, min_score=60, user_id=None: {
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [],
@@ -203,7 +243,7 @@ def test_write_digest_export_html_and_docx(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=100, min_score=0, user_id=None: {
+        lambda month, limit=100, min_score=0, user_id=None, **kwargs: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [
@@ -244,7 +284,7 @@ def test_write_digest_export_doc_alias_writes_real_docx(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=100, min_score=0, user_id=None: {
+        lambda month, limit=100, min_score=0, user_id=None, **kwargs: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [],
@@ -262,7 +302,7 @@ def test_write_digest_export_doc_alias_writes_real_docx(monkeypatch, tmp_path):
 
 def test_render_digest_docx_contains_digest_content():
     content = {
-        "issue": {"title": "Digest title", "intro": "Digest intro"},
+        "issue": {"title": "Digest title", "intro": "Digest intro", "highlights_title": "Итоги периода", "news_title": "Новости"},
         "news": [
             {
                 "category": "Рынок / LNG",
@@ -287,6 +327,29 @@ def test_render_digest_docx_contains_digest_content():
     assert "word/styles.xml" in names
     assert "Digest title" in document_xml
     assert "Export article" in document_xml
+    assert "Итоги периода" in document_xml
+    assert "World Oil" in document_xml
+    assert "20.05.2026" in document_xml
+
+
+def test_render_digest_docx_splits_news_with_page_breaks():
+    content = {
+        "issue": {"title": "Digest title", "intro": "Digest intro", "news_title": "Новости"},
+        "news": [
+            {"category": "Технологии", "title": "A1", "source": "SLB", "url": "https://e.com/1", "published_at": "2026-05-20", "summary": "S1"},
+            {"category": "Технологии", "title": "A2", "source": "SLB", "url": "https://e.com/2", "published_at": "2026-05-21", "summary": "S2"},
+            {"category": "Технологии", "title": "A3", "source": "SLB", "url": "https://e.com/3", "published_at": "2026-05-22", "summary": "S3"},
+            {"category": "Технологии", "title": "A4", "source": "World Oil", "url": "https://e.com/4", "published_at": "2026-05-23", "summary": "S4"},
+        ],
+    }
+
+    payload = render_digest_docx(content)
+
+    with ZipFile(BytesIO(payload)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+
+    assert document_xml.count("Новости") == 2
+    assert "lastRenderedPageBreak" in document_xml or 'w:type="page"' in document_xml
 
 
 def test_build_digest_content_includes_article_ids(monkeypatch):
@@ -299,7 +362,7 @@ def test_build_digest_content_includes_article_ids(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60, user_id=None: [
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [
             {
                 "id": 123,
                 "title": "Digest candidate",
@@ -329,7 +392,7 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60, user_id=None: [
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [
             {
                 "id": 123,
                 "title": "Digest candidate",
@@ -397,7 +460,59 @@ def test_render_digest_email_renders_highlights_block():
         }
     )
     assert "Итоги периода" in html
+    assert "news-card-tag" in html
+    assert "аналитических материалов" in html or "новость" in html or "новостей" in html
     assert "Сигналы" in html
+
+
+def test_render_digest_email_splits_news_into_page_sections_and_shows_source_meta():
+    html = render_digest_email(
+        {
+            "issue": {"title": "Digest", "preheader": "P", "intro": "Intro", "news_title": "Сигналы"},
+            "hero": {"badge": "NEWS", "headline": "DIGEST", "subtitle": "Sub", "image_url": ""},
+            "news": [
+                {"category": "Технологии", "title": "A1", "source": "SLB", "published_at": "2026-06-01", "url": "https://e.com/1", "summary": "s1", "image_url": ""},
+                {"category": "Технологии", "title": "A2", "source": "SLB", "published_at": "2026-06-02", "url": "https://e.com/2", "summary": "s2", "image_url": ""},
+                {"category": "Технологии", "title": "A3", "source": "SLB", "published_at": "2026-06-03", "url": "https://e.com/3", "summary": "s3", "image_url": ""},
+                {"category": "Технологии", "title": "A4", "source": "World Oil", "published_at": "2026-06-04", "url": "https://e.com/4", "summary": "s4", "image_url": ""},
+            ],
+            "footer": {"contact_text": "C", "contact_email": "d@e.com", "note": "N"},
+        }
+    )
+    assert html.count('class="news-page') == 2
+    assert 'class="news-page news-page-break"' in html
+    assert "SLB · 01.06.2026" in html
+    assert "World Oil · 04.06.2026" in html
+    assert html.count('class="news-section-title"') == 2
+
+
+def test_render_digest_email_uses_category_placeholder_for_missing_image():
+    html = render_digest_email(
+        {
+            "issue": {"title": "Digest", "preheader": "P", "intro": "Intro"},
+            "hero": {"badge": "NEWS", "headline": "DIGEST", "subtitle": "Sub", "image_url": ""},
+            "news": [
+                {"category": "Рынок / LNG", "title": "A", "source": "SLB", "url": "https://e.com/a", "summary": "s", "image_url": ""},
+            ],
+            "footer": {"contact_text": "C", "contact_email": "d@e.com", "note": "N"},
+        }
+    )
+    assert "data:image/svg+xml;base64," in html
+
+
+def test_render_digest_email_uses_placeholder_for_unusable_image_url():
+    html = render_digest_email(
+        {
+            "issue": {"title": "Digest", "preheader": "P", "intro": "Intro"},
+            "hero": {"badge": "NEWS", "headline": "DIGEST", "subtitle": "Sub", "image_url": ""},
+            "news": [
+                {"category": "Бизнес-сигнал", "title": "A", "source": "SLB", "url": "https://e.com/a", "summary": "s", "image_url": "https://example.com/news-1.jpg"},
+            ],
+            "footer": {"contact_text": "C", "contact_email": "d@e.com", "note": "N"},
+        }
+    )
+    assert "data:image/svg+xml;base64," in html
+    assert "example.com/news-1.jpg" not in html
 
 
 def test_render_digest_email_uses_empty_summary_fallback():
@@ -481,7 +596,7 @@ def test_save_digest_draft_persists_ordered_items(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=20, min_score=60, user_id=None: {
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: {
             "month": month,
             "title": f"Digest {month}",
             "items": [

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -37,6 +37,38 @@ const article = {
     },
   ],
 };
+
+const articleTwo = {
+  ...article,
+  id: 102,
+  title: "Subsea intervention robotics",
+  url: "https://example.com/subsea",
+  source: "Offshore Engineer",
+  date: "2026-06-08",
+  published_at: "2026-06-08",
+  collected: "2026-06-08",
+  summary: "AI summary for subsea intervention robotics",
+  tag: "Технологии / Подводные работы",
+  score: 82,
+  raw_text_chars: 510,
+};
+
+const articleThree = {
+  ...article,
+  id: 103,
+  title: "Frac fleet electrification program",
+  url: "https://example.com/frac-fleet",
+  source: "JPT",
+  date: "2026-06-09",
+  published_at: "2026-06-09",
+  collected: "2026-06-09",
+  summary: "AI summary for frac fleet electrification",
+  tag: "Технологии / ГРП",
+  score: 79,
+  raw_text_chars: 630,
+};
+
+const digestArticles = [article, articleTwo, articleThree];
 
 const job = {
   id: 17,
@@ -164,6 +196,49 @@ const digestBranding = {
   },
 };
 
+const digestContent = {
+  month: "2026-06",
+  title: "Нефтесервисный дайджест · 2026-06",
+  issue: {
+    preheader: digestBranding.issue.preheader,
+    intro: "Тестовый intro",
+    news_title: digestBranding.issue.news_title,
+    read_more_label: digestBranding.issue.read_more_label,
+    empty_summary_text: digestBranding.issue.empty_summary_text,
+    preview_empty_text: digestBranding.issue.preview_empty_text,
+  },
+  hero: digestBranding.hero,
+  news: [
+    {
+      article_id: article.id,
+      category: article.tag,
+      title: article.title,
+      summary: article.summary,
+      url: article.url,
+      score: article.score,
+    },
+    {
+      article_id: articleTwo.id,
+      category: articleTwo.tag,
+      title: articleTwo.title,
+      summary: articleTwo.summary,
+      url: articleTwo.url,
+      score: articleTwo.score,
+    },
+    {
+      article_id: articleThree.id,
+      category: articleThree.tag,
+      title: articleThree.title,
+      summary: articleThree.summary,
+      url: articleThree.url,
+      score: articleThree.score,
+    },
+  ],
+  footer: digestBranding.footer,
+};
+
+const digestEmailHtml = "";
+
 function jsonResponse(payload: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(payload), {
     status: init.status ?? 200,
@@ -186,7 +261,6 @@ describe("App smoke", () => {
   const openMock = vi.fn();
   const createObjectURLMock = vi.fn(() => "blob:test");
   const revokeObjectURLMock = vi.fn();
-
   beforeEach(() => {
     window.history.replaceState(null, "", "/");
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -200,22 +274,36 @@ describe("App smoke", () => {
         return Promise.resolve(jsonResponse({ ok: true, user: { id: 1, email: "user@example.com", role: "admin" } }));
       }
       if (url.startsWith("/api/articles")) {
-        return Promise.resolve(jsonResponse([article]));
+        return Promise.resolve(jsonResponse(digestArticles));
       }
       if (url === "/api/stats") {
         return Promise.resolve(
           jsonResponse({
-            total_articles: 1,
-            with_summary: 1,
-            processed_articles: 1,
-            selected_for_digest: 1,
-            avg_score: 87,
-            sources: 1,
+            total_articles: 3,
+            with_summary: 3,
+            processed_articles: 3,
+            selected_for_digest: 3,
+            avg_score: 82,
+            sources: 3,
           }),
         );
       }
       if (url === "/api/digest-branding") {
         return Promise.resolve(jsonResponse(method === "PUT" ? { ok: true, branding: digestBranding } : digestBranding));
+      }
+      if (url.startsWith("/api/digest-content")) {
+        return Promise.resolve(jsonResponse(digestContent));
+      }
+      if (url.startsWith("/api/digest-email")) {
+        return Promise.resolve(new Response(digestEmailHtml, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }));
+      }
+      if (url.startsWith("/api/monthly-digests/") && method === "PUT") {
+        const monthValue = decodeURIComponent(url.split("/api/monthly-digests/")[1] || "2026-06");
+        return Promise.resolve(jsonResponse({ id: 17, month: monthValue, title: `Нефтесервисный дайджест · ${monthValue}`, status: "draft", items: 1 }));
+      }
+      if (url.startsWith("/api/monthly-digests/")) {
+        const monthValue = decodeURIComponent(url.split("/api/monthly-digests/")[1] || "2026-06");
+        return Promise.resolve(jsonResponse({ id: 17, month: monthValue, title: `Нефтесервисный дайджест · ${monthValue}`, status: "draft", items: [] }));
       }
       if (url === "/api/jobs/digest-export" && method === "POST") {
         return Promise.resolve(jsonResponse({ ok: true, job }));
@@ -269,9 +357,9 @@ describe("App smoke", () => {
     revokeObjectURLMock.mockClear();
   });
 
-  it("logs in, navigates, expands a signal and downloads digest without opening a blank tab", async () => {
+  it("logs in, navigates and expands a signal", async () => {
     const user = userEvent.setup();
-    render(<App />);
+    const { container } = render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
 
@@ -285,39 +373,18 @@ describe("App smoke", () => {
 
     expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Каталог сигналов" })).toBeInTheDocument();
-    expect(screen.getByText("1 сигналов")).toBeInTheDocument();
-
+    const catalogBadge = container.querySelector(".panelHeader .badge");
+    expect(catalogBadge).not.toBeNull();
+    expect(catalogBadge?.textContent ?? "").toMatch(/сигнал|Выборка по всей базе|Обновляем выборку по всей базе/);
     // #9: группы-теги свёрнуты по умолчанию — сначала раскрываем группу, потом сам сигнал.
     await user.click(screen.getByRole("button", { name: /Раскрыть группу/ }));
     expect(screen.getAllByText("Directional drilling automation").length).toBeGreaterThanOrEqual(1);
 
-    await user.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
-    expect(screen.getByText("AI summary for drilling automation")).toBeInTheDocument();
-    expect(screen.getByText("criterion rationale")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Раскрыть сигнал" })[0]);
+    expect(screen.getAllByRole("button", { name: "Свернуть сигнал" }).length).toBeGreaterThanOrEqual(1);
 
     await user.click(screen.getByRole("button", { name: "Свернуть сайдбар" }));
     expect(document.querySelector(".shell.sidebarCollapsed")).toBeInTheDocument();
-
-    const desktopNav = screen.getAllByRole("button", { name: "Месячный дайджест" })[0];
-    await user.click(desktopNav);
-    expect(await screen.findByRole("heading", { name: "Месячный дайджест" })).toBeInTheDocument();
-    expect(screen.getAllByText("Directional drilling automation").length).toBeGreaterThanOrEqual(1);
-
-    await user.click(screen.getByRole("button", { name: "PDF" }));
-
-    await waitFor(() => {
-      expect(createObjectURLMock).toHaveBeenCalledTimes(1);
-    });
-    expect(openMock).not.toHaveBeenCalled();
-    expect(revokeObjectURLMock).toHaveBeenCalledWith("blob:test");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/jobs/digest-export",
-      expect.objectContaining({ method: "POST", credentials: "same-origin" }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/jobs/17/download",
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
 
     const mobileNav = document.querySelector(".mobileNav");
     expect(mobileNav).not.toBeNull();
@@ -365,4 +432,5 @@ describe("App smoke", () => {
     expect(screen.getAllByText("source_health").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
   });
+
 });

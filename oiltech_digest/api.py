@@ -143,6 +143,21 @@ class DigestRequest(BaseModel):
     month: str
     limit: int = 20
     min_score: float = 60
+    max_score: float | None = None
+    search: str = ""
+    top_tag: str = ""
+
+
+class MonthlyDigestItemIn(BaseModel):
+    article_id: int
+    section: str | None = None
+    editor_note: str | None = None
+
+
+class MonthlyDigestUpdateRequest(BaseModel):
+    title: str | None = None
+    status: str = "draft"
+    items: list[MonthlyDigestItemIn]
 
 
 class DigestExportJobRequest(BaseModel):
@@ -150,6 +165,9 @@ class DigestExportJobRequest(BaseModel):
     export_format: str = "pdf"
     limit: int = 100
     min_score: float = 0
+    max_score: float | None = None
+    search: str = ""
+    top_tag: str = ""
 
 
 class MaintenanceCleanupRequest(BaseModel):
@@ -407,7 +425,13 @@ def list_articles(
     source: str | None = None,
     tag: str | None = None,
     status: str | None = None,
+    language: str | None = None,
     min_score: float | None = None,
+    max_score: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sort: str = Query("score_desc", pattern="^(date_desc|score_desc|score_asc)$"),
+    changed_only: bool = False,
     limit: int = Query(1000, ge=1, le=5000),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
@@ -427,9 +451,23 @@ def list_articles(
     if status:
         clauses.append("COALESCE(uas.status, 'new') = %s")
         params.append(status)
+    if changed_only:
+        clauses.append("COALESCE(uas.status, 'new') <> 'new'")
+    if language:
+        clauses.append("a.language = %s")
+        params.append(language)
     if min_score is not None:
         clauses.append("COALESCE(sc.total_score, 0) >= %s")
         params.append(min_score)
+    if max_score is not None:
+        clauses.append("COALESCE(sc.total_score, 0) <= %s")
+        params.append(max_score)
+    if date_from:
+        clauses.append("COALESCE(a.published_at::date, a.collected_at::date) >= %s")
+        params.append(date_from)
+    if date_to:
+        clauses.append("COALESCE(a.published_at::date, a.collected_at::date) <= %s")
+        params.append(date_to)
     # Скрываем отклонённые гейтом релевантности статьи (relevant=false), как это уже
     # делает дайджест. relevant IS NULL (ещё не проверенные) остаются видны.
     clauses.append("c.relevant IS NOT FALSE")
@@ -437,6 +475,11 @@ def list_articles(
     # ещё в БД (восстановимы recheck-unmark до recheck-purge).
     clauses.append("NOT a.pending_deletion")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    order_by = {
+        "date_desc": "a.published_at DESC NULLS LAST, COALESCE(sc.total_score, 0) DESC, a.id DESC",
+        "score_asc": "COALESCE(sc.total_score, 0) ASC, a.published_at DESC NULLS LAST, a.id DESC",
+        "score_desc": "COALESCE(sc.total_score, 0) DESC, a.published_at DESC NULLS LAST, a.id DESC",
+    }[sort]
     # user_id — первый %s (для LEFT JOIN user_article_states), затем where-параметры, затем limit.
     params.insert(0, int(user["id"]))
     params.append(limit)
@@ -464,7 +507,7 @@ def list_articles(
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             {where}
-            ORDER BY COALESCE(sc.total_score, 0) DESC, a.published_at DESC NULLS LAST, a.id DESC
+            ORDER BY {order_by}
             LIMIT %s
             """,
             params,
@@ -697,8 +740,21 @@ def ai_article_cost(
 @app.get("/api/digest-content")
 def digest_content(month: str = "", limit: int = Query(100, ge=1, le=500),
                    min_score: float = 0,
+                   max_score: float | None = None,
+                   search: str = "",
+                   top_tag: str = "",
                    user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return _clean(build_digest_content(month=month, limit=limit, min_score=min_score, user_id=int(user["id"])))
+    return _clean(
+        build_digest_content(
+            month=month,
+            limit=limit,
+            min_score=min_score,
+            max_score=max_score,
+            search=search.strip() or None,
+            top_tag=top_tag.strip() or None,
+            user_id=int(user["id"]),
+        )
+    )
 
 
 @app.get("/api/digest-branding")
@@ -713,7 +769,17 @@ def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Dep
 
 @app.post("/api/monthly-digests")
 def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return _clean(save_digest_draft(month=payload.month, limit=payload.limit, min_score=payload.min_score, user_id=int(user["id"])))
+    return _clean(
+        save_digest_draft(
+            month=payload.month,
+            limit=payload.limit,
+            min_score=payload.min_score,
+            max_score=payload.max_score,
+            search=payload.search.strip() or None,
+            top_tag=payload.top_tag.strip() or None,
+            user_id=int(user["id"]),
+        )
+    )
 
 
 @app.get("/api/monthly-digests/{month}")
@@ -724,11 +790,33 @@ def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user))
     return _clean(digest)
 
 
+@app.put("/api/monthly-digests/{month}")
+def update_monthly_digest(month: str, payload: MonthlyDigestUpdateRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    saved = repository.save_monthly_digest(
+        month=month,
+        title=payload.title or f"Нефтесервисный дайджест · {month}",
+        items=[item.model_dump() for item in payload.items],
+        status=payload.status,
+    )
+    return _clean(saved)
+
+
 @app.get("/api/digest-email", response_class=HTMLResponse)
 def digest_email(month: str = "", limit: int = Query(100, ge=1, le=500),
                  min_score: float = 0,
+                 max_score: float | None = None,
+                 search: str = "",
+                 top_tag: str = "",
                  user: dict[str, Any] = Depends(require_user)) -> HTMLResponse:
-    content = build_digest_content(month=month, limit=limit, min_score=min_score, user_id=int(user["id"]))
+    content = build_digest_content(
+        month=month,
+        limit=limit,
+        min_score=min_score,
+        max_score=max_score,
+        search=search.strip() or None,
+        top_tag=top_tag.strip() or None,
+        user_id=int(user["id"]),
+    )
     return HTMLResponse(render_digest_email(content))
 
 
@@ -977,6 +1065,9 @@ def digest_export(
     export_format: str = Query("pdf", pattern="^(pdf|docx?|html|json)$"),
     limit: int = Query(100, ge=1, le=500),
     min_score: float = 0,
+    max_score: float | None = None,
+    search: str = "",
+    top_tag: str = "",
     user: dict[str, Any] = Depends(require_user),
 ) -> FileResponse:
     job_id = repository.create_export_job("monthly_digest", export_format)
@@ -986,6 +1077,9 @@ def digest_export(
             export_format=export_format,
             limit=limit,
             min_score=min_score,
+            max_score=max_score,
+            search=search.strip() or None,
+            top_tag=top_tag.strip() or None,
             user_id=int(user["id"]),
         )
         repository.finish_export_job(job_id, "ok", result["path"])

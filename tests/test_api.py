@@ -214,10 +214,14 @@ def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
 def test_create_monthly_digest_endpoint(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
     monkeypatch.setattr(
         api,
         "save_digest_draft",
-        lambda month, limit=20, min_score=60, user_id=None: {
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: captured.update(
+            {"month": month, "limit": limit, "min_score": min_score, "user_id": user_id, **kwargs}
+        )
+        or {
             "id": 9,
             "month": month,
             "title": f"Digest {month}",
@@ -230,7 +234,7 @@ def test_create_monthly_digest_endpoint(monkeypatch):
         client = TestClient(app)
         response = client.post(
             "/api/monthly-digests",
-            json={"month": "2026-05", "limit": 7, "min_score": 65},
+            json={"month": "2026-05", "limit": 7, "min_score": 65, "max_score": 90, "search": "drilling", "top_tag": "Бурение"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -243,6 +247,133 @@ def test_create_monthly_digest_endpoint(monkeypatch):
         "status": "draft",
         "items": 7,
         "min_score": 65,
+    }
+    assert captured == {
+        "month": "2026-05",
+        "limit": 7,
+        "min_score": 65.0,
+        "max_score": 90.0,
+        "search": "drilling",
+        "top_tag": "Бурение",
+        "user_id": 1,
+    }
+
+
+def test_digest_content_endpoint_passes_filters(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api,
+        "build_digest_content",
+        lambda month="", limit=100, min_score=0, user_id=None, **kwargs: captured.update(
+            {"month": month, "limit": limit, "min_score": min_score, "user_id": user_id, **kwargs}
+        )
+        or {"issue": {"title": "Digest"}, "news": [], "items": []},
+    )
+    try:
+        client = TestClient(app)
+        response = client.get("/api/digest-content?month=2026-06&limit=30&min_score=55&max_score=88&search=drilling&top_tag=%D0%91%D1%83%D1%80%D0%B5%D0%BD%D0%B8%D0%B5")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == {
+        "month": "2026-06",
+        "limit": 30,
+        "min_score": 55.0,
+        "max_score": 88.0,
+        "search": "drilling",
+        "top_tag": "Бурение",
+        "user_id": 1,
+    }
+
+
+def test_update_monthly_digest_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "save_monthly_digest",
+        lambda month, title, items, status="draft": captured.update(
+            {"month": month, "title": title, "items": items, "status": status}
+        )
+        or {"id": 12, "month": month, "title": title, "status": status, "items": len(items)},
+    )
+    try:
+        client = TestClient(app)
+        response = client.put(
+            "/api/monthly-digests/2026-06",
+            json={
+                "title": "Digest 2026-06",
+                "status": "draft",
+                "items": [
+                    {"article_id": 42, "section": "Технологии / Бурение", "editor_note": "First"},
+                    {"article_id": 43, "section": "Рынок / ОФС", "editor_note": "Second"},
+                ],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 12,
+        "month": "2026-06",
+        "title": "Digest 2026-06",
+        "status": "draft",
+        "items": 2,
+    }
+    assert captured == {
+        "month": "2026-06",
+        "title": "Digest 2026-06",
+        "status": "draft",
+        "items": [
+            {"article_id": 42, "section": "Технологии / Бурение", "editor_note": "First"},
+            {"article_id": 43, "section": "Рынок / ОФС", "editor_note": "Second"},
+        ],
+    }
+
+
+def test_update_monthly_digest_endpoint_allows_empty_issue(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "save_monthly_digest",
+        lambda month, title, items, status="draft": captured.update(
+            {"month": month, "title": title, "items": items, "status": status}
+        )
+        or {"id": 13, "month": month, "title": title, "status": status, "items": len(items)},
+    )
+    try:
+        client = TestClient(app)
+        response = client.put(
+            "/api/monthly-digests/2026-07",
+            json={
+                "title": "Digest 2026-07",
+                "status": "draft",
+                "items": [],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 13,
+        "month": "2026-07",
+        "title": "Digest 2026-07",
+        "status": "draft",
+        "items": 0,
+    }
+    assert captured == {
+        "month": "2026-07",
+        "title": "Digest 2026-07",
+        "status": "draft",
+        "items": [],
     }
 
 
@@ -402,7 +533,13 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
                 "source": "World Oil",
                 "tag": "Бурение",
                 "status": "digest",
+                "language": "en",
                 "min_score": 80,
+                "max_score": 95,
+                "date_from": "2026-06-01",
+                "date_to": "2026-06-30",
+                "sort": "date_desc",
+                "changed_only": True,
                 "limit": 25,
             },
         )
@@ -423,9 +560,15 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert "(t.name = %s OR parent.name = %s)" in articles_sql
     assert "user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s" in articles_sql  # пер-юзерный статус (#12)
     assert "COALESCE(uas.status, 'new') = %s" in articles_sql
+    assert "COALESCE(uas.status, 'new') <> 'new'" in articles_sql
+    assert "a.language = %s" in articles_sql
     assert "COALESCE(sc.total_score, 0) >= %s" in articles_sql
+    assert "COALESCE(sc.total_score, 0) <= %s" in articles_sql
+    assert "COALESCE(a.published_at::date, a.collected_at::date) >= %s" in articles_sql
+    assert "COALESCE(a.published_at::date, a.collected_at::date) <= %s" in articles_sql
     # user_id — первый параметр (LEFT JOIN), затем фильтры, затем limit.
-    assert articles_params == [1, "%drilling%", "World Oil", "Бурение", "Бурение", "digest", 80.0, 25]
+    assert "ORDER BY a.published_at DESC NULLS LAST" in articles_sql
+    assert articles_params == [1, "%drilling%", "World Oil", "Бурение", "Бурение", "digest", "en", 80.0, 95.0, "2026-06-01", "2026-06-30", 25]
 
 
 def test_update_source_persists_non_rss_scraper_fields(monkeypatch):
@@ -670,7 +813,7 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
         client = TestClient(app)
         response = client.post(
             "/api/jobs/digest-export",
-            json={"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60},
+            json={"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60, "max_score": 95, "search": "drilling", "top_tag": "Бурение"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -678,7 +821,16 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
     assert response.status_code == 200
     assert captured == {
         "kind": "digest_export",
-        "payload": {"month": "2026-06", "export_format": "pdf", "limit": 25, "min_score": 60.0, "user_id": 1},
+        "payload": {
+            "month": "2026-06",
+            "export_format": "pdf",
+            "limit": 25,
+            "min_score": 60.0,
+            "max_score": 95.0,
+            "search": "drilling",
+            "top_tag": "Бурение",
+            "user_id": 1,
+        },
         "kwargs": {"queue_name": "playwright", "execution_region": "ru", "capability": "playwright"},
     }
     assert response.json()["job"]["status"] == "queued"

@@ -2056,7 +2056,8 @@ def ai_article_cost_report(limit: int = 20, complete_only: bool = True) -> list[
 
 
 def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60,
-                      user_id: int | None = None) -> list[dict]:
+                      user_id: int | None = None, max_score: float | None = None,
+                      search: str | None = None, top_tag: str | None = None) -> list[dict]:
     """Статьи, выбранные в дайджест КОНКРЕТНЫМ пользователем (его user_article_states.status='digest').
 
     ``month`` опционален: пусто/None — фильтр периода снимается, возвращаются все
@@ -2064,9 +2065,33 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
     """
     params: dict = {"min_score": min_score, "limit": limit, "user_id": user_id}
     month_clause = ""
+    max_score_clause = ""
+    search_clause = ""
+    tag_clause = ""
     if month:
         month_clause = "AND to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %(month)s"
         params["month"] = month
+    if max_score is not None:
+        max_score_clause = "AND COALESCE(sc.total_score, 0) <= %(max_score)s"
+        params["max_score"] = max_score
+    if search:
+        search_clause = """
+              AND (
+                   COALESCE(c.title_ru, a.title) ILIKE %(search)s
+                OR COALESCE(c.summary, '') ILIKE %(search)s
+                OR COALESCE(t.name, '') ILIKE %(search)s
+                OR COALESCE(parent.name, '') ILIKE %(search)s
+              )
+        """
+        params["search"] = f"%{search}%"
+    if top_tag:
+        tag_clause = """
+              AND (
+                   t.name = %(top_tag)s
+                OR parent.name = %(top_tag)s
+              )
+        """
+        params["top_tag"] = top_tag
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -2088,7 +2113,10 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               AND c.relevant IS NOT FALSE
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
               AND COALESCE(sc.total_score, 0) >= %(min_score)s
+              {max_score_clause}
               {month_clause}
+              {search_clause}
+              {tag_clause}
             ORDER BY sc.total_score DESC NULLS LAST,
                      a.published_at DESC NULLS LAST
             LIMIT %(limit)s
@@ -2165,6 +2193,36 @@ def get_monthly_digest(month: str) -> dict | None:
             (digest["id"],),
         )
         return {**digest, "items": cur.fetchall()}
+
+
+def digest_items_by_article_ids(article_ids: list[int], user_id: int | None = None) -> list[dict]:
+    if not article_ids:
+        return []
+    order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.published_at, a.language, a.image_url,
+                   s.name AS source_name,
+                   c.summary,
+                   sc.total_score, sc.score_label,
+                   t.name AS tag_name, parent.name AS parent_tag_name
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            LEFT JOIN article_scores sc ON sc.article_id = a.id
+            LEFT JOIN article_tags at ON at.article_id = a.id
+            LEFT JOIN tags t ON t.id = at.tag_id
+            LEFT JOIN tags parent ON parent.id = t.parent_id
+            WHERE a.id = ANY(%s)
+              AND c.relevant IS NOT FALSE
+              AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
+            ORDER BY {order_case}
+            """,
+            [article_ids, *article_ids],
+        )
+        return cur.fetchall()
 
 
 def max_article_id() -> int | None:

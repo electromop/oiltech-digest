@@ -228,15 +228,40 @@ export type DigestContentItem = {
   title: string;
   summary: string;
   url: string;
+  source?: string;
+  published_at?: string | null;
+  image_url?: string;
   tag?: string;
   score?: number | null;
   score_label?: string | null;
 };
 
 export type DigestContent = {
-  month: string;
+  month: string | null;
   title: string;
+  issue?: {
+    title?: string;
+    period?: string;
+    preheader?: string;
+    intro?: string;
+    news_title?: string;
+    read_more_label?: string;
+    empty_summary_text?: string;
+    preview_empty_text?: string;
+  };
+  hero?: {
+    badge?: string;
+    headline?: string;
+    subtitle?: string;
+    image_url?: string;
+  };
   news: DigestContentItem[];
+  footer?: {
+    contact_text?: string;
+    contact_email?: string;
+    note?: string;
+    socials?: DigestBrandingSocial[];
+  };
 };
 
 export type DigestBrandingSocial = {
@@ -303,12 +328,19 @@ export type MonthlyDigestDraft = {
   status: string;
   items: Array<{
     article_id: number;
-    title: string;
-    summary: string;
-    url: string;
-    tag: string | null;
-    score: number | null;
+    sort_order?: number;
+    section?: string | null;
+    editor_note?: string | null;
   }>;
+};
+
+export type DigestDraftSaveResult = {
+  id: number;
+  month: string;
+  title: string;
+  status: string;
+  items: number;
+  content_items?: number;
 };
 
 export type ScoringCriterion = {

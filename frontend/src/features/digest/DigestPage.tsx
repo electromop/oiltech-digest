@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { listArticles, updateArticle } from "../../api/articles";
-import { enqueueDigestExport, getDigestBranding, saveDigestBranding } from "../../api/digest";
+import { enqueueDigestExport, getDigestBranding, getDigestContent, getDigestEmailHtml, getMonthlyDigest, saveDigestBranding, updateMonthlyDigest } from "../../api/digest";
 import { downloadJobResult, getJob } from "../../api/jobs";
-import type { Article, DigestBranding, DigestBrandingSocial, DigestHighlightCard, DigestHighlightRules } from "../../api/types";
+import type { Article, DigestBranding, DigestBrandingSocial, DigestContent, DigestDraftSaveResult, DigestHighlightCard, MonthlyDigestDraft } from "../../api/types";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -13,12 +13,22 @@ type Props = {
   isAdmin?: boolean;
 };
 
+const DIGEST_PREVIEW_LIMIT = 500;
+
 export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdmin = false }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
   const [branding, setBranding] = useState<DigestBranding | null>(null);
+  const [digestPreview, setDigestPreview] = useState<DigestContent | null>(null);
+  const [digestPreviewHtml, setDigestPreviewHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [brandingBusy, setBrandingBusy] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [lastSavedDraft, setLastSavedDraft] = useState<DigestDraftSaveResult | null>(null);
+  const [savedDraft, setSavedDraft] = useState<MonthlyDigestDraft | null>(null);
+  const [manualOrderIds, setManualOrderIds] = useState<number[]>([]);
+  const [draftDirty, setDraftDirty] = useState(false);
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
   const [tagQuery, setTagQuery] = useState("");
@@ -26,13 +36,25 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   const [month, setMonth] = useState("");
   const [scoreMin, setScoreMin] = useState(0);
   const [scoreMax, setScoreMax] = useState(100);
+  const [viewMode, setViewMode] = useState<"issue" | "branding">("issue");
   // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML») — без понятий
   // «задача/очередь/№N»: пользователь видит процесс и результат, а не job-runner.
   const [exporting, setExporting] = useState<string | null>(null);
+  const activeMonth = month || new Date().toISOString().slice(0, 7);
 
   useEffect(() => {
     void reload();
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    void loadDigestPreview();
+  }, [loading, month, scoreMin, scoreMax, search, tag]);
+
+  useEffect(() => {
+    if (loading) return;
+    void loadSavedDraft(activeMonth);
+  }, [loading, activeMonth]);
 
   async function reload() {
     try {
@@ -70,10 +92,85 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
           cards: brandingPayload.highlights?.cards || defaultHighlightCards(),
         },
       });
+      const [preview, previewHtml] = await Promise.all([
+        getDigestContent({
+          month,
+          limit: DIGEST_PREVIEW_LIMIT,
+          minScore: scoreMin,
+          maxScore: scoreMax,
+          search,
+          topTag: tag,
+        }),
+        getDigestEmailHtml({
+          month,
+          limit: DIGEST_PREVIEW_LIMIT,
+          minScore: scoreMin,
+          maxScore: scoreMax,
+          search,
+          topTag: tag,
+        }),
+      ]);
+      setDigestPreview(preview);
+      setDigestPreviewHtml(previewHtml);
     } catch (error) {
       handleError(error, "Не удалось загрузить статьи для дайджеста");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDigestPreview() {
+    try {
+      setPreviewLoading(true);
+      const [preview, previewHtml] = await Promise.all([
+        getDigestContent({
+          month,
+          limit: DIGEST_PREVIEW_LIMIT,
+          minScore: scoreMin,
+          maxScore: scoreMax,
+          search,
+          topTag: tag,
+        }),
+        getDigestEmailHtml({
+          month,
+          limit: DIGEST_PREVIEW_LIMIT,
+          minScore: scoreMin,
+          maxScore: scoreMax,
+          search,
+          topTag: tag,
+        }),
+      ]);
+      setDigestPreview(preview);
+      setDigestPreviewHtml(previewHtml);
+    } catch (error) {
+      handleError(error, "Не удалось обновить предпросмотр дайджеста");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function loadSavedDraft(targetMonth: string) {
+    try {
+      const draft = await getMonthlyDigest(targetMonth);
+      setSavedDraft(draft);
+      setLastSavedDraft({
+        id: draft.id,
+        month: draft.month,
+        title: draft.title,
+        status: draft.status,
+        items: draft.items.length,
+      });
+      setManualOrderIds(draft.items.map((item) => item.article_id));
+      setDraftDirty(false);
+    } catch (error) {
+      const status = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
+      if (status === 404) {
+        setSavedDraft(null);
+        setLastSavedDraft(null);
+        setDraftDirty(false);
+        return;
+      }
+      handleError(error, "Не удалось загрузить сохранённый draft");
     }
   }
 
@@ -130,6 +227,36 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     const q = tagQuery.trim().toLowerCase();
     return topTags.filter((option) => !q || option.toLowerCase().includes(q));
   }, [tagQuery, topTags]);
+  const exportPreviewItems = digestPreview?.news || [];
+  const previewOrderedCandidates = useMemo(() => {
+    const byId = new Map(digestCandidates.map((article) => [article.id, article]));
+    const ordered = exportPreviewItems
+      .map((item) => (item.article_id ? byId.get(item.article_id) : undefined))
+      .filter((article): article is Article => Boolean(article));
+    const usedIds = new Set(ordered.map((article) => article.id));
+    const remainder = digestCandidates.filter((article) => !usedIds.has(article.id));
+    return [...ordered, ...remainder];
+  }, [digestCandidates, exportPreviewItems]);
+  const previewCandidateIds = useMemo(() => previewOrderedCandidates.map((article) => article.id), [previewOrderedCandidates]);
+  const orderedDigestCandidates = useMemo(() => {
+    const byId = new Map(previewOrderedCandidates.map((article) => [article.id, article]));
+    return manualOrderIds.map((id) => byId.get(id)).filter((article): article is Article => Boolean(article));
+  }, [manualOrderIds, previewOrderedCandidates]);
+  const availableDigestCandidates = useMemo(() => {
+    const selectedIds = new Set(manualOrderIds);
+    return previewOrderedCandidates.filter((article) => !selectedIds.has(article.id));
+  }, [manualOrderIds, previewOrderedCandidates]);
+  const savedDraftVisibleIds = useMemo(
+    () => (savedDraft?.items || []).map((item) => item.article_id).filter((id) => previewCandidateIds.includes(id)),
+    [savedDraft, previewCandidateIds],
+  );
+  const hasManualChanges = draftDirty || JSON.stringify(manualOrderIds) !== JSON.stringify(savedDraftVisibleIds.length ? savedDraftVisibleIds : previewCandidateIds);
+
+  useEffect(() => {
+    if (draftDirty) return;
+    const baseIds = savedDraftVisibleIds.length ? savedDraftVisibleIds : previewCandidateIds;
+    setManualOrderIds(baseIds);
+  }, [draftDirty, previewCandidateIds, savedDraftVisibleIds]);
 
   function updateBrandingSection<K extends keyof DigestBranding>(section: K, value: DigestBranding[K]) {
     setBranding((prev) => (prev ? { ...prev, [section]: value } : prev));
@@ -173,23 +300,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     );
   }
 
-  function updateHighlightRules(value: DigestHighlightRules) {
-    setBranding((prev) => (prev ? { ...prev, highlights: value } : prev));
-  }
-
-  function updateHighlightCard(index: number, patch: Partial<DigestHighlightCard>) {
-    setBranding((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        highlights: {
-          ...prev.highlights,
-          cards: prev.highlights.cards.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
-        },
-      };
-    });
-  }
-
   async function handleSaveBranding() {
     if (!branding) return;
     try {
@@ -228,6 +338,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
           cards: saved.branding.highlights?.cards || defaultHighlightCards(),
         },
       });
+      await loadDigestPreview();
       showToast("Оформление дайджеста сохранено");
     } catch (error) {
       handleError(error, "Не удалось сохранить оформление дайджеста");
@@ -241,7 +352,11 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
       setBusy(true);
       setExporting(format.toUpperCase());
       // Документ собирается на сервере; для пользователя это просто ожидание файла.
-      const queued = await enqueueDigestExport(month, 200, scoreMin, format);
+      const queued = await enqueueDigestExport(month, DIGEST_PREVIEW_LIMIT, scoreMin, format, {
+        maxScore: scoreMax,
+        search,
+        topTag: tag,
+      });
       const finished = await waitForExportJob(queued.job.id);
       if (finished.status !== "ok") {
         throw new Error(finished.error || "Не удалось подготовить документ");
@@ -265,6 +380,62 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     }
   }
 
+  async function handleSaveDraft() {
+    try {
+      setDraftBusy(true);
+      const draftMonth = month || new Date().toISOString().slice(0, 7);
+      if (!month) setMonth(draftMonth);
+      const orderedItems = orderedDigestCandidates.map((article) => ({
+        article_id: article.id,
+        section: article.tag,
+        editor_note: article.summary || null,
+      }));
+      const saved = await updateMonthlyDigest(draftMonth, {
+        title: digestPreview?.title || `Нефтесервисный дайджест · ${draftMonth}`,
+        status: "draft",
+        items: orderedItems,
+      });
+      setLastSavedDraft(saved);
+      await loadSavedDraft(draftMonth);
+      await loadDigestPreview();
+      showToast(`Draft сохранён: ${saved.month}`);
+    } catch (error) {
+      handleError(error, "Не удалось сохранить draft дайджеста");
+    } finally {
+      setDraftBusy(false);
+    }
+  }
+
+  function moveDigestItem(articleId: number, direction: -1 | 1) {
+    setDraftDirty(true);
+    setManualOrderIds((current) => {
+      const index = current.indexOf(articleId);
+      if (index < 0) return current;
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= current.length) return current;
+      const next = [...current];
+      const [item] = next.splice(index, 1);
+      next.splice(nextIndex, 0, item);
+      return next;
+    });
+  }
+
+  function removeFromIssue(articleId: number) {
+    setDraftDirty(true);
+    setManualOrderIds((current) => current.filter((id) => id !== articleId));
+  }
+
+  function addToIssue(articleId: number) {
+    setDraftDirty(true);
+    setManualOrderIds((current) => (current.includes(articleId) ? current : [...current, articleId]));
+  }
+
+  function resetDraftQueue() {
+    const baseIds = savedDraftVisibleIds.length ? savedDraftVisibleIds : previewCandidateIds;
+    setManualOrderIds(baseIds);
+    setDraftDirty(false);
+  }
+
   // Ждём готовности файла, опрашивая сервер. Прогресс/номер наружу не показываем —
   // только нейтральный спиннер «Готовим документ…».
   async function waitForExportJob(jobId: number) {
@@ -278,20 +449,42 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     throw new Error("Документ готовится дольше обычного — попробуйте ещё раз чуть позже");
   }
 
-  return (
-    <section className="screenStack">
-      <header className="screenHeader">
-        <div>
-          <h1>Месячный дайджест</h1>
-        </div>
-        <div className="statusPill">{digestCandidates.length} статей</div>
-      </header>
+  const filterSummary = [
+    tag ? `тег: ${tag}` : "",
+    search.trim() ? `поиск: ${search.trim()}` : "",
+    scoreMin > 0 || scoreMax < 100 ? `score ${scoreMin}-${scoreMax}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
-      <section className="panel">
-        {busy ? <InlineLoader label={exporting ? `Готовим документ ${exporting}…` : "Готовим документ…"} /> : null}
+  const issueWorkspace = (
+    <div className="digestLayout">
+      <section className="digestBuilderMain">
         <div className="panelHeader">
           <h2>Выборка дайджеста</h2>
+          {previewLoading ? <span className="metaText">Обновляем preview выпуска…</span> : null}
         </div>
+
+        <div className="digestRunSummary">
+          <div className="digestRunCard">
+            <div className="metaText">Текущий выпуск</div>
+            <strong>{activeMonth}</strong>
+            <span className="metaText">{digestCandidates.length} статей в подборке</span>
+          </div>
+          <div className="digestRunCard">
+            <div className="metaText">Preview / экспорт</div>
+            <strong>{exportPreviewItems.length}</strong>
+            <span className="metaText">материалов реально вернёт backend</span>
+          </div>
+          <div className="digestRunCard">
+            <div className="metaText">Последний draft</div>
+            <strong>{lastSavedDraft ? lastSavedDraft.month : "ещё не сохранён"}</strong>
+            <span className="metaText">
+              {lastSavedDraft ? `${lastSavedDraft.items} материалов · статус ${lastSavedDraft.status}` : "Можно сохранить текущую выборку как выпуск"}
+            </span>
+          </div>
+        </div>
+        {filterSummary ? <div className="digestRunFilters">{filterSummary}</div> : null}
 
         <div className="digestFiltersRow">
           <label className="field">
@@ -370,344 +563,399 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
           </label>
         </div>
 
-        <div className="digestToolbar">
-          <div className="digestActionGroup digestActionGroupPrimary">
-            <span className="digestGroupLabel">Скачать дайджест</span>
-            <button type="button" className="primaryButton" onClick={() => void handleDigestExport("pdf")}>
-              PDF
-            </button>
-            <button type="button" className="ghostButton" onClick={() => void handleDigestExport("docx")}>
-              DOCX
-            </button>
-            <button type="button" className="ghostButton" onClick={() => void handleDigestExport("html")}>
-              HTML
-            </button>
-          </div>
-        </div>
-
-        {isAdmin && branding ? (
-          <div className="settingsCard digestBrandingCard">
-            <div className="panelHeader">
-              <h2>Оформление выпуска</h2>
-              <button type="button" className="primaryButton" disabled={brandingBusy} onClick={() => void handleSaveBranding()}>
-                Сохранить оформление
-              </button>
-            </div>
-            <div className="settingsGrid">
-              <label className="field">
-                <span>Бренд</span>
-                <input
-                  value={branding.header.brand_text}
-                  onChange={(event) => updateBrandingSection("header", { ...branding.header, brand_text: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Слоган</span>
-                <input
-                  value={branding.header.brand_suffix}
-                  onChange={(event) => updateBrandingSection("header", { ...branding.header, brand_suffix: event.target.value })}
-                />
-              </label>
-              <label className="field fieldWide">
-                <span>Подразделение</span>
-                <input
-                  value={branding.header.department_text}
-                  onChange={(event) => updateBrandingSection("header", { ...branding.header, department_text: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Плашка шапки</span>
-                <input
-                  value={branding.hero.badge}
-                  onChange={(event) => updateBrandingSection("hero", { ...branding.hero, badge: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Заголовок шапки</span>
-                <input
-                  value={branding.hero.headline}
-                  onChange={(event) => updateBrandingSection("hero", { ...branding.hero, headline: event.target.value })}
-                />
-              </label>
-              <label className="field fieldWide">
-                <span>Подзаголовок шапки</span>
-                <input
-                  value={branding.hero.subtitle}
-                  onChange={(event) => updateBrandingSection("hero", { ...branding.hero, subtitle: event.target.value })}
-                />
-              </label>
-              <label className="field fieldWide">
-                <span>Ссылка на изображение шапки</span>
-                <input
-                  value={branding.hero.image_url}
-                  onChange={(event) => updateBrandingSection("hero", { ...branding.hero, image_url: event.target.value })}
-                  placeholder="https://example.com/hero.jpg"
-                />
-              </label>
-              <label className="field">
-                <span>Текст предпросмотра письма</span>
-                <input
-                  value={branding.issue.preheader}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, preheader: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Шаблон заголовка</span>
-                <input
-                  value={branding.issue.title_template}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Шаблон заголовка с месяцем</span>
-                <input
-                  value={branding.issue.title_template_with_month}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template_with_month: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Заголовок KPI</span>
-                <input
-                  value={branding.issue.highlights_title}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, highlights_title: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Заголовок новостей</span>
-                <input
-                  value={branding.issue.news_title}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, news_title: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Призыв к действию</span>
-                <input
-                  value={branding.issue.read_more_label}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, read_more_label: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Запасной текст сути</span>
-                <input
-                  value={branding.issue.empty_summary_text}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, empty_summary_text: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Пустое превью</span>
-                <input
-                  value={branding.issue.preview_empty_text}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, preview_empty_text: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Период без месяца</span>
-                <input
-                  value={branding.issue.period_label_all}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, period_label_all: event.target.value })}
-                />
-              </label>
-              <label className="field fieldWide">
-                <span>Шаблон вступления</span>
-                <textarea
-                  value={branding.issue.intro_template}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template: event.target.value })}
-                />
-              </label>
-              <label className="field fieldWide">
-                <span>Шаблон вступления с месяцем</span>
-                <textarea
-                  value={branding.issue.intro_template_with_month}
-                  onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template_with_month: event.target.value })}
-                  placeholder="Используйте {month}"
-                />
-              </label>
-              <label className="field fieldWide">
-                <span>Контактный текст</span>
-                <textarea
-                  value={branding.footer.contact_text}
-                  onChange={(event) => updateBrandingSection("footer", { ...branding.footer, contact_text: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Эл. почта</span>
-                <input
-                  value={branding.footer.contact_email}
-                  onChange={(event) => updateBrandingSection("footer", { ...branding.footer, contact_email: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Примечание</span>
-                <input
-                  value={branding.footer.note}
-                  onChange={(event) => updateBrandingSection("footer", { ...branding.footer, note: event.target.value })}
-                />
-              </label>
-            </div>
-            <div className="digestSocialsEditor">
-              <div className="panelHeader">
-                <h3>Правила KPI</h3>
-                <span className="metaText">Ключевые слова через запятую. Аналитика считается по тегам и источникам, бизнес — по тегам.</span>
-              </div>
-              <div className="settingsGrid">
-                <label className="field fieldWide">
-                  <span>Источники аналитики</span>
-                  <textarea
-                    value={branding.highlights.analytics_source_keywords.join(", ")}
-                    onChange={(event) =>
-                      updateHighlightRules({
-                        ...branding.highlights,
-                        analytics_source_keywords: parseKeywordList(event.target.value),
-                      })
-                    }
-                    placeholder="rystad, wood mac, mckinsey"
-                  />
-                </label>
-                <label className="field fieldWide">
-                  <span>Теги аналитики</span>
-                  <textarea
-                    value={branding.highlights.analytics_category_keywords.join(", ")}
-                    onChange={(event) =>
-                      updateHighlightRules({
-                        ...branding.highlights,
-                        analytics_category_keywords: parseKeywordList(event.target.value),
-                      })
-                    }
-                    placeholder="аналит, обзор, прогноз"
-                  />
-                </label>
-                <label className="field fieldWide">
-                  <span>Теги бизнес-возможностей</span>
-                  <textarea
-                    value={branding.highlights.business_category_keywords.join(", ")}
-                    onChange={(event) =>
-                      updateHighlightRules({
-                        ...branding.highlights,
-                        business_category_keywords: parseKeywordList(event.target.value),
-                      })
-                    }
-                    placeholder="контракт, сделк, инвест"
-                  />
-                </label>
-              </div>
-            </div>
-            <div className="digestSocialsEditor">
-              <div className="panelHeader">
-                <h3>KPI-плашки</h3>
-                <span className="metaText">Можно поменять метрику, иконку и формулировку каждой карточки.</span>
-              </div>
-              <div className="digestSocialsList">
-                {branding.highlights.cards.map((item, index) => (
-                  <div className="digestSocialRow" key={`${item.metric}-${index}`}>
-                    <label className="field">
-                      <span>Метрика</span>
-                      <select value={item.metric} onChange={(event) => updateHighlightCard(index, { metric: event.target.value as DigestHighlightCard["metric"] })}>
-                        <option value="total">Всего</option>
-                        <option value="analytics">Аналитика</option>
-                        <option value="business">Бизнес</option>
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Иконка</span>
-                      <select value={item.icon} onChange={(event) => updateHighlightCard(index, { icon: event.target.value as DigestHighlightCard["icon"] })}>
-                        <option value="doc">Документ</option>
-                        <option value="chart">График</option>
-                        <option value="people">Люди</option>
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Префикс</span>
-                      <input value={item.prefix} onChange={(event) => updateHighlightCard(index, { prefix: event.target.value })} />
-                    </label>
-                    <label className="field">
-                      <span>1</span>
-                      <input value={item.noun_one} onChange={(event) => updateHighlightCard(index, { noun_one: event.target.value })} />
-                    </label>
-                    <label className="field">
-                      <span>2-4</span>
-                      <input value={item.noun_few} onChange={(event) => updateHighlightCard(index, { noun_few: event.target.value })} />
-                    </label>
-                    <label className="field">
-                      <span>5+</span>
-                      <input value={item.noun_many} onChange={(event) => updateHighlightCard(index, { noun_many: event.target.value })} />
-                    </label>
-                    <label className="field">
-                      <span>Суффикс</span>
-                      <input value={item.suffix} onChange={(event) => updateHighlightCard(index, { suffix: event.target.value })} />
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="digestSocialsEditor">
-              <div className="panelHeader">
-                <h3>Соцсети и каналы</h3>
-                <button type="button" className="ghostButton" onClick={addFooterSocial}>
-                  Добавить
-                </button>
-              </div>
-              <div className="digestSocialsList">
-                {branding.footer.socials.map((item, index) => (
-                  <div className="digestSocialRow" key={`${item.label}-${index}`}>
-                    <label className="field">
-                      <span>Название</span>
-                      <input value={item.label} onChange={(event) => updateFooterSocial(index, "label", event.target.value)} />
-                    </label>
-                    <label className="field">
-                      <span>Текст</span>
-                      <input value={item.text} onChange={(event) => updateFooterSocial(index, "text", event.target.value)} />
-                    </label>
-                    <label className="field">
-                      <span>Цвет</span>
-                      <input value={item.accent} onChange={(event) => updateFooterSocial(index, "accent", event.target.value)} />
-                    </label>
-                    <button type="button" className="ghostButton compactButton" onClick={() => removeFooterSocial(index)}>
-                      Удалить
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="digestPreviewLive">
-              <div className="panelHeader">
-                <h3>Предпросмотр в реальном времени</h3>
-                <span className="metaText">Показывает текущие поля оформления и первые сигналы выборки</span>
-              </div>
-              <DigestBrandingPreview branding={branding} articles={digestCandidates.slice(0, 3)} />
-            </div>
-          </div>
-        ) : null}
-
         {loading ? (
           <div className="emptyState"><LoadingState label="Загружаем сигналы…" /></div>
         ) : digestCandidates.length ? (
-          <div className="digestLayout">
-            <div className="digestPickListReact">
-              {digestCandidates.map((article) => (
-                <div className="digestPickRow" key={article.id}>
-                  <a href={article.url} target="_blank" rel="noreferrer">
-                    <strong>{article.title}</strong>
-                  </a>
-                  <div className="metaText">{article.tag} · оценка {Math.round(Number(article.score || 0))} · {formatDate(article.date)}</div>
-                  <button type="button" className="ghostButton" disabled={busy} onClick={() => void removeFromDigest(article.id)}>
-                    Убрать из дайджеста
-                  </button>
+            <div className="digestQueuePanel">
+              <div className="digestQueueHeader">
+                <div>
+                  <strong>Очередь выпуска</strong>
+                  <div className="metaText">
+                    {savedDraft?.month === activeMonth ? "Порядок можно менять вручную и сохранять в draft" : "Стартовый порядок синхронизирован с preview от backend"}
+                  </div>
                 </div>
-              ))}
-            </div>
-            <div className="digestPreviewGrid">
-              {digestCandidates.map((article, index) => (
-                <article className="digestPreviewCard" key={article.id}>
-                  <strong>{index + 1}. {article.tag}</strong>
-                  <div>{article.title}</div>
-                  <div className="metaText">{article.summary || branding?.issue.empty_summary_text || "Суть ещё не сформирована."}</div>
+                <div className="digestQueueHeaderMeta">
+                  {hasManualChanges ? <span className="miniPill warn">есть несохранённые изменения</span> : null}
+                  <span className="badge">{orderedDigestCandidates.length}</span>
+                </div>
+              </div>
+              <div className="digestPickListReact">
+              {orderedDigestCandidates.map((article, index) => (
+                <article className="digestPickRow" key={article.id}>
+                  <div className="digestPickTop">
+                    <div className="digestPickIndex">{String(index + 1).padStart(2, "0")}</div>
+                    <div className="digestPickMain">
+                      <div className="digestPickMetaRow">
+                        <span className="miniPill muted">{article.tag}</span>
+                        <span className="miniPill ok">{Math.round(Number(article.score || 0))}</span>
+                      </div>
+                      <a href={article.url} target="_blank" rel="noreferrer">
+                        <strong>{article.title}</strong>
+                      </a>
+                    </div>
+                    <div className="digestPickActions">
+                      <button
+                        type="button"
+                        className="ghostButton compactButton"
+                        disabled={index === 0}
+                        onClick={() => moveDigestItem(article.id, -1)}
+                        aria-label="Поднять материал выше"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="ghostButton compactButton"
+                        disabled={index === orderedDigestCandidates.length - 1}
+                        onClick={() => moveDigestItem(article.id, 1)}
+                        aria-label="Опустить материал ниже"
+                      >
+                        ↓
+                      </button>
+                      <button type="button" className="ghostButton compactButton" onClick={() => removeFromIssue(article.id)}>
+                        Из выпуска
+                      </button>
+                      <button type="button" className="ghostButton compactButton" disabled={busy} onClick={() => void removeFromDigest(article.id)}>
+                        Из дайджеста
+                      </button>
+                    </div>
+                  </div>
+                  <div className="digestPickSummary">{article.summary || branding?.issue.empty_summary_text || "Суть ещё не сформирована."}</div>
+                  <div className="digestPickFooter">
+                    <span>{article.source}</span>
+                    <span>{formatDate(article.date)}</span>
+                    <span>{article.raw_text_chars || 0} симв.</span>
+                  </div>
                 </article>
               ))}
             </div>
+            {availableDigestCandidates.length ? (
+              <div className="digestAvailablePanel">
+                <div className="panelHeader">
+                  <h3>Доступные материалы</h3>
+                  <span className="metaText">Можно добавить в сохранённый выпуск без смены фильтров</span>
+                </div>
+                <div className="digestAvailableList">
+                  {availableDigestCandidates.slice(0, 12).map((article) => (
+                    <div className="digestAvailableRow" key={article.id}>
+                      <div>
+                        <strong>{article.title}</strong>
+                        <div className="metaText">{article.tag} · {article.source}</div>
+                      </div>
+                      <button type="button" className="ghostButton compactButton" onClick={() => addToIssue(article.id)}>
+                        Добавить
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="emptyState">Нет статей со статусом «В дайджест» по текущим фильтрам.</div>
         )}
+      </section>
+
+      <aside className="digestBuilderSide">
+        <section className="digestControlCard">
+          <div className="panelHeader">
+            <h3>Действия по выпуску</h3>
+            <span className="metaText">Draft и экспорт работают по текущей выборке</span>
+          </div>
+          <div className="digestToolbar digestToolbarStack">
+            <div className="digestActionGroup">
+              <span className="digestGroupLabel">Сохранение</span>
+              <button type="button" className="ghostButton" disabled={draftBusy} onClick={() => void handleSaveDraft()}>
+                {draftBusy ? "Сохраняем draft…" : "Сохранить draft"}
+              </button>
+              <button type="button" className="ghostButton" disabled={!hasManualChanges} onClick={resetDraftQueue}>
+                Сбросить изменения
+              </button>
+            </div>
+            <div className="digestActionGroup">
+              <span className="digestGroupLabel">Экспорт</span>
+              <button type="button" className="primaryButton" onClick={() => void handleDigestExport("pdf")}>
+                PDF
+              </button>
+              <button type="button" className="ghostButton" onClick={() => void handleDigestExport("docx")}>
+                DOCX
+              </button>
+              <button type="button" className="ghostButton" onClick={() => void handleDigestExport("html")}>
+                HTML
+              </button>
+            </div>
+          </div>
+          <div className="digestControlMeta">
+            <div><strong>{activeMonth}</strong></div>
+            <div className="metaText">Месяц выпуска</div>
+            <div><strong>{exportPreviewItems.length}</strong></div>
+            <div className="metaText">Карточек в финальном preview</div>
+            <div><strong>{hasManualChanges ? "локальные правки" : "backend preview"}</strong></div>
+            <div className="metaText">
+              {hasManualChanges
+                ? "Порядок/состав уже изменён на экране, но preview обновится после сохранения draft"
+                : "Preview уже соответствует сохранённому draft или текущей backend-выборке"}
+            </div>
+          </div>
+        </section>
+
+        <section className="digestPreviewSurface">
+          <div className="panelHeader">
+            <h3>Предпросмотр выпуска</h3>
+            <span className="metaText">Тот же HTML, что пойдёт в экспорт</span>
+          </div>
+          {digestPreviewHtml ? (
+            <iframe
+              className="digestPreviewIframe"
+              title="Предпросмотр дайджеста"
+              srcDoc={digestPreviewHtml}
+              sandbox=""
+            />
+          ) : (
+            <div className="digestPreviewEmpty">{branding?.issue.preview_empty_text || "В текущей выборке нет сигналов для превью."}</div>
+          )}
+        </section>
+      </aside>
+    </div>
+  );
+
+  const brandingWorkspace = isAdmin && branding ? (
+    <div className="digestBrandingWorkspace">
+      <section className="settingsCard digestBrandingCard">
+        <div className="panelHeader">
+          <h2>Оформление выпуска</h2>
+          <button type="button" className="primaryButton" disabled={brandingBusy} onClick={() => void handleSaveBranding()}>
+            Сохранить оформление
+          </button>
+        </div>
+        <div className="settingsGrid">
+          <label className="field">
+            <span>Бренд</span>
+            <input
+              value={branding.header.brand_text}
+              onChange={(event) => updateBrandingSection("header", { ...branding.header, brand_text: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Слоган</span>
+            <input
+              value={branding.header.brand_suffix}
+              onChange={(event) => updateBrandingSection("header", { ...branding.header, brand_suffix: event.target.value })}
+            />
+          </label>
+          <label className="field fieldWide">
+            <span>Подразделение</span>
+            <input
+              value={branding.header.department_text}
+              onChange={(event) => updateBrandingSection("header", { ...branding.header, department_text: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Плашка шапки</span>
+            <input
+              value={branding.hero.badge}
+              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, badge: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Заголовок шапки</span>
+            <input
+              value={branding.hero.headline}
+              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, headline: event.target.value })}
+            />
+          </label>
+          <label className="field fieldWide">
+            <span>Подзаголовок шапки</span>
+            <input
+              value={branding.hero.subtitle}
+              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, subtitle: event.target.value })}
+            />
+          </label>
+          <label className="field fieldWide">
+            <span>Ссылка на изображение шапки</span>
+            <input
+              value={branding.hero.image_url}
+              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, image_url: event.target.value })}
+              placeholder="https://example.com/hero.jpg"
+            />
+          </label>
+          <label className="field">
+            <span>Текст предпросмотра письма</span>
+            <input
+              value={branding.issue.preheader}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, preheader: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Шаблон заголовка</span>
+            <input
+              value={branding.issue.title_template}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Шаблон заголовка с месяцем</span>
+            <input
+              value={branding.issue.title_template_with_month}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template_with_month: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Заголовок новостей</span>
+            <input
+              value={branding.issue.news_title}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, news_title: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Призыв к действию</span>
+            <input
+              value={branding.issue.read_more_label}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, read_more_label: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Запасной текст сути</span>
+            <input
+              value={branding.issue.empty_summary_text}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, empty_summary_text: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Пустое превью</span>
+            <input
+              value={branding.issue.preview_empty_text}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, preview_empty_text: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Период без месяца</span>
+            <input
+              value={branding.issue.period_label_all}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, period_label_all: event.target.value })}
+            />
+          </label>
+          <label className="field fieldWide">
+            <span>Шаблон вступления</span>
+            <textarea
+              value={branding.issue.intro_template}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template: event.target.value })}
+            />
+          </label>
+          <label className="field fieldWide">
+            <span>Шаблон вступления с месяцем</span>
+            <textarea
+              value={branding.issue.intro_template_with_month}
+              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template_with_month: event.target.value })}
+              placeholder="Используйте {month}"
+            />
+          </label>
+          <label className="field fieldWide">
+            <span>Контактный текст</span>
+            <textarea
+              value={branding.footer.contact_text}
+              onChange={(event) => updateBrandingSection("footer", { ...branding.footer, contact_text: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Эл. почта</span>
+            <input
+              value={branding.footer.contact_email}
+              onChange={(event) => updateBrandingSection("footer", { ...branding.footer, contact_email: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Примечание</span>
+            <input
+              value={branding.footer.note}
+              onChange={(event) => updateBrandingSection("footer", { ...branding.footer, note: event.target.value })}
+            />
+          </label>
+        </div>
+        <div className="digestSocialsEditor">
+          <div className="panelHeader">
+            <h3>Соцсети и каналы</h3>
+            <button type="button" className="ghostButton" onClick={addFooterSocial}>
+              Добавить
+            </button>
+          </div>
+          <div className="digestSocialsList">
+            {branding.footer.socials.map((item, index) => (
+              <div className="digestSocialRow" key={`${item.label}-${index}`}>
+                <label className="field">
+                  <span>Название</span>
+                  <input value={item.label} onChange={(event) => updateFooterSocial(index, "label", event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>Текст</span>
+                  <input value={item.text} onChange={(event) => updateFooterSocial(index, "text", event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>Цвет</span>
+                  <input value={item.accent} onChange={(event) => updateFooterSocial(index, "accent", event.target.value)} />
+                </label>
+                <button type="button" className="ghostButton compactButton" onClick={() => removeFooterSocial(index)}>
+                  Удалить
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="digestPreviewSurface">
+        <div className="panelHeader">
+          <h3>Live preview</h3>
+          <span className="metaText">Сразу видно, как изменится финальный HTML</span>
+        </div>
+        {digestPreviewHtml ? (
+          <iframe
+            className="digestPreviewIframe"
+            title="Предпросмотр дайджеста"
+            srcDoc={digestPreviewHtml}
+            sandbox=""
+          />
+        ) : (
+          <div className="digestPreviewEmpty">{branding.issue.preview_empty_text || "В текущей выборке нет сигналов для превью."}</div>
+        )}
+      </section>
+    </div>
+  ) : null;
+
+  return (
+    <section className="screenStack">
+      <header className="screenHeader">
+        <div>
+          <h1>Месячный дайджест</h1>
+          <p>Сборка выпуска, сохранение draft и финальный экспорт теперь живут в одном рабочем экране.</p>
+        </div>
+        <div className="statusPill">{digestCandidates.length} статей</div>
+      </header>
+
+      <section className="panel">
+        {busy ? <InlineLoader label={exporting ? `Готовим документ ${exporting}…` : "Готовим документ…"} /> : null}
+        <div className="panelHeader">
+          <h2>{viewMode === "issue" ? "Сборка выпуска" : "Оформление выпуска"}</h2>
+          {isAdmin ? (
+            <div className="digestModeSwitch" role="tablist" aria-label="Режим экрана дайджеста">
+              <button
+                type="button"
+                className={viewMode === "issue" ? "primaryButton" : "ghostButton"}
+                onClick={() => setViewMode("issue")}
+              >
+                Сборка выпуска
+              </button>
+              <button
+                type="button"
+                className={viewMode === "branding" ? "primaryButton" : "ghostButton"}
+                onClick={() => setViewMode("branding")}
+              >
+                Оформление
+              </button>
+            </div>
+          ) : null}
+        </div>
+        {viewMode === "issue" ? issueWorkspace : brandingWorkspace}
       </section>
     </section>
   );
@@ -717,51 +965,12 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function parseKeywordList(value: string) {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function defaultHighlightCards(): DigestHighlightCard[] {
   return [
     { metric: "total", icon: "doc", prefix: "", suffix: "", noun_one: "новость", noun_few: "новости", noun_many: "новостей" },
     { metric: "analytics", icon: "chart", prefix: "аналитических", suffix: "", noun_one: "материал", noun_few: "материала", noun_many: "материалов" },
     { metric: "business", icon: "people", prefix: "", suffix: "для бизнеса", noun_one: "возможность", noun_few: "возможности", noun_many: "возможностей" },
   ];
-}
-
-function plural(n: number, one: string, few: string, many: string) {
-  const mod100 = Math.abs(n) % 100;
-  if (mod100 > 10 && mod100 < 20) return many;
-  const mod10 = mod100 % 10;
-  if (mod10 === 1) return one;
-  if (mod10 >= 2 && mod10 <= 4) return few;
-  return many;
-}
-
-function computePreviewHighlights(articles: Article[], rules: DigestHighlightRules) {
-  const analytics = articles.filter((article) => {
-    const tag = (article.tag || "").toLowerCase();
-    const source = (article.source || "").toLowerCase();
-    return (
-      rules.analytics_category_keywords.some((keyword) => tag.includes(keyword.toLowerCase())) ||
-      rules.analytics_source_keywords.some((keyword) => source.includes(keyword.toLowerCase()))
-    );
-  }).length;
-  const business = articles.filter((article) => {
-    const tag = (article.tag || "").toLowerCase();
-    return rules.business_category_keywords.some((keyword) => tag.includes(keyword.toLowerCase()));
-  }).length;
-  const metrics = { total: articles.length, analytics, business };
-  const cards = rules.cards?.length ? rules.cards : defaultHighlightCards();
-  return cards.map((card) => ({
-    value: metrics[card.metric],
-    label: [card.prefix, plural(metrics[card.metric], card.noun_one, card.noun_few, card.noun_many), card.suffix]
-      .filter(Boolean)
-      .join(" "),
-  }));
 }
 
 function formatDate(value: string | null) {
@@ -782,86 +991,6 @@ function LoadingState(props: { label: string }) {
     <div className="loadingStateReact">
       <div className="spinnerReact" />
       <span>{props.label}</span>
-    </div>
-  );
-}
-
-function DigestBrandingPreview(props: { branding: DigestBranding; articles: Article[] }) {
-  const { branding, articles } = props;
-  const highlights = computePreviewHighlights(articles, branding.highlights);
-  return (
-    <div className="digestPreviewLiveFrame">
-      <div className="digestPreviewHeader">
-        <div className="digestPreviewBrandLine">
-          <strong>{branding.header.brand_text}</strong>
-          <span>/ {branding.header.brand_suffix}</span>
-        </div>
-        <div className="digestPreviewDept">{branding.header.department_text}</div>
-      </div>
-
-      <div className="metaText">{branding.issue.preheader}</div>
-
-      <div className="digestPreviewHero">
-        {branding.hero.image_url ? <div className="digestPreviewHeroImage" style={{ backgroundImage: `url(${branding.hero.image_url})` }} /> : null}
-        <div className="digestPreviewBadge">{branding.hero.badge}</div>
-        <div className="digestPreviewHeadline">{branding.hero.headline}</div>
-        <div className="digestPreviewSubtitle">{branding.hero.subtitle}</div>
-      </div>
-
-      <div className="metaText">
-        {articles.length
-          ? branding.issue.intro_template_with_month.replace("{month}", "текущий выпуск")
-          : branding.issue.intro_template}
-      </div>
-
-      <div className="digestPreviewSectionTitle">{branding.issue.highlights_title}</div>
-      <div className="digestPreviewHighlights">
-        {highlights.map((item) => (
-          <div className="digestPreviewHighlight" key={item.label}>
-            <strong>{item.value}</strong>
-            <span>{item.label}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="digestPreviewSectionTitle">{branding.issue.news_title}</div>
-      <div className="digestPreviewCards">
-        {articles.length ? (
-          articles.map((article, index) => (
-            <article className="digestPreviewLiveCard" key={article.id}>
-              <div className="digestPreviewLiveMeta">{index + 1}. {article.tag}</div>
-              <div className="digestPreviewLiveTitle">{article.title}</div>
-              <div className="digestPreviewLiveSummary">{article.summary || branding.issue.empty_summary_text}</div>
-              <div className="digestPreviewLiveFooter">
-                <span>{branding.issue.read_more_label}</span>
-                <span>оценка {Math.round(Number(article.score || 0))}</span>
-              </div>
-            </article>
-          ))
-        ) : (
-          <div className="digestPreviewEmpty">{branding.issue.preview_empty_text}</div>
-        )}
-      </div>
-
-      <div className="digestPreviewFooter">
-        <div className="digestPreviewSocials">
-          {branding.footer.socials.map((item, index) => (
-            <span
-              key={`${item.label}-${index}`}
-              className="digestPreviewSocial"
-              style={{ color: item.accent || "#262d3c" }}
-              title={item.label}
-            >
-              {item.text || item.label}
-            </span>
-          ))}
-        </div>
-        <div className="digestPreviewContact">
-          <strong>{branding.footer.contact_text}</strong>
-          <span>{branding.footer.contact_email}</span>
-          <span>{branding.footer.note}</span>
-        </div>
-      </div>
     </div>
   );
 }

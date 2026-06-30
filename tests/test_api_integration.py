@@ -136,7 +136,7 @@ def test_digest_export_endpoint_finishes_job_and_returns_file(monkeypatch, tmp_p
     monkeypatch.setattr(
         api,
         "write_digest_export",
-        lambda month, export_format, limit, min_score: {
+        lambda month, export_format, limit, min_score, **kwargs: {
             "path": str(exported),
             "filename": exported.name,
             "media_type": "text/html; charset=utf-8",

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { listArticles, updateArticle } from "../../api/articles";
+import { DEFAULT_ARTICLE_LIMIT, listArticles, type ArticleQuery, updateArticle } from "../../api/articles";
 import { getDashboardStats } from "../../api/stats";
 import type { Article, DashboardStats } from "../../api/types";
 
@@ -71,10 +71,7 @@ export function ArticlesPage(props: Props) {
   async function reload() {
     try {
       setBusy(true);
-      const [articlesPayload, statsPayload] = await Promise.all([listArticles(), getDashboardStats()]);
-      props.onArticlesReloaded(articlesPayload);
-      props.onStatsReloaded(statsPayload);
-      props.showToast("Данные обновлены");
+      await refreshCatalog({ keepQuery: true });
     } catch (error) {
       handleError(error, "Не удалось обновить статьи");
     } finally {
@@ -96,6 +93,52 @@ export function ArticlesPage(props: Props) {
     const q = sourceQuery.trim().toLowerCase();
     return sourceOptions.filter((option) => !q || option.toLowerCase().includes(q));
   }, [sourceOptions, sourceQuery]);
+  const hasServerQuery =
+    Boolean(search.trim())
+    || Boolean(tag)
+    || Boolean(status)
+    || Boolean(source)
+    || Boolean(language)
+    || scoreMin > 0
+    || scoreMax < 100
+    || Boolean(dateFrom)
+    || Boolean(dateTo)
+    || sort !== "score_desc"
+    || viewTab === "withStatus";
+  const activeServerQuery: ArticleQuery | null = hasServerQuery
+    ? {
+        search: search.trim() || undefined,
+        tag: tag || undefined,
+        status: status || undefined,
+        source: source || undefined,
+        language: language || undefined,
+        minScore: scoreMin,
+        maxScore: scoreMax,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
+        sort: sort as ArticleQuery["sort"],
+        changedOnly: viewTab === "withStatus",
+        limit: 5000,
+      }
+    : null;
+
+  async function refreshCatalog(options: { silent?: boolean; keepQuery?: boolean } = {}) {
+    const query = options.keepQuery ? activeServerQuery : null;
+    const [articlesPayload, statsPayload] = await Promise.all([
+      listArticles(query ?? { limit: DEFAULT_ARTICLE_LIMIT }),
+      getDashboardStats(),
+    ]);
+    if (query) {
+      setServerResults(articlesPayload);
+    } else {
+      setServerResults(null);
+      onArticlesReloaded(articlesPayload);
+    }
+    onStatsReloaded(statsPayload);
+    if (!options.silent) {
+      props.showToast("Данные обновлены");
+    }
+  }
 
   useEffect(() => {
     setRenderLimit(200);
@@ -107,12 +150,10 @@ export function ArticlesPage(props: Props) {
   useEffect(() => {
     let inFlight = false;
     async function refresh() {
-      if (inFlight || document.hidden || busy || searching || serverResults !== null) return;
+      if (inFlight || document.hidden || busy || searching) return;
       inFlight = true;
       try {
-        const [rows, statsPayload] = await Promise.all([listArticles(), getDashboardStats()]);
-        onArticlesReloaded(rows);
-        onStatsReloaded(statsPayload);
+        await refreshCatalog({ silent: true, keepQuery: true });
       } catch {
         // Фоновое обновление молчит об ошибках, чтобы не мешать работе.
       } finally {
@@ -128,13 +169,12 @@ export function ArticlesPage(props: Props) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [busy, searching, serverResults, onArticlesReloaded, onStatsReloaded]);
+  }, [activeServerQuery, busy, searching, onArticlesReloaded, onStatsReloaded]);
 
-  // Поиск уходит на сервер и покрывает ВСЮ базу (а не только загруженный топ-2000).
-  // Пустой запрос → возвращаемся к дефолтному набору. Debounce 400мс.
+  // Фильтры каталога работают по серверной выборке на ВСЮ базу, а не только по
+  // локальному топ-2000. Пустые фильтры → возвращаемся к дефолтному набору.
   useEffect(() => {
-    const q = search.trim();
-    if (!q) {
+    if (!hasServerQuery) {
       setServerResults(null);
       setSearching(false);
       return;
@@ -142,12 +182,12 @@ export function ArticlesPage(props: Props) {
     let cancelled = false;
     setSearching(true);
     const timer = window.setTimeout(() => {
-      listArticles({ search: q, limit: 5000 })
+      listArticles(activeServerQuery || { limit: 5000 })
         .then((rows) => {
           if (!cancelled) setServerResults(rows);
         })
         .catch((error) => {
-          if (!cancelled) handleError(error, "Не удалось выполнить поиск");
+          if (!cancelled) handleError(error, "Не удалось обновить выборку по фильтрам");
         })
         .finally(() => {
           if (!cancelled) setSearching(false);
@@ -157,28 +197,35 @@ export function ArticlesPage(props: Props) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [search]);
+  }, [activeServerQuery, hasServerQuery]);
 
   const filteredArticles = useMemo(() => {
-    const q = search.trim().toLowerCase();
     const items = articles.filter((article) => {
       const hay = [article.title, article.summary, article.source, article.tag].join(" ").toLowerCase();
       return (
-        // Вкладка «Со статусом» оставляет только статьи с изменённым статусом.
-        (viewTab === "all" || article.status !== "new") &&
-        // При серверном поиске текст уже отфильтрован в Postgres (включая raw_text,
-        // которого нет на клиенте) — не режем результат повторно по hay.
-        (serverResults !== null || !q || hay.includes(q)) &&
-        (!tag || article.tag === tag || article.tag.startsWith(`${tag} /`)) &&
-        (!status || article.status === status) &&
-        (!source || article.source === source) &&
-        Number(article.score || 0) >= scoreMin &&
-        Number(article.score || 0) <= scoreMax &&
-        (!dateFrom || String(article.date || "") >= dateFrom) &&
-        (!dateTo || String(article.date || "") <= dateTo) &&
-        (!language || article.language === language)
+        (
+          serverResults !== null
+            ? true
+            : (
+              (viewTab === "all" || article.status !== "new")
+              &&
+              (!search.trim() || hay.includes(search.trim().toLowerCase()))
+              && (!tag || article.tag === tag || article.tag.startsWith(`${tag} /`))
+              && (!status || article.status === status)
+              && (!source || article.source === source)
+              && Number(article.score || 0) >= scoreMin
+              && Number(article.score || 0) <= scoreMax
+              && (!dateFrom || String(article.date || "") >= dateFrom)
+              && (!dateTo || String(article.date || "") <= dateTo)
+              && (!language || article.language === language)
+            )
+        )
       );
     });
+
+    if (serverResults !== null) {
+      return items;
+    }
 
     items.sort((a, b) => {
       if (sort === "score_asc") return Number(a.score || 0) - Number(b.score || 0);
@@ -265,11 +312,7 @@ export function ArticlesPage(props: Props) {
     try {
       setBusy(true);
       await updateArticle(articleId, { status: nextStatus });
-      const [refreshedArticles, refreshedStats] = await Promise.all([listArticles(), getDashboardStats()]);
-      props.onArticlesReloaded(refreshedArticles);
-      props.onStatsReloaded(refreshedStats);
-      // Держим в синхроне активный серверный поиск (его не перезагружаем целиком).
-      setServerResults((prev) => (prev ? prev.map((item) => (item.id === articleId ? { ...item, status: nextStatus } : item)) : prev));
+      await refreshCatalog({ silent: true, keepQuery: true });
       props.showToast("Статус статьи обновлён");
     } catch (error) {
       handleError(error, "Не удалось обновить статус статьи");
@@ -308,9 +351,9 @@ export function ArticlesPage(props: Props) {
           <div className="settingsActions">
             <span className="badge">
               {searching
-                ? "Поиск по всей базе…"
+                ? "Обновляем выборку по всей базе…"
                 : serverResults !== null
-                  ? `Найдено по всей базе: ${filteredArticles.length}`
+                  ? `Выборка по всей базе: ${filteredArticles.length}`
                   : remaining > 0
                     ? `${filteredArticles.length} сигналов · показаны ${visibleArticles.length}`
                     : `${filteredArticles.length} сигналов`}
