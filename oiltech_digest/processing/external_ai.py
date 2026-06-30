@@ -199,7 +199,7 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], Non
 
 
 def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run: bool = False,
-                         mark: bool = False) -> dict[str, Any]:
+                         mark: bool = False, job_id: int | None = None) -> dict[str, Any]:
     """Применить вердикты к core: релевантные — персист, нерелевантные — УДАЛИТЬ.
     Статьи в сохранённом дайджесте по умолчанию пропускаются (force=False).
 
@@ -221,7 +221,7 @@ def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run
             if not dry_run:
                 repository.set_article_relevance(article_id, True, relevance.get("reason"), relevance.get("model"))
                 if relevance.get("model") and relevance.get("model") != "negative-keyword":
-                    _insert_run(article_id, "relevance", {**relevance, "provider": "openai"})
+                    _insert_run(article_id, "relevance", {**relevance, "provider": "openai"}, job_id=job_id)
             stats["kept"] += 1
         elif dry_run:
             stats["deleted"] += 1  # сколько БЫ удалили
@@ -290,7 +290,7 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[[], N
     return result
 
 
-def apply_translate_result(result: dict[str, Any]) -> dict[str, Any]:
+def apply_translate_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
     stats = {"articles": 0, "translation": 0, "errors": 0}
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
@@ -299,15 +299,18 @@ def apply_translate_result(result: dict[str, Any]) -> dict[str, Any]:
         if translation and translation.get("title_ru"):
             repository.set_article_title_ru(article_id, translation["title_ru"])
             if translation.get("provider") != "offline" or translation.get("model"):
-                _insert_run(article_id, "translation", translation)
+                _insert_run(article_id, "translation", translation, job_id=job_id)
             stats["translation"] += 1
         if item.get("errors"):
             stats["errors"] += len(item["errors"])
     return stats
 
 
-def apply_process_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Apply an external AI result to the core database."""
+def apply_process_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
+    """Apply an external AI result to the core database.
+
+    job_id — id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
+    (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт."""
     stats = {"articles": 0, "summary": 0, "relevance": 0, "translation": 0, "tagging": 0, "scoring": 0, "errors": 0}
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
@@ -315,14 +318,14 @@ def apply_process_result(result: dict[str, Any]) -> dict[str, Any]:
         if item.get("summary"):
             summary = item["summary"]
             repository.upsert_article_card(article_id, summary["summary"], summary.get("model"))
-            _insert_run(article_id, "summary", summary)
+            _insert_run(article_id, "summary", summary, job_id=job_id)
             stats["summary"] += 1
         if item.get("translation"):
             translation = item["translation"]
             if translation.get("title_ru"):
                 repository.set_article_title_ru(article_id, translation["title_ru"])
             if translation.get("provider") != "offline" or translation.get("model"):
-                _insert_run(article_id, "translation", translation)
+                _insert_run(article_id, "translation", translation, job_id=job_id)
             stats["translation"] += 1
         if item.get("relevance"):
             relevance = item["relevance"]
@@ -332,7 +335,7 @@ def apply_process_result(result: dict[str, Any]) -> dict[str, Any]:
                 relevance.get("reason"),
                 relevance.get("model"),
             )
-            _insert_run(article_id, "relevance", relevance)
+            _insert_run(article_id, "relevance", relevance, job_id=job_id)
             stats["relevance"] += 1
         if item.get("tagging"):
             tagging = item["tagging"]
@@ -343,7 +346,7 @@ def apply_process_result(result: dict[str, Any]) -> dict[str, Any]:
                 tagging.get("rationale"),
                 tagging.get("model"),
             )
-            _insert_run(article_id, "tagging", tagging)
+            _insert_run(article_id, "tagging", tagging, job_id=job_id)
             stats["tagging"] += 1
         if item.get("scoring"):
             scoring = item["scoring"]
@@ -355,7 +358,7 @@ def apply_process_result(result: dict[str, Any]) -> dict[str, Any]:
                 scoring.get("items") or [],
                 scoring.get("model"),
             )
-            _insert_run(article_id, "scoring", scoring)
+            _insert_run(article_id, "scoring", scoring, job_id=job_id)
             stats["scoring"] += 1
         if item.get("errors"):
             stats["errors"] += len(item["errors"])
@@ -374,9 +377,10 @@ def _response_payload(response: AIResponse, data: dict[str, Any]) -> dict[str, A
     }
 
 
-def _insert_run(article_id: int, stage: str, payload: dict[str, Any]) -> None:
+def _insert_run(article_id: int, stage: str, payload: dict[str, Any], *, job_id: int | None = None) -> None:
     repository.insert_ai_run(
         {
+            "job_id": job_id,
             "article_id": article_id,
             "stage": stage,
             "provider": payload.get("provider") or "openai",

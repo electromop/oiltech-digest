@@ -2042,15 +2042,20 @@ def replace_article_score(article_id: int, total_score: float, score_label: str,
 
 
 def insert_ai_run(rec: dict) -> None:
+    # job_id по умолчанию NULL — для локального пути и старых вызовов (не дедуплицируются).
+    # ON CONFLICT DO NOTHING (баг H1/T2): повторное применение результата задачи не двоит
+    # биллинг — одна строка на (job_id, article_id, stage).
+    rec = {"job_id": None, **rec}
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO ai_processing_runs
-              (article_id, stage, provider, model, language, input_tokens, output_tokens,
+              (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
                total_tokens, cost_usd, status, error_message)
-            VALUES (%(article_id)s, %(stage)s, %(provider)s, %(model)s, %(language)s,
+            VALUES (%(job_id)s, %(article_id)s, %(stage)s, %(provider)s, %(model)s, %(language)s,
                     %(input_tokens)s, %(output_tokens)s, %(total_tokens)s, %(cost_usd)s,
                     %(status)s, %(error_message)s)
+            ON CONFLICT (job_id, article_id, stage) DO NOTHING
             """,
             rec,
         )

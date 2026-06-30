@@ -896,15 +896,15 @@ def external_worker_complete(
         raise HTTPException(status_code=409, detail="Job lease is not active")
     try:
         if job.get("kind") == "process_articles" and result.get("external_ai"):
-            result = {**result, "applied": external_ai.apply_process_result(result)}
+            result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id)}
         if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
             job_payload = job.get("payload") or {}
             force = bool(job_payload.get("force", False))
             dry_run = bool(job_payload.get("dry_run", False))
             mark = bool(job_payload.get("mark", False))
-            result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark)}
+            result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark, job_id=job_id)}
         if job.get("kind") == "translate_titles" and result.get("translate_titles"):
-            result = {**result, "applied": external_ai.apply_translate_result(result)}
+            result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
         if job.get("kind") == "scrape_source" and result.get("external_fetch"):
             result = {**result, "applied": external_fetch.apply_scrape_result(result)}
     except Exception:

@@ -909,7 +909,7 @@ def test_external_worker_complete_applies_external_ai_result(monkeypatch):
     completed = []
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "process_articles"})
     monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
-    monkeypatch.setattr(api.external_ai, "apply_process_result", lambda result: applied.append(result) or {"articles": 1})
+    monkeypatch.setattr(api.external_ai, "apply_process_result", lambda result, **kwargs: applied.append(result) or {"articles": 1})
     monkeypatch.setattr(
         api.repository,
         "finish_external_background_job",
