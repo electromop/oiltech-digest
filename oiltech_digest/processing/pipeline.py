@@ -395,6 +395,8 @@ def score_article(article: dict, criteria: list[dict], client) -> AIResponse:
         _article_prompt(article) + "\n\ncriteria:\n" + "\n".join(criterion_lines),
         SCORE_SCHEMA,
         max_output_tokens=1800,
+        model=config.OPENAI_SCORE_MODEL,
+        reasoning_effort=config.OPENAI_SCORE_REASONING,
     )
 
 
@@ -409,6 +411,19 @@ def keyword_tag(article: dict, tags: list[dict]) -> dict:
     return best
 
 
+# Блендинг балла критерия. Оценка модели (ai_score) — ОСНОВНОЙ сигнал и НИЖНЯЯ граница:
+# модель читает суть статьи. Ключевые слова (keyword_score) могут только ПОДНЯТЬ балл, но
+# никогда не топят — узкие списки ключей (нужно 3+ точных совпадения из ~10 на критерий)
+# почти всегда дают низкий keyword_score, и в прежней схеме (0.35·kw + 0.65·ai) он тянул
+# итог вниз: статья с ai=80 давала total ~57 (< порога 65), а 70+ требовал ai≈100 — поэтому
+# до 65+ дотягивали единицы (инцидент 2026-06). Теперь:
+#   blended = SCORE_KEYWORD_WEIGHT·kw + SCORE_AI_WEIGHT·ai
+#   final   = max(ai, blended)   ← keyword добавляет вес только когда совпадений много (kw>ai)
+# Веса вынесены в константы — подстраивай после пилота на проде.
+SCORE_KEYWORD_WEIGHT = 0.2
+SCORE_AI_WEIGHT = 0.8
+
+
 def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[str, Any]) -> dict:
     by_id = {int(c["id"]): c for c in criteria}
     ai_items = {int(item["criterion_id"]): item for item in payload.get("items", []) if item.get("criterion_id") in by_id}
@@ -418,8 +433,15 @@ def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[s
         criterion_id = int(criterion["id"])
         weight = float(criterion["weight"])
         keyword_score = keyword_score_for_criterion(article, criterion)
-        ai_score = float((ai_items.get(criterion_id) or {}).get("ai_score") or keyword_score)
-        final_score = round((keyword_score * 0.35) + (ai_score * 0.65), 2)
+        ai_item = ai_items.get(criterion_id)
+        # Явная проверка наличия: легитимный ai_score=0 — это оценка, а не «нет ответа».
+        # Только если модель вообще не вернула критерий — падаем на детерминистский keyword.
+        if ai_item is not None and ai_item.get("ai_score") is not None:
+            ai_score = _clamp(float(ai_item["ai_score"]), 0, 100)
+        else:
+            ai_score = keyword_score
+        blended = (keyword_score * SCORE_KEYWORD_WEIGHT) + (ai_score * SCORE_AI_WEIGHT)
+        final_score = round(max(ai_score, blended), 2)
         weighted_total += final_score * weight / 100
         items.append(
             {

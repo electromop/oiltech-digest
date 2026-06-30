@@ -124,6 +124,15 @@ OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").st
 OPENAI_TRANSLATE_MODEL = os.environ.get("OPENAI_TRANSLATE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 
+# Скоринг (бизнес-эффект и пр. критерии) — балл напрямую определяет отбор в дайджест.
+# Раньше скоринг ТИХО ехал на основной OPENAI_MODEL с минимальным reasoning: при смене
+# основной модели на слабую/быструю (или откате на nano) балл систематически проседал
+# (инцидент 2026-06: средний total_score ~30, до 65+ дотягивали единицы). Даём скорингу
+# СВОЮ модель и НЕ minimal reasoning по умолчанию (minimal даёт терсые, заниженные баллы).
+# Если override не задан — основная модель, но reasoning по умолчанию medium, а не minimal.
+OPENAI_SCORE_MODEL = os.environ.get("OPENAI_SCORE_MODEL", "").strip() or OPENAI_MODEL
+OPENAI_SCORE_REASONING = os.environ.get("OPENAI_SCORE_REASONING", "").strip() or "medium"
+
 # USD per 1M tokens. Defaults follow the model docs snapshot used when this code
 # was written; override in .env if pricing changes or another model is selected.
 OPENAI_INPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_INPUT_USD_PER_MTOK", "0.05"))
