@@ -271,6 +271,7 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS ai_processing_runs (
   id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  job_id          BIGINT,                        -- фоновая задача-источник (идемпотентность биллинга, баг H1/T2)
   article_id      BIGINT REFERENCES articles(id),
   stage           TEXT NOT NULL,                 -- summary / tagging / scoring / digest
   provider        TEXT NOT NULL DEFAULT 'openai',
@@ -376,3 +377,9 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_background_jobs_external_ready ON background_jobs(execution_region, queue_name, status, run_after, created_at);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_lease_expires ON background_jobs(status, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_user_created ON background_jobs(user_id, created_at DESC);
+-- Идемпотентность биллинга AI (баг H1/T2): один (job_id, article_id, stage) — одна строка.
+-- Повторное применение результата задачи (ретрай/переотдача воркера) НЕ двоит ai_processing_runs
+-- → нет двойного счёта OpenAI. NULL job_id (локальный путь) и NULL article_id (дайджест) не
+-- дедуплицируются (NULL-ы различны в UNIQUE) — вставляются как раньше.
+ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS job_id BIGINT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_article_stage ON ai_processing_runs(job_id, article_id, stage);

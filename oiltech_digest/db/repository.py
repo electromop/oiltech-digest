@@ -645,6 +645,7 @@ def external_queue_status() -> dict:
             SELECT
               COUNT(*) FILTER (WHERE status = 'queued') AS queued,
               COUNT(*) FILTER (WHERE status = 'running') AS running,
+              COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
               COUNT(*) FILTER (WHERE status = 'failed') AS failed,
               COUNT(*) FILTER (WHERE status = 'ok') AS ok,
               MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
@@ -664,6 +665,7 @@ def external_queue_status() -> dict:
             SELECT queue_name,
                    COUNT(*) FILTER (WHERE status = 'queued') AS queued,
                    COUNT(*) FILTER (WHERE status = 'running') AS running,
+                   COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
                    COUNT(*) FILTER (WHERE status = 'failed') AS failed,
                    COUNT(*) FILTER (WHERE status = 'ok') AS ok,
                    MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
@@ -801,6 +803,52 @@ def finish_background_job(job_id: int, result: dict | None = None) -> None:
         conn.commit()
 
 
+def begin_external_background_job_finalize(job_id: int, *, lease_token_hash: str) -> bool:
+    """Атомарно перевести внешнюю задачу running→finalizing под защитой лиза (баг T2).
+
+    Закрывает окно двойного AI-расхода: применять результат и биллить ai_processing_runs
+    можно ТОЛЬКО после успешного перехода в 'finalizing'. Пока задача 'finalizing',
+    requeue_expired_external_leases (он трогает лишь status='running') её НЕ переотдаст,
+    поэтому другой воркер не прогонит AI повторно. Возвращает True, если лиз ещё валиден
+    и задача застолблена именно за этим воркером (его lease_token_hash)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'finalizing',
+                last_heartbeat_at = now()
+            WHERE id = %s
+              AND status = 'running'
+              AND execution_region = 'external'
+              AND lease_token_hash = %s
+              AND lease_expires_at > now()
+            """,
+            (job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
+def release_external_background_job_finalize(job_id: int, *, lease_token_hash: str) -> bool:
+    """Откатить finalizing→running, если применение результата упало (баг T2, восстановление).
+
+    Без отката задача залипла бы в 'finalizing' навсегда. После отката её подберёт обычный
+    путь восстановления (requeue_expired по истечении лиза / requeue_stale)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'running'
+            WHERE id = %s
+              AND status = 'finalizing'
+              AND lease_token_hash = %s
+            """,
+            (job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
 def finish_external_background_job(job_id: int, *, lease_token_hash: str, result: dict | None = None) -> bool:
     with get_connection() as conn:
         cur = conn.execute(
@@ -815,10 +863,10 @@ def finish_external_background_job(job_id: int, *, lease_token_hash: str, result
                 lease_expires_at = NULL,
                 finished_at = now()
             WHERE id = %s
-              AND status = 'running'
               AND execution_region = 'external'
               AND lease_token_hash = %s
-              AND lease_expires_at > now()
+              AND (status = 'finalizing'
+                   OR (status = 'running' AND lease_expires_at > now()))
             """,
             (Json(_jsonable(result or {})), job_id, lease_token_hash),
         )
@@ -927,8 +975,16 @@ def fail_external_background_job(
         return True
 
 
-def requeue_stale_background_jobs(stale_minutes: int) -> int:
-    """Move old running jobs back to queued after a worker crash/restart."""
+def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: int | None = None) -> int:
+    """Move old running/finalizing jobs back to queued after a worker/core crash/restart.
+
+    'finalizing' (баг T2) — переходный статус на время применения результата внешней задачи.
+    В норме он живёт секунды; если задача в нём дольше finalizing_stale_minutes (по
+    last_heartbeat_at, выставленному при входе в finalize), значит core упал между
+    застолблением и финишем — возвращаем в очередь. Отдельный (короткий) таймаут: apply
+    не должен длиться как обычный running. lease-поля чистим, чтобы задачу переотдать заново."""
+    if finalizing_stale_minutes is None:
+        finalizing_stale_minutes = stale_minutes
     with get_connection() as conn:
         cur = conn.execute(
             """
@@ -936,11 +992,16 @@ def requeue_stale_background_jobs(stale_minutes: int) -> int:
             SET status = 'queued',
                 progress = 0,
                 started_at = NULL,
-                error_message = 'Requeued after stale running timeout'
-            WHERE status = 'running'
-              AND started_at < now() - (%s::text || ' minutes')::interval
+                claimed_by = NULL,
+                lease_token_hash = NULL,
+                lease_expires_at = NULL,
+                error_message = 'Requeued after stale running/finalizing timeout'
+            WHERE (status = 'running'
+                   AND started_at < now() - (%s::text || ' minutes')::interval)
+               OR (status = 'finalizing'
+                   AND last_heartbeat_at < now() - (%s::text || ' minutes')::interval)
             """,
-            (stale_minutes,),
+            (stale_minutes, finalizing_stale_minutes),
         )
         conn.commit()
         return cur.rowcount or 0
@@ -2005,15 +2066,20 @@ def replace_article_score(article_id: int, total_score: float, score_label: str,
 
 
 def insert_ai_run(rec: dict) -> None:
+    # job_id по умолчанию NULL — для локального пути и старых вызовов (не дедуплицируются).
+    # ON CONFLICT DO NOTHING (баг H1/T2): повторное применение результата задачи не двоит
+    # биллинг — одна строка на (job_id, article_id, stage).
+    rec = {"job_id": None, **rec}
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO ai_processing_runs
-              (article_id, stage, provider, model, language, input_tokens, output_tokens,
+              (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
                total_tokens, cost_usd, status, error_message)
-            VALUES (%(article_id)s, %(stage)s, %(provider)s, %(model)s, %(language)s,
+            VALUES (%(job_id)s, %(article_id)s, %(stage)s, %(provider)s, %(model)s, %(language)s,
                     %(input_tokens)s, %(output_tokens)s, %(total_tokens)s, %(cost_usd)s,
                     %(status)s, %(error_message)s)
+            ON CONFLICT (job_id, article_id, stage) DO NOTHING
             """,
             rec,
         )

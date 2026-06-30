@@ -1139,7 +1139,7 @@ def test_external_worker_progress_and_complete_validate_lease(monkeypatch):
         lambda job_id, **kwargs: complete_calls.append((job_id, kwargs)) or True,
     )
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "digest_export"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
     client = TestClient(api.app)
 
     progress = client.post(
@@ -1165,8 +1165,8 @@ def test_external_worker_complete_applies_external_ai_result(monkeypatch):
     applied = []
     completed = []
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "process_articles"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
-    monkeypatch.setattr(api.external_ai, "apply_process_result", lambda result: applied.append(result) or {"articles": 1})
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.external_ai, "apply_process_result", lambda result, **kwargs: applied.append(result) or {"articles": 1})
     monkeypatch.setattr(
         api.repository,
         "finish_external_background_job",
@@ -1190,7 +1190,7 @@ def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
     applied = []
     completed = []
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "scrape_source"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
     monkeypatch.setattr(api.external_fetch, "apply_scrape_result", lambda result: applied.append(result) or {"inserted": 1})
     monkeypatch.setattr(
         api.repository,
@@ -1213,7 +1213,7 @@ def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
 def test_external_worker_complete_rejects_inactive_lease(monkeypatch):
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "digest_export"})
-    monkeypatch.setattr(api.repository, "external_background_job_lease_is_active", lambda job_id, **kwargs: False)
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: False)
     monkeypatch.setattr(api.repository, "finish_external_background_job", lambda job_id, **kwargs: False)
     client = TestClient(api.app)
 

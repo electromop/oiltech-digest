@@ -37,6 +37,10 @@ BACKGROUND_JOB_WORKERS = int(os.environ.get("BACKGROUND_JOB_WORKERS", "2"))
 BACKGROUND_JOB_INLINE = os.environ.get("BACKGROUND_JOB_INLINE", "1").lower() not in {"0", "false", "no"}
 BACKGROUND_JOB_POLL_SECONDS = float(os.environ.get("BACKGROUND_JOB_POLL_SECONDS", "2"))
 BACKGROUND_JOB_STALE_MINUTES = int(os.environ.get("BACKGROUND_JOB_STALE_MINUTES", "60"))
+# Залипший 'finalizing' (применение результата внешней задачи, баг T2) восстанавливаем по
+# своему, более короткому таймауту: apply длится секунды, а 60 мин — слишком долго. Благодаря
+# идемпотентности биллинга (H1) даже ложная переотдача не двоит счёт, поэтому таймаут безопасен.
+FINALIZE_STALE_MINUTES = int(os.environ.get("FINALIZE_STALE_MINUTES", "10"))
 BACKGROUND_JOB_RETENTION_DAYS = int(os.environ.get("BACKGROUND_JOB_RETENTION_DAYS", "30"))
 BACKGROUND_JOB_QUEUES = [
     item.strip()
@@ -123,6 +127,15 @@ OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").st
 # переопределить в .env воркера, если потребуется качество посильнее.
 OPENAI_TRANSLATE_MODEL = os.environ.get("OPENAI_TRANSLATE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+
+# Скоринг (бизнес-эффект и пр. критерии) — балл напрямую определяет отбор в дайджест.
+# Раньше скоринг ТИХО ехал на основной OPENAI_MODEL с минимальным reasoning: при смене
+# основной модели на слабую/быструю (или откате на nano) балл систематически проседал
+# (инцидент 2026-06: средний total_score ~30, до 65+ дотягивали единицы). Даём скорингу
+# СВОЮ модель и НЕ minimal reasoning по умолчанию (minimal даёт терсые, заниженные баллы).
+# Если override не задан — основная модель, но reasoning по умолчанию medium, а не minimal.
+OPENAI_SCORE_MODEL = os.environ.get("OPENAI_SCORE_MODEL", "").strip() or OPENAI_MODEL
+OPENAI_SCORE_REASONING = os.environ.get("OPENAI_SCORE_REASONING", "").strip() or "medium"
 
 # USD per 1M tokens. Defaults follow the model docs snapshot used when this code
 # was written; override in .env if pricing changes or another model is selected.
