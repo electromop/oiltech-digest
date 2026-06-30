@@ -734,7 +734,7 @@ def digest_email(month: str = "", limit: int = Query(100, ge=1, le=500),
 
 @app.get("/api/jobs")
 def list_jobs(
-    status: str | None = Query(None, pattern="^(queued|running|ok|failed)$"),
+    status: str | None = Query(None, pattern="^(queued|running|finalizing|ok|failed)$"),
     kind: str | None = None,
     queue_name: str | None = None,
     limit: int = Query(50, ge=1, le=200),

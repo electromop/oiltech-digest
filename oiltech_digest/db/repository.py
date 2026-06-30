@@ -626,6 +626,7 @@ def external_queue_status() -> dict:
             SELECT
               COUNT(*) FILTER (WHERE status = 'queued') AS queued,
               COUNT(*) FILTER (WHERE status = 'running') AS running,
+              COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
               COUNT(*) FILTER (WHERE status = 'failed') AS failed,
               COUNT(*) FILTER (WHERE status = 'ok') AS ok,
               MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
@@ -645,6 +646,7 @@ def external_queue_status() -> dict:
             SELECT queue_name,
                    COUNT(*) FILTER (WHERE status = 'queued') AS queued,
                    COUNT(*) FILTER (WHERE status = 'running') AS running,
+                   COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
                    COUNT(*) FILTER (WHERE status = 'failed') AS failed,
                    COUNT(*) FILTER (WHERE status = 'ok') AS ok,
                    MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
@@ -954,13 +956,16 @@ def fail_external_background_job(
         return True
 
 
-def requeue_stale_background_jobs(stale_minutes: int) -> int:
+def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: int | None = None) -> int:
     """Move old running/finalizing jobs back to queued after a worker/core crash/restart.
 
     'finalizing' (баг T2) — переходный статус на время применения результата внешней задачи.
-    В норме он живёт секунды; если задача в нём дольше stale-таймаута (по last_heartbeat_at,
-    выставленному при входе в finalize), значит core упал между застолблением и финишем —
-    возвращаем в очередь. lease-поля чистим, чтобы задачу можно было переотдать заново."""
+    В норме он живёт секунды; если задача в нём дольше finalizing_stale_minutes (по
+    last_heartbeat_at, выставленному при входе в finalize), значит core упал между
+    застолблением и финишем — возвращаем в очередь. Отдельный (короткий) таймаут: apply
+    не должен длиться как обычный running. lease-поля чистим, чтобы задачу переотдать заново."""
+    if finalizing_stale_minutes is None:
+        finalizing_stale_minutes = stale_minutes
     with get_connection() as conn:
         cur = conn.execute(
             """
@@ -977,7 +982,7 @@ def requeue_stale_background_jobs(stale_minutes: int) -> int:
                OR (status = 'finalizing'
                    AND last_heartbeat_at < now() - (%s::text || ' minutes')::interval)
             """,
-            (stale_minutes, stale_minutes),
+            (stale_minutes, finalizing_stale_minutes),
         )
         conn.commit()
         return cur.rowcount or 0
