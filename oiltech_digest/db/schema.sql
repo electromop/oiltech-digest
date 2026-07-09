@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS article_cards (
   relevant            BOOLEAN,                    -- AI-фильтр релевантности (Issue: AI-gate)
   relevance_reason    TEXT,
   relevance_model     TEXT,
-  status              TEXT DEFAULT 'new',         -- new / review / digest / archive / rejected
+  status              TEXT DEFAULT 'new',         -- new / review / digest / archive / noise / rejected
   selected_for_digest BOOLEAN DEFAULT FALSE,
   digest_month        TEXT,
   analyst_comment     TEXT,
@@ -248,7 +248,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS user_article_states (
   user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   article_id      BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-  status          TEXT NOT NULL DEFAULT 'new',  -- new / review / digest / archive
+  status          TEXT NOT NULL DEFAULT 'new',  -- new / review / digest / archive / noise
   analyst_comment TEXT,
   updated_at      TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (user_id, article_id)

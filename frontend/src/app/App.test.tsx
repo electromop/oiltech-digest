@@ -372,6 +372,8 @@ describe("App smoke", () => {
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
     expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+    const requestedUrls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(requestedUrls).toContain("/api/articles?limit=2000&min_score=50&max_score=100&sort=score_desc");
     expect(screen.getByRole("heading", { name: "Каталог сигналов" })).toBeInTheDocument();
     const catalogBadge = container.querySelector(".panelHeader .badge");
     expect(catalogBadge).not.toBeNull();

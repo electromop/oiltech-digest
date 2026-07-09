@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import { getSession, login, logout, register } from "../api/auth";
 import { getDashboardStats } from "../api/stats";
 import type { Article, DashboardStats, User } from "../api/types";
-import { ArticlesPage } from "../features/articles/ArticlesPage";
+import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles/ArticlesPage";
 import { DigestPage } from "../features/digest/DigestPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
@@ -292,7 +292,7 @@ export function App() {
   }
 
   async function loadDashboardData() {
-    const [articlesPayload, statsPayload] = await Promise.all([listArticles(), getDashboardStats()]);
+    const [articlesPayload, statsPayload] = await Promise.all([listArticles(DEFAULT_SIGNAL_ARTICLE_QUERY), getDashboardStats()]);
     setArticles(articlesPayload);
     setStats(statsPayload);
   }

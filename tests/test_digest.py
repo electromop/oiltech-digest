@@ -1,3 +1,4 @@
+import base64
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
@@ -467,7 +468,7 @@ def test_render_digest_email_omits_highlights_block():
     assert "Сигналы" in html
 
 
-def test_render_digest_email_splits_news_into_page_sections_and_shows_source_meta():
+def test_render_digest_email_flows_news_continuously_and_shows_source_meta():
     html = render_digest_email(
         {
             "issue": {"title": "Digest", "preheader": "P", "intro": "Intro", "news_title": "Сигналы"},
@@ -481,11 +482,15 @@ def test_render_digest_email_splits_news_into_page_sections_and_shows_source_met
             "footer": {"contact_text": "C", "contact_email": "d@e.com", "note": "N"},
         }
     )
-    assert html.count('class="news-page') == 2
-    assert 'class="news-page news-page-break"' in html
+    assert html.count('class="news-page"') == 1
+    assert "news-page-break" not in html
+    assert "page-break-before: always" not in html
     assert "SLB · 01.06.2026" in html
     assert "World Oil · 04.06.2026" in html
-    assert html.count('class="news-section-title"') == 2
+    assert html.count('class="news-section-title"') == 1
+    assert "news-repeat-table" in html
+    assert "table-header-group" in html
+    assert "page-break-after: avoid" in html
 
 
 def test_render_digest_email_uses_category_placeholder_for_missing_image():
@@ -502,6 +507,42 @@ def test_render_digest_email_uses_category_placeholder_for_missing_image():
     assert "data:image/svg+xml;base64," in html
 
 
+def test_news_placeholder_does_not_duplicate_tag_text():
+    from oiltech_digest.processing.digest import _news_placeholder_data_uri
+
+    uri = _news_placeholder_data_uri("Роботизация и автоматизация / Автономное бурение")
+    encoded = uri.split(",", 1)[1]
+    svg = base64.b64decode(encoded).decode("utf-8")
+
+    assert svg.count("РОБОТИЗАЦИЯ") == 1
+    assert "Роботизация и автоматизация" not in svg
+
+
+def test_news_placeholder_keeps_three_word_tag():
+    from oiltech_digest.processing.digest import _news_placeholder_data_uri
+
+    uri = _news_placeholder_data_uri("Роботизация и автономные системы")
+    encoded = uri.split(",", 1)[1]
+    svg = base64.b64decode(encoded).decode("utf-8")
+
+    assert "РОБОТИЗАЦИЯ" in svg
+    assert "АВТОНОМНЫЕ" in svg
+    assert "СИСТЕМЫ" in svg
+
+
+def test_news_placeholder_wraps_long_tag_without_cutting_words():
+    from oiltech_digest.processing.digest import _news_placeholder_data_uri
+
+    uri = _news_placeholder_data_uri("Автоматизация, цифровизация, инженерная аналитика и промышленный ИИ")
+    encoded = uri.split(",", 1)[1]
+    svg = base64.b64decode(encoded).decode("utf-8")
+
+    assert "АВТОМАТИЗАЦИЯ" in svg
+    assert "ЦИФРОВИЗАЦИЯ" in svg
+    assert "АВТОМАТИЗАЦИ<" not in svg
+    assert "ЦИФРОВИЗАЦ<" not in svg
+
+
 def test_render_digest_email_uses_placeholder_for_unusable_image_url():
     html = render_digest_email(
         {
@@ -514,6 +555,53 @@ def test_render_digest_email_uses_placeholder_for_unusable_image_url():
         }
     )
     assert "data:image/svg+xml;base64," in html
+
+
+def test_render_digest_email_uses_svg_social_icons():
+    html = render_digest_email(
+        {
+            "issue": {"title": "Digest", "preheader": "P", "intro": "Intro"},
+            "hero": {"badge": "NEWS", "headline": "DIGEST", "subtitle": "Sub", "image_url": ""},
+            "news": [],
+            "footer": {
+                "contact_text": "C",
+                "contact_email": "d@e.com",
+                "note": "N",
+                "socials": [
+                    {"label": "VK", "accent": "#0077ff", "text": "VK"},
+                    {"label": "Telegram", "accent": "#29a9eb", "text": "T"},
+                    {"label": "YouTube", "accent": "#ff0000", "text": "Y"},
+                    {"label": "Дзен", "accent": "#262d3c", "text": "Д"},
+                ],
+            },
+        }
+    )
+
+    assert html.count("<svg") >= 4
+    assert "title=\"VK\"" in html
+    assert "title=\"Telegram\"" in html
+    assert "title=\"YouTube\"" in html
+    assert "title=\"Дзен\"" in html
+
+
+def test_render_digest_email_centers_text_social_fallback_as_svg():
+    html = render_digest_email(
+        {
+            "issue": {"title": "Digest", "preheader": "P", "intro": "Intro"},
+            "hero": {"badge": "NEWS", "headline": "DIGEST", "subtitle": "Sub", "image_url": ""},
+            "news": [],
+            "footer": {
+                "contact_text": "C",
+                "contact_email": "d@e.com",
+                "note": "N",
+                "socials": [{"label": "Энергия+", "accent": "#e83d08", "text": "Э+"}],
+            },
+        }
+    )
+
+    assert "<svg" in html
+    assert 'text-anchor="middle"' in html
+    assert 'title="Энергия+"' in html
     assert "example.com/news-1.jpg" not in html
 
 

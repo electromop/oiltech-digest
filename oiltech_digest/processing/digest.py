@@ -477,26 +477,20 @@ def _render_news_sections(news_items: list[dict], issue: dict) -> str:
     title = issue.get("news_title") or "Новости"
     if not news_items:
         return f'<div class="news-section-title">{_html(title)}</div>'
-    # Новости постранично по 3 карточки (как в DOCX, см. _chunk_news_items): каждая
-    # «страница» — отдельный .news-page, со 2-й идёт принудительный разрыв (.news-page-break),
-    # заголовок раздела повторяется на каждой странице.
-    pages = []
-    for page_index, chunk in enumerate(_chunk_news_items(news_items, size=3)):
-        page_class = "news-page news-page-break" if page_index else "news-page"
-        items_html = "\n".join(_render_news_item(item, issue) for item in chunk)
-        pages.append(
-            f'<div class="{page_class}">'
-            f'<div class="news-section-title">{_html(title)}</div>'
-            f'{items_html}'
-            "</div>"
-        )
-    return "\n".join(pages)
-
-
-def _chunk_news_items(news_items: list[dict], size: int = 3) -> list[list[dict]]:
-    if size <= 0:
-        size = 3
-    return [news_items[index:index + size] for index in range(0, len(news_items), size)]
+    items_html = "\n".join(
+        '<tr><td style="padding:0;">'
+        f'{_render_news_item(item, issue)}'
+        "</td></tr>"
+        for item in news_items
+    )
+    return (
+        '<div class="news-page">'
+        '<table class="news-repeat-table" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">'
+        f'<thead><tr><td style="padding:0;"><div class="news-section-title">{_html(title)}</div></td></tr></thead>'
+        f'<tbody>{items_html}</tbody>'
+        "</table>"
+        "</div>"
+    )
 
 
 def _render_news_item(item: dict, issue: dict | None = None) -> str:
@@ -568,16 +562,70 @@ def _render_footer_socials(socials: list[dict]) -> str:
         return ""
     cells = []
     for item in socials:
+        icon = _footer_social_icon_svg(item)
         cells.append(
             '<td style="padding:0 7px;">'
             '<div style="width:36px;height:36px;background:#ffffff;border-radius:50%;'
-            'text-align:center;line-height:36px;'
+            'text-align:center;line-height:36px;display:inline-block;'
             f'color:{_html(item.get("accent") or "#262d3c")};'
             "font-weight:bold;font-size:13px;font-family:'GPN Din',Arial,Helvetica,sans-serif;"
-            f'" title="{_html(item.get("label"))}">{_html(item.get("text"))}</div>'
+            f'" title="{_html(item.get("label"))}">{icon}</div>'
             "</td>"
         )
     return "".join(cells)
+
+
+def _footer_social_icon_svg(item: dict) -> str:
+    label = str(item.get("label") or "").strip().lower()
+    text = str(item.get("text") or "").strip()
+    accent = _html(item.get("accent") or "#262d3c")
+    key = re.sub(r"[^a-zа-я0-9+]+", "", label, flags=re.IGNORECASE)
+    if key in {"vk", "вк"}:
+        return (
+            '<svg width="36" height="36" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg" '
+            'style="display:block;">'
+            f'<path fill="{accent}" d="M9.8 12.3h3.1c.1 3.1 1.4 5 2.5 5.4v-5.4h2.9v3.1c1.1-.1 2.2-1.7 2.6-3.1h3.1c-.5 1.9-1.8 3.4-3 4.1 1.3.6 2.7 2 3.3 4.4h-3.4c-.4-1.4-1.4-2.5-2.6-2.7v2.7h-.4c-5.2 0-7.9-3.4-8.1-8.5z"/>'
+            "</svg>"
+        )
+    if key in {"telegram", "tg", "телеграм"}:
+        return (
+            '<svg width="36" height="36" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg" '
+            'style="display:block;">'
+            f'<path fill="{accent}" d="M25.9 10.7 8.7 17.3c-1.2.5-1.2 1.1-.2 1.4l4.4 1.4 1.7 5.2c.2.6.3.8.7.8.4 0 .6-.2.9-.5l2.1-2 4.4 3.2c.8.4 1.3.2 1.5-.7l2.8-13.3c.3-1.1-.4-1.6-1.1-1.3zm-3.8 3.1-7.9 7.1-.3 3.1-1.2-4.1 9.4-6.1z"/>'
+            "</svg>"
+        )
+    if key in {"youtube", "ютуб"}:
+        return (
+            '<svg width="36" height="36" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg" '
+            'style="display:block;">'
+            f'<path fill="{accent}" d="M26.1 13.5c-.2-.9-.9-1.6-1.8-1.8C22.8 11.3 18 11.3 18 11.3s-4.8 0-6.3.4c-.9.2-1.6.9-1.8 1.8-.4 1.6-.4 4.9-.4 4.9s0 3.3.4 4.9c.2.9.9 1.6 1.8 1.8 1.5.4 6.3.4 6.3.4s4.8 0 6.3-.4c.9-.2 1.6-.9 1.8-1.8.4-1.6.4-4.9.4-4.9s0-3.3-.4-4.9z"/>'
+            '<path fill="#fff" d="m16.4 21.3 5-2.9-5-2.9v5.8z"/>'
+            "</svg>"
+        )
+    if key in {"rt", "rutube", "рутуб"}:
+        return (
+            '<svg width="36" height="36" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg" '
+            'style="display:block;">'
+            f'<rect x="8" y="12" width="20" height="12" rx="3" fill="{accent}"/>'
+            '<path fill="#fff" d="M15.2 20.8v-5.4h4.2c1.5 0 2.4.8 2.4 2 0 1-.6 1.6-1.4 1.9l1.5 1.5h-2.3l-1.2-1.3h-1.4v1.3h-1.8zm1.8-2.8h2.2c.5 0 .8-.2.8-.6s-.3-.6-.8-.6H17v1.2z"/>'
+            "</svg>"
+        )
+    if key in {"дзен", "dzen", "zen"}:
+        return (
+            '<svg width="36" height="36" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg" '
+            'style="display:block;">'
+            f'<circle cx="18" cy="18" r="9" fill="{accent}"/>'
+            '<path fill="#fff" d="M17 9.5h2c0 4.1 2.4 6.5 6.5 6.5v2c-4.1 0-6.5 2.4-6.5 6.5h-2c0-4.1-2.4-6.5-6.5-6.5v-2c4.1 0 6.5-2.4 6.5-6.5z"/>'
+            "</svg>"
+        )
+    fallback = _html(text or item.get("label") or "")
+    return (
+        '<svg width="36" height="36" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg" '
+        'style="display:block;">'
+        f'<text x="18" y="21.5" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" '
+        f'font-size="11" font-weight="700" fill="{accent}">{fallback}</text>'
+        "</svg>"
+    )
 
 
 def _news_placeholder_data_uri(category: object) -> str:
@@ -593,21 +641,11 @@ def _news_placeholder_data_uri(category: object) -> str:
         "бурение": ("#004A99", "#1D74D1"),
     }
     start, end = palette.get(key, ("#003DA6", "#001D50"))
-    label = escape(top[:26], quote=True)
-    badge_label = label.upper()
-    if len(badge_label) > 12:
-        split_at = badge_label.rfind(" ", 0, 12)
-        if split_at < 5:
-            split_at = 12
-        badge_lines = [badge_label[:split_at].strip(), badge_label[split_at:].strip()]
-    else:
-        badge_lines = [badge_label]
-    badge_lines = [line[:13] for line in badge_lines if line]
-    badge_width = min(110, max(42, max(len(line) for line in badge_lines) * 6 + 16))
-    badge_height = 26 if len(badge_lines) > 1 else 17
-    label_y = 56 if len(badge_lines) > 1 else 50
+    badge_lines = _placeholder_badge_lines(top)
+    badge_width = min(114, max(42, max(len(line) for line in badge_lines) * 5.5 + 16))
+    badge_height = 35 if len(badge_lines) > 2 else 26 if len(badge_lines) > 1 else 17
     badge_text = "".join(
-        f"<text x='14' y='{22 + idx * 10}' font-family='Arial,Helvetica,sans-serif' font-size='9' font-weight='700' fill='#ffffff'>{line}</text>"
+        f"<text x='14' y='{21 + idx * 9}' font-family='Arial,Helvetica,sans-serif' font-size='7.5' font-weight='700' fill='#ffffff'>{escape(line, quote=True)}</text>"
         for idx, line in enumerate(badge_lines)
     )
     svg = (
@@ -618,10 +656,33 @@ def _news_placeholder_data_uri(category: object) -> str:
         "<rect width='130' height='86' rx='6' fill='url(#g)'/>"
         f"<rect x='10' y='11' width='{badge_width}' height='{badge_height}' rx='8.5' fill='rgba(255,255,255,0.18)'/>"
         f"{badge_text}"
-        f"<text x='14' y='{label_y}' font-family='Arial,Helvetica,sans-serif' font-size='13' font-weight='700' fill='#ffffff'>{label}</text>"
         "</svg>"
     )
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
+def _placeholder_badge_lines(label: str, *, max_chars: int = 15, max_lines: int = 3) -> list[str]:
+    """Short readable placeholder label without cutting words in the middle."""
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", str(label).upper())
+    words = [word for word in words if word not in {"И", "AND"}]
+    if not words:
+        return ["НОВОСТИ"]
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > max_chars:
+            lines.append(current)
+            current = word
+            if len(lines) == max_lines:
+                break
+        else:
+            current = candidate
+        if len(lines) == max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    return lines[:max_lines] or ["НОВОСТИ"]
 
 
 def _is_unusable_digest_image_url(url: object) -> bool:

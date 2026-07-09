@@ -94,7 +94,7 @@ export type Article = {
   summary: string;
   score: number;
   rating: string;
-  status: "new" | "review" | "digest" | "archive";
+  status: "new" | "review" | "digest" | "archive" | "noise";
   language: string | null;
   date: string | null;
   collected: string | null;
@@ -217,7 +217,7 @@ export type ReadinessBenchmarkReport = {
 };
 
 export type ArticlePatch = {
-  status?: "new" | "review" | "digest" | "archive";
+  status?: Article["status"];
   selected_for_digest?: boolean;
   analyst_comment?: string | null;
 };

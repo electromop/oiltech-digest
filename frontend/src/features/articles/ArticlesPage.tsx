@@ -14,12 +14,23 @@ type Props = {
   onStatsReloaded: (stats: DashboardStats) => void;
 };
 
-const STATUSES: Array<Article["status"]> = ["new", "review", "digest", "archive"];
+export const DEFAULT_SIGNAL_SCORE_MIN = 50;
+export const DEFAULT_SIGNAL_SCORE_MAX = 100;
+export const DEFAULT_SIGNAL_SORT: NonNullable<ArticleQuery["sort"]> = "score_desc";
+export const DEFAULT_SIGNAL_ARTICLE_QUERY: ArticleQuery = {
+  limit: DEFAULT_ARTICLE_LIMIT,
+  minScore: DEFAULT_SIGNAL_SCORE_MIN,
+  maxScore: DEFAULT_SIGNAL_SCORE_MAX,
+  sort: DEFAULT_SIGNAL_SORT,
+};
+
+const STATUSES: Array<Article["status"]> = ["new", "review", "digest", "archive", "noise"];
 const STATUS_LABELS: Record<Article["status"], string> = {
   new: "Новая",
   review: "На проверке",
   digest: "В дайджест",
   archive: "Архив",
+  noise: "Шум",
 };
 
 // Интервал фонового обновления ленты. Консервативно: /api/articles и /api/stats —
@@ -35,11 +46,11 @@ export function ArticlesPage(props: Props) {
   const [status, setStatus] = useState("");
   const [source, setSource] = useState("");
   const [language, setLanguage] = useState("");
-  const [scoreMin, setScoreMin] = useState(0);
-  const [scoreMax, setScoreMax] = useState(100);
+  const [scoreMin, setScoreMin] = useState(DEFAULT_SIGNAL_SCORE_MIN);
+  const [scoreMax, setScoreMax] = useState(DEFAULT_SIGNAL_SCORE_MAX);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [sort, setSort] = useState("date_desc");
+  const [sort, setSort] = useState<NonNullable<ArticleQuery["sort"]>>(DEFAULT_SIGNAL_SORT);
   const [tagQuery, setTagQuery] = useState("");
   const [showTagOptions, setShowTagOptions] = useState(false);
   const [sourceQuery, setSourceQuery] = useState("");
@@ -55,7 +66,7 @@ export function ArticlesPage(props: Props) {
   // serverResults != null → активен серверный поиск по всей базе; иначе — дефолтный топ-2000.
   const articles = serverResults ?? initialArticles;
   const stats = initialStats;
-  // Вкладка «Со статусом»: статьи, у которых статус сменили (review/digest/archive).
+  // Вкладка «Со статусом»: статьи, у которых статус сменили (review/digest/archive/noise).
   const statusChangedCount = articles.filter((article) => article.status !== "new").length;
 
   function handleError(error: unknown, fallback: string) {
@@ -99,11 +110,11 @@ export function ArticlesPage(props: Props) {
     || Boolean(status)
     || Boolean(source)
     || Boolean(language)
-    || scoreMin > 0
-    || scoreMax < 100
+    || scoreMin !== DEFAULT_SIGNAL_SCORE_MIN
+    || scoreMax !== DEFAULT_SIGNAL_SCORE_MAX
     || Boolean(dateFrom)
     || Boolean(dateTo)
-    || sort !== "score_desc"
+    || sort !== DEFAULT_SIGNAL_SORT
     || viewTab === "withStatus";
   const activeServerQuery: ArticleQuery | null = hasServerQuery
     ? {
@@ -125,7 +136,7 @@ export function ArticlesPage(props: Props) {
   async function refreshCatalog(options: { silent?: boolean; keepQuery?: boolean } = {}) {
     const query = options.keepQuery ? activeServerQuery : null;
     const [articlesPayload, statsPayload] = await Promise.all([
-      listArticles(query ?? { limit: DEFAULT_ARTICLE_LIMIT }),
+      listArticles(query ?? DEFAULT_SIGNAL_ARTICLE_QUERY),
       getDashboardStats(),
     ]);
     if (query) {
@@ -182,7 +193,7 @@ export function ArticlesPage(props: Props) {
     let cancelled = false;
     setSearching(true);
     const timer = window.setTimeout(() => {
-      listArticles(activeServerQuery || { limit: 5000 })
+      listArticles(activeServerQuery || { ...DEFAULT_SIGNAL_ARTICLE_QUERY, limit: 5000 })
         .then((rows) => {
           if (!cancelled) setServerResults(rows);
         })
@@ -253,6 +264,7 @@ export function ArticlesPage(props: Props) {
     const newCount = articles.filter((item) => item.status === "new").length;
     const reviewCount = articles.filter((item) => item.status === "review").length;
     const digestCount = stats?.selected_for_digest ?? articles.filter((item) => item.digest).length;
+    const noiseCount = articles.filter((item) => item.status === "noise").length;
     const processedFallback = articles.filter((item) => {
       const hasSummary = Boolean(item.summary);
       const hasRelevance = item.relevant !== null;
@@ -269,6 +281,7 @@ export function ArticlesPage(props: Props) {
       { label: "Новые", value: newCount },
       { label: "На проверке", value: reviewCount },
       { label: "В дайджест", value: digestCount },
+      { label: "Шум", value: noiseCount },
     ];
   }, [articles, stats]);
 
@@ -282,11 +295,11 @@ export function ArticlesPage(props: Props) {
     setSourceQuery("");
     setShowSourceOptions(false);
     setLanguage("");
-    setScoreMin(0);
-    setScoreMax(100);
+    setScoreMin(DEFAULT_SIGNAL_SCORE_MIN);
+    setScoreMax(DEFAULT_SIGNAL_SCORE_MAX);
     setDateFrom("");
     setDateTo("");
-    setSort("date_desc");
+    setSort(DEFAULT_SIGNAL_SORT);
     setRenderLimit(200);
   }
 
@@ -491,7 +504,7 @@ export function ArticlesPage(props: Props) {
           </label>
           <label className="field">
             <span>Сортировка</span>
-            <select value={sort} onChange={(event) => setSort(event.target.value)}>
+            <select value={sort} onChange={(event) => setSort(event.target.value as NonNullable<ArticleQuery["sort"]>)}>
               <option value="date_desc">Сначала новые</option>
               <option value="score_desc">Оценка: по убыванию</option>
               <option value="score_asc">Оценка: по возрастанию</option>
