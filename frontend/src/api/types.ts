@@ -94,7 +94,7 @@ export type Article = {
   summary: string;
   score: number;
   rating: string;
-  status: "new" | "review" | "digest" | "archive" | "noise";
+  status: "new" | "review" | "digest" | "archive" | "noise" | "duplicate";
   language: string | null;
   date: string | null;
   collected: string | null;

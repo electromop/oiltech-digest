@@ -24,13 +24,14 @@ export const DEFAULT_SIGNAL_ARTICLE_QUERY: ArticleQuery = {
   sort: DEFAULT_SIGNAL_SORT,
 };
 
-const STATUSES: Array<Article["status"]> = ["new", "review", "digest", "archive", "noise"];
+const STATUSES: Array<Article["status"]> = ["new", "review", "digest", "archive", "noise", "duplicate"];
 const STATUS_LABELS: Record<Article["status"], string> = {
   new: "Новая",
   review: "На проверке",
   digest: "В дайджест",
   archive: "Архив",
   noise: "Шум",
+  duplicate: "Дубликат",
 };
 
 // Интервал фонового обновления ленты. Консервативно: /api/articles и /api/stats —
@@ -66,7 +67,7 @@ export function ArticlesPage(props: Props) {
   // serverResults != null → активен серверный поиск по всей базе; иначе — дефолтный топ-2000.
   const articles = serverResults ?? initialArticles;
   const stats = initialStats;
-  // Вкладка «Со статусом»: статьи, у которых статус сменили (review/digest/archive/noise).
+  // Вкладка «Со статусом»: статьи, у которых статус сменили (review/digest/archive/noise/duplicate).
   const statusChangedCount = articles.filter((article) => article.status !== "new").length;
 
   function handleError(error: unknown, fallback: string) {
@@ -265,6 +266,7 @@ export function ArticlesPage(props: Props) {
     const reviewCount = articles.filter((item) => item.status === "review").length;
     const digestCount = stats?.selected_for_digest ?? articles.filter((item) => item.digest).length;
     const noiseCount = articles.filter((item) => item.status === "noise").length;
+    const duplicateCount = articles.filter((item) => item.status === "duplicate").length;
     const processedFallback = articles.filter((item) => {
       const hasSummary = Boolean(item.summary);
       const hasRelevance = item.relevant !== null;
@@ -282,6 +284,7 @@ export function ArticlesPage(props: Props) {
       { label: "На проверке", value: reviewCount },
       { label: "В дайджест", value: digestCount },
       { label: "Шум", value: noiseCount },
+      { label: "Дубликаты", value: duplicateCount },
     ];
   }, [articles, stats]);
 
