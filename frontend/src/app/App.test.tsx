@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -433,6 +433,70 @@ describe("App smoke", () => {
     expect(await screen.findByText("articles_list")).toBeInTheDocument();
     expect(screen.getAllByText("source_health").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Регресс на бесконечный цикл переподгрузки ленты.
+  // activeServerQuery был объектным литералом, пересоздаваемым на КАЖДОМ рендере, и стоял
+  // в deps эффекта серверного поиска. Эффект вызывал setServerResults/setSearching → рендер →
+  // новая идентичность объекта → эффект снова → fetch каждые ~400мс, бесконечно.
+  // Взводился при ЛЮБОМ активном фильтре (поиск/тег/статус/источник/язык/score/сорт/«Со статусом»).
+  it("не перезапрашивает ленту в цикле, пока активен фильтр", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+
+    const articleCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/articles?")).length;
+
+    // Взводим серверный фильтр — ровно то, что делает аналитик.
+    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+
+    // Ждём, пока debounce (400мс) отработает и выборка придёт.
+    await waitFor(() => expect(articleCalls()).toBeGreaterThan(1));
+    const settled = articleCalls();
+
+    // Даём пройти времени, которого хватило бы на несколько циклов debounce (400мс).
+    // На багованном коде здесь набегает поток новых запросов; на исправленном — ни одного.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(articleCalls()).toBe(settled);
+  });
+
+  // Второй фронт того же бага: нестабильный activeServerQuery стоял и в deps 40с-эффекта,
+  // поэтому setInterval(40с) пересоздавался на КАЖДОМ рендере и «живое» автообновление при
+  // активном фильтре не доживало до срабатывания. Ждать 40с в тесте не нужно — достаточно
+  // убедиться, что таймер заводится один раз и не пересоздаётся бесконечно.
+  it("не пересоздаёт 40с-таймер автообновления на каждом рендере", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+
+    const autoRefreshTimers = () =>
+      setIntervalSpy.mock.calls.filter(([, ms]) => ms === 40000).length;
+
+    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+    await waitFor(() => expect(autoRefreshTimers()).toBeGreaterThan(0));
+
+    // Даём выборке полностью улечься: debounce (400мс) + ответ + сброс флага searching.
+    // До этого момента таймер пересоздаётся ЗАКОННО (меняется фильтр — меняются deps).
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const settled = autoRefreshTimers();
+
+    // А вот в ТИШИНЕ (пользователь ничего не трогает) таймер пересоздаваться не должен.
+    // На багованном коде цикл рендеров плодил новый setInterval снова и снова, из-за чего
+    // 40с-автообновление не доживало до срабатывания.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(autoRefreshTimers()).toBe(settled);
   });
 
 });

@@ -117,22 +117,31 @@ export function ArticlesPage(props: Props) {
     || Boolean(dateTo)
     || sort !== DEFAULT_SIGNAL_SORT
     || viewTab === "withStatus";
-  const activeServerQuery: ArticleQuery | null = hasServerQuery
-    ? {
-        search: search.trim() || undefined,
-        tag: tag || undefined,
-        status: status || undefined,
-        source: source || undefined,
-        language: language || undefined,
-        minScore: scoreMin,
-        maxScore: scoreMax,
-        dateFrom: dateFrom || undefined,
-        dateTo: dateTo || undefined,
-        sort: sort as ArticleQuery["sort"],
-        changedOnly: viewTab === "withStatus",
-        limit: 5000,
-      }
-    : null;
+  // ВАЖНО: только useMemo, иначе объект пересоздаётся на каждом рендере. Он стоит в deps
+  // ДВУХ эффектов ниже (серверный поиск + 40с-автообновление), а эффект поиска сам зовёт
+  // setServerResults/setSearching → рендер → новая идентичность объекта → эффект снова →
+  // бесконечный поток запросов /api/articles каждые ~400мс при ЛЮБОМ активном фильтре
+  // (и 40с-таймер при этом пересоздавался, так и не успевая сработать).
+  const activeServerQuery: ArticleQuery | null = useMemo(
+    () =>
+      hasServerQuery
+        ? {
+            search: search.trim() || undefined,
+            tag: tag || undefined,
+            status: status || undefined,
+            source: source || undefined,
+            language: language || undefined,
+            minScore: scoreMin,
+            maxScore: scoreMax,
+            dateFrom: dateFrom || undefined,
+            dateTo: dateTo || undefined,
+            sort: sort as ArticleQuery["sort"],
+            changedOnly: viewTab === "withStatus",
+            limit: 5000,
+          }
+        : null,
+    [hasServerQuery, search, tag, status, source, language, scoreMin, scoreMax, dateFrom, dateTo, sort, viewTab],
+  );
 
   async function refreshCatalog(options: { silent?: boolean; keepQuery?: boolean } = {}) {
     const query = options.keepQuery ? activeServerQuery : null;
