@@ -326,6 +326,46 @@ def test_requeue_stale_background_jobs_recovers_stuck_running_job(isolated_db):
     assert stored["error_message"] == "Requeued after stale running/finalizing timeout"
 
 
+def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isolated_db):
+    """Зависшая ЛОКАЛЬНАЯ AI-обработка, уже начавшая жечь OpenAI, не перезапускается.
+
+    requeue переиспользует тот же job_id, а get_articles_by_ids не пропускает уже
+    обработанные статьи — повторный прогон означает повторный РЕАЛЬНЫЙ расход.
+    Дедуп биллинга по (job_id, article_id, stage) тут не помог бы: он лишь СПРЯТАЛ бы
+    второй, реально оплаченный вызов из отчёта о стоимости. Поэтому помечаем failed
+    без авто-ретрая. Внешний контур (external-ai) не затрагиваем — у него свой lease.
+    """
+    stale_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    def make_stale_running(kind: str, queue_name: str, progress: int) -> dict:
+        job = repository.create_background_job(kind, {}, queue_name=queue_name)
+        repository.claim_next_background_job(queue_names=[queue_name])
+        with connection.get_connection() as conn:
+            conn.execute(
+                "UPDATE background_jobs SET started_at = %s, progress = %s WHERE id = %s",
+                (stale_started_at, progress, job["id"]),
+            )
+            conn.commit()
+        return job
+
+    burned = make_stale_running("process_articles", "default", progress=35)
+    not_started = make_stale_running("process_articles", "default", progress=0)
+    external = make_stale_running("process_articles", "external-ai", progress=35)
+
+    repository.requeue_stale_background_jobs(stale_minutes=60)
+
+    # Уже потратила деньги → failed, без авто-возврата в очередь.
+    burned_stored = repository.get_background_job(int(burned["id"]))
+    assert burned_stored["status"] == "failed"
+    assert "дважды" in (burned_stored["error_message"] or "")
+
+    # Упала ДО обращения к модели → безопасно перезапустить.
+    assert repository.get_background_job(int(not_started["id"]))["status"] == "queued"
+
+    # Внешний контур не задет — у него собственная защита (lease/finalize, T2/H1).
+    assert repository.get_background_job(int(external["id"]))["status"] == "queued"
+
+
 def test_worker_loop_once_processes_queued_jobs(monkeypatch, isolated_db):
     first = repository.create_background_job("test_worker", {"value": 2})
     second = repository.create_background_job("test_worker", {"value": 4})

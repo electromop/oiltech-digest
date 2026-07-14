@@ -187,6 +187,11 @@ def _run_process_articles(payload: dict[str, Any], job_id: int) -> dict[str, Any
         ids = []
         articles = repository.get_articles_needing_summary(limit)
 
+    # Отметка «эта попытка НАЧАЛА жечь OpenAI» — до первого обращения к модели.
+    # По ней requeue_stale_background_jobs отличает задачу, которую нельзя перезапускать
+    # автоматически (повторный прогон = повторный реальный расход), от упавшей до AI.
+    # Без этой отметки прогресс оставался 0, пока сгорали деньги на первой же стадии.
+    repository.update_background_job_progress(job_id, 1)
     summaries = process_summary_articles(articles, client)
     repository.update_background_job_progress(job_id, 35)
 

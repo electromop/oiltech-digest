@@ -986,6 +986,30 @@ def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: 
     if finalizing_stale_minutes is None:
         finalizing_stale_minutes = stale_minutes
     with get_connection() as conn:
+        # ЛОКАЛЬНУЮ AI-обработку, которая уже НАЧАЛА жечь OpenAI (progress > 0), в очередь
+        # НЕ возвращаем: повторный прогон — это повторный РЕАЛЬНЫЙ расход. requeue
+        # переиспользует тот же job_id, а get_articles_by_ids не пропускает уже
+        # обработанные статьи, поэтому модель вызвалась бы заново.
+        # NB: дедуп биллинга по (job_id, article_id, stage) здесь НЕ решение — он бы просто
+        # СПРЯТАЛ второй, реально оплаченный вызов из отчёта о стоимости (к тому же
+        # fail_background_job умеет ретраить ту же задачу, пока attempts < max_attempts).
+        # Помечаем failed без авто-ретрая — пусть решает человек.
+        # Внешний контур (queue_name='external-ai') не трогаем: у него свой lease/finalize.
+        conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'failed',
+                error_message = 'Зависла после начала AI-обработки. Не перезапускаем '
+                                'автоматически, чтобы не оплатить OpenAI дважды — '
+                                'проверьте результат и при необходимости запустите заново.'
+            WHERE status = 'running'
+              AND started_at < now() - (%s::text || ' minutes')::interval
+              AND kind = 'process_articles'
+              AND queue_name <> 'external-ai'
+              AND progress > 0
+            """,
+            (stale_minutes,),
+        )
         cur = conn.execute(
             """
             UPDATE background_jobs
