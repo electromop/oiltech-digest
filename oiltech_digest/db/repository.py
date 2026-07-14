@@ -1287,6 +1287,29 @@ def dashboard_stats(user_id: int | None = None) -> dict:
             {"user_id": user_id},
         )
         row = cur.fetchone()
+
+        # Пер-статусные счётчики для плиток — по ВСЕЙ базе, а не по загруженной странице.
+        # Раньше фронт считал их по массиву загруженных статей (топ-2000, к тому же
+        # суженный текущим фильтром), поэтому «Новые/На проверке/Шум/Дубликаты» занижали
+        # и «плавали» при фильтрации, расходясь с соседними плитками «Всего»/«Обработано».
+        # Видимость та же, что у ленты (list_articles): отклонённые гейтом релевантности и
+        # помеченные на удаление не показываем — иначе цифра не сойдётся с тем, что видно.
+        # Один GROUP BY вместо пяти отдельных COUNT-подзапросов.
+        cur.execute(
+            """
+            SELECT COALESCE(uas.status, 'new') AS status, COUNT(*) AS cnt
+              FROM articles a
+              LEFT JOIN article_cards c ON c.article_id = a.id
+              LEFT JOIN user_article_states uas
+                     ON uas.article_id = a.id AND uas.user_id = %(user_id)s
+             WHERE c.relevant IS NOT FALSE
+               AND NOT a.pending_deletion
+             GROUP BY 1
+            """,
+            {"user_id": user_id},
+        )
+        status_counts = {str(r["status"]): int(r["cnt"] or 0) for r in cur.fetchall()}
+
     return {
         "total_articles": int(row["total_articles"] or 0),
         "with_summary": int(row["with_summary"] or 0),
@@ -1294,6 +1317,10 @@ def dashboard_stats(user_id: int | None = None) -> dict:
         "selected_for_digest": int(row["selected_for_digest"] or 0),
         "avg_score": int(row["avg_score"] or 0),
         "sources": int(row["sources"] or 0),
+        "status_counts": {
+            status: status_counts.get(status, 0)
+            for status in ("new", "review", "digest", "archive", "noise", "duplicate")
+        },
     }
 
 

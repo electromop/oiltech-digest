@@ -151,6 +151,16 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
         "selected_for_digest": 1,
         "avg_score": 70,
         "sources": 4,
+        # Пер-статусные счётчики по всей базе: «Old article» без строки состояния читается
+        # как 'new', «Digest candidate» выбран аналитиком в дайджест.
+        "status_counts": {
+            "new": 1,
+            "review": 0,
+            "digest": 1,
+            "archive": 0,
+            "noise": 0,
+            "duplicate": 0,
+        },
     }
 
     health = repository.source_health_report(stale_days=3, limit=10)

@@ -271,11 +271,16 @@ export function ArticlesPage(props: Props) {
 
   const dashboardCards = useMemo(() => {
     const total = stats?.total_articles ?? articles.length;
-    const newCount = articles.filter((item) => item.status === "new").length;
-    const reviewCount = articles.filter((item) => item.status === "review").length;
+    // Счётчики по статусам берём с сервера (по всей базе). Клиентский подсчёт по массиву
+    // articles — лишь фоллбэк: этот массив ограничен топ-2000 и сужается активным фильтром,
+    // поэтому цифры занижали и «плавали», расходясь с плитками «Всего»/«Обработано».
+    const countByStatus = (status: Article["status"]) =>
+      stats?.status_counts?.[status] ?? articles.filter((item) => item.status === status).length;
+    const newCount = countByStatus("new");
+    const reviewCount = countByStatus("review");
     const digestCount = stats?.selected_for_digest ?? articles.filter((item) => item.digest).length;
-    const noiseCount = articles.filter((item) => item.status === "noise").length;
-    const duplicateCount = articles.filter((item) => item.status === "duplicate").length;
+    const noiseCount = countByStatus("noise");
+    const duplicateCount = countByStatus("duplicate");
     const processedFallback = articles.filter((item) => {
       const hasSummary = Boolean(item.summary);
       const hasRelevance = item.relevant !== null;

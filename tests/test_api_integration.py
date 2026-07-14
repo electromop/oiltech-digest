@@ -219,6 +219,87 @@ def test_min_score_filters_scored_noise_but_keeps_unscored_visible(isolated_db):
         app.dependency_overrides.clear()
 
 
+def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated_db):
+    """Пер-статусные счётчики считаются по ВСЕЙ базе и по правилам видимости ленты.
+
+    Раньше плитки «Новые/На проверке/Шум/Дубликаты» считались на клиенте по массиву
+    загруженных статей (топ-2000, суженный активным фильтром) — цифры занижали и
+    «плавали», расходясь с плитками «Всего»/«Обработано», которые всегда были по базе.
+    """
+    app = api.app
+    now = datetime.now(timezone.utc)
+
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES ('analyst@example.com', 'salt', 'hash', 'admin')
+            RETURNING id
+            """
+        ).fetchone()[0]
+        source_id = conn.execute(
+            """
+            INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category)
+            VALUES ('World Oil', 'News', 'https://example.com', TRUE, 'request', 'международные')
+            RETURNING id
+            """
+        ).fetchone()[0]
+
+        def add_article(slug: str, *, status: str | None, relevant: bool | None = True,
+                        pending_deletion: bool = False) -> int:
+            article_id = conn.execute(
+                """
+                INSERT INTO articles (source_id, title, url, published_at, collected_at,
+                                      raw_text, language, pending_deletion)
+                VALUES (%s, %s, %s, %s, %s, 'text', 'en', %s)
+                RETURNING id
+                """,
+                (source_id, f"Article {slug}", f"https://example.com/{slug}",
+                 now - timedelta(days=1), now - timedelta(days=1), pending_deletion),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, 'sum', %s)",
+                (article_id, relevant),
+            )
+            if status is not None:
+                conn.execute(
+                    "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, %s)",
+                    (user_id, article_id, status),
+                )
+            return article_id
+
+        add_article("n1", status=None)              # без строки состояния → считается 'new'
+        add_article("n2", status="new")
+        add_article("r1", status="review")
+        add_article("noise1", status="noise")
+        add_article("dup1", status="duplicate")
+        add_article("dup2", status="duplicate")
+        add_article("arch1", status="archive")
+        add_article("dig1", status="digest")
+        # Невидимые в ленте — не должны попадать в счётчики.
+        add_article("rejected", status="new", relevant=False)
+        add_article("marked", status="new", pending_deletion=True)
+        conn.commit()
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "analyst@example.com"}
+
+    try:
+        client = TestClient(app)
+        counts = client.get("/api/stats").json()["status_counts"]
+    finally:
+        app.dependency_overrides.clear()
+
+    # Отклонённый гейтом и помеченный на удаление в 'new' НЕ попали (их 2, оба со статусом new).
+    assert counts == {
+        "new": 2,
+        "review": 1,
+        "digest": 1,
+        "archive": 1,
+        "noise": 1,
+        "duplicate": 2,
+    }
+
+
 def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db):
     """Статус валидируется на границе API (422), мусор в БД не попадает.
 
