@@ -10,10 +10,18 @@ from oiltech_digest.db import connection
 
 def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
     app = api.app
-    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
     now = datetime.now(timezone.utc)
 
     with connection.get_connection() as conn:
+        # Пер-юзерное состояние (#12) ссылается на users(id) по внешнему ключу — нужен
+        # настоящий пользователь, а не выдуманный id из dependency_overrides.
+        user_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES ('test@example.com', 'salt', 'hash', 'admin')
+            RETURNING id
+            """
+        ).fetchone()[0]
         source_id = conn.execute(
             """
             INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category)
@@ -51,6 +59,16 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
             """,
             (article_id,),
         )
+        # Рабочий статус статьи ПЕР-ЮЗЕРНЫЙ (#12): /api/articles фильтрует по
+        # COALESCE(uas.status, 'new'), а не по article_cards.status. Без строки в
+        # user_article_states статус читается как 'new' и фильтр status=review даёт 0 строк.
+        conn.execute(
+            """
+            INSERT INTO user_article_states (user_id, article_id, status)
+            VALUES (%s, %s, 'review')
+            """,
+            (user_id, article_id),
+        )
         conn.execute(
             """
             INSERT INTO article_tags (article_id, tag_id, confidence, rationale)
@@ -75,6 +93,8 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
             (score_id, criterion_id),
         )
         conn.commit()
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "test@example.com"}
 
     try:
         client = TestClient(app)
@@ -236,7 +256,10 @@ def test_digest_export_endpoint_records_pdf_runtime_error(monkeypatch, isolated_
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
 
-    def fail_export(month, export_format, limit, min_score):
+    # Сигнатура должна принимать ВСЕ kwargs эндпоинта (max_score/search/top_tag/user_id),
+    # иначе TypeError при связывании аргументов срабатывает раньше raise RuntimeError,
+    # и вместо ветки 503 тест ловит generic 500.
+    def fail_export(month, export_format, limit, min_score, **kwargs):
         raise RuntimeError("PDF-экспорт требует Playwright")
 
     monkeypatch.setattr(api, "write_digest_export", fail_export)

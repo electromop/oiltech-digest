@@ -44,6 +44,15 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
     now = datetime.now(timezone.utc)
 
     with connection.get_connection() as conn:
+        # Выбор в дайджест ПЕР-ЮЗЕРНЫЙ (#12): dashboard_stats считает selected_for_digest
+        # из user_article_states для конкретного user_id, а не из article_cards.
+        analyst_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES ('analyst@example.com', 'salt', 'hash', 'admin')
+            RETURNING id
+            """
+        ).fetchone()[0]
         source_rows = conn.execute(
             """
             INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category)
@@ -101,6 +110,14 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
             """,
             (article_ids["Old article"], article_ids["Digest candidate"]),
         )
+        # Пер-юзерный выбор в дайджест (#12) — источник правды для selected_for_digest.
+        conn.execute(
+            """
+            INSERT INTO user_article_states (user_id, article_id, status)
+            VALUES (%s, %s, 'digest')
+            """,
+            (analyst_id, article_ids["Digest candidate"]),
+        )
         conn.execute(
             """
             INSERT INTO article_tags (article_id, tag_id, confidence, rationale)
@@ -126,7 +143,7 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
         )
         conn.commit()
 
-    stats = repository.dashboard_stats()
+    stats = repository.dashboard_stats(user_id=analyst_id)
     assert stats == {
         "total_articles": 2,
         "with_summary": 2,
@@ -141,7 +158,8 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
     assert health[0]["name"] == "No Articles"
     assert repository.source_health_report(stale_days=3, verdict="stale")[0]["name"] == "Stale Source"
 
-    digest_rows = repository.digest_candidates(month=now.strftime("%Y-%m"), min_score=60)
+    # digest_candidates тоже пер-юзерная (#12): без user_id выбор в дайджест не виден.
+    digest_rows = repository.digest_candidates(month=now.strftime("%Y-%m"), min_score=60, user_id=analyst_id)
     assert len(digest_rows) == 1
     assert digest_rows[0]["id"] == article_ids["Digest candidate"]
     assert digest_rows[0]["tag_name"] == "ГРП"
