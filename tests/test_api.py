@@ -594,7 +594,9 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert "COALESCE(uas.status, 'new') = %s" in articles_sql
     assert "COALESCE(uas.status, 'new') <> 'new'" in articles_sql
     assert "a.language = %s" in articles_sql
-    assert "COALESCE(sc.total_score, 0) >= %s" in articles_sql
+    # min_score применяется ТОЛЬКО к уже оценённым: у неоценённых балла нет, и COALESCE(...,0)
+    # выдавал бы их за 0, отсекая свежий приток порогом (лента выглядела замороженной).
+    assert "(sc.total_score IS NULL OR sc.total_score >= %s)" in articles_sql
     assert "COALESCE(sc.total_score, 0) <= %s" in articles_sql
     assert "COALESCE(a.published_at::date, a.collected_at::date) >= %s" in articles_sql
     assert "COALESCE(a.published_at::date, a.collected_at::date) <= %s" in articles_sql

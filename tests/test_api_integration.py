@@ -127,6 +127,78 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
         app.dependency_overrides.clear()
 
 
+def test_min_score_filters_scored_noise_but_keeps_unscored_visible(isolated_db):
+    """Порог min_score применяется только к УЖЕ оценённым статьям.
+
+    Регрессия деплоя 4ed8dd2: дефолт ленты стал min_score=50, а ещё не оценённые
+    статьи (нет строки в article_scores → total_score NULL → COALESCE 0) отсекались
+    порогом вместе с настоящим шумом. Свежий приток становился невидим до прохода
+    ИИ, и лента выглядела замороженной («обработка сломалась»).
+    Решение заказчика «скрывать <50» касается оценённого шума — оно сохраняется.
+    """
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
+    now = datetime.now(timezone.utc)
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            """
+            INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category)
+            VALUES ('World Oil', 'News', 'https://example.com', TRUE, 'request', 'международные')
+            RETURNING id
+            """
+        ).fetchone()[0]
+
+        def add_article(title: str, url: str, score: int | None) -> int:
+            article_id = conn.execute(
+                """
+                INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language)
+                VALUES (%s, %s, %s, %s, %s, 'raw text', 'en')
+                RETURNING id
+                """,
+                (source_id, title, url, now - timedelta(days=1), now - timedelta(days=1)),
+            ).fetchone()[0]
+            if score is not None:
+                conn.execute(
+                    """
+                    INSERT INTO article_scores (article_id, model, total_score, score_label, explanation)
+                    VALUES (%s, 'offline', %s, 'Высокая', 'why')
+                    """,
+                    (article_id, score),
+                )
+            return article_id
+
+        high_id = add_article("High signal", "https://example.com/high", 80)
+        noise_id = add_article("Scored noise", "https://example.com/noise", 30)
+        unscored_id = add_article("Fresh unscored", "https://example.com/fresh", None)
+        conn.commit()
+
+    try:
+        client = TestClient(app)
+        payload = client.get(
+            "/api/articles",
+            params={"min_score": 50, "max_score": 100, "sort": "score_desc", "limit": 100},
+        ).json()
+        ids = [row["id"] for row in payload]
+
+        # Оценённый шум (30 < 50) отсекается — решение «скрыть <50» работает.
+        assert noise_id not in ids
+        # Ценный сигнал виден.
+        assert high_id in ids
+        # Ещё НЕ оценённая статья ОСТАЁТСЯ видимой (суть фикса).
+        assert unscored_id in ids
+
+        # При score_desc неоценённая оседает вниз и не мешает «верху» ленты.
+        assert ids[0] == high_id
+        assert ids[-1] == unscored_id
+
+        unscored = next(row for row in payload if row["id"] == unscored_id)
+        assert unscored["score"] == 0
+        assert unscored["rating"] == "Без оценки"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_digest_export_endpoint_finishes_job_and_returns_file(monkeypatch, tmp_path, isolated_db):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}

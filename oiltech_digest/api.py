@@ -457,7 +457,12 @@ def list_articles(
         clauses.append("a.language = %s")
         params.append(language)
     if min_score is not None:
-        clauses.append("COALESCE(sc.total_score, 0) >= %s")
+        # Ещё НЕ оценённые статьи (нет строки в article_scores) — это не «низкобалльные»:
+        # балла у них попросту нет, и COALESCE(...,0) выдавал бы за 0, отсекая свежий приток
+        # порогом. Порог применяем только к УЖЕ оценённым — иначе новые статьи исчезают из
+        # ленты до прохода ИИ и она выглядит замороженной. Тот же принцип, что строкой ниже
+        # для c.relevant IS NULL: необработанное не прячем.
+        clauses.append("(sc.total_score IS NULL OR sc.total_score >= %s)")
         params.append(min_score)
     if max_score is not None:
         clauses.append("COALESCE(sc.total_score, 0) <= %s")
