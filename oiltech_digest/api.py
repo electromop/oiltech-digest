@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 import secrets
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -80,8 +80,15 @@ async def log_requests(request, call_next):
     return response
 
 
+# Допустимые пер-юзерные статусы статьи (#12). Должны совпадать с union Article["status"]
+# в frontend/src/api/types.ts. Колонки статуса — свободный TEXT без CHECK, поэтому
+# валидация на границе API — единственное, что не даёт записать мусор: статья с
+# неизвестным статусом молча пропадает из всех вкладок (фильтры перечисляют известный набор).
+ArticleStatus = Literal["new", "review", "digest", "archive", "noise", "duplicate"]
+
+
 class ArticlePatch(BaseModel):
-    status: str | None = None
+    status: ArticleStatus | None = None
     selected_for_digest: bool | None = None
     analyst_comment: str | None = None
 

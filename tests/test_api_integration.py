@@ -219,6 +219,70 @@ def test_min_score_filters_scored_noise_but_keeps_unscored_visible(isolated_db):
         app.dependency_overrides.clear()
 
 
+def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db):
+    """Статус валидируется на границе API (422), мусор в БД не попадает.
+
+    Колонки статуса — свободный TEXT без CHECK. Раньше ArticlePatch.status был
+    просто str, поэтому любая опечатка/неизвестное значение молча записывалось в
+    user_article_states, и статья исчезала из всех вкладок (они перечисляют
+    известный набор статусов) — тихая потеря сигнала.
+    """
+    app = api.app
+    now = datetime.now(timezone.utc)
+
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES ('analyst@example.com', 'salt', 'hash', 'admin')
+            RETURNING id
+            """
+        ).fetchone()[0]
+        source_id = conn.execute(
+            """
+            INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category)
+            VALUES ('World Oil', 'News', 'https://example.com', TRUE, 'request', 'международные')
+            RETURNING id
+            """
+        ).fetchone()[0]
+        article_id = conn.execute(
+            """
+            INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language)
+            VALUES (%s, 'Some signal', 'https://example.com/a', %s, %s, 'text', 'en')
+            RETURNING id
+            """,
+            (source_id, now - timedelta(days=1), now - timedelta(days=1)),
+        ).fetchone()[0]
+        conn.commit()
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "analyst@example.com"}
+
+    try:
+        client = TestClient(app)
+
+        bad = client.patch(f"/api/articles/{article_id}", json={"status": "делете"})
+        assert bad.status_code == 422
+
+        with connection.get_connection() as conn:
+            stored = conn.execute(
+                "SELECT status FROM user_article_states WHERE user_id = %s AND article_id = %s",
+                (user_id, article_id),
+            ).fetchone()
+        assert stored is None, "невалидный статус не должен создавать строку состояния"
+
+        for status in ("new", "review", "digest", "archive", "noise", "duplicate"):
+            ok = client.patch(f"/api/articles/{article_id}", json={"status": status})
+            assert ok.status_code == 200, f"статус {status} должен приниматься"
+            with connection.get_connection() as conn:
+                stored = conn.execute(
+                    "SELECT status FROM user_article_states WHERE user_id = %s AND article_id = %s",
+                    (user_id, article_id),
+                ).fetchone()[0]
+            assert stored == status
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_digest_export_endpoint_finishes_job_and_returns_file(monkeypatch, tmp_path, isolated_db):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com"}
