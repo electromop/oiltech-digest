@@ -5,12 +5,21 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal, get_args
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest import auth, config
 from oiltech_digest.db.connection import get_connection
+
+# Единый источник правды для набора пер-юзерных рабочих статусов статьи (#12).
+# ДОЛЖЕН совпадать с union Article["status"] во фронте (frontend/src/api/types.ts).
+# api.ArticlePatch.status импортирует ArticleStatus отсюда (валидация 422), dashboard_stats
+# проецирует счётчики по ARTICLE_STATUS_VALUES — так Python-половина не рассинхронится:
+# добавил статус в Literal → он автоматически появился и в кортеже (get_args).
+ArticleStatus = Literal["new", "review", "digest", "archive", "noise", "duplicate"]
+ARTICLE_STATUS_VALUES: tuple[ArticleStatus, ...] = get_args(ArticleStatus)
 
 # ---------------------------------------------------------------------------
 #  sources
@@ -709,6 +718,22 @@ def update_background_job_progress(job_id: int, progress: float) -> None:
         conn.commit()
 
 
+def mark_background_job_ai_started(job_id: int) -> None:
+    """Отметить, что локальная AI-обработка сделала первый вызов модели.
+
+    Служит дискриминатором для requeue_stale_background_jobs: задачу с проставленным
+    ai_started_at нельзя авто-перезапускать (повторный прогон = повторный расход OpenAI),
+    а упавшую ДО первого вызова (ai_started_at IS NULL) — можно. progress для этого не
+    годится: claim/mark-running форсят его в 10 ещё до тела обработчика, поэтому у любой
+    running-задачи progress уже >0 независимо от того, был ли вызов модели."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET ai_started_at = now() WHERE id = %s",
+            (job_id,),
+        )
+        conn.commit()
+
+
 def update_external_background_job_progress(
     job_id: int,
     *,
@@ -986,10 +1011,13 @@ def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: 
     if finalizing_stale_minutes is None:
         finalizing_stale_minutes = stale_minutes
     with get_connection() as conn:
-        # ЛОКАЛЬНУЮ AI-обработку, которая уже НАЧАЛА жечь OpenAI (progress > 0), в очередь
-        # НЕ возвращаем: повторный прогон — это повторный РЕАЛЬНЫЙ расход. requeue
-        # переиспользует тот же job_id, а get_articles_by_ids не пропускает уже
-        # обработанные статьи, поэтому модель вызвалась бы заново.
+        # ЛОКАЛЬНУЮ AI-обработку, которая уже НАЧАЛА жечь OpenAI, в очередь НЕ возвращаем:
+        # повторный прогон — это повторный РЕАЛЬНЫЙ расход. requeue переиспользует тот же
+        # job_id, а get_articles_by_ids не пропускает уже обработанные статьи, поэтому модель
+        # вызвалась бы заново. Дискриминатор — ai_started_at (ставится строго перед первым
+        # вызовом модели). progress тут НЕ годится: claim/mark-running форсят его в 10 ещё до
+        # тела обработчика, так что по progress «до/после AI» не отличить — и задача, упавшая
+        # ДО первого вызова ($0), ложно попадала бы под failed вместо авто-восстановления.
         # NB: дедуп биллинга по (job_id, article_id, stage) здесь НЕ решение — он бы просто
         # СПРЯТАЛ второй, реально оплаченный вызов из отчёта о стоимости (к тому же
         # fail_background_job умеет ретраить ту же задачу, пока attempts < max_attempts).
@@ -1006,7 +1034,7 @@ def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: 
               AND started_at < now() - (%s::text || ' minutes')::interval
               AND kind = 'process_articles'
               AND queue_name <> 'external-ai'
-              AND progress > 0
+              AND ai_started_at IS NOT NULL
             """,
             (stale_minutes,),
         )
@@ -1343,7 +1371,7 @@ def dashboard_stats(user_id: int | None = None) -> dict:
         "sources": int(row["sources"] or 0),
         "status_counts": {
             status: status_counts.get(status, 0)
-            for status in ("new", "review", "digest", "archive", "noise", "duplicate")
+            for status in ARTICLE_STATUS_VALUES
         },
     }
 

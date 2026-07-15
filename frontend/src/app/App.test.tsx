@@ -285,6 +285,10 @@ describe("App smoke", () => {
             selected_for_digest: 3,
             avg_score: 82,
             sources: 3,
+            // Счётчики по статусам с сервера (по всей базе), НАМЕРЕННО расходятся с
+            // загруженными фикстурами (все 3 — 'digest'): так тест отличает серверную
+            // привязку от клиентского фолбэка `?? articles.filter(...)`, который дал бы 0.
+            status_counts: { new: 5, review: 2, digest: 1, archive: 3, noise: 999, duplicate: 7 },
           }),
         );
       }
@@ -433,6 +437,31 @@ describe("App smoke", () => {
     expect(await screen.findByText("articles_list")).toBeInTheDocument();
     expect(screen.getAllByText("source_health").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Плитки статусов должны показывать серверные счётчики (status_counts по всей базе),
+  // а не клиентский подсчёт по загруженной странице. Мок /api/stats отдаёт noise=999 и
+  // duplicate=7, тогда как среди 3 загруженных статей нет ни одной 'noise'/'duplicate' —
+  // клиентский фолбэк дал бы 0. Значит ненулевые числа доказывают привязку к серверу.
+  it("плитки статусов берут счётчики с сервера, а не считают по загруженной странице", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+
+    const tileValue = (label: string) => {
+      const cards = Array.from(container.querySelectorAll(".statCardReact"));
+      const card = cards.find((el) => el.querySelector(".metaText")?.textContent === label);
+      return card?.querySelector(".statValueReact")?.textContent ?? null;
+    };
+
+    await waitFor(() => expect(tileValue("Шум")).toBe("999"));
+    expect(tileValue("Дубликаты")).toBe("7");
+    expect(tileValue("Новые")).toBe("5");
+    expect(tileValue("На проверке")).toBe("2");
   });
 
   // Регресс на бесконечный цикл переподгрузки ленты.

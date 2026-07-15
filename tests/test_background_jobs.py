@@ -65,6 +65,7 @@ def test_process_job_without_article_ids_uses_each_stage_queue(monkeypatch):
 
     monkeypatch.setattr(background_jobs, "make_client", lambda offline: object())
     monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, progress: None)
+    monkeypatch.setattr(background_jobs.repository, "mark_background_job_ai_started", lambda job_id: None)
     monkeypatch.setattr(
         background_jobs.repository,
         "get_articles_needing_summary",
@@ -103,6 +104,45 @@ def test_process_job_without_article_ids_uses_each_stage_queue(monkeypatch):
     assert result["relevance"] == {"processed": 1}
     assert result["tagging"] == {"processed": 1}
     assert result["scoring"] == {"processed": 1}
+
+
+def test_process_job_marks_ai_started_before_first_model_call(monkeypatch):
+    """ai_started_at ОБЯЗАН ставиться до первого вызова модели.
+
+    На этом порядке держится вся защита от двойной оплаты OpenAI: если пометить позже
+    (или после process_summary_articles), то падение на первой же стадии оставит
+    ai_started_at IS NULL, requeue вернёт задачу в очередь и уже оплаченные summary
+    прогонятся через модель повторно. Мокаем реальные вызовы и проверяем ПОРЯДОК.
+    """
+    order = []
+
+    monkeypatch.setattr(background_jobs, "make_client", lambda offline: object())
+    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, progress: None)
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "mark_background_job_ai_started",
+        lambda job_id: order.append("ai_started"),
+    )
+    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_summary", lambda limit: [{"id": 1}])
+    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_relevance", lambda limit: [])
+    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_tags", lambda limit: [])
+    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_scores", lambda limit: [])
+    monkeypatch.setattr(background_jobs.repository, "get_articles_by_ids", lambda ids, include_summary: [])
+    monkeypatch.setattr(
+        background_jobs,
+        "process_summary_articles",
+        lambda articles, client: order.append("model_call") or {"processed": len(articles)},
+    )
+    monkeypatch.setattr(background_jobs, "process_relevance_articles", lambda articles, client: {"processed": 0})
+    monkeypatch.setattr(background_jobs, "process_tag_articles", lambda articles, client: {"processed": 0})
+    monkeypatch.setattr(background_jobs, "process_score_articles", lambda articles, client: {"processed": 0})
+
+    background_jobs._run_process_articles({"limit": 10}, job_id=123)
+
+    assert "ai_started" in order, "ai_started_at не был помечен вовсе"
+    assert order.index("ai_started") < order.index("model_call"), (
+        "ai_started_at помечен ПОСЛЕ первого вызова модели — защита от двойной оплаты дырявая"
+    )
 
 
 def test_enqueue_can_skip_inline_execution(monkeypatch, isolated_db):
@@ -334,32 +374,41 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
     Дедуп биллинга по (job_id, article_id, stage) тут не помог бы: он лишь СПРЯТАЛ бы
     второй, реально оплаченный вызов из отчёта о стоимости. Поэтому помечаем failed
     без авто-ретрая. Внешний контур (external-ai) не затрагиваем — у него свой lease.
+
+    Дискриминатор — ai_started_at, НЕ progress: claim/mark-running форсят progress в 10
+    ещё до тела обработчика, поэтому «до-AI» кейс здесь реалистичен (running, progress=10,
+    ai_started_at IS NULL) — ровно он ломался у прежнего гарда `progress > 0`.
     """
     stale_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
 
-    def make_stale_running(kind: str, queue_name: str, progress: int) -> dict:
+    def make_stale_running(kind: str, queue_name: str, ai_started: bool) -> dict:
         job = repository.create_background_job(kind, {}, queue_name=queue_name)
+        # claim переводит в running и сам поднимает progress до 10 (как в проде).
         repository.claim_next_background_job(queue_names=[queue_name])
         with connection.get_connection() as conn:
             conn.execute(
-                "UPDATE background_jobs SET started_at = %s, progress = %s WHERE id = %s",
-                (stale_started_at, progress, job["id"]),
+                "UPDATE background_jobs SET started_at = %s, ai_started_at = %s WHERE id = %s",
+                (stale_started_at, stale_started_at if ai_started else None, job["id"]),
             )
             conn.commit()
         return job
 
-    burned = make_stale_running("process_articles", "default", progress=35)
-    not_started = make_stale_running("process_articles", "default", progress=0)
-    external = make_stale_running("process_articles", "external-ai", progress=35)
+    burned = make_stale_running("process_articles", "default", ai_started=True)
+    not_started = make_stale_running("process_articles", "default", ai_started=False)
+    external = make_stale_running("process_articles", "external-ai", ai_started=True)
+
+    # Инвариант, на котором держится дискриминатор: у running-задачи progress уже >0
+    # (claim поднял до 10), поэтому различать по нему «до/после AI» нельзя.
+    assert repository.get_background_job(int(not_started["id"]))["progress"] > 0
 
     repository.requeue_stale_background_jobs(stale_minutes=60)
 
-    # Уже потратила деньги → failed, без авто-возврата в очередь.
+    # Уже потратила деньги (ai_started_at выставлен) → failed, без авто-возврата в очередь.
     burned_stored = repository.get_background_job(int(burned["id"]))
     assert burned_stored["status"] == "failed"
     assert "дважды" in (burned_stored["error_message"] or "")
 
-    # Упала ДО обращения к модели → безопасно перезапустить.
+    # Упала ДО первого вызова модели (ai_started_at IS NULL) → безопасно перезапустить.
     assert repository.get_background_job(int(not_started["id"]))["status"] == "queued"
 
     # Внешний контур не задет — у него собственная защита (lease/finalize, T2/H1).

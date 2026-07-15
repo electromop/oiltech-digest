@@ -268,7 +268,7 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
                 )
             return article_id
 
-        add_article("n1", status=None)              # без строки состояния → считается 'new'
+        n1_id = add_article("n1", status=None)      # без строки состояния → считается 'new'
         add_article("n2", status="new")
         add_article("r1", status="review")
         add_article("noise1", status="noise")
@@ -279,6 +279,22 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
         # Невидимые в ленте — не должны попадать в счётчики.
         add_article("rejected", status="new", relevant=False)
         add_article("marked", status="new", pending_deletion=True)
+
+        # Второй пользователь метит статью n1 (которую A оставил как 'new') статусом 'noise'.
+        # Счётчики A должны это ИГНОРИРОВАТЬ — состояние статьи пер-юзерное (#12). Если из
+        # GROUP BY уберут предикат uas.user_id, чужой 'noise' протечёт в счётчики A и точный
+        # ассерт ниже упадёт (n1 уедет из 'new' в 'noise').
+        other_user_id = conn.execute(
+            """
+            INSERT INTO users (email, password_salt, password_hash, role)
+            VALUES ('other@example.com', 'salt', 'hash', 'user')
+            RETURNING id
+            """
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'noise')",
+            (other_user_id, n1_id),
+        )
         conn.commit()
 
     app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "analyst@example.com"}
