@@ -123,6 +123,8 @@ export type DashboardStats = {
   selected_for_digest: number;
   avg_score: number;
   sources: number;
+  // Счётчики по статусам — по ВСЕЙ базе (а не по загруженной странице), пер-юзерно.
+  status_counts?: Record<Article["status"], number>;
 };
 
 export type BackgroundJob = {

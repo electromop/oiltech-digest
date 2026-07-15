@@ -877,6 +877,16 @@ def _add_docx_hyperlink(paragraph, url: str, text: str, color_hex: str | None = 
     paragraph._p.append(hyperlink)
 
 
+def _chunk_news_items(news_items: list[dict], size: int = 3) -> list[list[dict]]:
+    """Разбить новости на «страницы» по size карточек — для постраничного DOCX
+    (render_digest_docx делит новости по 3 с разрывом страницы между чанками).
+    HTML-путь больше не использует этот хелпер, но DOCX-путь зависит от него —
+    не удалять без правки render_digest_docx."""
+    if size <= 0:
+        size = 3
+    return [news_items[index:index + size] for index in range(0, len(news_items), size)]
+
+
 def render_digest_docx(content: dict) -> bytes:
     """Render the branded digest to a rich .docx via python-docx.
 

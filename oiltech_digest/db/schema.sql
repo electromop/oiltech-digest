@@ -310,6 +310,7 @@ CREATE TABLE IF NOT EXISTS background_jobs (
   lease_token_hash TEXT,
   lease_expires_at TIMESTAMPTZ,
   last_heartbeat_at TIMESTAMPTZ,
+  ai_started_at TIMESTAMPTZ,               -- локальная AI-обработка сделала первый вызов модели
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at    TIMESTAMPTZ,
   finished_at   TIMESTAMPTZ
@@ -358,6 +359,7 @@ ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS claimed_by TEXT;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_token_hash TEXT;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS ai_started_at TIMESTAMPTZ;
 UPDATE background_jobs bj
 SET user_id = u.id
 FROM users u

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -285,6 +285,10 @@ describe("App smoke", () => {
             selected_for_digest: 3,
             avg_score: 82,
             sources: 3,
+            // Счётчики по статусам с сервера (по всей базе), НАМЕРЕННО расходятся с
+            // загруженными фикстурами (все 3 — 'digest'): так тест отличает серверную
+            // привязку от клиентского фолбэка `?? articles.filter(...)`, который дал бы 0.
+            status_counts: { new: 5, review: 2, digest: 1, archive: 3, noise: 999, duplicate: 7 },
           }),
         );
       }
@@ -433,6 +437,95 @@ describe("App smoke", () => {
     expect(await screen.findByText("articles_list")).toBeInTheDocument();
     expect(screen.getAllByText("source_health").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Плитки статусов должны показывать серверные счётчики (status_counts по всей базе),
+  // а не клиентский подсчёт по загруженной странице. Мок /api/stats отдаёт noise=999 и
+  // duplicate=7, тогда как среди 3 загруженных статей нет ни одной 'noise'/'duplicate' —
+  // клиентский фолбэк дал бы 0. Значит ненулевые числа доказывают привязку к серверу.
+  it("плитки статусов берут счётчики с сервера, а не считают по загруженной странице", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+
+    const tileValue = (label: string) => {
+      const cards = Array.from(container.querySelectorAll(".statCardReact"));
+      const card = cards.find((el) => el.querySelector(".metaText")?.textContent === label);
+      return card?.querySelector(".statValueReact")?.textContent ?? null;
+    };
+
+    await waitFor(() => expect(tileValue("Шум")).toBe("999"));
+    expect(tileValue("Дубликаты")).toBe("7");
+    expect(tileValue("Новые")).toBe("5");
+    expect(tileValue("На проверке")).toBe("2");
+  });
+
+  // Регресс на бесконечный цикл переподгрузки ленты.
+  // activeServerQuery был объектным литералом, пересоздаваемым на КАЖДОМ рендере, и стоял
+  // в deps эффекта серверного поиска. Эффект вызывал setServerResults/setSearching → рендер →
+  // новая идентичность объекта → эффект снова → fetch каждые ~400мс, бесконечно.
+  // Взводился при ЛЮБОМ активном фильтре (поиск/тег/статус/источник/язык/score/сорт/«Со статусом»).
+  it("не перезапрашивает ленту в цикле, пока активен фильтр", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+
+    const articleCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/articles?")).length;
+
+    // Взводим серверный фильтр — ровно то, что делает аналитик.
+    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+
+    // Ждём, пока debounce (400мс) отработает и выборка придёт.
+    await waitFor(() => expect(articleCalls()).toBeGreaterThan(1));
+    const settled = articleCalls();
+
+    // Даём пройти времени, которого хватило бы на несколько циклов debounce (400мс).
+    // На багованном коде здесь набегает поток новых запросов; на исправленном — ни одного.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(articleCalls()).toBe(settled);
+  });
+
+  // Второй фронт того же бага: нестабильный activeServerQuery стоял и в deps 40с-эффекта,
+  // поэтому setInterval(40с) пересоздавался на КАЖДОМ рендере и «живое» автообновление при
+  // активном фильтре не доживало до срабатывания. Ждать 40с в тесте не нужно — достаточно
+  // убедиться, что таймер заводится один раз и не пересоздаётся бесконечно.
+  it("не пересоздаёт 40с-таймер автообновления на каждом рендере", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+
+    const autoRefreshTimers = () =>
+      setIntervalSpy.mock.calls.filter(([, ms]) => ms === 40000).length;
+
+    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+    await waitFor(() => expect(autoRefreshTimers()).toBeGreaterThan(0));
+
+    // Даём выборке полностью улечься: debounce (400мс) + ответ + сброс флага searching.
+    // До этого момента таймер пересоздаётся ЗАКОННО (меняется фильтр — меняются deps).
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const settled = autoRefreshTimers();
+
+    // А вот в ТИШИНЕ (пользователь ничего не трогает) таймер пересоздаваться не должен.
+    // На багованном коде цикл рендеров плодил новый setInterval снова и снова, из-за чего
+    // 40с-автообновление не доживало до срабатывания.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(autoRefreshTimers()).toBe(settled);
   });
 
 });
