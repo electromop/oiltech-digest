@@ -295,3 +295,68 @@ def test_repository_cleanup_removes_only_expired_and_old_terminal_records(isolat
     assert session_tokens == [("active-session",)]
     assert background_statuses == [("fresh_ok", "ok"), ("running_job", "running")]
     assert export_statuses == [("html", "ok")]
+
+
+def test_needing_summary_skips_rejected_articles(isolated_db):
+    """Отклонённые гейтом статьи НЕ возвращаются в AI-обработку.
+
+    На проде (внешний путь) гейт релевантности идёт ПЕРВЫМ, и отклонённой статье суть
+    НЕ пишется (external_ai.process_payload: `if not relevant: continue`). Раз выборка
+    в обработку шла по `WHERE c.summary IS NULL` без фильтра по relevant, такая статья
+    возвращалась в очередь КАЖДЫЙ цикл — навсегда.
+
+    Последствия (баг «ИИ не работает» + утечка денег из аудита 09.07):
+    - гейт режет ~78%, значит бюджет цикла (AI_PROCESS_LIMIT) съедали ПОВТОРНЫЕ отказы
+      одних и тех же статей, а свежие вытеснялись из топа (ORDER BY published_at DESC);
+    - каждый цикл заново жёг дорогой гейт (gpt-5.5) на уже отклонённых статьях.
+    """
+    now = datetime.now(timezone.utc)
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            """
+            INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category)
+            VALUES ('World Oil', 'News', 'https://example.com', TRUE, 'request', 'международные')
+            RETURNING id
+            """
+        ).fetchone()[0]
+
+        def add_article(slug: str) -> int:
+            return conn.execute(
+                """
+                INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language)
+                VALUES (%s, %s, %s, %s, %s, 'text', 'en')
+                RETURNING id
+                """,
+                (source_id, f"Article {slug}", f"https://example.com/{slug}", now, now),
+            ).fetchone()[0]
+
+        fresh_id = add_article("fresh")           # карточки нет вовсе — ИИ её ещё не видел
+        rejected_id = add_article("rejected")     # гейт отклонил: relevant=false, сути нет
+        done_id = add_article("done")             # суть уже есть
+        retry_id = add_article("retry")           # релевантна, но суть не записалась (сбой)
+
+        conn.execute(
+            "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, NULL, FALSE)",
+            (rejected_id,),
+        )
+        conn.execute(
+            "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, 'есть суть', TRUE)",
+            (done_id,),
+        )
+        conn.execute(
+            "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, NULL, TRUE)",
+            (retry_id,),
+        )
+        conn.commit()
+
+    ids = [row["id"] for row in repository.get_articles_needing_summary(limit=50)]
+
+    # Никогда не обработанная — берём.
+    assert fresh_id in ids
+    # Релевантная, но без сути (сбой записи) — берём, это честный повтор.
+    assert retry_id in ids
+    # Уже с сутью — не трогаем.
+    assert done_id not in ids
+    # ГЛАВНОЕ: отклонённую гейтом НЕ переспрашиваем — иначе она жрёт бюджет цикла вечно.
+    assert rejected_id not in ids
