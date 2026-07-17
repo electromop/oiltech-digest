@@ -1655,6 +1655,17 @@ def get_articles_for_recheck(after_id: int = 0, limit: int = 100) -> list[dict]:
 
 
 def get_articles_needing_summary(limit: int = 20) -> list[dict]:
+    """Статьи, которым нужна AI-суть: ещё не обработанные + релевантные без сути (повтор после сбоя).
+
+    ОТКЛОНЁННЫЕ ГЕЙТОМ (relevant IS FALSE) ИСКЛЮЧЕНЫ, и это принципиально. На проде гейт
+    релевантности идёт ПЕРВЫМ и отклонённой статье суть НЕ пишется (external_ai.process_payload:
+    `if not relevant: continue`). Без этого фильтра такая статья вечно подходила под
+    `summary IS NULL` и возвращалась в обработку КАЖДЫЙ цикл: гейт режет ~78%, поэтому бюджет
+    цикла (AI_PROCESS_LIMIT) съедали повторные отказы одних и тех же статей, свежие вытеснялись
+    из топа (ORDER BY published_at DESC), а дорогой гейт (gpt-5.5) жёгся заново на том же наборе.
+    `IS NOT FALSE` (а не `IS NULL`) — чтобы релевантная статья без сути (сбой записи) всё-таки
+    попала на повтор. Идиома совпадает с list_articles и digest_candidates.
+    """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1665,6 +1676,7 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE c.summary IS NULL
+              AND c.relevant IS NOT FALSE
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
