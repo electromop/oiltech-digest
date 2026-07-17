@@ -439,6 +439,59 @@ describe("App smoke", () => {
     expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
   });
 
+  // Прототипы показывают ВЫМЫШЛЕННЫЕ данные внутри рабочей админки, поэтому доступны ТОЛЬКО
+  // администратору. Ниже закреплены обе половины контракта: админ видит их в меню и открывает,
+  // а обычный пользователь не видит группу и не пробивается по прямой ссылке.
+  it.each([
+    ["tech-preview", "Технологии"],
+    ["analytics-preview", "Аналитика для БРБ"],
+  ])("админ открывает прототип %s из меню, с плашкой демо-данных", async (screenId, heading) => {
+    window.history.replaceState(null, "", `/?screen=${screenId}`);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    // Прототип грузится отдельным чанком (lazy) — ждём его появления.
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+    // Данные вымышленные — плашка обязана быть на экране.
+    expect(screen.getByText("Прототип · демонстрационные данные")).toBeInTheDocument();
+    // У админа прототип доступен из меню (группа «Прототипы»).
+    // Навигация рендерится дважды — сайдбар и мобильное меню, поэтому кнопок несколько.
+    expect(screen.getAllByRole("button", { name: heading }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("обычный пользователь не видит группу «Прототипы» и не открывает их по прямой ссылке", async () => {
+    window.history.replaceState(null, "", "/?screen=tech-preview");
+
+    // Тот же мок, но роль — обычный пользователь.
+    const adminImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
+        return Promise.resolve(jsonResponse({ ok: true, user: { id: 2, email: "user@example.com", role: "user" } }));
+      }
+      return adminImpl!(input, init);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    // Прямая ссылка не пробивает: срабатывает admin-гард.
+    expect(await screen.findByRole("heading", { name: "Нет доступа" })).toBeInTheDocument();
+    expect(screen.queryByText("Прототип · демонстрационные данные")).not.toBeInTheDocument();
+    // Группы «Прототипы» в меню нет вовсе — ни в сайдбаре, ни в мобильном меню.
+    expect(screen.queryByText("Прототипы")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "Технологии" })).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: "Аналитика для БРБ" })).toHaveLength(0);
+  });
+
   // Плитки статусов должны показывать серверные счётчики (status_counts по всей базе),
   // а не клиентский подсчёт по загруженной странице. Мок /api/stats отдаёт noise=999 и
   // duplicate=7, тогда как среди 3 загруженных статей нет ни одной 'noise'/'duplicate' —

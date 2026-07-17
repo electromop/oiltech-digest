@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { listArticles } from "../api/articles";
 import { ApiError } from "../api/client";
 import { getSession, login, logout, register } from "../api/auth";
@@ -13,10 +13,26 @@ import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { UsersPage } from "../features/users/UsersPage";
 
-type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance";
+// Прототипы грузятся ОТДЕЛЬНЫМИ чанками (lazy): это статичные макеты, которые открывают по прямой
+// ссылке считаные разы, и рабочее приложение не должно тащить их вес на каждой загрузке.
+const AnalyticsPreview = lazy(() =>
+  import("../features/previews/AnalyticsPreview").then((m) => ({ default: m.AnalyticsPreview })),
+);
+const TechnologiesPreview = lazy(() =>
+  import("../features/previews/TechnologiesPreview").then((m) => ({ default: m.TechnologiesPreview })),
+);
+
+type ScreenId =
+  | "articles" | "digest" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
-const ADMIN_SCREENS = new Set<ScreenId>(["sources", "scoring", "tags", "users", "jobs", "maintenance"]);
+// Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
+// случайно открыть обычный пользователь и принять за настоящую аналитику.
+const ADMIN_SCREENS = new Set<ScreenId>([
+  "sources", "scoring", "tags", "users", "jobs", "maintenance",
+  "analytics-preview", "tech-preview",
+]);
 
 type ScreenDef = {
   id: ScreenId;
@@ -81,6 +97,22 @@ const screens: ScreenDef[] = [
     description: "Управление учётными записями и ролями (только для администратора).",
     status: "Экран активен",
   },
+  {
+    id: "tech-preview",
+    label: "Технологии",
+    eyebrow: "Prototype",
+    title: "Технологии",
+    description: "Статичный прототип каталога технологий: демонстрационные данные, без логики.",
+    status: "Прототип",
+  },
+  {
+    id: "analytics-preview",
+    label: "Аналитика для БРБ",
+    eyebrow: "Prototype",
+    title: "Аналитика для БРБ",
+    description: "Статичный прототип раздела аналитики: демонстрационные данные, без логики.",
+    status: "Прототип",
+  },
 ];
 
 const appHighlights = [
@@ -105,13 +137,22 @@ const navGroups: NavGroup[] = [
     label: "Администрирование",
     screens: ["users"],
   },
+  // Прототипы будущих разделов. Оба экрана в ADMIN_SCREENS, поэтому у не-админа фильтр ниже
+  // (isAdmin || !ADMIN_SCREENS.has(sid)) вычистит их, visibleScreens станет пустым и вся группа
+  // не отрисуется — обычный пользователь даже не увидит, что она существует.
+  {
+    label: "Прототипы",
+    screens: ["tech-preview", "analytics-preview"],
+  },
 ];
+
+// Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
+// прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
-  if (value === "jobs") return "jobs";
-  if (value === "maintenance") return "maintenance";
-  return "articles";
+  return URL_ADDRESSABLE.find((id) => id === value) ?? "articles";
 }
 
 export function App() {
@@ -222,6 +263,23 @@ export function App() {
     currentScreen = <MaintenancePage onUnauthorized={() => setUser(null)} showToast={showToast} />;
   }
 
+  // Статичные прототипы будущих разделов (демо-данные, без логики и без обращений к API).
+  if (activeScreen === "analytics-preview") {
+    currentScreen = (
+      <Suspense fallback={<div className="splashScreen">Загружаем прототип…</div>}>
+        <AnalyticsPreview />
+      </Suspense>
+    );
+  }
+
+  if (activeScreen === "tech-preview") {
+    currentScreen = (
+      <Suspense fallback={<div className="splashScreen">Загружаем прототип…</div>}>
+        <TechnologiesPreview />
+      </Suspense>
+    );
+  }
+
   if (activeScreen === "users") {
     currentScreen = <UsersPage onUnauthorized={() => setUser(null)} showToast={showToast} currentUserId={Number(user?.id ?? 0)} />;
   }
@@ -242,11 +300,11 @@ export function App() {
 
   function switchScreen(screenId: ScreenId) {
     setActiveScreen(screenId);
-    if (screenId === "jobs" || screenId === "maintenance") {
+    if (URL_ADDRESSABLE.includes(screenId)) {
       window.history.replaceState(null, "", `?screen=${screenId}`);
       return;
     }
-    if (window.location.search.includes("screen=jobs") || window.location.search.includes("screen=maintenance")) {
+    if (URL_ADDRESSABLE.some((id) => window.location.search.includes(`screen=${id}`))) {
       window.history.replaceState(null, "", window.location.pathname || "/");
     }
   }
