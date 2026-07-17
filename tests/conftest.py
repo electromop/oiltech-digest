@@ -9,6 +9,7 @@ from oiltech_digest.db import connection
 from oiltech_digest.db import repository
 from oiltech_digest import api
 from oiltech_digest.config import DATABASE_URL
+from oiltech_digest.ingestion import source_overrides
 
 
 @pytest.fixture()
@@ -28,6 +29,10 @@ def isolated_db(monkeypatch):
     monkeypatch.setattr(connection, "get_connection", connect)
     monkeypatch.setattr(repository, "get_connection", connect)
     monkeypatch.setattr(api, "get_connection", connect)
+    # source_overrides импортирует get_connection напрямую (from ...connection import ...),
+    # поэтому патч самого модуля connection его НЕ перехватывает — без этой строки
+    # apply_overrides() в тестах ходит в НАСТОЯЩУЮ базу вместо изолированной схемы.
+    monkeypatch.setattr(source_overrides, "get_connection", connect)
 
     try:
         connection.init_db()

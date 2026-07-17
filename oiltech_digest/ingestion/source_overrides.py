@@ -35,7 +35,10 @@ logger = logging.getLogger(__name__)
 #     они 403 и из NL (нужен challenge-solver, отдельный проект).
 SOURCE_OVERRIDES: dict[str, dict] = {
     # Проверено на проде:
-    "Shell": {"parse_strategy": "playwright"},  # главная отдаёт пресс-релизы (+6 статей)
+    # Ревизия 17.07: без listing_url скребли главную и замолчали с 01.07. Явный newsroom
+    # подтверждён рендером: «Shell to sell Sprng Energy group...» 13 Jul 2026.
+    "Shell": {"parse_strategy": "playwright",
+              "listing_url": "https://www.shell.com/news-and-insights/newsroom/news-and-media-releases.html"},
     "Baker Hughes": {"parse_strategy": "playwright",
                      "listing_url": "https://www.bakerhughes.com/company/news"},
     # Endeavor Business Media сменил схему RSS: старый путь /__rss/website-scheduled-content/
@@ -68,12 +71,23 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # которых падали request/WebFetch — BP/TechnipFMC):
     "SLB (Schlumberger)": {"parse_strategy": "playwright", "listing_url": "https://www.slb.com/news-and-insights"},  # рендер ✓, последние уже в БД
     "ADNOC": {"parse_strategy": "playwright", "listing_url": "https://www.adnoc.ae/en/news-and-media"},  # рендер ✓
-    "SOCAR": {"parse_strategy": "playwright", "listing_url": "https://socar.az/socar/en/page/media"},  # +6
+    # Ревизия 17.07: прежний /socar/en/page/media отдавал 0 статей — только навигацию (тот же
+    # паттерн, что у ДРТ/Petronas). Новый URL: 10 статей, даты 22.06–09.07.2026. playwright НЕ
+    # нужен — в сыром HTML 10 анкоров <a href="/en/post/...> (проверено голым UA).
+    "SOCAR": {"parse_strategy": "request",
+              "listing_url": "https://socar.az/en/page/press-releases"},
     "BP": {"parse_strategy": "playwright", "listing_url": "https://www.bp.com/en/global/corporate/news-and-insights/press-releases.html"},  # +3 (был 403 для request)
     "TechnipFMC": {"parse_strategy": "playwright", "listing_url": "https://www.technipfmc.com/en/media/press-releases/"},  # +6 (был 403)
-    "Halliburton": {"parse_strategy": "playwright", "listing_url": "https://www.halliburton.com/en/about-us/press-release"},  # +6
+    # Ревизия 17.07: playwright по /about-us/press-release молчал 38 дней. IR-фид живой
+    # (10 items, свежак 16.07) и гео-независим. Источник ценнейший: из 18 собранных статей
+    # ВСЕ 18 прошли гейт релевантности — 100% полезного сигнала.
+    "Halliburton": {"parse_strategy": "rss",
+                    "rss_url": "https://ir.halliburton.com/rss/news-releases.xml"},
     "TotalEnergies": {"parse_strategy": "playwright", "listing_url": "https://totalenergies.com/news/press-releases"},  # рендер ✓ (релизы с датами), нет свежее 28 мая
-    "Aker Solutions": {"parse_strategy": "playwright", "listing_url": "https://www.akersolutions.com/news/"},  # рендер ✓, нет свежее фев 2026
+    # Ревизия 17.07: /news/ → /news/news-archive/ (хронологическая лента «25 of 1154», SSR,
+    # свежак 15.07.2026); прежний URL молчал с 29.06.
+    "Aker Solutions": {"parse_strategy": "playwright",
+                       "listing_url": "https://www.akersolutions.com/news/news-archive/"},
     "Rystad Energy": {"parse_strategy": "playwright", "listing_url": "https://www.rystadenergy.com/news"},  # рендер ✓ (свежак 08 июня), scheduler собирает в фоне
     "Journal of Petroleum Technology": {"parse_strategy": "playwright", "listing_url": "https://jpt.spe.org/latest-news"},  # рендер ✓ (свежак 09 июня, даты извлекаются)
     # НЕ в реестре — listing отдаёт навигацию/SPA-оболочку вместо статей, нужен
@@ -97,10 +111,69 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "Агентство нефтегазовой информации": {"parse_strategy": "telegram", "url": "https://t.me/oilgasinform"},
     "Новая Энергия": {"parse_strategy": "telegram", "url": "https://t.me/novayaenergiya"},
     "Energy Today": {"parse_strategy": "telegram", "url": "https://t.me/energytodaygroup"},
+    # ==== Ревизия источников 2026-07-17 ====
+    # Диагностика на проде показала массовую болезнь: у многих источников прописан URL, который
+    # НЕ является лентой новостей — карта сайта, страница наград или просто главная. Парсер
+    # честно её скребёт, находит навигацию («История дивидендных выплат», «HR Portal»), один раз
+    # загребает как «статьи» и дальше получает только дубликаты. Внешне — «источник замолчал».
+    # Каждый URL ниже подтверждён живой проверкой + независимой перепроверкой (свежие заголовки
+    # 2026 с датами). Оговорка: проверки шли НЕ с РФ-прода → истина = живой parse после деплоя.
+
+    # -- Иностранные: RSS вместо скрейпа (RSS гео-независим и надёжнее) --
+    "NOV": {"parse_strategy": "rss",
+            "rss_url": "https://investors.nov.com/rss/news-releases.xml"},  # IR-фид, 10 items
+    "КазМунайГаз": {"parse_strategy": "rss",
+                    "rss_url": "https://www.kmg.kz/ru/press-center/press-releases/rss/"},  # 196 записей за 2026
+
+    # -- Иностранные: правильный раздел новостей вместо главной/наград --
+    "Petronas": {"parse_strategy": "request",
+                 "listing_url": "https://www.petronas.com/media/media-releases"},  # был rss.xml = НАГРАДЫ
+    "Mubadala Energy": {"parse_strategy": "request",
+                        "listing_url": "https://mubadalaenergy.com/all-news/"},
+    # NB: rss_url НЕ прописывать — /feed/ отдаёт дефолтный WordPress с единственным
+    # постом «Hello world!» от 2022; источник замолчал бы навсегда.
+    "OPEC": {"parse_strategy": "playwright",
+             "listing_url": "https://www.opec.org/press-releases.html"},
+    "QatarEnergy": {"parse_strategy": "playwright",
+                    "listing_url": "https://www.qatarenergy.qa/en/MediaCenter/Pages/news.aspx"},
+    "Kuwait Oil Company": {"parse_strategy": "playwright",
+                           "listing_url": "https://www.kockw.com/sites/EN/Pages/Media%20Center/News%20And%20Events/Allitems.aspx"},
+    # NB: прежний вывод «SharePoint за авторизацией, безнадёжен» ОПРОВЕРГНУТ живым рендером:
+    # страница публична (200), в Chrome отдаёт ленту со свежими датами (06/07/2026).
+
+    # -- Правки существующих записей: прописанный URL перестал быть лентой --
+    "SPE (Society of Petroleum Engineers)": {"parse_strategy": "request",
+                                             "listing_url": "https://jpt.spe.org/topic/spe-news"},
+    # ВАЖНО: НЕ ставить listing_url на www.spe.org/en/about/news/ — там лента живая, но статьи
+    # ведут на jpt.spe.org, а _build_candidate_from_anchor (request_parser.py:280) жёстко
+    # отбрасывает ссылки на чужой хост → 0 кандидатов. Листинг обязан жить на том же домене,
+    # что и статьи. RSS у jpt.spe.org мёртвый (0 items, lastBuildDate 2021).
+
+    # ==== Ревизия 2026-07-17: РФ-источники ====
+    # Все они парсили ГЛАВНУЮ (listing_url не задан → фоллбэк на url), т.е. собирали навигацию.
+    "Сургутнефтегаз": {"parse_strategy": "request",
+                       "listing_url": "https://www.surgutneftegas.ru/press-center/press_releases/"},
+    "Новатэк": {"parse_strategy": "request",
+                "listing_url": "https://www.novatek.ru/ru/press/releases/"},
+    "Сибур": {"parse_strategy": "request",
+              "listing_url": "https://www.sibur.ru/ru/press-center/news-and-press/"},
+    "Росатом": {"parse_strategy": "request",
+                "listing_url": "https://rosatom.ru/press_center/news/"},
+    "Ростех": {"parse_strategy": "rss", "rss_url": "https://rostec.ru/rss-yandex/"},  # 50 items, свежие
+    "Уфимский государственный нефтяной технический университет": {
+        "parse_strategy": "request", "listing_url": "https://rusoil.net/ru/news"},
+    "СПбГУ": {"parse_strategy": "rss", "rss_url": "https://spbu.ru/news-events.xml"},
+    "МГУ": {"parse_strategy": "playwright", "listing_url": "https://www.msu.ru/news/"},  # сайт — SPA
+
+    # -- Гос-агентства: сайты таймаутят с прода (20с×3), но у них есть официальные telegram-каналы --
+    # Telegram с РФ-сервера работает С ПЕРЕБОЯМИ (в логах бывает Network is unreachable), но
+    # 7 telegram-источников живы и свежие — канал надёжнее, чем таймаутящий сайт.
+    "Минпромторг РФ": {"parse_strategy": "telegram", "url": "https://t.me/minpromtorg_ru"},
+    "Росстандарт": {"parse_strategy": "telegram", "url": "https://t.me/rosstandart"},
+    "АЦ ТЭК": {"parse_strategy": "telegram", "url": "https://t.me/actekactek"},
+
     # Группа 🟡 (Playwright рендерит, нужен правильный news-URL) — добавляем после проверки:
     # "Weatherford": {"parse_strategy": "playwright", "listing_url": "..."},
-    # "OPEC": {"parse_strategy": "playwright", "listing_url": "..."},
-    # "Kuwait Oil Company": {"parse_strategy": "playwright", "listing_url": "..."},
     # "BCG Energy": {"parse_strategy": "playwright", "listing_url": "..."},
 }
 
