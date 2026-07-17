@@ -439,6 +439,30 @@ describe("App smoke", () => {
     expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
   });
 
+  // Прототипы будущих разделов — СКРЫТЫЕ экраны: открываются только по прямой ссылке и НЕ
+  // появляются в навигации. Это контракт безопасности: внутри рабочей админки они показывают
+  // ВЫМЫШЛЕННЫЕ данные, и случайно вынести их в меню (где их примут за настоящую аналитику) нельзя.
+  it.each([
+    ["tech-preview", "Технологии"],
+    ["analytics-preview", "Аналитика для БРБ"],
+  ])("открывает прототип ?screen=%s по ссылке и не показывает его в навигации", async (screenId, heading) => {
+    window.history.replaceState(null, "", `/?screen=${screenId}`);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    // Прототип грузится отдельным чанком (lazy) — ждём его появления.
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+    // Данные вымышленные — плашка обязана быть на экране.
+    expect(screen.getByText("Прототип · демонстрационные данные")).toBeInTheDocument();
+    // И в меню прототипа быть не должно.
+    expect(screen.queryByRole("button", { name: heading })).not.toBeInTheDocument();
+  });
+
   // Плитки статусов должны показывать серверные счётчики (status_counts по всей базе),
   // а не клиентский подсчёт по загруженной странице. Мок /api/stats отдаёт noise=999 и
   // duplicate=7, тогда как среди 3 загруженных статей нет ни одной 'noise'/'duplicate' —

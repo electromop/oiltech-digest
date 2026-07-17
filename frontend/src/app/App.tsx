@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { listArticles } from "../api/articles";
 import { ApiError } from "../api/client";
 import { getSession, login, logout, register } from "../api/auth";
@@ -13,10 +13,26 @@ import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { UsersPage } from "../features/users/UsersPage";
 
-type ScreenId = "articles" | "digest" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance";
+// Прототипы грузятся ОТДЕЛЬНЫМИ чанками (lazy): это статичные макеты, которые открывают по прямой
+// ссылке считаные разы, и рабочее приложение не должно тащить их вес на каждой загрузке.
+const AnalyticsPreview = lazy(() =>
+  import("../features/previews/AnalyticsPreview").then((m) => ({ default: m.AnalyticsPreview })),
+);
+const TechnologiesPreview = lazy(() =>
+  import("../features/previews/TechnologiesPreview").then((m) => ({ default: m.TechnologiesPreview })),
+);
+
+type ScreenId =
+  | "articles" | "digest" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
-const ADMIN_SCREENS = new Set<ScreenId>(["sources", "scoring", "tags", "users", "jobs", "maintenance"]);
+// Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
+// случайно открыть обычный пользователь и принять за настоящую аналитику.
+const ADMIN_SCREENS = new Set<ScreenId>([
+  "sources", "scoring", "tags", "users", "jobs", "maintenance",
+  "analytics-preview", "tech-preview",
+]);
 
 type ScreenDef = {
   id: ScreenId;
@@ -111,6 +127,10 @@ function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
   if (value === "jobs") return "jobs";
   if (value === "maintenance") return "maintenance";
+  // Прототипы будущих разделов: намеренно НЕ в navGroups — открываются только по прямой ссылке
+  // (?screen=analytics-preview / ?screen=tech-preview) и не меняют рабочую навигацию.
+  if (value === "analytics-preview") return "analytics-preview";
+  if (value === "tech-preview") return "tech-preview";
   return "articles";
 }
 
@@ -220,6 +240,23 @@ export function App() {
 
   if (activeScreen === "maintenance") {
     currentScreen = <MaintenancePage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+  }
+
+  // Статичные прототипы будущих разделов (демо-данные, без логики и без обращений к API).
+  if (activeScreen === "analytics-preview") {
+    currentScreen = (
+      <Suspense fallback={<div className="splashScreen">Загружаем прототип…</div>}>
+        <AnalyticsPreview />
+      </Suspense>
+    );
+  }
+
+  if (activeScreen === "tech-preview") {
+    currentScreen = (
+      <Suspense fallback={<div className="splashScreen">Загружаем прототип…</div>}>
+        <TechnologiesPreview />
+      </Suspense>
+    );
   }
 
   if (activeScreen === "users") {

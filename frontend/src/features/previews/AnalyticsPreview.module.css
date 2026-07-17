@@ -1,0 +1,846 @@
+/* Превью-экран «Аналитика для БРБ». Только CSS Modules — классы хешируются,
+   пересечений с globals.css нет. Цвета — токены продукта + палитра графиков. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  color: #0f172a;
+}
+
+/* ---------- Шапка ---------- */
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.titleWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.titleIcon {
+  color: var(--brand);
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+/* Обязательная плашка честности: данные придуманы. */
+.protoBadge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sem-warn-fg);
+  background: var(--sem-warn-bg);
+  border: 1px solid var(--sem-warn-border);
+}
+
+.protoDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: none;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.datePill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  font-size: 13px;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.datePill svg {
+  color: var(--text-muted);
+  flex: none;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+  background: #f8fafc;
+}
+
+.btnPrimary {
+  border-color: transparent;
+  background: var(--brand);
+  color: #ffffff;
+}
+
+.btnPrimary:hover {
+  background: #1e40af;
+  border-color: transparent;
+}
+
+/* ---------- Табы ---------- */
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tab {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.tabActive,
+.tabActive:hover {
+  background: var(--brand);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* ---------- Карточки ---------- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  min-width: 0;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Точка-маркер сущности всегда едет вместе с заголовком, иначе при переносе
+   она остаётся сиротой на отдельной строке. */
+.cardHeadMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.entityDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.cardSub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cardLink {
+  margin-top: auto;
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cardLink:hover {
+  text-decoration: underline;
+}
+
+.placeholder {
+  display: grid;
+  place-items: center;
+  padding: 72px 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  max-width: 460px;
+  margin: 0 auto;
+}
+
+/* ---------- Сетки ---------- */
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1.2fr 0.9fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.row3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr 0.9fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (max-width: 1400px) {
+  .kpiGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .page {
+    padding: 20px 16px;
+  }
+
+  .row2,
+  .row3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .kpiGrid,
+  .row2,
+  .row3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .h1 {
+    font-size: 22px;
+  }
+}
+
+/* ---------- KPI ---------- */
+
+.kpiCard {
+  gap: 8px;
+}
+
+.kpiTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kpiIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.kpiLabel {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+.kpiValueRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kpiValue {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpiCaption {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 34px;
+  margin-top: 2px;
+  overflow: visible;
+}
+
+/* ---------- Чипы ---------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.chipOk {
+  color: var(--sem-ok-fg);
+  background: var(--sem-ok-bg);
+  border-color: var(--sem-ok-border);
+}
+
+.chipBrand {
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: rgba(29, 78, 216, 0.18);
+}
+
+.deltaNone {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* ---------- Легенда ---------- */
+
+.legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+}
+
+/* ---------- Линейный график ---------- */
+
+.chartWrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gridLine {
+  stroke: rgba(148, 163, 184, 0.18);
+  stroke-width: 1;
+}
+
+.axisText {
+  font-size: 11px;
+  fill: var(--text-muted);
+}
+
+.crosshair {
+  stroke: rgba(148, 163, 184, 0.55);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.tooltip {
+  position: absolute;
+  top: 4px;
+  z-index: 2;
+  pointer-events: none;
+  min-width: 168px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+.tooltipFlip {
+  transform: translateX(-100%) translateX(-10px);
+}
+
+.tooltipDate {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+
+.tooltipValue {
+  margin-left: auto;
+  font-weight: 600;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Горизонтальные бары ---------- */
+
+.barList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(44px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+}
+
+.barRow:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+/* Подпись переносится, а не обрезается: в узкой колонке многоточие съедало
+   больше половины названий направлений. */
+.barLabel {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text-soft);
+}
+
+.barTrack {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.barFill {
+  height: 8px;
+  border-radius: 0 4px 4px 0;
+}
+
+.barValue {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 38px;
+}
+
+/* ---------- Карта регионов ---------- */
+
+.mapCard {
+  container-type: inline-size;
+}
+
+.mapBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@container (min-width: 420px) {
+  .mapBody {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  }
+}
+
+.mapFigure {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.map {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Контур обязателен: у слабых регионов заливка почти белая и без обводки
+   они сливаются с подложкой. */
+.mapBlob {
+  stroke: rgba(15, 23, 42, 0.14);
+  stroke-width: 1;
+  cursor: default;
+}
+
+.mapBlob:hover {
+  stroke: #0f172a;
+  stroke-width: 1.5;
+}
+
+.rampRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.rampBar {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.rampCell {
+  flex: 1;
+}
+
+.regionList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.regionRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+}
+
+.regionRow:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.regionName {
+  font-size: 12px;
+  color: var(--text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.regionValue {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ---------- Списки строк (возможности / watch-list / отчёты / сигналы) ---------- */
+
+.rowList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.listRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  margin: 0 -8px;
+  border-radius: 10px;
+}
+
+.listRow:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.tile {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.rowTitle {
+  font-size: 12px;
+  color: #0f172a;
+  line-height: 1.35;
+}
+
+.rowCaption {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.rowMeta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.star {
+  color: var(--sem-warn-fg);
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+/* Сегментированный переключатель watch-list */
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.segBtn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segBtn:hover {
+  color: #0f172a;
+}
+
+.segBtnActive,
+.segBtnActive:hover {
+  background: var(--surface-strong);
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.segPlaceholder {
+  padding: 20px 4px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------- Тренды (нумерованные строки) ---------- */
+
+.rank {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Бизнес-сигналы (иконка + счётчик + дельта) ---------- */
+
+.signalRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.signalCount {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+  text-align: right;
+}
+
+/* ---------- Сделки ---------- */
+
+.dealList {
+  display: flex;
+  flex-direction: column;
+}
+
+.dealRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 8px;
+  margin: 0 -8px;
+  border-radius: 10px;
+}
+
+.dealRow + .dealRow {
+  border-top: 1px solid var(--line);
+}
+
+.dealRow:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.dealMain {
+  min-width: 0;
+}
+
+.dealTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.dealDesc {
+  font-size: 12px;
+  color: var(--text-soft);
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+.dealRegion {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.dealSide {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.dealAmount {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dealType {
+  font-size: 11px;
+  color: var(--text-soft);
+  margin-top: 2px;
+}
+
+.dealDate {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
