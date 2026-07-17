@@ -440,7 +440,10 @@ def cmd_recheck_dry_show(args: argparse.Namespace) -> None:
     job = repository.get_background_job(args.job_id)
     if job is None:
         raise SystemExit(f"задача {args.job_id} не найдена")
-    applied = ((job.get("result") or {}).get("applied")) or {}
+    # ИМЕННО result_json: get_background_job делает SELECT *, ключи = колонки (schema.sql:305).
+    # Чтение несуществующего "result" молча давало {} → команда всегда ругалась «нет применённого
+    # результата», то есть превью dry-run было недоступно (тот же класс бага, что T3).
+    applied = ((job.get("result_json") or {}).get("applied")) or {}
     if "checked" not in applied:
         raise SystemExit(f"у задачи {args.job_id} нет применённого результата "
                          f"(status={job.get('status')}; это завершённая dry-run задача?)")

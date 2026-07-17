@@ -1007,7 +1007,11 @@ def external_worker_complete(
         if job.get("kind") == "process_articles" and result.get("external_ai"):
             result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id)}
         if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
-            job_payload = job.get("payload") or {}
+            # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи —
+            # это колонки таблицы (schema.sql:304). Ключа "payload" в строке НЕТ, и чтение его
+            # молча давало {} → mark/dry_run/force всегда False → recheck удалял статьи ФИЗИЧЕСКИ
+            # вопреки запрошенному мягкому режиму (баг T3, так уже потеряли ~2000 статей).
+            job_payload = job.get("payload_json") or {}
             force = bool(job_payload.get("force", False))
             dry_run = bool(job_payload.get("dry_run", False))
             mark = bool(job_payload.get("mark", False))
