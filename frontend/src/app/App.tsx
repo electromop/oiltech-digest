@@ -97,6 +97,22 @@ const screens: ScreenDef[] = [
     description: "Управление учётными записями и ролями (только для администратора).",
     status: "Экран активен",
   },
+  {
+    id: "tech-preview",
+    label: "Технологии",
+    eyebrow: "Prototype",
+    title: "Технологии",
+    description: "Статичный прототип каталога технологий: демонстрационные данные, без логики.",
+    status: "Прототип",
+  },
+  {
+    id: "analytics-preview",
+    label: "Аналитика для БРБ",
+    eyebrow: "Prototype",
+    title: "Аналитика для БРБ",
+    description: "Статичный прототип раздела аналитики: демонстрационные данные, без логики.",
+    status: "Прототип",
+  },
 ];
 
 const appHighlights = [
@@ -121,17 +137,22 @@ const navGroups: NavGroup[] = [
     label: "Администрирование",
     screens: ["users"],
   },
+  // Прототипы будущих разделов. Оба экрана в ADMIN_SCREENS, поэтому у не-админа фильтр ниже
+  // (isAdmin || !ADMIN_SCREENS.has(sid)) вычистит их, visibleScreens станет пустым и вся группа
+  // не отрисуется — обычный пользователь даже не увидит, что она существует.
+  {
+    label: "Прототипы",
+    screens: ["tech-preview", "analytics-preview"],
+  },
 ];
+
+// Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
+// прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
-  if (value === "jobs") return "jobs";
-  if (value === "maintenance") return "maintenance";
-  // Прототипы будущих разделов: намеренно НЕ в navGroups — открываются только по прямой ссылке
-  // (?screen=analytics-preview / ?screen=tech-preview) и не меняют рабочую навигацию.
-  if (value === "analytics-preview") return "analytics-preview";
-  if (value === "tech-preview") return "tech-preview";
-  return "articles";
+  return URL_ADDRESSABLE.find((id) => id === value) ?? "articles";
 }
 
 export function App() {
@@ -279,11 +300,11 @@ export function App() {
 
   function switchScreen(screenId: ScreenId) {
     setActiveScreen(screenId);
-    if (screenId === "jobs" || screenId === "maintenance") {
+    if (URL_ADDRESSABLE.includes(screenId)) {
       window.history.replaceState(null, "", `?screen=${screenId}`);
       return;
     }
-    if (window.location.search.includes("screen=jobs") || window.location.search.includes("screen=maintenance")) {
+    if (URL_ADDRESSABLE.some((id) => window.location.search.includes(`screen=${id}`))) {
       window.history.replaceState(null, "", window.location.pathname || "/");
     }
   }
