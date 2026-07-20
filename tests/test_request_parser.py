@@ -200,3 +200,35 @@ def test_parse_source_not_frozen_when_listing_hash_unchanged(monkeypatch):
 
     assert stats["added"] == 1
     assert inserted[0]["url"] == candidate.url
+
+
+# Реальный листинг Сургутнефтегаза: ссылки на статьи идут СО СЛЭШЕМ на конце.
+# Так устроены многие корпоративные РФ-сайты (Bitrix): без слэша сервер отдаёт 404.
+SLASH_HOME_HTML = """
+<html><body>
+  <a href="/">На главную</a>
+  <a href="/press-center/press_releases/">Все пресс-релизы</a>
+  <a href="/press-center/press_releases/preduprezhdenie-o-moshennicheskikh-deystviyakh/">
+     Предупреждение о мошеннических действиях в отношении партнёров компании</a>
+</body></html>
+"""
+
+
+def test_extract_candidate_links_keeps_trailing_slash():
+    """Финальный слэш в адресе статьи сохраняется — иначе сайт отдаёт 404.
+
+    Баг (найден на проде 20.07): путь резался через parts.path.rstrip('/'), и парсер шёл
+    за статьёй по адресу БЕЗ слэша. Сургутнефтегаз на такой адрес отвечает 404 —
+    листинг читался, кандидаты извлекались, а статей добавлялось 0 (источник выглядел
+    «замолчавшим»). Срез слэша нужен был только чтобы отсеять главную, поэтому он
+    остаётся в ПРОВЕРКЕ, но не в самом URL.
+    """
+    items = request_parser.extract_candidate_links("https://www.surgutneftegas.ru", SLASH_HOME_HTML, limit=10)
+    urls = [item.url for item in items]
+
+    assert "https://www.surgutneftegas.ru/press-center/press_releases/preduprezhdenie-o-moshennicheskikh-deystviyakh/" in urls, (
+        "слэш срезан → сайт вернёт 404 и статья не добавится"
+    )
+    # Главная по-прежнему не считается статьёй (ради этого и был rstrip).
+    assert "https://www.surgutneftegas.ru/" not in urls
+    assert "https://www.surgutneftegas.ru" not in urls

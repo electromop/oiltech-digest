@@ -284,12 +284,22 @@ def _build_candidate_from_anchor(home_url: str, base_host: str, node) -> Candida
     # схлопывались в URL раздела, и «Читать далее» в дайджесте вёл на сайт, а не на
     # конкретную новость (бэклог заказчика #3). Трекинговые параметры отсекаем.
     query = _clean_query(parts.query)
-    path = parts.path.rstrip("/")
+    # Финальный слэш СОХРАНЯЕМ: на многих корпоративных РФ-сайтах (Bitrix) адрес без него
+    # отдаёт 404 — листинг читается, кандидаты извлекаются, а статей добавляется 0, и
+    # источник выглядит «замолчавшим» (поймано на проде у Сургутнефтегаза 20.07).
+    # rstrip нужен был только чтобы отсеять главную («/» → пусто), поэтому он остаётся
+    # в ПРОВЕРКЕ ниже, но не в самом URL, по которому мы идём за статьёй.
+    path = parts.path
+    if path == "/":
+        # Корень схлопываем в пустой путь — как было раньше. Иначе query-only ссылки
+        # (https://site?p=678) сменили бы форму на https://site/?p=678, а articles.url
+        # уникален → уже сохранённые статьи вставились бы заново как дубликаты.
+        path = ""
     clean_url = f"{parts.scheme}://{parts.netloc}{path}"
     if query:
         clean_url += f"?{query}"
     # Главная/раздел без статейного таргета (нет ни пути, ни query) — не статья.
-    if not path and not query:
+    if not path.rstrip("/") and not query:
         return None
     title = normalize.clean_html(node.text_content())
     if len(title) < 18:
