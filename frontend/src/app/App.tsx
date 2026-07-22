@@ -5,6 +5,7 @@ import { getSession, login, logout, register } from "../api/auth";
 import { getDashboardStats } from "../api/stats";
 import type { Article, DashboardStats, User } from "../api/types";
 import { ArticlesPage } from "../features/articles/ArticlesPage";
+import { BacklogPage } from "../features/backlog/BacklogPage";
 import { DigestPage } from "../features/digest/DigestPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
@@ -115,6 +116,7 @@ function initialScreenFromUrl(): ScreenId {
 }
 
 export function App() {
+  const isTasksApp = window.location.pathname.replace(/\/+$/, "") === "/tasks";
   const [activeScreen, setActiveScreen] = useState<ScreenId>(initialScreenFromUrl);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -246,7 +248,7 @@ export function App() {
       window.history.replaceState(null, "", `?screen=${screenId}`);
       return;
     }
-    if (window.location.search.includes("screen=jobs") || window.location.search.includes("screen=maintenance")) {
+    if (window.location.search.includes("screen=")) {
       window.history.replaceState(null, "", window.location.pathname || "/");
     }
   }
@@ -256,7 +258,9 @@ export function App() {
       setAuthLoading(true);
       const payload = await getSession();
       setUser(payload.user);
-      await loadDashboardData();
+      if (!isTasksApp) {
+        await loadDashboardData();
+      }
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 401) {
         showToast(error instanceof Error ? error.message : "Не удалось загрузить сессию", "error");
@@ -271,7 +275,9 @@ export function App() {
     try {
       const payload = authMode === "register" ? await register(email.trim(), password) : await login(email.trim(), password);
       setUser(payload.user);
-      await loadDashboardData();
+      if (!isTasksApp) {
+        await loadDashboardData();
+      }
       setPassword("");
       showToast(authMode === "register" ? "Регистрация завершена" : "Вход выполнен");
     } catch (error) {
@@ -310,11 +316,13 @@ export function App() {
       <div className="authShellReact">
         <div className="authCardReact">
           <div className="eyebrow">OilTech Digest</div>
-          <h1>{authMode === "register" ? "Регистрация" : "Вход в админ-панель"}</h1>
+          <h1>{authMode === "register" ? "Регистрация" : isTasksApp ? "Вход в трекер задач" : "Вход в админ-панель"}</h1>
           <p>
             {authMode === "register"
-              ? "Создайте аккаунт, чтобы работать с сигналами, дайджестами и источниками."
-              : "Войдите в аккаунт, чтобы продолжить работу с редакторской панелью."}
+              ? "Создайте аккаунт, чтобы работать с задачами и редакторскими инструментами."
+              : isTasksApp
+                ? "Войдите в аккаунт, чтобы открыть скрытую доску проекта."
+                : "Войдите в аккаунт, чтобы продолжить работу с редакторской панелью."}
           </p>
           <label className="field">
             <span>Эл. почта</span>
@@ -345,6 +353,32 @@ export function App() {
             </button>
           </div>
         </div>
+        {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
+      </div>
+    );
+  }
+
+  if (isTasksApp) {
+    return (
+      <div className="tasksAppShell">
+        <header className="tasksAppTopbar">
+          <div className="brand">
+            <div className="brandMark">OT</div>
+            <div className="brandText">
+              <div className="brandTitle">OilTech Digest</div>
+              <div className="brandSubtitle">Трекер задач</div>
+            </div>
+          </div>
+          <div className="panelActions">
+            <div className="statusPill">{user.email}</div>
+            <button type="button" className="ghostButton compactButton" onClick={() => void handleLogout()}>
+              Выйти
+            </button>
+          </div>
+        </header>
+        <main className="tasksAppContent">
+          <BacklogPage onUnauthorized={() => setUser(null)} showToast={showToast} />
+        </main>
         {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
       </div>
     );

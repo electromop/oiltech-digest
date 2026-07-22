@@ -7,19 +7,20 @@ from decimal import Decimal
 import hashlib
 import hmac
 import logging
+import os
 from pathlib import Path
 import secrets
 import time
 from typing import Any
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, background_jobs, config
+from oiltech_digest import auth, background_jobs, backlog, config
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
@@ -175,6 +176,16 @@ class MaintenanceCleanupRequest(BaseModel):
     export_job_days: int | None = None
 
 
+class BacklogTaskCreate(BaseModel):
+    title: str
+    priority: str = "P3"
+    status: str = "new"
+
+
+class BacklogTaskPatch(BaseModel):
+    status: str
+
+
 class ExternalWorkerClaimRequest(BaseModel):
     worker_id: str
     queues: list[str] = []
@@ -277,7 +288,17 @@ class UserUpdate(BaseModel):
 
 
 @app.get("/")
-def index() -> FileResponse:
+def index() -> FileResponse | RedirectResponse:
+    if os.environ.get("TASKS_APP_MODE") == "1":
+        return RedirectResponse("/tasks", status_code=307)
+    if (FRONTEND_DIST_DIR / "index.html").exists():
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")
+    return FileResponse(WEB_DIR / "app.html")
+
+
+@app.get("/tasks")
+@app.get("/tasks/")
+def tasks_app() -> FileResponse:
     if (FRONTEND_DIST_DIR / "index.html").exists():
         return FileResponse(FRONTEND_DIST_DIR / "index.html")
     return FileResponse(WEB_DIR / "app.html")
@@ -524,6 +545,33 @@ def list_articles(
 def dashboard_stats(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Authoritative dashboard counters, computed over the full database."""
     return _clean(repository.dashboard_stats(int(user["id"])))
+
+
+@app.get("/api/backlog")
+def backlog_endpoint(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    return backlog.read_backlog()
+
+
+@app.post("/api/backlog/tasks")
+def create_backlog_task_endpoint(payload: BacklogTaskCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    try:
+        return backlog.create_plan_task(payload.title, priority=payload.priority, status=payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/backlog/tasks/{task_id}")
+def update_backlog_task_endpoint(
+    task_id: str,
+    payload: BacklogTaskPatch,
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    try:
+        return backlog.update_task_status(task_id, payload.status)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.patch("/api/articles/{article_id}")

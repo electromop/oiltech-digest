@@ -123,6 +123,32 @@ button {
   grid-template-columns: 96px minmax(0, 1fr);
 }
 
+.tasksAppShell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.tasksAppTopbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px clamp(14px, 2vw, 24px);
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(16px);
+}
+
+.tasksAppContent {
+  width: min(1680px, 100%);
+  margin: 0 auto;
+  padding: 18px clamp(14px, 2vw, 24px) 28px;
+}
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -447,6 +473,10 @@ button {
 .fullWidth {
   width: 100%;
   margin-top: 10px;
+}
+
+.compactField {
+  min-width: 180px;
 }
 
 .accentPanel {
@@ -1366,6 +1396,152 @@ button {
   color: #b91c1c;
 }
 
+.backlogStats {
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+}
+
+.backlogStats .statCardReact strong {
+  display: block;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.backlogStats .statCardReact span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.backlogComposer {
+  display: grid;
+  gap: 14px;
+}
+
+.backlogCreateGrid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 120px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.backlogBoard {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.backlogColumn {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.72);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.backlogColumnHeader {
+  min-height: 42px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.backlogColumnHeader h3 {
+  margin: 0;
+  font-size: 0.96rem;
+  line-height: 1.15;
+}
+
+.backlogColumnHeader span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.backlogColumnHeader strong {
+  min-width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  color: var(--brand);
+  border: 1px solid rgba(29, 78, 216, 0.16);
+}
+
+.backlogColumnList {
+  display: grid;
+  gap: 9px;
+}
+
+.backlogCard {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.backlogCard.tech {
+  border-left: 3px solid #eab308;
+}
+
+.backlogCard.inbox {
+  border-left: 3px solid #38bdf8;
+}
+
+.backlogCardTop,
+.backlogMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.backlogCard h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.28;
+}
+
+.backlogCard p {
+  margin: 0;
+  color: #475569;
+  font-size: 0.82rem;
+  line-height: 1.38;
+}
+
+.backlogSection,
+.backlogMeta {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.backlogCard .field select {
+  width: 100%;
+}
+
+.backlogEmpty {
+  min-height: 68px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.5);
+}
+
 .compactButton {
   min-height: 28px;
   padding: 0 9px;
@@ -2274,7 +2450,10 @@ button {
   .sourceFiltersGrid,
   .digestFiltersGrid,
   .articlesFiltersGrid,
-  .jobsFilters {
+  .jobsFilters,
+  .backlogStats,
+  .backlogCreateGrid,
+  .backlogBoard {
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   }
 
@@ -2353,6 +2532,9 @@ button {
   .sourceCreateGrid,
   .sourceFiltersGrid,
   .jobsFilters,
+  .backlogStats,
+  .backlogCreateGrid,
+  .backlogBoard,
   .maintenanceGrid,
   .digestFiltersGrid,
   .digestFiltersRow,

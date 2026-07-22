@@ -56,9 +56,38 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
+      - ./BACKLOG.md:/app/BACKLOG.md
       - exports:/app/exports
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  tasks:
+    build: .
+    container_name: oiltech_tasks
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oiltech}:${POSTGRES_PASSWORD:-oiltech_local_dev}@db:5432/${POSTGRES_DB:-oiltech_digest}
+      PYTHONUNBUFFERED: "1"
+      BACKGROUND_JOB_INLINE: "0"
+      TASKS_APP_MODE: "1"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - ./BACKLOG.md:/app/BACKLOG.md
+      - exports:/app/exports
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/tasks', timeout=5).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
