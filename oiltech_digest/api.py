@@ -308,6 +308,7 @@ def _set_session_cookie(response: Response, session_token: str) -> None:
         key=config.AUTH_COOKIE_NAME,
         value=session_token,
         httponly=True,
+        secure=config.AUTH_COOKIE_SECURE,
         samesite="lax",
         max_age=config.AUTH_SESSION_DAYS * 24 * 60 * 60,
     )
@@ -898,7 +899,7 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
 
 
 @app.post("/api/jobs/process")
-def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def enqueue_process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     if payload.limit < 1 or payload.limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
     decision = network_policy.route_ai_processing()
@@ -1131,7 +1132,7 @@ def digest_export(
 
 
 @app.post("/api/process")
-def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     client = make_client(payload.offline)
     if payload.article_ids:
         articles = repository.get_articles_by_ids(payload.article_ids, include_summary=False)

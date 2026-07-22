@@ -33,9 +33,10 @@ class AIResponse:
 
     @property
     def cost_usd(self) -> float:
+        input_rate, output_rate = config.price_for_model(self.model)
         return (
-            self.input_tokens * config.OPENAI_INPUT_USD_PER_MTOK
-            + self.output_tokens * config.OPENAI_OUTPUT_USD_PER_MTOK
+            self.input_tokens * input_rate
+            + self.output_tokens * output_rate
         ) / 1_000_000
 
 

@@ -298,3 +298,27 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     assert content["news"][0]["score"] == state["total_score"]
     assert content["news"][0]["summary"]
     assert not content["news"][0]["summary"].startswith(article["title"] + ":")
+
+
+def test_ai_response_cost_is_per_model():
+    """cost_usd должен считаться по прайсу КОНКРЕТНОЙ модели (тех-долг T4),
+    а не единой ставкой nano для всех."""
+    tok = dict(input_tokens=1_000_000, output_tokens=1_000_000)
+    flagship = AIResponse(data={}, model="gpt-5.5-2026-04-23", **tok)
+    mini = AIResponse(data={}, model="gpt-5-mini-2025-08-07", **tok)
+    nano = AIResponse(data={}, model="gpt-5-nano-2025-08-07", **tok)
+
+    # Порядок стоимости отражает реальность: флагман дороже mini дороже nano.
+    assert flagship.cost_usd > mini.cost_usd > nano.cost_usd
+    # gpt-5.5 = (5 + 30) USD за 1М+1М токенов; nano = (0.05 + 0.40).
+    assert abs(flagship.cost_usd - 35.0) < 1e-9
+    assert abs(nano.cost_usd - 0.45) < 1e-9
+
+
+def test_ai_response_cost_unknown_model_falls_back():
+    """Неизвестная модель → откат на дефолтные ставки config (env-независимо), а не падение."""
+    from oiltech_digest import config
+
+    response = AIResponse(data={}, model="some-future-model", input_tokens=1_000_000, output_tokens=1_000_000)
+    expected = config.OPENAI_INPUT_USD_PER_MTOK + config.OPENAI_OUTPUT_USD_PER_MTOK
+    assert abs(response.cost_usd - expected) < 1e-9

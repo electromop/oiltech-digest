@@ -1388,3 +1388,64 @@ def test_maintenance_benchmark_endpoint(monkeypatch):
     assert captured["articles_limit"] == 150
     assert response.json()["counts"]["articles"] == 42
     assert response.json()["benchmarks"][0]["name"] == "articles_list"
+
+
+def test_process_endpoints_require_admin():
+    """Тех-долг T7: /api/process и /api/jobs/process тратят платный OpenAI —
+    должны быть admin-only, обычному пользователю 403."""
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 2, "email": "user@example.com", "role": "user"}
+    try:
+        client = TestClient(app)
+        r_enqueue = client.post("/api/jobs/process", json={"limit": 5})
+        r_process = client.post("/api/process", json={"limit": 5})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert r_enqueue.status_code == 403
+    assert r_process.status_code == 403
+
+
+def test_process_endpoints_allow_admin(monkeypatch):
+    """Админ проходит гейт прав (не 403) — enqueue замокан, без реального OpenAI/БД."""
+    import types
+
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "admin@example.com", "role": "admin"}
+    monkeypatch.setattr(
+        api.network_policy,
+        "route_ai_processing",
+        lambda: types.SimpleNamespace(queue_name="default", execution_region="ru", capability=None),
+    )
+    monkeypatch.setattr(api.background_jobs, "enqueue", lambda *a, **k: {"id": 1, "kind": "process_articles", "status": "queued"})
+    monkeypatch.setattr(api, "_job_payload", lambda job: job)
+    try:
+        client = TestClient(app)
+        r_enqueue = client.post("/api/jobs/process", json={"limit": 5})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert r_enqueue.status_code != 403
+    assert r_enqueue.status_code == 200
+
+
+def test_session_cookie_secure_follows_config(monkeypatch):
+    """Тех-долг T8: при AUTH_COOKIE_SECURE=True (прод/HTTPS) cookie получает Secure;
+    при False (локалка/http) — нет. HttpOnly всегда."""
+    from fastapi import Response
+
+    from oiltech_digest import config
+
+    monkeypatch.setattr(config, "AUTH_COOKIE_SECURE", True)
+    secure_resp = Response()
+    api._set_session_cookie(secure_resp, "token-abc")
+    secure_cookie = secure_resp.headers.get("set-cookie", "")
+    assert "Secure" in secure_cookie
+    assert "HttpOnly" in secure_cookie
+
+    monkeypatch.setattr(config, "AUTH_COOKIE_SECURE", False)
+    plain_resp = Response()
+    api._set_session_cookie(plain_resp, "token-abc")
+    plain_cookie = plain_resp.headers.get("set-cookie", "")
+    assert "Secure" not in plain_cookie
+    assert "HttpOnly" in plain_cookie

@@ -8,8 +8,13 @@ import pytest
 from oiltech_digest.db import connection
 from oiltech_digest.db import repository
 from oiltech_digest import api
+from oiltech_digest import config
 from oiltech_digest.config import DATABASE_URL
 from oiltech_digest.ingestion import source_overrides
+
+# Тесты ходят через TestClient по http:// — браузерный cookie-jar не вернёт Secure-cookie
+# по незащищённому соединению, что ломает роундтрип логина. В проде (HTTPS) флаг остаётся True.
+config.AUTH_COOKIE_SECURE = False
 
 
 @pytest.fixture()

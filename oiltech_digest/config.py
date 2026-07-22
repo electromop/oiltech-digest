@@ -137,11 +137,39 @@ OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").st
 OPENAI_SCORE_MODEL = os.environ.get("OPENAI_SCORE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SCORE_REASONING = os.environ.get("OPENAI_SCORE_REASONING", "").strip() or "medium"
 
-# USD per 1M tokens. Defaults follow the model docs snapshot used when this code
-# was written; override in .env if pricing changes or another model is selected.
+# USD per 1M tokens. Fallback-ставки, если модель не найдена в таблице ниже.
+# Дефолт (0.05/0.40) — это прайс gpt-5-nano; для конкретных моделей берётся
+# OPENAI_MODEL_PRICES, иначе экран «AI-затраты» занижает стоимость в разы.
 OPENAI_INPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_INPUT_USD_PER_MTOK", "0.05"))
 OPENAI_OUTPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_OUTPUT_USD_PER_MTOK", "0.40"))
+
+# Пер-модельные ставки USD за 1М токенов (input, output). РАНЬШЕ cost_usd считался
+# ЕДИНЫМ прайсом (ставкой nano) для всех моделей → gpt-5-mini занижался ~15×,
+# gpt-5.5 ~100× (тех-долг T4). Матчинг по префиксу имени: в БД модель хранится
+# с датой-суффиксом ("gpt-5.5-2026-04-23"), поэтому сравниваем startswith, и более
+# длинный/специфичный префикс выигрывает ("gpt-5-mini" раньше гипотетического "gpt-5").
+OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "gpt-5.5": (5.0, 30.0),
+    "gpt-5.4": (2.5, 15.0),
+    "gpt-5-mini": (0.75, 4.5),
+    "gpt-5-nano": (0.05, 0.40),
+}
+
+
+def price_for_model(model: str | None) -> tuple[float, float]:
+    """USD/1М-токенов (input, output) для модели по префиксу имени.
+    Откат на OPENAI_INPUT/OUTPUT_USD_PER_MTOK, если модель не в таблице."""
+    if model:
+        for prefix in sorted(OPENAI_MODEL_PRICES, key=len, reverse=True):
+            if model.startswith(prefix):
+                return OPENAI_MODEL_PRICES[prefix]
+    return (OPENAI_INPUT_USD_PER_MTOK, OPENAI_OUTPUT_USD_PER_MTOK)
+
 
 # --- Auth ---
 AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")
 AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))
+# Флаг Secure на сессионной cookie. Прод за HTTPS (Caddy) → должно быть True (тех-долг T8).
+# Для локальной разработки по http:// выставить AUTH_COOKIE_SECURE=0, иначе браузер
+# не сохранит cookie и вход не сработает.
+AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower() in ("1", "true", "yes", "on")
