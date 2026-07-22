@@ -10,7 +10,7 @@ COPY frontend/index.html ./index.html
 COPY frontend/src ./src
 
 RUN npm ci
-RUN npm run build
+RUN npm exec vite build
 
 
 FROM python:3.13-slim
@@ -30,6 +30,7 @@ RUN python -m playwright install --with-deps chromium
 
 # Код приложения и статика админки
 COPY oiltech_digest ./oiltech_digest
+COPY BACKLOG.md ./BACKLOG.md
 COPY web ./web
 COPY --from=frontend-build /frontend/dist ./frontend/dist
 COPY scripts ./scripts

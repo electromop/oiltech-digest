@@ -127,6 +127,27 @@ export type DashboardStats = {
   status_counts?: Record<Article["status"], number>;
 };
 
+export type BacklogTaskStatus = "new" | "in_progress" | "done" | "paused" | "rejected";
+
+export type BacklogTask = {
+  id: string;
+  section: "plan" | "tech" | "inbox";
+  priority: string;
+  title: string;
+  status: BacklogTaskStatus;
+  status_label: string;
+  updated: string;
+  area?: string | null;
+  details?: string | null;
+};
+
+export type BacklogPayload = {
+  tasks: BacklogTask[];
+  counts: Record<BacklogTaskStatus, number>;
+  backlog_path: string;
+  updated_at: string;
+};
+
 export type BackgroundJob = {
   id: number;
   kind: string;
