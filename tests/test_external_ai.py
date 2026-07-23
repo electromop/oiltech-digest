@@ -120,3 +120,62 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
     assert [item[0] for item in calls[:4]] == ["summary", "run", "relevance", "run"]
     assert ("run", "scoring") in calls
 
+
+
+def _recheck_result(relevant: bool) -> dict:
+    return {
+        "articles": [
+            {
+                "article_id": 42,
+                "relevance": {
+                    "relevant": relevant,
+                    "reason": "тест",
+                    "model": "gpt-5.5-2026-04-23",
+                    "input_tokens": 1800,
+                    "output_tokens": 120,
+                    "total_tokens": 1920,
+                    "cost_usd": 0.0126,
+                },
+            }
+        ]
+    }
+
+
+def test_recheck_records_ai_run_for_rejected_articles(monkeypatch):
+    """Регресс: вызов гейта оплачен OpenAI и при relevant=false — прогон обязан попасть
+    в ai_processing_runs. Раньше _insert_run стоял только в ветке relevant=True, из-за чего
+    отклонённые (~40% базы) были невидимы для экрана «AI-затраты» (разрыв с дашбордом до 4.5×)."""
+    runs: list[tuple] = []
+    monkeypatch.setattr(external_ai, "_insert_run", lambda *a, **k: runs.append(a))
+    monkeypatch.setattr(external_ai.repository, "mark_article_for_deletion", lambda *a, **k: "marked")
+
+    stats = external_ai.apply_recheck_result(_recheck_result(relevant=False), mark=True)
+
+    assert stats["marked"] == 1
+    assert len(runs) == 1, "прогон по отклонённой статье не записан — счёт снова занижен"
+    assert runs[0][1] == "relevance"
+
+
+def test_recheck_records_ai_run_for_kept_articles(monkeypatch):
+    """Симметрия: у релевантных запись прогона тоже сохраняется (не сломали прежнее поведение)."""
+    runs: list[tuple] = []
+    monkeypatch.setattr(external_ai, "_insert_run", lambda *a, **k: runs.append(a))
+    monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *a, **k: None)
+
+    stats = external_ai.apply_recheck_result(_recheck_result(relevant=True))
+
+    assert stats["kept"] == 1
+    assert len(runs) == 1
+
+
+def test_recheck_skips_run_for_negative_keyword_block(monkeypatch):
+    """Детерминированный стоп-слово-отсев не ходит в OpenAI → прогон писать НЕ надо."""
+    runs: list[tuple] = []
+    monkeypatch.setattr(external_ai, "_insert_run", lambda *a, **k: runs.append(a))
+    monkeypatch.setattr(external_ai.repository, "mark_article_for_deletion", lambda *a, **k: "marked")
+    result = _recheck_result(relevant=False)
+    result["articles"][0]["relevance"]["model"] = "negative-keyword"
+
+    external_ai.apply_recheck_result(result, mark=True)
+
+    assert runs == []

@@ -217,11 +217,17 @@ def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run
             stats["errors"] += len(item.get("errors") or []) or 1
             continue
         stats["checked"] += 1
+        # Прогон пишем ДО ветвления по вердикту: вызов к OpenAI оплачен независимо от того,
+        # релевантна статья или нет. Раньше _insert_run стоял ТОЛЬКО в ветке relevant=True →
+        # гейт-вызовы по ОТКЛОНЁННЫМ статьям (~40% базы) и весь dry_run не попадали в
+        # ai_processing_runs, и экран «AI-затраты» систематически занижал счёт (сверка с
+        # дашбордом OpenAI 2026-07-23 дала разрыв до 4.5× на шумных батчах перепроверки).
+        run_model = relevance.get("model")
+        if run_model and run_model != "negative-keyword":
+            _insert_run(article_id, "relevance", {**relevance, "provider": "openai"}, job_id=job_id)
         if bool(relevance.get("relevant")):
             if not dry_run:
                 repository.set_article_relevance(article_id, True, relevance.get("reason"), relevance.get("model"))
-                if relevance.get("model") and relevance.get("model") != "negative-keyword":
-                    _insert_run(article_id, "relevance", {**relevance, "provider": "openai"}, job_id=job_id)
             stats["kept"] += 1
         elif dry_run:
             stats["deleted"] += 1  # сколько БЫ удалили
