@@ -291,8 +291,8 @@ class UserUpdate(BaseModel):
     password: str | None = None
 
 
-@app.get("/")
-def index() -> FileResponse | RedirectResponse:
+@app.get("/", response_model=None)
+def index():
     if os.environ.get("TASKS_APP_MODE") == "1":
         return RedirectResponse("/tasks", status_code=307)
     if (FRONTEND_DIST_DIR / "index.html").exists():
