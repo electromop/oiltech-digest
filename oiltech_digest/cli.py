@@ -956,8 +956,15 @@ def cmd_jobs_requeue_stale(args: argparse.Namespace) -> None:
         if args.stale_minutes is None
         else args.stale_minutes
     )
-    requeued = repository.requeue_stale_background_jobs(stale_minutes)
-    print(f"jobs-requeue-stale: requeued={requeued}, stale_minutes={stale_minutes}")
+    local = repository.requeue_stale_background_jobs(stale_minutes)
+    external = repository.requeue_expired_external_leases()
+    print(
+        f"jobs-requeue-stale: requeued={local.requeued}, exhausted={local.exhausted}, "
+        f"stale_minutes={stale_minutes}"
+    )
+    print(
+        f"external-leases: requeued={external.requeued}, exhausted={external.exhausted}"
+    )
 
 
 def cmd_external_queues_status(args: argparse.Namespace) -> None:

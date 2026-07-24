@@ -85,14 +85,29 @@ def worker_loop(
     sweep_interval = max(poll_seconds, 30.0)  # переочередь зависших — не чаще раза в ~30с
 
     def _sweep_stale() -> None:
-        requeued = repository.requeue_stale_background_jobs(stale_minutes, finalize_minutes)
-        if requeued:
+        local = repository.requeue_stale_background_jobs(stale_minutes, finalize_minutes)
+        if local.requeued or local.exhausted:
             logger.warning(
-                "jobs_requeued_stale count=%s stale_minutes=%s finalize_minutes=%s queues=%s",
-                requeued,
+                "jobs_requeued_stale requeued=%s exhausted=%s stale_minutes=%s "
+                "finalize_minutes=%s queues=%s",
+                local.requeued,
+                local.exhausted,
                 stale_minutes,
                 finalize_minutes,
                 ",".join(queue_names),
+            )
+        # Внешний контур убирается ПО LEASE, а не по настенным часам, — и делать это надо
+        # по расписанию. Раньше реапер жил только внутри /api/external-worker/claim (T21):
+        # пока воркер занят длинной задачей, он за новой не приходит, значит и протухшие
+        # lease никто не разбирает. Умри воркер совсем — задачи висели бы 'running' вечно,
+        # и интерфейс врал бы про идущую работу. Здесь этот сигнал наконец опрашивается
+        # регулярно, независимо от того, приходит воркер за работой или нет.
+        external = repository.requeue_expired_external_leases()
+        if external.requeued or external.exhausted:
+            logger.warning(
+                "external_leases_reaped requeued=%s exhausted=%s",
+                external.requeued,
+                external.exhausted,
             )
 
     last_sweep = 0.0

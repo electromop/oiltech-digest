@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Literal, NamedTuple, get_args
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -536,27 +536,88 @@ def claim_next_background_job(queue_names: list[str] | None = None) -> dict | No
         return job
 
 
-def requeue_expired_external_leases() -> int:
-    """Return external jobs with expired leases to the queue after worker loss."""
+class RequeueOutcome(NamedTuple):
+    """Итог разбора потерянных задач: сколько вернули в очередь и сколько похоронили."""
+
+    requeued: int
+    exhausted: int
+
+
+def _requeue_or_exhaust(conn, *, lost_where: str, lost_params: tuple, reason: str) -> RequeueOutcome:
+    """Разобрать задачи, признанные потерянными: вернуть в очередь либо закрыть как failed.
+
+    ПЕРЕОЧЕРЕДЬ — ЭТО ТОЖЕ ПОПЫТКА. Пока `attempts` не сверялся с `max_attempts`, задача,
+    которая физически не может завершиться, возвращалась в очередь вечно. Инцидент 24.07:
+    задача 1181 (батч 800 статей) намотала 6 кругов при `max_attempts=3`, каждый круг
+    начиная с первой статьи и заново оплачивая OpenAI, — а потолок попыток не срабатывал
+    никогда, потому что его проверял только `fail_background_job`, до которого дело не доходило.
+    Исчерпавшие лимит уходят в `failed`: дальше решает человек, а не бесконечный ретрай.
+
+    `lost_where` — SQL-предикат «задача потеряна». Он приходит из кода модуля (константа),
+    не из пользовательского ввода; переменная часть предиката передаётся через `lost_params`.
+    Вызывающий отвечает ровно за одно: чем он доказывает потерю. Что делать дальше —
+    политика, и она живёт здесь, в одном месте, для всех контуров.
+    """
+    exhausted = conn.execute(
+        f"""
+        UPDATE background_jobs
+        SET status = 'failed',
+            finished_at = now(),
+            claimed_by = NULL,
+            lease_token_hash = NULL,
+            lease_expires_at = NULL,
+            error_message = %s
+        WHERE ({lost_where})
+          AND attempts >= max_attempts
+        """,
+        (f"{reason}; исчерпаны попытки — автоматически не перезапускаем",) + lost_params,
+    )
+    requeued = conn.execute(
+        f"""
+        UPDATE background_jobs
+        SET status = 'queued',
+            progress = 0,
+            started_at = NULL,
+            claimed_by = NULL,
+            lease_token_hash = NULL,
+            lease_expires_at = NULL,
+            error_message = %s
+        WHERE ({lost_where})
+          AND attempts < max_attempts
+        """,
+        (reason,) + lost_params,
+    )
+    return RequeueOutcome(requeued=requeued.rowcount or 0, exhausted=exhausted.rowcount or 0)
+
+
+# Внешняя задача считается потерянной ТОЛЬКО по отсутствию валидного lease. Это её настоящий
+# признак жизни: воркер шлёт heartbeat перед каждой статьёй, и пока он жив, lease продлевается.
+#
+# NULL здесь тоже потеря, и это НЕ придирка. Раньше у внешней задачи было две страховки:
+# lease и уборщик по настенным часам. Вторую забрали (она и устраивала вечную петлю), значит
+# первая обязана покрыть всё поле. Иначе `running` без lease не подберёт уже никто:
+# `release_external_background_job_finalize` возвращает задачу в 'running' при откате
+# finalize и прямо рассчитывает, что её подберёт «requeue_expired по истечении лиза
+# / requeue_stale». Задача в 'running' без lease не имеет ВООБЩЕ никаких доказательств жизни —
+# это ровно определение потерянной.
+_EXTERNAL_LOST_WHERE = """
+    status = 'running'
+    AND execution_region = 'external'
+    AND (lease_expires_at IS NULL OR lease_expires_at < now())
+"""
+
+
+def requeue_expired_external_leases() -> RequeueOutcome:
+    """Разобрать внешние задачи с протухшим lease — воркер потерян."""
     with get_connection() as conn:
-        cur = conn.execute(
-            """
-            UPDATE background_jobs
-            SET status = 'queued',
-                progress = 0,
-                started_at = NULL,
-                claimed_by = NULL,
-                lease_token_hash = NULL,
-                lease_expires_at = NULL,
-                error_message = 'Requeued after external worker lease expired'
-            WHERE status = 'running'
-              AND execution_region = 'external'
-              AND lease_expires_at IS NOT NULL
-              AND lease_expires_at < now()
-            """
+        outcome = _requeue_or_exhaust(
+            conn,
+            lost_where=_EXTERNAL_LOST_WHERE,
+            lost_params=(),
+            reason="Requeued after external worker lease expired",
         )
         conn.commit()
-        return cur.rowcount or 0
+        return outcome
 
 
 def claim_external_background_job(
@@ -1000,14 +1061,30 @@ def fail_external_background_job(
         return True
 
 
-def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: int | None = None) -> int:
-    """Move old running/finalizing jobs back to queued after a worker/core crash/restart.
+def requeue_stale_background_jobs(
+    stale_minutes: int, finalizing_stale_minutes: int | None = None
+) -> RequeueOutcome:
+    """Разобрать локальные running и любые finalizing, зависшие после краша воркера/core.
 
-    'finalizing' (баг T2) — переходный статус на время применения результата внешней задачи.
-    В норме он живёт секунды; если задача в нём дольше finalizing_stale_minutes (по
-    last_heartbeat_at, выставленному при входе в finalize), значит core упал между
-    застолблением и финишем — возвращаем в очередь. Отдельный (короткий) таймаут: apply
-    не должен длиться как обычный running. lease-поля чистим, чтобы задачу переотдать заново."""
+    Настенные часы по `started_at` — ЗАПАСНАЯ эвристика живости, для задач, у которых
+    настоящего протокола живости нет: локальный воркер исполняет задачу в своём процессе
+    и, падая, не оставляет о себе никакого сигнала, кроме «висит слишком долго».
+
+    У ВНЕШНЕГО контура протокол есть — lease + heartbeat перед каждой статьёй, — и он
+    достовернее любого таймаута. Поэтому внешние `running` здесь не трогаются вовсе; ими
+    занимается `requeue_expired_external_leases`. Раньше этот фильтр стоял только на ветке
+    «пометить failed», а ветка переочереди хватала всё подряд, и комментарий про «внешний
+    контур не трогаем» описывал намерение, которого в коде не было. Итог (инцидент 24.07):
+    внешний батч длиннее stale_minutes переочередивался вопреки живому, только что
+    продлённому lease — воркер получал 409, бросал батч, тут же забирал ту же задачу
+    и начинал с нуля. Ровно раз в час, вечно.
+
+    'finalizing' (баг T2) — переходный статус на время применения результата внешней задачи;
+    он остаётся здесь СОЗНАТЕЛЬНО. В нём работает уже не воркер, а core, heartbeat не идёт,
+    и признак жизни тут действительно временной: `last_heartbeat_at` ставится при входе
+    в finalize, а сам apply обязан занимать секунды. Отдельный короткий таймаут
+    (`finalizing_stale_minutes`) — не «как обычный running».
+    """
     if finalizing_stale_minutes is None:
         finalizing_stale_minutes = stale_minutes
     with get_connection() as conn:
@@ -1022,7 +1099,6 @@ def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: 
         # СПРЯТАЛ второй, реально оплаченный вызов из отчёта о стоимости (к тому же
         # fail_background_job умеет ретраить ту же задачу, пока attempts < max_attempts).
         # Помечаем failed без авто-ретрая — пусть решает человек.
-        # Внешний контур (queue_name='external-ai') не трогаем: у него свой lease/finalize.
         conn.execute(
             """
             UPDATE background_jobs
@@ -1033,30 +1109,25 @@ def requeue_stale_background_jobs(stale_minutes: int, finalizing_stale_minutes: 
             WHERE status = 'running'
               AND started_at < now() - (%s::text || ' minutes')::interval
               AND kind = 'process_articles'
-              AND queue_name <> 'external-ai'
+              AND execution_region IS DISTINCT FROM 'external'
               AND ai_started_at IS NOT NULL
             """,
             (stale_minutes,),
         )
-        cur = conn.execute(
-            """
-            UPDATE background_jobs
-            SET status = 'queued',
-                progress = 0,
-                started_at = NULL,
-                claimed_by = NULL,
-                lease_token_hash = NULL,
-                lease_expires_at = NULL,
-                error_message = 'Requeued after stale running/finalizing timeout'
-            WHERE (status = 'running'
-                   AND started_at < now() - (%s::text || ' minutes')::interval)
-               OR (status = 'finalizing'
-                   AND last_heartbeat_at < now() - (%s::text || ' minutes')::interval)
+        outcome = _requeue_or_exhaust(
+            conn,
+            lost_where="""
+                (status = 'running'
+                 AND execution_region IS DISTINCT FROM 'external'
+                 AND started_at < now() - (%s::text || ' minutes')::interval)
+                OR (status = 'finalizing'
+                    AND last_heartbeat_at < now() - (%s::text || ' minutes')::interval)
             """,
-            (stale_minutes, finalizing_stale_minutes),
+            lost_params=(stale_minutes, finalizing_stale_minutes),
+            reason="Requeued after stale running/finalizing timeout",
         )
         conn.commit()
-        return cur.rowcount or 0
+        return outcome
 
 
 def count_stale_running_background_jobs(stale_minutes: int) -> int:

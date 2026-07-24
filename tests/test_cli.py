@@ -3,6 +3,7 @@ import argparse
 import pytest
 
 from oiltech_digest import cli
+from oiltech_digest.db import repository
 
 
 def test_schema_check_command_reports_ok(monkeypatch, capsys):
@@ -121,22 +122,33 @@ def test_jobs_requeue_stale_command_uses_config_default(monkeypatch, capsys):
 
     def fake_requeue(stale_minutes):
         called["stale_minutes"] = stale_minutes
-        return 2
+        return repository.RequeueOutcome(requeued=2, exhausted=1)
 
     monkeypatch.setattr("oiltech_digest.db.repository.requeue_stale_background_jobs", fake_requeue)
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.requeue_expired_external_leases",
+        lambda: repository.RequeueOutcome(requeued=0, exhausted=0),
+    )
 
     cli.main(["jobs-requeue-stale"])
 
     assert called["stale_minutes"] == 75
     output = capsys.readouterr().out
     assert "requeued=2" in output
+    assert "exhausted=1" in output
     assert "stale_minutes=75" in output
 
 
 def test_jobs_requeue_stale_command_accepts_override(monkeypatch, capsys):
     monkeypatch.setattr(
         "oiltech_digest.db.repository.requeue_stale_background_jobs",
-        lambda stale_minutes: stale_minutes // 30,
+        lambda stale_minutes: repository.RequeueOutcome(
+            requeued=stale_minutes // 30, exhausted=0
+        ),
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.requeue_expired_external_leases",
+        lambda: repository.RequeueOutcome(requeued=0, exhausted=0),
     )
 
     cli.main(["jobs-requeue-stale", "--stale-minutes", "120"])

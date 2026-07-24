@@ -306,7 +306,8 @@ def test_requeue_expired_external_leases(isolated_db):
         )
         conn.commit()
 
-    assert repository.requeue_expired_external_leases() == 1
+    outcome = repository.requeue_expired_external_leases()
+    assert (outcome.requeued, outcome.exhausted) == (1, 0)
     stored = repository.get_background_job(int(job["id"]))
     assert stored["status"] == "queued"
     assert stored["claimed_by"] is None
@@ -356,10 +357,10 @@ def test_requeue_stale_background_jobs_recovers_stuck_running_job(isolated_db):
         )
         conn.commit()
 
-    requeued = repository.requeue_stale_background_jobs(stale_minutes=60)
+    outcome = repository.requeue_stale_background_jobs(stale_minutes=60)
     stored = repository.get_background_job(int(job["id"]))
 
-    assert requeued == 1
+    assert (outcome.requeued, outcome.exhausted) == (1, 0)
     assert stored["status"] == "queued"
     assert stored["progress"] == 0
     assert stored["started_at"] is None
@@ -381,8 +382,12 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
     """
     stale_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
 
-    def make_stale_running(kind: str, queue_name: str, ai_started: bool) -> dict:
-        job = repository.create_background_job(kind, {}, queue_name=queue_name)
+    def make_stale_running(
+        kind: str, queue_name: str, ai_started: bool, execution_region: str = "ru"
+    ) -> dict:
+        job = repository.create_background_job(
+            kind, {}, queue_name=queue_name, execution_region=execution_region
+        )
         # claim переводит в running и сам поднимает progress до 10 (как в проде).
         repository.claim_next_background_job(queue_names=[queue_name])
         with connection.get_connection() as conn:
@@ -395,7 +400,9 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
 
     burned = make_stale_running("process_articles", "default", ai_started=True)
     not_started = make_stale_running("process_articles", "default", ai_started=False)
-    external = make_stale_running("process_articles", "external-ai", ai_started=True)
+    external = make_stale_running(
+        "process_articles", "external-ai", ai_started=True, execution_region="external"
+    )
 
     # Инвариант, на котором держится дискриминатор: у running-задачи progress уже >0
     # (claim поднял до 10), поэтому различать по нему «до/после AI» нельзя.
@@ -412,7 +419,176 @@ def test_requeue_stale_does_not_rerun_local_ai_job_that_already_spent_money(isol
     assert repository.get_background_job(int(not_started["id"]))["status"] == "queued"
 
     # Внешний контур не задет — у него собственная защита (lease/finalize, T2/H1).
-    assert repository.get_background_job(int(external["id"]))["status"] == "queued"
+    # Проверяем именно 'running': прежняя версия теста ждала 'queued', а это состояние
+    # давали ОБА поведения — и «не тронули», и «переочередили». Ассерт был слеп ровно
+    # к тому багу, который потом устроил вечную петлю 1181.
+    assert repository.get_background_job(int(external["id"]))["status"] == "running"
+
+
+def _claimed_external_job(*, max_attempts: int = 3, lease_seconds: int = 600) -> dict:
+    job = repository.create_background_job(
+        "process_articles",
+        {"limit": 800},
+        queue_name="external-ai",
+        execution_region="external",
+        capability="openai",
+        max_attempts=max_attempts,
+    )
+    repository.claim_external_background_job(
+        queue_names=["external-ai"],
+        capabilities=["openai"],
+        worker_id="nl-worker-1",
+        lease_token_hash="hash-live",
+        lease_seconds=lease_seconds,
+    )
+    return job
+
+
+def test_stale_sweeper_does_not_touch_external_job_with_live_lease(isolated_db):
+    """Регресс на вечную петлю 1181 (24.07).
+
+    Батч 800 статей идёт ~93 минуты — дольше stale_minutes=60. Воркер при этом жив
+    и продлевает lease heartbeat'ом перед каждой статьёй. Уборщик по настенным часам
+    возвращал такую задачу в очередь вопреки живому lease: воркер получал 409, бросал
+    батч, тут же забирал ту же задачу (она самая старая в очереди) и начинал с первой
+    статьи. Ровно раз в час, вечно, каждый круг заново оплачивая OpenAI.
+
+    Настоящий признак жизни внешней задачи — lease, и он здесь свежий. Значит уборщик
+    по часам обязан пройти мимо.
+    """
+    job = _claimed_external_job()
+    long_running = datetime.now(timezone.utc) - timedelta(hours=2)
+    with connection.get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET started_at = %s WHERE id = %s",
+            (long_running, job["id"]),
+        )
+        conn.commit()
+
+    outcome = repository.requeue_stale_background_jobs(stale_minutes=60)
+
+    assert (outcome.requeued, outcome.exhausted) == (0, 0)
+    stored = repository.get_background_job(int(job["id"]))
+    assert stored["status"] == "running"
+    assert stored["lease_token_hash"] == "hash-live"
+
+    # А по своему собственному сигналу — протухшему lease — она разбирается штатно.
+    with connection.get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = %s",
+            (job["id"],),
+        )
+        conn.commit()
+    assert repository.requeue_expired_external_leases().requeued == 1
+    assert repository.get_background_job(int(job["id"]))["status"] == "queued"
+
+
+def test_external_job_running_without_lease_is_not_orphaned(isolated_db):
+    """У внешней задачи осталась ОДНА страховка — lease, значит она обязана крыть всё поле.
+
+    `release_external_background_job_finalize` откатывает finalizing→running и рассчитывает,
+    что задачу подберёт путь восстановления. Пока уборщик по часам тоже трогал внешние задачи,
+    'running' без lease подобрал бы он. Теперь не подберёт — поэтому «lease IS NULL» обязано
+    считаться потерей, иначе задача зависла бы в 'running' навсегда.
+    """
+    job = _claimed_external_job()
+    with connection.get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET lease_expires_at = NULL WHERE id = %s",
+            (job["id"],),
+        )
+        conn.commit()
+
+    assert repository.requeue_expired_external_leases().requeued == 1
+    assert repository.get_background_job(int(job["id"]))["status"] == "queued"
+
+
+def test_lost_external_job_dies_after_max_attempts_instead_of_looping(isolated_db):
+    """Потолок попыток обязан срабатывать и на переочереди, а не только в fail_background_job.
+
+    У 1181 на проде было attempts=6 при max_attempts=3: переочередь не смотрела attempts,
+    поэтому лимит не наступал НИКОГДА. Задача, которая не может завершиться, обязана
+    умереть и дождаться человека, а не крутиться вечно.
+    """
+    job = _claimed_external_job(max_attempts=3)
+    job_id = int(job["id"])
+
+    def expire_lease() -> None:
+        with connection.get_connection() as conn:
+            conn.execute(
+                "UPDATE background_jobs SET lease_expires_at = now() - interval '1 minute' "
+                "WHERE id = %s",
+                (job_id,),
+            )
+            conn.commit()
+
+    def reclaim() -> None:
+        repository.claim_external_background_job(
+            queue_names=["external-ai"],
+            capabilities=["openai"],
+            worker_id="nl-worker-1",
+            lease_token_hash="hash-live",
+            lease_seconds=600,
+        )
+
+    # attempts=1 после первого claim. Два круга «протух lease → вернули в очередь → взяли снова».
+    for _ in range(2):
+        expire_lease()
+        assert repository.requeue_expired_external_leases().requeued == 1
+        reclaim()
+
+    assert repository.get_background_job(job_id)["attempts"] == 3
+
+    # Третий круг: попытки исчерпаны — задача закрывается, а не возвращается в очередь.
+    expire_lease()
+    outcome = repository.requeue_expired_external_leases()
+
+    assert (outcome.requeued, outcome.exhausted) == (0, 1)
+    stored = repository.get_background_job(job_id)
+    assert stored["status"] == "failed"
+    assert "исчерпаны попытки" in (stored["error_message"] or "")
+    assert stored["lease_token_hash"] is None
+
+
+def test_stale_local_job_dies_after_max_attempts(isolated_db):
+    """Тот же потолок для локального контура: настенные часы тоже не должны крутить вечно."""
+    job = repository.create_background_job(
+        "test_stale", {}, queue_name="default", max_attempts=1
+    )
+    repository.claim_next_background_job(queue_names=["default"])
+    with connection.get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET started_at = %s WHERE id = %s",
+            (datetime.now(timezone.utc) - timedelta(hours=2), job["id"]),
+        )
+        conn.commit()
+
+    outcome = repository.requeue_stale_background_jobs(stale_minutes=60)
+
+    assert (outcome.requeued, outcome.exhausted) == (0, 1)
+    assert repository.get_background_job(int(job["id"]))["status"] == "failed"
+
+
+def test_worker_loop_sweep_reaps_expired_external_leases(monkeypatch, isolated_db):
+    """T21: реапер lease обязан работать по расписанию, а не только внутри claim.
+
+    Пока воркер занят длинной задачей, за новой он не приходит — значит и протухшие
+    lease никто не разбирает. Умри воркер совсем, задачи висели бы 'running' вечно,
+    и интерфейс показывал бы идущую работу, которой нет.
+    """
+    job = _claimed_external_job()
+    with connection.get_connection() as conn:
+        conn.execute(
+            "UPDATE background_jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = %s",
+            (job["id"],),
+        )
+        conn.commit()
+
+    # Локальный воркер обслуживает свою очередь и внешнюю задачу не исполняет,
+    # но подметать протухшие lease обязан.
+    background_jobs.worker_loop(once=True, poll_seconds=0, stale_minutes=60, queue_names=["default"])
+
+    assert repository.get_background_job(int(job["id"]))["status"] == "queued"
 
 
 def test_worker_loop_once_processes_queued_jobs(monkeypatch, isolated_db):
