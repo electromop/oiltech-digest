@@ -1322,23 +1322,28 @@ def dashboard_stats(user_id: int | None = None) -> dict:
         cur.execute(
             """
             SELECT
-              (SELECT COUNT(*) FROM articles) AS total_articles,
-              (SELECT COUNT(*) FROM article_cards
-                 WHERE COALESCE(summary, '') <> '') AS with_summary,
+              -- «Сигналы» = то, что реально дошло до ленты: прошло гейт релевантности
+              -- и не убрано перепроверкой. Раньше здесь был COUNT(*) по ВСЕМ статьям,
+              -- и плитка показывала 14785 при 6.6к настоящих сигналов — отрезанное
+              -- попадало в базу счёта и делало все цифры бессмысленными.
+              (SELECT COUNT(*) FROM articles a
+                 JOIN article_cards c ON c.article_id = a.id
+                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion) AS total_articles,
+              (SELECT COUNT(*) FROM articles a
+                 JOIN article_cards c ON c.article_id = a.id
+                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion
+                  AND COALESCE(c.summary, '') <> '') AS with_summary,
+              -- Обработано — тоже ТОЛЬКО по сигналам, иначе «обработано» может
+              -- превысить «всего сигналов» (считалось по всей базе, включая отсев).
               (SELECT COUNT(*)
-                 FROM article_cards c
-                WHERE COALESCE(c.summary, '') <> ''
+                 FROM articles a
+                 JOIN article_cards c ON c.article_id = a.id
+                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion
+                  AND COALESCE(c.summary, '') <> ''
                   AND c.relevant IS NOT NULL
                   AND (
-                    c.relevant IS FALSE
-                    OR EXISTS (
-                      SELECT 1 FROM article_tags at
-                      WHERE at.article_id = c.article_id
-                    )
-                    OR EXISTS (
-                      SELECT 1 FROM article_scores sc
-                      WHERE sc.article_id = c.article_id
-                    )
+                    EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = c.article_id)
+                    OR EXISTS (SELECT 1 FROM article_scores sc WHERE sc.article_id = c.article_id)
                   )) AS processed_articles,
               (SELECT COUNT(*) FROM articles WHERE pending_deletion) AS cleaned_articles,
               (SELECT COUNT(*) FROM user_article_states
@@ -1376,6 +1381,9 @@ def dashboard_stats(user_id: int | None = None) -> dict:
         "total_articles": int(row["total_articles"] or 0),
         "with_summary": int(row["with_summary"] or 0),
         "processed_articles": int(row["processed_articles"] or 0),
+        # Терялось: SQL считал cleaned_articles, а возврат собирается вручную и поле
+        # в него не попадало → на фронте плитка «Почищено» всегда показывала 0.
+        "cleaned_articles": int(row["cleaned_articles"] or 0),
         "selected_for_digest": int(row["selected_for_digest"] or 0),
         "avg_score": int(row["avg_score"] or 0),
         "sources": int(row["sources"] or 0),

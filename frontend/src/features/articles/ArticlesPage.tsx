@@ -308,10 +308,9 @@ export function ArticlesPage(props: Props) {
   // Сколько статей вообще в работе (всего минус почищенные перепроверкой) — чтобы
   // «N сигналов» не читалось как «это вся база». Раньше показывалось только N, и при
   // дефолтном фильтре по баллу >=50 казалось, что сигналов всего 1820 из 6.6к.
-  const workingTotal = Math.max(
-    (stats?.total_articles ?? 0) - (stats?.cleaned_articles ?? 0),
-    filteredArticles.length,
-  );
+  // total_articles теперь и есть число СИГНАЛОВ (бэкенд считает после релевантности,
+  // отрезанное в базу счёта не входит), поэтому вычитать «почищено» больше не нужно.
+  const workingTotal = Math.max(stats?.total_articles ?? 0, filteredArticles.length);
 
   // Явно называем активные фильтры, которые сужают выдачу «молча».
   const filterHint = (() => {
