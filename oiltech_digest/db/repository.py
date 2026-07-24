@@ -1181,14 +1181,23 @@ def insert_article(rec: dict) -> bool:
 def get_articles_missing_image(limit: int = 200) -> list[dict]:
     """Статьи без картинки (image_url пуст) — для бэкфилла og:image в дайджест.
     fetch-full-text трогает только статьи без полного текста, поэтому уже
-    обработанные статьи остаются без image_url, и их добирает эта выборка."""
+    обработанные статьи остаются без image_url, и их добирает эта выборка.
+
+    СКРЫТЫЕ И ОТКЛОНЁННЫЕ ИСКЛЮЧЕНЫ. Бэкфилл — это РЕАЛЬНЫЙ поход в интернет за
+    каждой статьёй (медленный, с ретраями), а картинка нужна только тому, что
+    показывается. Замер 24.07: из 4675 статей без картинки 2085 (45%) были скрыты
+    (pending_deletion) или отклонены гейтом — почти половина запросов уходила
+    впустую. relevant IS NULL оставляем: статья ещё не гейчена и может стать видимой."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
             SELECT a.id, a.url
             FROM articles a
+            LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE a.url IS NOT NULL AND COALESCE(a.image_url, '') = ''
+              AND NOT a.pending_deletion
+              AND c.relevant IS NOT FALSE
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
