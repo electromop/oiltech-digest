@@ -823,7 +823,7 @@ def digest_branding(user: dict[str, Any] = Depends(require_user)) -> dict[str, A
 
 
 @app.put("/api/digest-branding")
-def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     return {"ok": True, "branding": _clean(save_digest_branding(payload.model_dump()))}
 
 
@@ -1102,14 +1102,14 @@ def external_worker_fail(
 
 
 @app.get("/api/maintenance/status")
-def get_maintenance_status(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def get_maintenance_status(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     return _clean(maintenance_status())
 
 
 @app.post("/api/maintenance/cleanup")
 def run_maintenance_cleanup(
     payload: MaintenanceCleanupRequest,
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     if payload.background_job_days is not None and payload.background_job_days < 1:
         raise HTTPException(status_code=400, detail="background_job_days must be >= 1")
@@ -1127,7 +1127,7 @@ def get_maintenance_benchmark(
     digest_limit: int = Query(100, ge=1, le=500),
     min_score: float = 0,
     warn_ms: float = Query(800, gt=0, le=10_000),
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     return _clean(
         run_readiness_benchmark(

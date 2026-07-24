@@ -229,13 +229,13 @@ export function App() {
   );
 
   if (activeScreen === "sources") {
-    currentScreen = <SourcesPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+    currentScreen = <SourcesPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "articles") {
     currentScreen = (
       <ArticlesPage
-        onUnauthorized={() => setUser(null)}
+        onUnauthorized={resetSession}
         showToast={showToast}
         initialArticles={articles}
         initialStats={stats}
@@ -246,23 +246,23 @@ export function App() {
   }
 
   if (activeScreen === "digest") {
-    currentScreen = <DigestPage onUnauthorized={() => setUser(null)} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} isAdmin={isAdmin} />;
+    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} isAdmin={isAdmin} />;
   }
 
   if (activeScreen === "scoring") {
-    currentScreen = <ScoringPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+    currentScreen = <ScoringPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "tags") {
-    currentScreen = <TagsPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+    currentScreen = <TagsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "jobs") {
-    currentScreen = <JobsPage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+    currentScreen = <JobsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "maintenance") {
-    currentScreen = <MaintenancePage onUnauthorized={() => setUser(null)} showToast={showToast} />;
+    currentScreen = <MaintenancePage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   // Статичные прототипы будущих разделов (демо-данные, без логики и без обращений к API).
@@ -283,7 +283,7 @@ export function App() {
   }
 
   if (activeScreen === "users") {
-    currentScreen = <UsersPage onUnauthorized={() => setUser(null)} showToast={showToast} currentUserId={Number(user?.id ?? 0)} />;
+    currentScreen = <UsersPage onUnauthorized={resetSession} showToast={showToast} currentUserId={Number(user?.id ?? 0)} />;
   }
 
   // Защита: не-админ не должен видеть админ-экраны даже по прямой ссылке ?screen=.
@@ -341,6 +341,16 @@ export function App() {
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Не удалось выполнить вход", "error");
     }
+  }
+
+  // Сброс сессии при 401. ВАЖНО: чистим не только user, но и данные — иначе после
+  // протухания куки в открытой вкладке в стейте остаются статьи и счётчики прежнего
+  // пользователя, и следующий вошедший видит их кадром до прихода своих данных
+  // (аудит изоляции 24.07: handleLogout чистил, а onUnauthorized — нет).
+  function resetSession() {
+    setUser(null);
+    setArticles([]);
+    setStats(null);
   }
 
   async function handleLogout() {
@@ -435,7 +445,7 @@ export function App() {
           </div>
         </header>
         <main className="tasksAppContent">
-          <BacklogPage onUnauthorized={() => setUser(null)} showToast={showToast} />
+          <BacklogPage onUnauthorized={resetSession} showToast={showToast} />
         </main>
         {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
       </div>

@@ -221,7 +221,7 @@ def build_digest_content(
         saved_digest = repository.get_monthly_digest(month, user_id=user_id)
         saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
         if saved_ids:
-            rows = repository.digest_items_by_article_ids(saved_ids[:limit], user_id=user_id)
+            rows = repository.digest_items_by_article_ids(saved_ids[:limit])
     if not rows:
         rows = repository.digest_candidates(
             month=month,

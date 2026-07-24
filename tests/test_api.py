@@ -1449,3 +1449,56 @@ def test_session_cookie_secure_follows_config(monkeypatch):
     plain_cookie = plain_resp.headers.get("set-cookie", "")
     assert "Secure" not in plain_cookie
     assert "HttpOnly" in plain_cookie
+
+
+def _as_user(role: str):
+    """Подменить текущего пользователя ролью (require_admin зависит от require_user транзитивно)."""
+    return lambda: {"id": 2, "email": "user@example.com", "role": role}
+
+
+def test_digest_branding_write_is_admin_only():
+    """Аудит изоляции 24.07: PUT /api/digest-branding стоял на require_user, а пишет
+    ОДИН общий файл digest_branding.json → обычный пользователь менял шапку/футер/hero
+    во всех выгрузках у всех, включая ту, что уходит заказчику."""
+    app = api.app
+    app.dependency_overrides[api.require_user] = _as_user("user")
+    try:
+        client = TestClient(app)
+        response = client.put("/api/digest-branding", json={})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+
+
+def test_maintenance_endpoints_are_admin_only():
+    """Аудит изоляции 24.07: /api/maintenance/* стояли на require_user, а cleanup удаляет
+    background_jobs и export_jobs ВСЕХ пользователей (в SQL нет фильтра по user_id) —
+    любой пользователь стирал историю задач и выгрузок остальным."""
+    app = api.app
+    app.dependency_overrides[api.require_user] = _as_user("user")
+    try:
+        client = TestClient(app)
+        cleanup = client.post("/api/maintenance/cleanup", json={"background_job_days": 1})
+        status = client.get("/api/maintenance/status")
+        benchmark = client.get("/api/maintenance/benchmark")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert cleanup.status_code == 403
+    assert status.status_code == 403
+    assert benchmark.status_code == 403
+
+
+def test_admin_still_reaches_maintenance_status(monkeypatch):
+    """Симметрия: админа не заблокировали (иначе «починили» ценой поломки экрана)."""
+    app = api.app
+    app.dependency_overrides[api.require_user] = _as_user("admin")
+    monkeypatch.setattr(api, "maintenance_status", lambda: {"ok": True})
+    try:
+        client = TestClient(app)
+        response = client.get("/api/maintenance/status")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200

@@ -2424,15 +2424,20 @@ def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
                 (month,),
             )
         else:
+            # Свой дайджест ДОЛЖЕН побеждать общий/легаси (user_id IS NULL).
+            # Было: ORDER BY (user_id = <id>) DESC — для общей строки выражение
+            # NULL = <id> даёт NULL, а в Postgres DESC по умолчанию NULLS FIRST,
+            # то есть легаси-строка вставала ПЕРЕД личной и LIMIT 1 отдавал её
+            # (проверено на проде). Условие (user_id IS NOT NULL) NULL не порождает.
             cur.execute(
                 """
                 SELECT id, user_id, month, title, status, created_at, updated_at
                 FROM monthly_digests
                 WHERE month = %s AND (user_id = %s OR user_id IS NULL)
-                ORDER BY (user_id = %s) DESC, updated_at DESC
+                ORDER BY (user_id IS NOT NULL) DESC, updated_at DESC
                 LIMIT 1
                 """,
-                (month, user_id, user_id),
+                (month, user_id),
             )
         digest = cur.fetchone()
         if digest is None:
@@ -2449,7 +2454,15 @@ def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
         return {**digest, "items": cur.fetchall()}
 
 
-def digest_items_by_article_ids(article_ids: list[int], user_id: int | None = None) -> list[dict]:
+def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
+    """Детали статей сохранённого дайджеста по списку id (порядок сохраняется).
+
+    ПЕР-ЮЗЕРНОГО СКОУПА ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО: выбираются только глобальные поля
+    статьи (заголовок, ссылка, суть, скор, теги). Раньше функция принимала `user_id`
+    и НИГДЕ его не использовала — это создавало ложное ощущение фильтрации по владельцу.
+    За принадлежность отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из get_monthly_digest,
+    который скоупит дайджест по user_id.
+    """
     if not article_ids:
         return []
     order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
