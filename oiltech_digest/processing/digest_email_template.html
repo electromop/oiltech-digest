@@ -37,6 +37,10 @@
 
     .news-repeat-table {{
       border-collapse: collapse;
+      /* fixed: ширины колонок задаются разметкой, а не содержимым — длинный текст
+         переносится внутри ячейки вместо того, чтобы раздвигать таблицу. */
+      table-layout: fixed;
+      width: 100%;
     }}
 
     .news-repeat-table thead {{
@@ -66,6 +70,10 @@
     }}
 
     .news-card-title {{
+      /* Без переносов длинное слово или URL распирает таблицу фикс-ширины 600px,
+         и вёрстка «съезжает» — карточка вылезает за рамку, картинка сдвигается. */
+      word-break: break-word;
+      overflow-wrap: anywhere;
       font-family: 'GPN Din Condensed', 'GPN Din', Arial, Helvetica, sans-serif;
       font-size: 20px;
       line-height: 24px;
@@ -76,6 +84,8 @@
     }}
 
     .news-card-summary {{
+      word-break: break-word;
+      overflow-wrap: anywhere;
       font-size: 13px;
       line-height: 18px;
       color: #333333;
@@ -83,6 +93,8 @@
     }}
 
     .news-card-meta {{
+      word-break: break-word;
+      overflow-wrap: anywhere;
       font-size: 11px;
       line-height: 16px;
       color: #68768f;
