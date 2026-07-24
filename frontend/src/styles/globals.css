@@ -337,6 +337,7 @@ button {
 .screenStack {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .screenHeader {
@@ -409,6 +410,7 @@ button {
 
 .panel {
   position: relative;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1428,13 +1430,19 @@ button {
 .backlogBoard {
   margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
   gap: 12px;
   align-items: start;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-gutter: stable;
 }
 
 .backlogColumn {
-  min-width: 0;
+  min-width: 220px;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 12px;
   background: rgba(248, 250, 252, 0.72);
@@ -1449,6 +1457,11 @@ button {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
+}
+
+.backlogColumnHeader > div {
+  min-width: 0;
 }
 
 .backlogColumnHeader h3 {
@@ -1484,10 +1497,12 @@ button {
 .backlogCard {
   display: grid;
   gap: 10px;
+  min-width: 0;
   padding: 12px;
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: rgba(255, 255, 255, 0.96);
+  overflow: hidden;
 }
 
 .backlogCard.tech {
@@ -1511,6 +1526,7 @@ button {
   margin: 0;
   font-size: 0.95rem;
   line-height: 1.28;
+  overflow-wrap: anywhere;
 }
 
 .backlogCard p {
@@ -1518,6 +1534,7 @@ button {
   color: #475569;
   font-size: 0.82rem;
   line-height: 1.38;
+  overflow-wrap: anywhere;
 }
 
 .backlogSection,
@@ -1525,9 +1542,12 @@ button {
   color: var(--text-muted);
   font-size: 0.76rem;
   font-weight: 800;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .backlogCard .field select {
+  min-width: 0;
   width: 100%;
 }
 
@@ -2452,8 +2472,7 @@ button {
   .articlesFiltersGrid,
   .jobsFilters,
   .backlogStats,
-  .backlogCreateGrid,
-  .backlogBoard {
+  .backlogCreateGrid {
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   }
 
@@ -2534,7 +2553,6 @@ button {
   .jobsFilters,
   .backlogStats,
   .backlogCreateGrid,
-  .backlogBoard,
   .maintenanceGrid,
   .digestFiltersGrid,
   .digestFiltersRow,
