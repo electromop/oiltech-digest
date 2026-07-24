@@ -1449,6 +1449,13 @@ button {
   padding: 10px;
   display: grid;
   gap: 10px;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.backlogColumn.dropTarget {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(219, 234, 254, 0.68);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.18);
 }
 
 .backlogColumnHeader {
@@ -1503,6 +1510,20 @@ button {
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: rgba(255, 255, 255, 0.96);
   overflow: hidden;
+  cursor: grab;
+  transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease, transform 160ms ease;
+}
+
+.backlogCard:hover {
+  border-color: rgba(37, 99, 235, 0.26);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.backlogCard.dragging {
+  cursor: grabbing;
+  opacity: 0.55;
+  transform: scale(0.99);
 }
 
 .backlogCard.tech {

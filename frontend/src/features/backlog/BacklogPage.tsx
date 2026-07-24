@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { createBacklogTask, getBacklog, updateBacklogTaskStatus } from "../../api/backlog";
 import type { BacklogPayload, BacklogTask, BacklogTaskStatus } from "../../api/types";
 
@@ -29,6 +29,8 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
   const [payload, setPayload] = useState<BacklogPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dropTargetStatus, setDropTargetStatus] = useState<BacklogTaskStatus | null>(null);
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState("P3");
   const [statusFilter, setStatusFilter] = useState<BacklogTaskStatus | "">("");
@@ -92,6 +94,32 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
     } finally {
       setSavingTaskId(null);
     }
+  }
+
+  function startDragging(task: BacklogTask, event: DragEvent<HTMLElement>) {
+    if (savingTaskId === task.id) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", task.id);
+    setDraggedTaskId(task.id);
+  }
+
+  function allowColumnDrop(status: BacklogTaskStatus, event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetStatus(status);
+  }
+
+  async function dropTask(status: BacklogTaskStatus, event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    const taskId = event.dataTransfer.getData("text/plain") || draggedTaskId;
+    setDraggedTaskId(null);
+    setDropTargetStatus(null);
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task || task.status === status) return;
+    await changeStatus(task, status);
   }
 
   return (
@@ -167,7 +195,13 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
           {statusColumns.map((column) => {
             const columnTasks = visibleTasks.filter((task) => task.status === column.id);
             return (
-              <section className="backlogColumn" key={column.id}>
+              <section
+                className={`backlogColumn ${dropTargetStatus === column.id ? "dropTarget" : ""}`}
+                key={column.id}
+                onDragOver={(event) => allowColumnDrop(column.id, event)}
+                onDragLeave={() => setDropTargetStatus((status) => (status === column.id ? null : status))}
+                onDrop={(event) => void dropTask(column.id, event)}
+              >
                 <div className="backlogColumnHeader">
                   <div>
                     <h3>{column.label}</h3>
@@ -177,7 +211,18 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
                 </div>
                 <div className="backlogColumnList">
                   {columnTasks.map((task) => (
-                    <BacklogCard key={`${task.section}-${task.id}`} task={task} disabled={savingTaskId === task.id} onChangeStatus={changeStatus} />
+                    <BacklogCard
+                      key={`${task.section}-${task.id}`}
+                      task={task}
+                      disabled={savingTaskId === task.id}
+                      dragging={draggedTaskId === task.id}
+                      onChangeStatus={changeStatus}
+                      onDragStart={startDragging}
+                      onDragEnd={() => {
+                        setDraggedTaskId(null);
+                        setDropTargetStatus(null);
+                      }}
+                    />
                   ))}
                   {!loading && columnTasks.length === 0 ? <div className="backlogEmpty">Нет задач</div> : null}
                 </div>
@@ -193,10 +238,20 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
 function BacklogCard(props: {
   task: BacklogTask;
   disabled: boolean;
+  dragging: boolean;
   onChangeStatus: (task: BacklogTask, status: BacklogTaskStatus) => Promise<void>;
+  onDragStart: (task: BacklogTask, event: DragEvent<HTMLElement>) => void;
+  onDragEnd: () => void;
 }) {
   return (
-    <article className={`backlogCard ${props.task.section}`}>
+    <article
+      className={`backlogCard ${props.task.section} ${props.dragging ? "dragging" : ""}`}
+      draggable={!props.disabled}
+      onDragStart={(event) => props.onDragStart(props.task, event)}
+      onDragEnd={props.onDragEnd}
+      aria-label={`Задача ${props.task.title}. Перетащите в другой столбик, чтобы изменить этап.`}
+      title="Перетащите карточку в другой столбик, чтобы изменить этап"
+    >
       <div className="backlogCardTop">
         <span className="badge">{props.task.priority}</span>
         <span className="backlogSection">{sectionLabels[props.task.section]}</span>
