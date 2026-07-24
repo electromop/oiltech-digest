@@ -148,6 +148,8 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
         "total_articles": 2,
         "with_summary": 2,
         "processed_articles": 2,
+        # Плитка «Почищено» = статьи с pending_deletion. В фикстуре таких нет, поэтому 0.
+        "cleaned_articles": 0,
         "selected_for_digest": 1,
         "avg_score": 70,
         "sources": 4,
