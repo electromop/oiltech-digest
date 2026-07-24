@@ -120,6 +120,14 @@ class ExternalWorkerClient:
 def _safe_heartbeat(client: "ExternalWorkerClient", job: dict[str, Any]) -> None:
     try:
         client.heartbeat(job)
+    except requests.HTTPError as exc:
+        # 409 = core отозвал lease (задача возвращена в очередь). Это НЕ временный сбой:
+        # результат уже не примут, поэтому батч прерываем немедленно, а не платим OpenAI
+        # за мусор. Прочие HTTP-ошибки по-прежнему считаем временными.
+        if exc.response is not None and exc.response.status_code == 409:
+            logger.warning("external_lease_lost job_id=%s — прерываю обработку", job.get("id"))
+            raise external_ai.LeaseLost(f"lease lost for job {job.get('id')}") from exc
+        logger.warning("external_heartbeat_failed job_id=%s", job.get("id"))
     except Exception:  # noqa: BLE001 - сбой heartbeat не должен прерывать обработку
         logger.warning("external_heartbeat_failed job_id=%s", job.get("id"))
 
@@ -161,6 +169,11 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
         else:
             raise ValueError(f"Unsupported external job kind: {job.get('kind')}")
         logger.info("external_job_finished job_id=%s kind=%s", job["id"], job.get("kind"))
+    except external_ai.LeaseLost:
+        # Ни complete, ни fail слать нельзя — оба вернут 409. Просто выходим: задача уже
+        # в очереди у core и будет выдана заново (возможно, этому же воркеру).
+        logger.warning("external_job_abandoned job_id=%s — lease отозван, беру следующую", job.get("id"))
+        return
     except Exception as exc:  # noqa: BLE001 - external failures must be returned to core
         logger.exception("external_job_failed job_id=%s kind=%s", job.get("id"), job.get("kind"))
         try:

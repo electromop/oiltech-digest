@@ -41,6 +41,18 @@ def build_process_articles_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class LeaseLost(RuntimeError):
+    """Core отозвал lease задачи (heartbeat вернул 409).
+
+    Принципиально отличается от временного сбоя сети: при 409 задача уже возвращена
+    в очередь и core НИКОГДА не примет её результат. Продолжать обработку — значит
+    платить OpenAI за работу, которая гарантированно будет выброшена.
+    Инцидент 24.07: воркер ~80 минут крутил такой цикл (heartbeat 409 → вызов OpenAI
+    200 → heartbeat 409 …) со скоростью ~$11/час в мусор, и это не попадало даже
+    в ai_processing_runs, потому что complete тоже отвергался.
+    """
+
+
 def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
     """Run the AI pipeline without direct database access.
 
@@ -68,6 +80,10 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | Non
         if heartbeat is not None:
             try:
                 heartbeat()
+            except LeaseLost:
+                # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
+                # работать дальше = платить за результат, который core не примет.
+                raise
             except Exception:  # noqa: BLE001 - heartbeat не должен ломать обработку батча
                 pass
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
@@ -177,6 +193,10 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], Non
         if heartbeat is not None:
             try:
                 heartbeat()
+            except LeaseLost:
+                # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
+                # работать дальше = платить за результат, который core не примет.
+                raise
             except Exception:  # noqa: BLE001
                 pass
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
@@ -276,6 +296,10 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[[], N
         if heartbeat is not None:
             try:
                 heartbeat()
+            except LeaseLost:
+                # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
+                # работать дальше = платить за результат, который core не примет.
+                raise
             except Exception:  # noqa: BLE001
                 pass
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}

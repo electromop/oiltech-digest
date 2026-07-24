@@ -179,3 +179,55 @@ def test_recheck_skips_run_for_negative_keyword_block(monkeypatch):
     external_ai.apply_recheck_result(result, mark=True)
 
     assert runs == []
+
+
+def test_lease_loss_aborts_batch_instead_of_burning_money():
+    """Инцидент 24.07: core отозвал lease (heartbeat 409), но воркер продолжал звать
+    OpenAI по каждой статье. Результат уже не примут — деньги в мусор (~$11/час,
+    80 минут). Теперь LeaseLost обязан прервать батч на ПЕРВОЙ же статье."""
+    calls = {"heartbeats": 0}
+
+    def failing_heartbeat():
+        calls["heartbeats"] += 1
+        raise external_ai.LeaseLost("lease lost for job 1181")
+
+    payload = {
+        "offline": True,
+        "articles": [{"id": i, "title": f"A{i}", "url": f"https://e.ru/{i}",
+                      "language": "ru", "raw_text": "бурение скважин", "source_name": "S"}
+                     for i in range(1, 6)],
+        "tags": [{"id": 10, "name": "Бурение", "keywords_json": ["бурение"], "keywords_en_json": []}],
+        "criteria": [{"id": 1, "name": "Тех", "weight": 100, "keywords_json": [], "keywords_en_json": []}],
+    }
+
+    try:
+        external_ai.process_payload(payload, heartbeat=failing_heartbeat)
+        raise AssertionError("LeaseLost проглочен — батч продолжил работу и жжёт деньги")
+    except external_ai.LeaseLost:
+        pass
+
+    assert calls["heartbeats"] == 1, "прервались не на первой статье — часть вызовов уже оплачена"
+
+
+def test_transient_heartbeat_failure_does_not_abort_batch():
+    """Обратная сторона: обычный сбой сети НЕ должен ронять батч — иначе любое моргание
+    связи будет терять уже оплаченную работу. Прерываемся только на потере lease."""
+    calls = {"heartbeats": 0}
+
+    def flaky_heartbeat():
+        calls["heartbeats"] += 1
+        raise ConnectionError("сеть моргнула")
+
+    payload = {
+        "offline": True,
+        "articles": [{"id": i, "title": f"A{i}", "url": f"https://e.ru/{i}",
+                      "language": "ru", "raw_text": "бурение скважин", "source_name": "S"}
+                     for i in range(1, 4)],
+        "tags": [{"id": 10, "name": "Бурение", "keywords_json": ["бурение"], "keywords_en_json": []}],
+        "criteria": [{"id": 1, "name": "Тех", "weight": 100, "keywords_json": [], "keywords_en_json": []}],
+    }
+
+    result = external_ai.process_payload(payload, heartbeat=flaky_heartbeat)
+
+    assert calls["heartbeats"] == 3, "батч оборвался на временном сбое"
+    assert result["stats"]["processed"] == 3
