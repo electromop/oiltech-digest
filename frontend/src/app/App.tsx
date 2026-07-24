@@ -8,6 +8,7 @@ import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles
 import { BacklogPage } from "../features/backlog/BacklogPage";
 import { DigestPage } from "../features/digest/DigestPage";
 import { JobsPage } from "../features/jobs/JobsPage";
+import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
@@ -25,13 +26,17 @@ const TechnologiesPreview = lazy(() =>
 
 type ScreenId =
   | "articles" | "digest" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
-  | "analytics-preview" | "tech-preview";
+  | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 // Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
 // случайно открыть обычный пользователь и принять за настоящую аналитику.
 const ADMIN_SCREENS = new Set<ScreenId>([
   "sources", "scoring", "tags", "users", "jobs", "maintenance",
+  // Статистика сводная (видно работу КАЖДОГО пользователя) — решение владельца:
+  // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
+  // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
+  "statistics",
   "analytics-preview", "tech-preview",
 ]);
 
@@ -99,6 +104,14 @@ const screens: ScreenDef[] = [
     status: "Экран активен",
   },
   {
+    id: "statistics",
+    label: "Статистика",
+    eyebrow: "Analytics",
+    title: "Статистика платформы",
+    description: "Месячные результаты платформы и работа пользователей: воронка от сбора до дайджеста, затраты на ИИ, разметка по каждому и общий итог (только для администратора).",
+    status: "Экран активен",
+  },
+  {
     id: "tech-preview",
     label: "Технологии",
     eyebrow: "Prototype",
@@ -136,7 +149,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Администрирование",
-    screens: ["users"],
+    screens: ["users", "statistics"],
   },
   // Прототипы будущих разделов. Оба экрана в ADMIN_SCREENS, поэтому у не-админа фильтр ниже
   // (isAdmin || !ADMIN_SCREENS.has(sid)) вычистит их, visibleScreens станет пустым и вся группа
@@ -284,6 +297,10 @@ export function App() {
 
   if (activeScreen === "users") {
     currentScreen = <UsersPage onUnauthorized={resetSession} showToast={showToast} currentUserId={Number(user?.id ?? 0)} />;
+  }
+
+  if (activeScreen === "statistics") {
+    currentScreen = <StatisticsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   // Защита: не-админ не должен видеть админ-экраны даже по прямой ссылке ?screen=.

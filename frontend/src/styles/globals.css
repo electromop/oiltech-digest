@@ -2562,3 +2562,41 @@ button {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* --- Раздел «Статистика» (admin-only): переиспользуем каркас benchmarkTable,
+   меняем только сетку колонок под каждую из трёх таблиц. --- */
+.statsTable {
+  margin-top: 4px;
+}
+
+.statsRow {
+  grid-template-columns: 96px 92px 132px 96px 88px 104px 88px;
+}
+
+.statsCostRow {
+  grid-template-columns: 96px 100px 108px minmax(160px, 1fr);
+}
+
+.statsUserRow {
+  grid-template-columns: minmax(180px, 1.6fr) repeat(5, 88px) 80px;
+}
+
+.statsTotalRow {
+  font-weight: 700;
+  background: var(--surface-strong);
+}
+
+.statsNote {
+  margin: 10px 2px 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .statsRow,
+  .statsCostRow,
+  .statsUserRow {
+    grid-template-columns: minmax(120px, 1fr) repeat(2, minmax(72px, auto));
+    row-gap: 4px;
+  }
+}

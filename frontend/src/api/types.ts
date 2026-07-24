@@ -411,3 +411,39 @@ export type AuthResponse = {
   ok: boolean;
   user: User;
 };
+
+// --- Месячная статистика платформы (раздел «Статистика», admin-only) ---
+export type MonthlyPlatformRow = {
+  month: string;
+  collected: number;
+  relevant: number;
+  rejected: number;
+  hidden: number;
+  summarized: number;
+  scored: number;
+  avg_score: number | null;
+  digest_ready: number;
+};
+
+export type MonthlyAiCostRow = {
+  month: string;
+  model: string;
+  runs: number;
+  cost_usd: number;
+};
+
+export type MonthlyActivityRow = {
+  month: string;
+  user_id: number;
+  email: string;
+  status: string;
+  marks: number;
+};
+
+export type MonthlyStats = {
+  months: number;
+  platform: MonthlyPlatformRow[];
+  ai_cost: MonthlyAiCostRow[];
+  activity: MonthlyActivityRow[];
+  activity_scope: string;
+};

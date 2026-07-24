@@ -1571,11 +1571,13 @@ def test_changed_only_tab_still_shows_marked(monkeypatch):
     assert "<> 'new'" in captured["sql"]
 
 
-def test_monthly_stats_scopes_activity_by_role(monkeypatch):
-    """Задача 18: платформенная воронка общая, но РАЗМЕТКА пер-юзерная —
-    обычный пользователь не должен видеть, кто и что пометил у других."""
+def test_monthly_stats_is_admin_only(monkeypatch):
+    """Задача 18: раздел статистики сводный — показывает работу КАЖДОГО пользователя,
+    поэтому по решению владельца он admin-only. Гейт обязан стоять на API, а не только
+    во фронте: аудит 24.07 показал, что фронтовый гейт без серверного (брендинг,
+    maintenance) означает доступ любым запросом в обход UI."""
     app = api.app
-    monkeypatch.setattr(api.repository, "monthly_platform_stats", lambda months: [{"month": "2026-07"}])
+    monkeypatch.setattr(api.repository, "monthly_platform_stats", lambda months: [])
     monkeypatch.setattr(api.repository, "monthly_ai_cost", lambda months: [])
     seen = {}
     monkeypatch.setattr(
@@ -1585,16 +1587,16 @@ def test_monthly_stats_scopes_activity_by_role(monkeypatch):
 
     app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
     try:
-        body = TestClient(app).get("/api/stats/monthly").json()
+        denied = TestClient(app).get("/api/stats/monthly")
     finally:
         app.dependency_overrides.clear()
-    assert seen["user_id"] == 7, "обычному пользователю подставили чужую активность"
-    assert body["activity_scope"] == "self"
+    assert denied.status_code == 403, "обычный пользователь получил сводную статистику по всем"
+    assert seen == {}, "запрос к данным вообще не должен был дойти до репозитория"
 
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@e.ru", "role": "admin"}
     try:
         body = TestClient(app).get("/api/stats/monthly").json()
     finally:
         app.dependency_overrides.clear()
-    assert seen["user_id"] is None, "админ должен видеть активность всех"
+    assert seen["user_id"] is None, "админ должен видеть активность всех пользователей"
     assert body["activity_scope"] == "all"

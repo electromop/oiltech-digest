@@ -1112,25 +1112,22 @@ def external_worker_fail(
 @app.get("/api/stats/monthly")
 def monthly_stats(
     months: int = Query(6, ge=1, le=24),
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Месячные результаты платформы + активность пользователей.
+    """Месячные результаты платформы + активность ВСЕХ пользователей.
 
-    СКОУП (урок аудита изоляции 24.07): воронка и стоимость ИИ — общие показатели
-    работы платформы, их видят все. А РАЗМЕТКА — пер-юзерная: обычный пользователь
-    видит только свою, админ — всех. Без этого раздел статистики стал бы окном в
-    чужую работу.
+    ADMIN-ONLY по решению владельца: раздел сводный, показывает работу каждого
+    пользователя и общий итог. Гейт стоит здесь, на API, а не только во фронте —
+    аудит изоляции 24.07 показал, что фронтовый гейт без серверного (брендинг,
+    maintenance) означает, что любой залогиненный получает данные запросом в обход UI.
     """
-    is_admin = (user.get("role") or "user") == "admin"
     return _clean(
         {
             "months": months,
             "platform": repository.monthly_platform_stats(months),
             "ai_cost": repository.monthly_ai_cost(months),
-            "activity": repository.monthly_user_activity(
-                months, user_id=None if is_admin else int(user["id"])
-            ),
-            "activity_scope": "all" if is_admin else "self",
+            "activity": repository.monthly_user_activity(months, user_id=None),
+            "activity_scope": "all",
         }
     )
 
