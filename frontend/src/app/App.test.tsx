@@ -288,6 +288,7 @@ describe("App smoke", () => {
             // Счётчики по статусам с сервера (по всей базе), НАМЕРЕННО расходятся с
             // загруженными фикстурами (все 3 — 'digest'): так тест отличает серверную
             // привязку от клиентского фолбэка `?? articles.filter(...)`, который дал бы 0.
+            cleaned_articles: 42,
             status_counts: { new: 5, review: 2, digest: 1, archive: 3, noise: 999, duplicate: 7 },
           }),
         );
@@ -513,7 +514,11 @@ describe("App smoke", () => {
 
     await waitFor(() => expect(tileValue("Шум")).toBe("999"));
     expect(tileValue("Дубликаты")).toBe("7");
-    expect(tileValue("Новые")).toBe("5");
+    // Плашка «Новые» заменена на «Почищено» (cleaned_articles): «Новые» показывала
+    // пер-юзерный статус и ни с чем не сходилась, а «Почищено» даёт арифметику
+    // Всего = Почищено + остаётся в работе.
+    expect(tileValue("Почищено")).toBe("42");
+    expect(tileValue("Новые")).toBeNull();
     expect(tileValue("На проверке")).toBe("2");
   });
 

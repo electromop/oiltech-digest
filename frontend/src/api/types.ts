@@ -120,6 +120,9 @@ export type DashboardStats = {
   total_articles: number;
   with_summary: number;
   processed_articles: number;
+  // Почищено — статьи, убранные из выдачи перепроверкой релевантности (pending_deletion).
+  // Даёт сходимость: всего = почищено + остаётся в работе.
+  cleaned_articles?: number;
   selected_for_digest: number;
   avg_score: number;
   sources: number;

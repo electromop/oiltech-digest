@@ -1340,6 +1340,7 @@ def dashboard_stats(user_id: int | None = None) -> dict:
                       WHERE sc.article_id = c.article_id
                     )
                   )) AS processed_articles,
+              (SELECT COUNT(*) FROM articles WHERE pending_deletion) AS cleaned_articles,
               (SELECT COUNT(*) FROM user_article_states
                  WHERE user_id = %(user_id)s AND status = 'digest') AS selected_for_digest,
               (SELECT ROUND(AVG(total_score)) FROM article_scores) AS avg_score,

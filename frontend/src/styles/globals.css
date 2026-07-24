@@ -2600,3 +2600,10 @@ button {
     row-gap: 4px;
   }
 }
+
+/* Подсказка об активных фильтрах ленты: дефолтный порог по баллу сужал выдачу молча. */
+.filterHintBadge {
+  background: transparent;
+  font-weight: 600;
+  opacity: 0.75;
+}

@@ -276,7 +276,10 @@ export function ArticlesPage(props: Props) {
     // поэтому цифры занижали и «плавали», расходясь с плитками «Всего»/«Обработано».
     const countByStatus = (status: Article["status"]) =>
       stats?.status_counts?.[status] ?? articles.filter((item) => item.status === status).length;
-    const newCount = countByStatus("new");
+    // «Почищено» — сколько убрала перепроверка релевантности (pending_deletion).
+    // Заменила плашку «Новые»: та показывала пер-юзерный статус и не сходилась ни с чем.
+    // Теперь тройка читается арифметически: Всего = Почищено + остаётся в работе.
+    const cleanedCount = stats?.cleaned_articles ?? 0;
     const reviewCount = countByStatus("review");
     const digestCount = stats?.selected_for_digest ?? articles.filter((item) => item.digest).length;
     const noiseCount = countByStatus("noise");
@@ -294,13 +297,32 @@ export function ArticlesPage(props: Props) {
     return [
       { label: "Всего сигналов", value: total },
       { label: "Обработано", value: processedCount },
-      { label: "Новые", value: newCount },
+      { label: "Почищено", value: cleanedCount },
       { label: "На проверке", value: reviewCount },
       { label: "В дайджест", value: digestCount },
       { label: "Шум", value: noiseCount },
       { label: "Дубликаты", value: duplicateCount },
     ];
   }, [articles, stats]);
+
+  // Сколько статей вообще в работе (всего минус почищенные перепроверкой) — чтобы
+  // «N сигналов» не читалось как «это вся база». Раньше показывалось только N, и при
+  // дефолтном фильтре по баллу >=50 казалось, что сигналов всего 1820 из 6.6к.
+  const workingTotal = Math.max(
+    (stats?.total_articles ?? 0) - (stats?.cleaned_articles ?? 0),
+    filteredArticles.length,
+  );
+
+  // Явно называем активные фильтры, которые сужают выдачу «молча».
+  const filterHint = (() => {
+    const parts: string[] = [];
+    if (scoreMin > 0) parts.push(`балл ≥ ${scoreMin}`);
+    if (scoreMax < 100) parts.push(`балл ≤ ${scoreMax}`);
+    if (status) parts.push("статус");
+    if (tag) parts.push("тег");
+    if (source) parts.push("источник");
+    return parts.length ? `фильтр: ${parts.join(", ")}` : "";
+  })();
 
   function resetFilters() {
     setSearch("");
@@ -385,9 +407,10 @@ export function ArticlesPage(props: Props) {
                 : serverResults !== null
                   ? `Выборка по всей базе: ${filteredArticles.length}`
                   : remaining > 0
-                    ? `${filteredArticles.length} сигналов · показаны ${visibleArticles.length}`
-                    : `${filteredArticles.length} сигналов`}
+                    ? `${filteredArticles.length} из ${workingTotal} сигналов · показаны ${visibleArticles.length}`
+                    : `${filteredArticles.length} из ${workingTotal} сигналов`}
             </span>
+            {filterHint ? <span className="badge filterHintBadge">{filterHint}</span> : null}
             {grouped.length ? (
               <>
                 <button type="button" className="ghostButton" onClick={() => setExpandedGroups(new Set(grouped.map(([group]) => group)))}>
