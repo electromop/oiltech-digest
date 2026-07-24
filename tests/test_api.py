@@ -1502,3 +1502,99 @@ def test_admin_still_reaches_maintenance_status(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
+
+
+def _articles_sql(monkeypatch) -> str:
+    """Перехватить SQL, который list_articles реально отправляет в БД."""
+    captured = {}
+
+    class Cur:
+        def execute(self, sql, params=None):
+            captured["sql"] = sql
+            return self
+
+        def fetchall(self):
+            return []
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def cursor(self, row_factory=None):
+            return Cur()
+
+    monkeypatch.setattr(api, "get_connection", lambda: Conn())
+    return captured
+
+
+def test_feed_hides_own_noise_and_duplicate(monkeypatch):
+    """Задача 19: пометка «Шум»/«Дубликат» обязана убирать статью из ЛИЧНОЙ ленты.
+    Замер 24.07: 104 помеченных статьи продолжали висеть — фильтра по статусу не было вовсе."""
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
+    captured = _articles_sql(monkeypatch)
+    try:
+        TestClient(app).get("/api/articles")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "NOT IN ('noise', 'duplicate')" in captured["sql"]
+
+
+def test_feed_still_shows_noise_when_explicitly_filtered(monkeypatch):
+    """Помеченное должно оставаться доступным по явному фильтру — иначе его не пересмотреть."""
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
+    captured = _articles_sql(monkeypatch)
+    try:
+        TestClient(app).get("/api/articles?status=noise")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "NOT IN ('noise', 'duplicate')" not in captured["sql"]
+
+
+def test_changed_only_tab_still_shows_marked(monkeypatch):
+    """Вкладка «Со статусом» показывает всё размеченное, включая шум и дубликаты."""
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
+    captured = _articles_sql(monkeypatch)
+    try:
+        TestClient(app).get("/api/articles?changed_only=true")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "NOT IN ('noise', 'duplicate')" not in captured["sql"]
+    assert "<> 'new'" in captured["sql"]
+
+
+def test_monthly_stats_scopes_activity_by_role(monkeypatch):
+    """Задача 18: платформенная воронка общая, но РАЗМЕТКА пер-юзерная —
+    обычный пользователь не должен видеть, кто и что пометил у других."""
+    app = api.app
+    monkeypatch.setattr(api.repository, "monthly_platform_stats", lambda months: [{"month": "2026-07"}])
+    monkeypatch.setattr(api.repository, "monthly_ai_cost", lambda months: [])
+    seen = {}
+    monkeypatch.setattr(
+        api.repository, "monthly_user_activity",
+        lambda months, user_id=None: seen.update({"user_id": user_id}) or [],
+    )
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
+    try:
+        body = TestClient(app).get("/api/stats/monthly").json()
+    finally:
+        app.dependency_overrides.clear()
+    assert seen["user_id"] == 7, "обычному пользователю подставили чужую активность"
+    assert body["activity_scope"] == "self"
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@e.ru", "role": "admin"}
+    try:
+        body = TestClient(app).get("/api/stats/monthly").json()
+    finally:
+        app.dependency_overrides.clear()
+    assert seen["user_id"] is None, "админ должен видеть активность всех"
+    assert body["activity_scope"] == "all"

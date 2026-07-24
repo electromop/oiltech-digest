@@ -477,6 +477,14 @@ def list_articles(
     if status:
         clauses.append("COALESCE(uas.status, 'new') = %s")
         params.append(status)
+    elif not changed_only:
+        # Пометка «Шум»/«Дубликат» — это «убрать с глаз», и она обязана убирать.
+        # Раньше лента не фильтровала статусы вообще, поэтому помеченное продолжало
+        # висеть у того, кто его пометил (замер 24.07: 104 таких статьи в ленте).
+        # Фильтр ПЕР-ЮЗЕРНЫЙ: uas приджойнен по текущему пользователю, чужие пометки
+        # ничего не скрывают. Явный фильтр по статусу и вкладка «Со статусом»
+        # (changed_only) по-прежнему показывают помеченное — иначе его не пересмотреть.
+        clauses.append("COALESCE(uas.status, 'new') NOT IN ('noise', 'duplicate')")
     if changed_only:
         clauses.append("COALESCE(uas.status, 'new') <> 'new'")
     if language:
@@ -1099,6 +1107,32 @@ def external_worker_fail(
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
     return {"ok": True}
+
+
+@app.get("/api/stats/monthly")
+def monthly_stats(
+    months: int = Query(6, ge=1, le=24),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """Месячные результаты платформы + активность пользователей.
+
+    СКОУП (урок аудита изоляции 24.07): воронка и стоимость ИИ — общие показатели
+    работы платформы, их видят все. А РАЗМЕТКА — пер-юзерная: обычный пользователь
+    видит только свою, админ — всех. Без этого раздел статистики стал бы окном в
+    чужую работу.
+    """
+    is_admin = (user.get("role") or "user") == "admin"
+    return _clean(
+        {
+            "months": months,
+            "platform": repository.monthly_platform_stats(months),
+            "ai_cost": repository.monthly_ai_cost(months),
+            "activity": repository.monthly_user_activity(
+                months, user_id=None if is_admin else int(user["id"])
+            ),
+            "activity_scope": "all" if is_admin else "self",
+        }
+    )
 
 
 @app.get("/api/maintenance/status")

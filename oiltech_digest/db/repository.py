@@ -1376,6 +1376,100 @@ def dashboard_stats(user_id: int | None = None) -> dict:
     }
 
 
+def monthly_platform_stats(months: int = 6) -> list[dict]:
+    """Месячная воронка платформы: собрано → прошло гейт → обработано → скрыто.
+
+    Глобальная (не пер-юзерная) метрика: это результат работы САМОЙ платформы,
+    одинаковый для всех. Пер-юзерная активность считается отдельно —
+    monthly_user_activity(), у неё свой скоуп по владельцу.
+    Месяц берём по collected_at (когда МЫ собрали), а не по published_at:
+    иначе старые статьи из архивных лент искажают динамику текущей работы.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT to_char(a.collected_at, 'YYYY-MM') AS month,
+                   count(*) AS collected,
+                   count(*) FILTER (WHERE c.relevant IS TRUE) AS relevant,
+                   count(*) FILTER (WHERE c.relevant IS FALSE) AS rejected,
+                   count(*) FILTER (WHERE a.pending_deletion) AS hidden,
+                   count(*) FILTER (WHERE COALESCE(c.summary, '') <> '') AS summarized,
+                   count(*) FILTER (WHERE sc.total_score IS NOT NULL) AS scored,
+                   round(avg(sc.total_score)) AS avg_score,
+                   count(*) FILTER (WHERE sc.total_score >= 60) AS digest_ready
+            FROM articles a
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            LEFT JOIN article_scores sc ON sc.article_id = a.id
+            WHERE a.collected_at >= date_trunc('month', now()) - make_interval(months => %s)
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            (months,),
+        )
+        return cur.fetchall()
+
+
+def monthly_ai_cost(months: int = 6) -> list[dict]:
+    """Стоимость ИИ по месяцам и моделям.
+
+    Считается по ai_processing_runs.cost_usd. ВАЖНО: до фикса 23.07 (T10) сюда не
+    попадали вызовы гейта по ОТКЛОНЁННЫМ статьям — исторические месяцы занижены.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT to_char(created_at, 'YYYY-MM') AS month,
+                   model,
+                   count(*) AS runs,
+                   round(sum(cost_usd)::numeric, 2) AS cost_usd
+            FROM ai_processing_runs
+            WHERE created_at >= date_trunc('month', now()) - make_interval(months => %s)
+            GROUP BY 1, 2
+            ORDER BY 1, 4 DESC
+            """,
+            (months,),
+        )
+        return cur.fetchall()
+
+
+def monthly_user_activity(months: int = 6, user_id: int | None = None) -> list[dict]:
+    """Разметка пользователей по месяцам: кто сколько чего пометил.
+
+    СКОУП: user_id=None — все пользователи (только для админа, решается в api).
+    Передан user_id — строго его собственная активность. Fail-closed не нужен:
+    вызывающий обязан передать user_id для не-админа (см. api.monthly_stats).
+    Месяц — по дате статьи, чтобы «разметка за июль» означала июльские новости.
+    """
+    params: list = [months]
+    user_clause = ""
+    if user_id is not None:
+        user_clause = "AND s.user_id = %s"
+        params.append(user_id)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') AS month,
+                   s.user_id,
+                   u.email,
+                   s.status,
+                   count(*) AS marks
+            FROM user_article_states s
+            JOIN users u ON u.id = s.user_id
+            JOIN articles a ON a.id = s.article_id
+            WHERE COALESCE(a.published_at, a.collected_at)
+                  >= date_trunc('month', now()) - make_interval(months => %s)
+              {user_clause}
+            GROUP BY 1, 2, 3, 4
+            ORDER BY 1 DESC, 5 DESC
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
 def clear_future_published_dates(tolerance_days: int = 2) -> int:
     """Обнулить недостоверные даты публикации из будущего (анонсы-события календаря).
 
