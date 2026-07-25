@@ -1420,7 +1420,13 @@ def dashboard_stats(user_id: int | None = None) -> dict:
               (SELECT COUNT(*) FROM user_article_states
                  WHERE user_id = %(user_id)s AND status = 'digest') AS selected_for_digest,
               (SELECT ROUND(AVG(total_score)) FROM article_scores) AS avg_score,
-              (SELECT COUNT(*) FROM sources) AS sources
+              (SELECT COUNT(*) FROM sources) AS sources,
+              -- «Всего» на дашборде показывает ВЕСЬ объём собранного (решение владельца
+              -- 25.07): все статьи в базе, включая отсев по релевантности и вычищенные
+              -- перепроверкой. total_articles выше остаётся «сигналами» (его читает
+              -- workingTotal и арифметика соседних плиток) — это ОТДЕЛЬНОЕ поле только
+              -- под первую плитку.
+              (SELECT COUNT(*) FROM articles) AS all_articles
             """,
             {"user_id": user_id},
         )
@@ -1450,6 +1456,9 @@ def dashboard_stats(user_id: int | None = None) -> dict:
 
     return {
         "total_articles": int(row["total_articles"] or 0),
+        # Весь объём базы — только под плитку «Всего» на дашборде. Отдельно от
+        # total_articles («сигналы»), чтобы не задеть workingTotal и «Обработано».
+        "all_articles": int(row["all_articles"] or 0),
         "with_summary": int(row["with_summary"] or 0),
         "processed_articles": int(row["processed_articles"] or 0),
         # Терялось: SQL считал cleaned_articles, а возврат собирается вручную и поле

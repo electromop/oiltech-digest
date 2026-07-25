@@ -270,7 +270,10 @@ export function ArticlesPage(props: Props) {
   }, [visibleArticles]);
 
   const dashboardCards = useMemo(() => {
-    const total = stats?.total_articles ?? articles.length;
+    // Первая плитка «Всего» показывает ВЕСЬ объём базы (решение владельца 25.07),
+    // а не только сигналы. all_articles — отдельное поле; total_articles («сигналы»)
+    // по-прежнему питает workingTotal и соседние плитки, поэтому его тут не трогаем.
+    const total = stats?.all_articles ?? stats?.total_articles ?? articles.length;
     // Счётчики по статусам берём с сервера (по всей базе). Клиентский подсчёт по массиву
     // articles — лишь фоллбэк: этот массив ограничен топ-2000 и сужается активным фильтром,
     // поэтому цифры занижали и «плавали», расходясь с плитками «Всего»/«Обработано».

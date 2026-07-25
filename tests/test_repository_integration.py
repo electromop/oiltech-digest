@@ -148,6 +148,10 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
         "total_articles": 2,
         "with_summary": 2,
         "processed_articles": 2,
+        # Весь объём базы под плитку «Всего». В этой фикстуре обе статьи — видимые сигналы,
+        # поэтому all_articles совпадает с total_articles; семантику «считает и отсев,
+        # и вычищенные» проверяет отдельный тест ниже.
+        "all_articles": 2,
         # Плитка «Почищено» = статьи с pending_deletion. В фикстуре таких нет, поэтому 0.
         "cleaned_articles": 0,
         "selected_for_digest": 1,
@@ -178,6 +182,54 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
     assert digest_rows[0]["parent_tag_name"] == "Технологии"
 
     assert repository.digest_candidates(month=now.strftime("%Y-%m"), min_score=95) == []
+
+
+def test_dashboard_all_articles_counts_whole_base_not_just_signals(isolated_db):
+    """Плитка «Всего» (all_articles) считает ВЕСЬ объём базы, а total_articles — только сигналы.
+
+    Решение владельца 25.07: первая плитка показывает всё собранное, включая отсев по
+    релевантности и вычищенное перепроверкой (pending_deletion). Разделение полей нужно,
+    чтобы это не задело total_articles («сигналы»), на котором держатся соседние плитки.
+    """
+    now = datetime.now(timezone.utc)
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            """
+            INSERT INTO sources (name, source_type, url, enabled, parse_strategy, category)
+            VALUES ('S', 'News', 'https://example.com/s', TRUE, 'request', 'международные')
+            RETURNING id
+            """
+        ).fetchone()[0]
+        article_ids = {}
+        for key, url, chash in [
+            ("signal", "https://example.com/a1", "h1"),
+            ("rejected", "https://example.com/a2", "h2"),
+            ("cleaned", "https://example.com/a3", "h3"),
+        ]:
+            article_ids[key] = conn.execute(
+                """
+                INSERT INTO articles (source_id, title, url, published_at, collected_at,
+                                      raw_text, language, content_hash, pending_deletion)
+                VALUES (%s, %s, %s, %s, %s, 'text', 'ru', %s, %s)
+                RETURNING id
+                """,
+                (source_id, key, url, now, now, chash, key == "cleaned"),
+            ).fetchone()[0]
+        # signal — прошёл гейт (relevant TRUE); rejected — отсеян (relevant FALSE);
+        # cleaned — relevant, но помечен на вычистку (pending_deletion выше).
+        conn.execute(
+            """
+            INSERT INTO article_cards (article_id, summary, relevant, status)
+            VALUES (%s, 'sig', TRUE, 'new'), (%s, 'rej', FALSE, 'new'), (%s, 'cln', TRUE, 'new')
+            """,
+            (article_ids["signal"], article_ids["rejected"], article_ids["cleaned"]),
+        )
+        conn.commit()
+
+    stats = repository.dashboard_stats(user_id=None)
+    assert stats["all_articles"] == 3      # все три статьи базы
+    assert stats["total_articles"] == 1    # только один видимый сигнал
+    assert stats["cleaned_articles"] == 1  # одна вычищена
 
 
 def test_insert_article_is_idempotent_by_url_against_real_db(isolated_db):

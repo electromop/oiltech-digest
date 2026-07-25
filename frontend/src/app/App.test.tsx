@@ -280,6 +280,9 @@ describe("App smoke", () => {
         return Promise.resolve(
           jsonResponse({
             total_articles: 3,
+            // Весь объём базы под плитку «Всего» — намеренно != total_articles (сигналы),
+            // чтобы тест проверял, что плитка берёт именно all_articles.
+            all_articles: 15,
             with_summary: 3,
             processed_articles: 3,
             selected_for_digest: 3,
@@ -513,6 +516,8 @@ describe("App smoke", () => {
     };
 
     await waitFor(() => expect(tileValue("Шум")).toBe("999"));
+    // Первая плитка «Всего» показывает весь объём базы (all_articles=15), а не сигналы (3).
+    expect(tileValue("Всего сигналов")).toBe("15");
     expect(tileValue("Дубликаты")).toBe("7");
     // Плашка «Новые» заменена на «Почищено» (cleaned_articles): «Новые» показывала
     // пер-юзерный статус и ни с чем не сходилась, а «Почищено» даёт арифметику

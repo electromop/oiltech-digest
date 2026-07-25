@@ -118,6 +118,8 @@ export type ScoreItem = {
 
 export type DashboardStats = {
   total_articles: number;
+  // Весь объём базы (все статьи, включая отсев и вычищенные) — только под плитку «Всего».
+  all_articles?: number;
   with_summary: number;
   processed_articles: number;
   // Почищено — статьи, убранные из выдачи перепроверкой релевантности (pending_deletion).
