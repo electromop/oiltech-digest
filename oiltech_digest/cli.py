@@ -143,7 +143,10 @@ def cmd_fetch_full_text(args: argparse.Namespace) -> None:
     )
     print(
         f"fetch-full-text: проверено={stats['processed']}, обновлено={stats['updated']}, "
-        f"слишком коротких={stats['too_short']}, ошибок={stats['failed']}"
+        f"слишком коротких={stats['too_short']}, "
+        # Отдельной строкой: это не сбой, а сработавшая защита от подмены текста (№24).
+        # Без своего счётчика она была невидима и терялась в общей арифметике.
+        f"отклонено стражем={stats.get('mismatch', 0)}, ошибок={stats['failed']}"
     )
 
 
