@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest import auth, config
+from oiltech_digest.ingestion import normalize
 from oiltech_digest.db.connection import get_connection
 
 # Единый источник правды для набора пер-юзерных рабочих статусов статьи (#12).
@@ -1230,15 +1231,17 @@ def _jsonable(value):
 def insert_article(rec: dict) -> bool:
     """Вставить статью. Дубликаты по url игнорируются (ON CONFLICT DO NOTHING).
     Возвращает True, если строка реально вставлена."""
-    rec = {**rec, "image_url": rec.get("image_url")}
+    rec = {**rec, "image_url": rec.get("image_url"),
+           "body_hash": normalize.compute_body_hash(rec.get("raw_text"))}
     with get_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, published_at,
-                                  raw_text, text_truncated, language, content_hash, image_url)
+                                  raw_text, text_truncated, language, content_hash, image_url,
+                                  body_hash)
             VALUES (%(source_id)s, %(title)s, %(url)s, %(published_at)s,
                     %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s,
-                    %(content_hash)s, %(image_url)s)
+                    %(content_hash)s, %(image_url)s, %(body_hash)s)
             ON CONFLICT (url) DO NOTHING
             RETURNING id
             """,
@@ -1247,6 +1250,30 @@ def insert_article(rec: dict) -> bool:
         row = cur.fetchone()
         conn.commit()
     return row is not None
+
+
+def body_hash_belongs_to_other_article(source_id: int, body_hash: str | None,
+                                       exclude_article_id: int | None = None) -> bool:
+    """Есть ли у ЭТОГО источника другая статья с таким же телом (задача №24).
+
+    Один и тот же текст у разных статей источника — почти всегда подмена: сайт отдал
+    листинг/пейвол/заглушку вместо статьи. Проверка идёт в паре (source_id, body_hash),
+    под неё есть составной индекс. Кросс-источниковые совпадения НЕ считаем подменой —
+    это перепечатки, ими занимается дедуп (№21).
+    """
+    if not body_hash:
+        return False
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT 1 FROM articles
+            WHERE source_id = %s AND body_hash = %s
+              AND (%s::bigint IS NULL OR id <> %s::bigint)
+            LIMIT 1
+            """,
+            (source_id, body_hash, exclude_article_id, exclude_article_id),
+        )
+        return cur.fetchone() is not None
 
 
 def get_articles_missing_image(limit: int = 200) -> list[dict]:
@@ -1339,6 +1366,7 @@ def update_article_full_text(article_id: int, raw_text: str | None, text_truncat
                 """
                 UPDATE articles
                 SET raw_text = %s,
+                    body_hash = %s,
                     text_truncated = %s,
                     full_text_fetched_at = now(),
                     full_text_status = %s,
@@ -1347,7 +1375,8 @@ def update_article_full_text(article_id: int, raw_text: str | None, text_truncat
                     updated_at = now()
                 WHERE id = %s
                 """,
-                (raw_text, text_truncated, status, error, method, article_id),
+                (raw_text, normalize.compute_body_hash(raw_text), text_truncated,
+                 status, error, method, article_id),
             )
         else:
             conn.execute(

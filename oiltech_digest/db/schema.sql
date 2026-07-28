@@ -78,8 +78,16 @@ CREATE TABLE IF NOT EXISTS articles (
   created_at     TIMESTAMPTZ DEFAULT now(),
   updated_at     TIMESTAMPTZ DEFAULT now()
 );
+-- body_hash — хэш САМОГО ТЕКСТА (в отличие от content_hash = заголовок+URL). Нужен,
+-- чтобы ловить подмену «одно тело — многим статьям» (задача №24): без него на проде
+-- накопилось 951 статья с побайтово общим телом, а всего чужое тело оказалось
+-- у 10.4% видимой ленты.
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS body_hash TEXT;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_url ON articles(url);
 CREATE INDEX IF NOT EXISTS idx_articles_content_hash ON articles(content_hash);
+-- Составной: проверка «такое тело у этого источника уже есть» идёт всегда в паре.
+CREATE INDEX IF NOT EXISTS idx_articles_source_body_hash ON articles(source_id, body_hash);
 CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
 CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
 

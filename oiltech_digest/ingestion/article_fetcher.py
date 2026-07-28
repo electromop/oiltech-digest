@@ -78,7 +78,9 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
     retry_too_short=True re-attempts articles previously marked too_short,
     useful after adding a new extraction backend (e.g. trafilatura).
     """
-    stats = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0}
+    # mismatch — отдельно от failed: это не сбой сети, а сработавшая защита от подмены
+    # текста (№24). Смешивать их нельзя, иначе не видно, работает ли страж.
+    stats = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0, "mismatch": 0}
     articles = repository.get_articles_needing_full_text(limit=limit, retry_too_short=retry_too_short)
     for article in articles:
         stats["processed"] += 1
@@ -105,7 +107,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
                     error=result.error,
                     image_url=result.image_url,
                 )
-                stats["too_short" if result.status == "too_short" else "failed"] += 1
+                stats[result.status if result.status in ("too_short", "mismatch") else "failed"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
             logger.warning("Full text fetch failed for article %s: %s", article.get("id"), exc)
             repository.update_article_full_text(
@@ -157,14 +159,39 @@ def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> E
     current = article.get("raw_text") or ""
     image_url = extract_og_image(content)
 
+    title = article.get("title") or ""
+    # Запоминаем отказ стража: если обе ветки извлечения дали ЧУЖОЙ текст, итог должен быть
+    # mismatch, а не too_short. Иначе сработавшая защита выглядела бы как «мало текста»,
+    # и починку дефекта №24 нельзя было бы отличить в статистике от обычной неудачи.
+    rejected_reason: str | None = None
+    rejected_method = "lxml"
+
     extracted = extract_main_text(content)
     if _is_better_text(extracted, current, min_chars=min_chars):
-        return ExtractionResult(extracted, "ok", method="lxml", image_url=image_url)
+        rejection = _ownership_rejection(article, title, extracted)
+        if rejection is None:
+            return ExtractionResult(extracted, "ok", method="lxml", image_url=image_url)
+        # Текст не принадлежит статье — НЕ пишем его, но пробуем вторую ветку извлечения.
+        logger.warning("full_text_rejected article=%s method=lxml reason=%s",
+                       article.get("id"), rejection)
+        rejected_reason, extracted = rejection, ""
 
     # Fallback: trafilatura often handles cluttered pages better than lxml heuristics.
     traf = _trafilatura_extract(content)
     if traf and _is_better_text(traf, current, min_chars=min_chars):
-        return ExtractionResult(traf, "ok", method="trafilatura", image_url=image_url)
+        rejection = _ownership_rejection(article, title, traf)
+        if rejection is None:
+            return ExtractionResult(traf, "ok", method="trafilatura", image_url=image_url)
+        logger.warning("full_text_rejected article=%s method=trafilatura reason=%s",
+                       article.get("id"), rejection)
+        rejected_reason, rejected_method, traf = rejection, "trafilatura", ""
+
+    if rejected_reason is not None:
+        # Сохранять нечего: прежний (пусть куцый, но СВОЙ) raw_text остаётся нетронутым.
+        return ExtractionResult(
+            "", "mismatch", method=rejected_method,
+            error=f"extracted text rejected: {rejected_reason}", image_url=image_url,
+        )
 
     best = traf if len(traf) > len(extracted) else extracted
     return ExtractionResult(
@@ -289,6 +316,36 @@ def _score_node(node, text: str) -> float:
     link_text = " ".join(normalize.clean_html(a.text_content()) for a in node.xpath(".//a"))
     link_penalty = min(400, len(link_text) * 0.4)
     return len(text) + paragraph_count * 30 + good_bonus - bad_penalty - link_penalty
+
+
+def _ownership_rejection(article: dict, title: str, text: str) -> str | None:
+    """Причина, по которой текст НЕ принадлежит этой статье, либо None если всё в порядке.
+
+    Два рубежа против подмены (задача №24, замер 28.07 — чужое тело у 10.4% видимой ленты,
+    у Neftegaz.ru 37.7%):
+
+    1. Заголовок не пересекается с текстом. Прежде принадлежность не проверялась ВООБЩЕ:
+       `_is_better_text` смотрел только на длину, поэтому листинг, пейвол или «избранный»
+       материал из JSON-LD побеждали настоящую статью и записывались со статусом ok.
+    2. Такое же тело уже есть у другой статьи ЭТОГО источника. Ловит случай, который
+       первый рубеж пропускает: сайт стабильно отдаёт одну и ту же страницу на все URL
+       (пейвол), и её заголовок-обвязка может формально пересечься с заголовком статьи.
+    """
+    if not normalize.title_matches_body(title, text):
+        return "title does not match body"
+
+    source_id = article.get("source_id")
+    if source_id is None:
+        return None
+    body_hash = normalize.compute_body_hash(text)
+    try:
+        if repository.body_hash_belongs_to_other_article(
+            int(source_id), body_hash, exclude_article_id=article.get("id")
+        ):
+            return "identical body already stored for another article of this source"
+    except Exception:  # noqa: BLE001 - сбой проверки не должен ронять дозагрузку
+        logger.warning("body_hash check failed article=%s", article.get("id"))
+    return None
 
 
 def _is_better_text(extracted: str, current: str, min_chars: int) -> bool:
