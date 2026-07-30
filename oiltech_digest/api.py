@@ -184,6 +184,7 @@ class BacklogTaskCreate(BaseModel):
     title: str
     priority: str = "P3"
     status: str = "new"
+    details: str | None = None
 
 
 class BacklogTaskPatch(BaseModel):
@@ -573,7 +574,7 @@ def backlog_endpoint(user: dict[str, Any] = Depends(require_user)) -> dict[str, 
 @app.post("/api/backlog/tasks")
 def create_backlog_task_endpoint(payload: BacklogTaskCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     try:
-        return backlog.create_plan_task(payload.title, priority=payload.priority, status=payload.status)
+        return backlog.create_plan_task(payload.title, priority=payload.priority, status=payload.status, details=payload.details)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

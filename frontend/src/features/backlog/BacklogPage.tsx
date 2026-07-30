@@ -9,12 +9,12 @@ type Props = {
   showToast: ToastWriter;
 };
 
-const statusColumns: Array<{ id: BacklogTaskStatus; label: string; hint: string }> = [
-  { id: "new", label: "Новое", hint: "Ждет разбора" },
-  { id: "in_progress", label: "В работе", hint: "Активный этап" },
-  { id: "paused", label: "Отложено", hint: "Пауза или блокер" },
-  { id: "done", label: "Готово", hint: "Закрытые задачи" },
-  { id: "rejected", label: "Отклонено", hint: "Не берем в работу" },
+const statusColumns: Array<{ id: BacklogTaskStatus; label: string; hint: string; short: string }> = [
+  { id: "new", label: "Новое", hint: "Ждет разбора", short: "Новые" },
+  { id: "in_progress", label: "В работе", hint: "Активный этап", short: "В работе" },
+  { id: "paused", label: "Отложено", hint: "Пауза или блокер", short: "Пауза" },
+  { id: "done", label: "Готово", hint: "Закрытые задачи", short: "Готово" },
+  { id: "rejected", label: "Отклонено", hint: "Не берем в работу", short: "Отклонено" },
 ];
 
 const priorities = ["P1", "P2", "P3", "P4"];
@@ -25,6 +25,8 @@ const sectionLabels: Record<BacklogTask["section"], string> = {
   inbox: "Входящие",
 };
 
+const statusLabels = Object.fromEntries(statusColumns.map((column) => [column.id, column.label])) as Record<BacklogTaskStatus, string>;
+
 export function BacklogPage({ onUnauthorized, showToast }: Props) {
   const [payload, setPayload] = useState<BacklogPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,17 +34,46 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [dropTargetStatus, setDropTargetStatus] = useState<BacklogTaskStatus | null>(null);
   const [title, setTitle] = useState("");
+  const [details, setDetails] = useState("");
   const [priority, setPriority] = useState("P3");
+  const [createStatus, setCreateStatus] = useState<BacklogTaskStatus>("new");
+  const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<BacklogTaskStatus | "">("");
+  const [priorityFilter, setPriorityFilter] = useState("");
+  const [sectionFilter, setSectionFilter] = useState<BacklogTask["section"] | "">("");
 
   useEffect(() => {
     void reload();
   }, []);
 
   const tasks = payload?.tasks ?? [];
-  const visibleTasks = useMemo(() => {
-    return statusFilter ? tasks.filter((task) => task.status === statusFilter) : tasks;
-  }, [statusFilter, tasks]);
+  const filteredTasks = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return tasks.filter((task) => {
+      const searchable = [task.id, task.priority, task.title, task.details, task.area, sectionLabels[task.section], statusLabels[task.status]]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return (
+        (!needle || searchable.includes(needle)) &&
+        (!statusFilter || task.status === statusFilter) &&
+        (!priorityFilter || task.priority === priorityFilter) &&
+        (!sectionFilter || task.section === sectionFilter)
+      );
+    });
+  }, [priorityFilter, query, sectionFilter, statusFilter, tasks]);
+
+  const metrics = useMemo(() => {
+    const total = tasks.length;
+    const done = countByStatus(tasks, "done");
+    const rejected = countByStatus(tasks, "rejected");
+    const active = countByStatus(tasks, "in_progress");
+    const paused = countByStatus(tasks, "paused");
+    const open = Math.max(total - done - rejected, 0);
+    const planned = Math.max(total - rejected, 0);
+    const progress = planned ? Math.round((done / planned) * 100) : 0;
+    return { total, done, rejected, active, paused, open, progress };
+  }, [tasks]);
 
   async function reload() {
     try {
@@ -71,9 +102,11 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
     }
     try {
       setSavingTaskId("new");
-      await createBacklogTask({ title: title.trim(), priority, status: "new" });
+      await createBacklogTask({ title: title.trim(), details: details.trim() || undefined, priority, status: createStatus });
       setTitle("");
-      showToast("Задача добавлена в BACKLOG.md");
+      setDetails("");
+      setCreateStatus("new");
+      showToast("Задача добавлена и синхронизирована с BACKLOG.md");
       await reload();
     } catch (error) {
       handleError(error, "Не удалось создать задачу");
@@ -84,12 +117,15 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
 
   async function changeStatus(task: BacklogTask, nextStatus: BacklogTaskStatus) {
     if (task.status === nextStatus) return;
+    const previousPayload = payload;
+    setSavingTaskId(task.id);
+    setPayload((current) => updatePayloadTask(current, { ...task, status: nextStatus, updated: "синхронизация" }));
     try {
-      setSavingTaskId(task.id);
-      await updateBacklogTaskStatus(task.id, nextStatus);
-      showToast("Статус синхронизирован с BACKLOG.md");
-      await reload();
+      const updated = await updateBacklogTaskStatus(task.id, nextStatus);
+      setPayload((current) => updatePayloadTask(current, updated));
+      showToast(`«${task.title}» → ${statusLabels[nextStatus]}`);
     } catch (error) {
+      setPayload(previousPayload);
       handleError(error, "Не удалось обновить статус");
     } finally {
       setSavingTaskId(null);
@@ -122,13 +158,20 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
     await changeStatus(task, status);
   }
 
+  function clearFilters() {
+    setQuery("");
+    setStatusFilter("");
+    setPriorityFilter("");
+    setSectionFilter("");
+  }
+
   return (
-    <section className="screenStack">
-      <header className="screenHeader">
+    <section className="screenStack backlogWorkspace">
+      <header className="screenHeader backlogHero">
         <div>
           <div className="eyebrow">Проектный поток</div>
           <h1>Задачи проекта</h1>
-          <p>Доска статусов поверх репозиторного бэклога. Изменения сразу записываются в BACKLOG.md.</p>
+          <p>Канбан-доска поверх репозиторного бэклога. Создание, этапы и перетаскивание сразу синхронизируются с BACKLOG.md.</p>
         </div>
         <div className="panelActions">
           <button type="button" className="ghostButton compactButton" onClick={() => void reload()} disabled={loading}>
@@ -138,13 +181,31 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
         </div>
       </header>
 
-      <section className="statsGridReact backlogStats">
-        {statusColumns.map((column) => (
-          <div className="statCardReact" key={column.id}>
-            <strong>{payload?.counts[column.id] ?? 0}</strong>
-            <span>{column.label}</span>
+      <section className="backlogOverview">
+        <article className="panel backlogProgressPanel">
+          <div className="panelKicker">Прогресс проекта</div>
+          <div className="backlogProgressHead">
+            <strong>{metrics.progress}%</strong>
+            <span>{metrics.done} готово из {Math.max(metrics.total - metrics.rejected, 0)}</span>
           </div>
-        ))}
+          <div className="backlogProgressTrack" aria-label={`Прогресс проекта ${metrics.progress}%`}>
+            <div style={{ width: `${metrics.progress}%` }} />
+          </div>
+          <div className="backlogProgressMeta">
+            <span>{metrics.open} открыто</span>
+            <span>{metrics.active} в работе</span>
+            <span>{metrics.paused} на паузе</span>
+          </div>
+        </article>
+
+        <section className="statsGridReact backlogStats" aria-label="Сводка по этапам">
+          {statusColumns.map((column) => (
+            <div className={`statCardReact backlogStatusStat ${column.id}`} key={column.id}>
+              <strong>{payload?.counts[column.id] ?? 0}</strong>
+              <span>{column.short}</span>
+            </div>
+          ))}
+        </section>
       </section>
 
       <section className="panel backlogComposer">
@@ -153,7 +214,7 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
           <span className="badge emphasis">Синхронизация: BACKLOG.md</span>
         </div>
         <div className="backlogCreateGrid">
-          <label className="field">
+          <label className="field backlogTitleField">
             <span>Название</span>
             <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Что нужно сделать по проекту" />
           </label>
@@ -167,19 +228,9 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
               ))}
             </select>
           </label>
-          <button type="button" className="primaryButton" onClick={() => void submitTask()} disabled={savingTaskId === "new"}>
-            Создать
-          </button>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panelHeader">
-          <h2>Этапы</h2>
-          <label className="field compactField">
-            <span>Фильтр</span>
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as BacklogTaskStatus | "")}>
-              <option value="">Все статусы</option>
+          <label className="field">
+            <span>Стартовый этап</span>
+            <select value={createStatus} onChange={(event) => setCreateStatus(event.target.value as BacklogTaskStatus)}>
               {statusColumns.map((column) => (
                 <option key={column.id} value={column.id}>
                   {column.label}
@@ -187,13 +238,69 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
               ))}
             </select>
           </label>
+          <label className="field backlogDetailsField">
+            <span>Описание</span>
+            <textarea value={details} onChange={(event) => setDetails(event.target.value)} placeholder="Контекст, критерий готовности или ссылка" rows={2} />
+          </label>
+          <button type="button" className="primaryButton backlogCreateButton" onClick={() => void submitTask()} disabled={savingTaskId === "new"}>
+            {savingTaskId === "new" ? "Создаем..." : "Создать"}
+          </button>
+        </div>
+      </section>
+
+      <section className="panel backlogBoardPanel">
+        <div className="panelHeader backlogToolbar">
+          <div>
+            <h2>Этапы</h2>
+            <span>{filteredTasks.length} из {tasks.length} задач в текущем срезе</span>
+          </div>
+          <div className="backlogFilters">
+            <label className="field backlogSearch">
+              <span>Поиск</span>
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Название, зона, #ID" />
+            </label>
+            <label className="field compactField">
+              <span>Этап</span>
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as BacklogTaskStatus | "")}>
+                <option value="">Все</option>
+                {statusColumns.map((column) => (
+                  <option key={column.id} value={column.id}>
+                    {column.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field compactField">
+              <span>Приоритет</span>
+              <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}>
+                <option value="">Все</option>
+                {priorities.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field compactField">
+              <span>Тип</span>
+              <select value={sectionFilter} onChange={(event) => setSectionFilter(event.target.value as BacklogTask["section"] | "")}>
+                <option value="">Все</option>
+                <option value="plan">План</option>
+                <option value="tech">Техдолг</option>
+                <option value="inbox">Входящие</option>
+              </select>
+            </label>
+            <button type="button" className="ghostButton compactButton" onClick={clearFilters} disabled={!query && !statusFilter && !priorityFilter && !sectionFilter}>
+              Сбросить
+            </button>
+          </div>
         </div>
 
-        {loading ? <div className="emptyState">Загружаем задачи из репозитория…</div> : null}
+        {loading ? <div className="emptyState">Загружаем задачи из репозитория...</div> : null}
 
         <div className="backlogBoard">
           {statusColumns.map((column) => {
-            const columnTasks = visibleTasks.filter((task) => task.status === column.id);
+            const columnTasks = filteredTasks.filter((task) => task.status === column.id);
             return (
               <section
                 className={`backlogColumn ${dropTargetStatus === column.id ? "dropTarget" : ""}`}
@@ -224,7 +331,7 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
                       }}
                     />
                   ))}
-                  {!loading && columnTasks.length === 0 ? <div className="backlogEmpty">Нет задач</div> : null}
+                  {!loading && columnTasks.length === 0 ? <div className="backlogEmpty">Перетащите сюда задачу</div> : null}
                 </div>
               </section>
             );
@@ -243,9 +350,11 @@ function BacklogCard(props: {
   onDragStart: (task: BacklogTask, event: DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
 }) {
+  const quickStatus = nextUsefulStatus(props.task.status);
+
   return (
     <article
-      className={`backlogCard ${props.task.section} ${props.dragging ? "dragging" : ""}`}
+      className={`backlogCard ${props.task.section} ${priorityClass(props.task.priority)} ${props.dragging ? "dragging" : ""}`}
       draggable={!props.disabled}
       onDragStart={(event) => props.onDragStart(props.task, event)}
       onDragEnd={props.onDragEnd}
@@ -258,24 +367,60 @@ function BacklogCard(props: {
       </div>
       <h4>{props.task.title}</h4>
       {props.task.details ? <p>{props.task.details}</p> : null}
+      {props.task.area ? <div className="backlogArea">{props.task.area}</div> : null}
       <div className="backlogMeta">
         <span>#{props.task.id}</span>
-        <span>{props.task.updated || "без даты"}</span>
+        <span>{props.disabled ? "сохраняем..." : props.task.updated || "без даты"}</span>
       </div>
-      <label className="field">
-        <span>Этап</span>
-        <select
-          value={props.task.status}
-          disabled={props.disabled}
-          onChange={(event) => void props.onChangeStatus(props.task, event.target.value as BacklogTaskStatus)}
-        >
-          <option value="new">Новое</option>
-          <option value="in_progress">В работе</option>
-          <option value="paused">Отложено</option>
-          <option value="done">Готово</option>
-          <option value="rejected">Отклонено</option>
-        </select>
-      </label>
+      <div className="backlogCardControls">
+        <label className="field">
+          <span>Этап</span>
+          <select
+            value={props.task.status}
+            disabled={props.disabled}
+            onChange={(event) => void props.onChangeStatus(props.task, event.target.value as BacklogTaskStatus)}
+          >
+            {statusColumns.map((column) => (
+              <option key={column.id} value={column.id}>
+                {column.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {quickStatus ? (
+          <button type="button" className="ghostButton compactButton" disabled={props.disabled} onClick={() => void props.onChangeStatus(props.task, quickStatus)}>
+            {quickStatus === "done" ? "Готово" : "В работу"}
+          </button>
+        ) : null}
+      </div>
     </article>
+  );
+}
+
+function nextUsefulStatus(status: BacklogTaskStatus): BacklogTaskStatus | null {
+  if (status === "new" || status === "paused") return "in_progress";
+  if (status === "in_progress") return "done";
+  return null;
+}
+
+function priorityClass(priority: string): string {
+  const match = priority.match(/^P([1-4])$/);
+  return match ? `priority${match[1]}` : "priorityOther";
+}
+
+function countByStatus(tasks: BacklogTask[], status: BacklogTaskStatus): number {
+  return tasks.filter((task) => task.status === status).length;
+}
+
+function updatePayloadTask(payload: BacklogPayload | null, task: BacklogTask): BacklogPayload | null {
+  if (!payload) return payload;
+  const tasks = payload.tasks.map((item) => (item.id === task.id ? { ...item, ...task } : item));
+  return { ...payload, tasks, counts: buildCounts(tasks) };
+}
+
+function buildCounts(tasks: BacklogTask[]): Record<BacklogTaskStatus, number> {
+  return statusColumns.reduce(
+    (counts, column) => ({ ...counts, [column.id]: countByStatus(tasks, column.id) }),
+    { new: 0, in_progress: 0, paused: 0, done: 0, rejected: 0 } as Record<BacklogTaskStatus, number>,
   );
 }

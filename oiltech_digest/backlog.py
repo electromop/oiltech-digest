@@ -63,8 +63,9 @@ def read_backlog() -> dict[str, Any]:
     }
 
 
-def create_plan_task(title: str, priority: str = "P3", status: str = "new") -> dict[str, Any]:
+def create_plan_task(title: str, priority: str = "P3", status: str = "new", details: str | None = None) -> dict[str, Any]:
     clean_title = _clean_cell(title)
+    clean_details = _clean_cell(details or "")
     clean_priority = _normalize_priority(priority)
     clean_status = _normalize_status(status)
     if not clean_title:
@@ -75,7 +76,8 @@ def create_plan_task(title: str, priority: str = "P3", status: str = "new") -> d
     table_start, table_end = _find_table(lines, PLAN_HEADER)
     next_id = _next_plan_id(lines[table_start + 2 : table_end])
     today = date.today().isoformat()
-    row = f"| {next_id} | **{clean_priority}** | {clean_title} | {STATUS_LABELS[clean_status]} | {today} |"
+    row_title = _compose_plan_title(clean_title, clean_details)
+    row = f"| {next_id} | **{clean_priority}** | {row_title} | {STATUS_LABELS[clean_status]} | {today} |"
     lines.insert(table_end, row)
     _write_lines(lines)
     return BacklogTask(
@@ -83,6 +85,7 @@ def create_plan_task(title: str, priority: str = "P3", status: str = "new") -> d
         section="plan",
         priority=clean_priority,
         title=clean_title,
+        details=clean_details or None,
         status=clean_status,
         updated=today,
     ).as_dict()
@@ -114,12 +117,14 @@ def _parse_plan_tasks(text: str) -> list[BacklogTask]:
     for cells in rows:
         if len(cells) < 5:
             continue
+        title, details = _split_plan_title(_strip_markdown(cells[2]))
         tasks.append(
             BacklogTask(
                 id=cells[0],
                 section="plan",
                 priority=_strip_markdown(cells[1]),
-                title=_strip_markdown(cells[2]),
+                title=title,
+                details=details,
                 status=_status_from_cell(cells[3]),
                 updated=_strip_markdown(cells[4]),
             )
@@ -262,6 +267,20 @@ def _format_row(cells: list[str]) -> str:
 
 def _clean_cell(value: str) -> str:
     return " ".join(value.replace("|", "/").split())
+
+
+def _compose_plan_title(title: str, details: str) -> str:
+    if not details:
+        return title
+    return f"{title} — Описание: {details}"
+
+
+def _split_plan_title(value: str) -> tuple[str, str | None]:
+    marker = " — Описание: "
+    if marker not in value:
+        return value, None
+    title, details = value.split(marker, 1)
+    return title.strip(), details.strip() or None
 
 
 def _strip_markdown(value: str) -> str:

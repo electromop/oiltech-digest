@@ -1398,8 +1398,70 @@ button {
   color: #b91c1c;
 }
 
+.backlogWorkspace {
+  gap: 16px;
+}
+
+.backlogHero p {
+  max-width: 76ch;
+}
+
+.backlogOverview {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.8fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.backlogProgressPanel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.backlogProgressHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.backlogProgressHead strong {
+  font-family: "GPN Din Condensed", "GPN Din", Inter, sans-serif;
+  font-size: 2.6rem;
+  line-height: 0.9;
+}
+
+.backlogProgressHead span,
+.backlogProgressMeta {
+  color: var(--text-muted);
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+
+.backlogProgressTrack {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.88);
+}
+
+.backlogProgressTrack div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #16a34a);
+  transition: width 220ms ease;
+}
+
+.backlogProgressMeta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .backlogStats {
-  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  grid-template-columns: repeat(5, minmax(112px, 1fr));
+  min-width: 0;
 }
 
 .backlogStats .statCardReact strong {
@@ -1415,16 +1477,82 @@ button {
   font-weight: 700;
 }
 
-.backlogComposer {
+.backlogStatusStat {
+  min-width: 0;
+  border-left: 3px solid rgba(37, 99, 235, 0.3);
+}
+
+.backlogStatusStat.in_progress {
+  border-left-color: #2563eb;
+}
+
+.backlogStatusStat.paused {
+  border-left-color: #eab308;
+}
+
+.backlogStatusStat.done {
+  border-left-color: #16a34a;
+}
+
+.backlogStatusStat.rejected {
+  border-left-color: #dc2626;
+}
+
+.backlogComposer,
+.backlogBoardPanel {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .backlogCreateGrid {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 120px auto;
+  grid-template-columns: minmax(260px, 1.35fr) 120px minmax(150px, 0.6fr) minmax(240px, 1fr) auto;
   gap: 10px;
   align-items: end;
+  min-width: 0;
+}
+
+.backlogTitleField,
+.backlogDetailsField {
+  min-width: 0;
+}
+
+.backlogDetailsField textarea {
+  min-height: 42px;
+  resize: vertical;
+}
+
+.backlogCreateButton {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+.backlogToolbar {
+  align-items: end;
+}
+
+.backlogToolbar > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.backlogToolbar > div:first-child span {
+  color: var(--text-muted);
+  font-weight: 800;
+}
+
+.backlogFilters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(118px, auto)) auto;
+  gap: 10px;
+  align-items: end;
+  min-width: min(720px, 100%);
+}
+
+.backlogSearch {
+  min-width: 0;
 }
 
 .backlogBoard {
@@ -1449,6 +1577,7 @@ button {
   padding: 10px;
   display: grid;
   gap: 10px;
+  align-content: start;
   transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
@@ -1514,6 +1643,22 @@ button {
   transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease, transform 160ms ease;
 }
 
+.backlogCard.priority1 {
+  border-top: 3px solid #dc2626;
+}
+
+.backlogCard.priority2 {
+  border-top: 3px solid #2563eb;
+}
+
+.backlogCard.priority3 {
+  border-top: 3px solid #16a34a;
+}
+
+.backlogCard.priority4 {
+  border-top: 3px solid #94a3b8;
+}
+
 .backlogCard:hover {
   border-color: rgba(37, 99, 235, 0.26);
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
@@ -1558,6 +1703,17 @@ button {
   overflow-wrap: anywhere;
 }
 
+.backlogArea {
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: #475569;
+  background: rgba(241, 245, 249, 0.88);
+  font-size: 0.78rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .backlogSection,
 .backlogMeta {
   color: var(--text-muted);
@@ -1570,6 +1726,20 @@ button {
 .backlogCard .field select {
   min-width: 0;
   width: 100%;
+}
+
+.backlogCardControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.backlogCardControls .compactButton {
+  min-height: 38px;
+  align-self: end;
+  white-space: nowrap;
 }
 
 .backlogEmpty {
@@ -2451,6 +2621,12 @@ button {
   border-left-color: #dc2626;
 }
 
+.tasksAppShell .toastReact {
+  top: 82px;
+  right: 20px;
+  bottom: auto;
+}
+
 /* ≤1100px: сайдбар прячется — и сразу появляется нижняя навигация (раньше в
    диапазоне 721–1100px не было ни того, ни другого). Карточные/статистические
    сетки текучи через auto-fit, поэтому форсим 1fr только у разнородных раскладок. */
@@ -2470,6 +2646,7 @@ button {
   }
 
   .heroGrid,
+  .backlogOverview,
   .sourceConfigGridReact,
   .digestToolbar,
   .digestRunSummary,
@@ -2495,6 +2672,11 @@ button {
   .backlogStats,
   .backlogCreateGrid {
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  }
+
+  .backlogFilters {
+    min-width: 0;
+    grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(118px, auto));
   }
 
   .digestBuilderSide .digestPreviewSurface {
@@ -2574,6 +2756,7 @@ button {
   .jobsFilters,
   .backlogStats,
   .backlogCreateGrid,
+  .backlogFilters,
   .maintenanceGrid,
   .digestFiltersGrid,
   .digestFiltersRow,
@@ -2583,6 +2766,25 @@ button {
   .articlesFiltersRowSecondary,
   .articlesFiltersGrid {
     grid-template-columns: 1fr;
+  }
+
+  .backlogOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .backlogCardControls {
+    grid-template-columns: 1fr;
+  }
+
+  .backlogCardControls .compactButton {
+    width: 100%;
+  }
+
+  .tasksAppShell .toastReact {
+    left: 12px;
+    right: 12px;
+    top: 74px;
+    max-width: none;
   }
 
   .sourceTop {

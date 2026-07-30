@@ -28,11 +28,13 @@ def test_backlog_create_and_update_sync_markdown(tmp_path, monkeypatch):
     path.write_text(SAMPLE_BACKLOG, encoding="utf-8")
     monkeypatch.setattr(backlog, "BACKLOG_PATH", path)
 
-    created = backlog.create_plan_task("Новая задача | с пайпом", priority="P2")
+    created = backlog.create_plan_task("Новая задача | с пайпом", priority="P2", details="Описание | тоже чистится")
     updated = backlog.update_task_status(created["id"], "in_progress")
     payload = backlog.read_backlog()
 
     assert created["id"] == "2"
+    assert created["details"] == "Описание / тоже чистится"
     assert updated["status"] == "in_progress"
     assert any(task["title"] == "Новая задача / с пайпом" for task in payload["tasks"])
-    assert "| 2 | **P2** | Новая задача / с пайпом | 🔵 |" in path.read_text(encoding="utf-8")
+    assert any(task["details"] == "Описание / тоже чистится" for task in payload["tasks"])
+    assert "| 2 | **P2** | Новая задача / с пайпом — Описание: Описание / тоже чистится | 🔵 |" in path.read_text(encoding="utf-8")

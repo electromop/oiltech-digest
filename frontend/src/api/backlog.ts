@@ -5,7 +5,7 @@ export function getBacklog() {
   return apiFetch<BacklogPayload>("/api/backlog");
 }
 
-export function createBacklogTask(payload: { title: string; priority: string; status?: BacklogTaskStatus }) {
+export function createBacklogTask(payload: { title: string; priority: string; status?: BacklogTaskStatus; details?: string }) {
   return apiFetch<BacklogTask>("/api/backlog/tasks", {
     method: "POST",
     body: JSON.stringify(payload),
