@@ -144,6 +144,15 @@ export type BacklogTask = {
   updated: string;
   area?: string | null;
   details?: string | null;
+  due_date?: string | null;
+  comments?: BacklogComment[];
+};
+
+export type BacklogComment = {
+  id: string;
+  author: string;
+  text: string;
+  created_at: string;
 };
 
 export type BacklogPayload = {

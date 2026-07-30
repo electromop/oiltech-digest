@@ -185,10 +185,16 @@ class BacklogTaskCreate(BaseModel):
     priority: str = "P3"
     status: str = "new"
     details: str | None = None
+    due_date: str | None = None
 
 
 class BacklogTaskPatch(BaseModel):
-    status: str
+    status: str | None = None
+    due_date: str | None = None
+
+
+class BacklogTaskCommentCreate(BaseModel):
+    text: str
 
 
 class ExternalWorkerClaimRequest(BaseModel):
@@ -574,7 +580,7 @@ def backlog_endpoint(user: dict[str, Any] = Depends(require_user)) -> dict[str, 
 @app.post("/api/backlog/tasks")
 def create_backlog_task_endpoint(payload: BacklogTaskCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     try:
-        return backlog.create_plan_task(payload.title, priority=payload.priority, status=payload.status, details=payload.details)
+        return backlog.create_plan_task(payload.title, priority=payload.priority, status=payload.status, details=payload.details, due_date=payload.due_date)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -586,9 +592,33 @@ def update_backlog_task_endpoint(
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     try:
-        return backlog.update_task_status(task_id, payload.status)
+        updated: dict[str, Any] | None = None
+        fields_set = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
+        if "status" in fields_set and payload.status is not None:
+            updated = backlog.update_task_status(task_id, payload.status)
+        if "due_date" in fields_set:
+            updated = backlog.update_task_due_date(task_id, payload.due_date)
+        if updated is None:
+            raise HTTPException(status_code=400, detail="Нет изменений для задачи")
+        return updated
     except KeyError:
         raise HTTPException(status_code=404, detail="Задача не найдена")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/backlog/tasks/{task_id}/comments")
+def create_backlog_task_comment_endpoint(
+    task_id: str,
+    payload: BacklogTaskCommentCreate,
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    try:
+        return backlog.add_task_comment(task_id, payload.text, str(user.get("email") or "Пользователь"))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

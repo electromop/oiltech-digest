@@ -1507,7 +1507,7 @@ button {
 
 .backlogCreateGrid {
   display: grid;
-  grid-template-columns: minmax(260px, 1.35fr) 120px minmax(150px, 0.6fr) minmax(240px, 1fr) auto;
+  grid-template-columns: minmax(240px, 1.2fr) 110px minmax(140px, 0.55fr) 140px minmax(220px, 1fr) auto;
   gap: 10px;
   align-items: end;
   min-width: 0;
@@ -1712,6 +1712,109 @@ button {
   font-size: 0.78rem;
   font-weight: 800;
   overflow-wrap: anywhere;
+}
+
+.backlogDueRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.backlogDueRow input {
+  min-width: 0;
+  width: 100%;
+}
+
+.backlogDueBadge {
+  min-height: 38px;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 9px;
+  border-radius: 10px;
+  font-size: 0.76rem;
+  font-weight: 900;
+  white-space: nowrap;
+  background: rgba(241, 245, 249, 0.88);
+  color: var(--text-muted);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.backlogDueBadge.ok {
+  color: var(--sem-ok-fg);
+  background: var(--sem-ok-bg);
+  border-color: var(--sem-ok-border);
+}
+
+.backlogDueBadge.soon,
+.backlogDueBadge.today {
+  color: var(--sem-warn-fg);
+  background: var(--sem-warn-bg);
+  border-color: var(--sem-warn-border);
+}
+
+.backlogDueBadge.overdue {
+  color: var(--sem-bad-fg);
+  background: var(--sem-bad-bg);
+  border-color: var(--sem-bad-border);
+}
+
+.backlogComments {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.backlogComment {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 9px;
+  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.backlogComment strong,
+.backlogComment span {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.backlogComment strong {
+  margin-right: 6px;
+}
+
+.backlogComment span {
+  color: var(--text-muted);
+  font-weight: 800;
+}
+
+.backlogComment p {
+  margin-top: 4px;
+  font-size: 0.78rem;
+}
+
+.backlogCommentComposer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.backlogCommentComposer textarea {
+  min-width: 0;
+  min-height: 38px;
+  resize: vertical;
+}
+
+.backlogCommentComposer .compactButton {
+  min-height: 38px;
+  white-space: nowrap;
 }
 
 .backlogSection,
@@ -2776,7 +2879,13 @@ button {
     grid-template-columns: 1fr;
   }
 
-  .backlogCardControls .compactButton {
+  .backlogDueRow,
+  .backlogCommentComposer {
+    grid-template-columns: 1fr;
+  }
+
+  .backlogCardControls .compactButton,
+  .backlogCommentComposer .compactButton {
     width: 100%;
   }
 

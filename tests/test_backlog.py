@@ -28,13 +28,19 @@ def test_backlog_create_and_update_sync_markdown(tmp_path, monkeypatch):
     path.write_text(SAMPLE_BACKLOG, encoding="utf-8")
     monkeypatch.setattr(backlog, "BACKLOG_PATH", path)
 
-    created = backlog.create_plan_task("Новая задача | с пайпом", priority="P2", details="Описание | тоже чистится")
+    created = backlog.create_plan_task("Новая задача | с пайпом", priority="P2", details="Описание | тоже чистится", due_date="2026-07-31")
     updated = backlog.update_task_status(created["id"], "in_progress")
+    dated = backlog.update_task_due_date(created["id"], "2026-08-01")
+    commented = backlog.add_task_comment(created["id"], "Комментарий | тоже чистится", "user@example.com")
     payload = backlog.read_backlog()
 
     assert created["id"] == "2"
     assert created["details"] == "Описание / тоже чистится"
     assert updated["status"] == "in_progress"
+    assert dated["due_date"] == "2026-08-01"
+    assert commented["comments"][0]["text"] == "Комментарий / тоже чистится"
     assert any(task["title"] == "Новая задача / с пайпом" for task in payload["tasks"])
     assert any(task["details"] == "Описание / тоже чистится" for task in payload["tasks"])
+    assert any(task["due_date"] == "2026-08-01" and task["comments"] for task in payload["tasks"])
     assert "| 2 | **P2** | Новая задача / с пайпом — Описание: Описание / тоже чистится | 🔵 |" in path.read_text(encoding="utf-8")
+    assert "TASK_TRACKER_META_START" in path.read_text(encoding="utf-8")

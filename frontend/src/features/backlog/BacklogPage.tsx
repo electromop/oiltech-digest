@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
-import { createBacklogTask, getBacklog, updateBacklogTaskStatus } from "../../api/backlog";
+import { addBacklogTaskComment, createBacklogTask, getBacklog, updateBacklogTask, updateBacklogTaskStatus } from "../../api/backlog";
 import type { BacklogPayload, BacklogTask, BacklogTaskStatus } from "../../api/types";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
@@ -35,12 +35,14 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
   const [dropTargetStatus, setDropTargetStatus] = useState<BacklogTaskStatus | null>(null);
   const [title, setTitle] = useState("");
   const [details, setDetails] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [priority, setPriority] = useState("P3");
   const [createStatus, setCreateStatus] = useState<BacklogTaskStatus>("new");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<BacklogTaskStatus | "">("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [sectionFilter, setSectionFilter] = useState<BacklogTask["section"] | "">("");
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void reload();
@@ -50,7 +52,17 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
   const filteredTasks = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return tasks.filter((task) => {
-      const searchable = [task.id, task.priority, task.title, task.details, task.area, sectionLabels[task.section], statusLabels[task.status]]
+      const searchable = [
+        task.id,
+        task.priority,
+        task.title,
+        task.details,
+        task.area,
+        task.due_date,
+        ...(task.comments ?? []).map((comment) => `${comment.author} ${comment.text}`),
+        sectionLabels[task.section],
+        statusLabels[task.status],
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -69,10 +81,12 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
     const rejected = countByStatus(tasks, "rejected");
     const active = countByStatus(tasks, "in_progress");
     const paused = countByStatus(tasks, "paused");
+    const overdue = tasks.filter((task) => task.status !== "done" && task.status !== "rejected" && dueState(task.due_date).tone === "overdue").length;
+    const dueSoon = tasks.filter((task) => task.status !== "done" && task.status !== "rejected" && dueState(task.due_date).tone === "soon").length;
     const open = Math.max(total - done - rejected, 0);
     const planned = Math.max(total - rejected, 0);
     const progress = planned ? Math.round((done / planned) * 100) : 0;
-    return { total, done, rejected, active, paused, open, progress };
+    return { total, done, rejected, active, paused, overdue, dueSoon, open, progress };
   }, [tasks]);
 
   async function reload() {
@@ -102,9 +116,10 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
     }
     try {
       setSavingTaskId("new");
-      await createBacklogTask({ title: title.trim(), details: details.trim() || undefined, priority, status: createStatus });
+      await createBacklogTask({ title: title.trim(), details: details.trim() || undefined, due_date: dueDate || undefined, priority, status: createStatus });
       setTitle("");
       setDetails("");
+      setDueDate("");
       setCreateStatus("new");
       showToast("Задача добавлена и синхронизирована с BACKLOG.md");
       await reload();
@@ -127,6 +142,41 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
     } catch (error) {
       setPayload(previousPayload);
       handleError(error, "Не удалось обновить статус");
+    } finally {
+      setSavingTaskId(null);
+    }
+  }
+
+  async function changeDueDate(task: BacklogTask, nextDueDate: string) {
+    const previousPayload = payload;
+    setSavingTaskId(task.id);
+    setPayload((current) => updatePayloadTask(current, { ...task, due_date: nextDueDate || null }));
+    try {
+      const updated = await updateBacklogTask(task.id, { due_date: nextDueDate || null });
+      setPayload((current) => updatePayloadTask(current, updated));
+      showToast(nextDueDate ? "Дедлайн обновлен" : "Дедлайн очищен");
+    } catch (error) {
+      setPayload(previousPayload);
+      handleError(error, "Не удалось обновить дедлайн");
+    } finally {
+      setSavingTaskId(null);
+    }
+  }
+
+  async function submitComment(task: BacklogTask) {
+    const text = (commentDrafts[task.id] ?? "").trim();
+    if (!text) {
+      showToast("Напишите комментарий", "error");
+      return;
+    }
+    try {
+      setSavingTaskId(task.id);
+      const updated = await addBacklogTaskComment(task.id, text);
+      setPayload((current) => updatePayloadTask(current, updated));
+      setCommentDrafts((drafts) => ({ ...drafts, [task.id]: "" }));
+      showToast("Комментарий добавлен");
+    } catch (error) {
+      handleError(error, "Не удалось добавить комментарий");
     } finally {
       setSavingTaskId(null);
     }
@@ -195,6 +245,7 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
             <span>{metrics.open} открыто</span>
             <span>{metrics.active} в работе</span>
             <span>{metrics.paused} на паузе</span>
+            <span>{metrics.overdue} просрочено</span>
           </div>
         </article>
 
@@ -237,6 +288,10 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="field">
+            <span>Дедлайн</span>
+            <input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
           </label>
           <label className="field backlogDetailsField">
             <span>Описание</span>
@@ -324,6 +379,10 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
                       disabled={savingTaskId === task.id}
                       dragging={draggedTaskId === task.id}
                       onChangeStatus={changeStatus}
+                      onChangeDueDate={changeDueDate}
+                      commentDraft={commentDrafts[task.id] ?? ""}
+                      onCommentDraftChange={(value) => setCommentDrafts((drafts) => ({ ...drafts, [task.id]: value }))}
+                      onAddComment={submitComment}
                       onDragStart={startDragging}
                       onDragEnd={() => {
                         setDraggedTaskId(null);
@@ -347,10 +406,16 @@ function BacklogCard(props: {
   disabled: boolean;
   dragging: boolean;
   onChangeStatus: (task: BacklogTask, status: BacklogTaskStatus) => Promise<void>;
+  onChangeDueDate: (task: BacklogTask, dueDate: string) => Promise<void>;
+  commentDraft: string;
+  onCommentDraftChange: (value: string) => void;
+  onAddComment: (task: BacklogTask) => Promise<void>;
   onDragStart: (task: BacklogTask, event: DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
 }) {
   const quickStatus = nextUsefulStatus(props.task.status);
+  const deadline = dueState(props.task.due_date);
+  const recentComments = (props.task.comments ?? []).slice(-2);
 
   return (
     <article
@@ -368,9 +433,39 @@ function BacklogCard(props: {
       <h4>{props.task.title}</h4>
       {props.task.details ? <p>{props.task.details}</p> : null}
       {props.task.area ? <div className="backlogArea">{props.task.area}</div> : null}
+      <div className="backlogDueRow">
+        <label className="field">
+          <span>Дедлайн</span>
+          <input type="date" value={props.task.due_date ?? ""} disabled={props.disabled} onChange={(event) => void props.onChangeDueDate(props.task, event.target.value)} />
+        </label>
+        <span className={`backlogDueBadge ${deadline.tone}`}>{deadline.label}</span>
+      </div>
       <div className="backlogMeta">
         <span>#{props.task.id}</span>
         <span>{props.disabled ? "сохраняем..." : props.task.updated || "без даты"}</span>
+      </div>
+      {recentComments.length ? (
+        <div className="backlogComments">
+          {recentComments.map((comment) => (
+            <div className="backlogComment" key={comment.id}>
+              <strong>{comment.author}</strong>
+              <span>{comment.created_at}</span>
+              <p>{comment.text}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="backlogCommentComposer">
+        <textarea
+          value={props.commentDraft}
+          disabled={props.disabled}
+          onChange={(event) => props.onCommentDraftChange(event.target.value)}
+          placeholder="Комментарий"
+          rows={2}
+        />
+        <button type="button" className="ghostButton compactButton" disabled={props.disabled || !props.commentDraft.trim()} onClick={() => void props.onAddComment(props.task)}>
+          Добавить
+        </button>
       </div>
       <div className="backlogCardControls">
         <label className="field">
@@ -406,6 +501,26 @@ function nextUsefulStatus(status: BacklogTaskStatus): BacklogTaskStatus | null {
 function priorityClass(priority: string): string {
   const match = priority.match(/^P([1-4])$/);
   return match ? `priority${match[1]}` : "priorityOther";
+}
+
+function dueState(value?: string | null): { label: string; tone: "none" | "ok" | "soon" | "today" | "overdue" } {
+  if (!value) return { label: "Без дедлайна", tone: "none" };
+  const today = startOfDay(new Date());
+  const due = startOfDay(new Date(`${value}T00:00:00`));
+  const days = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+  if (days < 0) return { label: `Просрочено ${Math.abs(days)} дн.`, tone: "overdue" };
+  if (days === 0) return { label: "Сегодня", tone: "today" };
+  if (days <= 3) return { label: `Через ${days} дн.`, tone: "soon" };
+  return { label: formatDate(value), tone: "ok" };
+}
+
+function startOfDay(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function formatDate(value: string): string {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}.${month}.${year}` : value;
 }
 
 function countByStatus(tasks: BacklogTask[], status: BacklogTaskStatus): number {
