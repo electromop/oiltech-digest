@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 from html import escape
@@ -186,14 +187,23 @@ def get_digest_branding() -> dict:
 
 def save_digest_branding(payload: dict) -> dict:
     current = _load_digest_branding()
+    payload_footer = payload.get("footer") or {}
+    # ВАЖНО: пустой список — это осознанное «удалить все соцсети», а не «поле не прислали».
+    # Раньше стояло `payload_socials or current_socials`, и falsy-пустой список проваливался
+    # на старое значение: пользователь удалял ссылки, а после пересборки они возвращались.
+    # Различаем именно наличие ключа, а не его истинность.
+    if "socials" in payload_footer and payload_footer.get("socials") is not None:
+        socials = list(payload_footer["socials"])
+    else:
+        socials = list(current["footer"].get("socials") or [])
     merged = {
         "header": {**current["header"], **(payload.get("header") or {})},
         "hero": {**current["hero"], **(payload.get("hero") or {})},
         "issue": {**current["issue"], **(payload.get("issue") or {})},
         "footer": {
             **current["footer"],
-            **(payload.get("footer") or {}),
-            "socials": list((payload.get("footer") or {}).get("socials") or current["footer"].get("socials") or []),
+            **payload_footer,
+            "socials": socials,
         },
         "highlights": {
             **current["highlights"],
@@ -628,43 +638,80 @@ def _footer_social_icon_svg(item: dict) -> str:
     )
 
 
+# Палитра заглушек. РАНЬШЕ подбор шёл по словарю с ключами вида "технологии"/"рынок",
+# но реальные названия тегов нормализуются в "роботизацияиавтономныесистемы" и т.п. —
+# совпадений не было НИ ОДНОГО, поэтому каждая заглушка получала цвет по умолчанию, и
+# выпуск выглядел как несколько одинаковых тёмно-синих плиток (жалоба заказчика 03.08).
+# Теперь цвет берётся детерминированно по хэшу рубрики: разные рубрики — разные плитки,
+# одна и та же рубрика всегда одинаковая, а набор пар остаётся согласованным с брендом.
+_PLACEHOLDER_PALETTE: tuple[tuple[str, str], ...] = (
+    ("#00317F", "#0B6FD0"),   # корпоративный синий
+    ("#0A5C36", "#13A163"),   # зелёный
+    ("#8A3208", "#E83D08"),   # оранжевый акцент бренда
+    ("#332C7A", "#6C63E0"),   # индиго
+    ("#00505C", "#00A0B4"),   # бирюзовый
+    ("#5B2350", "#A3448F"),   # пурпурный
+    ("#1F3B4D", "#4886B0"),   # стально-синий
+    ("#6B4E00", "#C79A0A"),   # охра
+)
+
+
+def _placeholder_palette_for(key: str) -> tuple[str, str]:
+    if not key:
+        return _PLACEHOLDER_PALETTE[0]
+    digest_hex = hashlib.md5(key.encode("utf-8")).hexdigest()[:8]
+    return _PLACEHOLDER_PALETTE[int(digest_hex, 16) % len(_PLACEHOLDER_PALETTE)]
+
+
 def _news_placeholder_data_uri(category: object) -> str:
     raw = str(category or "Новости").strip()
     top = raw.split(" / ", 1)[0].strip() or "Новости"
     key = re.sub(r"[^a-zа-я0-9]+", "", top.lower(), flags=re.IGNORECASE)
-    palette = {
-        "технологии": ("#003DA6", "#0057D9"),
-        "рынок": ("#0A5C36", "#0F8A50"),
-        "бизнессигналы": ("#7A2E0B", "#E83D08"),
-        "россия": ("#3F3A8C", "#625CDA"),
-        "международноесотрудничество": ("#005B66", "#0097A7"),
-        "бурение": ("#004A99", "#1D74D1"),
-    }
-    start, end = palette.get(key, ("#003DA6", "#001D50"))
-    badge_lines = _placeholder_badge_lines(top)
-    badge_width = min(114, max(42, max(len(line) for line in badge_lines) * 5.5 + 16))
-    badge_height = 35 if len(badge_lines) > 2 else 26 if len(badge_lines) > 1 else 17
-    badge_text = "".join(
-        f"<text x='14' y='{21 + idx * 9}' font-family='Arial,Helvetica,sans-serif' font-size='7.5' font-weight='700' fill='#ffffff'>{escape(line, quote=True)}</text>"
-        for idx, line in enumerate(badge_lines)
+    start, end = _placeholder_palette_for(key)
+    lines = _placeholder_badge_lines(top)
+    # Подпись прижата к низу под затемняющей подложкой — приём из редакционной вёрстки:
+    # плитка читается как оформленная обложка рубрики, а не как пустой прямоугольник.
+    base_y = 76 if len(lines) == 1 else 66
+    label = "".join(
+        f"<text x='11' y='{base_y + idx * 11}' font-family='Arial,Helvetica,sans-serif' "
+        f"font-size='9.5' font-weight='700' letter-spacing='0.2' fill='#ffffff'>"
+        f"{escape(line, quote=True)}</text>"
+        for idx, line in enumerate(lines)
     )
     svg = (
         "<svg xmlns='http://www.w3.org/2000/svg' width='130' height='86' viewBox='0 0 130 86'>"
-        "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
-        f"<stop offset='0' stop-color='{start}'/><stop offset='1' stop-color='{end}'/>"
-        "</linearGradient></defs>"
-        "<rect width='130' height='86' rx='6' fill='url(#g)'/>"
-        f"<rect x='10' y='11' width='{badge_width}' height='{badge_height}' rx='8.5' fill='rgba(255,255,255,0.18)'/>"
-        f"{badge_text}"
+        "<defs>"
+        f"<linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+        f"<stop offset='0' stop-color='{start}'/><stop offset='1' stop-color='{end}'/></linearGradient>"
+        "<linearGradient id='s' x1='0' y1='0' x2='0' y2='1'>"
+        "<stop offset='0' stop-color='#000000' stop-opacity='0'/>"
+        "<stop offset='1' stop-color='#000000' stop-opacity='0.55'/></linearGradient>"
+        "<clipPath id='c'><rect width='130' height='86' rx='6'/></clipPath>"
+        "</defs>"
+        "<g clip-path='url(#c)'>"
+        "<rect width='130' height='86' fill='url(#g)'/>"
+        # Концентрические дуги в правом верхнем углу — ненавязчивый фирменный мотив,
+        # чтобы плитка не читалась как «картинка не загрузилась».
+        "<g fill='none' stroke='#ffffff' stroke-opacity='0.16' stroke-width='1.4'>"
+        "<circle cx='112' cy='16' r='34'/><circle cx='112' cy='16' r='23'/>"
+        "<circle cx='112' cy='16' r='12'/></g>"
+        "<rect y='34' width='130' height='52' fill='url(#s)'/>"
+        f"{label}"
+        "</g>"
         "</svg>"
     )
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
 
 
-def _placeholder_badge_lines(label: str, *, max_chars: int = 15, max_lines: int = 3) -> list[str]:
-    """Short readable placeholder label without cutting words in the middle."""
+def _placeholder_badge_lines(label: str, *, max_chars: int = 17, max_lines: int = 2) -> list[str]:
+    """Короткая читаемая подпись рубрики: целые слова, максимум две строки.
+
+    Односимвольные обрывки отбрасываются — на длинных тегах вида
+    «Рынок, экономика, бизнес-модели, контракты и M&A» прежняя версия выдавала
+    строку «КОНТРАКТЫ M A», которая не значит ничего.
+    """
     words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", str(label).upper())
-    words = [word for word in words if word not in {"И", "AND"}]
+    words = [word for word in words if len(word) > 1 and word not in {"И", "AND", "ДЛЯ"}]
     if not words:
         return ["НОВОСТИ"]
     lines: list[str] = []
@@ -678,11 +725,14 @@ def _placeholder_badge_lines(label: str, *, max_chars: int = 15, max_lines: int 
                 break
         else:
             current = candidate
-        if len(lines) == max_lines:
-            break
     if current and len(lines) < max_lines:
         lines.append(current)
-    return lines[:max_lines] or ["НОВОСТИ"]
+    lines = lines[:max_lines] or ["НОВОСТИ"]
+    # Если рубрика не поместилась целиком — показываем это многоточием, а не обрывом.
+    consumed = sum(len(line.split()) for line in lines)
+    if consumed < len(words):
+        lines[-1] = lines[-1] + "…"
+    return lines
 
 
 def _is_unusable_digest_image_url(url: object) -> bool:

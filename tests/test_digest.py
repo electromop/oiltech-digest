@@ -518,16 +518,40 @@ def test_news_placeholder_does_not_duplicate_tag_text():
     assert "Роботизация и автоматизация" not in svg
 
 
-def test_news_placeholder_keeps_three_word_tag():
+def test_news_placeholder_truncates_long_tag_with_ellipsis():
+    """Подпись на плитке 130×86 — максимум две строки, обрезка помечается многоточием.
+
+    Раньше умещали до трёх строк кеглем 7.5 — в PDF это нечитаемо, и заказчик
+    забраковал такие плитки (03.08). Полное название рубрики всё равно напечатано
+    отдельным тегом в правом нижнем углу карточки, поэтому на плитке достаточно
+    начала — но обрыв должен быть виден как обрыв.
+    """
     from oiltech_digest.processing.digest import _news_placeholder_data_uri
 
     uri = _news_placeholder_data_uri("Роботизация и автономные системы")
-    encoded = uri.split(",", 1)[1]
-    svg = base64.b64decode(encoded).decode("utf-8")
+    svg = base64.b64decode(uri.split(",", 1)[1]).decode("utf-8")
 
     assert "РОБОТИЗАЦИЯ" in svg
     assert "АВТОНОМНЫЕ" in svg
-    assert "СИСТЕМЫ" in svg
+    assert "…" in svg
+    assert svg.count("<text") == 2
+
+
+def test_news_placeholder_colors_differ_between_categories():
+    """Регресс: словарь палитры имел ключи «технологии»/«рынок», а реальные теги
+    нормализуются в «роботизацияиавтономныесистемы» — не совпадал НИ ОДИН, и все
+    заглушки выпуска выходили одинаковыми тёмно-синими (жалоба заказчика 03.08)."""
+    from oiltech_digest.processing.digest import _news_placeholder_data_uri
+
+    def grad(category: str) -> str:
+        svg = base64.b64decode(_news_placeholder_data_uri(category).split(",", 1)[1]).decode("utf-8")
+        return svg.split("stop-color='")[1][:7]
+
+    a = grad("Роботизация и автономные системы")
+    b = grad("Рынок, экономика, бизнес-модели, контракты и M&A")
+    assert a != b, "разные рубрики обязаны различаться цветом"
+    # одна и та же рубрика — всегда один и тот же цвет (детерминированность)
+    assert a == grad("Роботизация и автономные системы")
 
 
 def test_news_placeholder_wraps_long_tag_without_cutting_words():
@@ -715,3 +739,39 @@ def test_save_digest_draft_persists_ordered_items(monkeypatch):
         {"article_id": 10, "section": "Drilling", "editor_note": "First"},
         {"article_id": 11, "section": "Production", "editor_note": "Second"},
     ]
+
+
+def test_save_digest_branding_persists_empty_socials(tmp_path, monkeypatch):
+    """Регресс: удаление ВСЕХ соцсетей в сборщике не сохранялось.
+
+    Фронт шлёт `socials: []`, а merge стоял на `payload_socials or current_socials` —
+    пустой список ложен в Python, поэтому проваливался на прежнее значение и
+    удалённые ссылки возвращались при следующей сборке (жалоба заказчика 03.08).
+    """
+    from oiltech_digest.processing import digest as digest_module
+
+    monkeypatch.setattr(digest_module, "TEMPLATE_DIR", tmp_path)
+
+    saved = digest_module.save_digest_branding(
+        {"footer": {"socials": [{"label": "VK", "accent": "#0077ff", "text": "vk.com/x"}]}}
+    )
+    assert len(saved["footer"]["socials"]) == 1
+
+    cleared = digest_module.save_digest_branding({"footer": {"socials": []}})
+    assert cleared["footer"]["socials"] == []
+    # и после перечитывания с диска — тоже пусто
+    assert digest_module.get_digest_branding()["footer"]["socials"] == []
+
+
+def test_save_digest_branding_keeps_socials_when_key_absent(tmp_path, monkeypatch):
+    """Обратная сторона фикса: если ключ socials не прислали вовсе — не затирать."""
+    from oiltech_digest.processing import digest as digest_module
+
+    monkeypatch.setattr(digest_module, "TEMPLATE_DIR", tmp_path)
+
+    digest_module.save_digest_branding(
+        {"footer": {"socials": [{"label": "TG", "accent": "#111", "text": "t.me/x"}]}}
+    )
+    merged = digest_module.save_digest_branding({"footer": {"note": "только заметку меняем"}})
+    assert [item["label"] for item in merged["footer"]["socials"]] == ["TG"]
+    assert merged["footer"]["note"] == "только заметку меняем"
