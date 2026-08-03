@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from oiltech_digest import config
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 
@@ -63,6 +64,27 @@ def _pdf_font_face_style() -> str:
     """<style> с GPN Din в base64 — добавляется в PDF-рендер для Chromium."""
     faces = _embedded_font_faces()
     return "<style>" + faces + "</style>" if faces else ""
+
+
+def _branding_store_path() -> Path:
+    """Куда ПИШЕМ брендинг.
+
+    На сервере это общий том (`DIGEST_BRANDING_PATH`), видимый всем контейнерам:
+    админка пишет, воркеры выгрузки читают то же самое. Без переменной — файл
+    в пакете, как при локальной разработке.
+    """
+    configured = config.DIGEST_BRANDING_PATH
+    return Path(configured) if configured else TEMPLATE_DIR / BRANDING_CONFIG
+
+
+def _branding_read_path() -> Path | None:
+    """Откуда ЧИТАЕМ: сначала общий том, иначе упакованный дефолт (первый запуск —
+    том ещё пуст). None — нет ни того, ни другого, работаем на значениях по умолчанию."""
+    store = _branding_store_path()
+    if store.exists():
+        return store
+    packaged = TEMPLATE_DIR / BRANDING_CONFIG
+    return packaged if packaged.exists() else None
 
 
 def _load_digest_branding() -> dict:
@@ -168,8 +190,8 @@ def _load_digest_branding() -> dict:
             ],
         },
     }
-    path = TEMPLATE_DIR / BRANDING_CONFIG
-    if not path.exists():
+    path = _branding_read_path()
+    if path is None:
         return defaults
     loaded = json.loads(path.read_text(encoding="utf-8"))
     return {
@@ -210,7 +232,8 @@ def save_digest_branding(payload: dict) -> dict:
             **(payload.get("highlights") or {}),
         },
     }
-    path = TEMPLATE_DIR / BRANDING_CONFIG
+    path = _branding_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
     return merged
 

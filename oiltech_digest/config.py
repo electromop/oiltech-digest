@@ -166,6 +166,15 @@ def price_for_model(model: str | None) -> tuple[float, float]:
     return (OPENAI_INPUT_USD_PER_MTOK, OPENAI_OUTPUT_USD_PER_MTOK)
 
 
+# --- Брендинг дайджеста ---
+# Путь к digest_branding.json. Пусто — файл берётся из пакета (локальная разработка,
+# тесты). На сервере ОБЯЗАН указывать на общий том, смонтированный во ВСЕ контейнеры.
+# Инцидент 03.08: файл лежал внутри образа, тома не было — админка (контейнер app)
+# записывала правки в свою копию, а выгрузку HTML/PDF делают воркеры и читали свою,
+# нетронутую. Пользователь видел изменения в превью и не видел в выгрузке. Плюс любая
+# пересборка образа возвращала git-версию поверх правок.
+DIGEST_BRANDING_PATH = os.environ.get("DIGEST_BRANDING_PATH", "").strip()
+
 # --- Auth ---
 AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")
 AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))

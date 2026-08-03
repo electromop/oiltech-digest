@@ -775,3 +775,35 @@ def test_save_digest_branding_keeps_socials_when_key_absent(tmp_path, monkeypatc
     merged = digest_module.save_digest_branding({"footer": {"note": "только заметку меняем"}})
     assert [item["label"] for item in merged["footer"]["socials"]] == ["TG"]
     assert merged["footer"]["note"] == "только заметку меняем"
+
+
+def test_branding_write_and_read_share_one_path(tmp_path, monkeypatch):
+    """Регресс инцидента 03.08: админка писала брендинг в свой контейнер, а выгрузку
+    делают воркеры и читали СВОЮ копию из образа — правки были видны в превью и не
+    видны в HTML/PDF. Путь записи и путь чтения обязаны совпадать."""
+    from oiltech_digest import config
+    from oiltech_digest.processing import digest as digest_module
+
+    shared = tmp_path / "branding" / "digest_branding.json"
+    monkeypatch.setattr(config, "DIGEST_BRANDING_PATH", str(shared))
+
+    digest_module.save_digest_branding({"footer": {"socials": []}})
+    assert shared.exists(), "запись должна идти в общий путь, а не в каталог пакета"
+    assert digest_module._branding_read_path() == shared
+    assert digest_module.get_digest_branding()["footer"]["socials"] == []
+
+    # и в собранном контенте выпуска — тоже пусто (именно его берут HTML/PDF)
+    monkeypatch.setattr(digest_module.repository, "digest_candidates", lambda **kw: [])
+    content = digest_module.build_digest_content(month="2026-07")
+    assert content["footer"]["socials"] == []
+
+
+def test_branding_falls_back_to_packaged_default_when_volume_empty(tmp_path, monkeypatch):
+    """Первый запуск с пустым томом: читаем упакованный дефолт, а не теряем брендинг."""
+    from oiltech_digest import config
+    from oiltech_digest.processing import digest as digest_module
+
+    monkeypatch.setattr(config, "DIGEST_BRANDING_PATH", str(tmp_path / "нет" / "файла.json"))
+    branding = digest_module.get_digest_branding()
+    assert branding["header"]["brand_text"]
+    assert "socials" in branding["footer"]
