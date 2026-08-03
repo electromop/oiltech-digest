@@ -1,0 +1,395 @@
+<meta charset="utf-8">
+<title>OilTech Digest — единая архитектурная схема</title>
+<style>
+  @page { size: A3 landscape; margin: 7mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #e8ecf0; }
+  .sheet {
+    width: 100vw; height: 100vh; padding: 12px 16px; background: #fff;
+    display: flex; align-items: center; justify-content: center;
+  }
+  svg.scheme { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; }
+  svg.scheme text { font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .code, .code-d, .cnt-n, .cnt-p { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  .h1   { font-size: 22px; font-weight: 700; fill: #16202b; letter-spacing: -.2px; }
+  .h2   { font-size: 12px; fill: #4a5a6a; }
+  .meta { font-size: 10px; fill: #7c8b99; }
+  .rule { stroke: #16202b; stroke-width: 2; }
+
+  /* ---- общие ярусные подписи (лист 1) ---- */
+  .badge   { fill: #16202b; }
+  .badge-t { font-size: 9.5px; font-weight: 700; fill: #fff; letter-spacing: .1em; }
+  .tier-t  { font-size: 13.5px; font-weight: 700; fill: #16202b; }
+  .tier-h  { font-size: 11.5px; fill: #7c8b99; }
+  .lbl-bg  { fill: #fff; }
+
+  .biz       { fill: #fff7ed; stroke: #fdba74; }
+  .biz-num   { fill: #b45309; }
+  .biz-num-t { font-size: 11px; font-weight: 700; fill: #fff; }
+  .biz-title { font-size: 14px; font-weight: 700; fill: #b45309; }
+  .biz-desc  { font-size: 11.5px; fill: #7c3d09; }
+  .chev      { fill: none; stroke: #f59e0b; stroke-width: 3.5;
+               stroke-linecap: round; stroke-linejoin: round; }
+
+  .link   { stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .link-a { fill: none; stroke: #cbd5e1; stroke-width: 1.5; }
+
+  .fn      { fill: #f6f8fa; stroke: #cbd5e1; }
+  .fn-hd   { fill: #e6ecf2; }
+  .fn-mod  { font-size: 9.5px; font-weight: 700; fill: #64748b; letter-spacing: .06em; }
+  .code    { font-size: 10.5px; fill: #334155; }
+  .code-b  { font-weight: 700; fill: #0f172a; }
+  .code-d  { font-size: 10.5px; fill: #64748b; }
+  .fn-note { font-size: 10px; fill: #7c8b99; }
+  .warn    { fill: #fef2f2; stroke: #fca5a5; }
+  .warn-t  { font-size: 9.5px; font-weight: 700; fill: #b91c1c; letter-spacing: .03em; }
+  .warn-d  { font-size: 9.5px; fill: #b91c1c; }
+
+  .stage-n  { fill: #1d4ed8; }
+  .stage-nt { font-size: 9px; font-weight: 700; fill: #fff; }
+  .stage-l  { stroke: #93c5fd; stroke-width: 1.5; }
+
+  .zone-ru      { fill: #f8fbff; stroke: #1d4ed8; stroke-width: 2; stroke-dasharray: 7 4; }
+  .zone-ext     { fill: #fffafa; stroke: #b91c1c; stroke-width: 2; stroke-dasharray: 7 4; }
+  .zone-net     { fill: #f8fafc; stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 7 4; }
+  .zone-lbl-bg  { fill: #fff; }
+  .zone-lbl-ru  { font-size: 9.5px; font-weight: 700; fill: #1d4ed8; letter-spacing: .06em; }
+  .zone-lbl-ext { font-size: 9.5px; font-weight: 700; fill: #b91c1c; letter-spacing: .06em; }
+  .zone-lbl-net { font-size: 9.5px; font-weight: 700; fill: #475569; letter-spacing: .06em; }
+
+  .cnt     { fill: #eff6ff; stroke: #93c5fd; }
+  .cnt-db  { fill: #f0fdf4; stroke: #86efac; }
+  .cnt-ext { fill: #fef2f2; stroke: #fca5a5; }
+  .cnt-n   { font-size: 11.5px; font-weight: 700; fill: #1e293b; }
+  .cnt-d   { font-size: 10.5px; fill: #475569; }
+  .cnt-p   { font-size: 9.5px; fill: #64748b; }
+
+  .stepbadge   { fill: #b45309; }
+  .stepbadge-t { font-size: 9px; font-weight: 700; fill: #fff; }
+
+  .wire       { stroke: #64748b; stroke-width: 1.5; fill: none; }
+  .wire-ext   { stroke: #b91c1c; stroke-width: 1.8; fill: none; stroke-dasharray: 5 3; }
+  .wire-lbl   { fill: #fff; stroke: #fca5a5; }
+  .wire-lbl-t { font-size: 10px; font-weight: 700; fill: #b91c1c; }
+  .wire-lbl-d { font-size: 9.5px; fill: #b91c1c; }
+
+  .ext-sys     { fill: #f1f5f9; stroke: #cbd5e1; }
+  .ext-sys-hot { fill: #fef2f2; stroke: #b91c1c; stroke-dasharray: 5 3; }
+  .ext-n       { font-size: 12px; font-weight: 700; fill: #334155; }
+  .ext-d       { font-size: 10px; fill: #64748b; }
+
+  /* ---- лист 2: DFD ---- */
+  .n-proc   { fill: #eff6ff; stroke: #93c5fd; }
+  .n-actor  { fill: #f1f5f9; stroke: #cbd5e1; }
+  .n-third  { fill: #fef2f2; stroke: #fca5a5; }
+  .n-store  { fill: #f0fdf4; stroke: #86efac; }
+  .n-store2 { fill: #f7fee7; stroke: #bef264; }
+  .n-t      { font-size: 12.5px; font-weight: 700; fill: #1e293b; }
+  .n-t-store{ font-size: 12.5px; font-weight: 700; fill: #15803d; }
+  .n-d      { font-size: 10.5px; fill: #475569; }
+
+  .dc-pd  { fill: #fee2e2; stroke: #ef4444; }
+  .dc-int { fill: #ffedd5; stroke: #f97316; }
+  .dc-pub { fill: #e2e8f0; stroke: #94a3b8; }
+  .dc-srv { fill: #dcfce7; stroke: #4ade80; }
+  .dc-t   { font-size: 9px; font-weight: 700; fill: #1e293b; letter-spacing: .03em; }
+
+  .f-wire    { stroke: #64748b; stroke-width: 1.8; fill: none; }
+  .f-int     { stroke: #94a3b8; stroke-width: 1.5; fill: none; }
+  .f-hot     { stroke: #b91c1c; stroke-width: 2.2; fill: none; stroke-dasharray: 6 3; }
+  .f-lbl     { fill: #fff; stroke: #cbd5e1; }
+  .f-lbl-hot { fill: #fff; stroke: #fca5a5; }
+  .f-id      { fill: #475569; }
+  .f-id-hot  { fill: #b91c1c; }
+  .f-id-t    { font-size: 9px; font-weight: 700; fill: #fff; }
+  .f-t       { font-size: 11.5px; font-weight: 700; fill: #1e293b; }
+  .f-t-hot   { font-size: 11.5px; font-weight: 700; fill: #b91c1c; }
+  .f-d       { font-size: 10px; fill: #475569; }
+  .f-d-hot   { font-size: 10px; fill: #b91c1c; }
+  .f-s       { font-size: 10px; font-weight: 700; fill: #334155; }
+  .f-s-hot   { font-size: 10px; font-weight: 700; fill: #b91c1c; }
+
+  .sec-h { font-size: 11px; font-weight: 700; fill: #16202b; letter-spacing: .08em; }
+  .th    { fill: #e2e8f0; }
+  .th-t  { font-size: 9.5px; font-weight: 700; fill: #475569; letter-spacing: .05em; }
+  .tr     { fill: #fff; stroke: #e2e8f0; }
+  .tr-hot { fill: #fef2f2; stroke: #fca5a5; }
+  .td     { font-size: 11px; fill: #334155; }
+  .td-b   { font-size: 11px; font-weight: 700; fill: #1e293b; }
+  .td-b-hot { font-size: 11px; font-weight: 700; fill: #b91c1c; }
+
+  .callout       { fill: #fef2f2; stroke: #b91c1c; stroke-width: 1.5; }
+  .callout-tag   { fill: #b91c1c; }
+  .callout-tag-t { font-size: 9.5px; font-weight: 700; fill: #fff; letter-spacing: .05em; }
+  .callout-t     { font-size: 11.5px; fill: #7f1d1d; }
+  .callout-b     { font-weight: 700; fill: #641414; }
+  .callout-d     { font-size: 10px; fill: #a86a6a; }
+
+  .leg-t { font-size: 10.5px; fill: #4a5a6a; }
+  .leg-h { font-size: 10.5px; fill: #7c8b99; }
+
+  @media print {
+    html, body { background: #fff; height: auto; }
+    .sheet { width: auto; height: auto; padding: 0; }
+    svg.scheme { width: 100%; height: auto; max-height: none; }
+  }
+</style>
+
+<div class="sheet">
+<svg viewBox="0 0 1600 998" xmlns="http://www.w3.org/2000/svg" class="scheme">
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0,1 L9,5 L0,9 z" fill="#64748b"/></marker>
+  <marker id="ar-ext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0,1 L9,5 L0,9 z" fill="#b91c1c"/></marker>
+</defs>
+<text x="40" y="36" class="h1">OilTech Digest — единая архитектурная схема</text>
+<text x="40" y="58" class="h2">Столбцы — шаги конвейера. Ярусы — уровни абстракции: что делаем → каким кодом → на каком железе. Нотация C4 (Deployment + Dynamic), ярусы по ArchiMate.</text>
+<text x="1560" y="24" class="meta" text-anchor="end">Версия 2026-08-02 · код 499cd17</text>
+<text x="1560" y="39" class="meta" text-anchor="end">Заказчик: ООО «Нефтесервисные решения» (Газпром нефть)</text>
+<text x="1560" y="54" class="meta" text-anchor="end">Лист 1 из 2 · лист 2 — потоки данных и границы доверия</text>
+<line x1="40" y1="74" x2="1560" y2="74" class="rule"/>
+<g><rect x="40" y="82" width="86" height="17" rx="3" class="badge"/><text x="83" y="94.5" class="badge-t" text-anchor="middle">ЯРУС 1</text><text x="136" y="95" class="tier-t">Бизнес-логика</text><text x="262" y="95" class="tier-h">что происходит с точки зрения продукта</text></g>
+<rect x="40" y="106" width="230" height="96" rx="7" class="biz" />
+<circle cx="61" cy="128" r="12" class="biz-num"/>
+<text x="61" y="132" class="biz-num-t" text-anchor="middle">1</text>
+<text x="80" y="133" class="biz-title">Источники</text>
+<text x="54" y="158" class="biz-desc">120 отраслевых сайтов</text>
+<text x="54" y="172" class="biz-desc">и лент. У каждого своя</text>
+<text x="54" y="186" class="biz-desc">стратегия обхода</text>
+<path d="M274,147.0 L290,154.0 L274,161.0" class="chev"/>
+<rect x="298" y="106" width="230" height="96" rx="7" class="biz" />
+<circle cx="319" cy="128" r="12" class="biz-num"/>
+<text x="319" y="132" class="biz-num-t" text-anchor="middle">2</text>
+<text x="338" y="133" class="biz-title">Сбор новостей</text>
+<text x="312" y="158" class="biz-desc">Обход лент и листингов,</text>
+<text x="312" y="172" class="biz-desc">отсев явного мусора —</text>
+<text x="312" y="186" class="biz-desc">ещё без затрат на ИИ</text>
+<path d="M532,147.0 L548,154.0 L532,161.0" class="chev"/>
+<rect x="556" y="106" width="230" height="96" rx="7" class="biz" />
+<circle cx="577" cy="128" r="12" class="biz-num"/>
+<text x="577" y="132" class="biz-num-t" text-anchor="middle">3</text>
+<text x="596" y="133" class="biz-title">Полный текст</text>
+<text x="570" y="158" class="biz-desc">RSS отдаёт анонс. Идём</text>
+<text x="570" y="172" class="biz-desc">на страницу и проверяем,</text>
+<text x="570" y="186" class="biz-desc">что текст — этой статьи</text>
+<path d="M790,147.0 L806,154.0 L790,161.0" class="chev"/>
+<rect x="814" y="106" width="230" height="96" rx="7" class="biz" />
+<circle cx="835" cy="128" r="12" class="biz-num"/>
+<text x="835" y="132" class="biz-num-t" text-anchor="middle">4</text>
+<text x="854" y="133" class="biz-title">Оценка ИИ</text>
+<text x="828" y="158" class="biz-desc">Важность → суть →</text>
+<text x="828" y="172" class="biz-desc">перевод → направление →</text>
+<text x="828" y="186" class="biz-desc">балл бизнес-эффекта</text>
+<path d="M1048,147.0 L1064,154.0 L1048,161.0" class="chev"/>
+<rect x="1072" y="106" width="230" height="96" rx="7" class="biz" />
+<circle cx="1093" cy="128" r="12" class="biz-num"/>
+<text x="1093" y="132" class="biz-num-t" text-anchor="middle">5</text>
+<text x="1112" y="133" class="biz-title">Работа аналитика</text>
+<text x="1086" y="158" class="biz-desc">Лента сигналов, личные</text>
+<text x="1086" y="172" class="biz-desc">статусы «в дайджест /</text>
+<text x="1086" y="186" class="biz-desc">шум / дубликат»</text>
+<path d="M1306,147.0 L1322,154.0 L1306,161.0" class="chev"/>
+<rect x="1330" y="106" width="230" height="96" rx="7" class="biz" />
+<circle cx="1351" cy="128" r="12" class="biz-num"/>
+<text x="1351" y="132" class="biz-num-t" text-anchor="middle">6</text>
+<text x="1370" y="133" class="biz-title">Дайджест</text>
+<text x="1344" y="158" class="biz-desc">Месячная подборка</text>
+<text x="1344" y="172" class="biz-desc">в фирменном шаблоне:</text>
+<text x="1344" y="186" class="biz-desc">PDF · DOCX · письмо</text>
+<line x1="155" y1="231" x2="155" y2="244" class="link"/>
+<path d="M151,243 L155,249 L159,243" class="link-a"/>
+<line x1="413" y1="231" x2="413" y2="244" class="link"/>
+<path d="M409,243 L413,249 L417,243" class="link-a"/>
+<line x1="671" y1="231" x2="671" y2="244" class="link"/>
+<path d="M667,243 L671,249 L675,243" class="link-a"/>
+<line x1="929" y1="231" x2="929" y2="244" class="link"/>
+<path d="M925,243 L929,249 L933,243" class="link-a"/>
+<line x1="1187" y1="231" x2="1187" y2="244" class="link"/>
+<path d="M1183,243 L1187,249 L1191,243" class="link-a"/>
+<line x1="1445" y1="231" x2="1445" y2="244" class="link"/>
+<path d="M1441,243 L1445,249 L1449,243" class="link-a"/>
+<g><rect x="36" y="205" width="1528" height="23" class="lbl-bg"/><rect x="40" y="209" width="86" height="17" rx="3" class="badge"/><text x="83" y="221.5" class="badge-t" text-anchor="middle">ЯРУС 2</text><text x="136" y="222" class="tier-t">Программные функции</text><text x="312" y="222" class="tier-h">какой код это исполняет — модуль и точка входа</text></g>
+<rect x="40" y="250" width="230" height="158" rx="7" class="fn" />
+<rect x="40" y="250" width="230" height="19" rx="7" class="fn-hd"/>
+<rect x="40" y="262" width="230" height="7" class="fn-hd"/>
+<text x="50" y="264" class="fn-mod">INGESTION</text>
+<text x="50" y="286" class="code"><tspan class="code-b">excel_seed</tspan>.seed_sources()</text>
+<text x="50" y="301" class="code"><tspan class="code-b">rss_discovery</tspan>.discover_all()</text>
+<text x="50" y="316" class="code"><tspan class="code-b">source_overrides</tspan>.apply()</text>
+<text x="50" y="386" class="fn-note">→ таблица sources: стратегия,</text>
+<text x="50" y="398" class="fn-note">listing_url, регион сети</text>
+<rect x="298" y="250" width="230" height="158" rx="7" class="fn" />
+<rect x="298" y="250" width="230" height="19" rx="7" class="fn-hd"/>
+<rect x="298" y="262" width="230" height="7" class="fn-hd"/>
+<text x="308" y="264" class="fn-mod">INGESTION</text>
+<text x="308" y="286" class="code"><tspan class="code-b">rss_parser</tspan>.parse_all()</text>
+<text x="308" y="301" class="code"><tspan class="code-b">request_parser</tspan>.parse_source()</text>
+<text x="308" y="316" class="code"><tspan class="code-b">playwright_parser</tspan>.parse_source()</text>
+<text x="308" y="331" class="code"><tspan class="code-b">relevance_filter</tspan>.should_keep_article()</text>
+<text x="308" y="346" class="code"><tspan class="code-b">repository</tspan>.insert_article()</text>
+<text x="308" y="386" class="fn-note">Префильтр без ИИ —</text>
+<text x="308" y="398" class="fn-note">отсев бесплатный</text>
+<rect x="556" y="250" width="230" height="158" rx="7" class="fn" />
+<rect x="556" y="250" width="230" height="19" rx="7" class="fn-hd"/>
+<rect x="556" y="262" width="230" height="7" class="fn-hd"/>
+<text x="566" y="264" class="fn-mod">INGESTION</text>
+<text x="566" y="286" class="code"><tspan class="code-b">article_fetcher</tspan>.fetch_full_text()</text>
+<text x="566" y="301" class="code-d">  ↳ extract_main_text()</text>
+<text x="566" y="316" class="code"><tspan class="code-b">normalize</tspan>.title_matches_body()</text>
+<text x="566" y="331" class="code"><tspan class="code-b">normalize</tspan>.compute_body_hash()</text>
+<rect x="563" y="368" width="216" height="33" rx="4" class="warn" />
+<text x="571" y="382" class="warn-t">СТРАЖ ПРИНАДЛЕЖНОСТИ</text>
+<text x="571" y="394" class="warn-d">два рубежа против чужого текста</text>
+<rect x="814" y="250" width="230" height="158" rx="7" class="fn" />
+<rect x="814" y="250" width="230" height="19" rx="7" class="fn-hd"/>
+<rect x="814" y="262" width="230" height="7" class="fn-hd"/>
+<text x="824" y="264" class="fn-mod">PROCESSING</text>
+<text x="824" y="286" class="code"><tspan class="code-b">pipeline</tspan>.process_pipeline_articles()</text>
+<circle cx="834" cy="300" r="7.5" class="stage-n"/>
+<text x="834" y="303" class="stage-nt" text-anchor="middle">1</text>
+<text x="848" y="304" class="code">relevance_article()</text>
+<line x1="834" y1="308" x2="834" y2="312" class="stage-l"/>
+<circle cx="834" cy="318" r="7.5" class="stage-n"/>
+<text x="834" y="321" class="stage-nt" text-anchor="middle">2</text>
+<text x="848" y="322" class="code">summary_article()</text>
+<line x1="834" y1="326" x2="834" y2="330" class="stage-l"/>
+<circle cx="834" cy="336" r="7.5" class="stage-n"/>
+<text x="834" y="339" class="stage-nt" text-anchor="middle">3</text>
+<text x="848" y="340" class="code">translate_article()</text>
+<line x1="834" y1="344" x2="834" y2="348" class="stage-l"/>
+<circle cx="834" cy="354" r="7.5" class="stage-n"/>
+<text x="834" y="357" class="stage-nt" text-anchor="middle">4</text>
+<text x="848" y="358" class="code">tag_article()</text>
+<line x1="834" y1="362" x2="834" y2="366" class="stage-l"/>
+<circle cx="834" cy="372" r="7.5" class="stage-n"/>
+<text x="834" y="375" class="stage-nt" text-anchor="middle">5</text>
+<text x="848" y="376" class="code">score_article()</text>
+<text x="824" y="400" class="fn-note">нерелевантное дальше не платим</text>
+<rect x="1072" y="250" width="230" height="158" rx="7" class="fn" />
+<rect x="1072" y="250" width="230" height="19" rx="7" class="fn-hd"/>
+<rect x="1072" y="262" width="230" height="7" class="fn-hd"/>
+<text x="1082" y="264" class="fn-mod">API · AUTH</text>
+<text x="1082" y="286" class="code"><tspan class="code-b">api</tspan>.list_articles()</text>
+<text x="1082" y="301" class="code"><tspan class="code-b">api</tspan>.update_article()</text>
+<text x="1082" y="316" class="code"><tspan class="code-b">auth</tspan>.verify_password()</text>
+<text x="1082" y="331" class="code-d">  require_user / require_admin</text>
+<text x="1082" y="386" class="fn-note">PBKDF2 × 200 000.</text>
+<text x="1082" y="398" class="fn-note">Статусы пер-юзерные</text>
+<rect x="1330" y="250" width="230" height="158" rx="7" class="fn" />
+<rect x="1330" y="250" width="230" height="19" rx="7" class="fn-hd"/>
+<rect x="1330" y="262" width="230" height="7" class="fn-hd"/>
+<text x="1340" y="264" class="fn-mod">PROCESSING</text>
+<text x="1340" y="286" class="code"><tspan class="code-b">digest</tspan>.build_digest_content()</text>
+<text x="1340" y="301" class="code-d">  ↳ render_digest_pdf()</text>
+<text x="1340" y="316" class="code-d">  ↳ render_digest_docx()</text>
+<text x="1340" y="331" class="code-d">  ↳ render_digest_email()</text>
+<text x="1340" y="386" class="fn-note">Экспорт — фоновая задача,</text>
+<text x="1340" y="398" class="fn-note">очередь playwright</text>
+<g><rect x="36" y="421" width="1528" height="23" class="lbl-bg"/><rect x="40" y="424" width="86" height="17" rx="3" class="badge"/><text x="83" y="436.5" class="badge-t" text-anchor="middle">ЯРУС 3</text><text x="136" y="437" class="tier-t">Инфраструктура</text><text x="288" y="437" class="tier-h">какой Docker-контейнер и на каком сервере · цифры в блоке = какие шаги он обслуживает</text></g>
+<rect x="30" y="448" width="1540" height="215" rx="10" class="zone-ru" />
+<rect x="46" y="440" width="352" height="17" rx="3" class="zone-lbl-bg"/>
+<text x="56" y="452" class="zone-lbl-ru">РОССИЙСКИЙ КОНТУР · СПб · 109.68.213.12 · docker-compose.yml</text>
+<rect x="40" y="470" width="1004" height="52" rx="7" class="cnt" />
+<text x="52" y="490" class="cnt-n">oiltech_scheduler</text>
+<text x="52" y="506" class="cnt-d">Цикл раз в 6 часов: discover-rss → parse → fetch-full-text → process / enqueue → stats</text>
+<circle cx="981" cy="485" r="7" class="stepbadge"/>
+<text x="981" y="488" class="stepbadge-t" text-anchor="middle">1</text>
+<circle cx="996" cy="485" r="7" class="stepbadge"/>
+<text x="996" y="488" class="stepbadge-t" text-anchor="middle">2</text>
+<circle cx="1011" cy="485" r="7" class="stepbadge"/>
+<text x="1011" y="488" class="stepbadge-t" text-anchor="middle">3</text>
+<circle cx="1026" cy="485" r="7" class="stepbadge"/>
+<text x="1026" y="488" class="stepbadge-t" text-anchor="middle">4</text>
+<rect x="1072" y="470" width="488" height="52" rx="7" class="cnt" />
+<text x="1084" y="490" class="cnt-n">oiltech_caddy</text>
+<text x="1084" y="506" class="cnt-d">Reverse-proxy, авто-HTTPS Let&#x27;s Encrypt,</text>
+<text x="1084" y="519" class="cnt-d">единственная точка входа снаружи</text>
+<circle cx="1527" cy="485" r="7" class="stepbadge"/>
+<text x="1527" y="488" class="stepbadge-t" text-anchor="middle">5</text>
+<circle cx="1542" cy="485" r="7" class="stepbadge"/>
+<text x="1542" y="488" class="stepbadge-t" text-anchor="middle">6</text>
+<text x="1548" y="513" class="cnt-p" text-anchor="end">80 · 443 → наружу</text>
+<rect x="298" y="532" width="746" height="52" rx="7" class="cnt" />
+<text x="310" y="552" class="cnt-n">oiltech_worker  +  oiltech_playwright_worker</text>
+<text x="310" y="568" class="cnt-d">Фоновые задачи. Очереди: default · ai · playwright (JS-сайты и рендер PDF)</text>
+<circle cx="981" cy="547" r="7" class="stepbadge"/>
+<text x="981" y="550" class="stepbadge-t" text-anchor="middle">2</text>
+<circle cx="996" cy="547" r="7" class="stepbadge"/>
+<text x="996" y="550" class="stepbadge-t" text-anchor="middle">3</text>
+<circle cx="1011" cy="547" r="7" class="stepbadge"/>
+<text x="1011" y="550" class="stepbadge-t" text-anchor="middle">4</text>
+<circle cx="1026" cy="547" r="7" class="stepbadge"/>
+<text x="1026" y="550" class="stepbadge-t" text-anchor="middle">6</text>
+<rect x="1072" y="532" width="488" height="52" rx="7" class="cnt" />
+<text x="1084" y="552" class="cnt-n">oiltech_app</text>
+<text x="1084" y="568" class="cnt-d">FastAPI + React-фронт (сборка Vite),</text>
+<text x="1084" y="581" class="cnt-d">сессии, роли admin / user</text>
+<circle cx="1527" cy="547" r="7" class="stepbadge"/>
+<text x="1527" y="550" class="stepbadge-t" text-anchor="middle">5</text>
+<circle cx="1542" cy="547" r="7" class="stepbadge"/>
+<text x="1542" y="550" class="stepbadge-t" text-anchor="middle">6</text>
+<text x="1548" y="575" class="cnt-p" text-anchor="end">127.0.0.1:8000</text>
+<rect x="40" y="594" width="230" height="54" rx="7" class="cnt" />
+<text x="52" y="614" class="cnt-n">bootstrap · tasks · docs</text>
+<text x="52" y="630" class="cnt-d">Разовый init-db и сиды,</text>
+<text x="52" y="643" class="cnt-d">трекер задач, справка</text>
+<rect x="298" y="594" width="1262" height="54" rx="7" class="cnt-db" />
+<text x="310" y="614" class="cnt-n">oiltech_pg · PostgreSQL 16</text>
+<text x="310" y="630" class="cnt-d">Всё состояние системы: sources · articles · article_cards · article_tags · article_scores ·</text>
+<text x="310" y="643" class="cnt-d">users · user_sessions · user_article_states · background_jobs · ai_processing_runs · monthly_digests</text>
+<text x="1548" y="639" class="cnt-p" text-anchor="end">127.0.0.1:5432 — наружу НЕ открыт</text>
+<path d="M1187,522 L1187,532" class="wire" marker-end="url(#ar)"/>
+<path d="M1187,584 L1187,594" class="wire" marker-end="url(#ar)"/>
+<path d="M671,522 L671,532" class="wire" marker-end="url(#ar)"/>
+<path d="M671,584 L671,594" class="wire" marker-end="url(#ar)"/>
+<rect x="284" y="690" width="774" height="86" rx="10" class="zone-ext" />
+<rect x="298" y="682" width="326" height="17" rx="3" class="zone-lbl-bg"/>
+<text x="308" y="694" class="zone-lbl-ext">⚠ ВНЕШНИЙ КОНТУР · Амстердам · ГРАНИЦА ДОВЕРИЯ</text>
+<rect x="302" y="710" width="738" height="52" rx="7" class="cnt-ext" />
+<text x="314" y="730" class="cnt-n">oiltech_external_worker</text>
+<text x="314" y="746" class="cnt-d">Stateless: своей базы нет, соединения с РФ-базой нет. Забирает задачи сам, по HTTPS task-API.</text>
+<text x="314" y="759" class="cnt-d">Очереди: external-ai · external-fetch · external-playwright</text>
+<circle cx="992" cy="725" r="7" class="stepbadge"/>
+<text x="992" y="728" class="stepbadge-t" text-anchor="middle">2</text>
+<circle cx="1007" cy="725" r="7" class="stepbadge"/>
+<text x="1007" y="728" class="stepbadge-t" text-anchor="middle">3</text>
+<circle cx="1022" cy="725" r="7" class="stepbadge"/>
+<text x="1022" y="728" class="stepbadge-t" text-anchor="middle">4</text>
+<path d="M1058,724 L1176,724 L1176,586" class="wire-ext" marker-end="url(#ar-ext)"/>
+<rect x="1190" y="686" width="228" height="30" rx="4" class="wire-lbl"/>
+<text x="1304" y="698" class="wire-lbl-t" text-anchor="middle">claim · heartbeat · complete</text>
+<text x="1304" y="709" class="wire-lbl-d" text-anchor="middle">Bearer-токен (SHA-256) + lease</text>
+<rect x="40" y="800" width="488" height="50" rx="7" class="ext-sys" />
+<text x="52" y="820" class="ext-n">120 источников</text>
+<text x="52" y="837" class="ext-d">RSS-ленты, листинги, JS-сайты. РФ-доступные — напрямую из СПб</text>
+<rect x="556" y="800" width="488" height="50" rx="7" class="ext-sys-hot" />
+<text x="568" y="820" class="ext-n">OpenAI API  🇺🇸  +  западные СМИ</text>
+<text x="568" y="837" class="ext-d">gpt-5.4 (гейт) · gpt-5-mini (суть, тег, скоринг, перевод)</text>
+<rect x="1072" y="800" width="488" height="50" rx="7" class="ext-sys" />
+<text x="1084" y="820" class="ext-n">Браузер аналитика</text>
+<text x="1084" y="837" class="ext-d">HTTPS на oiltech-digest.ru — вход без VPN</text>
+<path d="M155,800 L155,669" class="wire" marker-end="url(#ar)"/>
+<path d="M711,800 L711,782" class="wire-ext" marker-end="url(#ar-ext)"/>
+<path d="M1445,800 L1445,669" class="wire" marker-end="url(#ar)"/>
+<rect x="40" y="870" width="1520" height="54" rx="5" class="callout" />
+<rect x="52" y="882" width="168" height="20" rx="3" class="callout-tag" />
+<text x="136" y="896" class="callout-tag-t" text-anchor="middle">ГРАНИЦУ РФ ПЕРЕСЕКАЕТ</text>
+<text x="236" y="892" class="callout-t"><tspan class="callout-b">Наружу уходит:</tspan> тексты собранных новостей, список тегов и критерии скоринга — публичные отраслевые материалы с открытых сайтов.</text>
+<text x="236" y="910" class="callout-t"><tspan class="callout-b">Наружу НЕ уходит:</tspan> учётные записи и e-mail, хэши паролей, сессии, личные статусы и комментарии аналитиков, состав дайджеста. <tspan class="callout-d">Источник факта: external_ai.build_process_articles_payload()</tspan></text>
+<rect x="40" y="946" width="26" height="13" rx="3" class="biz" />
+<text x="73" y="957" class="leg-t">бизнес-шаг</text>
+<rect x="163" y="946" width="26" height="13" rx="3" class="fn" />
+<text x="196" y="957" class="leg-t">код и функции</text>
+<rect x="305" y="946" width="26" height="13" rx="3" class="cnt" />
+<text x="338" y="957" class="leg-t">контейнер в РФ</text>
+<rect x="454" y="946" width="26" height="13" rx="3" class="cnt-db" />
+<text x="487" y="957" class="leg-t">хранилище данных</text>
+<rect x="615" y="946" width="26" height="13" rx="3" class="cnt-ext" />
+<text x="648" y="957" class="leg-t">вне РФ-периметра</text>
+<rect x="777" y="946" width="26" height="13" rx="3" class="ext-sys" />
+<text x="810" y="957" class="leg-t">внешняя система</text>
+<text x="1560" y="957" class="leg-h" text-anchor="end">①—⑥ в блоке контейнера — какие шаги конвейера он обслуживает</text>
+</svg>
+</div>

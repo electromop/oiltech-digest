@@ -1,0 +1,304 @@
+<meta charset="utf-8">
+<title>OilTech Digest — потоки данных и границы доверия</title>
+<style>
+  @page { size: A3 landscape; margin: 7mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #e8ecf0; }
+  .sheet {
+    width: 100vw; height: 100vh; padding: 12px 16px; background: #fff;
+    display: flex; align-items: center; justify-content: center;
+  }
+  svg.scheme { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; }
+  svg.scheme text { font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .code, .code-d, .cnt-n, .cnt-p { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  .h1   { font-size: 22px; font-weight: 700; fill: #16202b; letter-spacing: -.2px; }
+  .h2   { font-size: 12px; fill: #4a5a6a; }
+  .meta { font-size: 10px; fill: #7c8b99; }
+  .rule { stroke: #16202b; stroke-width: 2; }
+
+  /* ---- общие ярусные подписи (лист 1) ---- */
+  .badge   { fill: #16202b; }
+  .badge-t { font-size: 9.5px; font-weight: 700; fill: #fff; letter-spacing: .1em; }
+  .tier-t  { font-size: 13.5px; font-weight: 700; fill: #16202b; }
+  .tier-h  { font-size: 11.5px; fill: #7c8b99; }
+  .lbl-bg  { fill: #fff; }
+
+  .biz       { fill: #fff7ed; stroke: #fdba74; }
+  .biz-num   { fill: #b45309; }
+  .biz-num-t { font-size: 11px; font-weight: 700; fill: #fff; }
+  .biz-title { font-size: 14px; font-weight: 700; fill: #b45309; }
+  .biz-desc  { font-size: 11.5px; fill: #7c3d09; }
+  .chev      { fill: none; stroke: #f59e0b; stroke-width: 3.5;
+               stroke-linecap: round; stroke-linejoin: round; }
+
+  .link   { stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .link-a { fill: none; stroke: #cbd5e1; stroke-width: 1.5; }
+
+  .fn      { fill: #f6f8fa; stroke: #cbd5e1; }
+  .fn-hd   { fill: #e6ecf2; }
+  .fn-mod  { font-size: 9.5px; font-weight: 700; fill: #64748b; letter-spacing: .06em; }
+  .code    { font-size: 10.5px; fill: #334155; }
+  .code-b  { font-weight: 700; fill: #0f172a; }
+  .code-d  { font-size: 10.5px; fill: #64748b; }
+  .fn-note { font-size: 10px; fill: #7c8b99; }
+  .warn    { fill: #fef2f2; stroke: #fca5a5; }
+  .warn-t  { font-size: 9.5px; font-weight: 700; fill: #b91c1c; letter-spacing: .03em; }
+  .warn-d  { font-size: 9.5px; fill: #b91c1c; }
+
+  .stage-n  { fill: #1d4ed8; }
+  .stage-nt { font-size: 9px; font-weight: 700; fill: #fff; }
+  .stage-l  { stroke: #93c5fd; stroke-width: 1.5; }
+
+  .zone-ru      { fill: #f8fbff; stroke: #1d4ed8; stroke-width: 2; stroke-dasharray: 7 4; }
+  .zone-ext     { fill: #fffafa; stroke: #b91c1c; stroke-width: 2; stroke-dasharray: 7 4; }
+  .zone-net     { fill: #f8fafc; stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 7 4; }
+  .zone-lbl-bg  { fill: #fff; }
+  .zone-lbl-ru  { font-size: 9.5px; font-weight: 700; fill: #1d4ed8; letter-spacing: .06em; }
+  .zone-lbl-ext { font-size: 9.5px; font-weight: 700; fill: #b91c1c; letter-spacing: .06em; }
+  .zone-lbl-net { font-size: 9.5px; font-weight: 700; fill: #475569; letter-spacing: .06em; }
+
+  .cnt     { fill: #eff6ff; stroke: #93c5fd; }
+  .cnt-db  { fill: #f0fdf4; stroke: #86efac; }
+  .cnt-ext { fill: #fef2f2; stroke: #fca5a5; }
+  .cnt-n   { font-size: 11.5px; font-weight: 700; fill: #1e293b; }
+  .cnt-d   { font-size: 10.5px; fill: #475569; }
+  .cnt-p   { font-size: 9.5px; fill: #64748b; }
+
+  .stepbadge   { fill: #b45309; }
+  .stepbadge-t { font-size: 9px; font-weight: 700; fill: #fff; }
+
+  .wire       { stroke: #64748b; stroke-width: 1.5; fill: none; }
+  .wire-ext   { stroke: #b91c1c; stroke-width: 1.8; fill: none; stroke-dasharray: 5 3; }
+  .wire-lbl   { fill: #fff; stroke: #fca5a5; }
+  .wire-lbl-t { font-size: 10px; font-weight: 700; fill: #b91c1c; }
+  .wire-lbl-d { font-size: 9.5px; fill: #b91c1c; }
+
+  .ext-sys     { fill: #f1f5f9; stroke: #cbd5e1; }
+  .ext-sys-hot { fill: #fef2f2; stroke: #b91c1c; stroke-dasharray: 5 3; }
+  .ext-n       { font-size: 12px; font-weight: 700; fill: #334155; }
+  .ext-d       { font-size: 10px; fill: #64748b; }
+
+  /* ---- лист 2: DFD ---- */
+  .n-proc   { fill: #eff6ff; stroke: #93c5fd; }
+  .n-actor  { fill: #f1f5f9; stroke: #cbd5e1; }
+  .n-third  { fill: #fef2f2; stroke: #fca5a5; }
+  .n-store  { fill: #f0fdf4; stroke: #86efac; }
+  .n-store2 { fill: #f7fee7; stroke: #bef264; }
+  .n-t      { font-size: 12.5px; font-weight: 700; fill: #1e293b; }
+  .n-t-store{ font-size: 12.5px; font-weight: 700; fill: #15803d; }
+  .n-d      { font-size: 10.5px; fill: #475569; }
+
+  .dc-pd  { fill: #fee2e2; stroke: #ef4444; }
+  .dc-int { fill: #ffedd5; stroke: #f97316; }
+  .dc-pub { fill: #e2e8f0; stroke: #94a3b8; }
+  .dc-srv { fill: #dcfce7; stroke: #4ade80; }
+  .dc-t   { font-size: 9px; font-weight: 700; fill: #1e293b; letter-spacing: .03em; }
+
+  .f-wire    { stroke: #64748b; stroke-width: 1.8; fill: none; }
+  .f-int     { stroke: #94a3b8; stroke-width: 1.5; fill: none; }
+  .f-hot     { stroke: #b91c1c; stroke-width: 2.2; fill: none; stroke-dasharray: 6 3; }
+  .f-lbl     { fill: #fff; stroke: #cbd5e1; }
+  .f-lbl-hot { fill: #fff; stroke: #fca5a5; }
+  .f-id      { fill: #475569; }
+  .f-id-hot  { fill: #b91c1c; }
+  .f-id-t    { font-size: 9px; font-weight: 700; fill: #fff; }
+  .f-t       { font-size: 11.5px; font-weight: 700; fill: #1e293b; }
+  .f-t-hot   { font-size: 11.5px; font-weight: 700; fill: #b91c1c; }
+  .f-d       { font-size: 10px; fill: #475569; }
+  .f-d-hot   { font-size: 10px; fill: #b91c1c; }
+  .f-s       { font-size: 10px; font-weight: 700; fill: #334155; }
+  .f-s-hot   { font-size: 10px; font-weight: 700; fill: #b91c1c; }
+
+  .sec-h { font-size: 11px; font-weight: 700; fill: #16202b; letter-spacing: .08em; }
+  .th    { fill: #e2e8f0; }
+  .th-t  { font-size: 9.5px; font-weight: 700; fill: #475569; letter-spacing: .05em; }
+  .tr     { fill: #fff; stroke: #e2e8f0; }
+  .tr-hot { fill: #fef2f2; stroke: #fca5a5; }
+  .td     { font-size: 11px; fill: #334155; }
+  .td-b   { font-size: 11px; font-weight: 700; fill: #1e293b; }
+  .td-b-hot { font-size: 11px; font-weight: 700; fill: #b91c1c; }
+
+  .callout       { fill: #fef2f2; stroke: #b91c1c; stroke-width: 1.5; }
+  .callout-tag   { fill: #b91c1c; }
+  .callout-tag-t { font-size: 9.5px; font-weight: 700; fill: #fff; letter-spacing: .05em; }
+  .callout-t     { font-size: 11.5px; fill: #7f1d1d; }
+  .callout-b     { font-weight: 700; fill: #641414; }
+  .callout-d     { font-size: 10px; fill: #a86a6a; }
+
+  .leg-t { font-size: 10.5px; fill: #4a5a6a; }
+  .leg-h { font-size: 10.5px; fill: #7c8b99; }
+
+  @media print {
+    html, body { background: #fff; height: auto; }
+    .sheet { width: auto; height: auto; padding: 0; }
+    svg.scheme { width: 100%; height: auto; max-height: none; }
+  }
+</style>
+
+<div class="sheet">
+<svg viewBox="0 0 1600 1004" xmlns="http://www.w3.org/2000/svg" class="scheme">
+<defs>
+  <marker id="ar-net" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0,1 L9,5 L0,9 z" fill="#64748b"/></marker>
+  <marker id="ar-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0,1 L9,5 L0,9 z" fill="#b91c1c"/></marker>
+</defs>
+<text x="40" y="36" class="h1">Потоки данных и границы доверия</text>
+<text x="40" y="58" class="h2">Нотация DFD с границами доверия (Microsoft SDL / OWASP) — в ней формулируются вопросы информационной безопасности: что пересекает периметр, чем аутентифицируется, какого класса данные.</text>
+<text x="1560" y="24" class="meta" text-anchor="end">Версия 2026-08-02 · код 499cd17</text>
+<text x="1560" y="39" class="meta" text-anchor="end">Лист 2 из 2 · лист 1 — единая архитектурная схема</text>
+<text x="1560" y="54" class="meta" text-anchor="end">Границы: B1 интернет↔РФ · B2 РФ↔внешний контур · B3 внешний↔США</text>
+<line x1="40" y1="74" x2="1560" y2="74" class="rule"/>
+<rect x="40" y="108" width="300" height="486" rx="10" class="zone-net"/>
+<rect x="54" y="100" width="118" height="17" rx="3" class="zone-lbl-bg"/>
+<text x="64" y="112" class="zone-lbl-net">ИНТЕРНЕТ</text>
+<rect x="430" y="108" width="640" height="486" rx="10" class="zone-ru"/>
+<rect x="444" y="100" width="330" height="17" rx="3" class="zone-lbl-bg"/>
+<text x="454" y="112" class="zone-lbl-ru">ГРАНИЦА ДОВЕРИЯ · РФ-КОНТУР · СПб</text>
+<rect x="1160" y="108" width="400" height="486" rx="10" class="zone-ext"/>
+<rect x="1174" y="100" width="196" height="17" rx="3" class="zone-lbl-bg"/>
+<text x="1184" y="112" class="zone-lbl-ext">ВНЕ ПЕРИМЕТРА РФ</text>
+<rect x="56" y="148" width="268" height="78" rx="7" class="n-actor"/>
+<text x="68" y="168" class="n-t">Аналитик · браузер</text>
+<text x="68" y="184" class="n-d">Вход по e-mail и паролю</text>
+<text x="68" y="197" class="n-d">на oiltech-digest.ru — без VPN,</text>
+<text x="68" y="210" class="n-d">роли admin / user</text>
+<rect x="56" y="250" width="268" height="78" rx="7" class="n-actor"/>
+<text x="68" y="270" class="n-t">120 источников (РФ-доступные)</text>
+<text x="68" y="286" class="n-d">Публичные RSS-ленты, листинги,</text>
+<text x="68" y="299" class="n-d">JS-сайты отраслевых изданий.</text>
+<text x="68" y="312" class="n-d">Читаем, ничего не отправляем</text>
+<rect x="56" y="352" width="268" height="62" rx="7" class="n-actor"/>
+<text x="68" y="372" class="n-t">Let&#x27;s Encrypt</text>
+<text x="68" y="388" class="n-d">Выпуск и продление TLS-сертификата</text>
+<text x="68" y="401" class="n-d">по протоколу ACME</text>
+<rect x="446" y="148" width="608" height="48" rx="7" class="n-proc"/>
+<text x="458" y="168" class="n-t">Caddy</text>
+<text x="458" y="184" class="n-d">Единственная точка входа снаружи · TLS-терминация · порты 80/443</text>
+<rect x="446" y="212" width="608" height="48" rx="7" class="n-proc"/>
+<text x="458" y="232" class="n-t">FastAPI (app)</text>
+<text x="458" y="248" class="n-d">Сессии, роли admin/user, вся логика чтения и правки данных</text>
+<rect x="446" y="276" width="608" height="48" rx="7" class="n-proc"/>
+<text x="458" y="296" class="n-t">scheduler · worker · playwright-worker</text>
+<text x="458" y="312" class="n-d">Сбор РФ-источников, фоновые задачи, рендер PDF</text>
+<rect x="446" y="340" width="608" height="146" rx="7" class="n-store"/>
+<text x="458" y="360" class="n-t-store">PostgreSQL 16 — единственное состояние системы</text>
+<rect x="458" y="378" width="62" height="17" rx="3" class="dc-pd"/>
+<text x="489" y="390" class="dc-t" text-anchor="middle">ПДн</text>
+<text x="530" y="391" class="n-d">users.email · password_hash (PBKDF2×200k, соль на юзера) · user_sessions</text>
+<rect x="458" y="404" width="62" height="17" rx="3" class="dc-int"/>
+<text x="489" y="416" class="dc-t" text-anchor="middle">ВНУТР.</text>
+<text x="530" y="417" class="n-d">user_article_states (статусы, комментарии) · monthly_digests (состав выпуска)</text>
+<rect x="458" y="430" width="62" height="17" rx="3" class="dc-pub"/>
+<text x="489" y="442" class="dc-t" text-anchor="middle">ПУБЛ.</text>
+<text x="530" y="443" class="n-d">articles.raw_text · article_cards · tags · article_scores</text>
+<rect x="458" y="456" width="62" height="17" rx="3" class="dc-srv"/>
+<text x="489" y="468" class="dc-t" text-anchor="middle">СЛУЖ.</text>
+<text x="530" y="469" class="n-d">ai_processing_runs (аудит затрат) · background_jobs (владелец, регион, lease)</text>
+<rect x="446" y="502" width="608" height="48" rx="7" class="n-store2"/>
+<text x="458" y="522" class="n-t">Тома и файлы на сервере</text>
+<text x="458" y="538" class="n-d">pgdata · exports (готовые PDF/DOCX) · caddy_data (сертификаты) · .env (секреты)</text>
+<rect x="1176" y="148" width="368" height="88" rx="7" class="n-third"/>
+<text x="1188" y="168" class="n-t">external-worker (Амстердам)</text>
+<text x="1188" y="184" class="n-d">Stateless: своей базы нет, соединения</text>
+<text x="1188" y="197" class="n-d">с РФ-базой нет by design. Хранит только</text>
+<text x="1188" y="210" class="n-d">ключ OpenAI и токен доступа к core API</text>
+<rect x="1176" y="268" width="368" height="74" rx="7" class="n-third"/>
+<text x="1188" y="288" class="n-t">OpenAI API  🇺🇸</text>
+<text x="1188" y="304" class="n-d">gpt-5.4 — гейт релевантности</text>
+<text x="1188" y="317" class="n-d">gpt-5-mini — суть, тег, скоринг, перевод</text>
+<rect x="1176" y="374" width="368" height="62" rx="7" class="n-actor"/>
+<text x="1188" y="394" class="n-t">Западные отраслевые СМИ</text>
+<text x="1188" y="410" class="n-d">Публичные сайты, недоступные</text>
+<text x="1188" y="423" class="n-d">с российского IP</text>
+<rect x="1176" y="468" width="368" height="48" rx="7" class="n-actor"/>
+<text x="1188" y="488" class="n-t">Резидентный прокси</text>
+<text x="1188" y="504" class="n-d">Опционально, для отдельных источников</text>
+<path d="M324,187 L442,187" class="f-wire" marker-end="url(#ar-net)"/>
+<rect x="341" y="172" width="84" height="30" rx="15" class="f-lbl"/>
+<circle cx="357" cy="187" r="9" class="f-id"/>
+<text x="357" y="190" class="f-id-t" text-anchor="middle">B1</text>
+<text x="371" y="190" class="f-s">вход</text>
+<path d="M442,300 L324,300" class="f-wire" marker-end="url(#ar-net)"/>
+<rect x="341" y="285" width="84" height="30" rx="15" class="f-lbl"/>
+<circle cx="357" cy="300" r="9" class="f-id"/>
+<text x="357" y="304" class="f-id-t" text-anchor="middle">B1</text>
+<text x="371" y="304" class="f-s">сбор</text>
+<path d="M442,383 L324,383" class="f-wire" marker-end="url(#ar-net)"/>
+<rect x="341" y="368" width="84" height="30" rx="15" class="f-lbl"/>
+<circle cx="357" cy="383" r="9" class="f-id"/>
+<text x="357" y="386" class="f-id-t" text-anchor="middle">B1</text>
+<text x="371" y="386" class="f-s">ACME</text>
+<path d="M1172,192 L1058,192" class="f-hot" marker-end="url(#ar-hot)"/>
+<rect x="1073" y="177" width="84" height="30" rx="15" class="f-lbl-hot"/>
+<circle cx="1089" cy="192" r="9" class="f-id-hot"/>
+<text x="1089" y="196" class="f-id-t" text-anchor="middle">B2</text>
+<text x="1103" y="196" class="f-s-hot">task-API</text>
+<path d="M1220,236 L1220,268" class="f-hot" marker-end="url(#ar-hot)"/>
+<circle cx="1220" cy="252" r="9" class="f-id-hot"/>
+<text x="1220" y="256" class="f-id-t" text-anchor="middle">B3</text>
+<path d="M1500,236 L1500,374" class="f-wire" marker-end="url(#ar-net)"/>
+<circle cx="1500" cy="305" r="9" class="f-id"/>
+<text x="1500" y="308" class="f-id-t" text-anchor="middle">B3</text>
+<path d="M750,196 L750,212" class="f-int" marker-end="url(#ar-net)"/>
+<path d="M750,260 L750,276" class="f-int" marker-end="url(#ar-net)"/>
+<path d="M750,324 L750,340" class="f-int" marker-end="url(#ar-net)"/>
+<path d="M750,486 L750,502" class="f-int" marker-end="url(#ar-net)"/>
+<rect x="852" y="324" width="202" height="16" rx="3" class="f-lbl"/>
+<text x="858" y="336" class="f-d">B4 · внутренняя docker-сеть</text>
+<text x="40" y="622" class="sec-h">ЧТО ПЕРЕСЕКАЕТ ГРАНИЦУ И НА КАКИХ УСЛОВИЯХ</text>
+<rect x="40" y="634" width="1520" height="22" rx="3" class="th"/>
+<text x="50" y="649" class="th-t">Граница</text>
+<text x="240" y="649" class="th-t">Что передаётся</text>
+<text x="670" y="649" class="th-t">Аутентификация и канал</text>
+<text x="1070" y="649" class="th-t">Класс данных</text>
+<text x="1270" y="649" class="th-t">Хранится ли снаружи</text>
+<rect x="40" y="656" width="1520" height="36" rx="0" class="tr"/>
+<text x="50" y="678" class="td-b">B1 · интернет → РФ</text>
+<text x="240" y="678" class="td">Логин, пароль, действия в интерфейсе</text>
+<text x="670" y="678" class="td">HTTPS + cookie HttpOnly/Secure/Lax</text>
+<rect x="1070" y="666" width="58" height="16" rx="3" class="dc-pd"/>
+<text x="1099" y="678" class="dc-t" text-anchor="middle">ПДн</text>
+<text x="1270" y="678" class="td">Нет — не покидает РФ</text>
+<rect x="40" y="694" width="1520" height="36" rx="0" class="tr"/>
+<text x="50" y="716" class="td-b">B1 · РФ → источники</text>
+<text x="240" y="716" class="td">Ничего. Только исходящий GET</text>
+<text x="670" y="716" class="td">HTTPS, троттлинг, cooldown при блокировке</text>
+<rect x="1070" y="704" width="58" height="16" rx="3" class="dc-pub"/>
+<text x="1099" y="716" class="dc-t" text-anchor="middle">—</text>
+<text x="1270" y="716" class="td">Не применимо</text>
+<rect x="40" y="732" width="1520" height="36" rx="0" class="tr-hot"/>
+<text x="50" y="754" class="td-b-hot">B2 · РФ ↔ внешний контур</text>
+<text x="240" y="754" class="td">Тексты новостей, теги, критерии скоринга</text>
+<text x="670" y="754" class="td">Bearer-токен (SHA-256) + lease, инициатива у воркера</text>
+<rect x="1070" y="742" width="58" height="16" rx="3" class="dc-pub"/>
+<text x="1099" y="754" class="dc-t" text-anchor="middle">ПУБЛ.</text>
+<text x="1270" y="754" class="td">Нет — воркер stateless, БД у него нет</text>
+<rect x="40" y="770" width="1520" height="36" rx="0" class="tr-hot"/>
+<text x="50" y="792" class="td-b-hot">B3 · внешний контур → США</text>
+<text x="240" y="792" class="td">Текст новости и промпт в OpenAI</text>
+<text x="670" y="792" class="td">HTTPS, ключ только в .env воркера</text>
+<rect x="1070" y="780" width="58" height="16" rx="3" class="dc-pub"/>
+<text x="1099" y="792" class="dc-t" text-anchor="middle">ПУБЛ.</text>
+<text x="1270" y="792" class="td">По политике провайдера — вне нашего контроля</text>
+<rect x="40" y="816" width="1520" height="52" rx="5" class="callout"/>
+<rect x="52" y="827" width="168" height="20" rx="3" class="callout-tag"/>
+<text x="136" y="841" class="callout-tag-t" text-anchor="middle">ГЛАВНЫЙ ВЫВОД</text>
+<text x="236" y="837" class="callout-t"><tspan class="callout-b">Границу пересекают только публичные тексты новостей.</tspan> Персональные данные, учётные записи, сессии и результаты работы аналитиков остаются в РФ-контуре — внешний контур физически не имеет доступа к базе.</text>
+<text x="236" y="855" class="callout-t"><tspan class="callout-b">Запасной вариант:</tspan> если трансграничная передача будет признана недопустимой, ИИ-обработка переносится на российскую модель (YandexGPT / GigaChat) — конвейер к провайдеру не привязан, <tspan class="callout-d">точка замены одна: processing/openai_client.py</tspan></text>
+<rect x="40" y="886" width="58" height="16" rx="3" class="dc-pd"/>
+<text x="69" y="898" class="dc-t" text-anchor="middle">ПДн</text>
+<text x="106" y="898" class="leg-t">персональные данные</text>
+<rect x="258" y="886" width="58" height="16" rx="3" class="dc-int"/>
+<text x="287" y="898" class="dc-t" text-anchor="middle">ВНУТР.</text>
+<text x="324" y="898" class="leg-t">внутренняя информация</text>
+<rect x="488" y="886" width="58" height="16" rx="3" class="dc-pub"/>
+<text x="517" y="898" class="dc-t" text-anchor="middle">ПУБЛ.</text>
+<text x="554" y="898" class="leg-t">публичные материалы</text>
+<rect x="706" y="886" width="58" height="16" rx="3" class="dc-srv"/>
+<text x="735" y="898" class="dc-t" text-anchor="middle">СЛУЖ.</text>
+<text x="772" y="898" class="leg-t">служебные и аудит</text>
+<text x="1560" y="898" class="leg-h" text-anchor="end">Стрелка показывает, кто ИНИЦИИРУЕТ соединение, а не куда текут данные</text>
+</svg>
+</div>
