@@ -91,7 +91,8 @@ def article_by_url(article_url: str) -> dict | None:
         cur.execute(
             """
             SELECT a.id, a.source_id, a.title, a.url, s.name AS source_name,
-                   a.full_text_status, a.full_text_method, char_length(coalesce(a.raw_text, '')) AS full_text_chars
+                   a.full_text_status, NULL::text AS full_text_method,
+                   char_length(coalesce(a.raw_text, '')) AS full_text_chars
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             WHERE a.url = %s
