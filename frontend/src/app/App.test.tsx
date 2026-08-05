@@ -299,6 +299,74 @@ describe("App smoke", () => {
       if (url === "/api/digest-branding") {
         return Promise.resolve(jsonResponse(method === "PUT" ? { ok: true, branding: digestBranding } : digestBranding));
       }
+      if (url === "/api/sources?limit=500") {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: 7,
+              name: "World Oil",
+              enabled: true,
+              url: "https://worldoil.com",
+              rss_url: "https://worldoil.com/rss",
+              parse_strategy: "rss",
+              source_type: "rss",
+              update_frequency: "ежедневно",
+              listing_url: null,
+              listing_strategy: null,
+              listing_selector: null,
+              article_link_selector: null,
+              article_date_selector: null,
+              network_region: "auto",
+              network_profile: "direct",
+              last_ru_probe_status: null,
+              last_external_probe_status: null,
+              external_required_reason: null,
+              external_cooldown_until: null,
+              last_seen_article_url: null,
+              last_seen_published_at: null,
+            },
+          ]),
+        );
+      }
+      if (url === "/api/source-health?limit=500") {
+        return Promise.resolve(jsonResponse([{ id: 7, verdict: "ok", articles: 25, last_article_at: "2026-06-07T00:00:00Z" }]));
+      }
+      if (url === "/api/articles/import" && method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            ok: true,
+            article: {
+              id: 55,
+              source_id: 7,
+              source_name: "World Oil",
+              duplicate: false,
+              title: "Imported article",
+              fetch_method: "http",
+              full_text_status: "ok",
+              full_text_method: "http",
+              full_text_chars: 1900,
+            },
+            job: {
+              id: 41,
+              kind: "process_articles",
+              queue: "external-ai",
+              execution_region: "external",
+              capability: "openai",
+              status: "queued",
+              progress: 0,
+              attempts: 0,
+              max_attempts: 3,
+              payload: { article_ids: [55], limit: 1, offline: false },
+              result: {},
+              error: null,
+              run_after: null,
+              created_at: null,
+              started_at: null,
+              finished_at: null,
+            },
+          }),
+        );
+      }
       if (url.startsWith("/api/digest-content")) {
         return Promise.resolve(jsonResponse(digestContent));
       }
@@ -589,6 +657,28 @@ describe("App smoke", () => {
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     expect(autoRefreshTimers()).toBe(settled);
+  });
+
+  it("imports article by direct url from admin sources page", async () => {
+    window.history.replaceState(null, "", "/?screen=sources");
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Источники" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Добавить статью по ссылке" })).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText("https://site.com/news/article"), "https://example.com/news/imported");
+    await user.type(screen.getByPlaceholderText("например, 12"), "7");
+    await user.click(screen.getByRole("button", { name: "Импортировать статью" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/articles/import")).toBe(true);
+    });
   });
 
 });

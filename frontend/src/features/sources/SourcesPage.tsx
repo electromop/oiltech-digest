@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   createSource,
   diagnoseSourceJob,
+  importArticleByUrl,
   listSourceHealth,
   listSources,
   scrapeSourceJob,
@@ -39,6 +40,9 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   const [newSourceName, setNewSourceName] = useState("");
   const [newSourceUrl, setNewSourceUrl] = useState("");
   const [newSourceFrequency, setNewSourceFrequency] = useState("ежедневно");
+  const [manualArticleUrl, setManualArticleUrl] = useState("");
+  const [manualArticleSourceId, setManualArticleSourceId] = useState("");
+  const [manualArticleProcess, setManualArticleProcess] = useState(true);
 
   useEffect(() => {
     void reload();
@@ -305,6 +309,35 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     }
   }
 
+  async function handleManualArticleImport() {
+    if (!manualArticleUrl.trim()) {
+      showToast("Вставьте прямую ссылку на статью", "error");
+      return;
+    }
+    try {
+      setBusy(true);
+      const payload = await importArticleByUrl({
+        url: manualArticleUrl.trim(),
+        source_id: manualArticleSourceId.trim() ? Number(manualArticleSourceId) : undefined,
+        process: manualArticleProcess,
+      });
+      const imported = payload.article;
+      const duplicateText = imported.duplicate ? "Повторная статья уже была в базе." : "Статья добавлена в базу.";
+      const processText = payload.job
+        ? ` AI-задача #${payload.job.id} поставлена в очередь ${payload.job.queue}.`
+        : " AI-обработка не запускалась.";
+      showToast(`${duplicateText} Article #${imported.id}. ${processText}`);
+      setManualArticleUrl("");
+      setManualArticleSourceId("");
+      setManualArticleProcess(true);
+      await reload();
+    } catch (error) {
+      handleError(error, "Не удалось импортировать статью");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="screenStack">
       <header className="screenHeader">
@@ -341,6 +374,49 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
           </label>
           <button type="button" className="primaryButton" onClick={() => void handleCreateSource()}>
             Добавить
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        {busy ? <InlineLoader label="Импортируем статью…" /> : null}
+        <div className="panelHeader">
+          <h2>Добавить статью по ссылке</h2>
+        </div>
+        <p className="metaText" style={{ margin: "0 0 4px" }}>
+          Для материалов, которые не пришли через RSS или скрапинг, можно вручную внести прямую ссылку на статью. Система сохранит текст в БД и, при необходимости, поставит AI-обработку в очередь.
+        </p>
+        <div className="sourceCreateGrid manualArticleGrid">
+          <label className="field fieldWide">
+            <span>Ссылка на статью</span>
+            <input
+              value={manualArticleUrl}
+              onChange={(event) => setManualArticleUrl(event.target.value)}
+              placeholder="https://site.com/news/article"
+            />
+          </label>
+          <label className="field">
+            <span>ID источника, если нужен</span>
+            <input
+              value={manualArticleSourceId}
+              onChange={(event) => setManualArticleSourceId(event.target.value.replace(/[^\d]/g, ""))}
+              placeholder="например, 12"
+              inputMode="numeric"
+            />
+          </label>
+          <label className="field fieldCheckbox">
+            <span>После импорта</span>
+            <div className="checkboxRow">
+              <input
+                type="checkbox"
+                checked={manualArticleProcess}
+                onChange={(event) => setManualArticleProcess(event.target.checked)}
+              />
+              <span>Сразу запустить AI-обработку</span>
+            </div>
+          </label>
+          <button type="button" className="primaryButton" onClick={() => void handleManualArticleImport()}>
+            Импортировать статью
           </button>
         </div>
       </section>

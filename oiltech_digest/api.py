@@ -38,6 +38,7 @@ from oiltech_digest.processing.pipeline import (
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.ingestion.manual_import import ManualImportError, import_article as import_manual_article
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import (
     build_digest_content,
@@ -141,6 +142,13 @@ class TagIn(BaseModel):
 class ProcessRequest(BaseModel):
     article_ids: list[int] | None = None
     limit: int = 5
+    offline: bool = False
+
+
+class ManualArticleImportRequest(BaseModel):
+    url: str
+    source_id: int | None = None
+    process: bool = True
     offline: bool = False
 
 
@@ -683,6 +691,50 @@ def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_
         parse_strategy=parse_strategy,
     )
     return {"ok": True, "id": source_id, "rss_url": rss_url or None, "parse_strategy": parse_strategy}
+
+
+@app.post("/api/articles/import")
+def import_article_by_url(
+    payload: ManualArticleImportRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        imported = import_manual_article(payload.url, explicit_source_id=payload.source_id)
+    except ManualImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    response: dict[str, Any] = {
+        "ok": True,
+        "article": {
+            "id": imported.article_id,
+            "source_id": imported.source_id,
+            "source_name": imported.source_name,
+            "duplicate": imported.duplicate,
+            "title": imported.title,
+            "fetch_method": imported.fetch_method,
+            "full_text_status": imported.full_text_status,
+            "full_text_method": imported.full_text_method,
+            "full_text_chars": imported.full_text_chars,
+        },
+    }
+    if not payload.process:
+        return response
+
+    decision = network_policy.route_ai_processing()
+    job = background_jobs.enqueue(
+        "process_articles",
+        {
+            "article_ids": [imported.article_id],
+            "limit": 1,
+            "offline": bool(payload.offline),
+        },
+        user_id=int(user["id"]),
+        queue_name=decision.queue_name,
+        execution_region=decision.execution_region,
+        capability=decision.capability,
+    )
+    response["job"] = _job_payload(job)
+    return response
 
 
 @app.patch("/api/sources/{source_id}")

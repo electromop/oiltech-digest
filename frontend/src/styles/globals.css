@@ -2347,6 +2347,35 @@ button {
   grid-column: 1 / -1;
 }
 
+.fieldCheckbox {
+  align-self: end;
+}
+
+.checkboxRow {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.9);
+  padding: 0 12px;
+}
+
+.checkboxRow input {
+  margin: 0;
+}
+
+.checkboxRow span {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.manualArticleGrid {
+  align-items: end;
+}
+
 .settingsActions {
   display: flex;
   gap: 8px;

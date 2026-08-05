@@ -951,6 +951,118 @@ def test_enqueue_process_endpoint_can_route_to_external_ai(monkeypatch):
     assert response.json()["job"]["execution_region"] == "external"
 
 
+def test_manual_article_import_endpoint_enqueues_ai_job(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    monkeypatch.setattr(
+        api,
+        "import_manual_article",
+        lambda url, explicit_source_id=None: type(
+            "ImportResult",
+            (),
+            {
+                "article_id": 55,
+                "source_id": 7,
+                "source_name": "Manual import: example.com",
+                "duplicate": False,
+                "title": "Example imported article",
+                "fetch_method": "http",
+                "full_text_status": "ok",
+                "full_text_method": "http",
+                "full_text_chars": 1840,
+            },
+        )(),
+    )
+    monkeypatch.setattr(api.network_policy.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(api.network_policy.config, "AI_EXECUTION_REGION", "external")
+    captured = {}
+
+    def fake_enqueue(kind, payload, **kwargs):
+        captured["kind"] = kind
+        captured["payload"] = payload
+        captured["kwargs"] = kwargs
+        return {
+            "id": 41,
+            "kind": kind,
+            "queue_name": kwargs.get("queue_name", "default"),
+            "execution_region": kwargs.get("execution_region", "ru"),
+            "capability": kwargs.get("capability"),
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    monkeypatch.setattr(api.background_jobs, "enqueue", fake_enqueue)
+    try:
+        client = TestClient(app)
+        response = client.post("/api/articles/import", json={"url": "https://example.com/news/1", "source_id": 7})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["article"] == {
+        "id": 55,
+        "source_id": 7,
+        "source_name": "Manual import: example.com",
+        "duplicate": False,
+        "title": "Example imported article",
+        "fetch_method": "http",
+        "full_text_status": "ok",
+        "full_text_method": "http",
+        "full_text_chars": 1840,
+    }
+    assert captured == {
+        "kind": "process_articles",
+        "payload": {"article_ids": [55], "limit": 1, "offline": False},
+        "kwargs": {"user_id": 1, "queue_name": "external-ai", "execution_region": "external", "capability": "openai"},
+    }
+    assert response.json()["job"]["queue"] == "external-ai"
+
+
+def test_manual_article_import_endpoint_can_skip_ai_processing(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    monkeypatch.setattr(
+        api,
+        "import_manual_article",
+        lambda url, explicit_source_id=None: type(
+            "ImportResult",
+            (),
+            {
+                "article_id": 91,
+                "source_id": 3,
+                "source_name": "World Oil",
+                "duplicate": True,
+                "title": "Already imported",
+                "fetch_method": "existing",
+                "full_text_status": "ok",
+                "full_text_method": "http",
+                "full_text_chars": 920,
+            },
+        )(),
+    )
+    enqueue_mock = []
+    monkeypatch.setattr(api.background_jobs, "enqueue", lambda *args, **kwargs: enqueue_mock.append((args, kwargs)))
+    try:
+        client = TestClient(app)
+        response = client.post("/api/articles/import", json={"url": "https://example.com/news/2", "process": False})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["article"]["duplicate"] is True
+    assert "job" not in response.json()
+    assert enqueue_mock == []
+
+
 def test_jobs_endpoints_scope_non_admin_to_own_jobs(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "user@example.com", "role": "user"}

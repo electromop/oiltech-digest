@@ -421,6 +421,29 @@ export type ScrapeResponse = {
   };
 };
 
+export type ManualArticleImportPayload = {
+  url: string;
+  source_id?: number | null;
+  process?: boolean;
+  offline?: boolean;
+};
+
+export type ManualArticleImportResult = {
+  ok: boolean;
+  article: {
+    id: number;
+    source_id: number;
+    source_name: string;
+    duplicate: boolean;
+    title: string;
+    fetch_method: string;
+    full_text_status: string | null;
+    full_text_method: string | null;
+    full_text_chars: number;
+  };
+  job?: BackgroundJob;
+};
+
 export type AuthResponse = {
   ok: boolean;
   user: User;

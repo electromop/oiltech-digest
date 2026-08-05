@@ -2,6 +2,8 @@ import { apiFetch } from "./client";
 import type {
   BackgroundJob,
   CreateSourcePayload,
+  ManualArticleImportPayload,
+  ManualArticleImportResult,
   ScrapeResponse,
   Source,
   SourceDiagnostics,
@@ -54,5 +56,12 @@ export function scrapeSource(sourceId: number) {
 export function scrapeSourceJob(sourceId: number) {
   return apiFetch<{ ok: boolean; job: BackgroundJob }>(`/api/sources/${sourceId}/scrape?background=true`, {
     method: "POST",
+  });
+}
+
+export function importArticleByUrl(payload: ManualArticleImportPayload) {
+  return apiFetch<ManualArticleImportResult>("/api/articles/import", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
