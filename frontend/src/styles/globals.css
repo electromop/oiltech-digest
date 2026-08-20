@@ -2986,3 +2986,242 @@ button {
   font-weight: 600;
   opacity: 0.75;
 }
+
+/* --- Экран «Материалы»: загрузка документов и карточка разбора --- */
+
+.documentUploadGrid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.4fr) minmax(160px, 1fr);
+  gap: 10px;
+  align-items: end;
+}
+
+/* input[type=file] — не текстовое поле: правило `.field input` навязывает ему
+   высоту 34px и padding текстового инпута, из-за чего кнопка выбора файла
+   обрезается. Селектор с типом специфичнее и перебивает его. */
+.uploadField input[type="file"] {
+  min-height: 0;
+  height: auto;
+  width: 100%;
+  padding: 9px 10px;
+  font-size: 0.82rem;
+  border: 1px dashed rgba(148, 163, 184, 0.5);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.documentFileMeta {
+  display: grid;
+  gap: 2px;
+  min-height: 34px;
+  align-content: center;
+  font-size: 0.82rem;
+  color: #0f172a;
+}
+
+.documentFileMeta span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.attestRow {
+  margin-top: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.attestRow input {
+  margin: 2px 0 0;
+}
+
+.attestRow span {
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #0f172a;
+}
+
+.documentAlert {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.documentAlert.bad {
+  color: var(--sem-bad-fg);
+  background: var(--sem-bad-bg);
+  border: 1px solid var(--sem-bad-border);
+}
+
+.documentAlert.warn {
+  color: var(--sem-warn-fg);
+  background: var(--sem-warn-bg);
+  border: 1px solid var(--sem-warn-border);
+}
+
+.documentsTable {
+  min-width: 940px;
+}
+
+.documentNameButton {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: var(--brand);
+  text-align: left;
+  cursor: pointer;
+}
+
+.documentRow.active {
+  background: var(--brand-soft);
+}
+
+.documentRowActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.documentLink {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.documentStatus.ok {
+  color: var(--sem-ok-fg);
+  background: var(--sem-ok-bg);
+}
+
+.documentStatus.warn {
+  color: var(--sem-warn-fg);
+  background: var(--sem-warn-bg);
+}
+
+.documentStatus.bad {
+  color: var(--sem-bad-fg);
+  background: var(--sem-bad-bg);
+}
+
+.documentStatus.muted {
+  color: var(--sem-muted-fg);
+  background: var(--sem-muted-bg);
+}
+
+.documentCard {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.documentPassport {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.documentPassportItem {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.7);
+}
+
+.documentPassportLabel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.documentPassportValue {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.documentBlock h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.documentEssence {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.documentList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.documentFactsTable {
+  min-width: 760px;
+}
+
+.documentFactsTable .factContext {
+  max-width: 340px;
+  overflow-wrap: anywhere;
+}
+
+/* Неподтверждённый факт НЕ должен читаться как подтверждённый: подсветка строки,
+   зачёркнутость доверия у значения и словесная метка в отдельной колонке. */
+.factRowUnverified {
+  background: var(--sem-warn-bg);
+}
+
+.factValue {
+  font-weight: 700;
+}
+
+.factValue.unverified {
+  color: var(--sem-warn-fg);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.factFlag {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.factFlag.ok {
+  color: var(--sem-ok-fg);
+  background: var(--sem-ok-bg);
+}
+
+.factFlag.bad {
+  color: var(--sem-bad-fg);
+  background: var(--sem-bad-bg);
+}
+
+@media (max-width: 900px) {
+  .documentUploadGrid {
+    grid-template-columns: 1fr;
+  }
+}

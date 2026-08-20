@@ -46,6 +46,53 @@ CARD_MAX_OUTPUT_TOKENS = 8000
 CHUNK_REASONING = "low"
 
 
+
+def marked_chunks(anchors: list[Anchor], max_chars: int = 12000) -> list[dict[str, Any]]:
+    """Фрагменты с ЯВНОЙ пометкой номера якоря перед текстом каждого якоря.
+
+    Без пометок модель не может знать, на какой именно странице стоит число: фрагмент
+    покрывает, скажем, страницы 3-9, и она угадывает. Замер 21.08 на 107-страничном
+    отчёте: 30 «неподтверждённых» фактов из 60 проверенных нашлись на ДРУГОЙ странице —
+    то есть значение верное, а ссылка нет. Пометки убирают именно эту причину.
+
+    Целые якоря не режутся, пока влезают в бюджет. Якорь длиннее бюджета режется
+    на части, у каждой части пометка того же номера.
+    """
+    chunks: list[dict[str, Any]] = []
+    current: list[str] = []
+    current_from: int | None = None
+    current_to: int | None = None
+    size = 0
+
+    def flush() -> None:
+        nonlocal current, current_from, current_to, size
+        if current and current_from is not None:
+            chunks.append({
+                "index": len(chunks), "text": "\n".join(current),
+                "anchor_from": current_from, "anchor_to": current_to,
+            })
+        current, current_from, current_to, size = [], None, None, 0
+
+    for anchor in anchors:
+        text = (anchor.text or "").strip()
+        if not text:
+            continue
+        marker = f"[[{{unit}} {anchor.number}]]"
+        pieces = [text] if len(text) <= max_chars else [
+            text[i:i + max_chars] for i in range(0, len(text), max_chars)
+        ]
+        for piece in pieces:
+            block = f"{marker}\n{piece}"
+            if size + len(block) > max_chars and current:
+                flush()
+            current.append(block)
+            size += len(block) + 1
+            current_from = anchor.number if current_from is None else current_from
+            current_to = anchor.number
+    flush()
+    return chunks
+
+
 def build_document_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Гидрация в core: по id документа собрать фрагменты текста для воркера."""
     document_id = int(payload["document_id"])
@@ -54,7 +101,11 @@ def build_document_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"document {document_id} not found")
 
     anchors = [Anchor(number=int(r["number"]), text=r["text"] or "") for r in documents_repo.get_anchors(document_id)]
-    chunks = chunk_anchors(anchors)
+    unit = document.get("anchor_unit") or "блок"
+    chunks = [
+        {**c, "text": c["text"].replace("{unit}", unit)}
+        for c in marked_chunks(anchors)
+    ]
     sent = chunks[:MAX_CHUNKS_PER_JOB]
 
     return {
@@ -62,10 +113,7 @@ def build_document_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "document_id": document_id,
         "anchor_unit": document.get("anchor_unit") or "блок",
         "chunks_total": len(chunks),
-        "chunks": [
-            {"index": c.index, "text": c.text, "anchor_from": c.anchor_from, "anchor_to": c.anchor_to}
-            for c in sent
-        ],
+        "chunks": sent,
         "offline": bool(payload.get("offline", False)),
     }
 

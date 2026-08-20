@@ -239,6 +239,56 @@ const digestContent = {
 
 const digestEmailHtml = "";
 
+const uploadedDocument = {
+  id: 501,
+  filename: "Отчёт ТЭК 2026.pdf",
+  kind: "pdf",
+  size_bytes: 1048576,
+  status: "ready",
+  error_message: null,
+  anchor_unit: "страница",
+  anchor_count: 18,
+  text_chars: 42000,
+  essence: "Обзор рынка нефтесервиса",
+  doc_type: "Аналитический отчёт",
+  publisher: "ЦДУ ТЭК",
+  fact_count: 2,
+  created_at: "2026-08-19T10:00:00Z",
+};
+
+const processingDocument = {
+  ...uploadedDocument,
+  id: 502,
+  filename: "Черновик регламента.docx",
+  kind: "docx",
+  status: "processing",
+  anchor_count: null,
+  fact_count: null,
+};
+
+// Список, который отдаёт мок GET /api/documents. Тест меняет его ДО входа в приложение,
+// чтобы проверить оба состояния опроса: есть документ в работе — и нет ни одного.
+let documentsFixture: unknown[] = [];
+
+const uploadedDocumentDetails = {
+  ok: true,
+  document: uploadedDocument,
+  card: {
+    doc_type: "Аналитический отчёт",
+    publisher: "ЦДУ ТЭК",
+    doc_date: "2026-07-01",
+    language: "ru",
+    essence: "Обзор рынка нефтесервиса за первое полугодие",
+    summary_json: ["Спрос на ГРП вырос", "Импорт оборудования снизился"],
+    claims_json: ["Доля отечественного оборудования достигнет 80 процентов"],
+  },
+  // Один факт сверен с текстом, второй — нет: карточка обязана показать их ПО-РАЗНОМУ.
+  facts: [
+    { value: "1200", unit: "скважин", context: "введено в эксплуатацию", anchor: 14, verified: true },
+    { value: "80", unit: "%", context: "доля отечественного оборудования", anchor: 21, verified: false },
+  ],
+};
+
 function jsonResponse(payload: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(payload), {
     status: init.status ?? 200,
@@ -263,6 +313,7 @@ describe("App smoke", () => {
   const revokeObjectURLMock = vi.fn();
   beforeEach(() => {
     window.history.replaceState(null, "", "/");
+    documentsFixture = [uploadedDocument];
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -366,6 +417,17 @@ describe("App smoke", () => {
             },
           }),
         );
+      }
+      if (url === "/api/documents" && method === "POST") {
+        return Promise.resolve(
+          jsonResponse({ ok: true, duplicate: false, document: uploadedDocument, job_id: 91 }),
+        );
+      }
+      if (url === "/api/documents/501") {
+        return Promise.resolve(jsonResponse(uploadedDocumentDetails));
+      }
+      if (url === "/api/documents") {
+        return Promise.resolve(jsonResponse({ ok: true, documents: documentsFixture }));
       }
       if (url.startsWith("/api/digest-content")) {
         return Promise.resolve(jsonResponse(digestContent));
@@ -679,6 +741,97 @@ describe("App smoke", () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/articles/import")).toBe(true);
     });
+  });
+
+  async function openDocumentsScreen() {
+    window.history.replaceState(null, "", "/?screen=documents");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Материалы" })).toBeInTheDocument();
+    return user;
+  }
+
+  function uploadCall() {
+    return fetchMock.mock.calls.find(
+      ([input, init]) => String(input) === "/api/documents" && (init as RequestInit | undefined)?.method === "POST",
+    );
+  }
+
+  it("отправляет файл на POST /api/documents многочастным телом, а не JSON", async () => {
+    const user = await openDocumentsScreen();
+
+    // Кнопка неактивна, пока нет файла И нет аттестации.
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+
+    const file = new File(["%PDF-1.4 тестовый документ"], "otchet.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByLabelText("Файл материала"), file);
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /Подтверждаю, что вправе загрузить/ }));
+    expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Загрузить" }));
+
+    await waitFor(() => {
+      expect(uploadCall()).toBeTruthy();
+    });
+
+    const init = uploadCall()![1] as RequestInit;
+    // Проверяем именно ТЕЛО: JSON.stringify(FormData) дал бы "{}" и сервер получил бы пустоту.
+    expect(init.body).toBeInstanceOf(FormData);
+    const body = init.body as FormData;
+    expect((body.get("file") as File).name).toBe("otchet.pdf");
+    expect(body.get("attested")).toBe("true");
+    // И заголовок: подставленный Content-Type ломает boundary многочастного тела.
+    expect(new Headers(init.headers as HeadersInit).has("Content-Type")).toBe(false);
+  });
+
+  it("в карточке материала неподтверждённый факт помечен иначе, чем подтверждённый", async () => {
+    const user = await openDocumentsScreen();
+
+    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+
+    expect(await screen.findByRole("heading", { name: "Факты" })).toBeInTheDocument();
+    expect(screen.getByText(/1 из 2 чисел не найдены в тексте документа/)).toBeInTheDocument();
+
+    const unverifiedRow = screen.getByText("не подтверждён").closest("tr") as HTMLElement;
+    expect(within(unverifiedRow).getByText("80")).toBeInTheDocument();
+    expect(within(unverifiedRow).getByText("страница 21")).toBeInTheDocument();
+
+    const verifiedRow = screen.getByText("подтверждён").closest("tr") as HTMLElement;
+    expect(within(verifiedRow).getByText("1200")).toBeInTheDocument();
+    expect(unverifiedRow).not.toBe(verifiedRow);
+  });
+
+  it("перезапрашивает список раз в 5 секунд, пока документ в работе", async () => {
+    documentsFixture = [processingDocument];
+    await openDocumentsScreen();
+
+    const listCalls = () =>
+      fetchMock.mock.calls.filter(
+        ([input, init]) => String(input) === "/api/documents" && (init as RequestInit | undefined)?.method !== "POST",
+      ).length;
+
+    await waitFor(() => expect(listCalls()).toBe(1));
+    // Реальное ожидание, а не проверка «таймер создан»: интересует именно повторный запрос.
+    await new Promise((resolve) => setTimeout(resolve, 5400));
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(1));
+    // Ждём дольше стандартных 5с vitest: интервал опроса по условию задачи — ровно 5 секунд.
+  }, 15000);
+
+  it("не опрашивает список, когда ни один материал не в работе", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    documentsFixture = [uploadedDocument]; // status: ready
+    await openDocumentsScreen();
+
+    expect(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" })).toBeInTheDocument();
+    // Ни одного 5-секундного таймера: опрос прекращается, когда работать не над чем.
+    expect(setIntervalSpy.mock.calls.filter(([, ms]) => ms === 5000).length).toBe(0);
   });
 
 });
