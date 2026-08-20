@@ -7,6 +7,35 @@
 
 ---
 
+## СТАТУС 2026-08-20: спека и тикеты опубликованы
+
+Ш0–Ш2 пройдены. Работать по фронту: брать тикет, у которого нет открытых блокеров.
+
+| Issue | Тикет | Блокируется |
+|---|---|---|
+| [#31](https://github.com/electromop/oiltech-digest/issues/31) | **СПЕКА** — родитель всех тикетов | — |
+| [#41](https://github.com/electromop/oiltech-digest/issues/41) | Ветка готова к работе | ✅ свободен |
+| [#32](https://github.com/electromop/oiltech-digest/issues/32) | Выбран парсер (нужны 3 реальных документа) | ✅ свободен |
+| [#33](https://github.com/electromop/oiltech-digest/issues/33) | Предусловие: закрыть регистрацию | ✅ свободен |
+| [#34](https://github.com/electromop/oiltech-digest/issues/34) | Предусловие: бэкап архивом тома (нужен доступ к серверу) | ✅ свободен |
+| [#35](https://github.com/electromop/oiltech-digest/issues/35) | Загрузка и хранение файлов | #41 |
+| [#36](https://github.com/electromop/oiltech-digest/issues/36) | Текст с якорями | #35, #32 |
+| [#37](https://github.com/electromop/oiltech-digest/issues/37) | Конвейер разбора и паспорт | #36 |
+| [#38](https://github.com/electromop/oiltech-digest/issues/38) | Факты, проверка и балл | #37 |
+| [#39](https://github.com/electromop/oiltech-digest/issues/39) | Направления и компании | #37 |
+| [#40](https://github.com/electromop/oiltech-digest/issues/40) | Публикация в корпус | #39, #38 |
+
+Рёбра — нативные зависимости GitHub, видны в интерфейсе. Проверить фронт:
+
+```bash
+for n in 41 32 33 34 35 36 37 38 39 40; do gh api repos/electromop/oiltech-digest/issues/$n --jq '"#\(.number) blocked_by=\(.issue_dependencies_summary.blocked_by // 0) \(.title)"'; done
+```
+
+Подтверждено владельцем: лимиты 25 МБ на файл · 20 файлов в пачке · 2 ГБ на пользователя ·
+10 ГБ на систему; загружать вправе любой авторизованный — после закрытия регистрации (#33).
+
+---
+
 ## P0 — два предусловия, вскрытых разведкой. Проверены руками, не со слов агента
 
 ### 1. `python-multipart` не установлен — контейнер `app` не поднимется
@@ -139,6 +168,8 @@ gh label create needs-triage   --color FBCA04 --description "Требует ра
 
 ```
 /implement Тикет #<N> — <заголовок тикета>.
+
+Возьми тикет через `gh issue view <N> --comments`. Спека-родитель — #31.
 
 Ветка feat/upload-docs (уже создана от origin/main). Начни с: git checkout feat/upload-docs && git pull.
 Спека — issue #<НОМЕР_СПЕКИ>. Решения Р1–Р11 — docs/handoff_2026-08-20_upload-docs.md.
