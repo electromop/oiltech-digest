@@ -497,6 +497,7 @@ export type UploadedDocument = {
   error_message: string | null;
   anchor_unit: string | null;
   anchor_count: number | null;
+  empty_anchors: number | null;
   text_chars: number | null;
   essence: string | null;
   doc_type: string | null;

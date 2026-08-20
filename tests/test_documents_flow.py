@@ -213,3 +213,59 @@ def test_invented_number_is_marked_unverified(isolated_db, client):
         assert facts["9 999"] is False
     finally:
         api.app.dependency_overrides.clear()
+
+
+def test_card_reports_anchors_without_text(isolated_db, client):
+    """Якоря без текста считаются и отдаются наружу.
+
+    На реальном заключении экспертизы текст был только на 40 страницах из 107.
+    Без этого числа карточка выглядит полнее, чем есть, и человек не понимает,
+    почему в ней мало фактов.
+    """
+    admin_id = _make_user(isolated_db, "a7@example.com", "admin")
+    api.app.dependency_overrides[api.require_admin] = _as("admin", admin_id)
+    api.app.dependency_overrides[api.require_user] = _as("admin", admin_id)
+    try:
+        document_id = client.post(
+            "/api/documents",
+            files={"file": ("отчёт.docx", _docx_bytes([
+                "Первый блок отчёта достаточной длины, чтобы не считаться сканом.",
+                "Второй содержательный блок отчёта о результатах работ на объекте.",
+            ]))},
+            data={"attested": "true"},
+        ).json()["document"]["id"]
+
+        # Дописываем пустые якоря — так выглядит наполовину распознанный документ.
+        from oiltech_digest.db import connection
+
+        with connection.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO document_anchors (document_id, number, text) VALUES (%s, 3, ''), (%s, 4, '   ')",
+                (document_id, document_id),
+            )
+            conn.commit()
+
+        body = client.get(f"/api/documents/{document_id}").json()
+        assert body["document"]["empty_anchors"] == 2
+
+        listing = client.get("/api/documents").json()["documents"]
+        assert listing[0]["empty_anchors"] == 2
+    finally:
+        api.app.dependency_overrides.clear()
+
+
+def test_document_without_empty_anchors_reports_zero(isolated_db, client):
+    admin_id = _make_user(isolated_db, "a8@example.com", "admin")
+    api.app.dependency_overrides[api.require_admin] = _as("admin", admin_id)
+    api.app.dependency_overrides[api.require_user] = _as("admin", admin_id)
+    try:
+        document_id = client.post(
+            "/api/documents",
+            files={"file": ("чистый.docx", _docx_bytes([
+                "Единственный блок документа, целиком читаемый и достаточно длинный.",
+            ]))},
+            data={"attested": "true"},
+        ).json()["document"]["id"]
+        assert client.get(f"/api/documents/{document_id}").json()["document"]["empty_anchors"] == 0
+    finally:
+        api.app.dependency_overrides.clear()

@@ -1618,6 +1618,10 @@ def _document_brief(row: dict[str, Any] | None) -> dict[str, Any]:
         "error_message": row.get("error_message"),
         "anchor_unit": row.get("anchor_unit"),
         "anchor_count": row.get("anchor_count"),
+        # Сколько якорей без текста. На реальном заключении экспертизы это 67 страниц
+        # из 107 — пользователь обязан видеть, что часть документа не прочитана,
+        # иначе полнота карточки выглядит выше, чем она есть.
+        "empty_anchors": row.get("empty_anchors"),
         "text_chars": row.get("text_chars"),
         "essence": row.get("essence"),
         "doc_type": row.get("doc_type"),

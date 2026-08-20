@@ -33,6 +33,13 @@ export function DocumentCardPanel({ details }: Props) {
           value={document.anchor_count ? `${document.anchor_count} (${document.anchor_unit || "блок"})` : "—"}
         />
         <PassportItem label="Знаков текста" value={document.text_chars ? String(document.text_chars) : "—"} />
+        {document.empty_anchors ? (
+          <PassportItem
+            label="Без текста"
+            value={`${document.empty_anchors} (${document.anchor_unit || "блок"})`}
+            warn
+          />
+        ) : null}
         <PassportItem label="Состояние" value={statusLabel(String(document.status))} />
       </div>
 
@@ -123,9 +130,9 @@ export function DocumentCardPanel({ details }: Props) {
   );
 }
 
-function PassportItem(props: { label: string; value: string }) {
+function PassportItem(props: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className="documentPassportItem">
+    <div className={props.warn ? "documentPassportItem warn" : "documentPassportItem"}>
       <span className="documentPassportLabel">{props.label}</span>
       <span className="documentPassportValue">{props.value}</span>
     </div>

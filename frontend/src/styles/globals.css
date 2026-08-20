@@ -3141,6 +3141,12 @@ button {
   background: rgba(241, 245, 249, 0.7);
 }
 
+/* Якоря без текста — предупреждение, а не нейтральный факт: на реальном заключении
+   экспертизы это 67 страниц из 107, и полнота карточки там заметно ниже, чем кажется. */
+.documentPassportItem.warn {
+  background: rgba(254, 243, 199, 0.85);
+}
+
 .documentPassportLabel {
   font-size: 0.7rem;
   font-weight: 700;

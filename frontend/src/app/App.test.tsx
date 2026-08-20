@@ -248,6 +248,7 @@ const uploadedDocument = {
   error_message: null,
   anchor_unit: "страница",
   anchor_count: 18,
+  empty_anchors: 0,
   text_chars: 42000,
   essence: "Обзор рынка нефтесервиса",
   doc_type: "Аналитический отчёт",
@@ -263,12 +264,17 @@ const processingDocument = {
   kind: "docx",
   status: "processing",
   anchor_count: null,
+  empty_anchors: null,
   fact_count: null,
 };
 
 // Список, который отдаёт мок GET /api/documents. Тест меняет его ДО входа в приложение,
 // чтобы проверить оба состояния опроса: есть документ в работе — и нет ни одного.
 let documentsFixture: unknown[] = [];
+
+// Документ в детальном ответе тесты подменяют: карточка рисуется ИМЕННО из него,
+// а не из строки списка. Менять список для проверки карточки бесполезно.
+let detailDocumentOverride: Record<string, unknown> | null = null;
 
 const uploadedDocumentDetails = {
   ok: true,
@@ -314,6 +320,7 @@ describe("App smoke", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/");
     documentsFixture = [uploadedDocument];
+    detailDocumentOverride = null;
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -424,7 +431,11 @@ describe("App smoke", () => {
         );
       }
       if (url === "/api/documents/501") {
-        return Promise.resolve(jsonResponse(uploadedDocumentDetails));
+        return Promise.resolve(jsonResponse(
+          detailDocumentOverride
+            ? { ...uploadedDocumentDetails, document: { ...uploadedDocument, ...detailDocumentOverride } }
+            : uploadedDocumentDetails,
+        ));
       }
       if (url === "/api/documents") {
         return Promise.resolve(jsonResponse({ ok: true, documents: documentsFixture }));
@@ -789,6 +800,30 @@ describe("App smoke", () => {
     expect(body.get("attested")).toBe("true");
     // И заголовок: подставленный Content-Type ломает boundary многочастного тела.
     expect(new Headers(init.headers as HeadersInit).has("Content-Type")).toBe(false);
+  });
+
+  it("карточка предупреждает, если часть документа без текстового слоя", async () => {
+    // На реальном заключении экспертизы текст был лишь на 40 страницах из 107.
+    // Без этой строки карточка выглядит полнее, чем есть.
+    documentsFixture = [uploadedDocument];
+    detailDocumentOverride = { anchor_count: 107, empty_anchors: 67 };
+    const user = await openDocumentsScreen();
+
+    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+
+    expect(await screen.findByText("Без текста")).toBeInTheDocument();
+    expect(screen.getByText("67 (страница)")).toBeInTheDocument();
+  });
+
+  it("карточка не показывает предупреждение, если документ прочитан целиком", async () => {
+    documentsFixture = [uploadedDocument];
+    detailDocumentOverride = { anchor_count: 18, empty_anchors: 0 };
+    const user = await openDocumentsScreen();
+
+    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+
+    expect(await screen.findByText("Знаков текста")).toBeInTheDocument();
+    expect(screen.queryByText("Без текста")).toBeNull();
   });
 
   it("в карточке материала неподтверждённый факт помечен иначе, чем подтверждённый", async () => {

@@ -64,11 +64,13 @@ def get_document(document_id: int, owner_user_id: int | None = None) -> dict | N
     владельца: проверка существования без проверки владельца отдаёт чужой документ."""
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        empty = """, (SELECT count(*) FROM document_anchors a
+                        WHERE a.document_id = documents.id AND btrim(a.text) = '') AS empty_anchors"""
         if owner_user_id is None:
-            cur.execute("SELECT * FROM documents WHERE id = %s", (document_id,))
+            cur.execute(f"SELECT *{empty} FROM documents WHERE id = %s", (document_id,))
         else:
             cur.execute(
-                "SELECT * FROM documents WHERE id = %s AND owner_user_id = %s",
+                f"SELECT *{empty} FROM documents WHERE id = %s AND owner_user_id = %s",
                 (document_id, owner_user_id),
             )
         return cur.fetchone()
@@ -80,7 +82,9 @@ def list_documents(owner_user_id: int, limit: int = 100) -> list[dict]:
         cur.execute(
             """
             SELECT d.*, c.essence, c.doc_type, c.publisher,
-                   (SELECT count(*) FROM document_facts f WHERE f.document_id = d.id) AS fact_count
+                   (SELECT count(*) FROM document_facts f WHERE f.document_id = d.id) AS fact_count,
+                   (SELECT count(*) FROM document_anchors a
+                     WHERE a.document_id = d.id AND btrim(a.text) = '') AS empty_anchors
             FROM documents d
             LEFT JOIN document_cards c ON c.document_id = d.id
             WHERE d.owner_user_id = %s
