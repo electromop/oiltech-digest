@@ -396,3 +396,85 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_user_created ON background_jobs(u
 -- дедуплицируются (NULL-ы различны в UNIQUE) — вставляются как раньше.
 ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS job_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_article_stage ON ai_processing_runs(job_id, article_id, stage);
+
+-- =========================================================================
+-- Загруженные документы (фича «приём файлов»)
+-- =========================================================================
+-- ДОКУМЕНТ — НЕ СТАТЬЯ, и это главное решение здесь. У документа нет источника,
+-- нет URL и нет даты публикации в ленте. Положить его в articles через синтетический
+-- источник значило бы отдать его 44 запросам репозитория по articles: дозагрузка
+-- полного текста пошла бы качать несуществующий адрес, гейт релевантности мог бы
+-- тихо скрыть документ пользователя, дедуп и массовые скрытия захватили бы его заодно.
+CREATE TABLE IF NOT EXISTS documents (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  owner_user_id     BIGINT NOT NULL REFERENCES users(id),
+  filename          TEXT NOT NULL,            -- исходное имя, ТОЛЬКО для показа
+  storage_path      TEXT NOT NULL,            -- путь на общем томе, имя генерируется
+  kind              TEXT NOT NULL,            -- pdf / pptx / docx, определён по сигнатуре
+  size_bytes        BIGINT NOT NULL,
+  content_sha256    TEXT NOT NULL,            -- дедуп повторной загрузки в пределах владельца
+  anchor_unit       TEXT,                     -- страница / слайд / блок
+  anchor_count      INTEGER,
+  text_chars        INTEGER,
+  status            TEXT NOT NULL DEFAULT 'uploaded',  -- uploaded / parsed / processing / ready / failed
+  error_message     TEXT,
+  -- Аттестация: ответственность за класс материала на загрузившем. Штампуется НА КАЖДУЮ
+  -- загрузку, а не разово в профиле: флаг в профиле, поставленный в марте, к ноябрьской
+  -- загрузке отношения не имеет и ничего не доказывает.
+  attested_at       TIMESTAMPTZ NOT NULL,
+  attestation_text  TEXT NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_documents_owner_created ON documents(owner_user_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_owner_sha ON documents(owner_user_id, content_sha256);
+
+-- Текст по якорям. Отдельной таблицей, а не JSON в documents: по ней ищет проверяльщик
+-- фактов — «есть ли это число на той странице, на которую сослалась модель».
+CREATE TABLE IF NOT EXISTS document_anchors (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  document_id   BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  number        INTEGER NOT NULL,
+  text          TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_document_anchors_doc_number ON document_anchors(document_id, number);
+
+-- Карточка документа. Зеркало пары articles / article_cards.
+CREATE TABLE IF NOT EXISTS document_cards (
+  document_id     BIGINT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+  doc_type        TEXT,      -- отчёт / презентация / статья / КП / иное
+  publisher       TEXT,
+  doc_date        TEXT,      -- как в документе, строкой: датой бывает «II квартал 2025»
+  language        TEXT,
+  essence         TEXT,      -- СУТЬ: что это за документ и зачем
+  summary_json    JSONB,     -- СВОДКА: пункты по разделам
+  claims_json     JSONB,     -- заявления документа, не подтверждённые фактами
+  model           TEXT,
+  generated_at    TIMESTAMPTZ
+);
+
+-- Извлечённые числа. verified проставляет КОД, сверяя значение с текстом якоря,
+-- а не модель о себе. Неподтверждённый факт хранится и показывается с пометкой.
+CREATE TABLE IF NOT EXISTS document_facts (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  document_id   BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  value         TEXT NOT NULL,
+  unit          TEXT,
+  context       TEXT,        -- на языке оригинала: иначе сверка с текстом якоря не сойдётся
+  anchor        INTEGER,
+  verified      BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_document_facts_doc ON document_facts(document_id);
+
+-- Учёт расходов на разбор документов. ai_processing_runs привязана к статье внешним
+-- ключом, и дедуп биллинга держится на UNIQUE (job_id, article_id, stage). Для документа
+-- article_id пуст, а NULL-ы в UNIQUE не конфликтуют — значит существующий индекс защиты
+-- НЕ даёт, и повторное применение результата удвоило бы счёт (баг H1/T2 заново).
+-- Поэтому отдельная колонка и СВОЙ ЧАСТИЧНЫЙ уникальный индекс для строк по документам.
+-- Существующий индекс по статьям НЕ трогаем: он корректен для своих строк, а лишний
+-- DROP на проде ночью — риск без выигрыша.
+ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS document_id BIGINT REFERENCES documents(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_document_stage
+  ON ai_processing_runs(job_id, document_id, stage) WHERE document_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_runs_document_id ON ai_processing_runs(document_id);

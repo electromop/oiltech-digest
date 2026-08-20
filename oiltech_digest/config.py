@@ -137,6 +137,20 @@ OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").st
 OPENAI_SCORE_MODEL = os.environ.get("OPENAI_SCORE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SCORE_REASONING = os.environ.get("OPENAI_SCORE_REASONING", "").strip() or "medium"
 
+# Модель разбора ДОКУМЕНТОВ. Своя переменная, и намеренно БЕЗ отката на OPENAI_MODEL.
+# Пер-стадийные переменные читаются из окружения того процесса, который реально зовёт
+# модель, — это внешний воркер, чей .env не в git. Тихий откат на основную модель уже
+# случался (инцидент 2026-06): дефолт — самая дешёвая gpt-5-nano, она ЕСТЬ в таблице
+# ставок, поэтому счёт бы сошёлся, а корпус разобрала бы слабейшая модель, и никто
+# не заметил бы. Пусто → стадия падает с явной ошибкой, а не работает молча.
+OPENAI_DOC_MODEL = os.environ.get("OPENAI_DOC_MODEL", "").strip() or None
+OPENAI_DOC_REASONING = os.environ.get("OPENAI_DOC_REASONING", "").strip() or "medium"
+
+# Приём файлов: переключатель и границы. Лимиты подтверждены владельцем 20.08.
+UPLOAD_DOCS_ENABLED = os.environ.get("UPLOAD_DOCS_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+UPLOAD_MAX_FILE_BYTES = int(os.environ.get("UPLOAD_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "").strip() or "/data/documents"
+
 # USD per 1M tokens. Fallback-ставки, если модель не найдена в таблице ниже.
 # Дефолт (0.05/0.40) — это прайс gpt-5-nano; для конкретных моделей берётся
 # OPENAI_MODEL_PRICES, иначе экран «AI-затраты» занижает стоимость в разы.

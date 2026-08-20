@@ -10,6 +10,7 @@ import requests
 
 from oiltech_digest import config
 from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,14 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
         elif job.get("kind") == "translate_titles":
             client.progress(job, 20)
             result = external_ai.process_translate_payload(
+                job.get("payload") or {},
+                heartbeat=lambda: _safe_heartbeat(client, job),
+            )
+            client.progress(job, 90)
+            client.complete(job, result)
+        elif job.get("kind") == "process_document":
+            client.progress(job, 20)
+            result = documents_external.process_document_payload(
                 job.get("payload") or {},
                 heartbeat=lambda: _safe_heartbeat(client, job),
             )

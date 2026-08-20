@@ -133,11 +133,42 @@ class OfflineAIClient:
                 "explanation": "offline fallback",
                 "items": [],
             }
+        elif name == "document_chunk":
+            # Офлайн-разбор фрагмента: берём ПЕРВОЕ настоящее число из текста и первый
+            # якорь фрагмента. Так проверяльщик фактов получает вход, который ДОЛЖЕН
+            # подтвердиться, — иначе тест сквозного пути не отличит рабочую сверку
+            # от сверки, которая всегда возвращает False.
+            anchor = _first_int(user_input, "якоря во фрагменте: с") or 1
+            match = re.search(r"\b\d[\d\u00a0 ]*(?:[.,]\d+)?\b", _after_marker(user_input, "текст:"))
+            facts = []
+            if match:
+                facts = [{"value": match.group(0).strip(), "unit": None,
+                          "context": "offline fallback", "anchor": anchor}]
+            data = {"about": _trim_sentences(_after_marker(user_input, "текст:"), 1)[:400] or "offline fallback",
+                    "facts": facts}
+        elif name == "document_card":
+            data = {
+                "passport": {"doc_type": "иное", "publisher": None, "date": None, "language": "ru"},
+                "essence": _trim_sentences(text, 2)[:600] or "offline fallback",
+                "summary": [line[:200] for line in text.split("[")[1:6]] or ["offline fallback"],
+                "claims": [],
+            }
         else:
             data = {}
         output = json.dumps(data, ensure_ascii=False)
         return AIResponse(data=data, model=self.model, input_tokens=approx_input, output_tokens=len(output) // 4)
 
+
+
+def _after_marker(text: str, marker: str) -> str:
+    index = text.find(marker)
+    return text[index + len(marker):] if index >= 0 else text
+
+
+def _first_int(text: str, marker: str) -> int | None:
+    tail = _after_marker(text, marker) if marker in text else ""
+    match = re.search(r"\d+", tail)
+    return int(match.group(0)) if match else None
 
 def _extract_output_text(raw: dict[str, Any]) -> str:
     if raw.get("output_text"):

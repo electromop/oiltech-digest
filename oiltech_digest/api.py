@@ -13,7 +13,7 @@ import secrets
 import time
 from typing import Any
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,7 +24,7 @@ from oiltech_digest import auth, background_jobs, backlog, config
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.db import repository
+from oiltech_digest.db import documents_repo, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest import network_policy
@@ -38,6 +38,9 @@ from oiltech_digest.processing.pipeline import (
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.documents import external as documents_external
+from oiltech_digest.documents import parsing as doc_parsing
+from oiltech_digest.documents.model import DocumentError
 from oiltech_digest.ingestion.manual_import import ManualImportError, import_article as import_manual_article
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import (
@@ -1158,6 +1161,12 @@ def external_worker_complete(
             result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark, job_id=job_id)}
         if job.get("kind") == "translate_titles" and result.get("translate_titles"):
             result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
+        if job.get("kind") == "process_document" and result.get("process_document"):
+            applied = documents_external.apply_document_result(result, job_id=job_id)
+            # Конверт ЗАМЕНЯЕТСЯ вычищенным, а не дополняется: result_json уходит клиенту
+            # через /api/jobs, и админ читает задачи любого пользователя. Карточка и факты
+            # уже применены в таблицы документов, где проверяется владелец.
+            result = {**documents_external.scrub_result(result), "applied": applied}
         if job.get("kind") == "scrape_source" and result.get("external_fetch"):
             result = {**result, "applied": external_fetch.apply_scrape_result(result)}
     except Exception:
@@ -1359,6 +1368,8 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
         return _clean(external_ai.build_recheck_payload(payload))
     if row.get("kind") == "translate_titles" and row.get("queue_name") == "external-ai":
         return _clean(external_ai.build_translate_payload(payload))
+    if row.get("kind") == "process_document" and row.get("queue_name") == "external-ai":
+        return _clean(documents_external.build_document_payload(payload))
     if row.get("kind") == "scrape_source" and str(row.get("queue_name") or "").startswith("external-"):
         return _clean(external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload))
     return _clean(payload)
@@ -1448,3 +1459,169 @@ def _date(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
+
+
+# =========================================================================
+# Приём файлов: загрузка документа, карточка, оригинал
+# =========================================================================
+# Разбор идёт ИНЛАЙНОМ в этом процессе, а не фоновой задачей, и это осознанное
+# отступление от спеки под срок. Основание — замер: pypdf на 299-страничном документе
+# держит пик 35 МБ и 5,5 секунды, а размер файла ограничен 25 МБ. Фоновая задача
+# потребовала бы локального обработчика, а тип без него не откладывается, а гибнет:
+# локальный воркер заберёт задачу и терминально завалит её как неизвестную.
+# Долг записан в тикете; при переезде на более мощный сервер разбор уезжает в воркер.
+
+ATTESTATION_TEXT = (
+    "Подтверждаю, что вправе загрузить этот материал и передать его в обработку, "
+    "и что мне известно: его текст покидает контур для разбора моделью."
+)
+
+
+def _documents_dir() -> Path:
+    directory = Path(config.UPLOAD_DIR)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+@app.post("/api/documents")
+async def upload_document(
+    file: UploadFile = File(...),
+    attested: bool = Form(False),
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if not config.UPLOAD_DOCS_ENABLED:
+        raise HTTPException(status_code=503, detail="Приём файлов временно выключен")
+    # Внешний контур выключен → отклоняем НА ВХОДЕ. Поставленная задача без внешнего
+    # исполнителя не откладывается, а гибнет: её заберёт локальный воркер и завалит.
+    if network_policy.route_ai_processing().execution_region != "external":
+        raise HTTPException(status_code=503, detail="Внешний контур обработки недоступен — загрузка отключена")
+    if not attested:
+        raise HTTPException(status_code=400, detail="Требуется подтверждение права на загрузку материала")
+
+    data = await file.read()
+    if len(data) > config.UPLOAD_MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл больше {config.UPLOAD_MAX_FILE_BYTES // 1024 // 1024} МБ",
+        )
+    if not data:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+
+    try:
+        kind = doc_parsing.detect_kind(data)
+    except DocumentError as exc:
+        raise HTTPException(status_code=415, detail=str(exc))
+
+    digest = hashlib.sha256(data).hexdigest()
+    existing = documents_repo.document_by_hash(int(user["id"]), digest)
+    if existing is not None:
+        return {"ok": True, "duplicate": True, "document": _document_brief(existing)}
+
+    try:
+        parsed = doc_parsing.parse_document(data, kind)
+    except DocumentError as exc:
+        # Скан, пароль, повреждение — понятный отказ, а не пустая карточка. Разбор
+        # документа без текстового слоя дал бы уверенную сводку из ничего.
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Имя пользователя НЕ участвует в пути: только сгенерированное.
+    storage_path = _documents_dir() / f"{digest}.{kind}"
+    storage_path.write_bytes(data)
+
+    document_id = documents_repo.create_document(
+        owner_user_id=int(user["id"]),
+        filename=(file.filename or "документ")[:300],
+        storage_path=str(storage_path),
+        kind=kind,
+        size_bytes=len(data),
+        content_sha256=digest,
+        attestation_text=ATTESTATION_TEXT,
+    )
+    documents_repo.save_anchors(
+        document_id, [(a.number, a.text) for a in parsed.anchors], parsed.anchor_unit
+    )
+
+    decision = network_policy.route_ai_processing()
+    job = repository.create_background_job(
+        "process_document",
+        {"document_id": document_id},
+        user_id=int(user["id"]),  # ИМЕННО поле, а не payload: видимость задач читает колонку
+        queue_name=decision.queue_name,
+        execution_region=decision.execution_region,
+        capability=decision.capability,
+    )
+    documents_repo.set_status(document_id, "processing")
+
+    document = documents_repo.get_document(document_id, int(user["id"]))
+    return {"ok": True, "duplicate": False, "document": _document_brief(document), "job_id": job["id"]}
+
+
+@app.get("/api/documents")
+def list_documents(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    rows = documents_repo.list_documents(int(user["id"]))
+    return {"ok": True, "documents": [_document_brief(row) for row in rows]}
+
+
+@app.get("/api/documents/{document_id}")
+def get_document(document_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    # Владелец проверяется В ЗАПРОСЕ, а не отдельной проверкой существования: копирование
+    # статейного образца (там проверяют только существование, потому что статьи общие)
+    # отдало бы чужой документ.
+    document = documents_repo.get_document(document_id, int(user["id"]))
+    if document is None:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    card = documents_repo.get_card(document_id)
+    facts = documents_repo.get_facts(document_id)
+    return {
+        "ok": True,
+        "document": _document_brief(document),
+        "card": _clean(card) if card else None,
+        "facts": [_clean(f) for f in facts],
+    }
+
+
+@app.get("/api/documents/{document_id}/original")
+def download_document(document_id: int, user: dict[str, Any] = Depends(require_user)):
+    document = documents_repo.get_document(document_id, int(user["id"]))
+    if document is None:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    path = Path(document["storage_path"]).resolve()
+    # Проверка принадлежности каталогу. Существующая выдача файлов её НЕ делает —
+    # копировать тот образец нельзя.
+    if not str(path).startswith(str(_documents_dir().resolve())) or not path.exists():
+        raise HTTPException(status_code=404, detail="Файл недоступен")
+    return FileResponse(path, filename=document["filename"])
+
+
+@app.delete("/api/documents/{document_id}")
+def delete_document(document_id: int, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    storage_path = documents_repo.delete_document(document_id, int(user["id"]))
+    if storage_path is None:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    # Файловая система транзакцией не покрывается: строка уже удалена, файл сносим следом.
+    try:
+        Path(storage_path).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("не удалось удалить файл документа %s", storage_path)
+    return {"ok": True}
+
+
+def _document_brief(row: dict[str, Any] | None) -> dict[str, Any]:
+    if not row:
+        return {}
+    return _clean({
+        "id": row.get("id"),
+        "filename": row.get("filename"),
+        "kind": row.get("kind"),
+        "size_bytes": row.get("size_bytes"),
+        "status": row.get("status"),
+        "error_message": row.get("error_message"),
+        "anchor_unit": row.get("anchor_unit"),
+        "anchor_count": row.get("anchor_count"),
+        "text_chars": row.get("text_chars"),
+        "essence": row.get("essence"),
+        "doc_type": row.get("doc_type"),
+        "publisher": row.get("publisher"),
+        "fact_count": row.get("fact_count"),
+        "created_at": row.get("created_at"),
+    })
