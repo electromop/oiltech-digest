@@ -127,6 +127,35 @@ def normalize_number(raw: str) -> str | None:
     return f"{int_part}.{frac_part}" if frac_part else int_part
 
 
+# Модели кладут в значение то, что человек прочитал бы как часть числа: знак сравнения
+# («>5000»), знак приблизительности («≈2 095»), словесный квалификатор («около 40»)
+# и даже ярлык перед двоеточием («GPT-5-MINI: 0,56»). Реальный прогон 21.08 на живой
+# презентации: 12 фактов из 34 отбивались как неподтверждённые ИМЕННО из-за этого,
+# хотя числа в тексте есть. Отказ по такой причине — ложный: он обесценивает пометку
+# «не подтверждено», потому что она перестаёт означать «модель выдумала».
+_QUALIFIER_RE = re.compile(
+    r"^\s*(?:[<>≥≤≈~≃⩾⩽]+|около|примерно|порядка|более|менее|свыше|не\s+менее|не\s+более|до|от)\s*",
+    re.IGNORECASE,
+)
+
+
+def strip_qualifiers(raw: str) -> str:
+    """Снять с начала значения ярлык и знаки сравнения/приблизительности."""
+    text = str(raw or "").strip()
+    # Ярлык перед двоеточием: «GPT-5-MINI: 0,56» → «0,56». Режем только если после
+    # двоеточия действительно начинается число — иначе съели бы осмысленный текст.
+    if ":" in text:
+        head, _, tail = text.partition(":")
+        if not any(ch.isdigit() for ch in head) or _NUMBER_RE.match(tail.strip()):
+            if any(ch.isdigit() for ch in tail):
+                text = tail.strip()
+    previous = None
+    while previous != text:
+        previous = text
+        text = _QUALIFIER_RE.sub("", text).strip()
+    return text
+
+
 def verify_value(value: str, unit: str | None, anchor_text: str) -> bool:
     """True, если число с таким же масштабом и единицей есть в тексте якоря.
 
@@ -141,10 +170,14 @@ def verify_value(value: str, unit: str | None, anchor_text: str) -> bool:
     if not anchor_text or not str(anchor_text).strip():
         return False
 
-    raw_value = str(value).strip()
+    raw_value = strip_qualifiers(value)
     head = _NUMBER_RE.match(raw_value)
     if head is None:
-        return False
+        # Значение без числа вовсе («Июнь 2026» как дата документа) сверяется
+        # как текст: подтверждаем, если оно дословно есть в тексте якоря.
+        needle = " ".join(str(value).strip().split()).lower()
+        haystack = " ".join(str(anchor_text).split()).lower()
+        return bool(needle) and needle in haystack
     normalized = normalize_number(head.group())
     if normalized is None:
         return False

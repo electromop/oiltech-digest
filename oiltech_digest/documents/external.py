@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 # молча: сколько фрагментов ушло и сколько всего — в статистике и в ответе пользователю.
 MAX_CHUNKS_PER_JOB = 40
 
+# Бюджет ответа. ВАЖНО: токены рассуждения считаются здесь же. Реальный прогон 21.08
+# на 13-слайдовой презентации показал: при 2500 модель израсходовала 2496 токенов
+# на рассуждение и 0 на ответ — клиент бросил AIClientError, частичного ответа не бывает.
+# Отсюда и большой бюджет, и низкое усилие рассуждения на стадии извлечения: это
+# извлечение из текста, а не задача на размышление.
+CHUNK_MAX_OUTPUT_TOKENS = 8000
+CARD_MAX_OUTPUT_TOKENS = 8000
+CHUNK_REASONING = "low"
+
 
 def build_document_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Гидрация в core: по id документа собрать фрагменты текста для воркера."""
@@ -93,7 +102,8 @@ def process_document_payload(
         try:
             resp = client.complete_json(
                 prompts.DOC_CHUNK_INSTRUCTIONS, user_input, prompts.DOC_CHUNK_SCHEMA,
-                max_output_tokens=2500, model=model, reasoning_effort=reasoning,
+                max_output_tokens=CHUNK_MAX_OUTPUT_TOKENS, model=model,
+                reasoning_effort=CHUNK_REASONING,
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"фрагмент {chunk['index']}: {str(exc)[:300]}")
@@ -120,7 +130,7 @@ def process_document_payload(
         try:
             resp = client.complete_json(
                 prompts.DOC_CARD_INSTRUCTIONS, "\n".join(chunk_notes)[:60000],
-                prompts.DOC_CARD_SCHEMA, max_output_tokens=3000,
+                prompts.DOC_CARD_SCHEMA, max_output_tokens=CARD_MAX_OUTPUT_TOKENS,
                 model=model, reasoning_effort=reasoning,
             )
             usage.append(_response_payload(resp, {}))

@@ -60,6 +60,7 @@ services:
       - ./BACKLOG.md:/app/BACKLOG.md
       - exports:/app/exports
       - branding:/app/branding
+      - documents:/data/documents
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -90,6 +91,7 @@ services:
       - ./BACKLOG.md:/app/BACKLOG.md
       - exports:/app/exports
       - branding:/app/branding
+      - documents:/data/documents
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/tasks', timeout=5).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -121,6 +123,7 @@ services:
     volumes:
       - exports:/app/exports
       - branding:/app/branding
+      - documents:/data/documents
     restart: unless-stopped
 
   playwright-worker:
@@ -147,6 +150,7 @@ services:
     volumes:
       - exports:/app/exports
       - branding:/app/branding
+      - documents:/data/documents
     restart: unless-stopped
 
   scheduler:
@@ -185,6 +189,7 @@ services:
     volumes:
       - exports:/app/exports
       - branding:/app/branding
+      - documents:/data/documents
     restart: unless-stopped
 
   docs:
@@ -246,5 +251,10 @@ volumes:
   # а не файл в репозитории: (1) правки видны всем контейнерам сразу, (2) деплой
   # `git reset --hard` + `build` их больше не затирает.
   branding:
+  # Оригиналы загруженных документов. Общий том, а не каталог в контейнере: пишет
+  # `app`, читает разбор — состояние в этой системе делят пять процессов, и правки
+  # в «свою копию» файла тут уже приводили к дефекту (брендинг, 03.08).
+  # ⚠️ В pg_dump этот том НЕ попадает: расширение задачи бэкапа — отдельный тикет #34.
+  documents:
   caddy_data:
   caddy_config:

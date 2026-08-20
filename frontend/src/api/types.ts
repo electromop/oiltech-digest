@@ -484,3 +484,63 @@ export type MonthlyStats = {
   activity: MonthlyActivityRow[];
   activity_scope: string;
 };
+
+// --- Приём файлов: документы пользователя (экран «Материалы») ---
+export type DocumentStatus = "uploaded" | "parsed" | "processing" | "ready" | "failed";
+
+export type UploadedDocument = {
+  id: number;
+  filename: string;
+  kind: string | null;
+  size_bytes: number | null;
+  status: DocumentStatus | string;
+  error_message: string | null;
+  anchor_unit: string | null;
+  anchor_count: number | null;
+  text_chars: number | null;
+  essence: string | null;
+  doc_type: string | null;
+  publisher: string | null;
+  fact_count: number | null;
+  created_at: string | null;
+};
+
+// summary_json/claims_json приходят из БД как JSON: с сервера обещан список пунктов,
+// но тип здесь unknown НАМЕРЕННО — карточка не должна падать, если в поле окажется
+// объект или строка, а не список (см. ErrorBoundary вокруг карточки).
+export type DocumentCard = {
+  doc_type: string | null;
+  publisher: string | null;
+  doc_date: string | null;
+  language: string | null;
+  essence: string | null;
+  summary_json: unknown;
+  claims_json: unknown;
+};
+
+export type DocumentFact = {
+  value: unknown;
+  unit: string | null;
+  context: string | null;
+  anchor: number | string | null;
+  verified: boolean;
+};
+
+export type DocumentDetails = {
+  ok: boolean;
+  document: UploadedDocument;
+  card: DocumentCard | null;
+  facts: DocumentFact[];
+};
+
+export type DocumentListResult = {
+  ok: boolean;
+  documents: UploadedDocument[];
+};
+
+export type DocumentUploadResult = {
+  ok: boolean;
+  duplicate: boolean;
+  document: UploadedDocument;
+  job_id?: number;
+};
