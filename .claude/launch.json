@@ -3,8 +3,16 @@
   "configurations": [
     {
       "name": "oiltech-local",
-      "runtimeExecutable": "scripts/run-local.sh",
-      "runtimeArgs": [],
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "oiltech_digest.api:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8011"
+      ],
       "port": 8011
     }
   ]
