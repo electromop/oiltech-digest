@@ -162,7 +162,7 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
