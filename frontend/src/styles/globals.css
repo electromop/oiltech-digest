@@ -3143,6 +3143,21 @@ button {
 
 /* Якоря без текста — предупреждение, а не нейтральный факт: на реальном заключении
    экспертизы это 67 страниц из 107, и полнота карточки там заметно ниже, чем кажется. */
+.documentFactsFilter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.documentFactsFilter input {
+  width: auto;
+  margin: 0;
+}
+
 .documentPassportItem.warn {
   background: rgba(254, 243, 199, 0.85);
 }

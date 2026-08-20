@@ -826,6 +826,21 @@ describe("App smoke", () => {
     expect(screen.queryByText("Без текста")).toBeNull();
   });
 
+  it("фильтр прячет неподтверждённые факты, но по умолчанию они видны", async () => {
+    // Умолчание принципиально: молчаливо спрятанная ошибка опаснее показанной.
+    // Фильтр нужен для больших документов, где строк за сотню.
+    const user = await openDocumentsScreen();
+    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+
+    expect(await screen.findByText("1200")).toBeInTheDocument();
+    expect(screen.getByText("80")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: /только подтверждённые/i }));
+
+    expect(screen.getByText("1200")).toBeInTheDocument();
+    expect(screen.queryByText("80")).toBeNull();
+  });
+
   it("в карточке материала неподтверждённый факт помечен иначе, чем подтверждённый", async () => {
     const user = await openDocumentsScreen();
 

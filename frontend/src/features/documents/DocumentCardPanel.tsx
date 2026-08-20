@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { DocumentDetails } from "../../api/types";
 import { anchorText, asList, formatSize, statusLabel, toText } from "./documentUtils";
 
@@ -16,6 +18,11 @@ export function DocumentCardPanel({ details }: Props) {
   const card = details.card;
   const facts = Array.isArray(details.facts) ? details.facts : [];
   const unverified = facts.filter((fact) => !fact.verified);
+  // Фильтр, а не скрытие по умолчанию: неподтверждённые числа видны сразу, потому что
+  // молчаливо спрятанная ошибка опаснее показанной. Но на большом документе строк
+  // бывает за сотню, и разобрать таблицу глазами без фильтра нельзя.
+  const [onlyVerified, setOnlyVerified] = useState(false);
+  const shownFacts = onlyVerified ? facts.filter((fact) => fact.verified) : facts;
   const summary = asList(card?.summary_json);
   const claims = asList(card?.claims_json);
 
@@ -89,6 +96,16 @@ export function DocumentCardPanel({ details }: Props) {
             отчёт, пока не проверите по оригиналу.
           </div>
         ) : null}
+        {facts.length && unverified.length ? (
+          <label className="documentFactsFilter">
+            <input
+              type="checkbox"
+              checked={onlyVerified}
+              onChange={(event) => setOnlyVerified(event.target.checked)}
+            />
+            <span>Показать только подтверждённые ({facts.length - unverified.length})</span>
+          </label>
+        ) : null}
         {facts.length ? (
           <div className="jobsTableWrap">
             <table className="jobsTable documentFactsTable">
@@ -102,7 +119,7 @@ export function DocumentCardPanel({ details }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {facts.map((fact, index) => (
+                {shownFacts.map((fact, index) => (
                   <tr key={`fact-${index}`} className={fact.verified ? undefined : "factRowUnverified"}>
                     <td>
                       <span className={fact.verified ? "factValue" : "factValue unverified"}>{toText(fact.value)}</span>
