@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "oiltech-local",
+      "runtimeExecutable": "scripts/run-local.sh",
+      "runtimeArgs": [],
+      "port": 8011
+    }
+  ]
+}

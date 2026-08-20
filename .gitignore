@@ -46,3 +46,6 @@ frontend/dist/
 frontend/*.tsbuildinfo
 frontend/vite.config.d.ts
 frontend/vite.config.js
+
+# Локальный каталог оригиналов при запуске scripts/run-local.sh
+.local-documents/
