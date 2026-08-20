@@ -156,6 +156,49 @@ def strip_qualifiers(raw: str) -> str:
     return text
 
 
+
+# Одна и та же единица пишется по-разному: документ говорит «м», «га», «м2», модель
+# отвечает «метр», «гектар», «квадратный метр». Замер 21.08 на 107-страничном отчёте:
+# на этом расхождении отбивалось БОЛЬШИНСТВО ложных отказов, притом что число стояло
+# ровно там, куда указывала ссылка.
+# Приводим написания к канону, но НЕ склеиваем разные величины: «барр» и «тонн»
+# остаются разными, потому что подмена барреля тонной — настоящая ошибка, а не
+# орфография. Ровно то же и с масштабом: он сверяется отдельно и строго.
+_UNIT_CANON = {
+    "m": ("м", "метр", "метра", "метров", "мтр", "m"),
+    "m2": ("м2", "кв.м", "квм", "кв", "квадратныйметр", "квадратныхметров", "квадратный", "m2"),
+    "m3": ("м3", "куб.м", "кубм", "кубическийметр", "кубическихметров", "кубический", "m3"),
+    "ha": ("га", "гектар", "гектара", "гектаров", "ha"),
+    "t": ("т", "тонн", "тонна", "тонны", "тн", "t"),
+    "bbl": ("барр", "баррель", "баррелей", "bbl"),
+    "month": ("мес", "месяц", "месяца", "месяцев", "month"),
+    "day": ("сут", "сутки", "суток", "день", "дней", "day"),
+    "year": ("год", "года", "лет", "г", "year"),
+    "pcs": ("шт", "штук", "штуки", "ед", "единиц", "единица", "pcs"),
+    "floor": ("этаж", "этажа", "этажей", "этажность"),
+    "kw": ("квт", "киловатт", "kw"),
+    "kv": ("кв", "киловольт", "kv"),
+    "rub": ("руб", "рубль", "рублей", "рубля", "р", "rub"),
+    "pct": ("%", "процент", "процента", "процентов", "pct"),
+}
+_UNIT_LOOKUP = {
+    spelling: canon for canon, spellings in _UNIT_CANON.items() for spelling in spellings
+}
+
+
+def canonical_unit(unit: str | None) -> str | None:
+    """Привести написание единицы к канону. Незнакомую вернуть как есть (сравнится буквально)."""
+    if unit is None:
+        return None
+    parts = []
+    for piece in str(unit).lower().replace(" ", "").split("/"):
+        piece = piece.strip(". ")
+        if not piece:
+            continue
+        parts.append(_UNIT_LOOKUP.get(piece, piece))
+    return "/".join(parts) if parts else None
+
+
 def verify_value(value: str, unit: str | None, anchor_text: str) -> bool:
     """True, если число с таким же масштабом и единицей есть в тексте якоря.
 
@@ -214,7 +257,7 @@ def verify_value(value: str, unit: str | None, anchor_text: str) -> bool:
         found_magnitude = _magnitude(found, found_exp)
         if found_magnitude is None or found_magnitude != target:
             continue
-        if claimed_unit is not None and found_unit != claimed_unit:
+        if claimed_unit is not None and canonical_unit(found_unit) != canonical_unit(claimed_unit):
             continue
         return True
     return False

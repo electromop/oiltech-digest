@@ -197,3 +197,25 @@ def test_verify_empty_or_unparsable_input_returns_false(value, unit, anchor):
 
 def test_verify_anchor_without_numbers_returns_false():
     assert verify_value("15", None, "Числа в этом абзаце отсутствуют") is False
+
+
+# --- Написание единицы против подмены величины -------------------------------
+# Замер 21.08 на 107-страничном заключении экспертизы: сверка отбивала большинство
+# верных фактов только потому, что модель пишет «метр», а документ «м». Разделяем
+# два разных случая: орфография единицы — не ошибка, подмена величины и масштаба — ошибка.
+
+def test_unit_spelling_does_not_block_verification():
+    assert verify_value("959,0", "метр", "Длина 959,0 м причала") is True
+    assert verify_value("29,95", "гектар", "Площадь 29,95 га") is True
+    assert verify_value("531,16", "квадратный метр", "Площадь застройки 531,16 м2") is True
+    assert verify_value("29,3", "мес.", "Срок строительства 29,3 месяцев") is True
+
+
+def test_different_quantity_still_blocks_verification():
+    """Барреля вместо тонн — настоящая ошибка, а не орфография."""
+    assert verify_value("1,5", "млн барр", "Добыча составила 1,5 млн тонн.") is False
+
+
+def test_scale_substitution_still_blocks_verification():
+    """Главная защита: подмена масштаба остаётся строгой."""
+    assert verify_value("1,5", "млрд тонн", "Добыча составила 1,5 млн тонн.") is False
