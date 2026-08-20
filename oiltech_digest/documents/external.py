@@ -23,7 +23,6 @@ from typing import Any, Callable
 from oiltech_digest import config
 from oiltech_digest.db import documents_repo
 from oiltech_digest.documents import prompts
-from oiltech_digest.documents.chunking import chunk_anchors
 from oiltech_digest.documents.model import Anchor
 from oiltech_digest.documents.verification import verify_value
 from oiltech_digest.processing.external_ai import LeaseLost, _response_payload

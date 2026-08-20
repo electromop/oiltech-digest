@@ -24,7 +24,12 @@ type Props = {
   showToast: ToastWriter;
 };
 
-const ATTESTATION_LABEL = "Подтверждаю, что вправе загрузить этот материал и передать его в обработку";
+// Текст ДОСЛОВНО совпадает с ATTESTATION_TEXT в oiltech_digest/api.py: в базу
+// пишется то, что человек реально прочитал. Аттестация — фиксация ответственности,
+// и расхождение формулировок обесценивает её как доказательство.
+const ATTESTATION_LABEL =
+  "Подтверждаю, что вправе загрузить этот материал и передать его в обработку, " +
+  "и что мне известно: его текст покидает контур для разбора моделью";
 const POLL_INTERVAL_MS = 5000;
 
 export function DocumentsPage({ onUnauthorized, showToast }: Props) {
