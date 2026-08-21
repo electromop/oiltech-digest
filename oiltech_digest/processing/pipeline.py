@@ -220,13 +220,13 @@ def process_score_articles(articles: list[dict], client) -> dict:
 
 
 def process_full(limit: int = 20, offline: bool = False) -> dict:
-    """Запустить по-статейный конвейер на статьях, у которых ещё нет сути."""
+    """Запустить по-статейный конвейер на статьях с незавершённым AI pipeline."""
     client = make_client(offline)
-    return process_pipeline_articles(repository.get_articles_needing_summary(limit), client)
+    return process_pipeline_articles(repository.get_articles_needing_pipeline(limit), client)
 
 
 def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = True) -> dict:
-    """Полный конвейер по одной статье целиком: full-text → суть → релевантность → тег → скоринг.
+    """Полный конвейер по одной статье целиком: full-text → релевантность → суть → тег → скоринг.
 
     Каждая статья проходит все этапы до конца, прежде чем берётся следующая, —
     готовые карточки появляются по мере обработки, не нужно ждать прогона всего
@@ -256,51 +256,66 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
             # 2. Релевантность ПЕРВОЙ — на сыром тексте, до сути (без bias и без лишних
             #    AI-вызовов на нерелевантном).
-            rel_resp = relevance_article(article, client)
-            relevant = bool(rel_resp.data.get("relevant"))
-            repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
-            _record_run(article, "relevance", client, rel_resp)
+            blocked_reason = _negative_keyword_block(article, tags)
+            if blocked_reason:
+                repository.set_article_relevance(article["id"], False, blocked_reason, "negative-keyword")
+                stats["rejected"] += 1
+                continue
+
+            if article.get("relevant") is True:
+                relevant = True
+            elif article.get("relevant") is False:
+                relevant = False
+            else:
+                rel_resp = relevance_article(article, client)
+                relevant = bool(rel_resp.data.get("relevant"))
+                repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
+                _record_run(article, "relevance", client, rel_resp)
             stats["relevant" if relevant else "rejected"] += 1
             if not relevant:
                 continue
 
             # 3. Суть.
-            summary_resp = summarize_article(article, client)
-            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
-            _record_run(article, "summary", client, summary_resp)
-            article["summary"] = summary_resp.data["summary"]
-            stats["summary"] += 1
+            if not article.get("summary"):
+                summary_resp = summarize_article(article, client)
+                repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
+                _record_run(article, "summary", client, summary_resp)
+                article["summary"] = summary_resp.data["summary"]
+                stats["summary"] += 1
 
             # 3b. Перевод заголовка — отдельная стадия (AI только для иностранных).
-            title_ru, translate_resp = title_ru_for_article(article, client)
-            if title_ru is not None:
-                repository.set_article_title_ru(article["id"], title_ru)
-                if translate_resp is not None:
-                    _record_run(article, "translation", client, translate_resp)
-                    stats["translated"] += 1
+            if not article.get("title_ru"):
+                title_ru, translate_resp = title_ru_for_article(article, client)
+                if title_ru is not None:
+                    repository.set_article_title_ru(article["id"], title_ru)
+                    if translate_resp is not None:
+                        _record_run(article, "translation", client, translate_resp)
+                        stats["translated"] += 1
 
             # 4. Тег.
-            tag_resp = tag_article(article, tags, client)
-            tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
-            if tag_id == 0:
-                tag_id = keyword_tag(article, tags)["tag_id"]
-            repository.upsert_article_tag(
-                article["id"], tag_id,
-                _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
-                tag_resp.data.get("rationale"), tag_resp.model,
-            )
-            _record_run(article, "tagging", client, tag_resp)
-            stats["tagged"] += 1
+            if article.get("existing_tag_id") is None:
+                tag_resp = tag_article(article, tags, client)
+                tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
+                if tag_id == 0:
+                    tag_id = keyword_tag(article, tags)["tag_id"]
+                repository.upsert_article_tag(
+                    article["id"], tag_id,
+                    _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
+                    tag_resp.data.get("rationale"), tag_resp.model,
+                )
+                _record_run(article, "tagging", client, tag_resp)
+                stats["tagged"] += 1
 
             # 5. Скоринг.
-            score_resp = score_article(article, criteria, client)
-            payload = normalize_score_payload(article, criteria, score_resp.data)
-            repository.replace_article_score(
-                article["id"], payload["total_score"], payload["score_label"],
-                payload["explanation"], payload["items"], score_resp.model,
-            )
-            _record_run(article, "scoring", client, score_resp)
-            stats["scored"] += 1
+            if article.get("existing_score_id") is None:
+                score_resp = score_article(article, criteria, client)
+                payload = normalize_score_payload(article, criteria, score_resp.data)
+                repository.replace_article_score(
+                    article["id"], payload["total_score"], payload["score_label"],
+                    payload["explanation"], payload["items"], score_resp.model,
+                )
+                _record_run(article, "scoring", client, score_resp)
+                stats["scored"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
             _record_error(article, "pipeline", client, exc)
             stats["errors"] += 1

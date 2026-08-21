@@ -139,6 +139,207 @@ def test_jobs_requeue_stale_command_uses_config_default(monkeypatch, capsys):
     assert "stale_minutes=75" in output
 
 
+def test_agent_query_memory_command_prints_rows(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.query_memory_report",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "query": "robotic drilling automation newsroom",
+                "topic": "бурение",
+                "score": 76,
+                "status": "active",
+                "found_candidates": 3,
+                "relevance_rate": 0.8,
+                "empty_result": False,
+            }
+        ],
+    )
+
+    cli.cmd_agent_query_memory(argparse.Namespace(status="active", limit=5, json=False))
+
+    out = capsys.readouterr().out
+    assert "agent-query-memory: status=active rows=1" in out
+    assert "robotic drilling automation newsroom" in out
+    assert captured == {"status": "active", "limit": 5}
+
+
+def test_agent_query_memory_command_all_status_passes_none(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.query_memory_report",
+        lambda **kwargs: captured.update(kwargs) or [],
+    )
+
+    cli.cmd_agent_query_memory(argparse.Namespace(status="all", limit=10, json=True))
+
+    assert capsys.readouterr().out.strip() == "[]"
+    assert captured == {"status": None, "limit": 10}
+
+
+def test_agent_readiness_command_prints_issues(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.source_discovery.readiness.source_discovery_readiness",
+        lambda: {
+            "ok": False,
+            "status": "blocked",
+            "checks": {"search": {"ok": False}},
+            "issues": [{"severity": "blocker", "code": "brave_key_missing", "message": "BRAVE_SEARCH_API_KEY пустой"}],
+            "recommendations": ["Заполните BRAVE_SEARCH_API_KEY"],
+        },
+    )
+
+    cli.cmd_agent_readiness(argparse.Namespace(json=False))
+
+    out = capsys.readouterr().out
+    assert "agent-readiness: status=blocked ok=False" in out
+    assert "brave_key_missing" in out
+    assert "Заполните BRAVE_SEARCH_API_KEY" in out
+
+
+def test_agent_loop_command_prints_summary(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.source_discovery.loop.run_agent_loop",
+        lambda config: {
+            "run_id": 77,
+            "iterations": [
+                {
+                    "iteration": 1,
+                    "action_count": 1,
+                    "auto_action_count": 1,
+                    "human_review_count": 0,
+                    "observations": [{"topic": "бурение", "candidate_count": 2, "query_strategy": "balanced", "search_status": "ok"}],
+                }
+            ],
+            "total_candidates": 2,
+            "terminal_reason": "max_iterations_reached",
+        },
+    )
+
+    cli.cmd_agent_loop(argparse.Namespace(
+        goal="найти",
+        days=30,
+        target_per_topic=10,
+        topic_limit=5,
+        candidate_limit=10,
+        max_actions=5,
+        max_iterations=1,
+        offline=True,
+        fetch_inspection=False,
+        dry_run=False,
+        evaluate=True,
+        article_limit=5,
+        no_memory=False,
+        max_daily_loop_runs=4,
+        max_daily_candidates=100,
+        max_daily_evaluations=100,
+        json=False,
+    ))
+
+    out = capsys.readouterr().out
+    assert "agent-loop: run_id=77 iterations=1 candidates=2" in out
+    assert "бурение: candidates=2 strategy=balanced search=ok" in out
+
+
+def test_enqueue_agent_loop_command_creates_job(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.background_job_status_counts",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.create_background_job",
+        lambda kind, payload, **kwargs: captured.update({"kind": kind, "payload": payload, **kwargs}) or {"id": 91},
+    )
+
+    cli.cmd_enqueue_agent_loop(argparse.Namespace(
+        goal="найти",
+        days=30,
+        target_per_topic=10,
+        topic_limit=5,
+        candidate_limit=10,
+        max_actions=4,
+        max_iterations=2,
+        offline=True,
+        fetch_inspection=False,
+        dry_run=False,
+        evaluate=True,
+        article_limit=5,
+        no_memory=False,
+        max_daily_loop_runs=4,
+        max_daily_candidates=100,
+        max_daily_evaluations=100,
+    ))
+
+    assert captured["kind"] == "source_discovery_loop"
+    assert captured["payload"]["max_iterations"] == 2
+    assert captured["capability"] == "source-discovery"
+    assert "enqueue-agent-loop: job id=91" in capsys.readouterr().out
+
+
+def test_enqueue_agent_loop_command_skips_when_loop_already_active(monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.background_job_status_counts",
+        lambda **kwargs: {"queued": 1},
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.create_background_job",
+        lambda *args, **kwargs: called.append((args, kwargs)) or {"id": 91},
+    )
+
+    cli.cmd_enqueue_agent_loop(argparse.Namespace(
+        goal="найти",
+        days=30,
+        target_per_topic=10,
+        topic_limit=5,
+        candidate_limit=10,
+        max_actions=4,
+        max_iterations=2,
+        offline=True,
+        fetch_inspection=False,
+        dry_run=False,
+        evaluate=True,
+        article_limit=5,
+        no_memory=False,
+        allow_parallel=False,
+        max_daily_loop_runs=4,
+        max_daily_candidates=100,
+        max_daily_evaluations=100,
+    ))
+
+    assert called == []
+    assert "enqueue-agent-loop: skipped active_jobs=1" in capsys.readouterr().out
+
+
+def test_source_candidate_triage_command_prints_rows(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.source_candidate_triage_report",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "id": 7,
+                "normalized_domain": "example.com",
+                "url": "https://example.com/news",
+                "status": "needs_human_review",
+                "recommended_action": "add",
+                "triage_priority": 120,
+                "tested_articles": 5,
+                "relevant_articles": 4,
+                "avg_score": 80,
+                "topic": "бурение",
+            }
+        ],
+    )
+
+    cli.cmd_source_candidate_triage(argparse.Namespace(limit=5, json=False))
+
+    out = capsys.readouterr().out
+    assert "source-candidate-triage: rows=1" in out
+    assert "example.com" in out
+    assert captured == {"limit": 5}
+
+
 def test_jobs_requeue_stale_command_accepts_override(monkeypatch, capsys):
     monkeypatch.setattr(
         "oiltech_digest.db.repository.requeue_stale_background_jobs",

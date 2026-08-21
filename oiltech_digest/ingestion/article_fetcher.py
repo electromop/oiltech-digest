@@ -14,13 +14,14 @@ import re
 
 from lxml import html
 
+from oiltech_digest import config
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.ingestion.http_client import fetch
 
 logger = logging.getLogger(__name__)
 
-MIN_FULL_TEXT_CHARS = 800
+MIN_FULL_TEXT_CHARS = config.MIN_FULL_TEXT_CHARS
 MIN_GAIN_RATIO = 2.0
 
 _DROP_XPATH = (
@@ -353,6 +354,8 @@ def _is_better_text(extracted: str, current: str, min_chars: int) -> bool:
     current_len = len(current or "")
     if extracted_len < min_chars:
         return False
+    if current_len < min_chars:
+        return True
     if current_len and extracted_len < current_len * MIN_GAIN_RATIO:
         return False
     return True

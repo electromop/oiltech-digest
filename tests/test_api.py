@@ -103,6 +103,604 @@ def test_source_diagnose_endpoint(monkeypatch):
     }
 
 
+def test_source_candidates_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    monkeypatch.setattr(
+        api.repository,
+        "list_source_candidates",
+        lambda status=None, topic=None, limit=100: [
+            {
+                "id": 7,
+                "url": "https://example.com/news",
+                "status": status or "needs_human_review",
+                "topic": topic,
+                "tested_articles": 5,
+                "relevant_articles": 4,
+                "avg_score": 72,
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/source-candidates?status=needs_human_review&topic=бурение&limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["id"] == 7
+    assert payload[0]["status"] == "needs_human_review"
+    assert payload[0]["topic"] == "бурение"
+
+
+def test_source_candidate_triage_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "source_candidate_triage_report",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "id": 7,
+                "url": "https://example.com/news",
+                "normalized_domain": "example.com",
+                "status": "needs_human_review",
+                "recommended_action": "add",
+                "triage_priority": 120,
+                "triage_reason": "Можно добавлять после проверки человеком",
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/source-candidates/triage?limit=5")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["triage_priority"] == 120
+    assert captured == {"limit": 5}
+
+
+def test_source_discovery_plan_endpoint(monkeypatch):
+    from oiltech_digest.source_discovery import planner
+
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    configs = []
+    monkeypatch.setattr(
+        planner,
+        "build_plan",
+        lambda config: configs.append(config) or {"actions": [{"action_type": "discover_sources", "topic": "бурение"}]},
+    )
+    try:
+        response = TestClient(app).get(
+            "/api/source-discovery/plan?days=14&target_per_topic=8&topic_limit=2&candidate_limit=6&max_actions=3"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["actions"][0]["topic"] == "бурение"
+    assert configs[0].days == 14
+    assert configs[0].target_per_topic == 8
+    assert configs[0].topic_limit == 2
+    assert configs[0].candidate_limit == 6
+    assert configs[0].max_actions == 3
+    assert configs[0].persist_memory is False
+
+
+def test_enqueue_source_discovery_plan_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.background_jobs,
+        "enqueue",
+        lambda kind, payload, **kwargs: captured.update({"kind": kind, "payload": payload, **kwargs}) or {
+            "id": 77,
+            "kind": kind,
+            "queue_name": kwargs["queue_name"],
+            "execution_region": kwargs["execution_region"],
+            "capability": kwargs["capability"],
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": 1,
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/source-discovery/plan/enqueue",
+            json={"days": 14, "topic_limit": 2, "candidate_limit": 6, "max_actions": 3},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["job"]["id"] == 77
+    assert captured["kind"] == "source_discovery_plan"
+    assert captured["payload"]["days"] == 14
+    assert captured["payload"]["topic_limit"] == 2
+    assert captured["queue_name"] == "default"
+    assert captured["user_id"] == 1
+
+
+def test_enqueue_source_discovery_loop_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.background_jobs,
+        "enqueue",
+        lambda kind, payload, **kwargs: captured.update({"kind": kind, "payload": payload, **kwargs}) or {
+            "id": 88,
+            "kind": kind,
+            "queue_name": kwargs["queue_name"],
+            "execution_region": kwargs["execution_region"],
+            "capability": kwargs["capability"],
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": 1,
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/source-discovery/loop/enqueue",
+            json={"goal": "найти источники", "max_iterations": 2, "max_actions": 3},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["job"]["id"] == 88
+    assert captured["kind"] == "source_discovery_loop"
+    assert captured["payload"]["max_iterations"] == 2
+    assert captured["queue_name"] == "default"
+    assert captured["user_id"] == 1
+
+
+def test_source_discovery_memory_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "list_agent_memory",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "id": 1,
+                "memory_key": "topic:бурение",
+                "memory_type": "topic",
+                "subject": "бурение",
+                "status": "active",
+                "score": 80,
+                "facts_json": {"gap": 3},
+                "last_seen_at": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/source-discovery/memory?memory_type=topic&status=active&limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["memory_key"] == "topic:бурение"
+    assert captured == {"memory_type": "topic", "status": "active", "limit": 10}
+
+
+def test_source_discovery_memory_patch_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    actions = []
+    monkeypatch.setattr(api.repository, "update_agent_memory_status", lambda memory_id, status: captured.update({"memory_id": memory_id, "status": status}) or True)
+    monkeypatch.setattr(
+        api.repository,
+        "record_agent_action",
+        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
+    )
+    try:
+        response = TestClient(app).patch("/api/source-discovery/memory/7", json={"status": "muted"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert captured == {"memory_id": 7, "status": "muted"}
+    assert actions[0]["action_type"] == "update_agent_memory"
+
+
+def test_source_discovery_memory_create_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    actions = []
+    monkeypatch.setattr(
+        api.repository,
+        "upsert_agent_memory",
+        lambda **kwargs: captured.update(kwargs) or 44,
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "record_agent_action",
+        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/source-discovery/memory",
+            json={"memory_type": "domain", "subject": "https://Example.com/news", "status": "rejected", "score": 0},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "id": 44}
+    assert captured["memory_key"] == "manual:domain:example.com"
+    assert captured["subject"] == "example.com"
+    assert captured["status"] == "rejected"
+    assert captured["facts"]["manual"] is True
+    assert actions[0]["action_type"] == "create_agent_memory"
+
+
+def test_source_discovery_quality_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "source_candidate_quality_report",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "subject": "бурение",
+                "candidates": 3,
+                "approved": 1,
+                "rejected": 1,
+                "paused": 0,
+                "needs_human_review": 1,
+                "test_more": 1,
+                "tested_articles": 10,
+                "relevant_articles": 6,
+                "noise_count": 2,
+                "avg_score": 70,
+                "approval_rate": 0.5,
+                "relevance_rate": 0.6,
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/source-discovery/quality?group_by=topic&limit=5")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["subject"] == "бурение"
+    assert response.json()[0]["approval_rate"] == 0.5
+    assert captured == {"group_by": "topic", "limit": 5}
+
+
+def test_source_discovery_quality_endpoint_rejects_bad_group_by(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    try:
+        response = TestClient(app).get("/api/source-discovery/quality?group_by=source")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+
+
+def test_source_discovery_query_memory_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "query_memory_report",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "query": "robotic drilling automation newsroom",
+                "topic": "бурение",
+                "score": 76,
+                "status": "active",
+                "found_candidates": 3,
+                "tested_articles": 5,
+                "relevant_articles": 4,
+                "avg_score": 80,
+                "empty_result": False,
+                "relevance_rate": 0.8,
+                "last_seen_at": None,
+                "updated_at": None,
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/source-discovery/query-memory?limit=5")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["query"] == "robotic drilling automation newsroom"
+    assert captured == {"status": "active", "limit": 5}
+
+
+def test_source_discovery_readiness_endpoint(monkeypatch):
+    from oiltech_digest.source_discovery import readiness
+
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    monkeypatch.setattr(
+        readiness,
+        "source_discovery_readiness",
+        lambda: {"ok": True, "status": "ready", "checks": {}, "issues": [], "recommendations": []},
+    )
+    try:
+        response = TestClient(app).get("/api/source-discovery/readiness")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+
+
+def test_source_discovery_actions_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "list_agent_actions",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "id": 1,
+                "run_id": 55,
+                "task_id": 7,
+                "action_type": "discover_sources_finished",
+                "input_json": {"topic": "бурение"},
+                "output_json": {"candidates": 2},
+                "cost_usd": 0,
+                "duration_ms": 123,
+                "created_at": None,
+                "task_kind": "discover_sources",
+                "task_status": "ok",
+                "task_topic": "бурение",
+                "decision_title": "Поиск источников завершён",
+                "decision_summary": "Тема: бурение, кандидатов: 2.",
+                "decision_tone": "good",
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/source-discovery/actions?action_type=discover_sources_finished&limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["action_type"] == "discover_sources_finished"
+    assert response.json()[0]["task_topic"] == "бурение"
+    assert response.json()[0]["decision_title"] == "Поиск источников завершён"
+    assert captured == {"action_type": "discover_sources_finished", "run_id": None, "limit": 10}
+
+
+def test_source_discovery_runs_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "list_agent_runs",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "id": 55,
+                "kind": "source_discovery_cycle",
+                "status": "ok",
+                "trigger": "scheduler",
+                "payload_json": {"topic_limit": 5},
+                "result_json": {"queued": {"queued": 2}},
+                "error_message": None,
+                "started_at": None,
+                "finished_at": None,
+                "created_at": None,
+                "action_count": 3,
+                "job_count": 2,
+                "ok_job_count": 1,
+                "failed_job_count": 0,
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/source-discovery/runs?status=ok&limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["kind"] == "source_discovery_cycle"
+    assert response.json()[0]["job_count"] == 2
+    assert captured == {"status": "ok", "limit": 10}
+
+
+def test_source_candidate_evaluate_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+
+    def fake_eval(candidate_id, article_limit=5, offline=True, collect=True, process=True):
+        return {
+            "candidate_id": candidate_id,
+            "task_id": 99,
+            "metrics": {"tested_articles": article_limit, "relevant_articles": 3, "avg_score": 70},
+            "recommended_action": "add",
+            "next_status": "needs_human_review",
+        }
+
+    from oiltech_digest.source_discovery import sandbox
+
+    monkeypatch.setattr(sandbox, "evaluate_source_candidate", fake_eval)
+    try:
+        response = TestClient(app).post(
+            "/api/source-candidates/7/evaluate",
+            json={"article_limit": 4, "offline": True, "collect": True, "process": True},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["metrics"]["tested_articles"] == 4
+
+
+def test_source_candidate_approve_endpoint(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    actions = []
+    enqueued = []
+    monkeypatch.setattr(api.repository, "approve_source_candidate", lambda candidate_id, **kwargs: 55)
+    monkeypatch.setattr(api.repository, "get_source", lambda source_id: {"id": source_id, "parse_strategy": "request", "network_region": "auto"})
+    monkeypatch.setattr(
+        api.background_jobs,
+        "enqueue",
+        lambda kind, payload, **kwargs: enqueued.append({"kind": kind, "payload": payload, **kwargs}) or {
+            "id": 91,
+            "kind": kind,
+            "queue_name": kwargs["queue_name"],
+            "execution_region": kwargs["execution_region"],
+            "capability": kwargs["capability"],
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "record_agent_action",
+        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/source-candidates/7/approve",
+            json={"enabled": True, "parse_strategy": "request", "network_region": "external"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["source_id"] == 55
+    assert response.json()["initial_job"]["id"] == 91
+    assert enqueued[0]["kind"] == "scrape_source"
+    assert enqueued[0]["payload"] == {"source_id": 55, "reason": "approved_source_candidate", "candidate_id": 7}
+    assert actions[0]["action_type"] == "approve_source_candidate"
+    assert actions[0]["output_payload"]["initial_job_id"] == 91
+
+
+def test_source_candidate_approve_endpoint_enqueues_initial_parse_for_rss(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    monkeypatch.setattr(api.repository, "approve_source_candidate", lambda candidate_id, **kwargs: 55)
+    monkeypatch.setattr(api.repository, "get_source", lambda source_id: {"id": source_id, "parse_strategy": "rss"})
+    monkeypatch.setattr(api.repository, "record_agent_action", lambda *args, **kwargs: 1)
+    called = []
+    monkeypatch.setattr(
+        api.background_jobs,
+        "enqueue",
+        lambda kind, payload, **kwargs: called.append({"kind": kind, "payload": payload, **kwargs}) or {
+            "id": 92,
+            "kind": kind,
+            "queue_name": kwargs["queue_name"],
+            "execution_region": kwargs["execution_region"],
+            "capability": kwargs["capability"],
+            "status": "queued",
+            "progress": 0,
+            "attempts": 0,
+            "max_attempts": kwargs.get("max_attempts", 3),
+            "run_after": None,
+            "payload_json": payload,
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/source-candidates/7/approve",
+            json={"enabled": True, "parse_strategy": "rss", "network_region": "auto"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["initial_job"]["id"] == 92
+    assert called[0]["kind"] == "parse_source_once"
+    assert called[0]["payload"] == {"source_id": 55, "reason": "approved_source_candidate", "candidate_id": 7}
+    assert called[0]["capability"] == "rss_parse"
+
+
+def test_source_candidate_patch_endpoint_records_operator_decision(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    captured = {}
+    actions = []
+    monkeypatch.setattr(api.repository, "get_source_candidate", lambda candidate_id: {"id": candidate_id})
+    monkeypatch.setattr(
+        api.repository,
+        "update_source_candidate_assessment",
+        lambda candidate_id, **kwargs: captured.update({"candidate_id": candidate_id, **kwargs}),
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "record_agent_action",
+        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}) or 1,
+    )
+    try:
+        response = TestClient(app).patch(
+            "/api/source-candidates/7",
+            json={
+                "status": "rejected",
+                "recommended_action": "reject",
+                "review_comment": "Не подходит по теме",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert captured == {
+        "candidate_id": 7,
+        "status": "rejected",
+        "recommended_action": "reject",
+        "review_comment": "Не подходит по теме",
+    }
+    assert actions[0]["action_type"] == "update_source_candidate"
+    assert actions[0]["input_payload"]["candidate_id"] == 7
+
+
 def test_source_diagnose_endpoint_accepts_unsaved_overrides(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
@@ -1238,6 +1836,52 @@ def test_external_worker_claim_hydrates_external_scrape_payload(monkeypatch):
     assert response.json()["job"]["payload"]["source"] == {"id": 7, "parse_strategy": "request"}
 
 
+def test_external_worker_claim_hydrates_source_candidate_evaluation_payload(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
+    monkeypatch.setattr(
+        api.external_ai,
+        "build_source_candidate_evaluate_payload",
+        lambda payload: {"kind": "source_candidate_evaluate", "candidate_id": payload["candidate_id"], "articles": [{"id": 101}]},
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "claim_external_background_job",
+        lambda **kwargs: {
+            "id": 12,
+            "kind": "source_candidate_evaluate",
+            "queue_name": "external-ai",
+            "execution_region": "external",
+            "capability": "openai",
+            "status": "running",
+            "progress": 10,
+            "attempts": 1,
+            "max_attempts": 1,
+            "run_after": None,
+            "payload_json": {"candidate_id": 42},
+            "result_json": None,
+            "error_message": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        },
+    )
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/claim",
+        headers={"Authorization": "Bearer secret"},
+        json={"worker_id": "eu-1", "queues": ["external-ai"], "capabilities": ["openai"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["payload"] == {
+        "kind": "source_candidate_evaluate",
+        "candidate_id": 42,
+        "articles": [{"id": 101}],
+    }
+
+
 def test_external_worker_progress_and_complete_validate_lease(monkeypatch):
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     progress_calls = []
@@ -1297,6 +1941,35 @@ def test_external_worker_complete_applies_external_ai_result(monkeypatch):
     assert response.status_code == 200
     assert applied == [{"external_ai": True, "articles": [{"article_id": 1}]}]
     assert completed[0][1]["result"]["applied"] == {"articles": 1}
+
+
+def test_external_worker_complete_applies_source_candidate_result(monkeypatch):
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    applied = []
+    completed = []
+    monkeypatch.setattr(api.repository, "get_background_job", lambda job_id: {"id": job_id, "kind": "source_candidate_evaluate"})
+    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
+    monkeypatch.setattr(
+        api.external_ai,
+        "apply_source_candidate_result",
+        lambda result, **kwargs: applied.append((result, kwargs)) or {"articles": 1, "ok": 1},
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "finish_external_background_job",
+        lambda job_id, **kwargs: completed.append((job_id, kwargs)) or True,
+    )
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/external-worker/jobs/10/complete",
+        headers={"Authorization": "Bearer secret"},
+        json={"lease_token": "lease", "result": {"source_candidate_evaluate": True, "candidate_id": 42, "articles": []}},
+    )
+
+    assert response.status_code == 200
+    assert applied == [({"source_candidate_evaluate": True, "candidate_id": 42, "articles": []}, {"job_id": 10})]
+    assert completed[0][1]["result"]["applied"] == {"articles": 1, "ok": 1}
 
 
 def test_external_worker_complete_reads_recheck_flags_from_payload_json(monkeypatch):

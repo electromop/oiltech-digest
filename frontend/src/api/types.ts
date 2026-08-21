@@ -36,6 +36,279 @@ export type SourceHealth = {
   last_article_at: string | null;
 };
 
+export type SourceCandidate = {
+  id: number;
+  url: string;
+  normalized_domain: string;
+  name: string | null;
+  candidate_type: string | null;
+  status: "new" | "researching" | "test_parsing" | "needs_human_review" | "approved" | "rejected" | "paused";
+  discovered_by: string;
+  discovery_reason: string | null;
+  topic: string | null;
+  expected_tags_json?: string[];
+  confidence: number | null;
+  tested_articles: number;
+  relevant_articles: number;
+  avg_score: number | null;
+  duplicate_count: number;
+  noise_count: number;
+  recommended_action: "add" | "test_more" | "reject" | "human_review" | null;
+  review_comment: string | null;
+  approved_source_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type SourceCandidateTriageRow = SourceCandidate & {
+  triage_priority: number;
+  triage_reason: string;
+};
+
+export type SourceCandidateArticle = {
+  id: number;
+  candidate_id: number;
+  title: string;
+  url: string;
+  published_at: string | null;
+  raw_text?: string | null;
+  language: string | null;
+  text_chars: number;
+  prefilter_keep: boolean | null;
+  prefilter_reason: string | null;
+  relevant: boolean | null;
+  relevance_reason: string | null;
+  relevance_model: string | null;
+  summary: string | null;
+  tag_id: number | null;
+  tag_confidence: number | null;
+  tag_rationale: string | null;
+  total_score: number | null;
+  score_label: string | null;
+  processing_status: "new" | "ok" | "rejected" | "error";
+  error_message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type SourceCandidateEvaluationResult = {
+  candidate_id: number;
+  task_id: number;
+  url: string;
+  collected: {
+    inserted_or_updated: number;
+    errors: number;
+  };
+  processed: {
+    processed: number;
+    relevant: number;
+    rejected: number;
+    errors: number;
+  };
+  metrics: {
+    tested_articles: number;
+    relevant_articles: number;
+    avg_score: number | null;
+    duplicate_count: number;
+    noise_count: number;
+  };
+  recommended_action: SourceCandidate["recommended_action"];
+  next_status: SourceCandidate["status"];
+  review_comment: string;
+  duration_ms: number;
+};
+
+export type SourceCandidateApprovePayload = {
+  name?: string | null;
+  source_type?: string;
+  parse_strategy?: "rss" | "request" | "playwright" | null;
+  enabled?: boolean;
+  category?: string | null;
+  priority?: number;
+  network_region?: "auto" | "ru" | "external";
+  scrape_after_approve?: boolean;
+};
+
+export type SourceCandidatePatchPayload = {
+  status?: SourceCandidate["status"];
+  recommended_action?: SourceCandidate["recommended_action"];
+  review_comment?: string | null;
+};
+
+export type AgentPlanAction = {
+  action_type: "discover_sources" | "review_source_candidate" | "recheck_source" | "tune_source_frequency";
+  priority: number;
+  topic?: string | null;
+  limit?: number;
+  query_hints?: string[];
+  reason: string;
+  policy_decision?: "auto" | "human_review" | "blocked";
+  policy_reason?: string;
+  requires_human_approval?: boolean;
+  operator_label?: string | null;
+  operator_url?: string | null;
+  candidate_id?: number;
+  url?: string | null;
+  source_id?: number;
+  source_name?: string | null;
+  direction?: "increase" | "decrease" | string;
+  recommended_frequency?: string | null;
+};
+
+export type AgentMemory = {
+  id: number;
+  memory_key: string;
+  memory_type: "topic" | "domain" | "source" | "query" | "plan" | "rule" | string;
+  subject: string;
+  status: "active" | "muted" | "rejected" | string;
+  score: number;
+  facts_json: Record<string, unknown>;
+  last_seen_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type AgentAction = {
+  id: number;
+  task_id: number | null;
+  action_type: string;
+  input_json: Record<string, unknown>;
+  output_json: Record<string, unknown>;
+  cost_usd: number;
+  duration_ms: number | null;
+  created_at: string | null;
+  task_kind: string | null;
+  task_status: string | null;
+  task_topic: string | null;
+  decision_title?: string;
+  decision_summary?: string;
+  decision_tone?: "neutral" | "good" | "warning" | "bad" | string;
+};
+
+export type AgentRun = {
+  id: number;
+  kind: string;
+  status: "running" | "ok" | "failed" | string;
+  trigger: string | null;
+  payload_json: Record<string, unknown>;
+  result_json: Record<string, unknown>;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string | null;
+  action_count: number;
+  job_count: number;
+  ok_job_count: number;
+  failed_job_count: number;
+};
+
+export type SourceDiscoveryQualityRow = {
+  subject: string;
+  candidates: number;
+  approved: number;
+  rejected: number;
+  paused: number;
+  needs_human_review: number;
+  test_more: number;
+  tested_articles: number;
+  relevant_articles: number;
+  noise_count: number;
+  avg_score: number | null;
+  approval_rate: number;
+  relevance_rate: number;
+};
+
+export type QueryMemoryRow = {
+  query: string;
+  topic: string | null;
+  score: number;
+  status: string;
+  found_candidates: number;
+  tested_articles: number;
+  relevant_articles: number;
+  avg_score: number | null;
+  empty_result: boolean;
+  relevance_rate: number;
+  last_seen_at: string | null;
+  updated_at: string | null;
+};
+
+export type SourceDiscoveryReadinessIssue = {
+  severity: "info" | "warning" | "blocker" | string;
+  code: string;
+  message: string;
+};
+
+export type SourceDiscoveryReadiness = {
+  ok: boolean;
+  status: "ready" | "degraded" | "blocked" | string;
+  checks: Record<string, {
+    ok: boolean;
+    issues?: SourceDiscoveryReadinessIssue[];
+    recommendations?: string[];
+    [key: string]: unknown;
+  }>;
+  issues: SourceDiscoveryReadinessIssue[];
+  recommendations: string[];
+};
+
+export type AgentPlan = {
+  kind: "source_discovery_plan";
+  period: {
+    from: string;
+    to: string;
+    days: number;
+  };
+  inputs: {
+    topic_gaps: Array<Record<string, unknown>>;
+    source_quality_count: number;
+    candidate_count: number;
+    memory_count: number;
+    query_memory_count?: number;
+  };
+  policy?: {
+    auto: number;
+    human_review: number;
+    blocked: number;
+  };
+  learning?: {
+    candidates: number;
+    approved: number;
+    rejected: number;
+    paused: number;
+    needs_human_review: number;
+    test_more: number;
+    approval_rate: number;
+    rejection_rate: number;
+  };
+  actions: AgentPlanAction[];
+  memory_updates: Array<Record<string, unknown>>;
+  duration_ms: number;
+};
+
+export type SourceDiscoveryPlanPayload = {
+  days?: number;
+  target_per_topic?: number;
+  topic_limit?: number;
+  candidate_limit?: number;
+  max_actions?: number;
+  persist_memory?: boolean;
+  offline?: boolean;
+  evaluate?: boolean;
+};
+
+export type SourceDiscoveryLoopPayload = SourceDiscoveryPlanPayload & {
+  goal?: string;
+  max_iterations?: number;
+  fetch_inspection?: boolean;
+  dry_run?: boolean;
+  auto_evaluate?: boolean;
+  article_limit?: number;
+  max_daily_loop_runs?: number;
+  max_daily_candidates?: number;
+  max_daily_evaluations?: number;
+};
+
 export type SourceDiagnostics = {
   verdict?: string;
   candidate_count?: number;
@@ -168,6 +441,7 @@ export type BackgroundJob = {
   queue: string;
   execution_region: string;
   capability: string | null;
+  agent_run_id?: number | null;
   status: "queued" | "running" | "ok" | "failed";
   progress: number;
   attempts: number;

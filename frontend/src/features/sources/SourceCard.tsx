@@ -8,6 +8,7 @@ type Props = {
   hasDraft: boolean;
   pending?: boolean;
   pendingLabel?: string | null;
+  focused?: boolean;
   currentField: (field: keyof SourcePatch) => string;
   onDraftChange: (field: keyof SourcePatch, value: string | null) => void;
   onToggle: (enabled: boolean) => void;
@@ -17,12 +18,12 @@ type Props = {
 };
 
 export function SourceCard(props: Props) {
-  const { source, health, diagnostic, hasDraft, pending, pendingLabel } = props;
+  const { source, health, diagnostic, hasDraft, pending, pendingLabel, focused } = props;
   const primaryUrl = source.url || source.rss_url || source.listing_url || "";
   const triage = getSourceTriage(source, health, diagnostic);
 
   return (
-    <article className="sourceCardReact">
+    <article className={focused ? "sourceCardReact focused" : "sourceCardReact"} id={`source-${source.id}`}>
       <div className="sourceTop">
         <div className="sourceSummary">
           <div className="sourceName">{source.name}</div>
@@ -81,7 +82,7 @@ export function SourceCard(props: Props) {
         ) : null}
       </div>
 
-      <details className="sourceAdvancedReact">
+      <details className="sourceAdvancedReact" open={focused || undefined}>
         <summary>{`Настройка ${source.parse_strategy === "request" ? "и диагностика" : ""}`}</summary>
         <div className="sourceConfigGridReact">
           <InputField
@@ -104,6 +105,18 @@ export function SourceCard(props: Props) {
               placeholder="Страница новостей"
             />
           ) : null}
+          <label className="field">
+            <span>Частота</span>
+            <select
+              value={props.currentField("update_frequency")}
+              onChange={(event) => props.onDraftChange("update_frequency", event.target.value || null)}
+            >
+              <option value="">Не задана</option>
+              <option value="ежечасно">Ежечасно</option>
+              <option value="ежедневно">Ежедневно</option>
+              <option value="еженедельно">Еженедельно</option>
+            </select>
+          </label>
         </div>
       </details>
       {diagnostic ? <DiagnosticsPanel diagnostic={diagnostic} /> : null}

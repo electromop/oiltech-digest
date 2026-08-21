@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from oiltech_digest.db import repository
-from oiltech_digest.config import REQUEST_ARTICLE_LIMIT
+from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.ingestion import normalize
 
 logger = logging.getLogger(__name__)
@@ -166,7 +166,7 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
             return None
         title, published_at, raw_text = parse_article_page(article_content, candidate.title)
         final_published = published_at or candidate.published_at
-        if not title or len(raw_text) < 200:
+        if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
             return None
         return {
             "source_id": source["id"],

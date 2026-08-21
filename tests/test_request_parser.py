@@ -28,6 +28,20 @@ ARTICLE_HTML = b"""
 </html>
 """
 
+SHORT_ARTICLE_HTML = b"""
+<html>
+  <head>
+    <meta property="og:title" content="SLB and Liberty advance digital completions">
+  </head>
+  <body>
+    <article>
+      <p>SLB and Liberty Energy announced a digital completions collaboration for oilfield service operations.</p>
+      <p>The release is brief but relevant for upstream technology monitoring.</p>
+    </article>
+  </body>
+</html>
+"""
+
 
 QUERY_HOME_HTML = b"""
 <html>
@@ -72,6 +86,25 @@ def test_parse_article_page_extracts_title_date_and_body():
     assert "Field automation rollout" in title
     assert published_at is not None
     assert "reduced manual interventions" in raw_text
+
+
+def test_fetch_article_candidate_keeps_short_relevant_press_release(monkeypatch):
+    monkeypatch.setattr(request_parser, "fetch", lambda url: SHORT_ARTICLE_HTML)
+    candidate = request_parser.CandidateLink(
+        url="https://example.com/news/short-release",
+        title="SLB and Liberty advance digital completions",
+        score=8,
+        published_at=None,
+    )
+
+    article = request_parser.fetch_article_candidate(
+        candidate,
+        {"id": 7, "name": "SLB", "category": "международные"},
+    )
+
+    assert article is not None
+    assert article["url"] == candidate.url
+    assert len(article["raw_text"]) >= 120
 
 
 def test_parse_source_uses_listing_page_and_updates_last_seen(monkeypatch):

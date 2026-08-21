@@ -33,6 +33,14 @@ HTTP_MIN_INTERVAL_SECONDS = float(os.environ.get("HTTP_MIN_INTERVAL_SECONDS", "1
 HTTP_JITTER_SECONDS = float(os.environ.get("HTTP_JITTER_SECONDS", "0.4"))
 HTTP_BLOCK_COOLDOWN_SECONDS = int(os.environ.get("HTTP_BLOCK_COOLDOWN_SECONDS", "900"))
 REQUEST_ARTICLE_LIMIT = int(os.environ.get("REQUEST_ARTICLE_LIMIT", "6"))
+# Минимум значимого текста для первичной вставки request/playwright-статей.
+# Корпоративные новости и press release бывают короткими; старый порог 200 символов
+# отбрасывал часть релевантных заметок ещё до AI-гейта.
+MIN_ARTICLE_TEXT_CHARS = int(os.environ.get("MIN_ARTICLE_TEXT_CHARS", "120"))
+# Минимум для записи дозагруженного full-text. Ownership guard ниже защищает от
+# листингов/пейволов, поэтому порог можно держать ниже прежних 800 и не терять
+# короткие, но полноценные материалы.
+MIN_FULL_TEXT_CHARS = int(os.environ.get("MIN_FULL_TEXT_CHARS", "500"))
 BACKGROUND_JOB_WORKERS = int(os.environ.get("BACKGROUND_JOB_WORKERS", "2"))
 BACKGROUND_JOB_INLINE = os.environ.get("BACKGROUND_JOB_INLINE", "1").lower() not in {"0", "false", "no"}
 BACKGROUND_JOB_POLL_SECONDS = float(os.environ.get("BACKGROUND_JOB_POLL_SECONDS", "2"))
@@ -154,6 +162,14 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5-mini": (0.75, 4.5),
     "gpt-5-nano": (0.05, 0.40),
 }
+
+# --- Source discovery ---
+# По умолчанию внешний поиск выключен: MVP можно гонять через --seed-url без ключей.
+# Поддержанные провайдеры: none / brave / serpapi.
+SOURCE_DISCOVERY_SEARCH_PROVIDER = os.environ.get("SOURCE_DISCOVERY_SEARCH_PROVIDER", "none").strip().lower()
+SOURCE_DISCOVERY_SEARCH_TIMEOUT = int(os.environ.get("SOURCE_DISCOVERY_SEARCH_TIMEOUT", "20"))
+BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
 
 
 def price_for_model(model: str | None) -> tuple[float, float]:

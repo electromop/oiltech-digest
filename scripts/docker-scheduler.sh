@@ -49,6 +49,22 @@ FULLTEXT_RETRY_TOO_SHORT="${FULLTEXT_RETRY_TOO_SHORT:-0}"
 # с РФ-сервера) фетчатся через зарубежный воркер. Шаг enqueue-external-scrape ставит
 # их в external-fetch/external-playwright; команда сама no-op при выключенном контуре.
 FETCH_EXTERNAL_ENABLED="${FETCH_EXTERNAL_ENABLED:-0}"
+SOURCE_DISCOVERY_ENABLED="${SOURCE_DISCOVERY_ENABLED:-0}"
+SOURCE_DISCOVERY_EVERY_CYCLES="${SOURCE_DISCOVERY_EVERY_CYCLES:-24}"
+SOURCE_DISCOVERY_TOPIC_LIMIT="${SOURCE_DISCOVERY_TOPIC_LIMIT:-3}"
+SOURCE_DISCOVERY_LIMIT="${SOURCE_DISCOVERY_LIMIT:-10}"
+SOURCE_DISCOVERY_ARTICLE_LIMIT="${SOURCE_DISCOVERY_ARTICLE_LIMIT:-5}"
+SOURCE_DISCOVERY_OFFLINE="${SOURCE_DISCOVERY_OFFLINE:-1}"
+SOURCE_DISCOVERY_EVALUATE="${SOURCE_DISCOVERY_EVALUATE:-1}"
+SOURCE_DISCOVERY_TOPICS="${SOURCE_DISCOVERY_TOPICS:-}"
+SOURCE_DISCOVERY_PLANNER_ENABLED="${SOURCE_DISCOVERY_PLANNER_ENABLED:-1}"
+SOURCE_DISCOVERY_MODE="${SOURCE_DISCOVERY_MODE:-plan}"
+SOURCE_DISCOVERY_TARGET_PER_TOPIC="${SOURCE_DISCOVERY_TARGET_PER_TOPIC:-10}"
+SOURCE_DISCOVERY_MAX_ACTIONS="${SOURCE_DISCOVERY_MAX_ACTIONS:-5}"
+SOURCE_DISCOVERY_MAX_ITERATIONS="${SOURCE_DISCOVERY_MAX_ITERATIONS:-3}"
+SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS="${SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS:-4}"
+SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES="${SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES:-100}"
+SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS="${SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS:-100}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -115,6 +131,64 @@ while true; do
     # Западные источники (network_region='external') фетчим через зарубежный воркер —
     # с РФ-сервера к ним нет доступа. Задачи разберёт NL external-worker.
     run_step "enqueue-external-scrape" python -m oiltech_digest.cli enqueue-external-scrape
+  fi
+
+  if [ "$SOURCE_DISCOVERY_ENABLED" = "1" ]; then
+    if [ "$SOURCE_DISCOVERY_EVERY_CYCLES" -gt 0 ] && [ $((cycle % SOURCE_DISCOVERY_EVERY_CYCLES)) -eq 0 ]; then
+      _source_discovery_offline_flag=""
+      if [ "$SOURCE_DISCOVERY_OFFLINE" = "1" ]; then
+        _source_discovery_offline_flag="--offline"
+      fi
+
+      _source_discovery_evaluate_flag="--no-evaluate"
+      if [ "$SOURCE_DISCOVERY_EVALUATE" = "1" ]; then
+        _source_discovery_evaluate_flag="--evaluate"
+      fi
+
+      if [ "$SOURCE_DISCOVERY_MODE" = "loop" ] && [ -z "$SOURCE_DISCOVERY_TOPICS" ]; then
+        run_step "enqueue-agent-loop" python -m oiltech_digest.cli enqueue-agent-loop \
+          --target-per-topic "$SOURCE_DISCOVERY_TARGET_PER_TOPIC" \
+          --topic-limit "$SOURCE_DISCOVERY_TOPIC_LIMIT" \
+          --candidate-limit "$SOURCE_DISCOVERY_LIMIT" \
+          --max-actions "$SOURCE_DISCOVERY_MAX_ACTIONS" \
+          --max-iterations "$SOURCE_DISCOVERY_MAX_ITERATIONS" \
+          --article-limit "$SOURCE_DISCOVERY_ARTICLE_LIMIT" \
+          --max-daily-loop-runs "$SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS" \
+          --max-daily-candidates "$SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES" \
+          --max-daily-evaluations "$SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS" \
+          $_source_discovery_offline_flag \
+          $_source_discovery_evaluate_flag
+      elif [ "$SOURCE_DISCOVERY_PLANNER_ENABLED" = "1" ] && [ -z "$SOURCE_DISCOVERY_TOPICS" ]; then
+        run_step "enqueue-agent-plan" python -m oiltech_digest.cli enqueue-agent-plan \
+          --target-per-topic "$SOURCE_DISCOVERY_TARGET_PER_TOPIC" \
+          --topic-limit "$SOURCE_DISCOVERY_TOPIC_LIMIT" \
+          --candidate-limit "$SOURCE_DISCOVERY_LIMIT" \
+          --max-actions "$SOURCE_DISCOVERY_MAX_ACTIONS" \
+          $_source_discovery_offline_flag \
+          $_source_discovery_evaluate_flag
+      else
+        set -- \
+          --topic-limit "$SOURCE_DISCOVERY_TOPIC_LIMIT" \
+          --limit "$SOURCE_DISCOVERY_LIMIT" \
+          --article-limit "$SOURCE_DISCOVERY_ARTICLE_LIMIT" \
+          $_source_discovery_offline_flag \
+          $_source_discovery_evaluate_flag
+
+        if [ -n "$SOURCE_DISCOVERY_TOPICS" ]; then
+          old_ifs="$IFS"
+          IFS=","
+          for topic in $SOURCE_DISCOVERY_TOPICS; do
+            topic="$(printf '%s' "$topic" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            if [ -n "$topic" ]; then
+              set -- "$@" --topic "$topic"
+            fi
+          done
+          IFS="$old_ifs"
+        fi
+
+        run_step "enqueue-source-discovery" python -m oiltech_digest.cli enqueue-source-discovery "$@"
+      fi
+    fi
   fi
 
   run_step "stats" python -m oiltech_digest.cli stats

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Callable
 
 from oiltech_digest.db import repository
@@ -29,12 +30,45 @@ def build_process_articles_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if article_ids:
         articles = repository.get_articles_by_ids(article_ids, include_summary=True)
     else:
-        articles = repository.get_articles_needing_summary(limit)
+        articles = repository.get_articles_needing_pipeline(limit)
     return {
         "kind": "process_articles",
         "offline": bool(payload.get("offline", False)),
         "limit": limit,
         "article_ids": article_ids,
+        "articles": [_jsonable_dict(article) for article in articles],
+        "tags": [_jsonable_dict(tag) for tag in repository.list_enabled_tags()],
+        "criteria": [_jsonable_dict(item) for item in repository.list_enabled_scoring_criteria()],
+    }
+
+
+def build_source_candidate_evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expand a source-candidate evaluation job into a self-contained AI payload."""
+    from oiltech_digest.source_discovery.sandbox import collect_candidate_articles
+
+    candidate_id = int(payload["candidate_id"])
+    article_limit = int(payload.get("article_limit") or 5)
+    collect = bool(payload.get("collect", True))
+    candidate = repository.get_source_candidate(candidate_id)
+    if candidate is None:
+        raise ValueError(f"source candidate id={candidate_id} not found")
+    collected = (
+        collect_candidate_articles(candidate, article_limit=article_limit)
+        if collect
+        else {"inserted_or_updated": 0, "errors": 0, "articles": []}
+    )
+    articles = repository.list_source_candidate_articles(
+        candidate_id,
+        limit=article_limit,
+        only_unprocessed=True,
+    )
+    return {
+        "kind": "source_candidate_evaluate",
+        "offline": bool(payload.get("offline", False)),
+        "candidate": _jsonable_dict(candidate),
+        "candidate_id": candidate_id,
+        "article_limit": article_limit,
+        "collected": _jsonable_dict(collected),
         "articles": [_jsonable_dict(article) for article in articles],
         "tags": [_jsonable_dict(tag) for tag in repository.list_enabled_tags()],
         "criteria": [_jsonable_dict(item) for item in repository.list_enabled_scoring_criteria()],
@@ -155,6 +189,103 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | Non
             item["scoring"] = _response_payload(score_resp, score_payload)
             result["stats"]["scored"] += 1
         except Exception as exc:  # noqa: BLE001 - one bad article must not kill the whole batch
+            result["stats"]["errors"] += 1
+            item["errors"].append(str(exc)[:1000])
+        result["articles"].append(item)
+    return result
+
+
+def process_source_candidate_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
+    """Run the AI pipeline for sandbox candidate articles without direct database access."""
+    client = make_client(bool(payload.get("offline", False)))
+    tags = payload.get("tags") or []
+    criteria = payload.get("criteria") or []
+    if not tags:
+        raise ValueError("No tags supplied in external source-candidate payload")
+    if not criteria:
+        raise ValueError("No scoring criteria supplied in external source-candidate payload")
+
+    result: dict[str, Any] = {
+        "external_ai": True,
+        "source_candidate_evaluate": True,
+        "kind": "source_candidate_evaluate",
+        "candidate_id": int(payload["candidate_id"]),
+        "collected": payload.get("collected") or {},
+        "stats": {"processed": 0, "summary": 0, "relevant": 0, "rejected": 0,
+                  "tagged": 0, "translated": 0, "scored": 0, "errors": 0},
+        "articles": [],
+    }
+    for article in payload.get("articles") or []:
+        if heartbeat is not None:
+            try:
+                heartbeat()
+            except LeaseLost:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
+        item: dict[str, Any] = {"candidate_article_id": int(article["id"]), "errors": []}
+        result["stats"]["processed"] += 1
+        try:
+            blocked_reason = _negative_keyword_block(article, tags)
+            if blocked_reason:
+                item["relevance"] = {
+                    "relevant": False,
+                    "reason": blocked_reason,
+                    "model": "negative-keyword",
+                    "provider": "offline",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "cost_usd": 0.0,
+                }
+                result["stats"]["rejected"] += 1
+                result["articles"].append(item)
+                continue
+
+            relevance_resp = relevance_article(article, client)
+            relevant = bool(relevance_resp.data.get("relevant"))
+            item["relevance"] = _response_payload(
+                relevance_resp,
+                {"relevant": relevant, "reason": relevance_resp.data.get("reason")},
+            )
+            result["stats"]["relevant" if relevant else "rejected"] += 1
+            if not relevant:
+                result["articles"].append(item)
+                continue
+
+            summary_resp = summarize_article(article, client)
+            item["summary"] = _response_payload(summary_resp, {"summary": summary_resp.data["summary"]})
+            article["summary"] = summary_resp.data["summary"]
+            result["stats"]["summary"] += 1
+
+            title_ru, translate_resp = title_ru_for_article(article, client)
+            if title_ru is not None:
+                if translate_resp is not None:
+                    item["translation"] = _response_payload(translate_resp, {"title_ru": title_ru})
+                    result["stats"]["translated"] += 1
+                else:
+                    item["translation"] = {"title_ru": title_ru, "model": None, "provider": "offline",
+                                           "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+
+            tag_resp = tag_article(article, tags, client)
+            tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
+            if tag_id == 0:
+                tag_id = int(keyword_tag(article, tags)["tag_id"])
+            item["tagging"] = _response_payload(
+                tag_resp,
+                {
+                    "tag_id": tag_id,
+                    "confidence": _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
+                    "rationale": tag_resp.data.get("rationale"),
+                },
+            )
+            result["stats"]["tagged"] += 1
+
+            score_resp = score_article(article, criteria, client)
+            score_payload = normalize_score_payload(article, criteria, score_resp.data)
+            item["scoring"] = _response_payload(score_resp, score_payload)
+            result["stats"]["scored"] += 1
+        except Exception as exc:  # noqa: BLE001
             result["stats"]["errors"] += 1
             item["errors"].append(str(exc)[:1000])
         result["articles"].append(item)
@@ -395,6 +526,192 @@ def apply_process_result(result: dict[str, Any], *, job_id: int | None = None) -
     return stats
 
 
+def apply_source_candidate_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
+    """Apply external AI result to source_candidate_articles and candidate assessment."""
+    from oiltech_digest.source_discovery.agent import recommend_source_action, _status_for_recommendation
+
+    candidate_id = int(result["candidate_id"])
+    stats = {"articles": 0, "ok": 0, "rejected": 0, "errors": 0, "job_id": job_id}
+    for item in result.get("articles") or []:
+        article_id = int(item["candidate_article_id"])
+        stats["articles"] += 1
+        if item.get("errors"):
+            repository.update_source_candidate_article_result(article_id, {
+                "relevant": None,
+                "relevance_reason": None,
+                "relevance_model": None,
+                "summary": None,
+                "summary_model": None,
+                "title_ru": None,
+                "tag_id": None,
+                "tag_confidence": None,
+                "tag_rationale": None,
+                "tag_model": None,
+                "total_score": None,
+                "score_label": None,
+                "score_explanation": None,
+                "score_items": [],
+                "score_model": None,
+                "processing_status": "error",
+                "error_message": "; ".join(str(error) for error in item.get("errors") or [])[:1000],
+            })
+            stats["errors"] += len(item["errors"])
+            continue
+
+        relevance = item.get("relevance") or {}
+        if not bool(relevance.get("relevant")):
+            repository.update_source_candidate_article_result(article_id, {
+                "relevant": False,
+                "relevance_reason": relevance.get("reason"),
+                "relevance_model": relevance.get("model"),
+                "summary": None,
+                "summary_model": None,
+                "title_ru": item.get("translation", {}).get("title_ru"),
+                "tag_id": None,
+                "tag_confidence": None,
+                "tag_rationale": None,
+                "tag_model": None,
+                "total_score": None,
+                "score_label": None,
+                "score_explanation": None,
+                "score_items": [],
+                "score_model": None,
+                "processing_status": "rejected",
+                "error_message": None,
+            })
+            stats["rejected"] += 1
+            continue
+
+        summary = item.get("summary") or {}
+        tagging = item.get("tagging") or {}
+        scoring = item.get("scoring") or {}
+        repository.update_source_candidate_article_result(article_id, {
+            "relevant": True,
+            "relevance_reason": relevance.get("reason"),
+            "relevance_model": relevance.get("model"),
+            "summary": summary.get("summary"),
+            "summary_model": summary.get("model"),
+            "title_ru": item.get("translation", {}).get("title_ru"),
+            "tag_id": tagging.get("tag_id"),
+            "tag_confidence": tagging.get("confidence"),
+            "tag_rationale": tagging.get("rationale"),
+            "tag_model": tagging.get("model"),
+            "total_score": scoring.get("total_score"),
+            "score_label": scoring.get("score_label"),
+            "score_explanation": scoring.get("explanation"),
+            "score_items": scoring.get("items") or [],
+            "score_model": scoring.get("model"),
+            "processing_status": "ok",
+            "error_message": None,
+        })
+        stats["ok"] += 1
+
+    metrics = repository.source_candidate_article_metrics(candidate_id)
+    recommendation = recommend_source_action(metrics, offline=True)
+    next_status = _status_for_recommendation(recommendation["recommended_action"])
+    repository.update_source_candidate_assessment(
+        candidate_id,
+        status=next_status,
+        tested_articles=metrics["tested_articles"],
+        relevant_articles=metrics["relevant_articles"],
+        avg_score=metrics["avg_score"],
+        duplicate_count=metrics["duplicate_count"],
+        noise_count=metrics["noise_count"],
+        recommended_action=recommendation["recommended_action"],
+        review_comment=recommendation["reason"],
+    )
+    learning = _record_source_candidate_learning(
+        candidate_id,
+        metrics,
+        recommendation,
+        next_status=next_status,
+        job_id=job_id,
+    )
+    return {
+        **stats,
+        "metrics": metrics,
+        "recommended_action": recommendation["recommended_action"],
+        "next_status": next_status,
+        "learning": learning,
+    }
+
+
+def _record_source_candidate_learning(
+    candidate_id: int,
+    metrics: dict[str, Any],
+    recommendation: dict[str, Any],
+    *,
+    next_status: str,
+    job_id: int | None = None,
+) -> dict[str, Any]:
+    try:
+        candidate = repository.get_source_candidate(candidate_id) or {}
+        job = repository.get_background_job(job_id) if job_id else None
+        run_id = int(job["agent_run_id"]) if job and job.get("agent_run_id") else None
+        topic = str(candidate.get("topic") or "").strip()
+        domain = str(candidate.get("normalized_domain") or "").strip().lower()
+        action = str(recommendation.get("recommended_action") or "")
+        facts = {
+            "candidate_id": candidate_id,
+            "url": candidate.get("url"),
+            "topic": topic or None,
+            "domain": domain or None,
+            "tested_articles": int(metrics.get("tested_articles") or 0),
+            "relevant_articles": int(metrics.get("relevant_articles") or 0),
+            "avg_score": metrics.get("avg_score"),
+            "noise_count": int(metrics.get("noise_count") or 0),
+            "duplicate_count": int(metrics.get("duplicate_count") or 0),
+            "recommended_action": action,
+            "next_status": next_status,
+            "reason": recommendation.get("reason"),
+        }
+        score = _candidate_learning_score(metrics, action)
+        memory_ids: list[int] = []
+        if topic:
+            memory_ids.append(repository.upsert_agent_memory(
+                memory_key=f"candidate-topic:{_digest(topic)}",
+                memory_type="topic",
+                subject=topic,
+                status="active" if action in {"add", "test_more", "human_review"} else "muted",
+                score=score,
+                facts=facts,
+            ))
+        if domain:
+            memory_ids.append(repository.upsert_agent_memory(
+                memory_key=f"candidate-domain:{_digest(domain)}",
+                memory_type="domain",
+                subject=domain,
+                status="active" if action in {"add", "test_more"} else "muted",
+                score=score,
+                facts=facts,
+            ))
+        repository.record_agent_action(
+            None,
+            "source_candidate_learning",
+            run_id=run_id,
+            input_payload={"candidate_id": candidate_id, "job_id": job_id},
+            output_payload={"memory_ids": memory_ids, "score": score, **facts},
+        )
+        return {"ok": True, "memory_ids": memory_ids, "score": score, "run_id": run_id}
+    except Exception as exc:  # noqa: BLE001 - learning must not break external job finalization
+        return {"ok": False, "error": str(exc)[:1000]}
+
+
+def _candidate_learning_score(metrics: dict[str, Any], recommended_action: str) -> float:
+    tested = int(metrics.get("tested_articles") or 0)
+    relevant = int(metrics.get("relevant_articles") or 0)
+    avg_score = float(metrics.get("avg_score") or 0)
+    noise = int(metrics.get("noise_count") or 0)
+    duplicate = int(metrics.get("duplicate_count") or 0)
+    action_bonus = {"add": 25, "test_more": 12, "human_review": 6, "reject": -20}.get(recommended_action, 0)
+    value = relevant * 18 + tested * 2 + avg_score * 0.45 - noise * 10 - duplicate * 6 + action_bonus
+    return round(max(0.0, min(100.0, value)), 2)
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha1(value.strip().lower().encode("utf-8")).hexdigest()[:16]
+
+
 def _response_payload(response: AIResponse, data: dict[str, Any]) -> dict[str, Any]:
     return {
         **data,
@@ -440,4 +757,3 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def _jsonable_dict(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in dict(row).items()}
-

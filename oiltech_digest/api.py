@@ -30,10 +30,7 @@ from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest import network_policy
 from oiltech_digest.processing.pipeline import (
     make_client,
-    process_relevance_articles,
-    process_score_articles,
-    process_summary_articles,
-    process_tag_articles,
+    process_pipeline_articles,
 )
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
@@ -114,6 +111,72 @@ class SourceCreate(BaseModel):
     priority: float = 1.0
     category: str | None = None
     update_frequency: str | None = None
+
+
+class SourceCandidateEvaluateRequest(BaseModel):
+    article_limit: int = 5
+    offline: bool = True
+    collect: bool = True
+    process: bool = True
+
+
+class SourceCandidateApproveRequest(BaseModel):
+    name: str | None = None
+    source_type: str = "Discovered"
+    parse_strategy: str | None = None
+    enabled: bool = False
+    category: str | None = None
+    priority: float = 1.0
+    network_region: str = "auto"
+    scrape_after_approve: bool = True
+
+
+class SourceCandidatePatch(BaseModel):
+    status: str | None = None
+    recommended_action: str | None = None
+    review_comment: str | None = None
+
+
+class SourceDiscoveryPlanRequest(BaseModel):
+    days: int = 30
+    target_per_topic: int = 10
+    topic_limit: int = 5
+    candidate_limit: int = 10
+    max_actions: int = 5
+    persist_memory: bool = True
+    offline: bool = True
+    evaluate: bool = True
+
+
+class SourceDiscoveryLoopRequest(BaseModel):
+    goal: str = "Найти новые полезные источники сигналов"
+    days: int = 30
+    target_per_topic: int = 10
+    topic_limit: int = 5
+    candidate_limit: int = 10
+    max_actions: int = 5
+    max_iterations: int = 3
+    offline: bool = True
+    fetch_inspection: bool = False
+    dry_run: bool = False
+    auto_evaluate: bool = True
+    article_limit: int = 5
+    persist_memory: bool = True
+    max_daily_loop_runs: int = 4
+    max_daily_candidates: int = 100
+    max_daily_evaluations: int = 100
+
+
+class AgentMemoryPatch(BaseModel):
+    status: str
+
+
+class AgentMemoryCreate(BaseModel):
+    memory_type: str
+    subject: str
+    status: str = "active"
+    score: float = 50
+    facts: dict[str, Any] | None = None
 
 
 class ScoringCriterionIn(BaseModel):
@@ -666,6 +729,330 @@ def source_health(
     return [_clean(row) for row in repository.source_health_report(stale_days=stale_days, limit=limit, verdict=verdict)]
 
 
+@app.get("/api/source-candidates")
+def list_source_candidates(
+    status: str | None = None,
+    topic: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    return [_clean(row) for row in repository.list_source_candidates(status=status, topic=topic, limit=limit)]
+
+
+@app.get("/api/source-candidates/triage")
+def source_candidate_triage(
+    limit: int = Query(20, ge=1, le=100),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    return [_clean(row) for row in repository.source_candidate_triage_report(limit=limit)]
+
+
+@app.get("/api/source-discovery/plan")
+def source_discovery_plan(
+    days: int = Query(30, ge=1, le=365),
+    target_per_topic: int = Query(10, ge=1, le=100),
+    topic_limit: int = Query(5, ge=1, le=50),
+    candidate_limit: int = Query(10, ge=1, le=50),
+    max_actions: int = Query(5, ge=1, le=50),
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.planner import PlannerConfig, build_plan
+
+    return _clean(build_plan(PlannerConfig(
+        days=days,
+        target_per_topic=target_per_topic,
+        topic_limit=topic_limit,
+        candidate_limit=candidate_limit,
+        max_actions=max_actions,
+        persist_memory=False,
+        record_action=False,
+    )))
+
+
+@app.post("/api/source-discovery/plan/enqueue")
+def enqueue_source_discovery_plan(
+    payload: SourceDiscoveryPlanRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if payload.days < 1 or payload.days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+    if payload.topic_limit < 1 or payload.topic_limit > 50:
+        raise HTTPException(status_code=400, detail="topic_limit must be between 1 and 50")
+    if payload.candidate_limit < 1 or payload.candidate_limit > 50:
+        raise HTTPException(status_code=400, detail="candidate_limit must be between 1 and 50")
+    if payload.max_actions < 1 or payload.max_actions > 50:
+        raise HTTPException(status_code=400, detail="max_actions must be between 1 and 50")
+    job = background_jobs.enqueue(
+        "source_discovery_plan",
+        payload.model_dump(),
+        user_id=int(user["id"]),
+        queue_name="default",
+        execution_region="ru",
+        capability="source-discovery",
+        max_attempts=1,
+    )
+    return {"ok": True, "job": _job_payload(job)}
+
+
+@app.post("/api/source-discovery/loop/enqueue")
+def enqueue_source_discovery_loop(
+    payload: SourceDiscoveryLoopRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if payload.days < 1 or payload.days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+    if payload.topic_limit < 1 or payload.topic_limit > 50:
+        raise HTTPException(status_code=400, detail="topic_limit must be between 1 and 50")
+    if payload.candidate_limit < 1 or payload.candidate_limit > 50:
+        raise HTTPException(status_code=400, detail="candidate_limit must be between 1 and 50")
+    if payload.max_actions < 1 or payload.max_actions > 50:
+        raise HTTPException(status_code=400, detail="max_actions must be between 1 and 50")
+    if payload.max_iterations < 1 or payload.max_iterations > 10:
+        raise HTTPException(status_code=400, detail="max_iterations must be between 1 and 10")
+    if payload.article_limit < 1 or payload.article_limit > 20:
+        raise HTTPException(status_code=400, detail="article_limit must be between 1 and 20")
+    if payload.max_daily_loop_runs < 0 or payload.max_daily_candidates < 0 or payload.max_daily_evaluations < 0:
+        raise HTTPException(status_code=400, detail="daily budget limits must be non-negative")
+    job = background_jobs.enqueue(
+        "source_discovery_loop",
+        payload.model_dump(),
+        user_id=int(user["id"]),
+        queue_name="default",
+        execution_region="ru",
+        capability="source-discovery",
+        max_attempts=1,
+    )
+    return {"ok": True, "job": _job_payload(job)}
+
+
+@app.get("/api/source-discovery/memory")
+def source_discovery_memory(
+    memory_type: str | None = Query(None),
+    status: str | None = Query("active"),
+    limit: int = Query(100, ge=1, le=500),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    normalized_status = status.strip() if isinstance(status, str) and status.strip() else None
+    return [_clean(row) for row in repository.list_agent_memory(memory_type=memory_type, status=normalized_status, limit=limit)]
+
+
+@app.post("/api/source-discovery/memory")
+def create_source_discovery_memory(
+    payload: AgentMemoryCreate,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    memory_type = payload.memory_type.strip().lower()
+    subject = payload.subject.strip()
+    if memory_type not in {"topic", "domain", "source", "query", "strategy", "rule"}:
+        raise HTTPException(status_code=400, detail="Unknown memory type")
+    if payload.status not in {"active", "muted", "rejected"}:
+        raise HTTPException(status_code=400, detail="Unknown memory status")
+    if not subject:
+        raise HTTPException(status_code=400, detail="Memory subject is required")
+    normalized_subject = repository.normalize_domain(subject) if memory_type == "domain" else subject
+    memory_id = repository.upsert_agent_memory(
+        memory_key=f"manual:{memory_type}:{normalized_subject.lower()}",
+        memory_type=memory_type,
+        subject=normalized_subject,
+        status=payload.status,
+        score=payload.score,
+        facts={**(payload.facts or {}), "manual": True, "created_by_user_id": int(user["id"])},
+    )
+    repository.record_agent_action(
+        None,
+        "create_agent_memory",
+        input_payload=payload.model_dump(),
+        output_payload={"memory_id": memory_id, "memory_type": memory_type, "subject": normalized_subject, "status": payload.status},
+    )
+    return {"ok": True, "id": memory_id}
+
+
+@app.patch("/api/source-discovery/memory/{memory_id}")
+def patch_source_discovery_memory(
+    memory_id: int,
+    payload: AgentMemoryPatch,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if payload.status not in {"active", "muted", "rejected"}:
+        raise HTTPException(status_code=400, detail="Unknown memory status")
+    if not repository.update_agent_memory_status(memory_id, payload.status):
+        raise HTTPException(status_code=404, detail="Agent memory row not found")
+    repository.record_agent_action(
+        None,
+        "update_agent_memory",
+        input_payload={"memory_id": memory_id, "status": payload.status},
+        output_payload={"ok": True},
+    )
+    return {"ok": True}
+
+
+@app.get("/api/source-discovery/actions")
+def source_discovery_actions(
+    action_type: str | None = Query(None),
+    run_id: int | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    return [_clean(row) for row in repository.list_agent_actions(action_type=action_type, run_id=run_id, limit=limit)]
+
+
+@app.get("/api/source-discovery/runs")
+def source_discovery_runs(
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    return [_clean(row) for row in repository.list_agent_runs(status=status, limit=limit)]
+
+
+@app.get("/api/source-discovery/quality")
+def source_discovery_quality(
+    group_by: str = Query("topic"),
+    limit: int = Query(20, ge=1, le=100),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    if group_by not in {"topic", "domain"}:
+        raise HTTPException(status_code=400, detail="group_by must be topic or domain")
+    return [_clean(row) for row in repository.source_candidate_quality_report(group_by=group_by, limit=limit)]
+
+
+@app.get("/api/source-discovery/query-memory")
+def source_discovery_query_memory(
+    limit: int = Query(20, ge=1, le=100),
+    status: str | None = Query("active"),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    normalized_status = status.strip() if isinstance(status, str) and status.strip() else None
+    return [_clean(row) for row in repository.query_memory_report(status=normalized_status, limit=limit)]
+
+
+@app.get("/api/source-discovery/readiness")
+def source_discovery_readiness_endpoint(
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.readiness import source_discovery_readiness
+
+    return _clean(source_discovery_readiness())
+
+
+@app.get("/api/source-candidates/{candidate_id}/articles")
+def list_source_candidate_articles(
+    candidate_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    if repository.get_source_candidate(candidate_id) is None:
+        raise HTTPException(status_code=404, detail="Source candidate not found")
+    return [_clean(row) for row in repository.list_source_candidate_articles(candidate_id, limit=limit)]
+
+
+@app.patch("/api/source-candidates/{candidate_id}")
+def patch_source_candidate(
+    candidate_id: int,
+    payload: SourceCandidatePatch,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if payload.status is not None and payload.status not in repository.SOURCE_CANDIDATE_STATUSES:
+        raise HTTPException(status_code=400, detail="Unknown source candidate status")
+    if payload.recommended_action is not None and payload.recommended_action not in repository.SOURCE_CANDIDATE_ACTIONS:
+        raise HTTPException(status_code=400, detail="Unknown source candidate recommended_action")
+    if repository.get_source_candidate(candidate_id) is None:
+        raise HTTPException(status_code=404, detail="Source candidate not found")
+    repository.update_source_candidate_assessment(
+        candidate_id,
+        status=payload.status,
+        recommended_action=payload.recommended_action,
+        review_comment=payload.review_comment,
+    )
+    repository.record_agent_action(
+        None,
+        "update_source_candidate",
+        input_payload={"candidate_id": candidate_id, **payload.model_dump(exclude_none=True)},
+        output_payload={"ok": True},
+    )
+    return {"ok": True}
+
+
+@app.post("/api/source-candidates/{candidate_id}/evaluate")
+def evaluate_source_candidate(
+    candidate_id: int,
+    payload: SourceCandidateEvaluateRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate as run_evaluation
+
+    if payload.article_limit < 1 or payload.article_limit > 20:
+        raise HTTPException(status_code=400, detail="article_limit must be between 1 and 20")
+    try:
+        result = run_evaluation(
+            candidate_id,
+            article_limit=payload.article_limit,
+            offline=payload.offline,
+            collect=payload.collect,
+            process=payload.process,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return _clean(result)
+
+
+@app.post("/api/source-candidates/{candidate_id}/approve")
+def approve_source_candidate(
+    candidate_id: int,
+    payload: SourceCandidateApproveRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if payload.parse_strategy is not None and payload.parse_strategy not in {"rss", "request", "playwright"}:
+        raise HTTPException(status_code=400, detail="parse_strategy must be rss, request or playwright")
+    if payload.network_region not in {"auto", "ru", "external"}:
+        raise HTTPException(status_code=400, detail="network_region must be auto, ru or external")
+    try:
+        source_id = repository.approve_source_candidate(
+            candidate_id,
+            name=payload.name,
+            source_type=payload.source_type,
+            parse_strategy=payload.parse_strategy,
+            enabled=payload.enabled,
+            category=payload.category,
+            priority=payload.priority,
+            network_region=payload.network_region,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    initial_job = None
+    if payload.scrape_after_approve:
+        source = repository.get_source(source_id)
+        strategy = source.get("parse_strategy") if source else None
+        if source and strategy in {"request", "playwright"}:
+            decision = network_policy.route_source_task(source, task_kind="scrape")
+            initial_job = background_jobs.enqueue(
+                "scrape_source",
+                {"source_id": source_id, "reason": "approved_source_candidate", "candidate_id": candidate_id},
+                user_id=int(user["id"]),
+                queue_name=decision.queue_name,
+                execution_region=decision.execution_region,
+                capability=decision.capability,
+                max_attempts=1,
+            )
+        elif source and strategy == "rss":
+            initial_job = background_jobs.enqueue(
+                "parse_source_once",
+                {"source_id": source_id, "reason": "approved_source_candidate", "candidate_id": candidate_id},
+                user_id=int(user["id"]),
+                queue_name="default",
+                execution_region="ru",
+                capability="rss_parse",
+                max_attempts=1,
+            )
+    repository.record_agent_action(
+        None,
+        "approve_source_candidate",
+        input_payload={"candidate_id": candidate_id, **payload.model_dump()},
+        output_payload={"source_id": source_id, "initial_job_id": int(initial_job["id"]) if initial_job else None},
+    )
+    return {"ok": True, "source_id": source_id, "initial_job": _job_payload(initial_job) if initial_job else None}
+
+
 @app.post("/api/sources")
 def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     # Пользователь вставляет просто ссылку на источник — система сама ищет RSS-ленту.
@@ -1158,6 +1545,8 @@ def external_worker_complete(
             result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark, job_id=job_id)}
         if job.get("kind") == "translate_titles" and result.get("translate_titles"):
             result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
+        if job.get("kind") == "source_candidate_evaluate" and result.get("source_candidate_evaluate"):
+            result = {**result, "applied": external_ai.apply_source_candidate_result(result, job_id=job_id)}
         if job.get("kind") == "scrape_source" and result.get("external_fetch"):
             result = {**result, "applied": external_fetch.apply_scrape_result(result)}
     except Exception:
@@ -1297,31 +1686,11 @@ def digest_export(
 def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     client = make_client(payload.offline)
     if payload.article_ids:
-        articles = repository.get_articles_by_ids(payload.article_ids, include_summary=False)
+        articles = repository.get_articles_by_ids(payload.article_ids, include_summary=True)
     else:
-        articles = repository.get_articles_needing_summary(payload.limit)
-    summaries = process_summary_articles(articles, client)
-
-    ids = [int(article["id"]) for article in articles]
-    relevance_articles = (
-        repository.get_articles_by_ids(ids, include_summary=True)
-        if payload.article_ids
-        else repository.get_articles_needing_relevance(payload.limit)
-    )
-    relevance = process_relevance_articles(relevance_articles, client)
-
-    if payload.article_ids:
-        with_summary = repository.get_articles_by_ids(ids, include_summary=True)
-    else:
-        with_summary = repository.get_articles_needing_tags(payload.limit)
-    tags = process_tag_articles(with_summary, client)
-
-    if payload.article_ids:
-        with_summary = repository.get_articles_by_ids(ids, include_summary=True)
-    else:
-        with_summary = repository.get_articles_needing_scores(payload.limit)
-    scores = process_score_articles(with_summary, client)
-    return {"summary": summaries, "relevance": relevance, "tagging": tags, "scoring": scores}
+        articles = repository.get_articles_needing_pipeline(payload.limit)
+    stats = process_pipeline_articles(articles, client, fetch_full=True)
+    return {"pipeline": stats}
 
 
 def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -1331,6 +1700,7 @@ def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
         "queue": row.get("queue_name") or "default",
         "execution_region": row.get("execution_region") or "ru",
         "capability": row.get("capability"),
+        "agent_run_id": row.get("agent_run_id"),
         "status": row["status"],
         "progress": float(row.get("progress") or 0),
         "attempts": int(row.get("attempts") or 0),
@@ -1359,6 +1729,8 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
         return _clean(external_ai.build_recheck_payload(payload))
     if row.get("kind") == "translate_titles" and row.get("queue_name") == "external-ai":
         return _clean(external_ai.build_translate_payload(payload))
+    if row.get("kind") == "source_candidate_evaluate" and row.get("queue_name") == "external-ai":
+        return _clean(external_ai.build_source_candidate_evaluate_payload(payload))
     if row.get("kind") == "scrape_source" and str(row.get("queue_name") or "").startswith("external-"):
         return _clean(external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload))
     return _clean(payload)

@@ -467,7 +467,18 @@ button {
   border-color: rgba(148, 163, 184, 0.25);
 }
 
-.ghostButton:disabled {
+.dangerGhostButton {
+  min-height: 34px;
+  border-radius: 9px;
+  padding: 0 12px;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  color: #b91c1c;
+  background: rgba(254, 242, 242, 0.88);
+  font-weight: 700;
+}
+
+.ghostButton:disabled,
+.dangerGhostButton:disabled {
   cursor: default;
   opacity: 0.55;
 }
@@ -2462,6 +2473,11 @@ button {
   gap: 10px;
 }
 
+.sourceCardReact.focused {
+  border-color: rgba(37, 99, 235, 0.7);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14), 0 14px 34px rgba(37, 99, 235, 0.14);
+}
+
 .sourceTop {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2542,6 +2558,185 @@ button {
 
 .sourceTriagePanel.muted {
   background: rgba(248, 250, 252, 0.82);
+}
+
+.sourceCandidateStats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sourceCandidateFilters {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(240px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.sourceCandidateTriageList {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sourceCandidateTriageItem {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  width: 100%;
+  border: 1px solid #dbe7f7;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 10px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sourceCandidateTriageItem:hover {
+  border-color: rgba(37, 99, 235, 0.34);
+  background: #eef6ff;
+}
+
+.sourceCandidateTriageItem span {
+  grid-row: 1 / span 3;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 900;
+}
+
+.sourceCandidateTriageItem strong,
+.sourceCandidateTriageItem em,
+.sourceCandidateTriageItem small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sourceCandidateTriageItem strong {
+  font-size: 0.84rem;
+}
+
+.sourceCandidateTriageItem em {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-style: normal;
+}
+
+.sourceCandidateTriageItem small {
+  color: #52627a;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.sourceCandidateList {
+  display: grid;
+  gap: 12px;
+}
+
+.sourceCandidateCard {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px;
+  box-shadow: 0 10px 28px rgba(37, 99, 235, 0.06);
+}
+
+.sourceCandidateTop {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.sourceCandidateMain {
+  min-width: 0;
+}
+
+.sourceCandidateBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sourceCandidateMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sourceCandidateMetrics span {
+  border: 1px solid #dbe7f7;
+  border-radius: 999px;
+  background: #f8fbff;
+  padding: 5px 8px;
+}
+
+.sourceCandidateComment {
+  margin-top: 10px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sourceCandidateArticles {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.sourceCandidateArticle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fbff;
+}
+
+.sourceCandidateArticle a {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.sourceCandidateArticle a:hover {
+  color: var(--blue);
+}
+
+.sourceCandidateArticle p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sourceCandidateArticleMeta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sourceCandidateArticleMeta span {
+  border: 1px solid #dbe7f7;
+  border-radius: 999px;
+  background: #fff;
+  padding: 4px 7px;
 }
 
 .sourceTriageHead {
@@ -2896,8 +3091,18 @@ button {
   .articlesAdvancedGrid,
   .articlesFiltersRow,
   .articlesFiltersRowSecondary,
-  .articlesFiltersGrid {
+  .articlesFiltersGrid,
+  .sourceCandidateStats,
+  .sourceCandidateFilters,
+  .sourceCandidateTriageList,
+  .sourceCandidateTop,
+  .sourceCandidateArticle {
     grid-template-columns: 1fr;
+  }
+
+  .sourceCandidateBadges,
+  .sourceCandidateArticleMeta {
+    justify-content: flex-start;
   }
 
   .backlogOverview {
@@ -2985,4 +3190,728 @@ button {
   background: transparent;
   font-weight: 600;
   opacity: 0.75;
+}
+
+/* --- Скрытый экран агента источников --- */
+.agentSettingsPanel {
+  padding-bottom: 18px;
+}
+
+.agentSettingsGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(110px, 1fr)) repeat(3, minmax(150px, auto));
+  gap: 10px;
+  align-items: end;
+}
+
+.checkField {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.checkField input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+}
+
+.agentLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.agentWideLayout {
+  display: grid;
+  gap: 14px;
+}
+
+.agentQualityLayout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.agentQualityList {
+  display: grid;
+  gap: 8px;
+}
+
+.agentQualityRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(4, minmax(68px, auto));
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.agentQualityRow strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.agentQueryMemoryList {
+  display: grid;
+  gap: 8px;
+}
+
+.agentQueryMemoryRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(120px, 0.8fr) 52px 78px 86px;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.agentQueryMemoryRow strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.agentQueryMemoryRow.muted {
+  background: #f8fafc;
+  color: #718096;
+}
+
+.agentQueryMemoryRow.muted strong {
+  color: #52627a;
+}
+
+.agentLearningStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.agentLearningStrip div {
+  min-width: 0;
+}
+
+.agentLearningStrip span {
+  display: block;
+  color: var(--brand);
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.agentLearningStrip p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.agentActionList,
+.agentMemoryList,
+.agentHistoryList,
+.agentRunList {
+  display: grid;
+  gap: 10px;
+}
+
+.agentActionCard {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.agentActionScore {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--brand);
+  font-size: 0.86rem;
+  font-weight: 900;
+}
+
+.agentActionTitle {
+  font-size: 0.88rem;
+  font-weight: 900;
+}
+
+.agentActionTitleRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agentPolicyBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.agentPolicyBadge.auto {
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+}
+
+.agentPolicyBadge.human_review {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+.agentPolicyBadge.blocked {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.agentActionTarget {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.agentQueryHints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.agentQueryHints span {
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--brand);
+  font-size: 0.7rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.agentActionCard p,
+.agentMemoryRow p,
+.agentOpsPanel p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.agentActionCard .agentPolicyReason {
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.agentOperatorLink {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 30px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--brand);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.agentOperatorLink:hover {
+  border-color: rgba(37, 99, 235, 0.34);
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.compactFilters {
+  grid-template-columns: minmax(160px, 240px);
+  margin-bottom: 10px;
+}
+
+.agentRuleForm {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(180px, 1fr) minmax(120px, 160px) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid #dbe7f7;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.agentMemoryRow {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.agentMemoryMeta {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  color: var(--brand);
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.agentMemoryRow strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+}
+
+.agentHistoryRow {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 150px;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.agentHistoryRow.good {
+  border-color: rgba(34, 197, 94, 0.28);
+  background: #f8fefb;
+}
+
+.agentHistoryRow.warning {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: #fffaf0;
+}
+
+.agentHistoryRow.bad {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: #fff7f7;
+}
+
+.agentHistoryTime {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.agentHistoryRow strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+}
+
+.agentHistoryActionType {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 7px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(219, 234, 254, 0.75);
+  color: var(--brand);
+  font-size: 0.64rem;
+  font-weight: 900;
+}
+
+.agentHistoryMeta {
+  display: grid;
+  gap: 5px;
+  justify-items: end;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.agentRunRow {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) 96px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.agentRunRow:hover,
+.agentRunRow.active {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: rgba(219, 234, 254, 0.34);
+}
+
+.agentRunRow strong {
+  display: block;
+  font-size: 0.86rem;
+}
+
+.agentRunRow p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.agentRunStatus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.agentRunStatus.ok {
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+}
+
+.agentRunStatus.failed {
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+}
+
+.agentRunStatus.running {
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--brand);
+}
+
+.agentRunDate {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.agentLoopReport,
+.agentLoopIterationList,
+.agentStrategyMemoryList {
+  display: grid;
+  gap: 10px;
+}
+
+.agentLoopSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agentLoopSummary div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe7f7;
+  border-radius: 9px;
+  background: #f8fbff;
+}
+
+.agentLoopSummary span {
+  display: block;
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.agentLoopSummary p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.agentLoopIteration,
+.agentStrategyMemoryRow {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.agentLoopIterationHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.agentLoopIterationHead strong {
+  color: var(--text);
+}
+
+.agentLoopObservationList {
+  display: grid;
+  gap: 7px;
+}
+
+.agentLoopObservation {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) 92px 74px 74px 74px 80px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.agentLoopObservation strong {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.agentStrategyMemoryRow {
+  grid-template-columns: minmax(0, 1.4fr) 78px 78px 78px 86px auto;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.agentStrategyMemoryRow.active {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: #f8fffb;
+}
+
+.agentStrategyMemoryRow.muted {
+  background: #f8fafc;
+}
+
+.agentStrategyMemoryRow.rejected {
+  border-color: rgba(239, 68, 68, 0.22);
+  background: #fff7f7;
+}
+
+.agentStrategyMemoryRow strong {
+  display: block;
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.agentStrategyMemoryRow p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.agentStrategyActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.agentOpsPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.45fr) minmax(260px, 0.7fr) minmax(280px, 0.9fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.agentReadinessStatus {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #dbe7f7;
+  border-radius: 9px;
+  background: #f8fbff;
+}
+
+.agentReadinessStatus strong {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.agentReadinessStatus span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.agentReadinessStatus.ready {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: #f0fdf4;
+}
+
+.agentReadinessStatus.degraded {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: #fffbeb;
+}
+
+.agentReadinessStatus.blocked {
+  border-color: rgba(239, 68, 68, 0.24);
+  background: #fef2f2;
+}
+
+.agentBudgetStrip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.agentBudgetStrip div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid #dbe7f7;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.agentBudgetStrip strong {
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.agentBudgetStrip span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.agentReadinessList {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 7px;
+}
+
+.agentReadinessIssue {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 7px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.agentReadinessIssue span {
+  color: var(--brand);
+  text-transform: uppercase;
+}
+
+.agentReadinessIssue strong {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.agentOpsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agentOpsGrid span {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(219, 234, 254, 0.7);
+  color: var(--brand);
+  font-size: 0.72rem;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+  .agentSettingsGrid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .agentLayout,
+  .agentQualityLayout,
+  .agentOpsPanel {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .agentActionCard,
+  .agentLearningStrip,
+  .agentMemoryRow,
+  .agentHistoryRow,
+  .agentQualityRow,
+  .agentQueryMemoryRow,
+  .agentRunRow,
+  .agentLoopSummary,
+  .agentLoopObservation,
+  .agentStrategyMemoryRow,
+  .agentRuleForm,
+  .agentBudgetStrip,
+  .agentOpsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .agentHistoryMeta,
+  .agentRunDate,
+  .agentStrategyActions {
+    justify-items: start;
+    justify-self: start;
+  }
+
+  .agentStrategyActions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }

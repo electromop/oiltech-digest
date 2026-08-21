@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 from dateutil import parser as dateparser
 from lxml import html
 
-from oiltech_digest.config import REQUEST_ARTICLE_LIMIT
+from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.ingestion.article_fetcher import extract_main_text
@@ -177,7 +177,7 @@ def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | No
         return None
     title, published_at, raw_text = parse_article_page(content, candidate.title)
     final_published = published_at or candidate.published_at
-    if not title or len(raw_text) < 200:
+    if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
         return None
     return {
         "source_id": source["id"],
@@ -216,7 +216,7 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
     )
 
     raw_text = extract_main_text(content)
-    if len(raw_text) < 200:
+    if len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
         raw_text = normalize.clean_html(doc.text_content())
     return title, published_at, raw_text
 

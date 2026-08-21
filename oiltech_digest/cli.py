@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -69,6 +70,11 @@ def cmd_migrate_digest_to_user(args: argparse.Namespace) -> None:
         return
     n = repository.migrate_global_status_to_user(int(target["id"]))
     print(f"Перенесено статусов: {n} → {args.email}")
+
+
+def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:
+    end = datetime.now(timezone.utc)
+    return end - timedelta(days=days), end
 
 
 def cmd_schema_check(args: argparse.Namespace) -> None:
@@ -271,28 +277,19 @@ def cmd_relevance(args: argparse.Namespace) -> None:
 
 
 def cmd_process(args: argparse.Namespace) -> None:
-    from oiltech_digest.processing.pipeline import (
-        process_relevance,
-        process_scores,
-        process_summaries,
-        process_tags,
-        process_translations,
-    )
+    from oiltech_digest.processing.pipeline import process_full
 
-    # Порядок: суть → релевантность (отсев) → перевод заголовка → теги → скоринг.
-    # tag/score автоматически пропускают нерелевантные (см. get_articles_needing_*).
-    summaries = process_summaries(limit=args.limit, offline=args.offline)
-    relevance = process_relevance(limit=args.limit, offline=args.offline)
-    translations = process_translations(limit=args.limit, offline=args.offline)
-    tags = process_tags(limit=args.limit, offline=args.offline)
-    scores = process_scores(limit=args.limit, offline=args.offline)
+    # Канонический pipeline: full-text → relevance → summary → translate → tag → score.
+    # Релевантность идёт до сути, чтобы summary не bias-ила гейт и чтобы не тратить AI
+    # на нерелевантные материалы.
+    stats = process_full(limit=args.limit, offline=args.offline)
     print(
         "process: "
-        f"summary={summaries['processed']}/{summaries['errors']} err, "
-        f"relevance={relevance['processed']} (отклонено={relevance['rejected']})/{relevance['errors']} err, "
-        f"translate={translations['processed']} (AI={translations['ai']})/{translations['errors']} err, "
-        f"tagging={tags['processed']}/{tags['errors']} err, "
-        f"scoring={scores['processed']}/{scores['errors']} err"
+        f"статей={stats['processed']}, full-text={stats['fulltext']}, "
+        f"релевантно={stats['relevant']}, отклонено={stats['rejected']}, "
+        f"summary={stats['summary']}, translate={stats['translated']}, "
+        f"tagging={stats['tagged']}, scoring={stats['scored']}, "
+        f"errors={stats['errors']}"
     )
 
 
@@ -300,25 +297,19 @@ def cmd_process_articles(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
     from oiltech_digest.processing.pipeline import (
         make_client,
-        process_relevance_articles,
-        process_score_articles,
-        process_summary_articles,
-        process_tag_articles,
+        process_pipeline_articles,
     )
 
     client = make_client(args.offline)
-    articles = repository.get_articles_by_ids(args.article_id, include_summary=False)
-    summaries = process_summary_articles(articles, client)
-    articles_with_summary = repository.get_articles_by_ids(args.article_id, include_summary=True)
-    relevance = process_relevance_articles(articles_with_summary, client)
-    tags = process_tag_articles(articles_with_summary, client)
-    scores = process_score_articles(articles_with_summary, client)
+    articles = repository.get_articles_by_ids(args.article_id, include_summary=True)
+    stats = process_pipeline_articles(articles, client, fetch_full=True)
     print(
         "process-articles: "
-        f"summary={summaries['processed']}/{summaries['errors']} err, "
-        f"relevance={relevance['processed']} (отклонено={relevance['rejected']})/{relevance['errors']} err, "
-        f"tagging={tags['processed']}/{tags['errors']} err, "
-        f"scoring={scores['processed']}/{scores['errors']} err"
+        f"статей={stats['processed']}, full-text={stats['fulltext']}, "
+        f"релевантно={stats['relevant']}, отклонено={stats['rejected']}, "
+        f"summary={stats['summary']}, translate={stats['translated']}, "
+        f"tagging={stats['tagged']}, scoring={stats['scored']}, "
+        f"errors={stats['errors']}"
     )
 
 
@@ -527,6 +518,37 @@ def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
         queues[decision.queue_name] = queues.get(decision.queue_name, 0) + 1
     detail = ", ".join(f"{q}={n}" for q, n in sorted(queues.items())) or "—"
     print(f"enqueue-external-scrape: external-источников={len(sources)}, задач={enq} ({detail})")
+
+
+def cmd_enqueue_source_discovery(args: argparse.Namespace) -> None:
+    """Поставить в очередь автоматический цикл поиска кандидатов источников."""
+    from oiltech_digest.db import repository
+
+    topics = [item.strip() for item in (args.topic or []) if item.strip()]
+    seed_urls = [item.strip() for item in (args.seed_url or []) if item.strip()]
+    payload = {
+        "topics": topics,
+        "seed_urls": seed_urls,
+        "topic_limit": int(args.topic_limit),
+        "limit": int(args.limit),
+        "offline": bool(args.offline),
+        "fetch_inspection": bool(args.fetch_inspection),
+        "auto_evaluate": bool(args.evaluate),
+        "article_limit": int(args.article_limit),
+    }
+    job = repository.create_background_job(
+        "discover_source_candidates",
+        payload,
+        queue_name="default",
+        execution_region="ru",
+        capability="source-discovery",
+        max_attempts=1,
+    )
+    topic_label = str(len(topics)) if topics else f"auto:{args.topic_limit}"
+    print(
+        f"enqueue-source-discovery: job id={job['id']} "
+        f"topics={topic_label} limit={args.limit} evaluate={args.evaluate}"
+    )
 
 
 def cmd_set_source_region(args: argparse.Namespace) -> None:
@@ -1044,10 +1066,452 @@ def cmd_bench_readiness(args: argparse.Namespace) -> None:
         print(format_benchmark_report(report))
 
 
+def cmd_source_candidate_add(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    candidate_id = repository.upsert_source_candidate({
+        "url": args.url,
+        "name": args.name,
+        "candidate_type": args.type,
+        "topic": args.topic,
+        "discovered_by": "manual",
+        "discovery_reason": args.reason,
+        "confidence": args.confidence,
+        "status": args.status,
+        "expected_tags_json": args.expected_tag or [],
+        "review_comment": args.comment,
+    })
+    print(f"source-candidate-add: id={candidate_id} url={args.url}")
+
+
+def cmd_source_candidates(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    rows = repository.list_source_candidates(
+        status=args.status,
+        topic=args.topic,
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
+        return
+    for row in rows:
+        print(
+            f"#{row['id']} [{row['status']}] {row.get('name') or row['normalized_domain']} "
+            f"url={row['url']} topic={row.get('topic') or '-'} "
+            f"tested={row['tested_articles']} relevant={row['relevant_articles']} "
+            f"avg_score={row.get('avg_score') or '-'} action={row.get('recommended_action') or '-'}"
+        )
+
+
+def cmd_source_candidate_triage(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    rows = repository.source_candidate_triage_report(limit=args.limit)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
+        return
+    if not rows:
+        print("source-candidate-triage: очередь решений пустая")
+        return
+    print(f"source-candidate-triage: rows={len(rows)}")
+    for row in rows:
+        print(
+            f"{row.get('triage_priority', 0):>5.1f}  #{row['id']}  "
+            f"{row.get('recommended_action') or '-':<12}  {row.get('status'):<18}  "
+            f"rel={row.get('relevant_articles', 0)}/{row.get('tested_articles', 0)} "
+            f"score={row.get('avg_score') or '-'}  {row.get('topic') or 'без темы'}  "
+            f"{row.get('normalized_domain') or row.get('url')}"
+        )
+
+
+def cmd_source_candidate_test(args: argparse.Namespace) -> None:
+    from oiltech_digest.source_discovery.agent import test_source_candidate
+
+    result = test_source_candidate(
+        args.candidate_id,
+        article_limit=args.article_limit,
+        offline=not args.ai_recommendation,
+        dry_run=args.dry_run,
+    )
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+
+    metrics = result["metrics"]
+    mode = "dry-run" if result["dry_run"] else "saved"
+    print(f"source-candidate-test: id={result['candidate_id']} {mode}")
+    print(f"url={result['url']}")
+    print(
+        "metrics: "
+        f"tested={metrics['tested_articles']} "
+        f"relevant={metrics['relevant_articles']} "
+        f"avg_score={metrics.get('avg_score') or '-'} "
+        f"noise={metrics['noise_count']} "
+        f"duplicates={metrics['duplicate_count']}"
+    )
+    print(f"recommendation: action={result['recommended_action']} next_status={result['next_status']}")
+    print(f"comment: {result['review_comment']}")
+
+
+def cmd_source_candidate_evaluate(args: argparse.Namespace) -> None:
+    from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate
+
+    result = evaluate_source_candidate(
+        args.candidate_id,
+        article_limit=args.article_limit,
+        offline=args.offline,
+        collect=args.collect,
+        process=args.process,
+    )
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+
+    metrics = result["metrics"]
+    print(f"source-candidate-evaluate: id={result['candidate_id']} task_id={result['task_id']}")
+    print(f"url={result['url']}")
+    print(
+        "sandbox: "
+        f"collected={result['collected']['inserted_or_updated']} "
+        f"processed={result['processed']['processed']} "
+        f"relevant={result['processed']['relevant']} "
+        f"rejected={result['processed']['rejected']} "
+        f"errors={result['processed']['errors'] + result['collected']['errors']}"
+    )
+    print(
+        "metrics: "
+        f"tested={metrics['tested_articles']} "
+        f"relevant={metrics['relevant_articles']} "
+        f"avg_score={metrics.get('avg_score') or '-'} "
+        f"noise={metrics['noise_count']} "
+        f"duplicates={metrics['duplicate_count']}"
+    )
+    print(f"recommendation: action={result['recommended_action']} next_status={result['next_status']}")
+    print(f"comment: {result['review_comment']}")
+
+
+def cmd_source_candidate_approve(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    source_id = repository.approve_source_candidate(
+        args.candidate_id,
+        name=args.name,
+        source_type=args.source_type,
+        parse_strategy=args.parse_strategy,
+        enabled=args.enabled,
+        category=args.category,
+        priority=args.priority,
+        network_region=args.network_region,
+    )
+    repository.record_agent_action(
+        None,
+        "approve_source_candidate",
+        input_payload={
+            "candidate_id": args.candidate_id,
+            "name": args.name,
+            "source_type": args.source_type,
+            "parse_strategy": args.parse_strategy,
+            "enabled": args.enabled,
+            "category": args.category,
+            "priority": args.priority,
+            "network_region": args.network_region,
+        },
+        output_payload={"source_id": source_id},
+    )
+    print(
+        f"source-candidate-approve: candidate_id={args.candidate_id} "
+        f"source_id={source_id} enabled={args.enabled}"
+    )
+
+
+def cmd_signal_feedback(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    event_id = repository.record_signal_feedback_event(
+        args.article_id,
+        args.event_type,
+        user_id=args.user_id,
+        old_value=args.old_value,
+        new_value=args.new_value,
+        comment=args.comment,
+    )
+    print(f"signal-feedback: id={event_id} article_id={args.article_id} event={args.event_type}")
+
+
+def cmd_source_quality(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    period_from, period_to = _utc_period_from_days(args.days)
+    rows = repository.compute_source_quality_rows(period_from, period_to)
+    if args.snapshot:
+        saved = repository.snapshot_source_quality(period_from, period_to)
+        print(f"source-quality: snapshot saved rows={saved} period_days={args.days}")
+    if args.json:
+        print(json.dumps(rows[:args.limit], ensure_ascii=False, indent=2, default=str))
+        return
+    for row in rows[:args.limit]:
+        print(
+            f"{row['quality_score']:>5}  {row['source_name']}  "
+            f"found={row['articles_found']} processed={row['articles_processed']} "
+            f"relevant={row['relevant_count']} rejected={row['rejected_count']} "
+            f"avg_score={row.get('avg_score') or '-'} digest={row['digest_count']} "
+            f"noise={row['noise_count']} dup={row['duplicate_count']}"
+        )
+
+
+def cmd_agent_query_memory(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    status = None if args.status == "all" else args.status
+    rows = repository.query_memory_report(status=status, limit=args.limit)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
+        return
+    if not rows:
+        print("agent-query-memory: записей нет")
+        return
+    print(f"agent-query-memory: status={args.status} rows={len(rows)}")
+    for row in rows:
+        label = "пустой" if row.get("empty_result") else "рабочий"
+        print(
+            f"{row.get('score', 0):>5.1f}  {row.get('status'):<6}  {label:<7}  "
+            f"{row.get('found_candidates', 0)} канд.  {row.get('relevance_rate', 0):.0%} релев.  "
+            f"{row.get('topic') or 'без темы'} :: {row.get('query')}"
+        )
+
+
+def cmd_agent_readiness(args: argparse.Namespace) -> None:
+    from oiltech_digest.source_discovery.readiness import source_discovery_readiness
+
+    report = source_discovery_readiness()
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        return
+    print(f"agent-readiness: status={report['status']} ok={report['ok']}")
+    for name, check in report["checks"].items():
+        print(f"  {name}: ok={check['ok']}")
+    if report["issues"]:
+        print("Проблемы:")
+        for issue in report["issues"]:
+            print(f"  - [{issue['severity']}] {issue['code']}: {issue['message']}")
+    if report["recommendations"]:
+        print("Что сделать:")
+        for item in report["recommendations"]:
+            print(f"  - {item}")
+
+
+def cmd_discover_sources(args: argparse.Namespace) -> None:
+    from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources
+
+    result = discover_sources(DiscoveryConfig(
+        topic=args.topic,
+        limit=args.limit,
+        seed_urls=tuple(args.seed_url or []),
+        offline=args.offline,
+        dry_run=args.dry_run,
+        fetch_inspection=args.fetch_inspection,
+        test_parse=args.test_parse,
+    ))
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+
+    mode = "dry-run" if result["dry_run"] else f"task_id={result.get('task_id')}"
+    print(f"discover-sources: topic={result['topic']} {mode}")
+    print("\nПоисковые запросы:")
+    for query in result["queries"]:
+        print(f"  - {query}")
+    print("\nПоиск:")
+    print(f"  status={result['search']['status']} reason={result['search']['reason']}")
+    if result["topic_gaps"]:
+        print("\nТемы с дефицитом:")
+        for gap in result["topic_gaps"][:5]:
+            print(f"  - {gap['topic']}: signals={gap['signals']}/{gap['target_signals']} gap={gap['gap']}")
+    if result["candidates"]:
+        print("\nКандидаты:")
+        for item in result["candidates"]:
+            print(
+                f"  - {item.get('id', 'dry')} {item['url']} "
+                f"type={item.get('candidate_type')} action={item.get('recommended_action')} "
+                f"tested={item.get('tested_articles', 0)} relevant={item.get('relevant_articles', 0)} "
+                f"comment={item.get('review_comment')}"
+            )
+    else:
+        print("\nКандидатов пока нет. Для MVP передайте --seed-url или подключите поисковый провайдер.")
+
+
+def cmd_agent_plan(args: argparse.Namespace) -> None:
+    from oiltech_digest.source_discovery.planner import PlannerConfig, build_plan, enqueue_plan_actions
+
+    from oiltech_digest.db import repository
+
+    run_id = None
+    if args.enqueue:
+        run_id = repository.create_agent_run(
+            "source_discovery_cycle",
+            trigger="cli",
+            payload={
+                "days": args.days,
+                "target_per_topic": args.target_per_topic,
+                "topic_limit": args.topic_limit,
+                "candidate_limit": args.candidate_limit,
+                "max_actions": args.max_actions,
+                "offline": args.offline,
+                "evaluate": args.evaluate,
+            },
+        )
+    plan = build_plan(PlannerConfig(
+        days=args.days,
+        target_per_topic=args.target_per_topic,
+        topic_limit=args.topic_limit,
+        candidate_limit=args.candidate_limit,
+        max_actions=args.max_actions,
+        persist_memory=not args.no_memory,
+        run_id=run_id,
+    ))
+    queued = {"queued": 0, "jobs": []}
+    if args.enqueue:
+        queued = enqueue_plan_actions(plan, offline=args.offline, evaluate=args.evaluate, run_id=run_id)
+        repository.finish_agent_run(run_id, status="ok", result={**plan, "run_id": run_id, "queued": queued})
+    if args.json:
+        print(json.dumps({**plan, "run_id": run_id, "queued": queued}, ensure_ascii=False, indent=2, default=str))
+        return
+
+    print(
+        "agent-plan: "
+        f"run_id={run_id or '-'} actions={len(plan['actions'])} memory_updates={len(plan['memory_updates'])} "
+        f"queued={queued['queued']}"
+    )
+    for index, action in enumerate(plan["actions"], start=1):
+        label = action["action_type"]
+        target = action.get("topic") or action.get("source_name") or action.get("url") or action.get("candidate_id")
+        print(f"{index}. [{action['priority']}] {label}: {target}")
+        print(f"   reason: {action['reason']}")
+    for job in queued["jobs"]:
+        print(f"queued job={job['job_id']} topic={job['topic']} priority={job['priority']}")
+
+
+def cmd_enqueue_agent_plan(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    payload = {
+        "days": int(args.days),
+        "target_per_topic": int(args.target_per_topic),
+        "topic_limit": int(args.topic_limit),
+        "candidate_limit": int(args.candidate_limit),
+        "max_actions": int(args.max_actions),
+        "persist_memory": not args.no_memory,
+        "offline": bool(args.offline),
+        "evaluate": bool(args.evaluate),
+    }
+    job = repository.create_background_job(
+        "source_discovery_plan",
+        payload,
+        queue_name="default",
+        execution_region="ru",
+        capability="source-discovery",
+        max_attempts=1,
+    )
+    print(
+        f"enqueue-agent-plan: job id={job['id']} "
+        f"topics={args.topic_limit} max_actions={args.max_actions}"
+    )
+
+
+def _agent_loop_payload(args: argparse.Namespace) -> dict:
+    return {
+        "goal": str(args.goal),
+        "days": int(args.days),
+        "target_per_topic": int(args.target_per_topic),
+        "topic_limit": int(args.topic_limit),
+        "candidate_limit": int(args.candidate_limit),
+        "max_actions": int(args.max_actions),
+        "max_iterations": int(args.max_iterations),
+        "offline": bool(args.offline),
+        "fetch_inspection": bool(args.fetch_inspection),
+        "dry_run": bool(args.dry_run),
+        "auto_evaluate": bool(args.evaluate),
+        "article_limit": int(args.article_limit),
+        "persist_memory": not bool(args.no_memory),
+        "max_daily_loop_runs": int(args.max_daily_loop_runs),
+        "max_daily_candidates": int(args.max_daily_candidates),
+        "max_daily_evaluations": int(args.max_daily_evaluations),
+    }
+
+
+def cmd_agent_loop(args: argparse.Namespace) -> None:
+    from oiltech_digest.source_discovery.loop import AgentLoopConfig, run_agent_loop
+
+    payload = _agent_loop_payload(args)
+    result = run_agent_loop(AgentLoopConfig(**payload))
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    print(
+        f"agent-loop: run_id={result['run_id']} iterations={len(result['iterations'])} "
+        f"candidates={result['total_candidates']} reason={result['terminal_reason']}"
+    )
+    for item in result["iterations"]:
+        print(
+            f"  iter={item['iteration']} actions={item['action_count']} "
+            f"auto={item['auto_action_count']} review={item['human_review_count']}"
+        )
+        for observation in item["observations"]:
+            print(
+                f"    - {observation['topic']}: candidates={observation['candidate_count']} "
+                f"strategy={observation.get('query_strategy') or '-'} search={observation['search_status']}"
+            )
+
+
+def cmd_enqueue_agent_loop(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    if not bool(getattr(args, "allow_parallel", False)):
+        counts = repository.background_job_status_counts(kind_prefix="source_discovery_loop")
+        active_count = sum(int(counts.get(status) or 0) for status in ("queued", "running", "finalizing"))
+        if active_count:
+            print(f"enqueue-agent-loop: skipped active_jobs={active_count}")
+            return
+
+    payload = _agent_loop_payload(args)
+    job = repository.create_background_job(
+        "source_discovery_loop",
+        payload,
+        queue_name="default",
+        execution_region="ru",
+        capability="source-discovery",
+        max_attempts=1,
+    )
+    print(
+        f"enqueue-agent-loop: job id={job['id']} "
+        f"iterations={args.max_iterations} max_actions={args.max_actions}"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oiltech_digest.cli", description="OilTech Digest — сбор RSS")
     parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (INFO)")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    def add_agent_loop_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--goal", default="Найти новые полезные источники сигналов")
+        p.add_argument("--days", type=int, default=30, help="период анализа базы")
+        p.add_argument("--target-per-topic", type=int, default=10)
+        p.add_argument("--topic-limit", type=int, default=5)
+        p.add_argument("--candidate-limit", type=int, default=10)
+        p.add_argument("--max-actions", type=int, default=5)
+        p.add_argument("--max-iterations", type=int, default=3)
+        p.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True)
+        p.add_argument("--fetch-inspection", action="store_true")
+        p.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
+        p.add_argument("--evaluate", action=argparse.BooleanOptionalAction, default=True)
+        p.add_argument("--article-limit", type=int, default=5)
+        p.add_argument("--no-memory", action="store_true")
+        p.add_argument("--allow-parallel", action="store_true", help="разрешить несколько одновременных agent-loop задач")
+        p.add_argument("--max-daily-loop-runs", type=int, default=4, help="суточный лимит agent-loop запусков; 0 = без лимита")
+        p.add_argument("--max-daily-candidates", type=int, default=100, help="суточный лимит новых кандидатов; 0 = без лимита")
+        p.add_argument("--max-daily-evaluations", type=int, default=100, help="суточный лимит AI-оценок кандидатов; 0 = без лимита")
 
     sub.add_parser("init-db", help="создать схему БД").set_defaults(func=cmd_init_db)
     sub.add_parser("schema-check", help="проверить наличие обязательных таблиц").set_defaults(func=cmd_schema_check)
@@ -1188,6 +1652,53 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_external.add_argument("--max-age-days", type=int, default=None, help="окно свежести статей (по умолчанию без ограничения)")
     p_enqueue_external.set_defaults(func=cmd_enqueue_external_scrape)
 
+    p_enqueue_source_discovery = sub.add_parser(
+        "enqueue-source-discovery",
+        help="поставить автоматический поиск кандидатов источников в очередь",
+    )
+    p_enqueue_source_discovery.add_argument(
+        "--topic",
+        action="append",
+        default=None,
+        help="тема разведки; можно указать несколько раз",
+    )
+    p_enqueue_source_discovery.add_argument(
+        "--topic-limit",
+        type=int,
+        default=3,
+        help="сколько слабых тем взять автоматически, если --topic не задан",
+    )
+    p_enqueue_source_discovery.add_argument("--limit", type=int, default=10, help="кандидатов на тему")
+    p_enqueue_source_discovery.add_argument(
+        "--seed-url",
+        action="append",
+        default=None,
+        help="URL-кандидат для проверки; можно указать несколько раз",
+    )
+    p_enqueue_source_discovery.add_argument(
+        "--offline",
+        action="store_true",
+        help="не вызывать OpenAI для генерации поисковых запросов",
+    )
+    p_enqueue_source_discovery.add_argument(
+        "--fetch-inspection",
+        action="store_true",
+        help="проверять найденные/seed URL HTTP-запросом",
+    )
+    p_enqueue_source_discovery.add_argument(
+        "--evaluate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="сразу прогонять найденных кандидатов через песочницу",
+    )
+    p_enqueue_source_discovery.add_argument(
+        "--article-limit",
+        type=int,
+        default=5,
+        help="сколько материалов кандидата брать для песочницы",
+    )
+    p_enqueue_source_discovery.set_defaults(func=cmd_enqueue_source_discovery)
+
     p_set_region = sub.add_parser("set-source-region", help="проставить network_region (auto|ru|external) источникам по id")
     p_set_region.add_argument("--ids", required=True, help="список id через запятую, напр. 16,84,64")
     p_set_region.add_argument("--region", required=True, help="auto|ru|external")
@@ -1217,6 +1728,160 @@ def build_parser() -> argparse.ArgumentParser:
     p_sources.add_argument("--search", default=None)
     p_sources.add_argument("--limit", type=int, default=50)
     p_sources.set_defaults(func=cmd_sources)
+
+    p_source_candidate_add = sub.add_parser("source-candidate-add", help="добавить кандидата источника для разведки")
+    p_source_candidate_add.add_argument("url")
+    p_source_candidate_add.add_argument("--name", default=None)
+    p_source_candidate_add.add_argument("--type", default="unknown", help="newsroom/media/company/rss/blog/unknown")
+    p_source_candidate_add.add_argument("--topic", default=None)
+    p_source_candidate_add.add_argument("--reason", default=None)
+    p_source_candidate_add.add_argument("--confidence", type=float, default=None)
+    p_source_candidate_add.add_argument("--status", default="new")
+    p_source_candidate_add.add_argument("--expected-tag", action="append", default=None)
+    p_source_candidate_add.add_argument("--comment", default=None)
+    p_source_candidate_add.set_defaults(func=cmd_source_candidate_add)
+
+    p_source_candidates = sub.add_parser("source-candidates", help="список кандидатов источников")
+    p_source_candidates.add_argument("--status", default=None)
+    p_source_candidates.add_argument("--topic", default=None)
+    p_source_candidates.add_argument("--limit", type=int, default=50)
+    p_source_candidates.add_argument("--json", action="store_true")
+    p_source_candidates.set_defaults(func=cmd_source_candidates)
+
+    p_source_candidate_triage = sub.add_parser("source-candidate-triage", help="очередь решений по кандидатам источников")
+    p_source_candidate_triage.add_argument("--limit", type=int, default=20)
+    p_source_candidate_triage.add_argument("--json", action="store_true")
+    p_source_candidate_triage.set_defaults(func=cmd_source_candidate_triage)
+
+    p_source_candidate_test = sub.add_parser(
+        "source-candidate-test",
+        help="проверить кандидата источника пробным read-only парсингом",
+    )
+    p_source_candidate_test.add_argument("candidate_id", type=int)
+    p_source_candidate_test.add_argument("--article-limit", type=int, default=5)
+    p_source_candidate_test.add_argument("--ai-recommendation", action="store_true",
+                                         help="попросить OpenAI уточнить рекомендацию; по умолчанию не вызывается")
+    p_source_candidate_test.add_argument("--dry-run", action="store_true",
+                                         help="не обновлять кандидата в БД")
+    p_source_candidate_test.add_argument("--json", action="store_true")
+    p_source_candidate_test.set_defaults(func=cmd_source_candidate_test)
+
+    p_source_candidate_evaluate = sub.add_parser(
+        "source-candidate-evaluate",
+        help="собрать тестовые материалы кандидата в песочницу и прогнать AI pipeline",
+    )
+    p_source_candidate_evaluate.add_argument("candidate_id", type=int)
+    p_source_candidate_evaluate.add_argument("--article-limit", type=int, default=5)
+    p_source_candidate_evaluate.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
+                                             help="offline AI по умолчанию; --no-offline вызовет OpenAI")
+    p_source_candidate_evaluate.add_argument("--collect", action=argparse.BooleanOptionalAction, default=True,
+                                             help="собирать материалы кандидата в песочницу")
+    p_source_candidate_evaluate.add_argument("--process", action=argparse.BooleanOptionalAction, default=True,
+                                             help="прогонять материалы песочницы через pipeline")
+    p_source_candidate_evaluate.add_argument("--json", action="store_true")
+    p_source_candidate_evaluate.set_defaults(func=cmd_source_candidate_evaluate)
+
+    p_source_candidate_approve = sub.add_parser(
+        "source-candidate-approve",
+        help="одобрить кандидата и создать/обновить настоящий источник",
+    )
+    p_source_candidate_approve.add_argument("candidate_id", type=int)
+    p_source_candidate_approve.add_argument("--name", default=None)
+    p_source_candidate_approve.add_argument("--source-type", default="Discovered")
+    p_source_candidate_approve.add_argument("--parse-strategy", choices=["rss", "request", "playwright"], default=None)
+    p_source_candidate_approve.add_argument("--enabled", action=argparse.BooleanOptionalAction, default=False,
+                                            help="по умолчанию источник создается выключенным")
+    p_source_candidate_approve.add_argument("--category", default=None)
+    p_source_candidate_approve.add_argument("--priority", type=float, default=1.0)
+    p_source_candidate_approve.add_argument("--network-region", choices=["auto", "ru", "external"], default="auto")
+    p_source_candidate_approve.set_defaults(func=cmd_source_candidate_approve)
+
+    p_signal_feedback = sub.add_parser("signal-feedback", help="записать событие обратной связи по сигналу")
+    p_signal_feedback.add_argument("article_id", type=int)
+    p_signal_feedback.add_argument("event_type", choices=[
+        "added_to_digest",
+        "marked_noise",
+        "marked_duplicate",
+        "tag_changed",
+        "score_changed",
+        "status_changed",
+        "comment_added",
+    ])
+    p_signal_feedback.add_argument("--user-id", type=int, default=None)
+    p_signal_feedback.add_argument("--old-value", default=None)
+    p_signal_feedback.add_argument("--new-value", default=None)
+    p_signal_feedback.add_argument("--comment", default=None)
+    p_signal_feedback.set_defaults(func=cmd_signal_feedback)
+
+    p_source_quality = sub.add_parser("source-quality", help="посчитать качество источников за период")
+    p_source_quality.add_argument("--days", type=int, default=30)
+    p_source_quality.add_argument("--limit", type=int, default=30)
+    p_source_quality.add_argument("--snapshot", action="store_true", help="сохранить срез в source_quality_snapshots")
+    p_source_quality.add_argument("--json", action="store_true")
+    p_source_quality.set_defaults(func=cmd_source_quality)
+
+    p_agent_query_memory = sub.add_parser("agent-query-memory", help="показать память поисковых формулировок агента")
+    p_agent_query_memory.add_argument("--status", choices=["active", "muted", "all"], default="active")
+    p_agent_query_memory.add_argument("--limit", type=int, default=20)
+    p_agent_query_memory.add_argument("--json", action="store_true")
+    p_agent_query_memory.set_defaults(func=cmd_agent_query_memory)
+
+    p_agent_readiness = sub.add_parser("agent-readiness", help="проверить готовность агента разведки источников")
+    p_agent_readiness.add_argument("--json", action="store_true")
+    p_agent_readiness.set_defaults(func=cmd_agent_readiness)
+
+    p_discover_sources = sub.add_parser("discover-sources", help="MVP агента разведки источников по теме")
+    p_discover_sources.add_argument("--topic", required=True, help="тема разведки, например 'роботизация бурения'")
+    p_discover_sources.add_argument("--limit", type=int, default=20)
+    p_discover_sources.add_argument("--seed-url", action="append", default=None,
+                                    help="URL кандидата для проверки; можно указать несколько раз")
+    p_discover_sources.add_argument("--offline", action="store_true",
+                                    help="не вызывать OpenAI, сгенерировать детерминированные запросы")
+    p_discover_sources.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True,
+                                    help="не писать кандидатов/действия в БД (по умолчанию включено)")
+    p_discover_sources.add_argument("--fetch-inspection", action="store_true",
+                                    help="попробовать HTTP-проверку seed-url")
+    p_discover_sources.add_argument("--test-parse", action="store_true",
+                                    help="read-only пробный парсинг кандидатов без записи в articles")
+    p_discover_sources.add_argument("--json", action="store_true")
+    p_discover_sources.set_defaults(func=cmd_discover_sources)
+
+    p_agent_plan = sub.add_parser("agent-plan", help="построить план действий агента разведки источников")
+    p_agent_plan.add_argument("--days", type=int, default=30, help="период анализа базы")
+    p_agent_plan.add_argument("--target-per-topic", type=int, default=10, help="целевое число релевантных сигналов на тему")
+    p_agent_plan.add_argument("--topic-limit", type=int, default=5, help="сколько тем рассмотреть")
+    p_agent_plan.add_argument("--candidate-limit", type=int, default=10, help="кандидатов на тему в discovery-задаче")
+    p_agent_plan.add_argument("--max-actions", type=int, default=5, help="максимум действий в плане")
+    p_agent_plan.add_argument("--no-memory", action="store_true", help="не сохранять обновления памяти агента")
+    p_agent_plan.add_argument("--enqueue", action="store_true", help="поставить discover-задачи из плана в очередь")
+    p_agent_plan.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
+                              help="offline-режим для discovery-задач")
+    p_agent_plan.add_argument("--evaluate", action=argparse.BooleanOptionalAction, default=True,
+                              help="оценивать найденных кандидатов")
+    p_agent_plan.add_argument("--json", action="store_true")
+    p_agent_plan.set_defaults(func=cmd_agent_plan)
+
+    p_enqueue_agent_plan = sub.add_parser("enqueue-agent-plan", help="поставить планирование агента в очередь")
+    p_enqueue_agent_plan.add_argument("--days", type=int, default=30, help="период анализа базы")
+    p_enqueue_agent_plan.add_argument("--target-per-topic", type=int, default=10, help="целевое число релевантных сигналов на тему")
+    p_enqueue_agent_plan.add_argument("--topic-limit", type=int, default=5, help="сколько тем рассмотреть")
+    p_enqueue_agent_plan.add_argument("--candidate-limit", type=int, default=10, help="кандидатов на тему в discovery-задаче")
+    p_enqueue_agent_plan.add_argument("--max-actions", type=int, default=5, help="максимум действий в плане")
+    p_enqueue_agent_plan.add_argument("--no-memory", action="store_true", help="не сохранять обновления памяти агента")
+    p_enqueue_agent_plan.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
+                                      help="offline-режим для discovery-задач")
+    p_enqueue_agent_plan.add_argument("--evaluate", action=argparse.BooleanOptionalAction, default=True,
+                                      help="оценивать найденных кандидатов")
+    p_enqueue_agent_plan.set_defaults(func=cmd_enqueue_agent_plan)
+
+    p_agent_loop = sub.add_parser("agent-loop", help="запустить итеративный agent loop разведки источников")
+    add_agent_loop_args(p_agent_loop)
+    p_agent_loop.add_argument("--json", action="store_true")
+    p_agent_loop.set_defaults(func=cmd_agent_loop)
+
+    p_enqueue_agent_loop = sub.add_parser("enqueue-agent-loop", help="поставить agent loop разведки источников в очередь")
+    add_agent_loop_args(p_enqueue_agent_loop)
+    p_enqueue_agent_loop.set_defaults(func=cmd_enqueue_agent_loop)
 
     p_source_health = sub.add_parser("source-health", help="вердикты покрытия источников: ok/stale/no_articles/disabled")
     p_source_health.add_argument("--stale-days", type=int, default=3)

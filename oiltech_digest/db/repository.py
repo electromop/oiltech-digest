@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, NamedTuple, get_args
+from urllib.parse import urlsplit
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -191,6 +192,1047 @@ def set_sources_network_region(ids: list[int], region: str) -> int:
         )
         conn.commit()
         return cur.rowcount
+
+
+# ---------------------------------------------------------------------------
+#  Разведка источников и обратная связь
+# ---------------------------------------------------------------------------
+
+SOURCE_CANDIDATE_STATUSES = (
+    "new",
+    "researching",
+    "test_parsing",
+    "needs_human_review",
+    "approved",
+    "rejected",
+    "paused",
+)
+
+SOURCE_CANDIDATE_ACTIONS = ("add", "test_more", "reject", "human_review")
+
+SIGNAL_FEEDBACK_EVENTS = (
+    "added_to_digest",
+    "marked_noise",
+    "marked_duplicate",
+    "tag_changed",
+    "score_changed",
+    "status_changed",
+    "comment_added",
+)
+
+
+def normalize_domain(url: str) -> str:
+    parsed = urlsplit((url or "").strip())
+    host = (parsed.netloc or parsed.path.split("/")[0]).lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host.split("@")[-1].split(":")[0]
+
+
+def record_signal_feedback_event(
+    article_id: int,
+    event_type: str,
+    *,
+    user_id: int | None = None,
+    old_value: str | None = None,
+    new_value: str | None = None,
+    comment: str | None = None,
+) -> int:
+    if event_type not in SIGNAL_FEEDBACK_EVENTS:
+        raise ValueError(f"Unknown signal feedback event_type: {event_type}")
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO signal_feedback_events
+              (article_id, user_id, event_type, old_value, new_value, comment)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (article_id, user_id, event_type, old_value, new_value, comment),
+        )
+        event_id = int(cur.fetchone()[0])
+        conn.commit()
+        return event_id
+
+
+def upsert_source_candidate(rec: dict) -> int:
+    url = (rec.get("url") or "").strip()
+    if not url:
+        raise ValueError("source candidate url is required")
+    status = rec.get("status") or "new"
+    if status not in SOURCE_CANDIDATE_STATUSES:
+        raise ValueError(f"Unknown source candidate status: {status}")
+    recommended_action = rec.get("recommended_action")
+    if recommended_action and recommended_action not in SOURCE_CANDIDATE_ACTIONS:
+        raise ValueError(f"Unknown source candidate recommended_action: {recommended_action}")
+    payload = {
+        **rec,
+        "url": url,
+        "normalized_domain": rec.get("normalized_domain") or normalize_domain(url),
+        "status": status,
+        "discovered_by": rec.get("discovered_by") or "manual",
+        "expected_tags_json": Json(rec.get("expected_tags_json") or []),
+    }
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO source_candidates (
+              url, normalized_domain, name, candidate_type, status, discovered_by,
+              discovery_reason, topic, expected_tags_json, confidence,
+              tested_articles, relevant_articles, avg_score, duplicate_count,
+              noise_count, recommended_action, review_comment, approved_source_id
+            )
+            VALUES (
+              %(url)s, %(normalized_domain)s, %(name)s, %(candidate_type)s, %(status)s,
+              %(discovered_by)s, %(discovery_reason)s, %(topic)s, %(expected_tags_json)s,
+              %(confidence)s, COALESCE(%(tested_articles)s, 0),
+              COALESCE(%(relevant_articles)s, 0), %(avg_score)s,
+              COALESCE(%(duplicate_count)s, 0), COALESCE(%(noise_count)s, 0),
+              %(recommended_action)s, %(review_comment)s, %(approved_source_id)s
+            )
+            ON CONFLICT (url) DO UPDATE SET
+              normalized_domain = EXCLUDED.normalized_domain,
+              name = COALESCE(EXCLUDED.name, source_candidates.name),
+              candidate_type = COALESCE(EXCLUDED.candidate_type, source_candidates.candidate_type),
+              status = EXCLUDED.status,
+              discovered_by = EXCLUDED.discovered_by,
+              discovery_reason = COALESCE(EXCLUDED.discovery_reason, source_candidates.discovery_reason),
+              topic = COALESCE(EXCLUDED.topic, source_candidates.topic),
+              expected_tags_json = EXCLUDED.expected_tags_json,
+              confidence = COALESCE(EXCLUDED.confidence, source_candidates.confidence),
+              tested_articles = EXCLUDED.tested_articles,
+              relevant_articles = EXCLUDED.relevant_articles,
+              avg_score = COALESCE(EXCLUDED.avg_score, source_candidates.avg_score),
+              duplicate_count = EXCLUDED.duplicate_count,
+              noise_count = EXCLUDED.noise_count,
+              recommended_action = COALESCE(EXCLUDED.recommended_action, source_candidates.recommended_action),
+              review_comment = COALESCE(EXCLUDED.review_comment, source_candidates.review_comment),
+              approved_source_id = COALESCE(EXCLUDED.approved_source_id, source_candidates.approved_source_id),
+              updated_at = now()
+            RETURNING id
+            """,
+            payload,
+        )
+        candidate_id = int(cur.fetchone()[0])
+        conn.commit()
+        return candidate_id
+
+
+def list_source_candidates(
+    *,
+    status: str | None = None,
+    topic: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list = []
+    if status:
+        clauses.append("status = %s")
+        params.append(status)
+    if topic:
+        clauses.append("topic ILIKE %s")
+        params.append(f"%{topic}%")
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT *
+            FROM source_candidates
+            {where}
+            ORDER BY
+              CASE status
+                WHEN 'needs_human_review' THEN 0
+                WHEN 'new' THEN 1
+                WHEN 'researching' THEN 2
+                WHEN 'test_parsing' THEN 3
+                WHEN 'approved' THEN 4
+                WHEN 'paused' THEN 5
+                ELSE 6
+              END,
+              created_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def source_candidate_triage_report(*, limit: int = 20) -> list[dict]:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT
+              *,
+              (
+                CASE COALESCE(recommended_action, '')
+                  WHEN 'add' THEN 90
+                  WHEN 'test_more' THEN 70
+                  WHEN 'human_review' THEN 55
+                  WHEN 'reject' THEN 25
+                  ELSE 40
+                END
+                + LEAST(COALESCE(relevant_articles, 0) * 4, 24)
+                + LEAST(COALESCE(avg_score, 0) / 5, 16)
+                - LEAST(COALESCE(noise_count, 0) * 5, 30)
+              )::float AS triage_priority,
+              CASE
+                WHEN recommended_action = 'add' THEN 'Можно добавлять после проверки человеком'
+                WHEN recommended_action = 'test_more' THEN 'Нужна дополнительная песочница'
+                WHEN recommended_action = 'reject' THEN 'Похоже на шум или слабый источник'
+                ELSE 'Нужно ручное решение'
+              END AS triage_reason
+            FROM source_candidates
+            WHERE status NOT IN ('approved', 'rejected')
+            ORDER BY triage_priority DESC, updated_at DESC, created_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def source_candidate_quality_report(*, group_by: str = "topic", limit: int = 20) -> list[dict]:
+    if group_by not in {"topic", "domain"}:
+        raise ValueError("group_by must be topic or domain")
+    subject_expr = "COALESCE(NULLIF(topic, ''), 'Без темы')" if group_by == "topic" else "normalized_domain"
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT
+              {subject_expr} AS subject,
+              COUNT(*)::int AS candidates,
+              COUNT(*) FILTER (WHERE status = 'approved')::int AS approved,
+              COUNT(*) FILTER (WHERE status = 'rejected')::int AS rejected,
+              COUNT(*) FILTER (WHERE status = 'paused')::int AS paused,
+              COUNT(*) FILTER (WHERE status = 'needs_human_review')::int AS needs_human_review,
+              COUNT(*) FILTER (WHERE recommended_action = 'test_more')::int AS test_more,
+              COALESCE(SUM(tested_articles), 0)::int AS tested_articles,
+              COALESCE(SUM(relevant_articles), 0)::int AS relevant_articles,
+              COALESCE(SUM(noise_count), 0)::int AS noise_count,
+              AVG(avg_score) FILTER (WHERE avg_score IS NOT NULL)::float AS avg_score,
+              CASE
+                WHEN COUNT(*) FILTER (WHERE status IN ('approved', 'rejected')) = 0 THEN 0
+                ELSE ROUND(
+                  COUNT(*) FILTER (WHERE status = 'approved')::numeric
+                  / COUNT(*) FILTER (WHERE status IN ('approved', 'rejected'))::numeric,
+                  3
+                )::float
+              END AS approval_rate,
+              CASE
+                WHEN COALESCE(SUM(tested_articles), 0) = 0 THEN 0
+                ELSE ROUND(
+                  COALESCE(SUM(relevant_articles), 0)::numeric
+                  / COALESCE(SUM(tested_articles), 0)::numeric,
+                  3
+                )::float
+              END AS relevance_rate
+            FROM source_candidates
+            WHERE {subject_expr} IS NOT NULL AND {subject_expr} <> ''
+            GROUP BY subject
+            ORDER BY
+              approved DESC,
+              relevance_rate DESC,
+              rejected ASC,
+              candidates DESC,
+              subject ASC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def get_source_candidate(candidate_id: int) -> dict | None:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT * FROM source_candidates WHERE id = %s", (candidate_id,))
+        return cur.fetchone()
+
+
+def update_source_candidate_assessment(
+    candidate_id: int,
+    *,
+    status: str | None = None,
+    tested_articles: int | None = None,
+    relevant_articles: int | None = None,
+    avg_score: float | None = None,
+    duplicate_count: int | None = None,
+    noise_count: int | None = None,
+    recommended_action: str | None = None,
+    review_comment: str | None = None,
+) -> None:
+    if status and status not in SOURCE_CANDIDATE_STATUSES:
+        raise ValueError(f"Unknown source candidate status: {status}")
+    if recommended_action and recommended_action not in SOURCE_CANDIDATE_ACTIONS:
+        raise ValueError(f"Unknown source candidate recommended_action: {recommended_action}")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE source_candidates
+            SET status = COALESCE(%s, status),
+                tested_articles = COALESCE(%s, tested_articles),
+                relevant_articles = COALESCE(%s, relevant_articles),
+                avg_score = COALESCE(%s, avg_score),
+                duplicate_count = COALESCE(%s, duplicate_count),
+                noise_count = COALESCE(%s, noise_count),
+                recommended_action = COALESCE(%s, recommended_action),
+                review_comment = COALESCE(%s, review_comment),
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (
+                status, tested_articles, relevant_articles, avg_score,
+                duplicate_count, noise_count, recommended_action, review_comment,
+                candidate_id,
+            ),
+        )
+        conn.commit()
+
+
+def approve_source_candidate(
+    candidate_id: int,
+    *,
+    name: str | None = None,
+    source_type: str = "Discovered",
+    parse_strategy: str | None = None,
+    enabled: bool = False,
+    category: str | None = None,
+    priority: float = 1.0,
+    network_region: str = "auto",
+) -> int:
+    candidate = get_source_candidate(candidate_id)
+    if candidate is None:
+        raise ValueError(f"source candidate id={candidate_id} not found")
+    if candidate.get("approved_source_id"):
+        return int(candidate["approved_source_id"])
+
+    url = str(candidate["url"])
+    candidate_type = str(candidate.get("candidate_type") or "").lower()
+    strategy = parse_strategy or ("rss" if candidate_type == "rss" or url.lower().endswith(".xml") else "request")
+    source_name = (name or candidate.get("name") or normalize_domain(url) or f"Source candidate {candidate_id}").strip()
+    source_category = category if category is not None else candidate.get("topic")
+    rss_url = url if strategy == "rss" else None
+    listing_url = None if strategy == "rss" else url
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO sources (
+              name, source_type, url, rss_url, enabled, parse_strategy,
+              listing_url, category, priority, network_region
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (name, source_type) DO UPDATE SET
+              url = EXCLUDED.url,
+              rss_url = EXCLUDED.rss_url,
+              enabled = EXCLUDED.enabled,
+              parse_strategy = EXCLUDED.parse_strategy,
+              listing_url = EXCLUDED.listing_url,
+              category = COALESCE(EXCLUDED.category, sources.category),
+              priority = EXCLUDED.priority,
+              network_region = EXCLUDED.network_region,
+              updated_at = now()
+            RETURNING id
+            """,
+            (
+                source_name,
+                source_type,
+                url,
+                rss_url,
+                enabled,
+                strategy,
+                listing_url,
+                source_category,
+                priority,
+                network_region,
+            ),
+        )
+        source_id = int(cur.fetchone()[0])
+        conn.execute(
+            """
+            UPDATE source_candidates
+            SET status = 'approved',
+                approved_source_id = %s,
+                recommended_action = COALESCE(recommended_action, 'add'),
+                review_comment = COALESCE(review_comment, 'Одобрено человеком и создано как источник.'),
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (source_id, candidate_id),
+        )
+        conn.commit()
+        return source_id
+
+
+def upsert_source_candidate_article(candidate_id: int, rec: dict) -> int:
+    url = (rec.get("url") or "").strip()
+    title = (rec.get("title") or "").strip()
+    if not url:
+        raise ValueError("source candidate article url is required")
+    if not title:
+        title = url
+    raw_text = rec.get("raw_text") or ""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO source_candidate_articles (
+              candidate_id, title, url, published_at, raw_text, language, text_chars,
+              prefilter_keep, prefilter_reason
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (candidate_id, url) DO UPDATE SET
+              title = EXCLUDED.title,
+              published_at = COALESCE(EXCLUDED.published_at, source_candidate_articles.published_at),
+              raw_text = COALESCE(EXCLUDED.raw_text, source_candidate_articles.raw_text),
+              language = COALESCE(EXCLUDED.language, source_candidate_articles.language),
+              text_chars = EXCLUDED.text_chars,
+              prefilter_keep = EXCLUDED.prefilter_keep,
+              prefilter_reason = EXCLUDED.prefilter_reason,
+              updated_at = now()
+            RETURNING id
+            """,
+            (
+                candidate_id,
+                title,
+                url,
+                rec.get("published_at"),
+                raw_text,
+                rec.get("language"),
+                len(raw_text),
+                rec.get("prefilter_keep"),
+                rec.get("prefilter_reason"),
+            ),
+        )
+        article_id = int(cur.fetchone()[0])
+        conn.commit()
+        return article_id
+
+
+def list_source_candidate_articles(
+    candidate_id: int,
+    *,
+    limit: int = 20,
+    only_unprocessed: bool = False,
+) -> list[dict]:
+    clauses = ["candidate_id = %s"]
+    params: list = [candidate_id]
+    if only_unprocessed:
+        clauses.append("processing_status IN ('new', 'error')")
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT sca.*, sc.name AS source_name, sc.topic AS source_category
+            FROM source_candidate_articles sca
+            JOIN source_candidates sc ON sc.id = sca.candidate_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY sca.created_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def update_source_candidate_article_result(article_id: int, payload: dict) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE source_candidate_articles
+            SET relevant = %(relevant)s,
+                relevance_reason = %(relevance_reason)s,
+                relevance_model = %(relevance_model)s,
+                summary = %(summary)s,
+                summary_model = %(summary_model)s,
+                title_ru = %(title_ru)s,
+                tag_id = %(tag_id)s,
+                tag_confidence = %(tag_confidence)s,
+                tag_rationale = %(tag_rationale)s,
+                tag_model = %(tag_model)s,
+                total_score = %(total_score)s,
+                score_label = %(score_label)s,
+                score_explanation = %(score_explanation)s,
+                score_items_json = %(score_items_json)s,
+                score_model = %(score_model)s,
+                processing_status = %(processing_status)s,
+                error_message = %(error_message)s,
+                updated_at = now()
+            WHERE id = %(id)s
+            """,
+            {
+                **payload,
+                "id": article_id,
+                "score_items_json": Json(payload.get("score_items") or []),
+            },
+        )
+        conn.commit()
+
+
+def source_candidate_article_metrics(candidate_id: int) -> dict:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT
+              COUNT(*)::int AS tested_articles,
+              COUNT(*) FILTER (WHERE relevant IS TRUE)::int AS relevant_articles,
+              AVG(total_score) FILTER (WHERE total_score IS NOT NULL) AS avg_score,
+              COUNT(*) FILTER (WHERE processing_status = 'rejected')::int AS noise_count,
+              0::int AS duplicate_count
+            FROM source_candidate_articles
+            WHERE candidate_id = %s
+            """,
+            (candidate_id,),
+        )
+        row = cur.fetchone() or {}
+        avg_score = row.get("avg_score")
+        return {
+            "tested_articles": int(row.get("tested_articles") or 0),
+            "relevant_articles": int(row.get("relevant_articles") or 0),
+            "avg_score": round(float(avg_score), 2) if avg_score is not None else None,
+            "duplicate_count": int(row.get("duplicate_count") or 0),
+            "noise_count": int(row.get("noise_count") or 0),
+        }
+
+
+def create_agent_task(
+    kind: str,
+    *,
+    topic: str | None = None,
+    payload: dict | None = None,
+    budget: dict | None = None,
+    status: str = "planned",
+) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO agent_tasks (kind, status, topic, payload_json, budget_json)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (kind, status, topic, Json(payload or {}), Json(budget or {})),
+        )
+        task_id = int(cur.fetchone()[0])
+        conn.commit()
+        return task_id
+
+
+def create_agent_run(
+    kind: str,
+    *,
+    trigger: str | None = None,
+    payload: dict | None = None,
+    status: str = "running",
+) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO agent_runs (kind, status, trigger, payload_json, started_at)
+            VALUES (%s, %s, %s, %s, now())
+            RETURNING id
+            """,
+            (kind, status, trigger, Json(payload or {})),
+        )
+        run_id = int(cur.fetchone()[0])
+        conn.commit()
+        return run_id
+
+
+def finish_agent_run(
+    run_id: int,
+    *,
+    status: str = "ok",
+    result: dict | None = None,
+    error_message: str | None = None,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE agent_runs
+            SET status = %s,
+                result_json = %s,
+                error_message = %s,
+                finished_at = now()
+            WHERE id = %s
+            """,
+            (status, Json(result or {}), error_message, run_id),
+        )
+        conn.commit()
+
+
+def list_agent_runs(*, status: str | None = None, limit: int = 50) -> list[dict]:
+    clauses: list[str] = []
+    params: list = []
+    if status:
+        clauses.append("ar.status = %s")
+        params.append(status)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT
+              ar.*,
+              COUNT(DISTINCT aa.id)::int AS action_count,
+              COUNT(DISTINCT bj.id)::int AS job_count,
+              COUNT(DISTINCT bj.id) FILTER (WHERE bj.status = 'ok')::int AS ok_job_count,
+              COUNT(DISTINCT bj.id) FILTER (WHERE bj.status = 'failed')::int AS failed_job_count
+            FROM agent_runs ar
+            LEFT JOIN agent_actions aa ON aa.run_id = ar.id
+            LEFT JOIN background_jobs bj ON bj.agent_run_id = ar.id
+            {where}
+            GROUP BY ar.id
+            ORDER BY ar.created_at DESC, ar.id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def record_agent_action(
+    task_id: int | None,
+    action_type: str,
+    *,
+    run_id: int | None = None,
+    input_payload: dict | None = None,
+    output_payload: dict | None = None,
+    cost_usd: float = 0,
+    duration_ms: int | None = None,
+) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO agent_actions
+              (run_id, task_id, action_type, input_json, output_json, cost_usd, duration_ms)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (run_id, task_id, action_type, Json(input_payload or {}), Json(output_payload or {}),
+             cost_usd, duration_ms),
+        )
+        action_id = int(cur.fetchone()[0])
+        conn.commit()
+        return action_id
+
+
+def list_agent_actions(
+    *,
+    action_type: str | None = None,
+    run_id: int | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list = []
+    if action_type:
+        clauses.append("aa.action_type = %s")
+        params.append(action_type)
+    if run_id is not None:
+        clauses.append("aa.run_id = %s")
+        params.append(run_id)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT
+              aa.*,
+              at.kind AS task_kind,
+              at.status AS task_status,
+              at.topic AS task_topic
+            FROM agent_actions aa
+            LEFT JOIN agent_tasks at ON at.id = aa.task_id
+            {where}
+            ORDER BY aa.created_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return [_with_agent_action_summary(row) for row in cur.fetchall()]
+
+
+def _with_agent_action_summary(row: dict) -> dict:
+    output = row.get("output_json") or {}
+    input_payload = row.get("input_json") or {}
+    action_type = str(row.get("action_type") or "")
+    title = action_type
+    summary = "Детали записаны в журнал действий"
+    tone = "neutral"
+    if action_type == "source_discovery_plan_built":
+        title = "План построен"
+        policy = output.get("policy") or {}
+        summary = (
+            f"Авто: {policy.get('auto', 0)}, вручную: {policy.get('human_review', 0)}, "
+            f"запрещено: {policy.get('blocked', 0)}."
+        )
+    elif action_type == "discover_sources_finished":
+        title = "Поиск источников завершён"
+        candidates = output.get("candidates") or []
+        topic = output.get("topic") or input_payload.get("topic") or row.get("task_topic")
+        summary = f"Тема: {topic or '—'}, кандидатов: {len(candidates)}, поиск: {(output.get('search') or {}).get('status', '—')}."
+        tone = "good" if candidates else "neutral"
+    elif action_type == "source_discovery_loop_iteration":
+        title = "Итерация агента"
+        observations = output.get("observations") or []
+        candidates = sum(int((item or {}).get("candidate_count") or 0) for item in observations)
+        queued = sum(int((item or {}).get("evaluation_jobs") or 0) for item in observations)
+        summary = f"Наблюдений: {len(observations)}, кандидатов: {candidates}, AI-оценок в очереди: {queued}."
+        tone = "good" if candidates else "neutral"
+    elif action_type == "source_discovery_loop_budget_stop":
+        title = "Агент остановлен бюджетом"
+        summary = f"Причина: {output.get('terminal_reason') or (output.get('budget') or {}).get('reason') or 'лимит'}."
+        tone = "warning"
+    elif action_type == "source_candidate_learning":
+        title = "Агент обучился"
+        summary = (
+            f"Кандидат #{output.get('candidate_id', '—')}, тема: {output.get('topic') or '—'}, "
+            f"домен: {output.get('domain') or '—'}, релевантных: {output.get('relevant_articles', 0)}, "
+            f"оценка памяти: {output.get('score', '—')}."
+        )
+        tone = "good" if str(output.get("recommended_action") or "") in {"add", "test_more"} else "neutral"
+    elif action_type == "approve_source_candidate":
+        title = "Кандидат одобрен"
+        summary = f"Создан источник #{output.get('source_id', '—')}, первый сбор: {output.get('initial_job_id') or 'не ставился'}."
+        tone = "good"
+    elif action_type == "update_agent_memory":
+        title = "Память изменена"
+        summary = f"Запись #{input_payload.get('memory_id', '—')} переведена в статус {input_payload.get('status', '—')}."
+    elif action_type == "create_agent_memory":
+        title = "Правило добавлено"
+        summary = (
+            f"{output.get('memory_type') or input_payload.get('memory_type') or 'память'}: "
+            f"{output.get('subject') or input_payload.get('subject') or '—'}, "
+            f"статус: {output.get('status') or input_payload.get('status') or '—'}."
+        )
+        tone = "warning" if (output.get("status") or input_payload.get("status")) == "rejected" else "good"
+    elif action_type == "update_source_candidate":
+        title = "Кандидат изменён"
+        summary = f"Кандидат #{input_payload.get('candidate_id', '—')}, статус: {input_payload.get('status', '—')}."
+    row["decision_title"] = title
+    row["decision_summary"] = summary
+    row["decision_tone"] = tone
+    return row
+
+
+def source_discovery_daily_usage() -> dict[str, int]:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT
+              (
+                SELECT COUNT(*)::int
+                FROM agent_runs
+                WHERE kind = 'source_discovery_loop'
+                  AND created_at >= date_trunc('day', now())
+              ) AS loop_runs,
+              (
+                SELECT COUNT(*)::int
+                FROM agent_actions
+                WHERE action_type = 'create_source_candidate'
+                  AND created_at >= date_trunc('day', now())
+              ) AS candidates_created,
+              (
+                SELECT COUNT(*)::int
+                FROM background_jobs
+                WHERE kind = 'source_candidate_evaluate'
+                  AND created_at >= date_trunc('day', now())
+              ) AS candidate_evaluations
+            """,
+        )
+        row = cur.fetchone() or {}
+        return {
+            "loop_runs": int(row.get("loop_runs") or 0),
+            "candidates_created": int(row.get("candidates_created") or 0),
+            "candidate_evaluations": int(row.get("candidate_evaluations") or 0),
+        }
+
+
+def upsert_agent_memory(
+    *,
+    memory_key: str,
+    memory_type: str,
+    subject: str,
+    status: str = "active",
+    score: float = 0,
+    facts: dict | None = None,
+) -> int:
+    key = memory_key.strip()
+    if not key:
+        raise ValueError("agent memory_key is required")
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO agent_memory
+              (memory_key, memory_type, subject, status, score, facts_json, last_seen_at)
+            VALUES (%s, %s, %s, %s, %s, %s, now())
+            ON CONFLICT (memory_key) DO UPDATE SET
+              memory_type = EXCLUDED.memory_type,
+              subject = EXCLUDED.subject,
+              status = EXCLUDED.status,
+              score = EXCLUDED.score,
+              facts_json = EXCLUDED.facts_json,
+              last_seen_at = now(),
+              updated_at = now()
+            RETURNING id
+            """,
+            (key, memory_type, subject, status, score, Json(facts or {})),
+        )
+        memory_id = int(cur.fetchone()[0])
+        conn.commit()
+        return memory_id
+
+
+def list_agent_memory(
+    *,
+    memory_type: str | None = None,
+    status: str | None = "active",
+    limit: int = 50,
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list = []
+    if memory_type:
+        clauses.append("memory_type = %s")
+        params.append(memory_type)
+    if status:
+        clauses.append("status = %s")
+        params.append(status)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT *
+            FROM agent_memory
+            {where}
+            ORDER BY score DESC, updated_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def update_agent_memory_status(memory_id: int, status: str) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE agent_memory
+            SET status = %s,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (status, memory_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def query_memory_report(*, status: str | None = "active", limit: int = 20) -> list[dict]:
+    rows = list_agent_memory(memory_type="query", status=status, limit=limit)
+    report = []
+    for row in rows:
+        facts = row.get("facts_json") or {}
+        tested = int(facts.get("tested_articles") or 0)
+        relevant = int(facts.get("relevant_articles") or 0)
+        report.append({
+            "query": row.get("subject"),
+            "topic": facts.get("topic"),
+            "score": float(row.get("score") or 0),
+            "status": row.get("status"),
+            "found_candidates": int(facts.get("found_candidates") or 0),
+            "tested_articles": tested,
+            "relevant_articles": relevant,
+            "avg_score": facts.get("avg_score"),
+            "empty_result": bool(facts.get("empty_result") or False),
+            "relevance_rate": round(relevant / max(tested, 1), 3) if tested else 0.0,
+            "last_seen_at": row.get("last_seen_at"),
+            "updated_at": row.get("updated_at"),
+        })
+    return report
+
+
+def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> list[dict]:
+    """Посчитать качество источников за период без записи в историю."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH article_metrics AS (
+              SELECT
+                a.id,
+                a.source_id,
+                c.summary,
+                c.relevant,
+                c.status AS card_status,
+                sc.total_score,
+                EXISTS (
+                  SELECT 1 FROM user_article_states uas
+                  WHERE uas.article_id = a.id AND uas.status = 'digest'
+                ) AS user_digest,
+                EXISTS (
+                  SELECT 1 FROM user_article_states uas
+                  WHERE uas.article_id = a.id AND uas.status = 'duplicate'
+                ) AS user_duplicate,
+                EXISTS (
+                  SELECT 1 FROM user_article_states uas
+                  WHERE uas.article_id = a.id AND uas.status = 'noise'
+                ) AS user_noise,
+                EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = a.id) AS has_tag,
+                COALESCE((
+                  SELECT SUM(r.cost_usd)
+                  FROM ai_processing_runs r
+                  WHERE r.article_id = a.id AND r.status = 'ok'
+                ), 0) AS processing_cost_usd
+              FROM articles a
+              LEFT JOIN article_cards c ON c.article_id = a.id
+              LEFT JOIN article_scores sc ON sc.article_id = a.id
+              WHERE a.collected_at >= %s
+                AND a.collected_at < %s
+            )
+            SELECT
+              s.id AS source_id,
+              s.name AS source_name,
+              COUNT(am.id) AS articles_found,
+              COUNT(am.id) FILTER (
+                WHERE am.summary IS NOT NULL
+                   OR am.relevant IS NOT NULL
+                   OR am.has_tag
+                   OR am.total_score IS NOT NULL
+              ) AS articles_processed,
+              COUNT(am.id) FILTER (WHERE am.relevant IS TRUE) AS relevant_count,
+              COUNT(am.id) FILTER (WHERE am.relevant IS FALSE OR am.card_status = 'rejected') AS rejected_count,
+              ROUND(AVG(am.total_score), 2) AS avg_score,
+              COUNT(am.id) FILTER (WHERE am.user_digest OR am.card_status = 'digest') AS digest_count,
+              COUNT(am.id) FILTER (WHERE am.user_duplicate OR am.card_status = 'duplicate') AS duplicate_count,
+              COUNT(am.id) FILTER (WHERE am.user_noise OR am.card_status = 'noise') AS noise_count,
+              COALESCE(ROUND(SUM(am.processing_cost_usd), 6), 0) AS processing_cost_usd
+            FROM sources s
+            LEFT JOIN article_metrics am ON am.source_id = s.id
+            GROUP BY s.id, s.name
+            HAVING COUNT(am.id) > 0
+            ORDER BY articles_found DESC, s.name
+            """,
+            (period_from, period_to),
+        )
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            item["quality_score"] = _source_quality_score(item)
+            rows.append(item)
+        return rows
+
+
+def compute_topic_gap_rows(
+    period_from: datetime,
+    period_to: datetime,
+    target_per_topic: int = 10,
+    limit: int = 10,
+) -> list[dict]:
+    """Темы/теги с дефицитом релевантных сигналов за период."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH tagged_articles AS (
+              SELECT
+                COALESCE(parent.name, t.name) AS topic,
+                a.id AS article_id,
+                c.relevant,
+                c.status AS card_status,
+                sc.total_score,
+                EXISTS (
+                  SELECT 1 FROM user_article_states uas
+                  WHERE uas.article_id = a.id AND uas.status = 'digest'
+                ) AS user_digest
+              FROM tags t
+              LEFT JOIN tags parent ON parent.id = t.parent_id
+              LEFT JOIN article_tags at ON at.tag_id = t.id
+              LEFT JOIN articles a
+                     ON a.id = at.article_id
+                    AND a.collected_at >= %s
+                    AND a.collected_at < %s
+              LEFT JOIN article_cards c ON c.article_id = a.id
+              LEFT JOIN article_scores sc ON sc.article_id = a.id
+              WHERE t.enabled = TRUE
+            )
+            SELECT
+              topic,
+              COUNT(article_id) FILTER (WHERE relevant IS TRUE) AS signals,
+              ROUND(AVG(total_score), 2) AS avg_score,
+              COUNT(article_id) FILTER (WHERE user_digest OR card_status = 'digest') AS digest_count
+            FROM tagged_articles
+            GROUP BY topic
+            ORDER BY GREATEST(%s - COUNT(article_id) FILTER (WHERE relevant IS TRUE), 0) DESC,
+                     topic
+            LIMIT %s
+            """,
+            (period_from, period_to, target_per_topic, limit),
+        )
+        rows = []
+        for row in cur.fetchall():
+            signals = int(row["signals"] or 0)
+            gap = max(int(target_per_topic) - signals, 0)
+            rows.append({
+                "topic": row["topic"],
+                "signals": signals,
+                "target_signals": int(target_per_topic),
+                "gap": gap,
+                "avg_score": row.get("avg_score"),
+                "digest_count": int(row["digest_count"] or 0),
+                "priority": round(min(100, gap / max(target_per_topic, 1) * 100), 2),
+            })
+        return rows
+
+
+def snapshot_source_quality(period_from: datetime, period_to: datetime) -> int:
+    rows = compute_source_quality_rows(period_from, period_to)
+    if not rows:
+        return 0
+    with get_connection() as conn:
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO source_quality_snapshots (
+                  source_id, period_from, period_to, articles_found, articles_processed,
+                  relevant_count, rejected_count, avg_score, digest_count, duplicate_count,
+                  noise_count, processing_cost_usd, quality_score
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    row["source_id"], period_from, period_to, row["articles_found"],
+                    row["articles_processed"], row["relevant_count"], row["rejected_count"],
+                    row["avg_score"], row["digest_count"], row["duplicate_count"],
+                    row["noise_count"], row["processing_cost_usd"], row["quality_score"],
+                ),
+            )
+        conn.commit()
+    return len(rows)
+
+
+def _source_quality_score(row: dict) -> float:
+    found = max(int(row.get("articles_found") or 0), 1)
+    relevant_rate = int(row.get("relevant_count") or 0) / found
+    digest_rate = int(row.get("digest_count") or 0) / found
+    duplicate_rate = int(row.get("duplicate_count") or 0) / found
+    noise_rate = int(row.get("noise_count") or 0) / found
+    avg_score = float(row.get("avg_score") or 0) / 100
+    score = (
+        relevant_rate * 35
+        + avg_score * 25
+        + digest_rate * 25
+        - duplicate_rate * 10
+        - noise_rate * 5
+    )
+    return round(max(0.0, min(100.0, score)), 2)
 
 
 def article_exists(url: str) -> bool:
@@ -463,6 +1505,7 @@ def create_background_job(
     execution_region: str = "ru",
     capability: str | None = None,
     max_attempts: int = 3,
+    agent_run_id: int | None = None,
 ) -> dict:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -470,9 +1513,9 @@ def create_background_job(
             """
             INSERT INTO background_jobs (
                 user_id, kind, queue_name, execution_region, capability,
-                status, progress, max_attempts, payload_json
+                agent_run_id, status, progress, max_attempts, payload_json
             )
-            VALUES (%s, %s, %s, %s, %s, 'queued', 0, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, 'queued', 0, %s, %s)
             RETURNING *
             """,
             (
@@ -481,6 +1524,7 @@ def create_background_job(
                 queue_name,
                 execution_region,
                 capability,
+                agent_run_id,
                 max_attempts,
                 Json(_jsonable(payload or {})),
             ),
@@ -675,6 +1719,7 @@ def list_background_jobs(
     kind: str | None = None,
     queue_name: str | None = None,
     user_id: int | None = None,
+    agent_run_id: int | None = None,
     limit: int = 50,
 ) -> list[dict]:
     clauses = []
@@ -691,6 +1736,9 @@ def list_background_jobs(
     if user_id is not None:
         clauses.append("user_id = %s")
         params.append(user_id)
+    if agent_run_id is not None:
+        clauses.append("agent_run_id = %s")
+        params.append(agent_run_id)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     params.append(limit)
     with get_connection() as conn:
@@ -706,6 +1754,30 @@ def list_background_jobs(
             params,
         )
         return cur.fetchall()
+
+
+def background_job_status_counts(*, capability: str | None = None, kind_prefix: str | None = None) -> dict[str, int]:
+    clauses: list[str] = []
+    params: list = []
+    if capability:
+        clauses.append("capability = %s")
+        params.append(capability)
+    if kind_prefix:
+        clauses.append("kind LIKE %s")
+        params.append(f"{kind_prefix}%")
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT status, COUNT(*)::int AS count
+            FROM background_jobs
+            {where}
+            GROUP BY status
+            """,
+            params,
+        )
+        return {str(row["status"]): int(row["count"]) for row in cur.fetchall()}
 
 
 def external_queue_status() -> dict:
@@ -1339,12 +2411,12 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
               {status_filter}
               AND (
                 COALESCE(a.text_truncated, FALSE) = TRUE
-                OR length(COALESCE(a.raw_text, '')) < 800
+                OR length(COALESCE(a.raw_text, '')) < %s
               )
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
-            (limit,),
+            (config.MIN_FULL_TEXT_CHARS, limit),
         )
         return cur.fetchall()
 
@@ -1717,8 +2789,18 @@ def get_article(article_id: int) -> dict | None:
 def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -> list[dict]:
     if not article_ids:
         return []
-    summary_select = ", c.summary" if include_summary else ""
-    summary_join = "LEFT JOIN article_cards c ON c.article_id = a.id" if include_summary else ""
+    summary_select = (
+        ", c.summary, c.relevant, c.title_ru, at.id AS existing_tag_id, sc.id AS existing_score_id"
+        if include_summary else ""
+    )
+    summary_join = (
+        """
+        LEFT JOIN article_cards c ON c.article_id = a.id
+        LEFT JOIN article_tags at ON at.article_id = a.id
+        LEFT JOIN article_scores sc ON sc.article_id = a.id
+        """
+        if include_summary else ""
+    )
     placeholders = ", ".join(["%s"] * len(article_ids))
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -1898,6 +2980,44 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
             LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE c.summary IS NULL
               AND c.relevant IS NOT FALSE
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
+    """Статьи, которым не хватает любого AI-этапа канонического pipeline.
+
+    Используется process/process-full/background/external enqueue. Старый выбор только по
+    ``summary IS NULL`` не поднимал статьи после частичного сбоя на тегировании/скоринге.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.*, c.summary, c.relevant, c.title_ru,
+                   at.id AS existing_tag_id, sc.id AS existing_score_id,
+                   s.name AS source_name, s.priority AS source_priority,
+                   s.category AS source_category
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            LEFT JOIN article_tags at ON at.article_id = a.id
+            LEFT JOIN article_scores sc ON sc.article_id = a.id
+            WHERE c.relevant IS NULL
+               OR (
+                    c.relevant IS TRUE
+                    AND (
+                        c.summary IS NULL
+                        OR c.title_ru IS NULL
+                        OR at.id IS NULL
+                        OR sc.id IS NULL
+                    )
+               )
+               OR c.article_id IS NULL
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,

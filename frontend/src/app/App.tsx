@@ -11,6 +11,8 @@ import { JobsPage } from "../features/jobs/JobsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
+import { SourceAgentPage } from "../features/sources/SourceAgentPage";
+import { SourceCandidatesPage } from "../features/sources/SourceCandidatesPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { UsersPage } from "../features/users/UsersPage";
@@ -25,14 +27,15 @@ const TechnologiesPreview = lazy(() =>
 );
 
 type ScreenId =
-  | "articles" | "digest" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "articles" | "digest" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
   | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 // Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
 // случайно открыть обычный пользователь и принять за настоящую аналитику.
 const ADMIN_SCREENS = new Set<ScreenId>([
-  "sources", "scoring", "tags", "users", "jobs", "maintenance",
+  "sources", "source-candidates", "scoring", "tags", "users", "jobs", "maintenance",
+  "source-agent",
   // Статистика сводная (видно работу КАЖДОГО пользователя) — решение владельца:
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
   // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
@@ -162,7 +165,7 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview"];
+const URL_ADDRESSABLE: ScreenId[] = ["sources", "jobs", "maintenance", "source-candidates", "source-agent", "tech-preview", "analytics-preview"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
@@ -243,6 +246,14 @@ export function App() {
 
   if (activeScreen === "sources") {
     currentScreen = <SourcesPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "source-candidates") {
+    currentScreen = <SourceCandidatesPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "source-agent") {
+    currentScreen = <SourceAgentPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "articles") {

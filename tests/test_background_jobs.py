@@ -60,7 +60,7 @@ def test_background_job_run_requeues_retryable_failure(monkeypatch, isolated_db)
     assert stored["run_after"] is not None
 
 
-def test_process_job_without_article_ids_uses_each_stage_queue(monkeypatch):
+def test_process_job_without_article_ids_uses_pipeline_queue(monkeypatch):
     calls = []
 
     monkeypatch.setattr(background_jobs, "make_client", lambda offline: object())
@@ -68,49 +68,30 @@ def test_process_job_without_article_ids_uses_each_stage_queue(monkeypatch):
     monkeypatch.setattr(background_jobs.repository, "mark_background_job_ai_started", lambda job_id: None)
     monkeypatch.setattr(
         background_jobs.repository,
-        "get_articles_needing_summary",
-        lambda limit: calls.append(("summary_queue", limit)) or [{"id": 1}],
+        "get_articles_needing_pipeline",
+        lambda limit: calls.append(("pipeline_queue", limit)) or [{"id": 1}],
     )
     monkeypatch.setattr(
-        background_jobs.repository,
-        "get_articles_needing_relevance",
-        lambda limit: calls.append(("relevance_queue", limit)) or [{"id": 2}],
+        background_jobs,
+        "process_pipeline_articles",
+        lambda articles, client, fetch_full=True: calls.append(("pipeline", [a["id"] for a in articles], fetch_full))
+        or {"processed": len(articles), "relevant": 1, "rejected": 0},
     )
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "get_articles_needing_tags",
-        lambda limit: calls.append(("tags_queue", limit)) or [{"id": 3}],
-    )
-    monkeypatch.setattr(
-        background_jobs.repository,
-        "get_articles_needing_scores",
-        lambda limit: calls.append(("scores_queue", limit)) or [{"id": 4}],
-    )
-    monkeypatch.setattr(background_jobs.repository, "get_articles_by_ids", lambda ids, include_summary: [])
-    monkeypatch.setattr(background_jobs, "process_summary_articles", lambda articles, client: {"processed": len(articles)})
-    monkeypatch.setattr(background_jobs, "process_relevance_articles", lambda articles, client: {"processed": len(articles)})
-    monkeypatch.setattr(background_jobs, "process_tag_articles", lambda articles, client: {"processed": len(articles)})
-    monkeypatch.setattr(background_jobs, "process_score_articles", lambda articles, client: {"processed": len(articles)})
 
     result = background_jobs._run_process_articles({"limit": 10}, job_id=123)
 
     assert calls == [
-        ("summary_queue", 10),
-        ("relevance_queue", 10),
-        ("tags_queue", 10),
-        ("scores_queue", 10),
+        ("pipeline_queue", 10),
+        ("pipeline", [1], True),
     ]
-    assert result["summary"] == {"processed": 1}
-    assert result["relevance"] == {"processed": 1}
-    assert result["tagging"] == {"processed": 1}
-    assert result["scoring"] == {"processed": 1}
+    assert result["pipeline"] == {"processed": 1, "relevant": 1, "rejected": 0}
 
 
 def test_process_job_marks_ai_started_before_first_model_call(monkeypatch):
     """ai_started_at ОБЯЗАН ставиться до первого вызова модели.
 
     На этом порядке держится вся защита от двойной оплаты OpenAI: если пометить позже
-    (или после process_summary_articles), то падение на первой же стадии оставит
+    (или после process_pipeline_articles), то падение на первой же стадии оставит
     ai_started_at IS NULL, requeue вернёт задачу в очередь и уже оплаченные summary
     прогонятся через модель повторно. Мокаем реальные вызовы и проверяем ПОРЯДОК.
     """
@@ -123,19 +104,12 @@ def test_process_job_marks_ai_started_before_first_model_call(monkeypatch):
         "mark_background_job_ai_started",
         lambda job_id: order.append("ai_started"),
     )
-    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_summary", lambda limit: [{"id": 1}])
-    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_relevance", lambda limit: [])
-    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_tags", lambda limit: [])
-    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_scores", lambda limit: [])
-    monkeypatch.setattr(background_jobs.repository, "get_articles_by_ids", lambda ids, include_summary: [])
+    monkeypatch.setattr(background_jobs.repository, "get_articles_needing_pipeline", lambda limit: [{"id": 1}])
     monkeypatch.setattr(
         background_jobs,
-        "process_summary_articles",
-        lambda articles, client: order.append("model_call") or {"processed": len(articles)},
+        "process_pipeline_articles",
+        lambda articles, client, fetch_full=True: order.append("model_call") or {"processed": len(articles)},
     )
-    monkeypatch.setattr(background_jobs, "process_relevance_articles", lambda articles, client: {"processed": 0})
-    monkeypatch.setattr(background_jobs, "process_tag_articles", lambda articles, client: {"processed": 0})
-    monkeypatch.setattr(background_jobs, "process_score_articles", lambda articles, client: {"processed": 0})
 
     background_jobs._run_process_articles({"limit": 10}, job_id=123)
 
@@ -143,6 +117,239 @@ def test_process_job_marks_ai_started_before_first_model_call(monkeypatch):
     assert order.index("ai_started") < order.index("model_call"), (
         "ai_started_at помечен ПОСЛЕ первого вызова модели — защита от двойной оплаты дырявая"
     )
+
+
+def test_discover_source_candidates_job_uses_topic_gaps_and_evaluates(monkeypatch):
+    from oiltech_digest.source_discovery import agent
+    from oiltech_digest.source_discovery import sandbox
+
+    progress = []
+    configs = []
+
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "update_background_job_progress",
+        lambda job_id, value: progress.append((job_id, value)),
+    )
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit: [{"topic": "роботизация бурения"}])
+
+    def fake_discover(config):
+        configs.append(config)
+        return {
+            "task_id": 7,
+            "search": {"status": "ok"},
+            "candidates": [
+                {
+                    "id": 42,
+                    "url": "https://example.com/newsroom",
+                    "recommended_action": "add",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(agent, "discover_sources", fake_discover)
+    monkeypatch.setattr(
+        sandbox,
+        "evaluate_source_candidate",
+        lambda candidate_id, article_limit, offline, collect, process: {
+            "candidate_id": candidate_id,
+            "metrics": {"tested_articles": article_limit, "relevant_articles": 3},
+            "recommended_action": "add",
+            "next_status": "needs_human_review",
+        },
+    )
+
+    result = background_jobs._run_discover_source_candidates(
+        {
+            "topic_limit": 1,
+            "limit": 5,
+            "offline": True,
+            "auto_evaluate": True,
+            "article_limit": 4,
+        },
+        job_id=123,
+    )
+
+    assert result["topics"] == ["роботизация бурения"]
+    assert result["candidates"] == 1
+    assert result["evaluated"] == 1
+    assert result["results"][0]["candidates"][0]["id"] == 42
+    assert result["results"][0]["evaluations"][0]["metrics"]["tested_articles"] == 4
+    assert configs[0].topic == "роботизация бурения"
+    assert configs[0].limit == 5
+    assert configs[0].offline is True
+    assert progress[0] == (123, 10)
+    assert progress[-1] == (123, 95)
+
+
+def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch):
+    from oiltech_digest.source_discovery import agent
+
+    jobs = []
+
+    monkeypatch.setattr(background_jobs.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: None)
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit: [{"topic": "роботизация бурения"}])
+    monkeypatch.setattr(
+        agent,
+        "discover_sources",
+        lambda config: {
+            "task_id": 7,
+            "search": {"status": "ok"},
+            "candidates": [{"id": 42, "url": "https://example.com/newsroom", "recommended_action": "add"}],
+        },
+    )
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "create_background_job",
+        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs}) or {"id": 99},
+    )
+
+    result = background_jobs._run_discover_source_candidates(
+        {
+            "topic_limit": 1,
+            "limit": 5,
+            "offline": True,
+            "auto_evaluate": True,
+            "article_limit": 4,
+        },
+        job_id=123,
+    )
+
+    assert result["evaluated"] == 0
+    assert result["evaluation_jobs"] == 1
+    assert jobs[0]["agent_run_id"] is None
+    assert jobs == [
+        {
+            "kind": "source_candidate_evaluate",
+            "payload": {
+                "candidate_id": 42,
+                "article_limit": 4,
+                "offline": False,
+                "collect": True,
+                "process": True,
+            },
+            "queue_name": "external-ai",
+            "execution_region": "external",
+            "capability": "openai",
+            "max_attempts": 1,
+            "agent_run_id": None,
+        }
+    ]
+
+
+def test_source_discovery_plan_job_builds_plan_and_queues_actions(monkeypatch):
+    from oiltech_digest.source_discovery import planner
+
+    progress = []
+    config_seen = {}
+    finished = []
+
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "update_background_job_progress",
+        lambda job_id, value: progress.append((job_id, value)),
+    )
+    monkeypatch.setattr(background_jobs.repository, "create_agent_run", lambda *args, **kwargs: 555)
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "finish_agent_run",
+        lambda run_id, **kwargs: finished.append({"run_id": run_id, **kwargs}),
+    )
+
+    def fake_build_plan(config):
+        config_seen.update({
+            "days": config.days,
+            "target_per_topic": config.target_per_topic,
+            "topic_limit": config.topic_limit,
+            "candidate_limit": config.candidate_limit,
+            "max_actions": config.max_actions,
+            "persist_memory": config.persist_memory,
+            "run_id": config.run_id,
+        })
+        return {"actions": [{"action_type": "discover_sources", "topic": "бурение", "priority": 90, "limit": 5}]}
+
+    monkeypatch.setattr(planner, "build_plan", fake_build_plan)
+    monkeypatch.setattr(
+        planner,
+        "enqueue_plan_actions",
+        lambda plan, offline, evaluate, run_id=None: {
+            "queued": 1,
+            "jobs": [{"job_id": 77, "topic": "бурение", "run_id": run_id}],
+        },
+    )
+
+    result = background_jobs._run_source_discovery_plan(
+        {
+            "days": 14,
+            "target_per_topic": 8,
+            "topic_limit": 2,
+            "candidate_limit": 5,
+            "max_actions": 3,
+            "persist_memory": False,
+            "offline": True,
+            "evaluate": False,
+        },
+        job_id=123,
+    )
+
+    assert config_seen == {
+        "days": 14,
+        "target_per_topic": 8,
+        "topic_limit": 2,
+        "candidate_limit": 5,
+        "max_actions": 3,
+        "persist_memory": False,
+        "run_id": 555,
+    }
+    assert result["run_id"] == 555
+    assert result["queued"]["queued"] == 1
+    assert result["queued"]["jobs"][0]["run_id"] == 555
+    assert finished[0]["run_id"] == 555
+    assert finished[0]["status"] == "ok"
+    assert progress == [(123, 20), (123, 70), (123, 95)]
+
+
+def test_source_discovery_loop_job_runs_loop(monkeypatch):
+    from oiltech_digest.source_discovery import loop
+
+    progress = []
+    captured = {}
+    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: progress.append((job_id, value)))
+    monkeypatch.setattr(
+        loop,
+        "run_agent_loop",
+        lambda config: captured.update({"config": config}) or {
+            "run_id": 12,
+            "iterations": [],
+            "total_candidates": 0,
+            "terminal_reason": "no_auto_actions",
+        },
+    )
+
+    result = background_jobs._HANDLERS["source_discovery_loop"](
+        {"goal": "найти", "max_iterations": 2, "max_actions": 3},
+        99,
+    )
+
+    assert result["run_id"] == 12
+    assert captured["config"].goal == "найти"
+    assert captured["config"].max_iterations == 2
+    assert captured["config"].max_actions == 3
+    assert progress == [(99, 10), (99, 95)]
+
+
+def test_parse_source_once_job_routes_rss_source(monkeypatch):
+    progress = []
+    monkeypatch.setattr(background_jobs.repository, "get_source", lambda source_id: {"id": source_id, "parse_strategy": "rss"})
+    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: progress.append((job_id, value)))
+    monkeypatch.setattr(background_jobs.rss_parser, "parse_source", lambda source: {"added": 2, "attempted": 3})
+
+    result = background_jobs._HANDLERS["parse_source_once"]({"source_id": 42}, 99)
+
+    assert result == {"source_id": 42, "strategy": "rss", "stats": {"added": 2, "attempted": 3}}
+    assert progress == [(99, 20), (99, 90)]
 
 
 def test_enqueue_can_skip_inline_execution(monkeypatch, isolated_db):

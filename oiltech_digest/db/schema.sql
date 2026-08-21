@@ -331,6 +331,166 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(qu
 -- его держать нельзя: на существующей БД `CREATE TABLE IF NOT EXISTS` — no-op, колонки
 -- user_id ещё нет → init-db падает `column "user_id" does not exist`.
 
+-- =========================================================================
+-- Разведка источников и обратная связь
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS signal_feedback_events (
+  id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  article_id  BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  user_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  event_type  TEXT NOT NULL,                  -- added_to_digest / marked_noise / marked_duplicate / tag_changed / score_changed / status_changed / comment_added
+  old_value   TEXT,
+  new_value   TEXT,
+  comment     TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signal_feedback_article_created ON signal_feedback_events(article_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_feedback_user_created ON signal_feedback_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_feedback_event_created ON signal_feedback_events(event_type, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS source_quality_snapshots (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  source_id           BIGINT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  period_from         TIMESTAMPTZ NOT NULL,
+  period_to           TIMESTAMPTZ NOT NULL,
+  articles_found      INTEGER NOT NULL DEFAULT 0,
+  articles_processed  INTEGER NOT NULL DEFAULT 0,
+  relevant_count      INTEGER NOT NULL DEFAULT 0,
+  rejected_count      INTEGER NOT NULL DEFAULT 0,
+  avg_score           NUMERIC,
+  digest_count        INTEGER NOT NULL DEFAULT 0,
+  duplicate_count     INTEGER NOT NULL DEFAULT 0,
+  noise_count         INTEGER NOT NULL DEFAULT 0,
+  processing_cost_usd NUMERIC NOT NULL DEFAULT 0,
+  quality_score       NUMERIC NOT NULL DEFAULT 0,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_source_quality_source_period ON source_quality_snapshots(source_id, period_to DESC);
+CREATE INDEX IF NOT EXISTS idx_source_quality_score ON source_quality_snapshots(quality_score DESC, period_to DESC);
+
+CREATE TABLE IF NOT EXISTS source_candidates (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  url                 TEXT NOT NULL,
+  normalized_domain   TEXT NOT NULL,
+  name                TEXT,
+  candidate_type      TEXT,                    -- newsroom / media / company / rss / blog / unknown
+  status              TEXT NOT NULL DEFAULT 'new',
+  discovered_by       TEXT NOT NULL DEFAULT 'manual',
+  discovery_reason    TEXT,
+  topic               TEXT,
+  expected_tags_json  JSONB,
+  confidence          NUMERIC,
+  tested_articles     INTEGER NOT NULL DEFAULT 0,
+  relevant_articles   INTEGER NOT NULL DEFAULT 0,
+  avg_score           NUMERIC,
+  duplicate_count     INTEGER NOT NULL DEFAULT 0,
+  noise_count         INTEGER NOT NULL DEFAULT 0,
+  recommended_action  TEXT,
+  review_comment      TEXT,
+  approved_source_id  BIGINT REFERENCES sources(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_candidates_url ON source_candidates(url);
+CREATE INDEX IF NOT EXISTS idx_source_candidates_status_created ON source_candidates(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_source_candidates_domain ON source_candidates(normalized_domain);
+
+CREATE TABLE IF NOT EXISTS source_candidate_articles (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  candidate_id        BIGINT NOT NULL REFERENCES source_candidates(id) ON DELETE CASCADE,
+  title               TEXT NOT NULL,
+  url                 TEXT NOT NULL,
+  published_at        TIMESTAMPTZ,
+  raw_text            TEXT,
+  language            TEXT,
+  text_chars          INTEGER NOT NULL DEFAULT 0,
+  prefilter_keep      BOOLEAN,
+  prefilter_reason    TEXT,
+  relevant            BOOLEAN,
+  relevance_reason    TEXT,
+  relevance_model     TEXT,
+  summary             TEXT,
+  summary_model       TEXT,
+  title_ru            TEXT,
+  tag_id              BIGINT REFERENCES tags(id) ON DELETE SET NULL,
+  tag_confidence      NUMERIC,
+  tag_rationale       TEXT,
+  tag_model           TEXT,
+  total_score         NUMERIC,
+  score_label         TEXT,
+  score_explanation   TEXT,
+  score_items_json    JSONB,
+  score_model         TEXT,
+  processing_status   TEXT NOT NULL DEFAULT 'new', -- new / ok / rejected / error
+  error_message       TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_candidate_articles_url ON source_candidate_articles(candidate_id, url);
+CREATE INDEX IF NOT EXISTS idx_source_candidate_articles_candidate ON source_candidate_articles(candidate_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_source_candidate_articles_status ON source_candidate_articles(candidate_id, processing_status);
+
+CREATE TABLE IF NOT EXISTS agent_tasks (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  kind          TEXT NOT NULL,                  -- discover_sources / test_source_candidate / recheck_source_quality / recommend_schedule_changes
+  status        TEXT NOT NULL DEFAULT 'planned',
+  topic         TEXT,
+  payload_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result_json   JSONB,
+  budget_json   JSONB,
+  error_message TEXT,
+  started_at    TIMESTAMPTZ,
+  finished_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_status_created ON agent_tasks(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_kind_created ON agent_tasks(kind, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  kind          TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'running',
+  trigger       TEXT,
+  payload_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result_json   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error_message TEXT,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status_created ON agent_runs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_kind_created ON agent_runs(kind, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_actions (
+  id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  run_id      BIGINT REFERENCES agent_runs(id) ON DELETE SET NULL,
+  task_id     BIGINT REFERENCES agent_tasks(id) ON DELETE CASCADE,
+  action_type TEXT NOT NULL,
+  input_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  cost_usd    NUMERIC NOT NULL DEFAULT 0,
+  duration_ms INTEGER,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_run_created ON agent_actions(run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_task_created ON agent_actions(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_type_created ON agent_actions(action_type, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_memory (
+  id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  memory_key      TEXT NOT NULL UNIQUE,
+  memory_type     TEXT NOT NULL,
+  subject         TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active',
+  score           NUMERIC NOT NULL DEFAULT 0,
+  facts_json      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_type_score ON agent_memory(memory_type, score DESC, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_subject ON agent_memory(subject);
+
 -- Idempotent upgrades for databases initialized before these columns existed.
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;
@@ -368,6 +528,26 @@ ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_token_hash TEXT;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS ai_started_at TIMESTAMPTZ;
+ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS agent_run_id BIGINT;
+ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS run_id BIGINT;
+DO $$
+BEGIN
+  ALTER TABLE background_jobs
+    ADD CONSTRAINT background_jobs_agent_run_id_fkey
+    FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id) ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+DO $$
+BEGIN
+  ALTER TABLE agent_actions
+    ADD CONSTRAINT agent_actions_run_id_fkey
+    FOREIGN KEY (run_id) REFERENCES agent_runs(id) ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_background_jobs_agent_run_created ON background_jobs(agent_run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_run_created ON agent_actions(run_id, created_at DESC);
 UPDATE background_jobs bj
 SET user_id = u.id
 FROM users u

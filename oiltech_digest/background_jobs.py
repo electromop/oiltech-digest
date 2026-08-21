@@ -15,15 +15,12 @@ from typing import Any, Callable
 
 from oiltech_digest import config
 from oiltech_digest.db import repository
-from oiltech_digest.ingestion import playwright_parser, request_parser
+from oiltech_digest.ingestion import playwright_parser, request_parser, rss_parser, telegram_parser
 from oiltech_digest.ingestion.source_diagnostics import diagnose_source
 from oiltech_digest.processing.digest import write_digest_export
 from oiltech_digest.processing.pipeline import (
     make_client,
-    process_relevance_articles,
-    process_score_articles,
-    process_summary_articles,
-    process_tag_articles,
+    process_pipeline_articles,
 )
 
 _executor = ThreadPoolExecutor(max_workers=max(1, config.BACKGROUND_JOB_WORKERS))
@@ -197,10 +194,9 @@ def _run_process_articles(payload: dict[str, Any], job_id: int) -> dict[str, Any
 
     if has_article_ids:
         ids = [int(article_id) for article_id in article_ids]
-        articles = repository.get_articles_by_ids(ids, include_summary=False)
+        articles = repository.get_articles_by_ids(ids, include_summary=True)
     else:
-        ids = []
-        articles = repository.get_articles_needing_summary(limit)
+        articles = repository.get_articles_needing_pipeline(limit)
 
     # Отметка «эта попытка НАЧАЛА жечь OpenAI» — строго ДО первого обращения к модели.
     # По ней requeue_stale_background_jobs отличает задачу, которую нельзя перезапускать
@@ -208,35 +204,11 @@ def _run_process_articles(payload: dict[str, Any], job_id: int) -> dict[str, Any
     # Именно отдельная колонка, а не progress: claim/mark-running форсят progress в 10
     # ещё до тела обработчика, поэтому по progress «до/после AI» не различить.
     repository.mark_background_job_ai_started(job_id)
-    summaries = process_summary_articles(articles, client)
-    repository.update_background_job_progress(job_id, 35)
-
-    ids = ids or [int(article["id"]) for article in articles]
-    relevance_articles = (
-        repository.get_articles_by_ids(ids, include_summary=True)
-        if has_article_ids
-        else repository.get_articles_needing_relevance(limit)
-    )
-    relevance = process_relevance_articles(relevance_articles, client)
-    repository.update_background_job_progress(job_id, 55)
-
-    with_summary = (
-        repository.get_articles_by_ids(ids, include_summary=True)
-        if has_article_ids
-        else repository.get_articles_needing_tags(limit)
-    )
-    tags = process_tag_articles(with_summary, client)
-    repository.update_background_job_progress(job_id, 75)
-
-    with_summary = (
-        repository.get_articles_by_ids(ids, include_summary=True)
-        if has_article_ids
-        else repository.get_articles_needing_scores(limit)
-    )
-    scores = process_score_articles(with_summary, client)
+    repository.update_background_job_progress(job_id, 20)
+    stats = process_pipeline_articles(articles, client, fetch_full=True)
     repository.update_background_job_progress(job_id, 95)
 
-    return {"summary": summaries, "relevance": relevance, "tagging": tags, "scoring": scores}
+    return {"pipeline": stats}
 
 
 def _run_scrape_source(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
@@ -255,6 +227,27 @@ def _run_scrape_source(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     return {"source_id": source_id, "stats": stats}
 
 
+def _run_parse_source_once(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    source_id = int(payload["source_id"])
+    source = repository.get_source(source_id)
+    if source is None:
+        raise ValueError("Source not found")
+    strategy = source.get("parse_strategy")
+    repository.update_background_job_progress(job_id, 20)
+    if strategy == "rss":
+        stats = rss_parser.parse_source(source)
+    elif strategy == "request":
+        stats = request_parser.parse_source(source)
+    elif strategy == "telegram":
+        stats = telegram_parser.parse_source(source)
+    elif strategy == "playwright":
+        stats = playwright_parser.parse_source(source)
+    else:
+        raise ValueError("parse_source_once supports rss/request/telegram/playwright sources")
+    repository.update_background_job_progress(job_id, 90)
+    return {"source_id": source_id, "strategy": strategy, "stats": stats}
+
+
 def _run_diagnose_source(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     source_id = int(payload["source_id"])
     source = repository.get_source(source_id)
@@ -269,6 +262,167 @@ def _run_diagnose_source(payload: dict[str, Any], job_id: int) -> dict[str, Any]
     return result
 
 
+def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources, get_topic_gaps
+    from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate
+
+    topics = [str(item).strip() for item in payload.get("topics") or [] if str(item).strip()]
+    if not topics:
+        gaps = get_topic_gaps(limit=int(payload.get("topic_limit") or 3))
+        topics = [str(row.get("topic") or "").strip() for row in gaps if str(row.get("topic") or "").strip()]
+    if not topics:
+        return {"topics": [], "candidates": 0, "evaluated": 0, "reason": "no topic gaps found"}
+
+    limit = int(payload.get("limit") or 10)
+    offline = bool(payload.get("offline", False))
+    fetch_inspection = bool(payload.get("fetch_inspection", False))
+    auto_evaluate = bool(payload.get("auto_evaluate", True))
+    article_limit = int(payload.get("article_limit") or 5)
+    agent_run_id = int(payload["agent_run_id"]) if payload.get("agent_run_id") else None
+    results: list[dict[str, Any]] = []
+    total_candidates = 0
+    total_evaluated = 0
+    total_evaluation_jobs = 0
+
+    for index, topic in enumerate(topics, start=1):
+        progress = int(min(85, 10 + (index - 1) * 70 / max(len(topics), 1)))
+        repository.update_background_job_progress(job_id, progress)
+        discovery = discover_sources(DiscoveryConfig(
+            topic=topic,
+            limit=limit,
+            seed_urls=tuple(payload.get("seed_urls") or ()),
+            offline=offline,
+            dry_run=False,
+            fetch_inspection=fetch_inspection,
+            test_parse=False,
+            run_id=agent_run_id,
+        ))
+        topic_result = {
+            "topic": topic,
+            "task_id": discovery.get("task_id"),
+            "search": discovery.get("search"),
+            "candidates": [
+                {"id": item.get("id"), "url": item.get("url"), "action": item.get("recommended_action")}
+                for item in discovery.get("candidates") or []
+            ],
+            "evaluations": [],
+        }
+        total_candidates += len(topic_result["candidates"])
+        if auto_evaluate:
+            for item in discovery.get("candidates") or []:
+                candidate_id = item.get("id")
+                if not candidate_id:
+                    continue
+                if config.EXTERNAL_WORKERS_ENABLED and config.AI_EXECUTION_REGION == "external":
+                    evaluation_job = repository.create_background_job(
+                        "source_candidate_evaluate",
+                        {
+                            "candidate_id": int(candidate_id),
+                            "article_limit": article_limit,
+                            "offline": False,
+                            "collect": True,
+                            "process": True,
+                        },
+                        queue_name="external-ai",
+                        execution_region="external",
+                        capability="openai",
+                        max_attempts=1,
+                        agent_run_id=agent_run_id,
+                    )
+                    topic_result["evaluations"].append({
+                        "candidate_id": int(candidate_id),
+                        "job_id": int(evaluation_job["id"]),
+                        "queued": "external-ai",
+                    })
+                    total_evaluation_jobs += 1
+                    continue
+                evaluation = evaluate_source_candidate(
+                    int(candidate_id),
+                    article_limit=article_limit,
+                    offline=True,
+                    collect=True,
+                    process=True,
+                )
+                topic_result["evaluations"].append({
+                    "candidate_id": int(candidate_id),
+                    "metrics": evaluation.get("metrics"),
+                    "recommended_action": evaluation.get("recommended_action"),
+                    "next_status": evaluation.get("next_status"),
+                })
+                total_evaluated += 1
+        results.append(topic_result)
+
+    repository.update_background_job_progress(job_id, 95)
+    return {
+        "topics": topics,
+        "candidates": total_candidates,
+        "evaluated": total_evaluated,
+        "evaluation_jobs": total_evaluation_jobs,
+        "results": results,
+    }
+
+
+def _run_source_discovery_plan(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.planner import PlannerConfig, build_plan, enqueue_plan_actions
+
+    run_id = repository.create_agent_run(
+        "source_discovery_cycle",
+        trigger=str(payload.get("trigger") or "background_job"),
+        payload={**payload, "background_job_id": job_id},
+    )
+    repository.update_background_job_progress(job_id, 20)
+    try:
+        plan = build_plan(PlannerConfig(
+            days=int(payload.get("days") or 30),
+            target_per_topic=int(payload.get("target_per_topic") or 10),
+            topic_limit=int(payload.get("topic_limit") or 5),
+            candidate_limit=int(payload.get("candidate_limit") or 10),
+            max_actions=int(payload.get("max_actions") or 5),
+            persist_memory=bool(payload.get("persist_memory", True)),
+            run_id=run_id,
+        ))
+        repository.update_background_job_progress(job_id, 70)
+        queued = enqueue_plan_actions(
+            plan,
+            offline=bool(payload.get("offline", True)),
+            evaluate=bool(payload.get("evaluate", True)),
+            run_id=run_id,
+        )
+        repository.update_background_job_progress(job_id, 95)
+        result = {**plan, "run_id": run_id, "queued": queued}
+        repository.finish_agent_run(run_id, status="ok", result=result)
+        return result
+    except Exception as exc:
+        repository.finish_agent_run(run_id, status="failed", result={}, error_message=str(exc)[:1000])
+        raise
+
+
+def _run_source_discovery_loop(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.loop import AgentLoopConfig, run_agent_loop
+
+    repository.update_background_job_progress(job_id, 10)
+    result = run_agent_loop(AgentLoopConfig(
+        goal=str(payload.get("goal") or "Найти новые полезные источники сигналов"),
+        days=int(payload.get("days") or 30),
+        target_per_topic=int(payload.get("target_per_topic") or 10),
+        topic_limit=int(payload.get("topic_limit") or 5),
+        candidate_limit=int(payload.get("candidate_limit") or 10),
+        max_actions=int(payload.get("max_actions") or 5),
+        max_iterations=int(payload.get("max_iterations") or 3),
+        offline=bool(payload.get("offline", True)),
+        fetch_inspection=bool(payload.get("fetch_inspection", False)),
+        dry_run=bool(payload.get("dry_run", False)),
+        auto_evaluate=bool(payload.get("auto_evaluate", True)),
+        article_limit=int(payload.get("article_limit") or 5),
+        persist_memory=bool(payload.get("persist_memory", True)),
+        max_daily_loop_runs=int(payload.get("max_daily_loop_runs") or 4),
+        max_daily_candidates=int(payload.get("max_daily_candidates") or 100),
+        max_daily_evaluations=int(payload.get("max_daily_evaluations") or 100),
+    ))
+    repository.update_background_job_progress(job_id, 95)
+    return result
+
+
 def job_download_path(job: dict[str, Any]) -> Path | None:
     result = job.get("result_json") or {}
     path = result.get("path")
@@ -278,6 +432,10 @@ def job_download_path(job: dict[str, Any]) -> Path | None:
 _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "digest_export": _run_digest_export,
     "process_articles": _run_process_articles,
+    "parse_source_once": _run_parse_source_once,
     "scrape_source": _run_scrape_source,
     "diagnose_source": _run_diagnose_source,
+    "source_discovery_plan": _run_source_discovery_plan,
+    "source_discovery_loop": _run_source_discovery_loop,
+    "discover_source_candidates": _run_discover_source_candidates,
 }

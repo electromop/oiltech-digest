@@ -53,11 +53,18 @@ def test_extract_main_text_uses_json_ld_article_body():
 
 
 def test_is_better_text_requires_meaningful_gain():
-    current = "Short RSS teaser about drilling."
-    extracted = "Full text. " * 40
+    current = "Existing article body about drilling automation. " * 25
+    extracted = "Full text. " * 100
 
     assert not article_fetcher._is_better_text(extracted, current, min_chars=800)
     assert article_fetcher._is_better_text(extracted * 3, current, min_chars=800)
+
+
+def test_is_better_text_accepts_full_article_over_short_teaser():
+    current = "Short RSS teaser about drilling."
+    extracted = "Full text about a relevant oilfield technology deployment. " * 10
+
+    assert article_fetcher._is_better_text(extracted, current, min_chars=500)
 
 
 def test_extract_og_image_prefers_open_graph():
