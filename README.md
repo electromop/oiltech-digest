@@ -29,7 +29,7 @@ Telegram), очищает и оценивает их с помощью AI, а р
 Пользователи → 🇷🇺 РФ-core (БД + UI + РФ-парсинг)  ⇄ HTTPS task-API ⇄  🌍 NL-воркер (OpenAI + иностранные сайты)
 ```
 
-Всё за флагами (`EXTERNAL_WORKERS_ENABLED`, `AI_EXECUTION_REGION`, `FETCH_EXTERNAL_ENABLED`) — по умолчанию **single-server** режим, когда один сервер делает всё. Детали: [`docs/geodistributed_architecture_plan.md`](docs/geodistributed_architecture_plan.md), [`docs/external_worker_deploy.md`](docs/external_worker_deploy.md).
+Всё за флагами (`EXTERNAL_WORKERS_ENABLED`, `AI_EXECUTION_REGION`, `FETCH_EXTERNAL_ENABLED`) — по умолчанию **single-server** режим, когда один сервер делает всё. Детали: [`docs/archive/geodistributed_architecture_plan.md`](docs/archive/geodistributed_architecture_plan.md), [`docs/external_worker_deploy.md`](docs/external_worker_deploy.md).
 
 ---
 

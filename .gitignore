@@ -49,3 +49,8 @@ frontend/vite.config.js
 
 # Локальный каталог оригиналов при запуске scripts/run-local.sh
 .local-documents/
+
+# Мусор macOS
+.DS_Store
+Icon?
+._*
