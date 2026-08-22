@@ -201,7 +201,17 @@ def cmd_apply_source_overrides(args: argparse.Namespace) -> None:
 
     stats = apply_overrides()
     print(f"Оверрайды источников: изменено={stats['changed']}, без изменений={stats['unchanged']}, "
-          f"не найдено={stats['not_found']}")
+          f"не найдено={stats['not_found']}, неоднозначно={stats['ambiguous']}")
+    # Промах по имени = «починил, а источник всё так же молчит». В bootstrap вызов обёрнут
+    # в `|| true`, поэтому кода возврата никто не увидит — единственный сигнал деплою это
+    # напечатанное ИМЯ, а не счётчик, который легко прочитать как 0.
+    problems = (
+        [(name, "не найден в БД (проверьте sources.name)") for name in stats["missing_names"]]
+        + [(name, "несколько строк с этим именем (добавьте source_type в запись реестра)")
+           for name in stats["ambiguous_names"]]
+    )
+    for name, reason in problems:
+        print(f"  ВНИМАНИЕ: оверрайд НЕ применён — {name}: {reason}")
 
 
 def cmd_summarize(args: argparse.Namespace) -> None:

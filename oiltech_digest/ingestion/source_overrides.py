@@ -23,6 +23,10 @@ from oiltech_digest.db.connection import get_connection
 logger = logging.getLogger(__name__)
 
 # Ключ — точное имя источника (sources.name). Значения:
+#   source_type    — опционально, но ОБЯЗАТЕЛЬНО для неуникальных имён: естественный ключ
+#     таблицы — пара (name, source_type), одно издание живёт двумя строками (сайт 'Media' +
+#     'Telegram'-канал) под общим именем. Без него имя с двумя строками считается
+#     неоднозначным и оверрайд НЕ применяется (шумно, см. apply_overrides).
 #   parse_strategy — обязательно ('playwright' для JS/WAF-сайтов, 'rss' для лент);
 #   listing_url    — опционально; None = не трогать (берётся из url/сидера).
 #   rss_url        — опционально; для RSS-лент с нестандартным/сменившимся URL фида.
@@ -165,6 +169,39 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "СПбГУ": {"parse_strategy": "rss", "rss_url": "https://spbu.ru/news-events.xml"},
     "МГУ": {"parse_strategy": "playwright", "listing_url": "https://www.msu.ru/news/"},  # сайт — SPA
 
+    # ==== Ревизия 2026-08-22 (#61): федеральные СМИ собирали ОБЩУЮ ленту издания ====
+    # Та же болезнь, что у РФ-блока выше, но на самых объёмных источниках: профиль издания
+    # жил ТОЛЬКО в поле name («Энергетика», «ТЭК»), а на настройку не влиял — у РБК не задан
+    # listing_url (фоллбэк на url = главная rbc.ru), у Интерфакса rss_url = общий фид издания.
+    # В ленту нефтесервисного дайджеста попадали кот Ларри, приговор экс-генералу Росгвардии
+    # и танк «Пантера» — заказчику это видно.
+    # `source_type` здесь ОБЯЗАТЕЛЕН: у обоих изданий есть telegram-двойник с ТЕМ ЖЕ именем
+    # (#59), и до правки apply_overrides ниже оверрайд мог лечь на него (см. её докстринг).
+    "Интерфакс ТЭК": {
+        "source_type": "Media", "parse_strategy": "request",
+        # Проверено живым diagnose_source 22.08: verdict=ok, 8 кандидатов, заголовки
+        # отраслевые («Минпромторг хочет к 2030 году довести долю поставляемого оборудования
+        # РФ для ТЭК до 90%», «Изменения в топливном демпфере и налоговые послабления в ТЭК»).
+        # ⚠️ ФОРМАТ URL: у Интерфакса тег живёт в ПУТИ. Форма `?tag=…` отдаёт 200 и кандидатов,
+        # но это ОБЩАЯ лента: замер 22.08 — ?tag=ТЭК, ?tag=нефть, ?tag=энергетика вернули ОДИН
+        # И ТОТ ЖЕ список (Wildberries, ЦИК, погода в Москве). Неверный URL здесь не падает,
+        # а тихо отдаёт мусор — то есть выглядит как успешно применённый оверрайд.
+        "listing_url": "https://www.interfax.ru/tags/%D0%A2%D0%AD%D0%9A/"},
+    # NB: rss_url Интерфакса остаётся общей лентой издания. При parse_strategy='request' он не
+    # читается (диспетчер в rss_parser.parse_all жёстко по parse_strategy), но возврат стратегии
+    # на 'rss' — хоть руками, хоть discover-rss — вернёт мусор. Профильного фида у тега нет.
+    "РБК Энергетика": {
+        "source_type": "Media", "parse_strategy": "request",
+        # ⚠️ ЕДИНСТВЕННАЯ запись реестра, НЕ подтверждённая живой проверкой. rbc.ru закрыт
+        # для не-РФ IP: 401 с KZ-выхода, 403 у WebFetch, TCP-таймаут на rssexport/amp.rbc.ru,
+        # а SSH на РФ-прод не идёт через VPN мака. Основание выбора — поисковый индекс: URL
+        # проиндексирован с ТЕМАТИЧЕСКИМ title «нефть и газ — последние новости сегодня на
+        # РБК.Ру» (общий title РБК другой), т.е. РБК, в отличие от Интерфакса, тег в query
+        # обрабатывает. ОБЯЗАТЕЛЬНО после деплоя: `source-diagnose 50`.
+        #   candidate_count=0        → ставить parse_strategy='playwright' (страница на JS);
+        #   заголовки снова общие    → тег подобран неверно, пробовать ?tag=ТЭК.
+        "listing_url": "https://www.rbc.ru/tags/?tag=%D0%BD%D0%B5%D1%84%D1%82%D1%8C+%D0%B8+%D0%B3%D0%B0%D0%B7"},
+
     # -- Гос-агентства: сайты таймаутят с прода (20с×3), но у них есть официальные telegram-каналы --
     # Telegram с РФ-сервера работает С ПЕРЕБОЯМИ (в логах бывает Network is unreachable), но
     # 7 telegram-источников живы и свежие — канал надёжнее, чем таймаутящий сайт.
@@ -180,10 +217,24 @@ SOURCE_OVERRIDES: dict[str, dict] = {
 
 def apply_overrides() -> dict:
     """Идемпотентно применить оверрайды. Меняет строку только если что-то реально
-    изменилось, и тогда же сбрасывает request-состояние. Возвращает статистику."""
+    изменилось, и тогда же сбрасывает request-состояние. Возвращает статистику.
+
+    Выбор строки идёт по паре `(name, source_type)` — естественному ключу таблицы
+    (`idx_sources_name_type`), а не по одному имени: одно издание живёт двумя строками
+    (сайт + telegram-канал) под общим именем. Поиск по одному `name` с `fetchone()`
+    отдавал строку на усмотрение плана запроса — на seq scan оверрайд ложился на
+    выключенный telegram-двойник, и `changed=1` означал «починен не тот источник».
+
+    Неоднозначность (имя без `source_type` совпало с несколькими строками) — это ОТКАЗ
+    с именем в отчёте, а не выбор наугад: молча испорченный второй источник дороже
+    непримененного оверрайда.
+    """
     changed = 0
     unchanged = 0
     not_found = 0
+    ambiguous = 0
+    missing_names: list[str] = []
+    ambiguous_names: list[str] = []
     with get_connection() as conn:
         for name, fields in SOURCE_OVERRIDES.items():
             new_strategy = fields["parse_strategy"]
@@ -191,15 +242,31 @@ def apply_overrides() -> dict:
             new_rss = fields.get("rss_url")
             new_url = fields.get("url")
             new_region = fields.get("network_region")
-            row = conn.execute(
-                "SELECT id, parse_strategy, listing_url, rss_url, url, network_region FROM sources WHERE name = %s",
-                (name,),
-            ).fetchone()
-            if row is None:
+            want_type = fields.get("source_type")
+            select = ("SELECT id, parse_strategy, listing_url, rss_url, url, network_region, "
+                      "source_type FROM sources WHERE name = %s")
+            select_params: tuple = (name,)
+            if want_type is not None:
+                select += " AND source_type = %s"
+                select_params += (want_type,)
+            rows = conn.execute(select + " ORDER BY id", select_params).fetchall()
+            if not rows:
                 not_found += 1
-                logger.warning("source override: источник %r не найден в БД", name)
+                missing_names.append(name if want_type is None else f"{name} [{want_type}]")
+                logger.warning("source override: источник %r (source_type=%r) не найден в БД",
+                               name, want_type)
                 continue
-            source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region = row
+            if len(rows) > 1:
+                # Сузить ключ может только сам реестр — угадывать здесь нечего.
+                ambiguous += 1
+                ambiguous_names.append(name)
+                logger.error(
+                    "source override: имя %r неоднозначно (совпало строк: %d — %s) — оверрайд "
+                    "НЕ применён, добавьте source_type в запись реестра",
+                    name, len(rows), ", ".join(f"id={r[0]} {r[6]}" for r in rows),
+                )
+                continue
+            source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region, _ = rows[0]
             listing_changed = new_listing is not None and (cur_listing or "") != new_listing
             rss_changed = new_rss is not None and (cur_rss or "") != new_rss
             url_changed = new_url is not None and (cur_url or "") != new_url
@@ -237,4 +304,6 @@ def apply_overrides() -> dict:
                         f" url={new_url}" if new_url else "",
                         f" region={new_region}" if new_region else "")
         conn.commit()
-    return {"changed": changed, "unchanged": unchanged, "not_found": not_found}
+    return {"changed": changed, "unchanged": unchanged, "not_found": not_found,
+            "ambiguous": ambiguous, "missing_names": missing_names,
+            "ambiguous_names": ambiguous_names}

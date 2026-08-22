@@ -136,6 +136,60 @@ def test_source_overrides_registry_is_well_formed():
         region = fields.get("network_region")
         if region is not None:
             assert region in {"auto", "ru", "external"}, f"{name!r}: неизвестный network_region"
+        source_type = fields.get("source_type")
+        if source_type is not None:
+            assert source_type and source_type.strip() == source_type, \
+                f"{name!r}: source_type пустой или с лишними пробелами"
+
+
+def test_source_overrides_agree_with_the_seed_sheet():
+    """Реестр сверяется с ЕДИНСТВЕННЫМ источником правды об источниках — Excel-сидером.
+
+    Две проверки, обе против одного и того же дефекта: оверрайд, который молча не применится.
+    1) Имя, у которого в сидере ДВЕ строки (издание живёт сайтом и telegram-каналом под общим
+       именем), обязано нести `source_type` — иначе apply_overrides отбросит его как
+       неоднозначный. Список таких имён НЕ захардкожен, а вычисляется из книги: появится
+       третий двойник — тест потребует source_type и для него.
+    2) Пара (name, source_type) обязана существовать в книге. Опечатка в типе («media»,
+       «News» вместо «Media») даёт not_found, то есть тихий no-op на проде.
+
+    Захардкоженный по памяти список допустимых типов здесь был бы хуже бесполезного: в
+    колонке «Тип» 33 различных значения («Company / NOC», «University / R&D», «Analytics»…),
+    и такой список отбраковывал бы валидные записи, а не ловил ошибки.
+    """
+    import collections
+
+    import openpyxl
+
+    registry = source_overrides.SOURCE_OVERRIDES
+    workbook = openpyxl.load_workbook(
+        Path(__file__).resolve().parent.parent
+        / "data" / "seed" / "1_Список_источников_для_дайджеста.xlsx"
+    )
+    rows = list(workbook["Sources_Expanded"].iter_rows(values_only=True))
+    header = rows[0]
+    name_col, type_col = header.index("Источник"), header.index("Тип")
+
+    seeded_types: dict[str, list[str]] = collections.defaultdict(list)
+    for row in rows[1:]:
+        if row[name_col] and row[type_col]:
+            seeded_types[str(row[name_col]).strip()].append(str(row[type_col]).strip())
+
+    for name, fields in registry.items():
+        variants = seeded_types.get(name)
+        if not variants:
+            continue  # источник заведён не через сидер — сверять не с чем
+        if len(variants) > 1:
+            assert "source_type" in fields, (
+                f"{name!r}: в сидере {len(variants)} строки ({', '.join(sorted(variants))}) — "
+                f"без source_type оверрайд будет отброшен как неоднозначный"
+            )
+        declared = fields.get("source_type")
+        if declared is not None:
+            assert declared in variants, (
+                f"{name!r}: source_type={declared!r} не встречается в сидере "
+                f"(есть: {', '.join(sorted(variants))}) — оверрайд не найдёт строку"
+            )
 
     # Дубль ключа в dict-литерале молча теряется — ловим по исходнику.
     source = Path(source_overrides.__file__).read_text(encoding="utf-8")
@@ -143,3 +197,139 @@ def test_source_overrides_registry_is_well_formed():
     keys = re.findall(r'^\s{4}"([^"]+)":\s*\{', body, re.M)
     duplicates = {key for key in keys if keys.count(key) > 1}
     assert not duplicates, f"дубли ключей в реестре: {sorted(duplicates)}"
+
+
+def test_apply_overrides_picks_row_by_source_type_when_name_is_not_unique(isolated_db, monkeypatch):
+    """При неуникальном `name` оверрайд обязан лечь на строку, выбранную по `source_type`.
+
+    Естественный ключ таблицы — пара `(name, source_type)`: одно издание живёт двумя
+    строками (сайт + telegram-канал) под ОДНИМ именем — «РБК Энергетика», «Интерфакс ТЭК»,
+    «Neftegaz.ru». Пока в реестре не было ни одного такого имени, дефект был латентным:
+    поиск шёл `WHERE name = %s` c `.fetchone()` — без `ORDER BY` и без `source_type`, то есть
+    какая строка вернётся, решал план запроса. Прогон на временной БД с seq scan клал
+    оверрайд на ВЫКЛЮЧЕННУЮ telegram-строку: `changed=1`, а починен не тот источник.
+
+    Здесь проверяется обе половины: нужная строка изменена И телеграм-двойник не тронут
+    (его `url`, `parse_strategy` и `enabled` — это отдельный рабочий источник, порча
+    которого выглядела бы как «оверрайд применился успешно»).
+    """
+    with connection.get_connection() as conn:
+        site_id = _add_source(
+            conn, "РБК Энергетика", source_type="Media",
+            url="https://www.rbc.ru", parse_strategy="request", enabled=True,
+        )
+        telegram_id = _add_source(
+            conn, "РБК Энергетика", source_type="Telegram",
+            url="https://t.me/rbc_energy", parse_strategy="telegram", enabled=False,
+        )
+        conn.commit()
+
+    monkeypatch.setattr(
+        source_overrides,
+        "SOURCE_OVERRIDES",
+        {"РБК Энергетика": {"source_type": "Media", "parse_strategy": "request",
+                            "listing_url": "https://www.rbc.ru/tags/?tag=нефть+и+газ"}},
+    )
+
+    stats = source_overrides.apply_overrides()
+    assert stats["changed"] == 1
+    assert stats["not_found"] == 0
+    assert stats["ambiguous"] == 0
+
+    with connection.get_connection() as conn:
+        site = conn.execute(
+            "SELECT listing_url, parse_strategy, url, enabled FROM sources WHERE id = %s",
+            (site_id,),
+        ).fetchone()
+        telegram = conn.execute(
+            "SELECT listing_url, parse_strategy, url, enabled FROM sources WHERE id = %s",
+            (telegram_id,),
+        ).fetchone()
+
+    # Строка сайта — починена.
+    assert site == ("https://www.rbc.ru/tags/?tag=нефть+и+газ", "request", "https://www.rbc.ru", True)
+    # Телеграм-двойник — нетронут целиком.
+    assert telegram == (None, "telegram", "https://t.me/rbc_energy", False)
+
+
+def test_apply_overrides_refuses_ambiguous_name_instead_of_guessing(isolated_db, monkeypatch):
+    """Имя без `source_type`, совпавшее с НЕСКОЛЬКИМИ строками, не применяется вслепую.
+
+    Молчаливый выбор «какой-нибудь» строки — худший исход: счётчик покажет `changed=1`,
+    а починен будет не тот источник (и заодно испорчен второй). Поэтому неоднозначность —
+    это отказ с именем в отчёте, а не монетка.
+    """
+    with connection.get_connection() as conn:
+        site_id = _add_source(conn, "Neftegaz.ru", source_type="Media",
+                              url="https://neftegaz.ru", parse_strategy="rss")
+        telegram_id = _add_source(conn, "Neftegaz.ru", source_type="Telegram",
+                                  url="https://t.me/neftegazchannel", parse_strategy="telegram")
+        conn.commit()
+
+    monkeypatch.setattr(
+        source_overrides,
+        "SOURCE_OVERRIDES",
+        {"Neftegaz.ru": {"parse_strategy": "request", "listing_url": "https://neftegaz.ru/news/"}},
+    )
+
+    stats = source_overrides.apply_overrides()
+
+    assert stats["ambiguous"] == 1
+    assert stats["changed"] == 0
+    assert "Neftegaz.ru" in stats["ambiguous_names"]
+
+    with connection.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT parse_strategy, listing_url FROM sources WHERE id IN (%s, %s) ORDER BY id",
+            (site_id, telegram_id),
+        ).fetchall()
+    # Ни одна из двух строк не тронута.
+    assert rows == [("rss", None), ("telegram", None)]
+
+
+def test_apply_overrides_reports_missing_names_not_just_a_counter(isolated_db, monkeypatch):
+    """Не найденное имя возвращается СПИСКОМ, а не только числом.
+
+    Вызов в bootstrap обёрнут в `|| true`, а CLI печатал лишь счётчик — промах по имени
+    выглядел как успешный деплой. Чтобы промах было видно, нужно само имя.
+    """
+    monkeypatch.setattr(
+        source_overrides,
+        "SOURCE_OVERRIDES",
+        {"Источник Которого Нет": {"parse_strategy": "rss", "rss_url": "https://example.com/rss"}},
+    )
+
+    stats = source_overrides.apply_overrides()
+
+    assert stats["not_found"] == 1
+    assert stats["missing_names"] == ["Источник Которого Нет"]
+
+
+def test_apply_overrides_source_type_mismatch_is_reported_as_missing(isolated_db, monkeypatch):
+    """Запись с `source_type`, которого нет у источника, — промах, а не тихое применение.
+
+    Опечатка в `source_type` («Мedia», «news») не должна деградировать до поиска по одному
+    имени: иначе сужение ключа, добавленное ради безопасности, само стало бы источником
+    случайного попадания.
+    """
+    with connection.get_connection() as conn:
+        source_id = _add_source(conn, "Интерфакс ТЭК", source_type="Media",
+                                url="https://www.interfax.ru", parse_strategy="rss")
+        conn.commit()
+
+    monkeypatch.setattr(
+        source_overrides,
+        "SOURCE_OVERRIDES",
+        {"Интерфакс ТЭК": {"source_type": "Telegram", "parse_strategy": "telegram",
+                           "url": "https://t.me/interfax_energy"}},
+    )
+
+    stats = source_overrides.apply_overrides()
+
+    assert stats["not_found"] == 1
+    assert stats["changed"] == 0
+    with connection.get_connection() as conn:
+        row = conn.execute(
+            "SELECT parse_strategy, url FROM sources WHERE id = %s", (source_id,)
+        ).fetchone()
+    assert row == ("rss", "https://www.interfax.ru")

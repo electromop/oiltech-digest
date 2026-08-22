@@ -80,8 +80,18 @@ def get_sources_for_discovery(only_missing: bool = True,
 
     `playwright` — осознанно выставленная вручную стратегия (JS/WAF-сайты); discover-rss
     НЕ должен её сбрасывать в request, иначе оверрайды откатываются на каждом цикле.
+
+    По той же причине исключаются источники с заданным `listing_url`: он ставится только
+    осознанно (реестр оверрайдов или админка), а discover_feed пробует НЕ его, а `url` —
+    главную страницу издания. У федеральных СМИ главная всегда рекламирует RSS, поэтому
+    update_source_rss перезаписал бы parse_strategy на 'rss' с ОБЩИМ фидом издания —
+    ровно тем мусором, ради которого источник и правился (#61). Порядок на деплое делает
+    это неизбежным: bootstrap применяет реестр, а первый же цикл планировщика запускает
+    discover-rss (RUN_DISCOVER_ON_START=1), то есть откат случился бы до первого парса.
     """
-    query = "SELECT * FROM sources WHERE enabled = TRUE AND parse_strategy NOT IN ('telegram', 'playwright')"
+    query = ("SELECT * FROM sources WHERE enabled = TRUE "
+             "AND parse_strategy NOT IN ('telegram', 'playwright') "
+             "AND (listing_url IS NULL OR listing_url = '')")
     params: list = []
     if only_missing:
         query += " AND (rss_url IS NULL OR rss_url = '')"
