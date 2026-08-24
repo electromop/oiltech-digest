@@ -168,6 +168,101 @@ def test_source_candidate_quality_report_groups_by_topic_and_domain(isolated_db)
     assert {row["subject"] for row in domain_rows} == {"good.example.com", "bad.example.com"}
 
 
+def test_upsert_source_candidate_allows_missing_approved_source_id(isolated_db):
+    candidate_id = repository.upsert_source_candidate({
+        "url": "https://seed.example.com/news",
+        "topic": "цифровые технологии нефтегаз",
+    })
+
+    row = repository.get_source_candidate(candidate_id)
+
+    assert row["url"] == "https://seed.example.com/news"
+    assert row["normalized_domain"] == "seed.example.com"
+    assert row["status"] == "new"
+    assert row["approved_source_id"] is None
+
+
+def test_source_candidate_article_metrics_include_real_quality_funnel(isolated_db):
+    candidate_id = repository.upsert_source_candidate({
+        "url": "https://quality.example.com/news",
+        "topic": "бурение",
+    })
+    first_id = repository.upsert_source_candidate_article(
+        candidate_id,
+        {
+            "url": "https://quality.example.com/news/a",
+            "title": "A",
+            "raw_text": "x" * 500,
+            "prefilter_keep": True,
+        },
+    )
+    second_id = repository.upsert_source_candidate_article(
+        candidate_id,
+        {
+            "url": "https://quality.example.com/news/b",
+            "title": "B",
+            "raw_text": "x" * 300,
+            "prefilter_keep": True,
+        },
+    )
+    repository.update_source_candidate_article_result(
+        first_id,
+        {
+            "relevant": True,
+            "relevance_reason": "ok",
+            "relevance_model": "test",
+            "summary": "summary",
+            "summary_model": "test",
+            "title_ru": "A",
+            "tag_id": None,
+            "tag_confidence": None,
+            "tag_rationale": None,
+            "tag_model": "test",
+            "total_score": 75,
+            "score_label": "high",
+            "score_explanation": "good",
+            "score_items": [],
+            "score_model": "test",
+            "processing_status": "ok",
+            "error_message": None,
+        },
+    )
+    repository.update_source_candidate_article_result(
+        second_id,
+        {
+            "relevant": False,
+            "relevance_reason": "noise",
+            "relevance_model": "test",
+            "summary": None,
+            "summary_model": None,
+            "title_ru": None,
+            "tag_id": None,
+            "tag_confidence": None,
+            "tag_rationale": None,
+            "tag_model": None,
+            "total_score": None,
+            "score_label": None,
+            "score_explanation": None,
+            "score_items": [],
+            "score_model": None,
+            "processing_status": "rejected",
+            "error_message": "noise",
+        },
+    )
+
+    metrics = repository.source_candidate_article_metrics(candidate_id)
+
+    assert metrics["tested_articles"] == 2
+    assert metrics["parsed_articles"] == 2
+    assert metrics["kept_by_prefilter"] == 2
+    assert metrics["processed_articles"] == 2
+    assert metrics["relevant_articles"] == 1
+    assert metrics["scored_articles"] == 1
+    assert metrics["high_score_articles"] == 1
+    assert metrics["avg_score"] == 75
+    assert metrics["noise_count"] == 1
+
+
 def test_source_candidate_triage_report_prioritizes_actionable_candidates(isolated_db):
     add_id = repository.upsert_source_candidate({
         "url": "https://ready.example.com/news",
@@ -341,7 +436,8 @@ def test_agent_actions_list_adds_learning_summary(isolated_db):
     assert rows[0]["decision_title"] == "Агент обучился"
     assert rows[0]["decision_tone"] == "good"
     assert "example.com" in rows[0]["decision_summary"]
-    assert rows[0]["output_json"] == {"candidates": 2}
+    assert rows[0]["output_json"]["candidate_id"] == 42
+    assert rows[0]["output_json"]["score"] == 88
 
 
 def test_agent_runs_list_counts_actions_and_jobs(isolated_db):

@@ -20,6 +20,7 @@ from oiltech_digest.source_discovery.agent import (
     _name_from_domain,
     _status_for_recommendation,
 )
+from oiltech_digest.source_discovery.learning import apply_candidate_learning
 
 
 def evaluate_source_candidate(
@@ -62,7 +63,8 @@ def evaluate_source_candidate(
         "errors": 0,
     }
     metrics = repository.source_candidate_article_metrics(candidate_id)
-    recommendation = recommend_source_action(metrics, offline=True)
+    evidence = repository.list_source_candidate_articles(candidate_id, limit=article_limit)
+    recommendation = recommend_source_action(metrics, offline=offline, evidence=evidence)
     next_status = _status_for_recommendation(recommendation["recommended_action"])
     repository.update_source_candidate_assessment(
         candidate_id,
@@ -75,6 +77,16 @@ def evaluate_source_candidate(
         recommended_action=recommendation["recommended_action"],
         review_comment=recommendation["reason"],
     )
+    learning = None
+    if recommendation["recommended_action"] in {"add", "test_more", "reject"}:
+        learning = apply_candidate_learning(
+            candidate_id,
+            event_type="evaluated",
+            status=next_status,
+            recommended_action=recommendation["recommended_action"],
+            review_comment=recommendation["reason"],
+            metrics=metrics,
+        )
     result = {
         "candidate_id": candidate_id,
         "task_id": task_id,
@@ -85,6 +97,7 @@ def evaluate_source_candidate(
         "recommended_action": recommendation["recommended_action"],
         "next_status": next_status,
         "review_comment": recommendation["reason"],
+        "learning": learning,
         "duration_ms": int((time.monotonic() - started) * 1000),
     }
     repository.record_agent_action(

@@ -46,6 +46,7 @@ from oiltech_digest.processing.digest import (
     write_digest_export,
 )
 from oiltech_digest.processing import external_ai
+from oiltech_digest.source_discovery.learning import apply_candidate_learning
 
 WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -148,6 +149,15 @@ class SourceDiscoveryPlanRequest(BaseModel):
     evaluate: bool = True
 
 
+class SourceDiscoveryDiscoverRequest(BaseModel):
+    topic: str
+    seed_url: str
+    limit: int = 20
+    offline: bool = True
+    fetch_inspection: bool = False
+    test_parse: bool = False
+
+
 class SourceDiscoveryLoopRequest(BaseModel):
     goal: str = "Найти новые полезные источники сигналов"
     days: int = 30
@@ -157,7 +167,8 @@ class SourceDiscoveryLoopRequest(BaseModel):
     max_actions: int = 5
     max_iterations: int = 3
     offline: bool = True
-    fetch_inspection: bool = False
+    fetch_inspection: bool = True
+    test_parse: bool = True
     dry_run: bool = False
     auto_evaluate: bool = True
     article_limit: int = 5
@@ -747,6 +758,46 @@ def source_candidate_triage(
     return [_clean(row) for row in repository.source_candidate_triage_report(limit=limit)]
 
 
+@app.post("/api/source-discovery/discover")
+def source_discovery_discover(
+    payload: SourceDiscoveryDiscoverRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    topic = payload.topic.strip()
+    seed_url = payload.seed_url.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="topic is required")
+    if not seed_url:
+        raise HTTPException(status_code=400, detail="seed_url is required")
+    if payload.limit < 1 or payload.limit > 50:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 50")
+
+    from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources
+
+    result = discover_sources(DiscoveryConfig(
+        topic=topic,
+        limit=payload.limit,
+        seed_urls=(seed_url,),
+        offline=payload.offline,
+        dry_run=False,
+        fetch_inspection=payload.fetch_inspection,
+        test_parse=payload.test_parse,
+    ))
+    repository.record_agent_action(
+        None,
+        "manual_seed_source_candidate",
+        input_payload={**payload.model_dump(), "user_id": int(user["id"])},
+        output_payload={
+            "topic": topic,
+            "seed_url": seed_url,
+            "candidates": len(result.get("candidates") or []),
+            "candidate_ids": [item.get("id") for item in result.get("candidates") or [] if item.get("id")],
+        },
+        duration_ms=result.get("duration_ms"),
+    )
+    return {"ok": True, "result": _clean(result)}
+
+
 @app.get("/api/source-discovery/plan")
 def source_discovery_plan(
     days: int = Query(30, ge=1, le=365),
@@ -823,6 +874,50 @@ def enqueue_source_discovery_loop(
         max_attempts=1,
     )
     return {"ok": True, "job": _job_payload(job)}
+
+
+@app.post("/api/source-discovery/loop/dry-run")
+def dry_run_source_discovery_loop(
+    payload: SourceDiscoveryLoopRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    if payload.days < 1 or payload.days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+    if payload.topic_limit < 1 or payload.topic_limit > 50:
+        raise HTTPException(status_code=400, detail="topic_limit must be between 1 and 50")
+    if payload.candidate_limit < 1 or payload.candidate_limit > 50:
+        raise HTTPException(status_code=400, detail="candidate_limit must be between 1 and 50")
+    if payload.max_actions < 1 or payload.max_actions > 50:
+        raise HTTPException(status_code=400, detail="max_actions must be between 1 and 50")
+    if payload.max_iterations < 1 or payload.max_iterations > 10:
+        raise HTTPException(status_code=400, detail="max_iterations must be between 1 and 10")
+    if payload.article_limit < 1 or payload.article_limit > 20:
+        raise HTTPException(status_code=400, detail="article_limit must be between 1 and 20")
+    if payload.max_daily_loop_runs < 0 or payload.max_daily_candidates < 0 or payload.max_daily_evaluations < 0:
+        raise HTTPException(status_code=400, detail="daily budget limits must be non-negative")
+
+    from oiltech_digest.source_discovery.loop import AgentLoopConfig, run_agent_loop
+
+    result = run_agent_loop(AgentLoopConfig(
+        goal=payload.goal,
+        days=payload.days,
+        target_per_topic=payload.target_per_topic,
+        topic_limit=payload.topic_limit,
+        candidate_limit=payload.candidate_limit,
+        max_actions=payload.max_actions,
+        max_iterations=payload.max_iterations,
+        offline=payload.offline,
+        fetch_inspection=payload.fetch_inspection,
+        test_parse=payload.test_parse,
+        dry_run=True,
+        auto_evaluate=False,
+        article_limit=payload.article_limit,
+        persist_memory=False,
+        max_daily_loop_runs=payload.max_daily_loop_runs,
+        max_daily_candidates=payload.max_daily_candidates,
+        max_daily_evaluations=payload.max_daily_evaluations,
+    ))
+    return {"ok": True, "result": _clean(result)}
 
 
 @app.get("/api/source-discovery/memory")
@@ -926,6 +1021,17 @@ def source_discovery_query_memory(
     return [_clean(row) for row in repository.query_memory_report(status=normalized_status, limit=limit)]
 
 
+@app.get("/api/source-discovery/evaluation")
+def source_discovery_evaluation(
+    limit: int = Query(500, ge=1, le=2000),
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    candidates = repository.list_source_candidates(limit=limit)
+    source_memory = repository.list_agent_memory(memory_type="source", status=None, limit=limit)
+    actions = repository.list_agent_actions(limit=min(limit, 500))
+    return _clean(_source_discovery_evaluation_report(candidates, source_memory, actions))
+
+
 @app.get("/api/source-discovery/readiness")
 def source_discovery_readiness_endpoint(
     user: dict[str, Any] = Depends(require_admin),
@@ -964,11 +1070,20 @@ def patch_source_candidate(
         recommended_action=payload.recommended_action,
         review_comment=payload.review_comment,
     )
+    learning = None
+    if payload.status in {"approved", "rejected", "paused"} or payload.recommended_action == "reject":
+        learning = apply_candidate_learning(
+            candidate_id,
+            event_type="operator_update",
+            status=payload.status,
+            recommended_action=payload.recommended_action,
+            review_comment=payload.review_comment,
+        )
     repository.record_agent_action(
         None,
         "update_source_candidate",
         input_payload={"candidate_id": candidate_id, **payload.model_dump(exclude_none=True)},
-        output_payload={"ok": True},
+        output_payload={"ok": True, "learning": learning},
     )
     return {"ok": True}
 
@@ -1049,6 +1164,13 @@ def approve_source_candidate(
         "approve_source_candidate",
         input_payload={"candidate_id": candidate_id, **payload.model_dump()},
         output_payload={"source_id": source_id, "initial_job_id": int(initial_job["id"]) if initial_job else None},
+    )
+    apply_candidate_learning(
+        candidate_id,
+        event_type="approved",
+        status="approved",
+        recommended_action="add",
+        source_id=source_id,
     )
     return {"ok": True, "source_id": source_id, "initial_job": _job_payload(initial_job) if initial_job else None}
 
@@ -1691,6 +1813,219 @@ def process_articles(payload: ProcessRequest, user: dict[str, Any] = Depends(req
         articles = repository.get_articles_needing_pipeline(payload.limit)
     stats = process_pipeline_articles(articles, client, fetch_full=True)
     return {"pipeline": stats}
+
+
+def _source_discovery_evaluation_report(
+    candidates: list[dict[str, Any]],
+    source_memory: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    candidate_eval = _candidate_recommendation_eval(candidates)
+    source_eval = _source_audit_eval(source_memory)
+    recent_agent_actions = _recent_agent_action_eval(actions)
+    weak_rules = [
+        item for item in source_eval["rules"]
+        if item["confidence_low"] or item["suppressed"] or item["avg_source_score"] < -40
+    ][:8]
+    return {
+        "summary": {
+            "candidates": candidate_eval["total"],
+            "candidate_decisions": candidate_eval["decided"],
+            "candidate_agreement_rate": candidate_eval["agreement_rate"],
+            "source_memories": source_eval["total"],
+            "sources_under_watch": source_eval["under_watch"],
+            "high_confidence_sources": source_eval["confidence"].get("high", 0),
+            "weak_rules": len(weak_rules),
+            "recent_actions": recent_agent_actions["total"],
+        },
+        "candidate_recommendations": candidate_eval,
+        "source_audit": source_eval,
+        "weak_rules": weak_rules,
+        "recent_actions": recent_agent_actions,
+    }
+
+
+def _candidate_recommendation_eval(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(candidates)
+    decided = 0
+    agreements = 0
+    disagreements = 0
+    by_recommendation: dict[str, dict[str, Any]] = {}
+    disagreements_examples: list[dict[str, Any]] = []
+    for row in candidates:
+        recommendation = str(row.get("recommended_action") or "unknown")
+        status = str(row.get("status") or "unknown")
+        bucket = by_recommendation.setdefault(recommendation, {
+            "recommendation": recommendation,
+            "total": 0,
+            "decided": 0,
+            "agreed": 0,
+            "disagreed": 0,
+            "agreement_rate": 0.0,
+        })
+        bucket["total"] += 1
+        agreement = _candidate_agreement(status, recommendation)
+        if agreement is None:
+            continue
+        decided += 1
+        bucket["decided"] += 1
+        if agreement:
+            agreements += 1
+            bucket["agreed"] += 1
+        else:
+            disagreements += 1
+            bucket["disagreed"] += 1
+            if len(disagreements_examples) < 8:
+                disagreements_examples.append({
+                    "candidate_id": row.get("id"),
+                    "name": row.get("name") or row.get("normalized_domain") or row.get("url"),
+                    "status": status,
+                    "recommended_action": recommendation,
+                    "topic": row.get("topic"),
+                    "avg_score": row.get("avg_score"),
+                })
+    rows = []
+    for bucket in by_recommendation.values():
+        if bucket["decided"]:
+            bucket["agreement_rate"] = round(bucket["agreed"] / bucket["decided"], 3)
+        rows.append(bucket)
+    rows.sort(key=lambda item: (item["decided"], item["total"]), reverse=True)
+    return {
+        "total": total,
+        "decided": decided,
+        "agreed": agreements,
+        "disagreed": disagreements,
+        "agreement_rate": round(agreements / decided, 3) if decided else 0.0,
+        "by_recommendation": rows,
+        "disagreements": disagreements_examples,
+    }
+
+
+def _candidate_agreement(status: str, recommendation: str) -> bool | None:
+    if status not in {"approved", "rejected", "paused"}:
+        return None
+    if recommendation == "add":
+        return status == "approved"
+    if recommendation == "reject":
+        return status == "rejected"
+    if recommendation == "test_more":
+        return status in {"approved", "paused"}
+    if recommendation == "human_review":
+        return True
+    return None
+
+
+def _source_audit_eval(source_memory: list[dict[str, Any]]) -> dict[str, Any]:
+    by_problem: dict[str, dict[str, Any]] = {}
+    by_recommendation: dict[str, dict[str, Any]] = {}
+    confidence = {"low": 0, "medium": 0, "high": 0}
+    severity = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+    rule_stats: dict[str, dict[str, Any]] = {}
+    under_watch = 0
+    examples = []
+    for row in source_memory:
+        facts = row.get("facts_json") or {}
+        recommendation = str(facts.get("recommendation") or "keep")
+        problem_type = str(facts.get("problem_type") or facts.get("status") or "stable")
+        confidence_key = str(facts.get("confidence") or "medium")
+        severity_key = str(facts.get("severity") or "low")
+        score = float(row.get("score") or 0)
+        confidence[confidence_key] = confidence.get(confidence_key, 0) + 1
+        severity[severity_key] = severity.get(severity_key, 0) + 1
+        if recommendation != "keep":
+            under_watch += 1
+        problem_bucket = by_problem.setdefault(problem_type, {"problem_type": problem_type, "count": 0, "avg_source_score": 0.0})
+        problem_bucket["count"] += 1
+        problem_bucket["avg_source_score"] += score
+        rec_bucket = by_recommendation.setdefault(recommendation, {
+            "recommendation": recommendation,
+            "label": str(facts.get("recommendation_label") or recommendation),
+            "count": 0,
+            "avg_source_score": 0.0,
+        })
+        rec_bucket["count"] += 1
+        rec_bucket["avg_source_score"] += score
+        decision_log = facts.get("decision_log") if isinstance(facts.get("decision_log"), dict) else {}
+        for rule in decision_log.get("triggered_rules") or []:
+            if isinstance(rule, dict):
+                _bump_rule(rule_stats, str(rule.get("rule") or "unknown"), "triggered", score, confidence_key)
+        for rule in decision_log.get("suppressed_rules") or []:
+            if isinstance(rule, dict):
+                _bump_rule(rule_stats, str(rule.get("rule") or "unknown"), "suppressed", score, confidence_key)
+        if recommendation != "keep" and len(examples) < 8:
+            examples.append({
+                "source_id": facts.get("source_id"),
+                "source_name": row.get("subject"),
+                "problem_type": problem_type,
+                "severity": severity_key,
+                "confidence": confidence_key,
+                "recommendation": recommendation,
+                "recommendation_label": facts.get("recommendation_label") or recommendation,
+                "score": score,
+            })
+    problems = _average_count_rows(by_problem.values())
+    recommendations = _average_count_rows(by_recommendation.values())
+    rules = []
+    for row in rule_stats.values():
+        total = max(int(row["triggered"]) + int(row["suppressed"]), 1)
+        row["suppression_rate"] = round(int(row["suppressed"]) / total, 3)
+        row["avg_source_score"] = round(float(row["avg_source_score"]) / total, 2)
+        rules.append(row)
+    rules.sort(key=lambda item: (item["suppressed"], item["confidence_low"], -item["avg_source_score"]), reverse=True)
+    return {
+        "total": len(source_memory),
+        "under_watch": under_watch,
+        "confidence": confidence,
+        "severity": severity,
+        "problems": problems,
+        "recommendations": recommendations,
+        "rules": rules,
+        "examples": examples,
+    }
+
+
+def _bump_rule(rule_stats: dict[str, dict[str, Any]], rule: str, field: str, score: float, confidence: str) -> None:
+    bucket = rule_stats.setdefault(rule, {
+        "rule": rule,
+        "triggered": 0,
+        "suppressed": 0,
+        "confidence_low": 0,
+        "avg_source_score": 0.0,
+        "suppression_rate": 0.0,
+    })
+    bucket[field] += 1
+    if confidence == "low":
+        bucket["confidence_low"] += 1
+    bucket["avg_source_score"] += score
+
+
+def _average_count_rows(rows: Any) -> list[dict[str, Any]]:
+    result = []
+    for row in rows:
+        count = max(int(row.get("count") or 0), 1)
+        item = dict(row)
+        item["avg_source_score"] = round(float(item.get("avg_source_score") or 0) / count, 2)
+        result.append(item)
+    result.sort(key=lambda item: item.get("count", 0), reverse=True)
+    return result
+
+
+def _recent_agent_action_eval(actions: list[dict[str, Any]]) -> dict[str, Any]:
+    by_type: dict[str, int] = {}
+    learning_events = 0
+    for row in actions:
+        action_type = str(row.get("action_type") or "unknown")
+        by_type[action_type] = by_type.get(action_type, 0) + 1
+        if action_type == "source_candidate_learning":
+            learning_events += 1
+    return {
+        "total": len(actions),
+        "learning_events": learning_events,
+        "by_type": [
+            {"action_type": key, "count": value}
+            for key, value in sorted(by_type.items(), key=lambda item: item[1], reverse=True)
+        ],
+    }
 
 
 def _job_payload(row: dict[str, Any]) -> dict[str, Any]:

@@ -1,5 +1,8 @@
+from datetime import datetime, timezone
+
 from oiltech_digest.source_discovery import agent
 from oiltech_digest.ingestion.source_diagnostics import ProbeResult
+from oiltech_digest.processing.openai_client import AIResponse
 
 
 def test_generate_search_queries_offline_uses_topic():
@@ -48,6 +51,28 @@ def test_generate_search_queries_skips_muted_queries(monkeypatch):
     assert len(queries) == 3
 
 
+def test_generate_search_queries_uses_successful_topic_query_domain_memory(monkeypatch):
+    def fake_memory(**kwargs):
+        if kwargs.get("memory_type") == "topic_query_domain":
+            return [{
+                "subject": "роботизация бурения | autonomous drilling source | useful.example.com",
+                "status": "active",
+                "score": 40,
+                "facts_json": {
+                    "topic": "роботизация бурения",
+                    "query": "autonomous drilling source",
+                    "domain": "useful.example.com",
+                },
+            }]
+        return []
+
+    monkeypatch.setattr(agent.repository, "list_agent_memory", fake_memory)
+
+    queries = agent.generate_search_queries("роботизация бурения", offline=True, limit=3)
+
+    assert queries[0] == "autonomous drilling source"
+
+
 def test_generate_search_queries_uses_strategy_specific_templates(monkeypatch):
     monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
 
@@ -89,6 +114,7 @@ def test_discover_sources_dry_run_does_not_write(monkeypatch):
     monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [{"topic": "t", "signals": 1, "target_signals": 10, "gap": 9}])
     monkeypatch.setattr(agent, "search_web", lambda queries, limit=20: {"status": "not_configured", "reason": "x", "queries": queries, "limit": limit, "results": []})
     monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
     monkeypatch.setattr(agent.repository, "upsert_source_candidate", lambda rec: calls.append(rec) or 1)
 
     result = agent.discover_sources(agent.DiscoveryConfig(
@@ -150,6 +176,7 @@ def test_search_web_brave_maps_results(monkeypatch):
 
 def test_discover_sources_uses_search_results_as_candidates(monkeypatch):
     monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
     monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
     monkeypatch.setattr(
         agent,
@@ -188,6 +215,7 @@ def test_discover_sources_persists_query_memory(monkeypatch):
         },
     )
     monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
     monkeypatch.setattr(agent.repository, "create_agent_task", lambda *args, **kwargs: 11)
     monkeypatch.setattr(agent.repository, "upsert_source_candidate", lambda rec: 22)
     monkeypatch.setattr(agent.repository, "record_agent_action", lambda *args, **kwargs: actions.append((args, kwargs)) or 1)
@@ -200,10 +228,9 @@ def test_discover_sources_persists_query_memory(monkeypatch):
     ))
 
     assert result["candidates"][0]["id"] == 22
-    assert memory[0]["memory_type"] == "query"
-    assert memory[0]["subject"] == "robotic drilling automation"
-    assert memory[0]["facts"]["topic"] == "роботизация бурения"
-    assert memory[0]["facts"]["empty_result"] is False
+    query_memory = {item["subject"]: item for item in memory if item["memory_type"] == "query"}
+    assert query_memory["robotic drilling automation"]["facts"]["topic"] == "роботизация бурения"
+    assert query_memory["robotic drilling automation"]["facts"]["empty_result"] is False
     assert actions[-1][0][1] == "discover_sources_finished"
 
 
@@ -265,7 +292,7 @@ def test_discover_sources_does_not_mute_queries_when_search_is_not_configured(mo
 
 
 def test_candidate_urls_skip_rejected_search_domains_but_keep_seed_urls():
-    result = agent._candidate_urls(
+    result, skipped, cooldown = agent._candidate_urls(
         ("https://bad.example.com/news",),
         [
             {"url": "https://bad.example.com/press", "query": "q"},
@@ -279,6 +306,476 @@ def test_candidate_urls_skip_rejected_search_domains_but_keep_seed_urls():
         "https://bad.example.com/news",
         "https://good.example.com/news",
     ]
+    assert skipped == []
+    assert cooldown == []
+
+
+def test_candidate_urls_skip_existing_source_domains():
+    result, skipped, cooldown = agent._candidate_urls(
+        (),
+        [
+            {"url": "https://neftegaz.ru/news/", "query": "q"},
+            {"url": "https://new.example.com/news", "query": "q"},
+        ],
+        10,
+        source_inventory={
+            "by_url": {},
+            "by_domain": {
+                "neftegaz.ru": {"id": 12, "name": "Neftegaz"},
+            },
+        },
+    )
+
+    assert [item["url"] for item in result] == ["https://new.example.com/news"]
+    assert cooldown == []
+    assert skipped == [{
+        "url": "https://neftegaz.ru/news",
+        "domain": "neftegaz.ru",
+        "source_id": 12,
+        "source_name": "Neftegaz",
+        "reason": "already_exists_in_sources",
+    }]
+
+
+def test_candidate_urls_normalizes_url_keys_and_keeps_single_candidate():
+    result, skipped, cooldown = agent._candidate_urls(
+        ("example.com/news/#section", "https://EXAMPLE.com/news/"),
+        [],
+        10,
+    )
+
+    assert skipped == []
+    assert cooldown == []
+    assert result == [{
+        "url": "https://example.com/news",
+        "reason": "Seed URL supplied by operator",
+        "query": "",
+    }]
+
+
+def test_candidate_urls_matches_existing_source_without_www():
+    result, skipped, cooldown = agent._candidate_urls(
+        ("https://www.slb.com/news-and-insights",),
+        [],
+        10,
+        source_inventory={
+            "by_url": {},
+            "by_domain": {"slb.com": {"id": 22, "name": "SLB"}},
+        },
+    )
+
+    assert result == []
+    assert cooldown == []
+    assert skipped == [{
+        "url": "https://www.slb.com/news-and-insights",
+        "domain": "slb.com",
+        "source_id": 22,
+        "source_name": "SLB",
+        "reason": "already_exists_in_sources",
+    }]
+
+
+def test_candidate_urls_skip_temporary_unavailable_domains():
+    result, skipped, cooldown = agent._candidate_urls(
+        (),
+        [
+            {"url": "https://flaky.example.com/news", "query": "q"},
+            {"url": "https://good.example.com/news", "query": "q"},
+        ],
+        10,
+        cooldown_domains={
+            "flaky.example.com": {
+                "retry_after": "2026-08-24T10:00:00+00:00",
+                "failure_count": 2,
+                "last_reason": "http_502",
+            }
+        },
+    )
+
+    assert [item["url"] for item in result] == ["https://good.example.com/news"]
+    assert skipped == []
+    assert cooldown == [{
+        "url": "https://flaky.example.com/news",
+        "domain": "flaky.example.com",
+        "reason": "temporary_unavailable_cooldown",
+        "retry_after": "2026-08-24T10:00:00+00:00",
+        "failure_count": 2,
+        "last_reason": "http_502",
+    }]
+
+
+def test_candidate_urls_keep_seed_urls_even_when_domain_is_on_cooldown():
+    result, skipped, cooldown = agent._candidate_urls(
+        ("https://flaky.example.com/news",),
+        [{"url": "https://flaky.example.com/press", "query": "q"}],
+        10,
+        cooldown_domains={
+            "flaky.example.com": {
+                "retry_after": "2026-08-24T10:00:00+00:00",
+                "failure_count": 2,
+                "last_reason": "http_502",
+            }
+        },
+    )
+
+    assert [item["url"] for item in result] == ["https://flaky.example.com/news"]
+    assert skipped == []
+    assert cooldown == [{
+        "url": "https://flaky.example.com/press",
+        "domain": "flaky.example.com",
+        "reason": "temporary_unavailable_cooldown",
+        "retry_after": "2026-08-24T10:00:00+00:00",
+        "failure_count": 2,
+        "last_reason": "http_502",
+    }]
+
+
+def test_candidate_urls_skip_bad_topic_query_domain_combo():
+    result, skipped, cooldown = agent._candidate_urls(
+        (),
+        [
+            {"url": "https://bad.example.com/news", "query": "bad drilling query"},
+            {"url": "https://good.example.com/news", "query": "bad drilling query"},
+        ],
+        10,
+        learning_policy={
+            "blocked_combo_keys": {agent._combo_policy_key("bad drilling query", "bad.example.com")},
+            "promoted_combo_keys": set(),
+            "muted_queries": set(),
+        },
+    )
+
+    assert [item["url"] for item in result] == ["https://good.example.com/news"]
+    assert skipped == []
+    assert cooldown == []
+
+
+def test_rank_search_results_boosts_successful_combo_and_skips_bad_combo():
+    result = agent._rank_search_results(
+        [
+            {"url": "https://neutral.example.com/news", "query": "drilling news"},
+            {"url": "https://bad.example.com/news", "query": "bad query"},
+            {"url": "https://useful.example.com/news", "query": "good query"},
+        ],
+        {
+            "promoted_combo_keys": {agent._combo_policy_key("good query", "useful.example.com")},
+            "blocked_combo_keys": {agent._combo_policy_key("bad query", "bad.example.com")},
+            "muted_queries": set(),
+            "query_scores": {"good query": 20},
+            "domain_scores": {"useful.example.com": 30},
+        },
+    )
+
+    assert [item["url"] for item in result] == [
+        "https://useful.example.com/news",
+        "https://neutral.example.com/news",
+    ]
+
+
+def test_discover_sources_with_seed_urls_skips_web_search(monkeypatch):
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(agent, "search_web", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("search must be skipped")))
+    monkeypatch.setattr(
+        agent,
+        "inspect_source",
+        lambda url, fetch=False: {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Seed",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 200, "error": None},
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "test_parse_source",
+        lambda url, article_limit=5: {
+            "url": url,
+            "verdict": "ok",
+            "metrics": {
+                "tested_articles": 2,
+                "relevant_articles": 1,
+                "avg_score": 70,
+                "duplicate_count": 0,
+                "noise_count": 0,
+            },
+        },
+    )
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        seed_urls=("https://seed.example.com/news",),
+        offline=True,
+        dry_run=True,
+        fetch_inspection=True,
+        test_parse=True,
+    ))
+
+    assert result["search"]["status"] == "seed_only"
+    assert [item["url"] for item in result["candidates"]] == ["https://seed.example.com/news"]
+
+
+def test_discover_sources_skips_unavailable_candidates_when_fetching(monkeypatch):
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(
+        agent,
+        "search_web",
+        lambda queries, limit=20: {
+            "status": "ok",
+            "queries": queries,
+            "limit": limit,
+            "results": [
+                {"url": "https://bad.example.com/news", "query": "q"},
+                {"url": "https://good.example.com/news", "query": "q"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "inspect_source",
+        lambda url, fetch=False: {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Example",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 502 if "bad" in url else 200, "error": None},
+        },
+    )
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        offline=True,
+        dry_run=True,
+        fetch_inspection=True,
+    ))
+
+    assert [item["url"] for item in result["candidates"]] == ["https://good.example.com/news"]
+    assert result["unavailable_sources_skipped"][0]["reason"] == "http_502"
+
+
+def test_discover_sources_records_temporary_unavailable_memory(monkeypatch):
+    memory = []
+    actions = []
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(agent.repository, "create_agent_task", lambda *args, **kwargs: 11)
+    monkeypatch.setattr(agent.repository, "record_agent_action", lambda *args, **kwargs: actions.append((args, kwargs)) or 1)
+    monkeypatch.setattr(agent.repository, "upsert_agent_memory", lambda **kwargs: memory.append(kwargs) or 1)
+    monkeypatch.setattr(
+        agent,
+        "search_web",
+        lambda queries, limit=20: {
+            "status": "ok",
+            "queries": queries,
+            "limit": limit,
+            "results": [{"url": "https://flaky.example.com/news", "query": "q"}],
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "inspect_source",
+        lambda url, fetch=False: {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Flaky",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 502, "error": None},
+        },
+    )
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        offline=True,
+        dry_run=False,
+        fetch_inspection=True,
+    ))
+
+    assert result["candidates"] == []
+    assert memory[0]["memory_key"] == "domain:flaky.example.com"
+    assert memory[0]["status"] == "temporary_unavailable"
+    assert memory[0]["facts"]["failure_count"] == 1
+    assert memory[0]["facts"]["last_reason"] == "http_502"
+    assert memory[0]["facts"]["retry_after"]
+
+
+def test_record_unavailable_domain_rejects_after_threshold(monkeypatch):
+    memory = []
+
+    def fake_memory(**kwargs):
+        return [{
+            "subject": "flaky.example.com",
+            "facts_json": {"failure_count": agent.TEMPORARY_UNAVAILABLE_REJECT_AFTER - 1},
+        }]
+
+    monkeypatch.setattr(agent.repository, "list_agent_memory", fake_memory)
+    monkeypatch.setattr(agent.repository, "upsert_agent_memory", lambda **kwargs: memory.append(kwargs) or 1)
+
+    agent._record_unavailable_domain(
+        "https://flaky.example.com/news",
+        "fetch_failed: timeout",
+        {"probe": {"status": None, "error": "timeout"}},
+    )
+
+    assert memory[0]["status"] == "rejected"
+    assert memory[0]["facts"]["failure_count"] == agent.TEMPORARY_UNAVAILABLE_REJECT_AFTER
+
+
+def test_temporary_unavailable_domains_honors_retry_after(monkeypatch):
+    monkeypatch.setattr(
+        agent.repository,
+        "list_agent_memory",
+        lambda **kwargs: [
+            {
+                "subject": "wait.example.com",
+                "facts_json": {
+                    "retry_after": "2026-08-24T10:00:00+00:00",
+                    "failure_count": 1,
+                    "last_reason": "http_502",
+                },
+            },
+            {
+                "subject": "expired.example.com",
+                "facts_json": {
+                    "retry_after": "2026-08-22T10:00:00+00:00",
+                    "failure_count": 1,
+                    "last_reason": "http_502",
+                },
+            },
+        ],
+    )
+
+    result = agent._temporary_unavailable_domains(datetime(2026, 8, 23, tzinfo=timezone.utc))
+
+    assert set(result) == {"wait.example.com"}
+    assert result["wait.example.com"]["failure_count"] == 1
+
+
+def test_discover_sources_skips_candidates_without_parseable_articles(monkeypatch):
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(
+        agent,
+        "search_web",
+        lambda queries, limit=20: {
+            "status": "ok",
+            "queries": queries,
+            "limit": limit,
+            "results": [
+                {"url": "https://empty.example.com/news", "query": "q"},
+                {"url": "https://useful.example.com/news", "query": "q"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "inspect_source",
+        lambda url, fetch=False: {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Example",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 200, "error": None},
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "test_parse_source",
+        lambda url, article_limit=5: {
+            "url": url,
+            "verdict": "no_candidates" if "empty" in url else "ok",
+            "metrics": {
+                "tested_articles": 0 if "empty" in url else 2,
+                "relevant_articles": 0 if "empty" in url else 1,
+                "avg_score": None if "empty" in url else 70,
+                "duplicate_count": 0,
+                "noise_count": 0,
+            },
+        },
+    )
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        offline=True,
+        dry_run=True,
+        fetch_inspection=True,
+        test_parse=True,
+    ))
+
+    assert [item["url"] for item in result["candidates"]] == ["https://useful.example.com/news"]
+    assert result["parse_failed_sources_skipped"][0]["reason"] == "no_candidates"
+
+
+def test_url_quality_gate_skips_bad_source_entrypoints():
+    assert agent._url_quality_gate_reason("https://example.com/files/report.pdf") == "bad_url_type:document"
+    assert agent._url_quality_gate_reason("https://example.com/tag/drilling") == "bad_url_type:index_noise"
+    assert agent._url_quality_gate_reason("https://example.com/search?q=drilling") == "bad_url_type:index_noise"
+    assert agent._url_quality_gate_reason("https://example.com/news/2026/robotic-drilling-system-improves-oilfield-operations") == "single_article_url"
+    assert agent._url_quality_gate_reason("https://example.com/news") is None
+    assert agent._url_quality_gate_reason("https://example.com/newsroom") is None
+
+
+def test_content_quality_gate_detects_semantic_404_and_antibot():
+    assert agent._content_quality_gate_reason("<html><title>Page not found</title><body>This page does not exist.</body></html>") == "semantic_404"
+    assert agent._content_quality_gate_reason("<html><body>Checking your browser before accessing. Cloudflare cf-challenge</body></html>") == "anti_bot"
+    assert agent._content_quality_gate_reason("<html><body>Новости компании и пресс-релизы по бурению</body></html>") is None
+
+
+def test_discover_sources_skips_quality_gate_candidates(monkeypatch):
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(
+        agent,
+        "search_web",
+        lambda queries, limit=20: {
+            "status": "ok",
+            "queries": queries,
+            "limit": limit,
+            "results": [
+                {"url": "https://example.com/tag/drilling", "query": "q"},
+                {"url": "https://blocked.example.com/news", "query": "q"},
+                {"url": "https://good.example.com/news", "query": "q"},
+            ],
+        },
+    )
+
+    def fake_inspect(url, fetch=False):
+        return {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Example",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 200, "error": None},
+            **({"quality_gate_reason": "anti_bot"} if "blocked" in url else {}),
+        }
+
+    monkeypatch.setattr(agent, "inspect_source", fake_inspect)
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        offline=True,
+        dry_run=True,
+        fetch_inspection=True,
+    ))
+
+    assert [item["url"] for item in result["candidates"]] == ["https://good.example.com/news"]
+    assert [item["reason"] for item in result["quality_gate_sources_skipped"]] == ["bad_url_type:index_noise", "anti_bot"]
 
 
 def test_test_parse_source_scores_useful_candidate(monkeypatch):
@@ -362,6 +859,60 @@ def test_test_source_candidate_updates_assessment(monkeypatch):
         "review_comment": "Источник дал достаточно релевантных материалов и выглядит полезным.",
     }]
     assert actions[0]["action_type"] == "test_source_candidate"
+
+
+def test_recommend_source_action_uses_ai_evidence(monkeypatch):
+    calls = []
+
+    class Client:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            calls.append({
+                "instructions": instructions,
+                "user_input": user_input,
+                "schema": schema,
+                "max_output_tokens": max_output_tokens,
+            })
+            return AIResponse(
+                data={
+                    "recommended_action": "add",
+                    "reason": "Источник дает релевантные материалы по бурению.",
+                    "strengths": ["Есть статьи с высоким score", "Тематика совпадает"],
+                    "risks": ["Выборка пока небольшая"],
+                    "confidence": 0.82,
+                },
+                model="fake-ai",
+            )
+
+    monkeypatch.setattr(agent, "make_client", lambda offline: Client())
+
+    result = agent.recommend_source_action(
+        {
+            "tested_articles": 5,
+            "relevant_articles": 4,
+            "avg_score": 72,
+            "duplicate_count": 0,
+            "noise_count": 1,
+        },
+        offline=False,
+        evidence=[
+            {
+                "title": "Robotic drilling system",
+                "summary": "Компания запустила роботизированную буровую.",
+                "relevant": True,
+                "total_score": 80,
+                "score_label": "Высокая",
+            }
+        ],
+    )
+
+    assert result["recommended_action"] == "add"
+    assert result["source"] == "ai"
+    assert result["model"] == "fake-ai"
+    assert result["confidence"] == 0.82
+    assert "Сильные стороны" in result["reason"]
+    assert "Риски" in result["reason"]
+    assert "Robotic drilling system" in calls[0]["user_input"]
+    assert calls[0]["schema"]["name"] == "source_candidate_recommendation"
 
 
 def test_test_source_candidate_dry_run_does_not_update(monkeypatch):

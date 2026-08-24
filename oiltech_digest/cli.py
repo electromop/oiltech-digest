@@ -533,6 +533,7 @@ def cmd_enqueue_source_discovery(args: argparse.Namespace) -> None:
         "limit": int(args.limit),
         "offline": bool(args.offline),
         "fetch_inspection": bool(args.fetch_inspection),
+        "test_parse": bool(getattr(args, "test_parse", True)),
         "auto_evaluate": bool(args.evaluate),
         "article_limit": int(args.article_limit),
     }
@@ -1430,6 +1431,7 @@ def _agent_loop_payload(args: argparse.Namespace) -> dict:
         "max_iterations": int(args.max_iterations),
         "offline": bool(args.offline),
         "fetch_inspection": bool(args.fetch_inspection),
+        "test_parse": bool(getattr(args, "test_parse", True)),
         "dry_run": bool(args.dry_run),
         "auto_evaluate": bool(args.evaluate),
         "article_limit": int(args.article_limit),
@@ -1504,6 +1506,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--max-iterations", type=int, default=3)
         p.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True)
         p.add_argument("--fetch-inspection", action="store_true")
+        p.add_argument("--test-parse", action=argparse.BooleanOptionalAction, default=True)
         p.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
         p.add_argument("--evaluate", action=argparse.BooleanOptionalAction, default=True)
         p.add_argument("--article-limit", type=int, default=5)
@@ -1684,6 +1687,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--fetch-inspection",
         action="store_true",
         help="проверять найденные/seed URL HTTP-запросом",
+    )
+    p_enqueue_source_discovery.add_argument(
+        "--test-parse",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="проверять, что из кандидата реально извлекаются статьи",
     )
     p_enqueue_source_discovery.add_argument(
         "--evaluate",

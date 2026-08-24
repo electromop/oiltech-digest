@@ -337,6 +337,7 @@ def test_source_discovery_loop_job_runs_loop(monkeypatch):
     assert captured["config"].goal == "найти"
     assert captured["config"].max_iterations == 2
     assert captured["config"].max_actions == 3
+    assert captured["config"].test_parse is True
     assert progress == [(99, 10), (99, 95)]
 
 

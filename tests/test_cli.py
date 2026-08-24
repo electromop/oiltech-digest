@@ -226,6 +226,7 @@ def test_agent_loop_command_prints_summary(monkeypatch, capsys):
         max_iterations=1,
         offline=True,
         fetch_inspection=False,
+        test_parse=True,
         dry_run=False,
         evaluate=True,
         article_limit=5,

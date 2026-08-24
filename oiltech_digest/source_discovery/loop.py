@@ -31,6 +31,7 @@ class AgentLoopConfig:
     max_iterations: int = 3
     offline: bool = True
     fetch_inspection: bool = False
+    test_parse: bool = True
     dry_run: bool = False
     auto_evaluate: bool = True
     article_limit: int = 5
@@ -44,25 +45,29 @@ class AgentLoopConfig:
 def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
     config = config or AgentLoopConfig()
     started = time.monotonic()
-    run_id = config.run_id or repository.create_agent_run(
-        "source_discovery_loop",
-        trigger="cli" if config.run_id is None else "nested",
-        payload={
-            "goal": config.goal,
-            "days": config.days,
-            "target_per_topic": config.target_per_topic,
-            "topic_limit": config.topic_limit,
-            "candidate_limit": config.candidate_limit,
-            "max_actions": config.max_actions,
-            "max_iterations": config.max_iterations,
-            "offline": config.offline,
-            "dry_run": config.dry_run,
-            "auto_evaluate": config.auto_evaluate,
-            "article_limit": config.article_limit,
-            "max_daily_loop_runs": config.max_daily_loop_runs,
-            "max_daily_candidates": config.max_daily_candidates,
-            "max_daily_evaluations": config.max_daily_evaluations,
-        },
+    run_id = None if config.dry_run else (
+        config.run_id or repository.create_agent_run(
+            "source_discovery_loop",
+            trigger="cli" if config.run_id is None else "nested",
+            payload={
+                "goal": config.goal,
+                "days": config.days,
+                "target_per_topic": config.target_per_topic,
+                "topic_limit": config.topic_limit,
+                "candidate_limit": config.candidate_limit,
+                "max_actions": config.max_actions,
+                "max_iterations": config.max_iterations,
+                "offline": config.offline,
+                "fetch_inspection": config.fetch_inspection,
+                "test_parse": config.test_parse,
+                "dry_run": config.dry_run,
+                "auto_evaluate": config.auto_evaluate,
+                "article_limit": config.article_limit,
+                "max_daily_loop_runs": config.max_daily_loop_runs,
+                "max_daily_candidates": config.max_daily_candidates,
+                "max_daily_evaluations": config.max_daily_evaluations,
+            },
+        )
     )
     iterations: list[dict[str, Any]] = []
     total_candidates = 0
@@ -81,16 +86,18 @@ def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
                 "empty_iterations": 0,
                 "terminal_reason": terminal_reason,
                 "budget": initial_budget,
+                "dry_run": config.dry_run,
                 "duration_ms": int((time.monotonic() - started) * 1000),
             }
-            repository.record_agent_action(
-                None,
-                "source_discovery_loop_budget_stop",
-                run_id=run_id,
-                input_payload={"goal": config.goal},
-                output_payload=result,
-            )
-            repository.finish_agent_run(run_id, status="ok", result=result)
+            if run_id is not None:
+                repository.record_agent_action(
+                    None,
+                    "source_discovery_loop_budget_stop",
+                    run_id=run_id,
+                    input_payload={"goal": config.goal},
+                    output_payload=result,
+                )
+                repository.finish_agent_run(run_id, status="ok", result=result)
             return result
 
         for iteration in range(1, max(1, config.max_iterations) + 1):
@@ -104,8 +111,8 @@ def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
                 topic_limit=config.topic_limit,
                 candidate_limit=config.candidate_limit,
                 max_actions=config.max_actions,
-                persist_memory=config.persist_memory,
-                record_action=True,
+                persist_memory=config.persist_memory and not config.dry_run,
+                record_action=not config.dry_run,
                 run_id=run_id,
             ))
             auto_actions = [
@@ -115,13 +122,14 @@ def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
             if not auto_actions:
                 terminal_reason = "no_auto_actions"
                 iterations.append(_iteration_result(iteration, plan, []))
-                repository.record_agent_action(
-                    None,
-                    "source_discovery_loop_iteration",
-                    run_id=run_id,
-                    input_payload={"iteration": iteration, "goal": config.goal},
-                    output_payload=iterations[-1],
-                )
+                if run_id is not None:
+                    repository.record_agent_action(
+                        None,
+                        "source_discovery_loop_iteration",
+                        run_id=run_id,
+                        input_payload={"iteration": iteration, "goal": config.goal},
+                        output_payload=iterations[-1],
+                    )
                 break
 
             observations = []
@@ -137,7 +145,7 @@ def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
                     offline=config.offline,
                     dry_run=config.dry_run,
                     fetch_inspection=config.fetch_inspection,
-                    test_parse=False,
+                    test_parse=config.test_parse,
                     run_id=run_id,
                     query_strategy=query_strategy,
                 ))
@@ -163,17 +171,18 @@ def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
                     "task_id": discovery.get("task_id"),
                 }
                 observations.append(observation)
-                if config.persist_memory:
+                if config.persist_memory and not config.dry_run:
                     _persist_strategy_memory(observation)
 
             iterations.append(_iteration_result(iteration, plan, observations))
-            repository.record_agent_action(
-                None,
-                "source_discovery_loop_iteration",
-                run_id=run_id,
-                input_payload={"iteration": iteration, "goal": config.goal},
-                output_payload=iterations[-1],
-            )
+            if run_id is not None:
+                repository.record_agent_action(
+                    None,
+                    "source_discovery_loop_iteration",
+                    run_id=run_id,
+                    input_payload={"iteration": iteration, "goal": config.goal},
+                    output_payload=iterations[-1],
+                )
 
             if any(item["candidate_count"] for item in observations):
                 empty_iterations = 0
@@ -182,6 +191,7 @@ def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
                 empty_iterations += 1
                 terminal_reason = "no_candidates_found"
 
+        reflection = _build_loop_reflection(iterations, terminal_reason=terminal_reason)
         result = {
             "run_id": run_id,
             "goal": config.goal,
@@ -189,13 +199,26 @@ def run_agent_loop(config: AgentLoopConfig | None = None) -> dict[str, Any]:
             "total_candidates": total_candidates,
             "empty_iterations": empty_iterations,
             "terminal_reason": terminal_reason,
+            "reflection": reflection,
             "budget": _budget_state(config, candidates_in_run=total_candidates),
+            "dry_run": config.dry_run,
             "duration_ms": int((time.monotonic() - started) * 1000),
         }
-        repository.finish_agent_run(run_id, status="ok", result=result)
+        if run_id is not None:
+            if config.persist_memory:
+                _persist_loop_reflection(run_id, config, reflection)
+            repository.record_agent_action(
+                None,
+                "source_discovery_loop_reflection",
+                run_id=run_id,
+                input_payload={"goal": config.goal, "run_id": run_id},
+                output_payload=reflection,
+            )
+            repository.finish_agent_run(run_id, status="ok", result=result)
         return result
     except Exception as exc:
-        repository.finish_agent_run(run_id, status="failed", result={"iterations": iterations}, error_message=str(exc)[:1000])
+        if run_id is not None:
+            repository.finish_agent_run(run_id, status="failed", result={"iterations": iterations}, error_message=str(exc)[:1000])
         raise
 
 
@@ -371,6 +394,195 @@ def _persist_strategy_memory(observation: dict[str, Any]) -> None:
             },
         )
     except Exception:  # noqa: BLE001 - learning write must not break the loop
+        return
+
+
+def _build_loop_reflection(iterations: list[dict[str, Any]], *, terminal_reason: str) -> dict[str, Any]:
+    observations = [
+        observation
+        for iteration in iterations
+        for observation in iteration.get("observations") or []
+    ]
+    by_topic: dict[str, dict[str, Any]] = {}
+    by_strategy: dict[str, dict[str, Any]] = {}
+    for observation in observations:
+        topic = str(observation.get("topic") or "без темы").strip()
+        strategy = str(observation.get("query_strategy") or "balanced").strip().lower()
+        candidates = int(observation.get("candidate_count") or 0)
+        relevant = int(observation.get("relevant_articles") or 0)
+        evaluated = int(observation.get("evaluated_count") or 0)
+        errors = int(observation.get("evaluation_errors") or 0)
+        avg_score = observation.get("avg_score")
+        topic_row = by_topic.setdefault(topic, {
+            "topic": topic,
+            "candidate_count": 0,
+            "relevant_articles": 0,
+            "evaluated_count": 0,
+            "evaluation_errors": 0,
+            "strategies": {},
+            "avg_scores": [],
+        })
+        strategy_row = by_strategy.setdefault(strategy, {
+            "strategy": strategy,
+            "candidate_count": 0,
+            "relevant_articles": 0,
+            "evaluated_count": 0,
+            "evaluation_errors": 0,
+            "topics": set(),
+            "avg_scores": [],
+        })
+        topic_row["candidate_count"] += candidates
+        topic_row["relevant_articles"] += relevant
+        topic_row["evaluated_count"] += evaluated
+        topic_row["evaluation_errors"] += errors
+        topic_row["strategies"][strategy] = int(topic_row["strategies"].get(strategy) or 0) + candidates
+        strategy_row["candidate_count"] += candidates
+        strategy_row["relevant_articles"] += relevant
+        strategy_row["evaluated_count"] += evaluated
+        strategy_row["evaluation_errors"] += errors
+        strategy_row["topics"].add(topic)
+        if avg_score is not None:
+            try:
+                topic_row["avg_scores"].append(float(avg_score))
+                strategy_row["avg_scores"].append(float(avg_score))
+            except (TypeError, ValueError):
+                pass
+
+    topic_rows = [_finalize_reflection_row(row) for row in by_topic.values()]
+    strategy_rows = [_finalize_reflection_row({**row, "topics": sorted(row["topics"])}) for row in by_strategy.values()]
+    worked_topics = sorted(
+        [row for row in topic_rows if row["candidate_count"] > 0],
+        key=lambda row: (row["relevant_articles"], row["candidate_count"], row["avg_score"] or 0),
+        reverse=True,
+    )
+    empty_topics = sorted(
+        [row for row in topic_rows if row["candidate_count"] == 0],
+        key=lambda row: row["topic"],
+    )
+    strong_strategies = sorted(
+        [row for row in strategy_rows if row["candidate_count"] > 0],
+        key=lambda row: (row["relevant_articles"], row["candidate_count"], row["avg_score"] or 0),
+        reverse=True,
+    )
+    weak_strategies = sorted(
+        [row for row in strategy_rows if row["candidate_count"] == 0 or row["evaluation_errors"] > row["relevant_articles"]],
+        key=lambda row: (row["candidate_count"], -row["evaluation_errors"]),
+    )
+    next_hints = _reflection_next_hints(worked_topics, empty_topics, strong_strategies, weak_strategies, terminal_reason)
+    return {
+        "worked_topics": worked_topics[:8],
+        "empty_topics": empty_topics[:8],
+        "strong_strategies": strong_strategies[:6],
+        "weak_strategies": weak_strategies[:6],
+        "next_hints": next_hints,
+        "summary": _reflection_summary(worked_topics, empty_topics, strong_strategies, weak_strategies, terminal_reason),
+    }
+
+
+def _finalize_reflection_row(row: dict[str, Any]) -> dict[str, Any]:
+    scores = row.pop("avg_scores", [])
+    row["avg_score"] = round(sum(scores) / len(scores), 2) if scores else None
+    return row
+
+
+def _reflection_next_hints(
+    worked_topics: list[dict[str, Any]],
+    empty_topics: list[dict[str, Any]],
+    strong_strategies: list[dict[str, Any]],
+    weak_strategies: list[dict[str, Any]],
+    terminal_reason: str,
+) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    for row in worked_topics[:3]:
+        best_strategy = _best_strategy_from_counts(row.get("strategies") or {})
+        hints.append({
+            "kind": "promote_topic",
+            "topic": row["topic"],
+            "strategy": best_strategy,
+            "reason": f"Тема дала {row['candidate_count']} кандидатов и {row['relevant_articles']} релевантных материалов.",
+        })
+    for row in empty_topics[:3]:
+        hints.append({
+            "kind": "change_strategy",
+            "topic": row["topic"],
+            "strategy": _next_strategy_for_empty(row.get("strategies") or {}),
+            "reason": "В прошлом запуске тема не дала кандидатов.",
+        })
+    for row in strong_strategies[:2]:
+        hints.append({
+            "kind": "promote_strategy",
+            "strategy": row["strategy"],
+            "reason": f"Стратегия дала {row['candidate_count']} кандидатов.",
+        })
+    for row in weak_strategies[:2]:
+        hints.append({
+            "kind": "mute_strategy",
+            "strategy": row["strategy"],
+            "reason": "Стратегия дала пустой или ошибочный результат.",
+        })
+    if terminal_reason in {"no_candidates_found", "no_auto_actions"}:
+        hints.append({
+            "kind": "broaden_search",
+            "reason": "Последний цикл остановился без новых кандидатов. Нужны более широкие темы или другой тип запросов.",
+        })
+    return hints[:10]
+
+
+def _reflection_summary(
+    worked_topics: list[dict[str, Any]],
+    empty_topics: list[dict[str, Any]],
+    strong_strategies: list[dict[str, Any]],
+    weak_strategies: list[dict[str, Any]],
+    terminal_reason: str,
+) -> dict[str, Any]:
+    return {
+        "terminal_reason": terminal_reason,
+        "worked_topic_count": len(worked_topics),
+        "empty_topic_count": len(empty_topics),
+        "strong_strategy_count": len(strong_strategies),
+        "weak_strategy_count": len(weak_strategies),
+        "best_topic": worked_topics[0]["topic"] if worked_topics else None,
+        "best_strategy": strong_strategies[0]["strategy"] if strong_strategies else None,
+    }
+
+
+def _best_strategy_from_counts(counts: dict[str, Any]) -> str | None:
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda item: int(item[1] or 0), reverse=True)[0][0]
+
+
+def _next_strategy_for_empty(counts: dict[str, Any]) -> str:
+    tried = {str(key).strip().lower() for key in counts}
+    for strategy in QUERY_STRATEGIES:
+        if strategy not in tried:
+            return strategy
+    return "balanced"
+
+
+def _persist_loop_reflection(run_id: int, config_value: AgentLoopConfig, reflection: dict[str, Any]) -> None:
+    digest = hashlib.sha1(f"{run_id}:{config_value.goal}".encode("utf-8")).hexdigest()[:16]
+    score = min(
+        100.0,
+        35.0
+        + len(reflection.get("worked_topics") or []) * 10
+        + len(reflection.get("strong_strategies") or []) * 5
+        - len(reflection.get("empty_topics") or []) * 4,
+    )
+    try:
+        repository.upsert_agent_memory(
+            memory_key=f"reflection:{digest}",
+            memory_type="reflection",
+            subject=config_value.goal,
+            status="active",
+            score=round(max(0.0, score), 2),
+            facts={
+                "run_id": run_id,
+                "goal": config_value.goal,
+                **reflection,
+            },
+        )
+    except Exception:  # noqa: BLE001 - reflection write must not break the loop
         return
 
 

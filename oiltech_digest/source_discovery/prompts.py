@@ -35,8 +35,9 @@ SEARCH_QUERY_SCHEMA = {
 
 SOURCE_RECOMMENDATION_INSTRUCTIONS = """Ты оцениваешь кандидата источника для OilTech Digest.
 
-Смотри только на переданные факты: сколько материалов проверено, сколько релевантных,
-какая средняя оценка, сколько шума и дублей. Не придумывай факты.
+Смотри только на переданные факты: метрики проверки, примеры материалов, причины
+релевантности, теги, краткие сути и оценки. Не придумывай факты и не утверждай,
+что источник стабильно полезен, если проверено мало материалов.
 
 Верни действие:
 - add: источник явно полезен;
@@ -44,7 +45,11 @@ SOURCE_RECOMMENDATION_INSTRUCTIONS = """Ты оцениваешь кандида
 - reject: источник шумный или бесполезный;
 - human_review: нужна ручная проверка.
 
-reason — коротко по-русски, почему такое решение. Ответ строго по JSON Schema."""
+reason — коротко по-русски, почему такое решение.
+strengths — 1-4 сильные стороны источника по фактам.
+risks — 1-4 риска или причины осторожности.
+confidence — уверенность от 0 до 1.
+Ответ строго по JSON Schema."""
 
 
 SOURCE_RECOMMENDATION_SCHEMA = {
@@ -52,14 +57,26 @@ SOURCE_RECOMMENDATION_SCHEMA = {
     "schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["recommended_action", "reason"],
+        "required": ["recommended_action", "reason", "strengths", "risks", "confidence"],
         "properties": {
             "recommended_action": {
                 "type": "string",
                 "enum": ["add", "test_more", "reject", "human_review"],
             },
             "reason": {"type": "string"},
+            "strengths": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "risks": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+            },
         },
     },
 }
-

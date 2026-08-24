@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import re
 import time
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -30,6 +32,8 @@ from oiltech_digest.source_discovery.prompts import (
 
 
 DEFAULT_MAX_QUERIES = 8
+TEMPORARY_UNAVAILABLE_COOLDOWN_HOURS = 24
+TEMPORARY_UNAVAILABLE_REJECT_AFTER = 3
 
 
 @dataclass(frozen=True)
@@ -79,20 +83,81 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
         limit=DEFAULT_MAX_QUERIES,
         strategy=config.query_strategy,
     )
-    search_results = search_web(queries, limit=config.limit)
+    if config.seed_urls:
+        search_results = {
+            "status": "seed_only",
+            "provider": "operator",
+            "reason": "explicit seed URLs supplied; web search skipped",
+            "queries": queries,
+            "limit": config.limit,
+            "results": [],
+        }
+    else:
+        search_results = search_web(queries, limit=config.limit)
 
     candidates = []
     rejected_domains = _rejected_memory_domains()
-    candidate_urls = _candidate_urls(
+    cooldown_domains = _temporary_unavailable_domains()
+    learning_policy = _learning_memory_policy(config.topic)
+    source_inventory = _source_inventory_index()
+    cooldown_sources_skipped = []
+    quality_gate_sources_skipped = []
+    unavailable_sources_skipped = []
+    parse_failed_sources_skipped = []
+    candidate_urls, skipped_existing_sources, skipped_cooldown_sources = _candidate_urls(
         config.seed_urls,
         search_results.get("results") or [],
         config.limit,
         rejected_domains=rejected_domains,
+        cooldown_domains=cooldown_domains,
+        source_inventory=source_inventory,
+        learning_policy=learning_policy,
     )
+    cooldown_sources_skipped.extend(skipped_cooldown_sources)
     for url_info in candidate_urls:
         url = url_info["url"]
+        url_gate_reason = _url_quality_gate_reason(url)
+        if url_gate_reason:
+            quality_gate_sources_skipped.append({
+                "url": url,
+                "domain": repository.normalize_domain(url),
+                "reason": url_gate_reason,
+                "stage": "url",
+            })
+            continue
         inspection = inspect_source(url, fetch=config.fetch_inspection)
+        content_gate_reason = inspection.get("quality_gate_reason")
+        if content_gate_reason:
+            quality_gate_sources_skipped.append({
+                "url": url,
+                "domain": repository.normalize_domain(url),
+                "reason": content_gate_reason,
+                "stage": "content",
+                "probe": inspection.get("probe"),
+            })
+            continue
+        skip_reason = _inspection_skip_reason(inspection)
+        if skip_reason:
+            if not config.dry_run:
+                _record_unavailable_domain(url, skip_reason, inspection)
+            unavailable_sources_skipped.append({
+                "url": url,
+                "domain": repository.normalize_domain(url),
+                "reason": skip_reason,
+                "probe": inspection.get("probe"),
+            })
+            continue
         parse_result = test_parse_source(url, article_limit=5) if config.test_parse else None
+        parse_skip_reason = _parse_skip_reason(parse_result)
+        if parse_skip_reason:
+            parse_failed_sources_skipped.append({
+                "url": url,
+                "domain": repository.normalize_domain(url),
+                "reason": parse_skip_reason,
+                "verdict": parse_result.get("verdict") if parse_result else None,
+                "metrics": parse_result.get("metrics") if parse_result else None,
+            })
+            continue
         metrics = parse_result["metrics"] if parse_result else {
             "tested_articles": 0,
             "relevant_articles": 0,
@@ -100,7 +165,11 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
             "duplicate_count": 0,
             "noise_count": 0,
         }
-        recommendation = recommend_source_action({**metrics, "inspection": inspection}, offline=config.offline)
+        recommendation = recommend_source_action(
+            {**metrics, "inspection": inspection},
+            offline=config.offline,
+            evidence=(parse_result or {}).get("candidates") or [],
+        )
         candidate = {
             "url": url,
             "normalized_domain": repository.normalize_domain(url),
@@ -109,6 +178,8 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
             "status": "needs_human_review",
             "discovered_by": "source-discovery-agent",
             "discovery_reason": url_info.get("reason") or f"Candidate for topic: {config.topic}",
+            "discovery_query": url_info.get("query"),
+            "query_strategy": config.query_strategy,
             "topic": config.topic,
             "confidence": inspection.get("confidence"),
             "tested_articles": metrics.get("tested_articles", 0),
@@ -139,8 +210,14 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
         "topic_gaps": gaps,
         "queries": queries,
         "query_strategy": config.query_strategy,
+        "learning_policy": _public_learning_policy(learning_policy),
         "search": search_results,
         "rejected_domains_skipped": sorted(rejected_domains),
+        "existing_sources_skipped": skipped_existing_sources,
+        "cooldown_sources_skipped": cooldown_sources_skipped,
+        "quality_gate_sources_skipped": quality_gate_sources_skipped,
+        "unavailable_sources_skipped": unavailable_sources_skipped,
+        "parse_failed_sources_skipped": parse_failed_sources_skipped,
         "candidates": candidates,
         "limits": {
             "max_queries": DEFAULT_MAX_QUERIES,
@@ -179,9 +256,11 @@ def generate_search_queries(
     if not topic:
         raise ValueError("topic is required")
     remembered = _remembered_queries(topic, limit=limit)
-    muted = _muted_queries(topic)
+    policy = _learning_memory_policy(topic)
+    combo_queries = [str(item.get("query") or "").strip() for item in policy.get("promoted_combos", []) if str(item.get("query") or "").strip()]
+    muted = _muted_queries(topic) | set(str(item).lower() for item in policy.get("muted_queries", []))
     if offline:
-        return _merge_queries(remembered, _offline_queries(topic, DEFAULT_MAX_QUERIES, strategy=strategy), limit=limit, exclude=muted)
+        return _merge_queries(combo_queries + remembered, _offline_queries(topic, DEFAULT_MAX_QUERIES, strategy=strategy), limit=limit, exclude=muted)
     client = make_client(False)
     response = client.complete_json(
         SEARCH_QUERY_INSTRUCTIONS,
@@ -191,7 +270,7 @@ def generate_search_queries(
     )
     queries = [str(item).strip() for item in response.data.get("queries") or [] if str(item).strip()]
     generated = _merge_queries(queries, _offline_queries(topic, DEFAULT_MAX_QUERIES, strategy=strategy), limit=DEFAULT_MAX_QUERIES)
-    return _merge_queries(remembered, generated, limit=limit, exclude=muted)
+    return _merge_queries(combo_queries + remembered, generated, limit=limit, exclude=muted)
 
 
 def search_web(queries: list[str], *, limit: int = 20) -> dict[str, Any]:
@@ -252,7 +331,131 @@ def inspect_source(url: str, *, fetch: bool = False) -> dict[str, Any]:
         text = content[:5000].decode("utf-8", errors="ignore").lower()
         result["has_rss_hint"] = "rss" in text or "application/rss+xml" in text
         result["has_news_hint"] = any(word in text for word in ("news", "press release", "новости", "пресс-релиз"))
+        gate_reason = _content_quality_gate_reason(text)
+        if gate_reason:
+            result["quality_gate_reason"] = gate_reason
     return result
+
+
+def _url_quality_gate_reason(url: str) -> str | None:
+    parsed = urlsplit(_normalize_candidate_url(url))
+    path = (parsed.path or "/").lower()
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        return None
+
+    last_segment = segments[-1]
+    if re.search(r"\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip|rar|7z)(?:$|\?)", path):
+        return "bad_url_type:document"
+    if any(segment in {"tag", "tags", "author", "authors", "search"} for segment in segments):
+        return "bad_url_type:index_noise"
+    if last_segment in {"tag", "tags", "author", "authors", "search"}:
+        return "bad_url_type:index_noise"
+    if _looks_like_single_article_path(segments):
+        return "single_article_url"
+    return None
+
+
+def _looks_like_single_article_path(segments: list[str]) -> bool:
+    if len(segments) < 2:
+        return False
+    collection_markers = {
+        "news",
+        "novosti",
+        "новости",
+        "press",
+        "press-releases",
+        "press_release",
+        "pressroom",
+        "newsroom",
+        "media",
+        "blog",
+        "articles",
+        "events",
+        "archive",
+        "publications",
+        "insights",
+    }
+    last = segments[-1]
+    if last in collection_markers:
+        return False
+    if len(segments) == 2 and last in {"releases", "press-releases", "newsroom", "media-center"}:
+        return False
+    has_date_segment = any(re.fullmatch(r"20\d{2}", segment) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment) for segment in segments)
+    slug_tokens = [token for token in re.split(r"[-_]+", last) if token]
+    if has_date_segment and len(slug_tokens) >= 2:
+        return True
+    if len(segments) >= 3 and len(slug_tokens) >= 5:
+        return True
+    return False
+
+
+def _content_quality_gate_reason(text: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", (text or "").lower()).strip()
+    if not normalized:
+        return None
+    anti_bot_patterns = (
+        "cf-challenge",
+        "cloudflare",
+        "checking your browser",
+        "verify you are human",
+        "captcha",
+        "access denied",
+        "enable javascript",
+        "please enable javascript",
+        "доступ запрещен",
+        "подтвердите, что вы человек",
+        "включите javascript",
+        "проверка браузера",
+    )
+    if any(pattern in normalized for pattern in anti_bot_patterns):
+        return "anti_bot"
+    semantic_404_patterns = (
+        "page not found",
+        "not found",
+        "page does not exist",
+        "this page could not be found",
+        "404",
+        "страница не найдена",
+        "страница не существует",
+        "материал не найден",
+        "ошибка 404",
+    )
+    if any(pattern in normalized for pattern in semantic_404_patterns):
+        news_hints = ("news", "press release", "новости", "пресс-релиз", "article", "статья")
+        if len(normalized) < 2500 or not any(hint in normalized for hint in news_hints):
+            return "semantic_404"
+    return None
+
+
+def _inspection_skip_reason(inspection: dict[str, Any]) -> str | None:
+    if not inspection.get("fetch_checked"):
+        return None
+    probe = inspection.get("probe") or {}
+    status = probe.get("status")
+    error = probe.get("error")
+    if error:
+        return f"fetch_failed: {error}"
+    if status is None:
+        return "fetch_failed"
+    try:
+        status_int = int(status)
+    except (TypeError, ValueError):
+        return None
+    if status_int >= 500:
+        return f"http_{status_int}"
+    if status_int in {401, 403, 404, 410, 451}:
+        return f"http_{status_int}"
+    return None
+
+
+def _parse_skip_reason(parse_result: dict[str, Any] | None) -> str | None:
+    if not parse_result:
+        return None
+    verdict = parse_result.get("verdict")
+    if verdict in {"listing_fetch_failed", "no_candidates"}:
+        return str(verdict)
+    return None
 
 
 def test_parse_source(url: str, *, article_limit: int = 5) -> dict[str, Any]:
@@ -365,7 +568,11 @@ def test_source_candidate(
     started = time.monotonic()
     parse_result = test_parse_source(str(candidate["url"]), article_limit=article_limit)
     metrics = parse_result["metrics"]
-    recommendation = recommend_source_action(metrics, offline=offline)
+    recommendation = recommend_source_action(
+        metrics,
+        offline=offline,
+        evidence=parse_result.get("candidates") or [],
+    )
     next_status = _status_for_recommendation(recommendation["recommended_action"])
     result = {
         "candidate_id": candidate_id,
@@ -404,18 +611,29 @@ def score_source_candidate(metrics: dict[str, Any]) -> dict[str, Any]:
     tested = int(metrics.get("tested_articles") or 0)
     relevant = int(metrics.get("relevant_articles") or 0)
     avg_score = float(metrics.get("avg_score") or 0)
+    high_score = int(
+        metrics.get("high_score_articles")
+        if metrics.get("high_score_articles") is not None
+        else (relevant if avg_score >= 50 else 0)
+    )
+    processed = int(metrics.get("processed_articles") or max(relevant, high_score))
     duplicate = int(metrics.get("duplicate_count") or 0)
     noise = int(metrics.get("noise_count") or 0)
     denominator = max(tested, 1)
+    processed_denominator = max(processed, tested, 1)
     quality_score = (
-        (relevant / denominator) * 45
-        + (avg_score / 100) * 30
+        (processed / denominator) * 10
+        + (relevant / processed_denominator) * 35
+        + (high_score / processed_denominator) * 25
+        + (avg_score / 100) * 20
         - (duplicate / denominator) * 10
         - (noise / denominator) * 15
     )
     return {
         "tested_articles": tested,
+        "processed_articles": processed,
         "relevant_articles": relevant,
+        "high_score_articles": high_score,
         "avg_score": avg_score if metrics.get("avg_score") is not None else None,
         "duplicate_count": duplicate,
         "noise_count": noise,
@@ -423,10 +641,17 @@ def score_source_candidate(metrics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def recommend_source_action(metrics: dict[str, Any], *, offline: bool = True) -> dict[str, str]:
+def recommend_source_action(
+    metrics: dict[str, Any],
+    *,
+    offline: bool = True,
+    evidence: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     score = score_source_candidate(metrics)
     tested = score["tested_articles"]
+    processed = score["processed_articles"]
     relevant = score["relevant_articles"]
+    high_score = score["high_score_articles"]
     quality = score["quality_score"]
     if tested == 0:
         fallback = {
@@ -443,6 +668,11 @@ def recommend_source_action(metrics: dict[str, Any], *, offline: bool = True) ->
             "recommended_action": "add",
             "reason": "Источник дал достаточно релевантных материалов и выглядит полезным.",
         }
+    elif processed >= 3 and high_score >= 2 and quality >= 45:
+        fallback = {
+            "recommended_action": "test_more",
+            "reason": "Источник уже дал несколько сильных сигналов, но выборки пока мало для автоматического добавления.",
+        }
     elif quality <= 20:
         fallback = {
             "recommended_action": "reject",
@@ -454,19 +684,98 @@ def recommend_source_action(metrics: dict[str, Any], *, offline: bool = True) ->
             "reason": "Качество неоднозначное; решение лучше принять человеку.",
         }
     if offline:
-        return fallback
+        return {
+            **fallback,
+            "source": "rules",
+            "confidence": _rule_confidence(score),
+            "strengths": [],
+            "risks": [],
+        }
 
     client = make_client(False)
     response = client.complete_json(
         SOURCE_RECOMMENDATION_INSTRUCTIONS,
-        json.dumps({"metrics": metrics, "score": score}, ensure_ascii=False),
+        json.dumps(
+            {
+                "metrics": metrics,
+                "score": score,
+                "fallback_recommendation": fallback,
+                "article_evidence": _compact_source_evidence(evidence or metrics.get("evidence") or []),
+            },
+            ensure_ascii=False,
+        ),
         SOURCE_RECOMMENDATION_SCHEMA,
-        max_output_tokens=400,
+        max_output_tokens=800,
     )
+    reason = str(response.data.get("reason") or fallback["reason"]).strip()
+    strengths = [str(item).strip() for item in response.data.get("strengths") or [] if str(item).strip()]
+    risks = [str(item).strip() for item in response.data.get("risks") or [] if str(item).strip()]
+    confidence = _safe_float(response.data.get("confidence"), default=_rule_confidence(score))
     return {
         "recommended_action": response.data.get("recommended_action") or fallback["recommended_action"],
-        "reason": response.data.get("reason") or fallback["reason"],
+        "reason": _format_ai_source_review(reason, strengths=strengths, risks=risks, confidence=confidence, model=response.model),
+        "source": "ai",
+        "model": response.model,
+        "confidence": confidence,
+        "strengths": strengths,
+        "risks": risks,
     }
+
+
+def _rule_confidence(score: dict[str, Any]) -> float:
+    tested = int(score.get("tested_articles") or 0)
+    quality = float(score.get("quality_score") or 0)
+    if tested == 0:
+        return 0.25
+    if tested < 5:
+        return 0.45
+    if quality >= 55 or quality <= 20:
+        return 0.75
+    return 0.55
+
+
+def _safe_float(value: Any, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return round(max(0.0, min(1.0, parsed)), 2)
+
+
+def _format_ai_source_review(
+    reason: str,
+    *,
+    strengths: list[str],
+    risks: list[str],
+    confidence: float,
+    model: str,
+) -> str:
+    parts = [reason]
+    if strengths:
+        parts.append("Сильные стороны: " + "; ".join(strengths[:4]) + ".")
+    if risks:
+        parts.append("Риски: " + "; ".join(risks[:4]) + ".")
+    parts.append(f"AI confidence: {confidence:.2f}; model: {model}.")
+    return " ".join(part for part in parts if part).strip()
+
+
+def _compact_source_evidence(evidence: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    compact = []
+    for item in evidence[:limit]:
+        compact.append({
+            "title": str(item.get("title") or item.get("title_ru") or "")[:240],
+            "url": str(item.get("url") or "")[:400],
+            "relevant": item.get("relevant"),
+            "relevance_reason": str(item.get("relevance_reason") or item.get("prefilter_reason") or "")[:500],
+            "summary": str(item.get("summary") or "")[:700],
+            "tag": item.get("tag") or item.get("tag_id"),
+            "score": item.get("total_score") if item.get("total_score") is not None else item.get("listing_score"),
+            "score_label": item.get("score_label"),
+            "score_explanation": str(item.get("score_explanation") or "")[:500],
+            "verdict": item.get("verdict") or item.get("processing_status"),
+            "text_chars": item.get("text_chars"),
+        })
+    return compact
 
 
 def _offline_queries(topic: str, limit: int, *, strategy: str = "balanced") -> list[str]:
@@ -665,6 +974,102 @@ def _rejected_memory_domains() -> set[str]:
     return {str(row.get("subject") or "").strip().lower() for row in rows if row.get("subject")}
 
 
+def _temporary_unavailable_domains(now: datetime | None = None) -> dict[str, dict[str, Any]]:
+    now = now or datetime.now(timezone.utc)
+    try:
+        rows = repository.list_agent_memory(memory_type="domain", status="temporary_unavailable", limit=500)
+    except Exception:  # noqa: BLE001 - cooldown memory must not break discovery
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        domain = str(row.get("subject") or "").strip().lower()
+        facts = row.get("facts_json") or {}
+        retry_after = _parse_datetime(facts.get("retry_after"))
+        if not domain or retry_after is None or retry_after <= now:
+            continue
+        result[domain] = {
+            "retry_after": retry_after.isoformat(),
+            "failure_count": int(facts.get("failure_count") or 0),
+            "last_reason": facts.get("last_reason"),
+        }
+    return result
+
+
+def _record_unavailable_domain(url: str, reason: str, inspection: dict[str, Any]) -> None:
+    domain = repository.normalize_domain(url).lower()
+    if not domain:
+        return
+    status = _domain_unavailable_status(reason)
+    existing = _domain_memory_facts(domain)
+    previous_count = int(existing.get("failure_count") or 0)
+    failure_count = previous_count + 1
+    now = datetime.now(timezone.utc)
+    retry_after = now + timedelta(hours=TEMPORARY_UNAVAILABLE_COOLDOWN_HOURS)
+    if status == "temporary_unavailable" and failure_count >= TEMPORARY_UNAVAILABLE_REJECT_AFTER:
+        status = "rejected"
+    facts = {
+        **existing,
+        "last_url": url,
+        "last_reason": reason,
+        "failure_count": failure_count,
+        "retry_after": retry_after.isoformat(),
+        "last_probe": inspection.get("probe") or {},
+        "updated_by": "source-discovery-agent",
+    }
+    score = -float(failure_count)
+    try:
+        repository.upsert_agent_memory(
+            memory_key=f"domain:{domain}",
+            memory_type="domain",
+            subject=domain,
+            status=status,
+            score=score,
+            facts=facts,
+        )
+    except Exception:  # noqa: BLE001 - memory write must not fail source discovery
+        return
+
+
+def _domain_unavailable_status(reason: str) -> str:
+    if reason.startswith("http_5") or reason.startswith("fetch_failed"):
+        return "temporary_unavailable"
+    return "rejected"
+
+
+def _domain_memory_facts(domain: str) -> dict[str, Any]:
+    try:
+        rows = repository.list_agent_memory(memory_type="domain", status=None, limit=1000)
+    except Exception:  # noqa: BLE001 - memory read must not fail source discovery
+        return {}
+    for row in rows:
+        if str(row.get("subject") or "").strip().lower() == domain:
+            facts = row.get("facts_json") or {}
+            return facts if isinstance(facts, dict) else {}
+    return {}
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _source_inventory_index() -> dict[str, dict]:
+    try:
+        return repository.source_inventory_index()
+    except Exception:  # noqa: BLE001 - inventory dedupe must not break discovery
+        return {"by_url": {}, "by_domain": {}}
+
+
 def _remembered_queries(topic: str, *, limit: int) -> list[str]:
     try:
         rows = repository.list_agent_memory(memory_type="query", status="active", limit=100)
@@ -699,6 +1104,119 @@ def _muted_queries(topic: str) -> set[str]:
         if query:
             muted.add(query)
     return muted
+
+
+def _learning_memory_policy(topic: str) -> dict[str, Any]:
+    topic_key = topic.strip().lower()
+    policy: dict[str, Any] = {
+        "topic": topic,
+        "promoted_combos": [],
+        "muted_combos": [],
+        "promoted_combo_keys": set(),
+        "blocked_combo_keys": set(),
+        "muted_queries": set(),
+        "domain_scores": {},
+        "query_scores": {},
+    }
+    try:
+        combo_rows = repository.list_agent_memory(memory_type="topic_query_domain", status=None, limit=500)
+    except Exception:  # noqa: BLE001 - learning policy must not break discovery
+        combo_rows = []
+    for row in combo_rows:
+        facts = row.get("facts_json") or {}
+        if str(facts.get("topic") or "").strip().lower() != topic_key:
+            continue
+        query = str(facts.get("query") or "").strip()
+        domain = str(facts.get("domain") or "").strip().lower()
+        if not query or not domain:
+            continue
+        score = float(row.get("score") or 0)
+        status = str(row.get("status") or "")
+        combo = {
+            "query": query,
+            "domain": domain,
+            "score": score,
+            "status": status,
+            "reason": facts.get("last_reason"),
+        }
+        key = _combo_policy_key(query, domain)
+        if status == "active" and score > 0:
+            policy["promoted_combos"].append(combo)
+            policy["promoted_combo_keys"].add(key)
+        elif status in {"muted", "rejected"} or score < 0:
+            policy["muted_combos"].append(combo)
+            policy["blocked_combo_keys"].add(key)
+    policy["promoted_combos"].sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+
+    try:
+        query_rows = repository.list_agent_memory(memory_type="query", status=None, limit=500)
+    except Exception:  # noqa: BLE001
+        query_rows = []
+    for row in query_rows:
+        facts = row.get("facts_json") or {}
+        if str(facts.get("topic") or "").strip().lower() != topic_key:
+            continue
+        query = str(row.get("subject") or "").strip().lower()
+        if not query:
+            continue
+        score = float(row.get("score") or 0)
+        policy["query_scores"][query] = score
+        if str(row.get("status") or "") == "muted" or score < 0:
+            policy["muted_queries"].add(query)
+
+    try:
+        domain_rows = repository.list_agent_memory(memory_type="domain", status=None, limit=500)
+    except Exception:  # noqa: BLE001
+        domain_rows = []
+    for row in domain_rows:
+        domain = str(row.get("subject") or "").strip().lower()
+        if domain:
+            policy["domain_scores"][domain] = float(row.get("score") or 0)
+    return policy
+
+
+def _public_learning_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "topic": policy.get("topic"),
+        "promoted_combos": list(policy.get("promoted_combos") or [])[:10],
+        "muted_combos": list(policy.get("muted_combos") or [])[:10],
+        "muted_queries": sorted(policy.get("muted_queries") or [])[:20],
+        "domain_scores": dict(list((policy.get("domain_scores") or {}).items())[:20]),
+        "query_scores": dict(list((policy.get("query_scores") or {}).items())[:20]),
+    }
+
+
+def _combo_policy_key(query: str, domain: str) -> str:
+    return f"{str(query or '').strip().lower()}::{str(domain or '').strip().lower()}"
+
+
+def _rank_search_results(results: list[dict[str, Any]], learning_policy: dict[str, Any]) -> list[dict[str, Any]]:
+    if not results:
+        return []
+    promoted_combo_keys = set(learning_policy.get("promoted_combo_keys") or set())
+    blocked_combo_keys = set(learning_policy.get("blocked_combo_keys") or set())
+    muted_queries = set(learning_policy.get("muted_queries") or set())
+    query_scores = learning_policy.get("query_scores") or {}
+    domain_scores = learning_policy.get("domain_scores") or {}
+
+    ranked = []
+    for index, item in enumerate(results):
+        url = str(item.get("url") or "")
+        query = str(item.get("query") or "").strip().lower()
+        domain = repository.normalize_domain(url).lower()
+        combo_key = _combo_policy_key(query, domain)
+        if query and query in muted_queries:
+            continue
+        if query and domain and combo_key in blocked_combo_keys:
+            continue
+        score = 0.0
+        if query and domain and combo_key in promoted_combo_keys:
+            score += 120.0
+        score += float(query_scores.get(query) or 0) * 0.6
+        score += float(domain_scores.get(domain) or 0) * 0.4
+        ranked.append((score, -index, item))
+    ranked.sort(reverse=True, key=lambda row: (row[0], row[1]))
+    return [item for _, _, item in ranked]
 
 
 def _merge_queries(primary: list[str], fallback: list[str], *, limit: int, exclude: set[str] | None = None) -> list[str]:
@@ -792,26 +1310,96 @@ def _candidate_urls(
     limit: int,
     *,
     rejected_domains: set[str] | None = None,
-) -> list[dict[str, str]]:
+    cooldown_domains: dict[str, dict[str, Any]] | None = None,
+    source_inventory: dict[str, dict] | None = None,
+    learning_policy: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[dict[str, Any]]]:
     items: list[dict[str, str]] = []
     seen: set[str] = set()
+    skipped_existing: list[dict[str, Any]] = []
+    skipped_cooldown: list[dict[str, Any]] = []
     rejected_domains = rejected_domains or set()
+    cooldown_domains = cooldown_domains or {}
+    source_inventory = source_inventory or {"by_url": {}, "by_domain": {}}
+    learning_policy = learning_policy or {}
+    blocked_combo_keys = set(learning_policy.get("blocked_combo_keys") or set())
+    promoted_combo_keys = set(learning_policy.get("promoted_combo_keys") or set())
+    muted_queries = set(learning_policy.get("muted_queries") or set())
+
+    def existing_source_for(url: str) -> dict | None:
+        exact = source_inventory.get("by_url", {}).get(_url_key(url))
+        if exact:
+            return exact
+        domain = repository.normalize_domain(url).lower()
+        return source_inventory.get("by_domain", {}).get(domain)
+
+    def add_item(url: str, reason: str, query: str = "", *, bypass_cooldown: bool = False) -> None:
+        normalized_url = _normalize_candidate_url(url)
+        key = _url_key(normalized_url)
+        if not normalized_url or key in seen:
+            return
+        seen.add(key)
+        existing_source = existing_source_for(normalized_url)
+        domain = repository.normalize_domain(normalized_url)
+        if existing_source:
+            skipped_existing.append({
+                "url": normalized_url,
+                "domain": domain,
+                "source_id": existing_source.get("id"),
+                "source_name": existing_source.get("name"),
+                "reason": "already_exists_in_sources",
+            })
+            return
+        cooldown = None if bypass_cooldown else cooldown_domains.get(domain.lower())
+        if cooldown:
+            skipped_cooldown.append({
+                "url": normalized_url,
+                "domain": domain,
+                "reason": "temporary_unavailable_cooldown",
+                "retry_after": cooldown.get("retry_after"),
+                "failure_count": cooldown.get("failure_count"),
+                "last_reason": cooldown.get("last_reason"),
+            })
+            return
+        domain_key = repository.normalize_domain(normalized_url).lower()
+        query_key = str(query or "").strip().lower()
+        if query_key and not bypass_cooldown and query_key in muted_queries:
+            return
+        if query_key and domain_key and not bypass_cooldown and _combo_policy_key(query_key, domain_key) in blocked_combo_keys:
+            return
+        items.append({"url": normalized_url, "reason": reason, "query": query})
+
     for url in seed_urls:
-        normalized = str(url).strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        items.append({"url": normalized, "reason": "Seed URL supplied by operator", "query": ""})
-    for result in search_results:
+        add_item(str(url), "Seed URL supplied by operator", bypass_cooldown=True)
+    for result in _rank_search_results(search_results, learning_policy):
         normalized = str(result.get("url") or "").strip()
-        if not normalized or normalized in seen:
+        if not normalized or _url_key(normalized) in seen:
             continue
         domain = repository.normalize_domain(normalized).lower()
         if domain and domain in rejected_domains:
             continue
-        seen.add(normalized)
         reason = f"Search result for query: {result.get('query')}" if result.get("query") else "Search result"
-        items.append({"url": normalized, "reason": reason, "query": str(result.get("query") or "")})
+        add_item(normalized, reason, str(result.get("query") or ""))
         if len(items) >= limit:
             break
-    return items[:limit]
+    return items[:limit], skipped_existing, skipped_cooldown
+
+
+def _normalize_candidate_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if not parsed.scheme and parsed.path and "." in parsed.path.split("/")[0]:
+        parsed = urlsplit(f"https://{value}")
+    if parsed.scheme not in {"http", "https"} or not (parsed.netloc or parsed.path):
+        return ""
+    host = parsed.netloc.lower()
+    path = parsed.path or ""
+    if path != "/":
+        path = path.rstrip("/")
+    return urlunsplit((parsed.scheme.lower(), host, path, parsed.query, ""))
+
+
+def _url_key(url: str) -> str:
+    return _normalize_candidate_url(url).rstrip("/").lower()

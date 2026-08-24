@@ -53,10 +53,66 @@ def test_agent_loop_runs_auto_discovery_iterations(monkeypatch):
     assert len(result["iterations"]) == 2
     assert result["total_candidates"] == 4
     assert result["terminal_reason"] == "max_iterations_reached"
-    assert len(actions) == 2
+    assert len(actions) == 3
+    assert actions[-1][0][1] == "source_discovery_loop_reflection"
+    assert result["reflection"]["worked_topics"][0]["topic"] == "бурение"
+    assert result["reflection"]["next_hints"][0]["kind"] == "promote_topic"
     assert finished[-1][1]["status"] == "ok"
     assert all(plan.run_id == 77 for plan in plans)
     assert memory[0]["memory_type"] == "strategy"
+    assert memory[-1]["memory_type"] == "reflection"
+
+
+def test_agent_loop_dry_run_does_not_write_run_actions_or_memory(monkeypatch):
+    writes = []
+    plans = []
+    memory = []
+
+    _stub_loop_memory(monkeypatch, memory)
+    monkeypatch.setattr(loop.repository, "create_agent_run", lambda *args, **kwargs: writes.append(("create_run", args, kwargs)) or 77)
+    monkeypatch.setattr(loop.repository, "finish_agent_run", lambda *args, **kwargs: writes.append(("finish_run", args, kwargs)))
+    monkeypatch.setattr(loop.repository, "record_agent_action", lambda *args, **kwargs: writes.append(("action", args, kwargs)) or 1)
+
+    def fake_plan(config):
+        plans.append(config)
+        return {
+            "policy": {"auto": 1, "human_review": 0, "blocked": 0},
+            "learning": {},
+            "actions": [
+                {
+                    "action_type": "discover_sources",
+                    "policy_decision": "auto",
+                    "topic": "бурение",
+                    "priority": 90,
+                    "limit": 3,
+                }
+            ],
+        }
+
+    discoveries = []
+    monkeypatch.setattr(loop, "build_plan", fake_plan)
+    monkeypatch.setattr(
+        loop,
+        "discover_sources",
+        lambda config: discoveries.append(config) or {
+            "task_id": None,
+            "queries": ["q1", "q2"],
+            "search": {"status": "ok"},
+            "candidates": [{"url": "https://example.com/news"}],
+        },
+    )
+    monkeypatch.setattr(loop, "evaluate_source_candidate", lambda *args, **kwargs: {"metrics": {"relevant_articles": 1, "avg_score": 80}})
+
+    result = loop.run_agent_loop(loop.AgentLoopConfig(max_iterations=1, dry_run=True, persist_memory=True, auto_evaluate=True))
+
+    assert result["dry_run"] is True
+    assert result["run_id"] is None
+    assert result["total_candidates"] == 1
+    assert writes == []
+    assert memory == []
+    assert plans[0].record_action is False
+    assert plans[0].persist_memory is False
+    assert discoveries[0].dry_run is True
 
 
 def test_agent_loop_continues_with_next_strategy_after_empty_iteration(monkeypatch):

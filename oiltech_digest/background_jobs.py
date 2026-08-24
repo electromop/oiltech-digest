@@ -276,6 +276,7 @@ def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dic
     limit = int(payload.get("limit") or 10)
     offline = bool(payload.get("offline", False))
     fetch_inspection = bool(payload.get("fetch_inspection", False))
+    test_parse = bool(payload.get("test_parse", True))
     auto_evaluate = bool(payload.get("auto_evaluate", True))
     article_limit = int(payload.get("article_limit") or 5)
     agent_run_id = int(payload["agent_run_id"]) if payload.get("agent_run_id") else None
@@ -294,7 +295,7 @@ def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dic
             offline=offline,
             dry_run=False,
             fetch_inspection=fetch_inspection,
-            test_parse=False,
+            test_parse=test_parse,
             run_id=agent_run_id,
         ))
         topic_result = {
@@ -411,6 +412,7 @@ def _run_source_discovery_loop(payload: dict[str, Any], job_id: int) -> dict[str
         max_iterations=int(payload.get("max_iterations") or 3),
         offline=bool(payload.get("offline", True)),
         fetch_inspection=bool(payload.get("fetch_inspection", False)),
+        test_parse=bool(payload.get("test_parse", True)),
         dry_run=bool(payload.get("dry_run", False)),
         auto_evaluate=bool(payload.get("auto_evaluate", True)),
         article_limit=int(payload.get("article_limit") or 5),

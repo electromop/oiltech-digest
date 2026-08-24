@@ -161,6 +161,32 @@ def list_sources(search: str | None = None, limit: int = 50) -> list[dict]:
         return cur.fetchall()
 
 
+def source_inventory_index() -> dict[str, dict]:
+    """Индекс существующих источников по URL и доменам для дедупликации discovery."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT id, name, url, rss_url, listing_url, enabled
+            FROM sources
+            """
+        )
+        rows = cur.fetchall()
+
+    by_url: dict[str, dict] = {}
+    by_domain: dict[str, dict] = {}
+    for row in rows:
+        for field in ("url", "rss_url", "listing_url"):
+            value = str(row.get(field) or "").strip()
+            if not value:
+                continue
+            by_url[value.rstrip("/").lower()] = row
+            domain = normalize_domain(value).lower()
+            if domain and domain not in by_domain:
+                by_domain[domain] = row
+    return {"by_url": by_url, "by_domain": by_domain}
+
+
 def get_source(source_id: int) -> dict | None:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -269,9 +295,22 @@ def upsert_source_candidate(rec: dict) -> int:
         **rec,
         "url": url,
         "normalized_domain": rec.get("normalized_domain") or normalize_domain(url),
+        "name": rec.get("name"),
+        "candidate_type": rec.get("candidate_type"),
         "status": status,
         "discovered_by": rec.get("discovered_by") or "manual",
+        "discovery_reason": rec.get("discovery_reason"),
+        "topic": rec.get("topic"),
         "expected_tags_json": Json(rec.get("expected_tags_json") or []),
+        "confidence": rec.get("confidence"),
+        "tested_articles": rec.get("tested_articles"),
+        "relevant_articles": rec.get("relevant_articles"),
+        "avg_score": rec.get("avg_score"),
+        "duplicate_count": rec.get("duplicate_count"),
+        "noise_count": rec.get("noise_count"),
+        "recommended_action": recommended_action,
+        "review_comment": rec.get("review_comment"),
+        "approved_source_id": rec.get("approved_source_id"),
     }
     with get_connection() as conn:
         cur = conn.execute(
@@ -679,7 +718,12 @@ def source_candidate_article_metrics(candidate_id: int) -> dict:
             """
             SELECT
               COUNT(*)::int AS tested_articles,
+              COUNT(*) FILTER (WHERE text_chars > 0)::int AS parsed_articles,
+              COUNT(*) FILTER (WHERE processing_status IN ('ok', 'rejected'))::int AS processed_articles,
+              COUNT(*) FILTER (WHERE prefilter_keep IS TRUE)::int AS kept_by_prefilter,
               COUNT(*) FILTER (WHERE relevant IS TRUE)::int AS relevant_articles,
+              COUNT(*) FILTER (WHERE total_score IS NOT NULL)::int AS scored_articles,
+              COUNT(*) FILTER (WHERE total_score >= 50)::int AS high_score_articles,
               AVG(total_score) FILTER (WHERE total_score IS NOT NULL) AS avg_score,
               COUNT(*) FILTER (WHERE processing_status = 'rejected')::int AS noise_count,
               0::int AS duplicate_count
@@ -692,7 +736,12 @@ def source_candidate_article_metrics(candidate_id: int) -> dict:
         avg_score = row.get("avg_score")
         return {
             "tested_articles": int(row.get("tested_articles") or 0),
+            "parsed_articles": int(row.get("parsed_articles") or 0),
+            "processed_articles": int(row.get("processed_articles") or 0),
+            "kept_by_prefilter": int(row.get("kept_by_prefilter") or 0),
             "relevant_articles": int(row.get("relevant_articles") or 0),
+            "scored_articles": int(row.get("scored_articles") or 0),
+            "high_score_articles": int(row.get("high_score_articles") or 0),
             "avg_score": round(float(avg_score), 2) if avg_score is not None else None,
             "duplicate_count": int(row.get("duplicate_count") or 0),
             "noise_count": int(row.get("noise_count") or 0),
@@ -874,9 +923,10 @@ def _with_agent_action_summary(row: dict) -> dict:
     elif action_type == "discover_sources_finished":
         title = "Поиск источников завершён"
         candidates = output.get("candidates") or []
+        candidate_count = candidates if isinstance(candidates, int | float) else len(candidates)
         topic = output.get("topic") or input_payload.get("topic") or row.get("task_topic")
-        summary = f"Тема: {topic or '—'}, кандидатов: {len(candidates)}, поиск: {(output.get('search') or {}).get('status', '—')}."
-        tone = "good" if candidates else "neutral"
+        summary = f"Тема: {topic or '—'}, кандидатов: {candidate_count}, поиск: {(output.get('search') or {}).get('status', '—')}."
+        tone = "good" if candidate_count else "neutral"
     elif action_type == "source_discovery_loop_iteration":
         title = "Итерация агента"
         observations = output.get("observations") or []
@@ -1100,6 +1150,16 @@ def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> l
             SELECT
               s.id AS source_id,
               s.name AS source_name,
+              s.enabled,
+              s.parse_strategy,
+              s.source_type,
+              s.update_frequency,
+              s.network_region,
+              s.network_profile,
+              s.last_ru_probe_status,
+              s.last_external_probe_status,
+              s.external_required_reason,
+              s.last_seen_published_at,
               COUNT(am.id) AS articles_found,
               COUNT(am.id) FILTER (
                 WHERE am.summary IS NOT NULL
@@ -1116,8 +1176,10 @@ def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> l
               COALESCE(ROUND(SUM(am.processing_cost_usd), 6), 0) AS processing_cost_usd
             FROM sources s
             LEFT JOIN article_metrics am ON am.source_id = s.id
-            GROUP BY s.id, s.name
-            HAVING COUNT(am.id) > 0
+            GROUP BY s.id, s.name, s.enabled, s.parse_strategy, s.source_type,
+              s.update_frequency, s.network_region, s.network_profile,
+              s.last_ru_probe_status, s.last_external_probe_status,
+              s.external_required_reason, s.last_seen_published_at
             ORDER BY articles_found DESC, s.name
             """,
             (period_from, period_to),
