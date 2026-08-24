@@ -46,4 +46,5 @@ nav:
   - Для пользователей:
       - user/index.md
   - Для разработчиков:
-      - developer/index.md
+      - Обзор: developer/index.md
+      - Пайплайн поиска источников: developer/source-discovery-pipeline.md

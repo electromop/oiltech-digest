@@ -51,6 +51,12 @@ sources -> parse -> articles -> fetch-full-text -> summary -> relevance -> tag -
 | `frontend/src` | React admin |
 | `docs/help` | MkDocs Material documentation service |
 
+## Агент поиска источников
+
+Подробная документация по текущему пайплайну агента, генерации поисковых запросов, фильтрам кандидатов и пробному парсингу:
+
+- [Пайплайн поиска источников](source-discovery-pipeline.md)
+
 ## База данных
 
 Основные таблицы:
