@@ -291,6 +291,7 @@ def process_source_candidate_payload(payload: dict[str, Any], heartbeat: Callabl
         result["articles"].append(item)
     result["source_quality"] = _external_source_quality(payload, result)
     result["source_regularity"] = _external_source_regularity(payload, result)
+    result["source_health"] = _external_source_health(payload, result)
     return result
 
 
@@ -531,6 +532,7 @@ def apply_process_result(result: dict[str, Any], *, job_id: int | None = None) -
 def apply_source_candidate_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
     """Apply external AI result to source_candidate_articles and candidate assessment."""
     from oiltech_digest.source_discovery.agent import recommend_source_action, _status_for_recommendation
+    from oiltech_digest.source_discovery.source_health import assess_source_health, health_comment
     from oiltech_digest.source_discovery.source_quality import quality_comment
     from oiltech_digest.source_discovery.source_regularity import regularity_comment
 
@@ -614,16 +616,19 @@ def apply_source_candidate_result(result: dict[str, Any], *, job_id: int | None 
     recommendation = recommend_source_action(metrics, offline=True)
     source_quality = result.get("source_quality") or {}
     source_regularity = result.get("source_regularity") or {}
+    source_health = result.get("source_health") or assess_source_health(metrics, recommendation, source_quality, source_regularity)
+    final_recommendation = {**recommendation, "recommended_action": source_health["recommended_action"]}
     review_comment = " ".join(
         part
         for part in [
-            str(recommendation.get("reason") or "").strip(),
+            health_comment(source_health),
+            str(final_recommendation.get("reason") or "").strip(),
             quality_comment(source_quality),
             regularity_comment(source_regularity),
         ]
         if part
     ).strip()
-    next_status = _status_for_recommendation(recommendation["recommended_action"])
+    next_status = _status_for_recommendation(final_recommendation["recommended_action"])
     repository.update_source_candidate_assessment(
         candidate_id,
         status=next_status,
@@ -632,24 +637,26 @@ def apply_source_candidate_result(result: dict[str, Any], *, job_id: int | None 
         avg_score=metrics["avg_score"],
         duplicate_count=metrics["duplicate_count"],
         noise_count=metrics["noise_count"],
-        recommended_action=recommendation["recommended_action"],
+        recommended_action=final_recommendation["recommended_action"],
         review_comment=review_comment,
     )
     learning = _record_source_candidate_learning(
         candidate_id,
         metrics,
-        {**recommendation, "reason": review_comment},
+        {**final_recommendation, "reason": review_comment},
         next_status=next_status,
         job_id=job_id,
         source_quality=source_quality,
         source_regularity=source_regularity,
+        source_health=source_health,
     )
     return {
         **stats,
         "metrics": metrics,
         "source_quality": source_quality,
         "source_regularity": source_regularity,
-        "recommended_action": recommendation["recommended_action"],
+        "source_health": source_health,
+        "recommended_action": final_recommendation["recommended_action"],
         "next_status": next_status,
         "review_comment": review_comment,
         "learning": learning,
@@ -665,6 +672,7 @@ def _record_source_candidate_learning(
     job_id: int | None = None,
     source_quality: dict[str, Any] | None = None,
     source_regularity: dict[str, Any] | None = None,
+    source_health: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         candidate = repository.get_source_candidate(candidate_id) or {}
@@ -688,6 +696,7 @@ def _record_source_candidate_learning(
             "reason": recommendation.get("reason"),
             "source_quality": source_quality or {},
             "source_regularity": source_regularity or {},
+            "source_health": source_health or {},
         }
         score = _candidate_learning_score(metrics, action)
         memory_ids: list[int] = []
@@ -771,6 +780,16 @@ def _external_source_regularity(payload: dict[str, Any], result: dict[str, Any])
 
     candidate = payload.get("candidate") or {"id": payload.get("candidate_id")}
     return assess_source_regularity(candidate, payload.get("collected") or {}, _external_candidate_articles(payload, result))
+
+
+def _external_source_health(payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.agent import recommend_source_action
+    from oiltech_digest.source_discovery.source_health import assess_source_health
+
+    articles = _external_candidate_articles(payload, result)
+    metrics = _external_candidate_metrics(articles)
+    recommendation = recommend_source_action(metrics, offline=True, evidence=articles)
+    return assess_source_health(metrics, recommendation, result.get("source_quality") or {}, result.get("source_regularity") or {})
 
 
 def _external_candidate_articles(payload: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:

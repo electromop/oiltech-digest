@@ -65,6 +65,7 @@ def test_process_source_candidate_payload_builds_article_results(monkeypatch):
     assert result["articles"][0]["tagging"]["tag_id"] == 7
     assert result["articles"][0]["scoring"]["total_score"] == 33.33
     assert result["source_regularity"]["dated_articles"] == 1
+    assert result["source_health"]["recommended_action"] in {"test_more", "human_review"}
 
 
 def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypatch):
@@ -153,6 +154,16 @@ def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypat
             "next_checks": [],
             "confidence": 0.6,
         },
+        "source_health": {
+            "health_score": 52,
+            "verdict": "promising_needs_more_data",
+            "recommended_action": "test_more",
+            "reason": "Плюсы: тестовый источник.",
+            "factors": ["тестовый источник"],
+            "risks": ["малая выборка"],
+            "confidence": 0.6,
+            "components": {},
+        },
     }, job_id=99)
 
     assert applied["ok"] == 1
@@ -163,6 +174,8 @@ def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypat
     assert assessment["tested_articles"] == 1
     assert assessment["relevant_articles"] == 1
     assert assessment["recommended_action"] in {"add", "test_more", "human_review", "reject"}
+    assert applied["source_health"]["verdict"] == "promising_needs_more_data"
+    assert "Итоговая оценка источника" in assessment["review_comment"]
     assert "Регулярность источника" in assessment["review_comment"]
     assert applied["learning"]["ok"] is True
     assert {item["memory_type"] for item in memory} == {"topic", "domain"}

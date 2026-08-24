@@ -21,6 +21,7 @@ from oiltech_digest.source_discovery.agent import (
     _status_for_recommendation,
 )
 from oiltech_digest.source_discovery.learning import apply_candidate_learning
+from oiltech_digest.source_discovery.source_health import assess_source_health, health_comment
 from oiltech_digest.source_discovery.source_quality import assess_source_quality, quality_comment
 from oiltech_digest.source_discovery.source_regularity import assess_source_regularity, regularity_comment
 
@@ -69,12 +70,15 @@ def evaluate_source_candidate(
     recommendation = recommend_source_action(metrics, offline=offline, evidence=evidence)
     source_quality = _safe_source_quality(candidate, metrics, evidence, offline=offline)
     source_regularity = assess_source_regularity(candidate, collected, evidence)
+    source_health = assess_source_health(metrics, recommendation, source_quality, source_regularity)
+    final_recommendation = {**recommendation, "recommended_action": source_health["recommended_action"]}
     review_comment = _merge_review_comment(
-        recommendation["reason"],
+        health_comment(source_health),
+        final_recommendation["reason"],
         quality_comment(source_quality),
         regularity_comment(source_regularity),
     )
-    next_status = _status_for_recommendation(recommendation["recommended_action"])
+    next_status = _status_for_recommendation(final_recommendation["recommended_action"])
     repository.update_source_candidate_assessment(
         candidate_id,
         status=next_status,
@@ -83,17 +87,17 @@ def evaluate_source_candidate(
         avg_score=metrics["avg_score"],
         duplicate_count=metrics["duplicate_count"],
         noise_count=metrics["noise_count"],
-        recommended_action=recommendation["recommended_action"],
+        recommended_action=final_recommendation["recommended_action"],
         review_comment=review_comment,
     )
-    quality_memory = _persist_source_quality_memory(candidate, metrics, recommendation, source_quality, source_regularity)
+    quality_memory = _persist_source_quality_memory(candidate, metrics, final_recommendation, source_quality, source_regularity, source_health)
     learning = None
-    if recommendation["recommended_action"] in {"add", "test_more", "reject"}:
+    if final_recommendation["recommended_action"] in {"add", "test_more", "reject"}:
         learning = apply_candidate_learning(
             candidate_id,
             event_type="evaluated",
             status=next_status,
-            recommended_action=recommendation["recommended_action"],
+            recommended_action=final_recommendation["recommended_action"],
             review_comment=review_comment,
             metrics=metrics,
         )
@@ -106,7 +110,8 @@ def evaluate_source_candidate(
         "metrics": metrics,
         "source_quality": source_quality,
         "source_regularity": source_regularity,
-        "recommended_action": recommendation["recommended_action"],
+        "source_health": source_health,
+        "recommended_action": final_recommendation["recommended_action"],
         "next_status": next_status,
         "review_comment": review_comment,
         "quality_memory": quality_memory,
@@ -154,6 +159,7 @@ def _persist_source_quality_memory(
     recommendation: dict[str, Any],
     source_quality: dict[str, Any],
     source_regularity: dict[str, Any] | None = None,
+    source_health: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         candidate_id = int(candidate["id"])
@@ -176,6 +182,7 @@ def _persist_source_quality_memory(
                 "recommendation_reason": recommendation.get("reason"),
                 "source_quality": source_quality,
                 "source_regularity": source_regularity or {},
+                "source_health": source_health or {},
             },
         )
         return {"ok": True, "memory_id": memory_id}

@@ -198,14 +198,17 @@ def test_evaluate_source_candidate_uses_ai_recommendation_with_evidence(monkeypa
     assert recommendations[0]["offline"] is False
     assert recommendations[0]["evidence"] == articles
     assert updates[0]["recommended_action"] == "test_more"
-    assert updates[0]["review_comment"].startswith("AI просит проверить больше материалов.")
+    assert updates[0]["review_comment"].startswith("Итоговая оценка источника")
+    assert "AI просит проверить больше материалов." in updates[0]["review_comment"]
     assert "AI-оценка источника" in updates[0]["review_comment"]
     assert "Регулярность источника" in updates[0]["review_comment"]
     assert result["source_quality"]["quality_label"] == "перспективный"
     assert result["source_regularity"]["regularity_label"] == "active_but_sparse"
+    assert result["source_health"]["recommended_action"] == "test_more"
     assert result["quality_memory"] == {"ok": True, "memory_id": 501}
     assert memory_updates[0]["memory_type"] == "source_candidate_quality"
     assert memory_updates[0]["facts"]["source_quality"]["useful_summary"] == "Источник дает материалы по роботизации бурения."
     assert memory_updates[0]["facts"]["source_regularity"]["regularity_label"] == "active_but_sparse"
+    assert memory_updates[0]["facts"]["source_health"]["verdict"] == "promising_needs_more_data"
     assert result["review_comment"] == updates[0]["review_comment"]
     assert actions[0]["action_type"] == "evaluate_source_candidate_finished"

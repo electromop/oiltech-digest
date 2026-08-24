@@ -217,17 +217,22 @@ function candidateDecisionLabel(candidate: SourceCandidateTriageRow) {
 
 function explainCandidate(candidate: SourceCandidateTriageRow) {
   const comment = candidate.review_comment?.trim() || "";
+  const healthMarker = "Итоговая оценка источника";
   const qualityMarker = "AI-оценка источника";
   const regularityMarker = "Регулярность источника";
+  const healthStart = comment.indexOf(healthMarker);
   const qualityStart = comment.indexOf(qualityMarker);
   const regularityStart = comment.indexOf(regularityMarker);
-  const firstMarker = [qualityStart, regularityStart].filter((index) => index >= 0).sort((a, b) => a - b)[0] ?? -1;
+  const markerStarts = [healthStart, qualityStart, regularityStart].filter((index) => index >= 0).sort((a, b) => a - b);
+  const firstMarker = markerStarts[0] ?? -1;
   const decision = firstMarker >= 0 ? comment.slice(0, firstMarker).trim() : comment;
+  const healthEnd = [qualityStart, regularityStart].filter((index) => index > healthStart).sort((a, b) => a - b)[0];
+  const health = healthStart >= 0 ? comment.slice(healthStart, healthEnd).trim() : "";
   const quality = qualityStart >= 0
     ? comment.slice(qualityStart, regularityStart > qualityStart ? regularityStart : undefined).trim()
     : "";
   const regularity = regularityStart >= 0 ? comment.slice(regularityStart).trim() : "";
-  return { decision, quality, regularity };
+  return { decision, health, quality, regularity };
 }
 
 function percent(value: number | null | undefined) {
@@ -1031,6 +1036,12 @@ export function SourceAgentPage({ onUnauthorized, showToast }: Props) {
                 <p>{candidate.triage_reason}</p>
                 {candidate.review_comment ? (
                   <div className="agentDecisionBox">
+                    {explainCandidate(candidate).health ? (
+                      <div>
+                        <span>Итог</span>
+                        <p>{explainCandidate(candidate).health}</p>
+                      </div>
+                    ) : null}
                     <div>
                       <span>Решение</span>
                       <strong>{candidateDecisionLabel(candidate)}</strong>
