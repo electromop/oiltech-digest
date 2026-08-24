@@ -46,10 +46,44 @@ sources -> parse -> articles -> fetch-full-text -> summary -> relevance -> tag -
 | `oiltech_digest/background_jobs.py` | DB-backed worker runtime |
 | `oiltech_digest/network_policy.py` | маршрутизация РФ/external задач |
 | `oiltech_digest/external_worker.py` | pull-worker для зарубежного сервера |
+| `oiltech_digest/processing/domain_glossary.py` | нефтегазовый глоссарий для summary/title_ru |
 | `oiltech_digest/processing/external_ai.py` | self-contained AI payload |
 | `oiltech_digest/ingestion/external_fetch.py` | external fetch/playwright payload |
 | `frontend/src` | React admin |
 | `docs/help` | MkDocs Material documentation service |
+
+## Нефтегазовая терминология
+
+Суть сигнала и перевод заголовка используют доменный глоссарий:
+
+```text
+oiltech_digest/processing/domain_glossary.py
+```
+
+Задача слоя - не общий машинный перевод, а нормализация отраслевых терминов. Например:
+
+| Английский термин | Preferred RU | Запрещенный вариант |
+|---|---|---|
+| `hydraulic fracturing`, `fracking`, `frac stimulation` | `ГРП` | `фракинг` |
+| `well completion` | `заканчивание скважины` | `завершение скважины` |
+| `workover` | `КРС` | `ворковер` |
+| `enhanced oil recovery`, `EOR` | `МУН` | - |
+| `drilling fluid`, `drilling mud` | `буровой раствор` | `буровая грязь` |
+
+Как работает:
+
+1. Перед AI-вызовом система ищет релевантные термины в `title`, `raw_text`, `summary`.
+2. В prompt добавляется только компактный блок найденных терминов, а не весь словарь.
+3. Модель получает прямое правило: использовать `preferred_ru` и не использовать `forbidden_ru`.
+4. После ответа безопасные запрещенные варианты заменяются детерминированно.
+
+Расширение словаря:
+
+- добавлять термин в `GLOSSARY`;
+- указывать все частые английские варианты в `source_terms`;
+- фиксировать один продуктовый `preferred_ru`;
+- добавлять `forbidden_ru`, если модель часто выбирает плохой перевод;
+- покрывать важные кейсы тестами в `tests/test_processing.py`.
 
 ## Агент поиска источников
 

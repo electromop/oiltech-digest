@@ -10,6 +10,7 @@ from typing import Any
 from oiltech_digest import config
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
+from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, OfflineAIClient, OpenAIResponsesClient
 from oiltech_digest.processing.prompts import (
     RELEVANCE_INSTRUCTIONS,
@@ -323,11 +324,17 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
 
 def summarize_article(article: dict, client) -> AIResponse:
-    return client.complete_json(
+    response = client.complete_json(
         SUMMARY_INSTRUCTIONS,
         _article_prompt(article),
         SUMMARY_SCHEMA,
         max_output_tokens=1200,
+    )
+    return AIResponse(
+        data={**response.data, "summary": enforce_glossary_text(str(response.data.get("summary") or ""), article)},
+        model=response.model,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
     )
 
 
@@ -349,13 +356,19 @@ def relevance_article(article: dict, client) -> AIResponse:
 def translate_article(article: dict, client) -> AIResponse:
     """AI-перевод заголовка на русский. Отдельная стадия (раньше был частью summary).
     Модель/effort — собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
-    return client.complete_json(
+    response = client.complete_json(
         TRANSLATE_INSTRUCTIONS,
         _title_prompt(article),
         TRANSLATE_SCHEMA,
         max_output_tokens=300,
         model=config.OPENAI_TRANSLATE_MODEL,
         reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
+    )
+    return AIResponse(
+        data={**response.data, "title_ru": enforce_glossary_text(str(response.data.get("title_ru") or ""), article)},
+        model=response.model,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
     )
 
 
@@ -496,7 +509,7 @@ def score_label(score: float) -> str:
 
 
 def _article_prompt(article: dict) -> str:
-    return "\n".join(
+    base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
             f"source: {article.get('source_name') or ''}",
@@ -507,6 +520,8 @@ def _article_prompt(article: dict) -> str:
             f"text: {_compact(article.get('raw_text') or '', 6000)}",
         ]
     )
+    glossary = glossary_prompt_block(article)
+    return f"{base}\n\n{glossary}" if glossary else base
 
 
 def _relevance_prompt(article: dict) -> str:
@@ -526,13 +541,16 @@ def _relevance_prompt(article: dict) -> str:
 
 def _title_prompt(article: dict) -> str:
     """Вход переводчика — только заголовок и контекст источника (дёшево, без полного текста)."""
-    return "\n".join(
+    base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
             f"source: {article.get('source_name') or ''}",
             f"language: {article.get('language') or 'unknown'}",
+            f"context: {_compact(article.get('raw_text') or article.get('summary') or '', 900)}",
         ]
     )
+    glossary = glossary_prompt_block(article, limit=8)
+    return f"{base}\n\n{glossary}" if glossary else base
 
 
 def _negative_keyword_block(article: dict, tags: list[dict]) -> str | None:

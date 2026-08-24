@@ -1,4 +1,5 @@
 from oiltech_digest.processing import pipeline
+from oiltech_digest.processing.domain_glossary import glossary_prompt_block, terminology_warnings
 from oiltech_digest.processing import digest
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient, _extract_output_text
@@ -150,6 +151,65 @@ def test_keyword_tag_selects_best_tag():
         {"id": 2, "keywords_json": ["ГРП"], "keywords_en_json": ["electric frac", "hydraulic fracturing"]},
     ]
     assert pipeline.keyword_tag(article, tags)["tag_id"] == 2
+
+
+def test_glossary_prompt_selects_relevant_oilfield_terms():
+    article = {
+        "title": "Electric frac fleet expands hydraulic fracturing operations",
+        "raw_text": "The company uses electric frac units and proppant for hydraulic fracturing.",
+    }
+
+    block = glossary_prompt_block(article)
+
+    assert "hydraulic fracturing" in block
+    assert "preferred_ru: ГРП" in block
+    assert "forbidden_ru: фракинг" in block
+    assert "proppant" in block
+
+
+def test_summary_enforces_oilfield_preferred_terms():
+    class BadTranslatorClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            assert "preferred_ru: ГРП" in user_input
+            return AIResponse(
+                data={"summary": "Компания расширила фракинг и закупила новые флоты."},
+                model="fake",
+            )
+
+    article = {
+        "title": "Electric frac fleet expands hydraulic fracturing operations",
+        "raw_text": "Electric frac fleet expands hydraulic fracturing operations in oilfields.",
+    }
+
+    response = pipeline.summarize_article(article, BadTranslatorClient())
+
+    assert "ГРП" in response.data["summary"]
+    assert "фракинг" not in response.data["summary"].lower()
+    assert terminology_warnings(response.data["summary"], article) == []
+
+
+def test_title_translation_enforces_completion_and_workover_terms():
+    class BadTitleClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            assert "preferred_ru: заканчивание скважины" in user_input
+            assert "preferred_ru: КРС" in user_input
+            return AIResponse(
+                data={"title_ru": "Завершение скважины и ворковер увеличили добычу"},
+                model="fake",
+            )
+
+    article = {
+        "title": "Well completion and workover improve production",
+        "raw_text": "The article describes well completion and workover operations.",
+        "language": "en",
+    }
+
+    title_ru, response = pipeline.title_ru_for_article(article, BadTitleClient())
+
+    assert response is not None
+    assert "заканчивание скважины" in title_ru
+    assert "КРС" in title_ru
+    assert "ворковер" not in title_ru.lower()
 
 
 def test_offline_summary_is_deterministic():
