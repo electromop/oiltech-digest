@@ -205,8 +205,8 @@ def test_glossary_enforces_inflected_bad_terms():
     summary = response.data["summary"].lower()
 
     assert "грп" in summary
-    assert "шельфовый" in summary
-    assert "жидкость обратного притока" in summary
+    assert "на шельфе" in summary
+    assert "анализ жидкости обратного притока" in summary
     assert "крс" in summary
     assert "фракинг" not in summary
     assert "оффшор" not in summary
@@ -231,8 +231,8 @@ def test_glossary_catches_reservoir_and_stimulation_calques():
 
     response = pipeline.summarize_article(article, BadTranslatorClient())
 
-    assert "интенсификация притока" in response.data["summary"]
-    assert "пласт" in response.data["summary"]
+    assert "провёл интенсификацию притока" in response.data["summary"]
+    assert "для пласта" in response.data["summary"]
     assert "стимуляция скважины" not in response.data["summary"]
     assert "резервуар" not in response.data["summary"]
 
@@ -256,7 +256,7 @@ def test_title_translation_enforces_completion_and_workover_terms():
     title_ru, response = pipeline.title_ru_for_article(article, BadTitleClient())
 
     assert response is not None
-    assert "заканчивание скважины" in title_ru
+    assert "заканчивание скважины" in title_ru.lower()
     assert "КРС" in title_ru
     assert "ворковер" not in title_ru.lower()
 

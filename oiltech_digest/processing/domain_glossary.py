@@ -53,6 +53,25 @@ GLOSSARY: tuple[GlossaryTerm, ...] = (
     GlossaryTerm(("condition monitoring",), "мониторинг состояния оборудования"),
 )
 
+PHRASE_REPAIRS: tuple[tuple[str, str], ...] = (
+    (r"\bпров[её]л(?:а|и)?\s+стимуляци(?:ю|и)\s+скважин(?:ы|е|ой)?\b", "провел интенсификацию притока"),
+    (r"\bстимуляци(?:я|и|ю|ей)\s+скважин(?:ы|е|ой)?\b", "интенсификация притока"),
+    (r"\bдля\s+резервуар(?:а|ов)?\b", "для пласта"),
+    (r"\bв\s+резервуар(?:е|ах)?\b", "в пласте"),
+    (r"\bиз\s+резервуар(?:а|ов)?\b", "из пласта"),
+    (r"\bрезервуар(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b", "пласт"),
+    (r"\bна\s+оффшор(?:е|е)?\b", "на шельфе"),
+    (r"\bоффшорн(?:ый|ая|ое|ые)\s+проект\b", "шельфовый проект"),
+    (r"\bоффшорн(?:ая)\s+добыч[а-я]*\b", "шельфовая добыча"),
+    (r"\bоффшорн(?:ое)\s+бурени[а-я]*\b", "шельфовое бурение"),
+    (r"\bпосле\s+фрак(?:инга|инге|ингом)\b", "после ГРП"),
+    (r"\bфрак(?:инговый|инговая|инговое|инговые)\s+флот(?:ы|ов|ами|ом)?\b", "флот ГРП"),
+    (r"\bэлектрическ(?:ий|ая|ое|ие)\s+фрак(?:инг|инга|инговый|инговая|инговое|инговые)?\b", "электрический флот ГРП"),
+    (r"\bфлоубэк(?:а|ом|е)?\s+анализ\b", "анализ жидкости обратного притока"),
+    (r"\bворковер(?:ов|а)?\s+программ[а-я]*\b", "программа КРС"),
+    (r"\bзавершени(?:е|я|ю|ем|и)\s+скважин(?:ы|е|ой)?\b", "заканчивание скважины"),
+)
+
 
 def relevant_glossary_terms(article: dict, *, limit: int = 12) -> list[GlossaryTerm]:
     text = _article_text(article)
@@ -81,11 +100,14 @@ def glossary_prompt_block(article: dict, *, limit: int = 12) -> str:
 def enforce_glossary_text(text: str, article: dict) -> str:
     """Apply safe deterministic replacements for known bad Russian terms."""
     result = text or ""
+    result = _repair_bad_phrases(result, article)
     for term in relevant_glossary_terms(article):
         for forbidden in term.forbidden_ru:
             result = _replace_case_insensitive(result, forbidden, term.preferred_ru)
         for pattern in _forbidden_patterns(term):
             result = re.sub(pattern, term.preferred_ru, result, flags=re.I)
+    result = _polish_repaired_phrases(result)
+    result = _capitalize_sentence_starts(result)
     return result
 
 
@@ -119,6 +141,34 @@ def _article_text(article: dict) -> str:
 
 def _forbidden_patterns(term: GlossaryTerm) -> tuple[str, ...]:
     return term.forbidden_patterns if isinstance(term.forbidden_patterns, tuple) else ()
+
+
+def _repair_bad_phrases(text: str, article: dict) -> str:
+    if not relevant_glossary_terms(article):
+        return text
+    result = text
+    for pattern, replacement in PHRASE_REPAIRS:
+        result = re.sub(pattern, replacement, result, flags=re.I)
+    return result
+
+
+def _polish_repaired_phrases(text: str) -> str:
+    replacements = (
+        (r"\bпровел\b", "провёл"),
+        (r"\bпровела интенсификацию\b", "провела интенсификацию"),
+        (r"\bизучил[аи]?\s+жидкость обратного притока\b", "изучила жидкость обратного притока"),
+    )
+    result = text
+    for pattern, replacement in replacements:
+        result = re.sub(pattern, replacement, result, flags=re.I)
+    return result
+
+
+def _capitalize_sentence_starts(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        return f"{match.group(1)}{match.group(2).upper()}"
+
+    return re.sub(r"(^|[.!?]\s+)([а-яё])", repl, text)
 
 
 def _contains_term(text: str, term: str) -> bool:
