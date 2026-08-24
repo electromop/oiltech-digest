@@ -231,6 +231,12 @@ def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> li
     base_host = (urlsplit(listing_url).netloc or "").lower()
     nodes = _nodes_by_selector(doc, listing_selector) if listing_selector else []
     if not nodes:
+        if listing_selector:
+            # Фоллбэк на весь документ — самый коварный исход: источник с настроенным
+            # селектором собирает ссылки отовсюду (у СМИ это сквозной сайдбар общей ленты),
+            # и выглядит это как рабочая настройка. Пусть будет видно в логе.
+            logger.warning("listing_selector %r не нашёл узлов — беру всю страницу",
+                           listing_selector)
         nodes = [doc]
 
     seen: set[str] = set()
@@ -348,7 +354,11 @@ def _nodes_by_selector(node, selector: str | None) -> list:
         if selector.startswith(("/", ".//", "(")):
             return list(node.xpath(selector))
         return list(node.cssselect(selector))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - кривой селектор не должен валить парс источника
+        # Молчать здесь нельзя: вызывающий код при пустом результате берёт ВСЮ страницу,
+        # то есть отказ селектора выглядит как успешная фильтрация. Так пропал целый
+        # ImportError — cssselect не был в requirements, и любой CSS-селектор был no-op.
+        logger.warning("селектор %r не отработал (%s: %s)", selector, type(exc).__name__, exc)
         return []
 
 

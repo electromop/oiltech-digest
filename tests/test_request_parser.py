@@ -211,7 +211,7 @@ SLASH_HOME_HTML = """
   <a href="/press-center/press_releases/preduprezhdenie-o-moshennicheskikh-deystviyakh/">
      Предупреждение о мошеннических действиях в отношении партнёров компании</a>
 </body></html>
-"""
+""".encode("utf-8")
 
 
 def test_extract_candidate_links_keeps_trailing_slash():
@@ -232,3 +232,49 @@ def test_extract_candidate_links_keeps_trailing_slash():
     # Главная по-прежнему не считается статьёй (ради этого и был rstrip).
     assert "https://www.surgutneftegas.ru/" not in urls
     assert "https://www.surgutneftegas.ru" not in urls
+
+
+TWO_BLOCK_LISTING = """
+<html><body>
+  <div class="search-item__wrap l-col-center">
+    <a href="/business/27/04/2026/69ef5b0c">Shell купит канадскую энергетическую компанию ARC Resources</a>
+  </div>
+  <div class="search-item__wrap l-col-center">
+    <a href="/quote/04/08/2026/6a71d91d">Цена нефти Brent упала почти на 4% после слов министра финансов США</a>
+  </div>
+  <div class="js-news-feed-list">
+    <a href="/sport/24/08/2026/6a8c1efe">Мяч, которым Марадона забил гол «рукой Бога», продали за $3,35 млн</a>
+    <a href="/politics/24/08/2026/6a8c0728">Львова-Белова заявила о сорванных попытках ее «захвата»</a>
+    <a href="/society/24/08/2026/6a8c1763">Логистический магнат, миллиардер Клаус-Михаэль Кюне ушел из жизни</a>
+  </div>
+</body></html>
+""".encode("utf-8")
+
+
+def test_listing_selector_isolates_the_listing_from_a_sidebar_feed():
+    """При заданном listing_selector кандидаты берутся ТОЛЬКО из него.
+
+    Форма страницы взята с прода (#61, РБК 24.08): у федеральных СМИ на странице раздела
+    живут ДВА блока ссылок — сама выдача (`div.search-item__wrap`) и сквозной сайдбар общей
+    ленты (`div.js-news-feed-list`). Без селектора кандидаты собираются из обоих, и сайдбар
+    выигрывает по очкам: замер на проде дал 8 кандидатов из сайдбара и ноль из выдачи, то
+    есть источник выглядел бы починенным, а тащил бы прежний мусор.
+
+    Здесь фиксируется механизм, а не вёрстка РБК: селектор задан — сайдбара в кандидатах нет.
+    """
+    source = {"listing_selector": ".search-item__wrap"}
+    candidates = request_parser.extract_candidate_links(
+        source, "https://www.rbc.ru/tags/?tag=нефть", TWO_BLOCK_LISTING, limit=12
+    )
+
+    urls = [c.url for c in candidates]
+    assert len(urls) == 2, f"ожидались только карточки выдачи, получено: {urls}"
+    assert all("/sport/" not in u and "/politics/" not in u and "/society/" not in u for u in urls)
+    assert "https://www.rbc.ru/business/27/04/2026/69ef5b0c" in urls
+    assert "https://www.rbc.ru/quote/04/08/2026/6a71d91d" in urls
+
+    # Без селектора сайдбар попадает в кандидаты — то самое поведение, от которого спасаемся.
+    without_selector = request_parser.extract_candidate_links(
+        {}, "https://www.rbc.ru/tags/?tag=нефть", TWO_BLOCK_LISTING, limit=12
+    )
+    assert any("/sport/" in c.url for c in without_selector)

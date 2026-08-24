@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 #     неоднозначным и оверрайд НЕ применяется (шумно, см. apply_overrides).
 #   parse_strategy — обязательно ('playwright' для JS/WAF-сайтов, 'rss' для лент);
 #   listing_url    — опционально; None = не трогать (берётся из url/сидера).
+#   listing_selector — опционально; CSS/XPath карточек листинга. Нужен, когда на странице
+#     НЕСКОЛЬКО блоков ссылок и «чужой» побеждает по очкам (сквозной сайдбар общей ленты
+#     у федеральных СМИ). При заданном селекторе кандидаты берутся ТОЛЬКО из него.
 #   rss_url        — опционально; для RSS-лент с нестандартным/сменившимся URL фида.
 #   url            — опционально; для telegram/прочих с исправленным каналом/адресом.
 #   network_region — опционально ('external' = фетчить через зарубежный воркер).
@@ -191,16 +194,21 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # читается (диспетчер в rss_parser.parse_all жёстко по parse_strategy), но возврат стратегии
     # на 'rss' — хоть руками, хоть discover-rss — вернёт мусор. Профильного фида у тега нет.
     "РБК Энергетика": {
-        "source_type": "Media", "parse_strategy": "request",
-        # ⚠️ ЕДИНСТВЕННАЯ запись реестра, НЕ подтверждённая живой проверкой. rbc.ru закрыт
-        # для не-РФ IP: 401 с KZ-выхода, 403 у WebFetch, TCP-таймаут на rssexport/amp.rbc.ru,
-        # а SSH на РФ-прод не идёт через VPN мака. Основание выбора — поисковый индекс: URL
-        # проиндексирован с ТЕМАТИЧЕСКИМ title «нефть и газ — последние новости сегодня на
-        # РБК.Ру» (общий title РБК другой), т.е. РБК, в отличие от Интерфакса, тег в query
-        # обрабатывает. ОБЯЗАТЕЛЬНО после деплоя: `source-diagnose 50`.
-        #   candidate_count=0        → ставить parse_strategy='playwright' (страница на JS);
-        #   заголовки снова общие    → тег подобран неверно, пробовать ?tag=ТЭК.
-        "listing_url": "https://www.rbc.ru/tags/?tag=%D0%BD%D0%B5%D1%84%D1%82%D1%8C+%D0%B8+%D0%B3%D0%B0%D0%B7"},
+        "source_type": "Media", "parse_strategy": "playwright",
+        # Замер на проде 24.08 (rbc.ru закрыт для не-РФ IP, поэтому проверка шла на сервере).
+        # Выдача тега рисуется на JS: request отдаёт 226 КБ / 266 анкеров, playwright на том
+        # же URL — 377 КБ / 376 анкеров, и только во втором появляется блок
+        # `div.search-item__wrap` с нефтегазовыми заголовками (Brent, Shell покупает ARC
+        # Resources, налог на сверхприбыль энергокомпаний, Saudi Aramco).
+        # listing_selector ОБЯЗАТЕЛЕН, и это не косметика: на отрендеренной странице ДВА
+        # блока ссылок — выдача тега и сквозной сайдбар общей ленты `div.js-news-feed-list`
+        # (Марадона, теннисист, Львова-Белова). Без селектора кандидаты берутся из обоих, и
+        # сайдбар выигрывает по очкам: замер дал 8 кандидатов из сайдбара и НОЛЬ из тега —
+        # то есть источник выглядел бы починенным, а тащил бы ровно тот же мусор.
+        # Известное ограничение: тег пополняется медленно — на 24.08 свежайшая статья от
+        # 04.08, дальше вглубь до 2021. Мало, но профильно; объём тюнить отдельно.
+        "listing_url": "https://www.rbc.ru/tags/?tag=%D0%BD%D0%B5%D1%84%D1%82%D1%8C+%D0%B8+%D0%B3%D0%B0%D0%B7",
+        "listing_selector": ".search-item__wrap"},
 
     # -- Гос-агентства: сайты таймаутят с прода (20с×3), но у них есть официальные telegram-каналы --
     # Telegram с РФ-сервера работает С ПЕРЕБОЯМИ (в логах бывает Network is unreachable), но
@@ -242,9 +250,10 @@ def apply_overrides() -> dict:
             new_rss = fields.get("rss_url")
             new_url = fields.get("url")
             new_region = fields.get("network_region")
+            new_selector = fields.get("listing_selector")
             want_type = fields.get("source_type")
             select = ("SELECT id, parse_strategy, listing_url, rss_url, url, network_region, "
-                      "source_type FROM sources WHERE name = %s")
+                      "source_type, listing_selector FROM sources WHERE name = %s")
             select_params: tuple = (name,)
             if want_type is not None:
                 select += " AND source_type = %s"
@@ -266,13 +275,14 @@ def apply_overrides() -> dict:
                     name, len(rows), ", ".join(f"id={r[0]} {r[6]}" for r in rows),
                 )
                 continue
-            source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region, _ = rows[0]
+            source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region, _, cur_selector = rows[0]
             listing_changed = new_listing is not None and (cur_listing or "") != new_listing
             rss_changed = new_rss is not None and (cur_rss or "") != new_rss
             url_changed = new_url is not None and (cur_url or "") != new_url
             region_changed = new_region is not None and (cur_region or "auto") != new_region
+            selector_changed = new_selector is not None and (cur_selector or "") != new_selector
             if (cur_strategy == new_strategy and not listing_changed and not rss_changed
-                    and not url_changed and not region_changed):
+                    and not url_changed and not region_changed and not selector_changed):
                 unchanged += 1
                 continue
 
@@ -296,10 +306,14 @@ def apply_overrides() -> dict:
             if new_region is not None:
                 sets.append("network_region = %(network_region)s")
                 params["network_region"] = new_region
+            if new_selector is not None:
+                sets.append("listing_selector = %(listing_selector)s")
+                params["listing_selector"] = new_selector
             conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = %(id)s", params)
             changed += 1
-            logger.info("source override: %s → %s%s%s%s%s", name, new_strategy,
+            logger.info("source override: %s → %s%s%s%s%s%s", name, new_strategy,
                         f" listing={new_listing}" if new_listing else "",
+                        f" selector={new_selector}" if new_selector else "",
                         f" rss={new_rss}" if new_rss else "",
                         f" url={new_url}" if new_url else "",
                         f" region={new_region}" if new_region else "")

@@ -3,6 +3,10 @@ feedparser==6.0.11
 requests==2.32.3
 python-dateutil==2.9.0
 lxml>=4.9.0
+# CSS-селекторы listing_selector/article_link_selector: lxml делегирует .cssselect()
+# сюда. Без пакета вызов кидает ImportError, и селектор молча деградирует в «вся
+# страница» — то есть выглядит применённым, но не фильтрует (#61).
+cssselect>=1.2.0
 trafilatura>=1.12.0
 openpyxl==3.1.5
 python-dotenv==1.0.1

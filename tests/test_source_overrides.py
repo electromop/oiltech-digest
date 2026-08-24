@@ -333,3 +333,45 @@ def test_apply_overrides_source_type_mismatch_is_reported_as_missing(isolated_db
             "SELECT parse_strategy, url FROM sources WHERE id = %s", (source_id,)
         ).fetchone()
     assert row == ("rss", "https://www.interfax.ru")
+
+
+def test_apply_overrides_sets_listing_selector(isolated_db, monkeypatch):
+    """Реестр умеет задавать `listing_selector` — без него JS-листинг чинится наполовину.
+
+    Случай РБК (#61): выдача тега рисуется на JS, поэтому нужен playwright. Но на
+    отрендеренной странице ДВА блока ссылок — сама выдача тега (`div.search-item__wrap`,
+    нефтегазовые заголовки) и сквозной сайдбар общей ленты (`div.js-news-feed-list`,
+    Марадона и теннисист). Кандидаты собираются из обоих, и по очкам сайдбар выигрывает —
+    замер на проде 24.08 дал 8 кандидатов из сайдбара и ноль из выдачи тега.
+
+    `extract_candidate_links` при заданном селекторе возвращает ТОЛЬКО узлы из него
+    (`explicit[:limit]`), то есть селектор — единственный способ отсечь сайдбар. Раз чинить
+    источник положено через реестр, реестр обязан уметь и это поле.
+    """
+    with connection.get_connection() as conn:
+        source_id = _add_source(
+            conn, "РБК Энергетика", source_type="Media",
+            url="https://www.rbc.ru", parse_strategy="request",
+        )
+        conn.commit()
+
+    monkeypatch.setattr(
+        source_overrides,
+        "SOURCE_OVERRIDES",
+        {"РБК Энергетика": {"source_type": "Media", "parse_strategy": "playwright",
+                            "listing_url": "https://www.rbc.ru/tags/?tag=нефть",
+                            "listing_selector": ".search-item__wrap"}},
+    )
+
+    stats = source_overrides.apply_overrides()
+    assert stats["changed"] == 1
+
+    with connection.get_connection() as conn:
+        row = conn.execute(
+            "SELECT parse_strategy, listing_url, listing_selector FROM sources WHERE id = %s",
+            (source_id,),
+        ).fetchone()
+    assert row == ("playwright", "https://www.rbc.ru/tags/?tag=нефть", ".search-item__wrap")
+
+    # Идемпотентность: селектор не должен провоцировать «изменено» на каждом деплое.
+    assert source_overrides.apply_overrides()["changed"] == 0
