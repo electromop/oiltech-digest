@@ -289,6 +289,8 @@ def process_source_candidate_payload(payload: dict[str, Any], heartbeat: Callabl
             result["stats"]["errors"] += 1
             item["errors"].append(str(exc)[:1000])
         result["articles"].append(item)
+    result["source_quality"] = _external_source_quality(payload, result)
+    result["source_regularity"] = _external_source_regularity(payload, result)
     return result
 
 
@@ -529,6 +531,8 @@ def apply_process_result(result: dict[str, Any], *, job_id: int | None = None) -
 def apply_source_candidate_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
     """Apply external AI result to source_candidate_articles and candidate assessment."""
     from oiltech_digest.source_discovery.agent import recommend_source_action, _status_for_recommendation
+    from oiltech_digest.source_discovery.source_quality import quality_comment
+    from oiltech_digest.source_discovery.source_regularity import regularity_comment
 
     candidate_id = int(result["candidate_id"])
     stats = {"articles": 0, "ok": 0, "rejected": 0, "errors": 0, "job_id": job_id}
@@ -608,6 +612,17 @@ def apply_source_candidate_result(result: dict[str, Any], *, job_id: int | None 
 
     metrics = repository.source_candidate_article_metrics(candidate_id)
     recommendation = recommend_source_action(metrics, offline=True)
+    source_quality = result.get("source_quality") or {}
+    source_regularity = result.get("source_regularity") or {}
+    review_comment = " ".join(
+        part
+        for part in [
+            str(recommendation.get("reason") or "").strip(),
+            quality_comment(source_quality),
+            regularity_comment(source_regularity),
+        ]
+        if part
+    ).strip()
     next_status = _status_for_recommendation(recommendation["recommended_action"])
     repository.update_source_candidate_assessment(
         candidate_id,
@@ -618,20 +633,25 @@ def apply_source_candidate_result(result: dict[str, Any], *, job_id: int | None 
         duplicate_count=metrics["duplicate_count"],
         noise_count=metrics["noise_count"],
         recommended_action=recommendation["recommended_action"],
-        review_comment=recommendation["reason"],
+        review_comment=review_comment,
     )
     learning = _record_source_candidate_learning(
         candidate_id,
         metrics,
-        recommendation,
+        {**recommendation, "reason": review_comment},
         next_status=next_status,
         job_id=job_id,
+        source_quality=source_quality,
+        source_regularity=source_regularity,
     )
     return {
         **stats,
         "metrics": metrics,
+        "source_quality": source_quality,
+        "source_regularity": source_regularity,
         "recommended_action": recommendation["recommended_action"],
         "next_status": next_status,
+        "review_comment": review_comment,
         "learning": learning,
     }
 
@@ -643,6 +663,8 @@ def _record_source_candidate_learning(
     *,
     next_status: str,
     job_id: int | None = None,
+    source_quality: dict[str, Any] | None = None,
+    source_regularity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         candidate = repository.get_source_candidate(candidate_id) or {}
@@ -664,6 +686,8 @@ def _record_source_candidate_learning(
             "recommended_action": action,
             "next_status": next_status,
             "reason": recommendation.get("reason"),
+            "source_quality": source_quality or {},
+            "source_regularity": source_regularity or {},
         }
         score = _candidate_learning_score(metrics, action)
         memory_ids: list[int] = []
@@ -683,6 +707,15 @@ def _record_source_candidate_learning(
                 subject=domain,
                 status="active" if action in {"add", "test_more"} else "muted",
                 score=score,
+                facts=facts,
+            ))
+        if source_quality:
+            memory_ids.append(repository.upsert_agent_memory(
+                memory_key=f"source-candidate-quality:{candidate_id}",
+                memory_type="source_candidate_quality",
+                subject=domain or str(candidate.get("url") or candidate_id),
+                status="active" if action in {"add", "test_more", "human_review"} else "muted",
+                score=float(source_quality.get("usefulness_score") or score),
                 facts=facts,
             ))
         repository.record_agent_action(
@@ -706,6 +739,73 @@ def _candidate_learning_score(metrics: dict[str, Any], recommended_action: str) 
     action_bonus = {"add": 25, "test_more": 12, "human_review": 6, "reject": -20}.get(recommended_action, 0)
     value = relevant * 18 + tested * 2 + avg_score * 0.45 - noise * 10 - duplicate * 6 + action_bonus
     return round(max(0.0, min(100.0, value)), 2)
+
+
+def _external_source_quality(payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.source_quality import assess_source_quality
+
+    candidate = payload.get("candidate") or {"id": payload.get("candidate_id")}
+    articles = _external_candidate_articles(payload, result)
+    metrics = _external_candidate_metrics(articles)
+    try:
+        return assess_source_quality(candidate, metrics, articles, offline=bool(payload.get("offline", False)))
+    except Exception as exc:  # noqa: BLE001 - quality assessment must not break external AI result
+        return {
+            "source": "error",
+            "model": None,
+            "quality_label": "сомнительный",
+            "usefulness_score": None,
+            "topic_fit": "",
+            "article_pattern": "",
+            "useful_summary": "AI-оценка качества источника не выполнена.",
+            "strengths": [],
+            "risks": [str(exc)[:500]],
+            "next_checks": ["Повторить AI-оценку качества источника."],
+            "confidence": 0,
+            "error": str(exc)[:1000],
+        }
+
+
+def _external_source_regularity(payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.source_regularity import assess_source_regularity
+
+    candidate = payload.get("candidate") or {"id": payload.get("candidate_id")}
+    return assess_source_regularity(candidate, payload.get("collected") or {}, _external_candidate_articles(payload, result))
+
+
+def _external_candidate_articles(payload: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
+    articles = []
+    for source_article, processed in zip(payload.get("articles") or [], result.get("articles") or []):
+        relevance = processed.get("relevance") or {}
+        summary = processed.get("summary") or {}
+        scoring = processed.get("scoring") or {}
+        status = "error" if processed.get("errors") else ("rejected" if relevance and not relevance.get("relevant") else "ok")
+        articles.append({
+            **source_article,
+            "relevant": relevance.get("relevant"),
+            "relevance_reason": relevance.get("reason"),
+            "summary": summary.get("summary"),
+            "total_score": scoring.get("total_score"),
+            "score_label": scoring.get("score_label"),
+            "processing_status": status,
+        })
+    return articles
+
+
+def _external_candidate_metrics(articles: list[dict[str, Any]]) -> dict[str, Any]:
+    scored_values = [float(item["total_score"]) for item in articles if item.get("total_score") is not None]
+    return {
+        "tested_articles": len(articles),
+        "parsed_articles": sum(1 for item in articles if int(item.get("text_chars") or 0) > 0),
+        "processed_articles": sum(1 for item in articles if item.get("processing_status") in {"ok", "rejected"}),
+        "kept_by_prefilter": sum(1 for item in articles if item.get("prefilter_keep") is True),
+        "relevant_articles": sum(1 for item in articles if item.get("relevant") is True),
+        "scored_articles": len(scored_values),
+        "high_score_articles": sum(1 for value in scored_values if value >= 50),
+        "avg_score": round(sum(scored_values) / len(scored_values), 2) if scored_values else None,
+        "duplicate_count": 0,
+        "noise_count": sum(1 for item in articles if item.get("processing_status") == "rejected"),
+    }
 
 
 def _digest(value: str) -> str:

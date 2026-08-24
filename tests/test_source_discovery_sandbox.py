@@ -81,6 +81,7 @@ def test_evaluate_source_candidate_uses_ai_recommendation_with_evidence(monkeypa
     updates = []
     actions = []
     recommendations = []
+    memory_updates = []
     articles = [
         {
             "title": "Robotic drilling system",
@@ -136,8 +137,50 @@ def test_evaluate_source_candidate_uses_ai_recommendation_with_evidence(monkeypa
     )
     monkeypatch.setattr(
         sandbox,
+        "assess_source_quality",
+        lambda candidate, metrics, evidence, offline=True: {
+            "source": "ai",
+            "model": "test-model",
+            "quality_label": "перспективный",
+            "usefulness_score": 64,
+            "topic_fit": "Подходит теме.",
+            "article_pattern": "Есть технические материалы.",
+            "useful_summary": "Источник дает материалы по роботизации бурения.",
+            "strengths": ["Есть релевантный материал."],
+            "risks": ["Малая выборка."],
+            "next_checks": ["Проверить регулярность."],
+            "confidence": 0.62,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_regularity",
+        lambda candidate, collected, evidence: {
+            "source": "rules",
+            "regularity_label": "active_but_sparse",
+            "is_regular": True,
+            "sample_size": 1,
+            "dated_articles": 1,
+            "articles_last_30_days": 1,
+            "articles_last_90_days": 1,
+            "latest_age_days": 3,
+            "archive_suspected": False,
+            "section_updates": True,
+            "reason": "Источник обновляется, но выборка мала.",
+            "risks": [],
+            "next_checks": [],
+            "confidence": 0.62,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
         "apply_candidate_learning",
         lambda candidate_id, **kwargs: {"candidate_id": candidate_id, "event_type": kwargs["event_type"]},
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "upsert_agent_memory",
+        lambda **kwargs: memory_updates.append(kwargs) or 501,
     )
     monkeypatch.setattr(
         sandbox.repository,
@@ -155,6 +198,14 @@ def test_evaluate_source_candidate_uses_ai_recommendation_with_evidence(monkeypa
     assert recommendations[0]["offline"] is False
     assert recommendations[0]["evidence"] == articles
     assert updates[0]["recommended_action"] == "test_more"
-    assert updates[0]["review_comment"] == "AI просит проверить больше материалов."
-    assert result["review_comment"] == "AI просит проверить больше материалов."
+    assert updates[0]["review_comment"].startswith("AI просит проверить больше материалов.")
+    assert "AI-оценка источника" in updates[0]["review_comment"]
+    assert "Регулярность источника" in updates[0]["review_comment"]
+    assert result["source_quality"]["quality_label"] == "перспективный"
+    assert result["source_regularity"]["regularity_label"] == "active_but_sparse"
+    assert result["quality_memory"] == {"ok": True, "memory_id": 501}
+    assert memory_updates[0]["memory_type"] == "source_candidate_quality"
+    assert memory_updates[0]["facts"]["source_quality"]["useful_summary"] == "Источник дает материалы по роботизации бурения."
+    assert memory_updates[0]["facts"]["source_regularity"]["regularity_label"] == "active_but_sparse"
+    assert result["review_comment"] == updates[0]["review_comment"]
     assert actions[0]["action_type"] == "evaluate_source_candidate_finished"

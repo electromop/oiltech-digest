@@ -207,6 +207,29 @@ function candidateActionLabel(candidate: SourceCandidateTriageRow) {
   return "Нужно решение";
 }
 
+function candidateDecisionLabel(candidate: SourceCandidateTriageRow) {
+  if (candidate.recommended_action === "add") return "Вердикт: добавить";
+  if (candidate.recommended_action === "test_more") return "Вердикт: проверить еще";
+  if (candidate.recommended_action === "reject") return "Вердикт: не добавлять";
+  if (candidate.recommended_action === "human_review") return "Вердикт: нужен человек";
+  return "Вердикт: не решено";
+}
+
+function explainCandidate(candidate: SourceCandidateTriageRow) {
+  const comment = candidate.review_comment?.trim() || "";
+  const qualityMarker = "AI-оценка источника";
+  const regularityMarker = "Регулярность источника";
+  const qualityStart = comment.indexOf(qualityMarker);
+  const regularityStart = comment.indexOf(regularityMarker);
+  const firstMarker = [qualityStart, regularityStart].filter((index) => index >= 0).sort((a, b) => a - b)[0] ?? -1;
+  const decision = firstMarker >= 0 ? comment.slice(0, firstMarker).trim() : comment;
+  const quality = qualityStart >= 0
+    ? comment.slice(qualityStart, regularityStart > qualityStart ? regularityStart : undefined).trim()
+    : "";
+  const regularity = regularityStart >= 0 ? comment.slice(regularityStart).trim() : "";
+  return { decision, quality, regularity };
+}
+
 function percent(value: number | null | undefined) {
   return `${Math.round(Number(value || 0) * 100)}%`;
 }
@@ -1006,6 +1029,33 @@ export function SourceAgentPage({ onUnauthorized, showToast }: Props) {
                 <span>{candidateActionLabel(candidate)}</span>
                 <strong>{candidate.name || candidate.normalized_domain}</strong>
                 <p>{candidate.triage_reason}</p>
+                {candidate.review_comment ? (
+                  <div className="agentDecisionBox">
+                    <div>
+                      <span>Решение</span>
+                      <strong>{candidateDecisionLabel(candidate)}</strong>
+                      <p>{explainCandidate(candidate).decision || candidate.triage_reason}</p>
+                    </div>
+                    {explainCandidate(candidate).quality ? (
+                      <div>
+                        <span>Качество</span>
+                        <p>{explainCandidate(candidate).quality}</p>
+                      </div>
+                    ) : null}
+                    {explainCandidate(candidate).regularity ? (
+                      <div>
+                        <span>Регулярность</span>
+                        <p>{explainCandidate(candidate).regularity}</p>
+                      </div>
+                    ) : null}
+                    <div className="agentDecisionMetrics">
+                      <span>проверено {candidate.tested_articles}</span>
+                      <span>релевантно {candidate.relevant_articles}</span>
+                      <span>score {candidate.avg_score ?? "—"}</span>
+                      <span>шум {candidate.noise_count}</span>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="agentQuickActions">
                   <button type="button" className="miniActionButton good" onClick={() => void handleCandidateQuickAction(candidate, "approve")} disabled={Boolean(quickActionKey)}>
                     {quickActionKey === `candidate:${candidate.id}:approve` ? "..." : "Одобрить"}

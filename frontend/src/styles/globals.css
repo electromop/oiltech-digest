@@ -3530,6 +3530,67 @@ button {
   overflow-wrap: anywhere;
 }
 
+.agentOperatorRow .agentOperatorComment {
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.07);
+  color: #334155;
+  font-size: 0.7rem;
+}
+
+.agentDecisionBox {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.13);
+  border-radius: 9px;
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.agentDecisionBox > div {
+  min-width: 0;
+}
+
+.agentDecisionBox span {
+  display: block;
+  margin-bottom: 2px;
+  color: #2563eb;
+  font-size: 0.62rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.agentDecisionBox strong {
+  display: block;
+  margin-bottom: 2px;
+  color: #0f172a;
+  font-size: 0.76rem;
+}
+
+.agentDecisionBox p {
+  color: #334155;
+  font-size: 0.68rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.agentDecisionMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.agentDecisionMetrics span {
+  display: inline-flex;
+  margin: 0;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #475569;
+  font-size: 0.62rem;
+  text-transform: none;
+}
+
 .agentQuickActions {
   display: flex;
   flex-wrap: wrap;

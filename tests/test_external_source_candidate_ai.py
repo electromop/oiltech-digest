@@ -9,6 +9,7 @@ def test_process_source_candidate_payload_builds_article_results(monkeypatch):
         "title": "Robotic drilling system improves operations",
         "url": "https://example.com/news/robotic-drilling",
         "raw_text": "Robotic drilling system improves oilfield operations.",
+        "published_at": "2026-08-20T10:00:00+00:00",
         "language": "en",
         "source_name": "Example",
         "source_category": "роботизация бурения",
@@ -63,6 +64,7 @@ def test_process_source_candidate_payload_builds_article_results(monkeypatch):
     assert result["articles"][0]["summary"]["summary"] == "Короткая суть"
     assert result["articles"][0]["tagging"]["tag_id"] == 7
     assert result["articles"][0]["scoring"]["total_score"] == 33.33
+    assert result["source_regularity"]["dated_articles"] == 1
 
 
 def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypatch):
@@ -136,6 +138,21 @@ def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypat
                 },
             }
         ],
+        "source_regularity": {
+            "regularity_label": "active_but_sparse",
+            "is_regular": True,
+            "sample_size": 1,
+            "dated_articles": 1,
+            "articles_last_30_days": 1,
+            "articles_last_90_days": 1,
+            "latest_age_days": 2,
+            "archive_suspected": False,
+            "section_updates": True,
+            "reason": "Источник обновляется.",
+            "risks": [],
+            "next_checks": [],
+            "confidence": 0.6,
+        },
     }, job_id=99)
 
     assert applied["ok"] == 1
@@ -146,6 +163,7 @@ def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypat
     assert assessment["tested_articles"] == 1
     assert assessment["relevant_articles"] == 1
     assert assessment["recommended_action"] in {"add", "test_more", "human_review", "reject"}
+    assert "Регулярность источника" in assessment["review_comment"]
     assert applied["learning"]["ok"] is True
     assert {item["memory_type"] for item in memory} == {"topic", "domain"}
     assert memory[0]["facts"]["candidate_id"] == 42

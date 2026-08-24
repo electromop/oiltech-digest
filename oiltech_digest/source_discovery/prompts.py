@@ -80,3 +80,65 @@ SOURCE_RECOMMENDATION_SCHEMA = {
         },
     },
 }
+
+
+SOURCE_QUALITY_INSTRUCTIONS = """Ты оцениваешь качество кандидата источника для OilTech Digest.
+
+На входе есть сам кандидат, метрики пробного парсинга и несколько материалов из песочницы.
+Нужно не просто решить "добавить или нет", а объяснить качество источника как поставщика
+будущих сигналов.
+
+Смотри только на факты во входе. Не придумывай стабильность, периодичность и репутацию, если
+это не видно из материалов. Если выборка мала — прямо отметь это как риск.
+
+Оцени:
+- насколько источник подходит теме;
+- похож ли он на регулярный источник сигналов, а не на одну случайную статью;
+- какие типы материалов он даёт;
+- почему он полезен или почему это шум;
+- что надо проверить следующим шагом.
+
+Ответ только на русском и строго по JSON Schema."""
+
+
+SOURCE_QUALITY_SCHEMA = {
+    "name": "source_candidate_quality",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "quality_label",
+            "usefulness_score",
+            "topic_fit",
+            "article_pattern",
+            "useful_summary",
+            "strengths",
+            "risks",
+            "next_checks",
+            "confidence",
+        ],
+        "properties": {
+            "quality_label": {
+                "type": "string",
+                "enum": ["сильный", "перспективный", "сомнительный", "шумный"],
+            },
+            "usefulness_score": {"type": "number", "minimum": 0, "maximum": 100},
+            "topic_fit": {"type": "string"},
+            "article_pattern": {"type": "string"},
+            "useful_summary": {"type": "string"},
+            "strengths": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "risks": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "next_checks": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+    },
+}

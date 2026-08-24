@@ -21,6 +21,8 @@ from oiltech_digest.source_discovery.agent import (
     _status_for_recommendation,
 )
 from oiltech_digest.source_discovery.learning import apply_candidate_learning
+from oiltech_digest.source_discovery.source_quality import assess_source_quality, quality_comment
+from oiltech_digest.source_discovery.source_regularity import assess_source_regularity, regularity_comment
 
 
 def evaluate_source_candidate(
@@ -65,6 +67,13 @@ def evaluate_source_candidate(
     metrics = repository.source_candidate_article_metrics(candidate_id)
     evidence = repository.list_source_candidate_articles(candidate_id, limit=article_limit)
     recommendation = recommend_source_action(metrics, offline=offline, evidence=evidence)
+    source_quality = _safe_source_quality(candidate, metrics, evidence, offline=offline)
+    source_regularity = assess_source_regularity(candidate, collected, evidence)
+    review_comment = _merge_review_comment(
+        recommendation["reason"],
+        quality_comment(source_quality),
+        regularity_comment(source_regularity),
+    )
     next_status = _status_for_recommendation(recommendation["recommended_action"])
     repository.update_source_candidate_assessment(
         candidate_id,
@@ -75,8 +84,9 @@ def evaluate_source_candidate(
         duplicate_count=metrics["duplicate_count"],
         noise_count=metrics["noise_count"],
         recommended_action=recommendation["recommended_action"],
-        review_comment=recommendation["reason"],
+        review_comment=review_comment,
     )
+    quality_memory = _persist_source_quality_memory(candidate, metrics, recommendation, source_quality, source_regularity)
     learning = None
     if recommendation["recommended_action"] in {"add", "test_more", "reject"}:
         learning = apply_candidate_learning(
@@ -84,7 +94,7 @@ def evaluate_source_candidate(
             event_type="evaluated",
             status=next_status,
             recommended_action=recommendation["recommended_action"],
-            review_comment=recommendation["reason"],
+            review_comment=review_comment,
             metrics=metrics,
         )
     result = {
@@ -94,9 +104,12 @@ def evaluate_source_candidate(
         "collected": collected,
         "processed": processed,
         "metrics": metrics,
+        "source_quality": source_quality,
+        "source_regularity": source_regularity,
         "recommended_action": recommendation["recommended_action"],
         "next_status": next_status,
-        "review_comment": recommendation["reason"],
+        "review_comment": review_comment,
+        "quality_memory": quality_memory,
         "learning": learning,
         "duration_ms": int((time.monotonic() - started) * 1000),
     }
@@ -108,6 +121,66 @@ def evaluate_source_candidate(
         duration_ms=result["duration_ms"],
     )
     return result
+
+
+def _safe_source_quality(candidate: dict, metrics: dict[str, Any], evidence: list[dict[str, Any]], *, offline: bool) -> dict[str, Any]:
+    try:
+        return assess_source_quality(candidate, metrics, evidence, offline=offline)
+    except Exception as exc:  # noqa: BLE001 - quality explanation must not break candidate evaluation
+        return {
+            "source": "error",
+            "model": None,
+            "quality_label": "сомнительный",
+            "usefulness_score": None,
+            "topic_fit": "",
+            "article_pattern": "",
+            "useful_summary": "AI-оценка качества источника не выполнена.",
+            "strengths": [],
+            "risks": [str(exc)[:500]],
+            "next_checks": ["Повторить AI-оценку качества источника."],
+            "confidence": 0,
+            "error": str(exc)[:1000],
+        }
+
+
+def _merge_review_comment(*parts: str) -> str:
+    clean = [str(part or "").strip() for part in parts]
+    return " ".join(part for part in clean if part).strip()
+
+
+def _persist_source_quality_memory(
+    candidate: dict,
+    metrics: dict[str, Any],
+    recommendation: dict[str, Any],
+    source_quality: dict[str, Any],
+    source_regularity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        candidate_id = int(candidate["id"])
+        domain = str(candidate.get("normalized_domain") or repository.normalize_domain(str(candidate.get("url") or ""))).strip().lower()
+        subject = domain or str(candidate.get("url") or f"candidate:{candidate_id}")
+        memory_id = repository.upsert_agent_memory(
+            memory_key=f"source-candidate-quality:{candidate_id}",
+            memory_type="source_candidate_quality",
+            subject=subject,
+            status="active" if recommendation.get("recommended_action") in {"add", "test_more", "human_review"} else "muted",
+            score=float(source_quality.get("usefulness_score") or 0),
+            facts={
+                "candidate_id": candidate_id,
+                "url": candidate.get("url"),
+                "name": candidate.get("name"),
+                "topic": candidate.get("topic"),
+                "domain": domain or None,
+                "metrics": metrics,
+                "recommended_action": recommendation.get("recommended_action"),
+                "recommendation_reason": recommendation.get("reason"),
+                "source_quality": source_quality,
+                "source_regularity": source_regularity or {},
+            },
+        )
+        return {"ok": True, "memory_id": memory_id}
+    except Exception as exc:  # noqa: BLE001 - quality memory must not block evaluation
+        return {"ok": False, "error": str(exc)[:1000]}
 
 
 def collect_candidate_articles(candidate: dict, *, article_limit: int = 5) -> dict[str, Any]:
@@ -170,6 +243,7 @@ def collect_candidate_articles(candidate: dict, *, article_limit: int = 5) -> di
             "url": link.url,
             "title": title,
             "text_chars": len(raw_text or ""),
+            "published_at": published_at.isoformat() if published_at else None,
             "prefilter_keep": pre_filter.keep,
             "prefilter_reason": pre_filter.reason,
         })
