@@ -17,8 +17,12 @@ import type {
   SourceCandidateEvaluationResult,
   SourceCandidatePatchPayload,
   SourceCandidateTriageRow,
-  SourceDiscoveryPlanPayload,
+  SourceDiscoveryDiscoverPayload,
+  SourceDiscoveryDiscoverResult,
+  SourceDiscoveryEvaluation,
+  SourceDiscoveryLoopResult,
   SourceDiscoveryLoopPayload,
+  SourceDiscoveryPlanPayload,
   SourceDiscoveryQualityRow,
   SourceDiscoveryReadiness,
   SourceDiagnostics,
@@ -102,6 +106,20 @@ export function enqueueSourceDiscoveryLoop(payload: SourceDiscoveryLoopPayload =
   });
 }
 
+export function dryRunSourceDiscoveryLoop(payload: SourceDiscoveryLoopPayload = {}) {
+  return apiFetch<{ ok: boolean; result: SourceDiscoveryLoopResult }>("/api/source-discovery/loop/dry-run", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function discoverSourceCandidate(payload: SourceDiscoveryDiscoverPayload) {
+  return apiFetch<{ ok: boolean; result: SourceDiscoveryDiscoverResult }>("/api/source-discovery/discover", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listAgentMemory(query: { memory_type?: string; status?: string; limit?: number } = {}) {
   const params = new URLSearchParams();
   params.set("limit", String(query.limit ?? 100));
@@ -151,6 +169,10 @@ export function listQueryMemory(query: { limit?: number; status?: string } = {})
   params.set("limit", String(query.limit ?? 20));
   if (query.status) params.set("status", query.status);
   return apiFetch<QueryMemoryRow[]>(`/api/source-discovery/query-memory?${params.toString()}`);
+}
+
+export function getSourceDiscoveryEvaluation(limit = 500) {
+  return apiFetch<SourceDiscoveryEvaluation>(`/api/source-discovery/evaluation?limit=${limit}`);
 }
 
 export function getSourceDiscoveryReadiness() {

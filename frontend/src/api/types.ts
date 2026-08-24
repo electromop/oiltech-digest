@@ -136,11 +136,29 @@ export type SourceCandidatePatchPayload = {
 };
 
 export type AgentPlanAction = {
-  action_type: "discover_sources" | "review_source_candidate" | "recheck_source" | "tune_source_frequency";
+  action_type: "discover_sources" | "review_source_candidate" | "recheck_source" | "tune_source_frequency" | "audit_existing_source";
   priority: number;
   topic?: string | null;
   limit?: number;
   query_hints?: string[];
+  memory_explanation?: {
+    query_hints?: string[];
+    promoted_combos?: Array<{
+      query: string;
+      domain: string;
+      score: number;
+      status: string;
+      reason?: string | null;
+    }>;
+    muted_combos?: Array<{
+      query: string;
+      domain: string;
+      score: number;
+      status: string;
+      reason?: string | null;
+    }>;
+    feedback?: Record<string, number>;
+  };
   reason: string;
   policy_decision?: "auto" | "human_review" | "blocked";
   policy_reason?: string;
@@ -153,6 +171,14 @@ export type AgentPlanAction = {
   source_name?: string | null;
   direction?: "increase" | "decrease" | string;
   recommended_frequency?: string | null;
+  audit_status?: string;
+  audit_problem_type?: string;
+  audit_severity?: string;
+  audit_confidence?: string;
+  audit_recommendation?: string;
+  audit_recommendation_label?: string;
+  audit_reasons?: string[];
+  audit_decision_log?: Record<string, unknown>;
 };
 
 export type AgentMemory = {
@@ -233,6 +259,65 @@ export type QueryMemoryRow = {
   updated_at: string | null;
 };
 
+export type SourceDiscoveryEvaluation = {
+  summary: {
+    candidates: number;
+    candidate_decisions: number;
+    candidate_agreement_rate: number;
+    source_memories: number;
+    sources_under_watch: number;
+    high_confidence_sources: number;
+    weak_rules: number;
+    recent_actions: number;
+  };
+  candidate_recommendations: {
+    total: number;
+    decided: number;
+    agreed: number;
+    disagreed: number;
+    agreement_rate: number;
+    by_recommendation: Array<{
+      recommendation: string;
+      total: number;
+      decided: number;
+      agreed: number;
+      disagreed: number;
+      agreement_rate: number;
+    }>;
+    disagreements: Array<Record<string, unknown>>;
+  };
+  source_audit: {
+    total: number;
+    under_watch: number;
+    confidence: Record<string, number>;
+    severity: Record<string, number>;
+    problems: Array<{ problem_type: string; count: number; avg_source_score: number }>;
+    recommendations: Array<{ recommendation: string; label: string; count: number; avg_source_score: number }>;
+    rules: Array<{
+      rule: string;
+      triggered: number;
+      suppressed: number;
+      confidence_low: number;
+      avg_source_score: number;
+      suppression_rate: number;
+    }>;
+    examples: Array<Record<string, unknown>>;
+  };
+  weak_rules: Array<{
+    rule: string;
+    triggered: number;
+    suppressed: number;
+    confidence_low: number;
+    avg_source_score: number;
+    suppression_rate: number;
+  }>;
+  recent_actions: {
+    total: number;
+    learning_events: number;
+    by_type: Array<{ action_type: string; count: number }>;
+  };
+};
+
 export type SourceDiscoveryReadinessIssue = {
   severity: "info" | "warning" | "blocker" | string;
   code: string;
@@ -297,16 +382,96 @@ export type SourceDiscoveryPlanPayload = {
   evaluate?: boolean;
 };
 
+export type SourceDiscoveryDiscoverPayload = {
+  topic: string;
+  seed_url: string;
+  limit?: number;
+  offline?: boolean;
+  fetch_inspection?: boolean;
+  test_parse?: boolean;
+};
+
+export type SourceDiscoverySkippedCandidate = {
+  url: string;
+  domain: string;
+  reason: string;
+  source_id?: number;
+  source_name?: string;
+  verdict?: string | null;
+  retry_after?: string;
+  failure_count?: number;
+  last_reason?: string;
+};
+
+export type SourceDiscoveryDiscoverResult = {
+  candidates: SourceCandidate[];
+  existing_sources_skipped?: SourceDiscoverySkippedCandidate[];
+  cooldown_sources_skipped?: SourceDiscoverySkippedCandidate[];
+  quality_gate_sources_skipped?: SourceDiscoverySkippedCandidate[];
+  unavailable_sources_skipped?: SourceDiscoverySkippedCandidate[];
+  parse_failed_sources_skipped?: SourceDiscoverySkippedCandidate[];
+  duration_ms: number;
+};
+
 export type SourceDiscoveryLoopPayload = SourceDiscoveryPlanPayload & {
   goal?: string;
   max_iterations?: number;
   fetch_inspection?: boolean;
+  test_parse?: boolean;
   dry_run?: boolean;
   auto_evaluate?: boolean;
   article_limit?: number;
   max_daily_loop_runs?: number;
   max_daily_candidates?: number;
   max_daily_evaluations?: number;
+};
+
+export type SourceDiscoveryLoopObservation = {
+  action_type?: string;
+  topic?: string | null;
+  priority?: number | null;
+  query_strategy?: string | null;
+  search_status?: string | null;
+  query_count?: number;
+  candidate_count?: number;
+  evaluated_count?: number;
+  evaluation_jobs?: number;
+  evaluation_errors?: number;
+  relevant_articles?: number;
+  avg_score?: number | null;
+  task_id?: number | null;
+};
+
+export type SourceDiscoveryLoopIteration = {
+  iteration: number;
+  policy?: Record<string, unknown> | null;
+  learning?: Record<string, unknown> | null;
+  action_count: number;
+  auto_action_count: number;
+  human_review_count: number;
+  observations: SourceDiscoveryLoopObservation[];
+};
+
+export type SourceDiscoveryLoopReflection = {
+  worked_topics: Array<Record<string, unknown>>;
+  empty_topics: Array<Record<string, unknown>>;
+  strong_strategies: Array<Record<string, unknown>>;
+  weak_strategies: Array<Record<string, unknown>>;
+  next_hints: Array<Record<string, unknown>>;
+  summary: Record<string, unknown>;
+};
+
+export type SourceDiscoveryLoopResult = {
+  run_id: number | null;
+  goal: string;
+  iterations: SourceDiscoveryLoopIteration[];
+  total_candidates: number;
+  empty_iterations: number;
+  terminal_reason: string;
+  reflection?: SourceDiscoveryLoopReflection;
+  budget?: Record<string, unknown>;
+  dry_run?: boolean;
+  duration_ms: number;
 };
 
 export type SourceDiagnostics = {
