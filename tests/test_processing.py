@@ -188,6 +188,55 @@ def test_summary_enforces_oilfield_preferred_terms():
     assert terminology_warnings(response.data["summary"], article) == []
 
 
+def test_glossary_enforces_inflected_bad_terms():
+    class BadTranslatorClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            return AIResponse(
+                data={"summary": "После фракинга на оффшоре компания провела флоубэка анализ и ворковеров программу."},
+                model="fake",
+            )
+
+    article = {
+        "title": "Offshore fracking flowback and workover program",
+        "raw_text": "Offshore hydraulic fracturing generated flowback and required workover operations.",
+    }
+
+    response = pipeline.summarize_article(article, BadTranslatorClient())
+    summary = response.data["summary"].lower()
+
+    assert "грп" in summary
+    assert "шельфовый" in summary
+    assert "жидкость обратного притока" in summary
+    assert "крс" in summary
+    assert "фракинг" not in summary
+    assert "оффшор" not in summary
+    assert "флоубэк" not in summary
+    assert "ворковер" not in summary
+
+
+def test_glossary_catches_reservoir_and_stimulation_calques():
+    class BadTranslatorClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            assert "preferred_ru: пласт" in user_input
+            assert "preferred_ru: интенсификация притока" in user_input
+            return AIResponse(
+                data={"summary": "Оператор провёл стимуляцию скважины для резервуара."},
+                model="fake",
+            )
+
+    article = {
+        "title": "Well stimulation improves reservoir output",
+        "raw_text": "Well stimulation improved reservoir output in the producing formation.",
+    }
+
+    response = pipeline.summarize_article(article, BadTranslatorClient())
+
+    assert "интенсификация притока" in response.data["summary"]
+    assert "пласт" in response.data["summary"]
+    assert "стимуляция скважины" not in response.data["summary"]
+    assert "резервуар" not in response.data["summary"]
+
+
 def test_title_translation_enforces_completion_and_workover_terms():
     class BadTitleClient:
         def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
