@@ -31,6 +31,17 @@ _PDF_FONT_FILES = {
     "GPN Din Condensed": [("GPN_DIN_Condensed-Bold.ttf", 700)],
 }
 
+# Колонтитул с номером страницы. Классы pageNumber/totalPages подставляет сам
+# Chromium. Размер шрифта задаём явно: по умолчанию колонтитул рисуется ~6px и
+# читается как грязь. Корпоративный GPN Din здесь не используем — колонтитул
+# рендерится в отдельном контексте, куда @font-face из документа не долетает.
+_PDF_FOOTER_TEMPLATE = (
+    '<div style="width:100%;padding:0 14mm;font-size:9px;'
+    'font-family:Arial,Helvetica,sans-serif;color:#68768f;text-align:right;">'
+    '<span class="pageNumber"></span> / <span class="totalPages"></span>'
+    "</div>"
+)
+
 
 def _asset_bytes(name: str) -> bytes | None:
     path = ASSETS_DIR / name
@@ -886,7 +897,15 @@ def render_digest_pdf(content: dict) -> bytes:
             pdf_bytes = page.pdf(
                 format="A4",
                 print_background=True,
-                margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
+                # Нумерация страниц — просьба заказчика 25.08. Chromium рисует её
+                # только при display_header_footer, и только в ПОЛЯХ страницы:
+                # при нижнем поле 0 колонтитул физически некуда положить, поэтому
+                # снизу появляется 12 мм. Верхнее поле остаётся нулевым, чтобы
+                # hero-баннер по-прежнему упирался в край листа.
+                display_header_footer=True,
+                header_template="<div></div>",
+                footer_template=_PDF_FOOTER_TEMPLATE,
+                margin={"top": "0", "bottom": "12mm", "left": "0", "right": "0"},
             )
         finally:
             browser.close()
