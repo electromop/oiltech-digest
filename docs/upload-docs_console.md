@@ -62,7 +62,7 @@ curl -s -o /dev/null -w "health: %{http_code}\n" https://oiltech-digest.ru/api/h
 Бэкапов по расписанию нет — это единственная страховка.
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T oiltech_pg pg_dump -U oiltech oiltech_digest | gzip > /root/before-upload-docs-$(date +%F-%H%M).sql.gz && ls -lh /root/before-upload-docs-*.sql.gz | tail -1'
+ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T db pg_dump -U oiltech oiltech_digest | gzip > /root/before-upload-docs-$(date +%F-%H%M).sql.gz && ls -lh /root/before-upload-docs-*.sql.gz | tail -1'
 ```
 
 ---
@@ -72,7 +72,7 @@ ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T oiltec
 Рестарт рвёт lease внешнего воркера — 24.07 на этом сожгли ~$11/час в петле.
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T oiltech_pg psql -U oiltech -d oiltech_digest -c "SELECT id, kind, status FROM background_jobs WHERE status IN (\047running\047,\047finalizing\047);"'
+ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T db psql -U oiltech -d oiltech_digest -c "SELECT id, kind, status FROM background_jobs WHERE status IN (\047running\047,\047finalizing\047);"'
 ```
 
 Пусто — идём дальше. Есть строки — подождать, пока завершатся.
@@ -136,13 +136,13 @@ ssh root@85.234.107.233 'cd /root/oiltech-digest && git fetch origin && git rese
 Что задача взялась и завершилась:
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T oiltech_pg psql -U oiltech -d oiltech_digest -c "SELECT id, kind, status, progress FROM background_jobs WHERE kind = \047process_document\047 ORDER BY id DESC LIMIT 5;"'
+ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T db psql -U oiltech -d oiltech_digest -c "SELECT id, kind, status, progress FROM background_jobs WHERE kind = \047process_document\047 ORDER BY id DESC LIMIT 5;"'
 ```
 
 Сколько стоил разбор:
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T oiltech_pg psql -U oiltech -d oiltech_digest -c "SELECT document_id, stage, model, total_tokens, cost_usd FROM ai_processing_runs WHERE document_id IS NOT NULL ORDER BY id DESC LIMIT 10;"'
+ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T db psql -U oiltech -d oiltech_digest -c "SELECT document_id, stage, model, total_tokens, cost_usd FROM ai_processing_runs WHERE document_id IS NOT NULL ORDER BY id DESC LIMIT 10;"'
 ```
 
 ---
