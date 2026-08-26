@@ -278,3 +278,65 @@ def test_listing_selector_isolates_the_listing_from_a_sidebar_feed():
         {}, "https://www.rbc.ru/tags/?tag=нефть", TWO_BLOCK_LISTING, limit=12
     )
     assert any("/sport/" in c.url for c in without_selector)
+
+
+JPT_LISTING_HTML = b"""
+<html>
+  <body>
+    <div class="Navigation"><a href="/topic/fracturing-pressure-pumping">Fracturing</a></div>
+    <div class="PromoB">
+      <div class="PromoB-content">
+        <div class="PromoB-title"><a href="/bp-secures-loran-phase-2-offshore-exploration">BP secures Loran Phase 2 offshore exploration</a></div>
+        <div class="PromoB-by-line">August 25, 2026 &bull; JPT Staff &bull; Journal of Petroleum Technology</div>
+      </div>
+    </div>
+    <div class="PromoA">
+      <div class="PromoA-content">
+        <div class="PromoA-title"><a href="/from-hydrocarbon-recovery-to-in-situ-mineral-leaching">From hydrocarbon recovery to in-situ mineral leaching</a></div>
+        <div class="PromoA-by-line">August 17, 2026 &bull; SPE Flow Measurement Technical Section</div>
+      </div>
+    </div>
+  </body>
+</html>
+"""
+
+
+def test_parse_datetime_reads_date_embedded_in_a_by_line():
+    """Дата в карточке издания приходит вместе с автором и названием журнала.
+
+    Строгий разбор на такой строке падает, и источник получает published_at=None —
+    именно так JPT годами шёл с пустым last_seen_published_at."""
+    parsed = request_parser._parse_datetime(
+        "August 25, 2026 • JPT Staff • Journal of Petroleum Technology"
+    )
+
+    assert parsed is not None
+    assert parsed.date().isoformat() == "2026-08-25"
+
+
+def test_parse_datetime_does_not_invent_dates_from_arbitrary_text():
+    """Защита от fuzzy-разбора: он выдумывал 2026-05-12 из «Section 5 of 12»
+    и 2026-03-25 из «Halliburton 2026 Q3 results webcast»."""
+    for noise in ("JPT Staff • Journal of Petroleum Technology",
+                  "Section 5 of 12",
+                  "Halliburton 2026 Q3 results webcast",
+                  "Read more"):
+        assert request_parser._parse_datetime(noise) is None, noise
+
+
+def test_promo_selectors_take_articles_with_dates_and_skip_topic_links():
+    """Селекторный путь на разметке JPT: только карточки, с датами, без рубрик."""
+    source = {
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+    }
+    candidates = request_parser.extract_candidate_links(
+        source, "https://jpt.spe.org/latest-news", JPT_LISTING_HTML, limit=50
+    )
+
+    urls = [c.url for c in candidates]
+    assert len(candidates) == 2
+    assert not any("/topic/" in u for u in urls), urls
+    assert all(c.published_at is not None for c in candidates)
+    assert {c.published_at.date().isoformat() for c in candidates} == {"2026-08-25", "2026-08-17"}

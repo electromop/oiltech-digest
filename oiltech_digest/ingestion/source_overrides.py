@@ -96,7 +96,21 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "Aker Solutions": {"parse_strategy": "playwright",
                        "listing_url": "https://www.akersolutions.com/news/news-archive/"},
     "Rystad Energy": {"parse_strategy": "playwright", "listing_url": "https://www.rystadenergy.com/news"},  # рендер ✓ (свежак 08 июня), scheduler собирает в фоне
-    "Journal of Petroleum Technology": {"parse_strategy": "playwright", "listing_url": "https://jpt.spe.org/latest-news"},  # рендер ✓ (свежак 09 июня, даты извлекаются)
+    # JPT — личная просьба заказчика (24.08: «для нефтянки это маст хэв, номер 1 в мире,
+    # а оттуда мало что подтягивается»). Рендер всегда был исправен (219 КБ, ни WAF, ни
+    # блокировки) — теряли на разборе. Замер по сохранённой странице: без селекторов
+    # якорный путь давал 42 кандидата, из них 30 — рубрики `/topic/...`, и рубрика же
+    # шла ПЕРВОЙ по оценке, занимая слот в выдаче. Дат не было ни у одного.
+    # Разметка ленты — Arc Publishing: карточки .PromoB (12 шт.) и .PromoA (2 шт.),
+    # ссылка в *-title, дата в *-by-line. Комментарий «даты извлекаются» здесь стоял
+    # ошибочно: last_seen_published_at у источника был пуст.
+    "Journal of Petroleum Technology": {
+        "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/latest-news",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+    },
     # НЕ в реестре — listing отдаёт навигацию/SPA-оболочку вместо статей, нужен
     # listing_selector или другой URL (тюнинг отдельной задачей):
     #   Wood Mackenzie #16 (/press-releases/ → blogs/sign-up/topics)
@@ -251,9 +265,15 @@ def apply_overrides() -> dict:
             new_url = fields.get("url")
             new_region = fields.get("network_region")
             new_selector = fields.get("listing_selector")
+            # Эти два оверрайд раньше НЕ умел: прописанные в реестре, они молча
+            # никуда не доезжали. Именно их не хватает JPT, чтобы брать карточки
+            # ленты, а не рубрики, и видеть дату публикации.
+            new_link_selector = fields.get("article_link_selector")
+            new_date_selector = fields.get("article_date_selector")
             want_type = fields.get("source_type")
             select = ("SELECT id, parse_strategy, listing_url, rss_url, url, network_region, "
-                      "source_type, listing_selector FROM sources WHERE name = %s")
+                      "source_type, listing_selector, article_link_selector, "
+                      "article_date_selector FROM sources WHERE name = %s")
             select_params: tuple = (name,)
             if want_type is not None:
                 select += " AND source_type = %s"
@@ -275,14 +295,20 @@ def apply_overrides() -> dict:
                     name, len(rows), ", ".join(f"id={r[0]} {r[6]}" for r in rows),
                 )
                 continue
-            source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region, _, cur_selector = rows[0]
+            (source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region, _,
+             cur_selector, cur_link_selector, cur_date_selector) = rows[0]
             listing_changed = new_listing is not None and (cur_listing or "") != new_listing
             rss_changed = new_rss is not None and (cur_rss or "") != new_rss
             url_changed = new_url is not None and (cur_url or "") != new_url
             region_changed = new_region is not None and (cur_region or "auto") != new_region
             selector_changed = new_selector is not None and (cur_selector or "") != new_selector
+            link_selector_changed = (new_link_selector is not None
+                                     and (cur_link_selector or "") != new_link_selector)
+            date_selector_changed = (new_date_selector is not None
+                                     and (cur_date_selector or "") != new_date_selector)
             if (cur_strategy == new_strategy and not listing_changed and not rss_changed
-                    and not url_changed and not region_changed and not selector_changed):
+                    and not url_changed and not region_changed and not selector_changed
+                    and not link_selector_changed and not date_selector_changed):
                 unchanged += 1
                 continue
 
@@ -309,11 +335,19 @@ def apply_overrides() -> dict:
             if new_selector is not None:
                 sets.append("listing_selector = %(listing_selector)s")
                 params["listing_selector"] = new_selector
+            if new_link_selector is not None:
+                sets.append("article_link_selector = %(article_link_selector)s")
+                params["article_link_selector"] = new_link_selector
+            if new_date_selector is not None:
+                sets.append("article_date_selector = %(article_date_selector)s")
+                params["article_date_selector"] = new_date_selector
             conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = %(id)s", params)
             changed += 1
-            logger.info("source override: %s → %s%s%s%s%s%s", name, new_strategy,
+            logger.info("source override: %s → %s%s%s%s%s%s%s%s", name, new_strategy,
                         f" listing={new_listing}" if new_listing else "",
                         f" selector={new_selector}" if new_selector else "",
+                        f" link_selector={new_link_selector}" if new_link_selector else "",
+                        f" date_selector={new_date_selector}" if new_date_selector else "",
                         f" rss={new_rss}" if new_rss else "",
                         f" url={new_url}" if new_url else "",
                         f" region={new_region}" if new_region else "")

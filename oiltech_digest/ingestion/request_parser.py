@@ -33,6 +33,13 @@ _BAD_LINK_RE = re.compile(
 )
 _DATE_HINT_RE = re.compile(r"/20\d{2}/\d{1,2}/\d{1,2}/")
 _DATE_TEXT_RE = re.compile(r"\b(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2})\b")
+# Форма даты внутри более длинной строки: ISO, «19 August 2026», «August 25, 2026».
+# Используется только как запасной путь в _parse_datetime — см. комментарий там.
+_DATE_IN_TEXT_RE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}\b"
+    r"|\b[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}\b"
+)
 
 
 @dataclass(frozen=True)
@@ -383,13 +390,30 @@ def _guess_date_from_text(raw: str) -> str:
     return match.group(1) if match else ""
 
 
+def _try_parse_datetime(raw: str) -> datetime | None:
+    try:
+        return dateparser.parse(raw)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def _parse_datetime(raw: str) -> datetime | None:
     if not raw:
         return None
-    try:
-        parsed = dateparser.parse(raw)
-    except (ValueError, TypeError, OverflowError):
-        return None
+    parsed = _try_parse_datetime(raw)
+    if parsed is None:
+        # В карточке листинга дата почти никогда не лежит одна: рядом автор и название
+        # издания («August 25, 2026 • JPT Staff • Journal of Petroleum Technology»).
+        # Строгий разбор на такой строке падает, и источник годами идёт с пустым
+        # published_at — ровно это было у JPT.
+        #
+        # dateparser.parse(fuzzy=True) сюда НЕ годится, проверено на реальных строках:
+        # он выдумывает дату там, где её нет — «Section 5 of 12» превращалось в
+        # 2026-05-12, а «Halliburton 2026 Q3 results webcast» в 2026-03-25. Поэтому
+        # сначала вырезаем ФОРМУ даты, и разбираем только её.
+        match = _DATE_IN_TEXT_RE.search(raw)
+        if match:
+            parsed = _try_parse_datetime(match.group(0))
     if parsed is None:
         return None
     if parsed.tzinfo is None:
