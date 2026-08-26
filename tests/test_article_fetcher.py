@@ -189,3 +189,62 @@ def test_mismatch_keeps_previous_text_and_is_counted_separately(monkeypatch):
     assert stats["mismatch"] == 1
     assert stats["failed"] == 0
     assert written["raw_text"] is None        # прежний текст не затирается
+
+
+THIN_HTML = b"<html><body><p>Too little.</p></body></html>"
+
+
+def _stub_fetch(monkeypatch, content):
+    monkeypatch.setattr(article_fetcher, "fetch", lambda url, **kwargs: content)
+
+
+def test_fetch_article_text_reports_no_gain_when_stored_text_is_fine(monkeypatch):
+    """Извлеклось нормально, но не вдвое длиннее уже сохранённого.
+
+    Это НЕ «мало текста»: тело статьи на месте, перезаписывать его нечем.
+    Раньше оба исхода назывались too_short, и при ручном импорте статья с
+    40 000 знаков выглядела сломанной.
+    """
+    _stub_fetch(monkeypatch, ARTICLE_HTML)
+    stored = "Уже сохранённое тело статьи. " * 8
+    article = {"id": 1, "url": "https://example.com/a", "title": "Drilling", "raw_text": stored}
+
+    result = article_fetcher.fetch_article_text(article, min_chars=100)
+
+    assert result.status == "no_gain"
+    assert len(result.text) >= 100          # текст извлёкся, он просто не лучше
+    assert result.text                       # и он не пустой
+
+
+def test_fetch_article_text_reports_too_short_for_thin_page(monkeypatch):
+    """Страница действительно куцая — здесь too_short по-прежнему уместен."""
+    _stub_fetch(monkeypatch, THIN_HTML)
+    article = {"id": 2, "url": "https://example.com/b", "title": "Thin", "raw_text": ""}
+
+    result = article_fetcher.fetch_article_text(article, min_chars=800)
+
+    assert result.status == "too_short"
+
+
+def test_no_gain_never_wipes_stored_text(monkeypatch):
+    """Страховка на уровне записи: при не-ok статусе raw_text не передаётся,
+    а update_article_full_text в этом случае трогает только статусные поля."""
+    _stub_fetch(monkeypatch, ARTICLE_HTML)
+    written = {}
+
+    monkeypatch.setattr(
+        article_fetcher.repository, "get_articles_needing_full_text",
+        lambda **kwargs: [{"id": 3, "url": "https://example.com/c",
+                           "title": "Drilling", "raw_text": "Тело статьи. " * 20}],
+    )
+    monkeypatch.setattr(
+        article_fetcher.repository, "update_article_full_text",
+        lambda article_id, **kwargs: written.update(kwargs),
+    )
+
+    stats = article_fetcher.fetch_full_text(limit=1, min_chars=100)
+
+    assert stats["no_gain"] == 1
+    assert stats["too_short"] == 0
+    assert written["raw_text"] is None       # текст в базе остаётся нетронутым
+    assert written["status"] == "no_gain"

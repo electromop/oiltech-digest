@@ -75,12 +75,13 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
                     retry_too_short: bool = False) -> dict:
     """Fetch and store full text for truncated articles.
 
-    retry_too_short=True re-attempts articles previously marked too_short,
-    useful after adding a new extraction backend (e.g. trafilatura).
+    retry_too_short=True re-attempts articles previously marked too_short or
+    no_gain, useful after adding a new extraction backend (e.g. trafilatura).
     """
     # mismatch — отдельно от failed: это не сбой сети, а сработавшая защита от подмены
     # текста (№24). Смешивать их нельзя, иначе не видно, работает ли страж.
-    stats = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0, "mismatch": 0}
+    stats = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0,
+             "no_gain": 0, "mismatch": 0}
     articles = repository.get_articles_needing_full_text(limit=limit, retry_too_short=retry_too_short)
     for article in articles:
         stats["processed"] += 1
@@ -107,7 +108,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
                     error=result.error,
                     image_url=result.image_url,
                 )
-                stats[result.status if result.status in ("too_short", "mismatch") else "failed"] += 1
+                stats[result.status if result.status in ("too_short", "no_gain", "mismatch") else "failed"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
             logger.warning("Full text fetch failed for article %s: %s", article.get("id"), exc)
             repository.update_article_full_text(
@@ -194,9 +195,18 @@ def fetch_article_text(article: dict, min_chars: int = MIN_FULL_TEXT_CHARS) -> E
         )
 
     best = traf if len(traf) > len(extracted) else extracted
+    # Сюда попадают ДВА разных исхода, и раньше оба назывались too_short:
+    #   1) страница действительно куцая — извлекли меньше min_chars;
+    #   2) извлекли нормально, но не вдвое больше уже сохранённого (MIN_GAIN_RATIO),
+    #      то есть текст у статьи ЕСТЬ и он не хуже — перезаписывать нечем.
+    # Второе — не проблема, а штатный отказ от бесполезной перезаписи. Общее имя
+    # too_short заставляло читать «у статьи нет текста» там, где текст на месте:
+    # при ручном импорте 24.08 четыре статьи из пяти выглядели сломанными, хотя
+    # в базе лежали их полные тела (у одной — 40 297 знаков).
+    status = "no_gain" if len(best) >= min_chars else "too_short"
     return ExtractionResult(
         best,
-        "too_short",
+        status,
         method="trafilatura" if traf and len(traf) > len(extracted) else "lxml",
         error=f"extracted={len(best)} chars, current={len(current)} chars",
         image_url=image_url,

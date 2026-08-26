@@ -70,7 +70,9 @@ CREATE TABLE IF NOT EXISTS articles (
   raw_text       TEXT,
   text_truncated BOOLEAN DEFAULT FALSE,           -- RSS отдал обрезанный/сокращённый текст
   full_text_fetched_at TIMESTAMPTZ,
-  full_text_status TEXT,                          -- ok / failed / too_short / blocked / paywall
+  full_text_status TEXT,                          -- ok / failed / too_short / no_gain / mismatch / blocked / paywall
+                                                  -- no_gain: текст извлёкся нормально, но не вдвое длиннее
+                                                  -- уже сохранённого — перезаписывать нечем, статья цела
   full_text_error TEXT,
   extraction_method TEXT,                         -- rss / lxml / trafilatura / selector
   language       TEXT,

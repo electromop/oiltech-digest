@@ -1331,11 +1331,16 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
 
     retry_too_short=True also includes articles previously marked too_short so they
     can be re-attempted (e.g. after trafilatura is added to the extraction chain).
+
+    Сюда же берём no_gain: этот статус выделен из too_short позже, и в базе с
+    прежних прогонов лежат строки, где «нет прироста» записано как too_short.
+    Если брать только одно из двух значений, часть статей молча выпадет из
+    повтора — поэтому список, а не равенство.
     """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         status_filter = (
-            "AND (a.full_text_status IS NULL OR a.full_text_status = 'too_short')"
+            "AND (a.full_text_status IS NULL OR a.full_text_status IN ('too_short', 'no_gain'))"
             if retry_too_short
             else "AND a.full_text_status IS NULL"
         )

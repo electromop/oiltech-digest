@@ -144,6 +144,9 @@ def cmd_fetch_full_text(args: argparse.Namespace) -> None:
     print(
         f"fetch-full-text: проверено={stats['processed']}, обновлено={stats['updated']}, "
         f"слишком коротких={stats['too_short']}, "
+        # Отдельно от «слишком коротких»: текст у статьи ЕСТЬ и он не хуже нового,
+        # перезапись просто не нужна. Под общим именем это читалось как поломка.
+        f"без прироста={stats.get('no_gain', 0)}, "
         # Отдельной строкой: это не сбой, а сработавшая защита от подмены текста (№24).
         # Без своего счётчика она была невидима и терялась в общей арифметике.
         f"отклонено стражем={stats.get('mismatch', 0)}, ошибок={stats['failed']}"
@@ -1099,7 +1102,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_full.add_argument("--limit", type=int, default=50)
     p_full.add_argument("--min-chars", type=int, default=800)
     p_full.add_argument("--retry-too-short", action="store_true",
-                        help="повторить попытку для статей с full_text_status='too_short'")
+                        help="повторить попытку для статей со статусом too_short или no_gain")
     p_full.set_defaults(func=cmd_fetch_full_text)
 
     p_backfill_images = sub.add_parser("backfill-images", help="дозаполнить og:image у статей без картинки")
