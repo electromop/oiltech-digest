@@ -1,0 +1,2377 @@
+
+<!doctype html>
+<html lang="ru" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Документация пользователя и разработчика OilTech Digest">
+      
+      
+      
+        <link rel="canonical" href="http://127.0.0.1/help/developer/source-discovery-pipeline/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/signals-overview.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Пайплайн поиска источников - OilTech Digest Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#_1" class="md-skip">
+          Перейти к содержанию
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Верхний колонтитул">
+    <a href="../.." title="OilTech Digest Docs" class="md-header__button md-logo" aria-label="OilTech Digest Docs" data-md-component="logo">
+      
+  <img src="../../assets/signals-overview.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            OilTech Digest Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Пайплайн поиска источников
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Поиск" placeholder="Поиск" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Поиск">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Очистить" aria-label="Очистить" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Инициализация поиска
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Вкладки" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Обзор
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user/" class="md-tabs__link">
+          
+  
+  
+  Для пользователей
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Для разработчиков
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Навигация" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="OilTech Digest Docs" class="md-nav__button md-logo" aria-label="OilTech Digest Docs" data-md-component="logo">
+      
+  <img src="../../assets/signals-overview.png" alt="logo">
+
+    </a>
+    OilTech Digest Docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Обзор
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Для пользователей
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Для пользователей
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Документация пользователя
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Для разработчиков
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Для разработчиков
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Обзор
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Пайплайн поиска источников
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Пайплайн поиска источников
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Содержание">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Содержание
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Цель
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Общая схема
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Основные точки входа
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 1. Выбор темы
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 2. Генерация поисковых запросов
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Этап 2. Генерация поисковых запросов">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Память запросов
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-offline-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2. Offline-режим
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-ai-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3. AI-режим
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Финальная сборка списка
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 3. Поиск URL
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-seed-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 4. Seed URL
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 5. Нормализация и дедупликация URL
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-quality-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 6. Quality gates
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Этап 6. Quality gates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-url-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1. URL gates
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-content-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2. Content gates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 7. Отсев уже существующих источников
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 8. Отсев запрещенных доменов
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-retrycooldown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 9. Retry/cooldown для временно недоступных доменов
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 10. Проверка доступности
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 11. Пробный парсинг
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 12. Рекомендация действия
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 13. Создание кандидата
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-agent-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 14. Agent loop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Память агента
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-evaluation-report" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent Evaluation Report
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#learning-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learning loop по обратной связи
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Learning loop по обратной связи">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Когда срабатывает обучение
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что сохраняется по реальным статьям
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как определяется происхождение кандидата
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как меняется score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Важное правило
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Текущие ограничения
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Практические команды
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Содержание">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Содержание
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Цель
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Общая схема
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Основные точки входа
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 1. Выбор темы
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 2. Генерация поисковых запросов
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Этап 2. Генерация поисковых запросов">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Память запросов
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-offline-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2. Offline-режим
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-ai-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3. AI-режим
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Финальная сборка списка
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 3. Поиск URL
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-seed-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 4. Seed URL
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 5. Нормализация и дедупликация URL
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-quality-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 6. Quality gates
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Этап 6. Quality gates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-url-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1. URL gates
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-content-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2. Content gates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 7. Отсев уже существующих источников
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 8. Отсев запрещенных доменов
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-retrycooldown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 9. Retry/cooldown для временно недоступных доменов
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 10. Проверка доступности
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 11. Пробный парсинг
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 12. Рекомендация действия
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 13. Создание кандидата
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-agent-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Этап 14. Agent loop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Память агента
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-evaluation-report" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent Evaluation Report
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#learning-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learning loop по обратной связи
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Learning loop по обратной связи">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Когда срабатывает обучение
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что сохраняется по реальным статьям
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как определяется происхождение кандидата
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как меняется score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Важное правило
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Текущие ограничения
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Практические команды
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="_1">Пайплайн поиска источников</h1>
+<p>Этот документ описывает текущую реализацию агента поиска дополнительных источников: как выбираются темы, как генерируются поисковые запросы, как URL превращаются в кандидатов и какие проверки защищают систему от мусора.</p>
+<h2 id="_2">Цель</h2>
+<p>Агент должен помогать оператору находить новые источники сигналов, но не должен сам добавлять источник в боевой каталог.</p>
+<p>Основной принцип:</p>
+<ul>
+<li>агент ищет и проверяет кандидатов;</li>
+<li>система сохраняет метрики и причины решений;</li>
+<li>человек утверждает добавление источника;</li>
+<li>после утверждения источник попадает в <code>sources</code> и начинает работать через обычный пайплайн сбора.</li>
+</ul>
+<h2 id="_3">Общая схема</h2>
+<div class="highlight"><pre><span></span><code>flowchart TD
+    A[&quot;Текущая база сигналов&quot;] --&gt; B[&quot;Поиск тем с дефицитом&quot;]
+    B --&gt; C[&quot;План действий агента&quot;]
+    C --&gt; D[&quot;Генерация поисковых запросов&quot;]
+    D --&gt; E[&quot;Поиск URL через Brave/SerpAPI&quot;]
+    O[&quot;Seed URL от оператора&quot;] --&gt; S[&quot;Режим seed_only&quot;]
+    S --&gt; G[&quot;Нормализация и дедупликация URL&quot;]
+    E --&gt; G
+    G --&gt; H[&quot;Проверка: источник уже есть?&quot;]
+    H --&gt;|да| H1[&quot;Пропустить: already_exists_in_sources&quot;]
+    H --&gt;|нет| C1[&quot;Проверка cooldown&quot;]
+    C1 --&gt;|retry_after еще не наступил| C2[&quot;Пропустить: temporary_unavailable_cooldown&quot;]
+    C1 --&gt;|можно проверять| I[&quot;Проверка доступности&quot;]
+    I --&gt;|HTTP 4xx/5xx/timeout| I1[&quot;Пропустить: unavailable_sources_skipped&quot;]
+    I --&gt;|доступен| J[&quot;Пробный парсинг&quot;]
+    J --&gt;|нет статей| J1[&quot;Пропустить: parse_failed_sources_skipped&quot;]
+    J --&gt;|статьи есть| K[&quot;Расчет метрик качества&quot;]
+    K --&gt; L[&quot;Рекомендация действия&quot;]
+    L --&gt; M[&quot;Кандидат needs_human_review&quot;]
+    M --&gt; N[&quot;Оператор approve/reject/pause&quot;]
+</code></pre></div>
+<h2 id="_4">Основные точки входа</h2>
+<table>
+<thead>
+<tr>
+<th>Точка входа</th>
+<th>Где используется</th>
+<th>Что делает</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>discover_sources()</code></td>
+<td>ядро агента</td>
+<td>один проход поиска кандидатов по теме или seed-url</td>
+</tr>
+<tr>
+<td><code>run_agent_loop()</code></td>
+<td>автоматический цикл</td>
+<td>строит план, выбирает темы, запускает <code>discover_sources()</code></td>
+</tr>
+<tr>
+<td><code>POST /api/source-discovery/discover</code></td>
+<td>UI, ручной seed-url</td>
+<td>проверяет один URL, введенный оператором</td>
+</tr>
+<tr>
+<td><code>POST /api/source-discovery/loop/enqueue</code></td>
+<td>UI</td>
+<td>ставит agent loop в очередь</td>
+</tr>
+<tr>
+<td><code>enqueue-agent-loop</code></td>
+<td>CLI</td>
+<td>ставит agent loop в очередь с консоли</td>
+</tr>
+<tr>
+<td><code>discover-sources</code></td>
+<td>CLI</td>
+<td>ручной запуск одного прохода</td>
+</tr>
+</tbody>
+</table>
+<h2 id="1">Этап 1. Выбор темы</h2>
+<p>Автоматический loop начинает с планировщика.</p>
+<p>Функции:</p>
+<ul>
+<li><code>get_topic_gaps()</code>;</li>
+<li><code>build_plan()</code>;</li>
+<li><code>run_agent_loop()</code>.</li>
+</ul>
+<p>Логика:</p>
+<ol>
+<li>Система смотрит, какие темы за период дают мало сигналов.</li>
+<li>Сравнивает фактическое количество сигналов с целевым количеством.</li>
+<li>Формирует действия типа <code>discover_sources</code>.</li>
+<li>Для автозапуска разрешены только безопасные действия.</li>
+</ol>
+<p>Безопасное действие означает: агент может искать и проверять источники, но не может сам включать их в боевой каталог.</p>
+<h2 id="2">Этап 2. Генерация поисковых запросов</h2>
+<p>Функция: <code>generate_search_queries(topic, offline, limit, strategy)</code>.</p>
+<p>На вход:</p>
+<table>
+<thead>
+<tr>
+<th>Поле</th>
+<th>Значение</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>topic</code></td>
+<td>тема, например <code>роботизация бурения</code></td>
+</tr>
+<tr>
+<td><code>offline</code></td>
+<td>использовать только шаблоны без OpenAI</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>максимум запросов, сейчас обычно 8</td>
+</tr>
+<tr>
+<td><code>strategy</code></td>
+<td>стратегия поиска: <code>balanced</code>, <code>newsroom</code>, <code>technical</code>, <code>company</code></td>
+</tr>
+</tbody>
+</table>
+<p>На выход:</p>
+<div class="highlight"><pre><span></span><code><span class="p">[</span>
+<span class="w">  </span><span class="s2">&quot;роботизация бурения нефтегаз новости&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;роботизация бурения upstream news&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;роботизация бурения press release oil gas&quot;</span>
+<span class="p">]</span>
+</code></pre></div>
+<h3 id="21">2.1. Память запросов</h3>
+<p>Перед генерацией агент читает <code>agent_memory</code>:</p>
+<ul>
+<li><code>memory_type=query</code>, <code>status=active</code> - успешные прошлые запросы;</li>
+<li><code>memory_type=query</code>, <code>status=muted</code> - запросы, которые раньше дали пустой результат.</li>
+</ul>
+<p>Правила:</p>
+<ol>
+<li>Успешные запросы ставятся в начало списка.</li>
+<li>Muted-запросы исключаются.</li>
+<li>Память фильтруется по текущей теме.</li>
+</ol>
+<p>Это нужно, чтобы агент не повторял заведомо пустые поисковые фразы и переиспользовал удачные.</p>
+<h3 id="22-offline-">2.2. Offline-режим</h3>
+<p>Если <code>offline=true</code>, OpenAI не вызывается. Запросы строятся по шаблонам.</p>
+<p>Базовая стратегия <code>balanced</code>:</p>
+<div class="highlight"><pre><span></span><code>{topic} нефтегаз новости
+{topic} нефтесервис пресс-релиз
+{topic} технологии добычи нефти
+{topic} upstream news
+{topic} oilfield technology news
+{topic} press release oil gas
+{topic} drilling production technology
+{topic} energy industry newsroom
+</code></pre></div>
+<p>Стратегия <code>newsroom</code> добавляет запросы на пресс-центры:</p>
+<div class="highlight"><pre><span></span><code>{topic} newsroom press release oil gas
+{topic} media center upstream company
+{topic} новости компании нефтегаз
+{topic} пресс-релиз нефтесервис
+</code></pre></div>
+<p>Стратегия <code>technical</code> добавляет технические источники:</p>
+<div class="highlight"><pre><span></span><code>{topic} technology case study oilfield
+{topic} technical paper upstream
+{topic} SPE drilling production technology
+{topic} patent oil gas technology
+</code></pre></div>
+<p>Стратегия <code>company</code> ищет поставщиков и нефтесервис:</p>
+<div class="highlight"><pre><span></span><code>{topic} vendor oilfield solution
+{topic} service company launch
+{topic} нефтесервис технология компания
+{topic} industrial supplier oil gas news
+</code></pre></div>
+<h3 id="23-ai-">2.3. AI-режим</h3>
+<p>Если <code>offline=false</code>, агент вызывает OpenAI через текущий AI-клиент.</p>
+<p>Промпт просит:</p>
+<ul>
+<li>искать источники новостей, а не одну случайную статью;</li>
+<li>давать часть запросов на русском и часть на английском;</li>
+<li>добавлять слова <code>news</code>, <code>newsroom</code>, <code>press release</code>, <code>technology</code>, <code>oilfield</code>, <code>upstream</code>, если уместно;</li>
+<li>не делать слишком общие запросы;</li>
+<li>вернуть JSON по схеме.</li>
+</ul>
+<p>После ответа OpenAI агент все равно добавляет offline-шаблоны как fallback. Это защищает запуск от ситуации, когда модель вернула слишком мало запросов.</p>
+<h3 id="24">2.4. Финальная сборка списка</h3>
+<p>Функция <code>_merge_queries()</code>:</p>
+<ul>
+<li>убирает пустые строки;</li>
+<li>убирает дубли;</li>
+<li>убирает muted-запросы;</li>
+<li>сохраняет порядок;</li>
+<li>режет список по <code>limit</code>.</li>
+</ul>
+<p>Итоговый порядок:</p>
+<ol>
+<li>сохраненные успешные запросы из памяти;</li>
+<li>AI-запросы, если включен AI-режим;</li>
+<li>offline-шаблоны как fallback.</li>
+</ol>
+<h2 id="3-url">Этап 3. Поиск URL</h2>
+<p>Функция: <code>search_web()</code>.</p>
+<p>Поддерживаемые провайдеры:</p>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Env</th>
+<th>Назначение</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td><code>SOURCE_DISCOVERY_SEARCH_PROVIDER=none</code></td>
+<td>поиск выключен</td>
+</tr>
+<tr>
+<td><code>brave</code></td>
+<td><code>BRAVE_SEARCH_API_KEY</code></td>
+<td>Brave Search API</td>
+</tr>
+<tr>
+<td><code>serpapi</code></td>
+<td><code>SERPAPI_API_KEY</code></td>
+<td>Google results через SerpAPI</td>
+</tr>
+</tbody>
+</table>
+<p>Если поиск выключен, агент возвращает статус <code>not_configured</code> и не создает URL из внешней выдачи.</p>
+<h2 id="4-seed-url">Этап 4. Seed URL</h2>
+<p>Seed URL - это URL, который оператор вставил руками на странице агента.</p>
+<p>Если <code>seed_urls</code> не пустой:</p>
+<ul>
+<li>web search пропускается;</li>
+<li>статус поиска становится <code>seed_only</code>;</li>
+<li>кандидаты строятся только из seed URL;</li>
+<li>запросы все равно генерируются для логов и памяти, но не используются для выдачи.</li>
+</ul>
+<p>Это важно, чтобы при проверке одного конкретного источника агент не создавал рядом случайные кандидаты из поисковых шаблонов.</p>
+<h2 id="5-url">Этап 5. Нормализация и дедупликация URL</h2>
+<p>Функция: <code>_candidate_urls()</code>.</p>
+<p>Что нормализуется:</p>
+<ul>
+<li>если схемы нет, добавляется <code>https://</code>;</li>
+<li>схема и host приводятся к нижнему регистру;</li>
+<li><code>#fragment</code> удаляется;</li>
+<li>хвостовой <code>/</code> убирается, кроме корня сайта;</li>
+<li>URL используется как стабильный ключ дедупликации.</li>
+</ul>
+<p>Примеры:</p>
+<table>
+<thead>
+<tr>
+<th>Вход</th>
+<th>Нормализованный URL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>example.com/news/#top</code></td>
+<td><code>https://example.com/news</code></td>
+</tr>
+<tr>
+<td><code>https://EXAMPLE.com/news/</code></td>
+<td><code>https://example.com/news</code></td>
+</tr>
+<tr>
+<td><code>https://example.com/</code></td>
+<td><code>https://example.com/</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-quality-gates">Этап 6. Quality gates</h2>
+<p>Quality gates отсекают URL, которые технически могут быть доступны, но почти наверняка не являются хорошей точкой входа источника.</p>
+<h3 id="61-url-gates">6.1. URL gates</h3>
+<p>Срабатывают до HTTP-запроса.</p>
+<p>Отсекаются:</p>
+<ul>
+<li>документы и архивы: <code>.pdf</code>, <code>.doc</code>, <code>.docx</code>, <code>.xls</code>, <code>.xlsx</code>, <code>.ppt</code>, <code>.pptx</code>, <code>.zip</code>, <code>.rar</code>, <code>.7z</code>;</li>
+<li>индексный шум: <code>/tag/</code>, <code>/tags/</code>, <code>/author/</code>, <code>/authors/</code>, <code>/search</code>;</li>
+<li>одиночные статьи вместо раздела источника.</li>
+</ul>
+<p>Примеры причин:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;quality_gate_sources_skipped&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/tag/drilling&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bad_url_type:index_noise&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;stage&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;url&quot;</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/news/2026/robotic-drilling-system-improves-oilfield-operations&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;single_article_url&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;stage&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;url&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="62-content-gates">6.2. Content gates</h3>
+<p>Срабатывают после <code>fetch_inspection</code>, если страница вернула HTML.</p>
+<p>Отсекаются:</p>
+<ul>
+<li>semantic 404: HTTP <code>200</code>, но внутри текст <code>page not found</code>, <code>page does not exist</code>, <code>страница не найдена</code>, <code>ошибка 404</code>;</li>
+<li>anti-bot/challenge: <code>Cloudflare</code>, <code>cf-challenge</code>, <code>captcha</code>, <code>access denied</code>, <code>enable javascript</code>, <code>подтвердите, что вы человек</code>.</li>
+</ul>
+<p>Пример:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;quality_gate_sources_skipped&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/news&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;anti_bot&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;stage&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;content&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Quality gates не заменяют пробный парсинг. Они только убирают очевидно плохие входы до дорогой проверки.</p>
+<h2 id="7">Этап 7. Отсев уже существующих источников</h2>
+<p>Функция: <code>source_inventory_index()</code>.</p>
+<p>Агент строит индекс текущей таблицы <code>sources</code>:</p>
+<ul>
+<li>по <code>url</code>;</li>
+<li>по <code>rss_url</code>;</li>
+<li>по <code>listing_url</code>;</li>
+<li>по домену.</li>
+</ul>
+<p>Если кандидат совпал с существующим источником, он не создается.</p>
+<p>Результат попадает в:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;existing_sources_skipped&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://www.slb.com/news-and-insights&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;slb.com&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;source_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">22</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;source_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SLB (Schlumberger)&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;already_exists_in_sources&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h2 id="8">Этап 8. Отсев запрещенных доменов</h2>
+<p>Агент читает <code>agent_memory</code>:</p>
+<ul>
+<li><code>memory_type=domain</code>;</li>
+<li><code>status=rejected</code>.</li>
+</ul>
+<p>Если домен найден в rejected-memory, URL пропускается. Это ручной blacklist для оператора.</p>
+<p>Особенность: seed URL оператора не отсекается rejected-memory на этапе <code>_candidate_urls()</code>, чтобы человек мог принудительно перепроверить домен.</p>
+<h2 id="9-retrycooldown">Этап 9. Retry/cooldown для временно недоступных доменов</h2>
+<p>Если источник дал timeout или <code>5xx</code>, агент не должен проверять его снова в каждом запуске.</p>
+<p>Логика:</p>
+<ol>
+<li>При временной ошибке агент пишет <code>agent_memory</code>:</li>
+<li><code>memory_type=domain</code>;</li>
+<li><code>status=temporary_unavailable</code>;</li>
+<li><code>subject=&lt;domain&gt;</code>;</li>
+<li><code>facts.failure_count</code>;</li>
+<li><code>facts.retry_after</code>;</li>
+<li><code>facts.last_reason</code>;</li>
+<li><code>facts.last_probe</code>.</li>
+<li>Пока <code>retry_after</code> не наступил, домен пропускается до HTTP-запроса в автоматическом поиске.</li>
+<li>После нескольких подряд временных ошибок домен переводится в <code>rejected</code>.</li>
+</ol>
+<p>Seed URL от оператора обходит cooldown, чтобы человек мог принудительно перепроверить временно недоступный источник.</p>
+<p>Текущие параметры:</p>
+<table>
+<thead>
+<tr>
+<th>Параметр</th>
+<th>Значение</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cooldown</td>
+<td>24 часа</td>
+</tr>
+<tr>
+<td>reject threshold</td>
+<td>3 временные ошибки</td>
+</tr>
+</tbody>
+</table>
+<p>Пример пропуска:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;cooldown_sources_skipped&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://flaky.example.com/news&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;flaky.example.com&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;temporary_unavailable_cooldown&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;retry_after&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-24T10:00:00+00:00&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;failure_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;last_reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http_502&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Permanent-ошибки вроде <code>403</code>, <code>404</code>, <code>410</code>, <code>451</code> сразу пишутся как <code>rejected</code>, потому что обычно это не временная недоступность.</p>
+<h2 id="10">Этап 10. Проверка доступности</h2>
+<p>Функция: <code>inspect_source(url, fetch=True)</code>.</p>
+<p>Если включен <code>fetch_inspection</code>, агент делает HTTP probe и сохраняет:</p>
+<ul>
+<li>status;</li>
+<li>размер ответа;</li>
+<li>время ответа;</li>
+<li>ошибку, если она была;</li>
+<li>признаки RSS;</li>
+<li>признаки страницы новостей.</li>
+</ul>
+<p>Отсев выполняет <code>_inspection_skip_reason()</code>.</p>
+<p>Пропускаются:</p>
+<ul>
+<li>любые <code>5xx</code>;</li>
+<li><code>401</code>;</li>
+<li><code>403</code>;</li>
+<li><code>404</code>;</li>
+<li><code>410</code>;</li>
+<li><code>451</code>;</li>
+<li>timeout;</li>
+<li>fetch error;</li>
+<li>отсутствие статуса.</li>
+</ul>
+<p>Результат попадает в:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;unavailable_sources_skipped&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://burneft.ru/&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;burneft.ru&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http_502&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h2 id="11">Этап 11. Пробный парсинг</h2>
+<p>Функция: <code>test_parse_source(url, article_limit=5)</code>.</p>
+<p>Пробный парсинг не пишет статьи в основной поток. Он только проверяет, можно ли из кандидата извлечь материалы.</p>
+<p>Логика:</p>
+<ol>
+<li>Скачать listing page.</li>
+<li>Извлечь ссылки на возможные статьи.</li>
+<li>Скачать несколько статей.</li>
+<li>Извлечь заголовок, дату и текст.</li>
+<li>Прогнать локальный prefilter.</li>
+<li>Посчитать тестовые метрики.</li>
+</ol>
+<p>Метрики:</p>
+<table>
+<thead>
+<tr>
+<th>Метрика</th>
+<th>Что значит</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tested_articles</code></td>
+<td>сколько материалов нашли и положили в песочницу</td>
+</tr>
+<tr>
+<td><code>parsed_articles</code></td>
+<td>у скольких материалов удалось извлечь текст</td>
+</tr>
+<tr>
+<td><code>kept_by_prefilter</code></td>
+<td>сколько материалов прошло быстрый локальный фильтр</td>
+</tr>
+<tr>
+<td><code>processed_articles</code></td>
+<td>сколько материалов прошло AI-проверку или было явно отклонено</td>
+</tr>
+<tr>
+<td><code>relevant_articles</code></td>
+<td>сколько материалов AI признал релевантными</td>
+</tr>
+<tr>
+<td><code>scored_articles</code></td>
+<td>сколько материалов получило score</td>
+</tr>
+<tr>
+<td><code>high_score_articles</code></td>
+<td>сколько материалов получило score <code>50+</code></td>
+</tr>
+<tr>
+<td><code>avg_score</code></td>
+<td>средний score по оцененным материалам</td>
+</tr>
+<tr>
+<td><code>duplicate_count</code></td>
+<td>сколько дублей встретилось</td>
+</tr>
+<tr>
+<td><code>noise_count</code></td>
+<td>сколько материалов похоже на шум</td>
+</tr>
+</tbody>
+</table>
+<p>Пропускаются результаты:</p>
+<ul>
+<li><code>listing_fetch_failed</code>;</li>
+<li><code>no_candidates</code>.</li>
+</ul>
+<p>Результат попадает в:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;parse_failed_sources_skipped&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://oil.rftoday.ru/&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;oil.rftoday.ru&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;no_candidates&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;verdict&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;no_candidates&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h2 id="12">Этап 12. Рекомендация действия</h2>
+<p>Функция: <code>recommend_source_action()</code>.</p>
+<p>Оценка двухслойная.</p>
+<p>Первый слой - прозрачные правила по метрикам. Он всегда доступен и используется как fallback.</p>
+<p>Quality score считается по реальной воронке материалов:</p>
+<ul>
+<li>доля материалов, которые удалось обработать;</li>
+<li>доля релевантных материалов;</li>
+<li>доля материалов со score <code>50+</code>;</li>
+<li>средний score;</li>
+<li>штрафы за шум и дубли.</li>
+</ul>
+<p>Если <code>offline=true</code>, решение считается только по правилам:</p>
+<table>
+<thead>
+<tr>
+<th>Условие</th>
+<th>Действие</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>материалов не проверяли</td>
+<td><code>human_review</code></td>
+</tr>
+<tr>
+<td>качество высокое</td>
+<td><code>add</code></td>
+</tr>
+<tr>
+<td>качество среднее</td>
+<td><code>test_more</code></td>
+</tr>
+<tr>
+<td>качество низкое</td>
+<td><code>reject</code></td>
+</tr>
+<tr>
+<td>неоднозначно</td>
+<td><code>human_review</code></td>
+</tr>
+</tbody>
+</table>
+<p>Если <code>offline=false</code>, включается второй слой: AI получает не только агрегированные метрики, но и компактные доказательства по материалам кандидата.</p>
+<p>В evidence попадает:</p>
+<ul>
+<li>заголовок;</li>
+<li>URL;</li>
+<li>релевантность;</li>
+<li>причина релевантности или prefilter;</li>
+<li>краткая суть;</li>
+<li>тег;</li>
+<li>score и label;</li>
+<li>объяснение score;</li>
+<li>статус обработки;</li>
+<li>размер текста.</li>
+</ul>
+<p>AI возвращает:</p>
+<ul>
+<li><code>recommended_action</code>;</li>
+<li><code>reason</code>;</li>
+<li><code>strengths</code>;</li>
+<li><code>risks</code>;</li>
+<li><code>confidence</code>.</li>
+</ul>
+<p>Результат сохраняется в <code>review_comment</code> кандидата и в <code>agent_actions.output_payload</code>. Это дает оператору не только рекомендацию, но и объяснение, почему источник полезен или рискован.</p>
+<p>Правило безопасности: модель оценивает только переданные факты и не должна придумывать стабильность источника, если проверено мало материалов.</p>
+<h2 id="13">Этап 13. Создание кандидата</h2>
+<p>Если источник прошел проверки, создается запись в <code>source_candidates</code>.</p>
+<p>Статус:</p>
+<div class="highlight"><pre><span></span><code>needs_human_review
+</code></pre></div>
+<p>Сохраняется:</p>
+<ul>
+<li>URL;</li>
+<li>домен;</li>
+<li>имя;</li>
+<li>тип кандидата;</li>
+<li>тема;</li>
+<li>confidence;</li>
+<li>тестовые метрики;</li>
+<li>рекомендация;</li>
+<li>причина рекомендации;</li>
+<li>inspection;</li>
+<li>test_parse.</li>
+</ul>
+<p>Источник не попадает в <code>sources</code>, пока оператор не нажмет approve.</p>
+<h2 id="14-agent-loop">Этап 14. Agent loop</h2>
+<p>Функция: <code>run_agent_loop()</code>.</p>
+<p>Loop делает несколько итераций:</p>
+<ol>
+<li>Проверяет суточные бюджеты.</li>
+<li>Строит план действий.</li>
+<li>Берет только действия с <code>policy_decision=auto</code>.</li>
+<li>Выбирает стратегию запросов.</li>
+<li>Запускает <code>discover_sources()</code>.</li>
+<li>При необходимости ставит кандидатов на оценку.</li>
+<li>Записывает наблюдения.</li>
+<li>Обновляет память стратегий.</li>
+</ol>
+<p>План действий теперь содержит <code>memory_explanation</code> для действий <code>discover_sources</code>.</p>
+<p>В нем видно:</p>
+<ul>
+<li>какие запросы агент взял из памяти;</li>
+<li>какие связки <code>тема + запрос + домен</code> усиливают действие;</li>
+<li>какие связки будут исключены как плохие;</li>
+<li>какая ручная обратная связь по теме повлияла на приоритет.</li>
+</ul>
+<p>Это нужно для отладки: оператор видит, почему агент выбрал тему и какие прошлые решения повлияли на следующий поиск.</p>
+<p>Loop останавливается, если:</p>
+<ul>
+<li>достигнут лимит итераций;</li>
+<li>нет автоматических действий;</li>
+<li>несколько итераций не дали кандидатов;</li>
+<li>достигнут суточный бюджет;</li>
+<li>не удалось прочитать usage-бюджет.</li>
+</ul>
+<h2 id="_5">Память агента</h2>
+<p>Используется таблица <code>agent_memory</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Тип памяти</th>
+<th>Что хранит</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>поисковые запросы, которые были полезны или пусты</td>
+</tr>
+<tr>
+<td><code>strategy</code></td>
+<td>эффективность стратегий по теме</td>
+</tr>
+<tr>
+<td><code>domain</code></td>
+<td>ручные правила по доменам</td>
+</tr>
+<tr>
+<td><code>topic</code></td>
+<td>ручные правила по темам</td>
+</tr>
+<tr>
+<td><code>topic_query_domain</code></td>
+<td>связка темы, поискового запроса и домена</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>выводы по конкретным существующим источникам</td>
+</tr>
+</tbody>
+</table>
+<p>Как обновляется query-memory:</p>
+<ul>
+<li>если поиск успешен и запрос ничего не дал, запрос может стать <code>muted</code>;</li>
+<li>если запрос привел к кандидатам, сохраняется как <code>active</code>;</li>
+<li>сохраняются <code>found_candidates</code>, <code>tested_articles</code>, <code>relevant_articles</code>, <code>avg_score</code>, <code>empty_result</code>.</li>
+</ul>
+<p>Как память применяется при новом поиске:</p>
+<ul>
+<li>успешные <code>query</code> и <code>topic_query_domain</code> подмешиваются в начало списка поисковых запросов;</li>
+<li><code>muted</code> query исключаются из генерации;</li>
+<li>плохая связка <code>topic + query + domain</code> исключает конкретный результат поиска;</li>
+<li>хорошая связка <code>topic + query + domain</code> поднимает результат выше в очереди проверки;</li>
+<li>score домена и score запроса дают дополнительный вес при сортировке результатов.</li>
+</ul>
+<p>Это не заменяет quality gates. Даже если память подняла результат выше, URL всё равно проходит проверки на существующий источник, cooldown, semantic 404, anti-bot и плохой тип URL.</p>
+<p>Как обновляется domain-memory для временно недоступных источников:</p>
+<ul>
+<li><code>temporary_unavailable</code> ставится при timeout/fetch failed/<code>5xx</code>;</li>
+<li><code>retry_after</code> ограничивает повторные проверки;</li>
+<li><code>failure_count</code> растет при повторных ошибках;</li>
+<li>после порога ошибок статус становится <code>rejected</code>;</li>
+<li><code>rejected</code> домены исключаются из обычного поиска.</li>
+</ul>
+<p>Как обновляется source-memory:</p>
+<ul>
+<li>ключ памяти: <code>source:&lt;source_id&gt;</code>;</li>
+<li>стабильный источник получает <code>status=active</code>;</li>
+<li>источник с проблемами получает <code>status=muted</code>;</li>
+<li>в <code>facts_json</code> сохраняются <code>source_id</code>, recommendation, причины, quality score, шум, дубли, parser/network поля.</li>
+</ul>
+<p>Что агент считает проблемой источника:</p>
+<ul>
+<li>за период нет сигналов;</li>
+<li>много шума;</li>
+<li>много дублей;</li>
+<li>низкий средний score;</li>
+<li>проблемный RU/External доступ;</li>
+<li>статьи находятся, но не обрабатываются, значит вероятно нужен другой парсер.</li>
+</ul>
+<p>Какие рекомендации пишет агент:</p>
+<ul>
+<li><code>increase_frequency</code> - проверять чаще;</li>
+<li><code>decrease_frequency_or_pause</code> - проверять реже или поставить на паузу;</li>
+<li><code>try_playwright_parser</code> - сменить стратегию парсинга;</li>
+<li><code>diagnose_or_pause</code> - отправить на диагностику или поставить на паузу;</li>
+<li><code>diagnose_network</code> - отправить на сетевую диагностику;</li>
+<li><code>move_to_external_region</code> - перенести в external-worker.</li>
+</ul>
+<p>Для таких случаев план создает action <code>audit_existing_source</code>. Это действие не меняет источник автоматически: оператор должен открыть источник и решить, что делать.</p>
+<p>В UI на странице агента есть блок <code>Источники под наблюдением</code>. Он строится из <code>agent_memory</code> типа <code>source</code> и показывает источник, проблему, рекомендацию, причину и ссылку на экран источников.</p>
+<p>Для корректности решения audit action также содержит:</p>
+<ul>
+<li><code>problem_type</code> - тип проблемы: <code>stale</code>, <code>noisy</code>, <code>duplicating</code>, <code>low_score</code>, <code>needs_external</code>, <code>broken</code>, <code>parser_suspect</code>;</li>
+<li><code>severity</code> - серьёзность: <code>low</code>, <code>medium</code>, <code>high</code>, <code>critical</code>;</li>
+<li><code>confidence</code> - уверенность: <code>low</code>, <code>medium</code>, <code>high</code>;</li>
+<li><code>decision_log.triggered_rules</code> - правила, которые сработали;</li>
+<li><code>decision_log.suppressed_rules</code> - правила, которые были подавлены более важным признаком.</li>
+</ul>
+<p>Правила приоритета:</p>
+<ul>
+<li>сетевой блокер важнее подозрения на парсер;</li>
+<li>external-блокер важнее обычного качества;</li>
+<li>полезный источник с digest-сигналами нельзя агрессивно отключать;</li>
+<li>маленькая выборка снижает confidence.</li>
+</ul>
+<h2 id="agent-evaluation-report">Agent Evaluation Report</h2>
+<p>Endpoint: <code>/api/source-discovery/evaluation</code>.</p>
+<p>Отчёт нужен, чтобы оценивать качество самого агента.</p>
+<p>Он показывает:</p>
+<ul>
+<li>сколько рекомендаций по кандидатам уже получили решение оператора;</li>
+<li>какая доля рекомендаций совпала с решением оператора;</li>
+<li>какие рекомендации по источникам встречаются чаще всего;</li>
+<li>какие типы проблем источников встречаются чаще всего;</li>
+<li>какие правила часто подавляются или срабатывают с низкой уверенностью;</li>
+<li>сколько learning-событий есть в последних действиях агента.</li>
+</ul>
+<p>В UI отчёт отображается на странице агента в блоке <code>Качество агента</code>.</p>
+<h2 id="learning-loop">Learning loop по обратной связи</h2>
+<p>Функция: <code>apply_candidate_learning()</code>.</p>
+<p>Агент обновляет память не только во время поиска, но и после фактических решений оператора и результата песочницы.</p>
+<h3 id="_6">Когда срабатывает обучение</h3>
+<table>
+<thead>
+<tr>
+<th>Событие</th>
+<th>Что обновляется</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Оператор одобрил кандидата</td>
+<td>домен, тема, поисковый запрос, стратегия</td>
+</tr>
+<tr>
+<td>Оператор отклонил как шум</td>
+<td>домен, тема, поисковый запрос, стратегия получают штраф</td>
+</tr>
+<tr>
+<td>Оператор отклонил как дубликат</td>
+<td>штрафуются домен, URL/запрос и стратегия, но тема не штрафуется</td>
+</tr>
+<tr>
+<td>Песочница нашла хорошие статьи</td>
+<td>домен, тема, запрос и стратегия получают небольшой плюс</td>
+</tr>
+<tr>
+<td>Песочница не нашла релевантных статей</td>
+<td>домен, тема, запрос и стратегия получают небольшой минус</td>
+</tr>
+</tbody>
+</table>
+<p>Дополнительно всегда обновляется память <code>topic_query_domain</code>, если известны все три части:</p>
+<div class="highlight"><pre><span></span><code>тема | поисковый запрос | домен
+</code></pre></div>
+<p>Это нужно, чтобы агент не делал слишком грубые выводы. Например, домен может быть полезен для цифровизации, но бесполезен для бурения. Или запрос может хорошо работать только на конкретной группе сайтов.</p>
+<h3 id="_7">Что сохраняется по реальным статьям</h3>
+<p>В <code>facts_json.metrics</code> и <code>facts_json.quality_funnel</code> сохраняется воронка:</p>
+<table>
+<thead>
+<tr>
+<th>Поле</th>
+<th>Что показывает</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>found</code></td>
+<td>сколько материалов нашли</td>
+</tr>
+<tr>
+<td><code>parsed</code></td>
+<td>сколько материалов удалось разобрать</td>
+</tr>
+<tr>
+<td><code>prefilter_kept</code></td>
+<td>сколько прошло быстрый фильтр</td>
+</tr>
+<tr>
+<td><code>processed</code></td>
+<td>сколько дошло до AI-обработки или явного отклонения</td>
+</tr>
+<tr>
+<td><code>relevant</code></td>
+<td>сколько признано релевантными</td>
+</tr>
+<tr>
+<td><code>scored</code></td>
+<td>сколько получило score</td>
+</tr>
+<tr>
+<td><code>score_50_plus</code></td>
+<td>сколько материалов имеет score <code>50+</code></td>
+</tr>
+<tr>
+<td><code>noise</code></td>
+<td>сколько ушло в шум</td>
+</tr>
+<tr>
+<td><code>duplicates</code></td>
+<td>сколько дублей найдено</td>
+</tr>
+</tbody>
+</table>
+<p>Так агент учится не по внешнему виду сайта, а по фактической пользе источника для базы сигналов.</p>
+<h3 id="_8">Как определяется происхождение кандидата</h3>
+<p>При создании кандидата агент пишет в <code>agent_actions</code>:</p>
+<ul>
+<li><code>candidate_id</code>;</li>
+<li><code>discovery_query</code>;</li>
+<li><code>query_strategy</code>;</li>
+<li><code>topic</code>;</li>
+<li>URL и домен.</li>
+</ul>
+<p>Learning loop читает последнюю action-запись <code>create_source_candidate</code> и понимает, какой запрос и какая стратегия привели к кандидату.</p>
+<h3 id="score">Как меняется score</h3>
+<p>Score хранится в <code>agent_memory.score</code> и накапливается в диапазоне от <code>-100</code> до <code>100</code>.</p>
+<p>Примерные правила:</p>
+<table>
+<thead>
+<tr>
+<th>Решение</th>
+<th style="text-align: right;">Domain</th>
+<th style="text-align: right;">Topic</th>
+<th style="text-align: right;">Query</th>
+<th style="text-align: right;">Strategy</th>
+<th style="text-align: right;">Topic+Query+Domain</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>approve</td>
+<td style="text-align: right;">+30</td>
+<td style="text-align: right;">+18</td>
+<td style="text-align: right;">+24</td>
+<td style="text-align: right;">+18</td>
+<td style="text-align: right;">+30</td>
+</tr>
+<tr>
+<td>sandbox positive</td>
+<td style="text-align: right;">+12..+22</td>
+<td style="text-align: right;">+8</td>
+<td style="text-align: right;">+12..+22</td>
+<td style="text-align: right;">+8</td>
+<td style="text-align: right;">+12..+22</td>
+</tr>
+<tr>
+<td>reject duplicate</td>
+<td style="text-align: right;">-12</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">-10</td>
+<td style="text-align: right;">-6</td>
+<td style="text-align: right;">-12</td>
+</tr>
+<tr>
+<td>reject noise</td>
+<td style="text-align: right;">-25</td>
+<td style="text-align: right;">-8</td>
+<td style="text-align: right;">-20</td>
+<td style="text-align: right;">-10</td>
+<td style="text-align: right;">-25</td>
+</tr>
+<tr>
+<td>reject general</td>
+<td style="text-align: right;">-18</td>
+<td style="text-align: right;">-5</td>
+<td style="text-align: right;">-14</td>
+<td style="text-align: right;">-8</td>
+<td style="text-align: right;">-18</td>
+</tr>
+<tr>
+<td>sandbox negative</td>
+<td style="text-align: right;">-12</td>
+<td style="text-align: right;">-4</td>
+<td style="text-align: right;">-10</td>
+<td style="text-align: right;">-5</td>
+<td style="text-align: right;">-12</td>
+</tr>
+</tbody>
+</table>
+<p>Каждое изменение добавляет запись в <code>facts.events</code>, чтобы можно было восстановить, почему score вырос или упал.</p>
+<h3 id="_9">Важное правило</h3>
+<p>Дубликат не должен портить тему. Если найденный источник оказался дублем уже существующего, это проблема домена/URL/запроса, но не признак того, что тема плохая.</p>
+<h2 id="_10">Текущие ограничения</h2>
+<ol>
+<li>Semantic 404 пока ловится косвенно через <code>no_candidates</code>, но не отдельным детектором текста.</li>
+<li>Cloudflare/captcha/challenge пока не имеют отдельной причины отсева.</li>
+<li>Поддомены считаются отдельными доменами, кроме случая точного совпадения через <code>sources</code>.</li>
+<li>RSS/sitemap fallback перед <code>no_candidates</code> пока не реализован.</li>
+<li>Пробный score не равен полноценному AI-score основного пайплайна.</li>
+<li>Агент не делает автоматический approve источника, это намеренное ограничение безопасности.</li>
+</ol>
+<h2 id="_11">Практические команды</h2>
+<p>Проверить один seed URL без записи в БД:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>app<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>oiltech_digest.cli<span class="w"> </span>discover-sources<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;цифровизация бурения&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--seed-url<span class="w"> </span><span class="s2">&quot;https://example.com/news&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--offline<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--dry-run<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--fetch-inspection<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--test-parse<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--json
+</code></pre></div>
+<p>Запустить автоматический loop:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>app<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>oiltech_digest.cli<span class="w"> </span>agent-loop<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--offline<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--fetch-inspection<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--test-parse<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-iterations<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--candidate-limit<span class="w"> </span><span class="m">10</span>
+</code></pre></div>
+<p>Поставить loop в очередь:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>app<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>oiltech_digest.cli<span class="w"> </span>enqueue-agent-loop<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--offline<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--fetch-inspection<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--test-parse
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  К началу
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tabs", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0432 \u0431\u0443\u0444\u0435\u0440", "clipboard.copy": "\u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0432 \u0431\u0443\u0444\u0435\u0440", "search.result.more.one": "\u0415\u0449\u0451 1 \u043d\u0430 \u044d\u0442\u043e\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435", "search.result.more.other": "\u0415\u0449\u0451 # \u043d\u0430 \u044d\u0442\u043e\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435", "search.result.none": "\u0421\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0439 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", "search.result.one": "\u041d\u0430\u0439\u0434\u0435\u043d\u043e 1 \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0435", "search.result.other": "\u041d\u0430\u0439\u0434\u0435\u043d\u043e \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0439: #", "search.result.placeholder": "\u041d\u0430\u0447\u043d\u0438\u0442\u0435 \u043f\u0435\u0447\u0430\u0442\u0430\u0442\u044c \u0434\u043b\u044f \u043f\u043e\u0438\u0441\u043a\u0430", "search.result.term.missing": "\u041e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442", "select.version": "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0432\u0435\u0440\u0441\u0438\u044e"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

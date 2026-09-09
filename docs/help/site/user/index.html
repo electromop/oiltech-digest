@@ -1,0 +1,2521 @@
+
+<!doctype html>
+<html lang="ru" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Документация пользователя и разработчика OilTech Digest">
+      
+      
+      
+        <link rel="canonical" href="http://127.0.0.1/help/user/">
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../developer/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/signals-overview.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Документация пользователя - OilTech Digest Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#_1" class="md-skip">
+          Перейти к содержанию
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Верхний колонтитул">
+    <a href=".." title="OilTech Digest Docs" class="md-header__button md-logo" aria-label="OilTech Digest Docs" data-md-component="logo">
+      
+  <img src="../assets/signals-overview.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            OilTech Digest Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Документация пользователя
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Поиск" placeholder="Поиск" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Поиск">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Очистить" aria-label="Очистить" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Инициализация поиска
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Вкладки" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Обзор
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Для пользователей
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../developer/" class="md-tabs__link">
+          
+  
+  
+  Для разработчиков
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Навигация" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="OilTech Digest Docs" class="md-nav__button md-logo" aria-label="OilTech Digest Docs" data-md-component="logo">
+      
+  <img src="../assets/signals-overview.png" alt="logo">
+
+    </a>
+    OilTech Digest Docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Обзор
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Для пользователей
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Для пользователей
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Документация пользователя
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Документация пользователя
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Содержание">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Содержание
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Быстрый старт
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Основные понятия
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Вход и регистрация
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Экран "Сигналы"
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Экран &#34;Сигналы&#34;">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что показывает верхняя панель
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как искать материал по словам
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как фильтровать по тегам
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как фильтровать по источнику
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как фильтровать по статусу
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как сортировать
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Карточка сигнала
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Карточка сигнала">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что видно в свернутом виде
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как раскрыть сигнал
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что проверять в раскрытой карточке
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как понять, что материал хороший
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Статусы сигналов
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Статусы сигналов">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как поставить статус "В дайджест"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как убрать материал из дайджеста
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Месячный дайджест
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Месячный дайджест">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что делать на этой странице
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что означает месяц
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#html-preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTML preview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#draft" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Draft
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pdf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#worddocx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Word/DOCX
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Источники
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Источники">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что такое источник
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Основные поля источника
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Стратегии парсинга
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как понять, что с источником проблема
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_28" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Скоринг
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Скоринг">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как читать score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Когда можно игнорировать низкий score
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Теги
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Теги">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как пользоваться тегами
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что делать, если тег неправильный
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Типовой рабочий процесс редактора
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Типовой рабочий процесс редактора">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_33" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ежедневная проверка
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Подготовка выпуска
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_35" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Проверка качества выпуска
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Частые проблемы
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Частые проблемы">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_37" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Не вижу нужный материал
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        В дайджесте пусто
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pdf-word" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF или Word долго формируется
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI-суть выглядит странно
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Score выглядит неправильным
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_39" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Источник не обновляется
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_40" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что передавать администратору при проблеме
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Короткий чеклист перед отправкой дайджеста
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Для разработчиков
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Для разработчиков
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Обзор
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer/source-discovery-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Пайплайн поиска источников
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Содержание">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Содержание
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Быстрый старт
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Основные понятия
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Вход и регистрация
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Экран "Сигналы"
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Экран &#34;Сигналы&#34;">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что показывает верхняя панель
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как искать материал по словам
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как фильтровать по тегам
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как фильтровать по источнику
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как фильтровать по статусу
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как сортировать
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Карточка сигнала
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Карточка сигнала">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что видно в свернутом виде
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как раскрыть сигнал
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что проверять в раскрытой карточке
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как понять, что материал хороший
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Статусы сигналов
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Статусы сигналов">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как поставить статус "В дайджест"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как убрать материал из дайджеста
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Месячный дайджест
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Месячный дайджест">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что делать на этой странице
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что означает месяц
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#html-preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTML preview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#draft" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Draft
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pdf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#worddocx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Word/DOCX
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Источники
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Источники">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что такое источник
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Основные поля источника
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Стратегии парсинга
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как понять, что с источником проблема
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_28" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Скоринг
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Скоринг">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как читать score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Когда можно игнорировать низкий score
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Теги
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Теги">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Как пользоваться тегами
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что делать, если тег неправильный
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Типовой рабочий процесс редактора
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Типовой рабочий процесс редактора">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_33" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ежедневная проверка
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Подготовка выпуска
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_35" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Проверка качества выпуска
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Частые проблемы
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Частые проблемы">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_37" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Не вижу нужный материал
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        В дайджесте пусто
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pdf-word" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF или Word долго формируется
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI-суть выглядит странно
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Score выглядит неправильным
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_39" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Источник не обновляется
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_40" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Что передавать администратору при проблеме
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Короткий чеклист перед отправкой дайджеста
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="_1">Документация пользователя</h1>
+<p>Эта инструкция написана для человека, который впервые открыл OilTech Digest и должен самостоятельно понять, где что находится, как работать с сигналами, как собрать дайджест и что делать, если результат выглядит странно.</p>
+<p>OilTech Digest собирает материалы из источников, обрабатывает их AI pipeline, присваивает теги, считает score и помогает собрать месячный дайджест.</p>
+<h2 id="_2">Быстрый старт</h2>
+<p>Если нужно просто начать работу без чтения всей документации:</p>
+<ol>
+<li>Откройте админку.</li>
+<li>Войдите в аккаунт или зарегистрируйтесь.</li>
+<li>Перейдите в раздел <strong>Сигналы</strong>.</li>
+<li>Отсортируйте список по <code>Score: по убыванию</code>.</li>
+<li>Выберите нужный тег или источник.</li>
+<li>Раскройте интересный сигнал стрелкой слева от заголовка.</li>
+<li>Проверьте AI-суть, тег, score и ссылку на оригинал.</li>
+<li>Если материал нужен в выпуск, поставьте статус <strong>В дайджест</strong>.</li>
+<li>Перейдите в <strong>Месячный дайджест</strong>.</li>
+<li>Проверьте список материалов и экспортируйте PDF или Word.</li>
+</ol>
+<div class="admonition tip">
+<p class="admonition-title">Самый частый сценарий</p>
+<p>Обычно работа идет так: <code>Сигналы -&gt; фильтры -&gt; раскрыть карточку -&gt; поставить В дайджест -&gt; Месячный дайджест -&gt; PDF/Word</code>.</p>
+</div>
+<h2 id="_3">Основные понятия</h2>
+<table>
+<thead>
+<tr>
+<th>Термин</th>
+<th>Что означает</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Сигнал</td>
+<td>Найденная статья, новость, пост или аналитический материал</td>
+</tr>
+<tr>
+<td>Источник</td>
+<td>Сайт, RSS-лента, Telegram-канал или другой канал сбора материалов</td>
+</tr>
+<tr>
+<td>AI-суть</td>
+<td>Короткое описание материала, сформированное AI</td>
+</tr>
+<tr>
+<td>Тег</td>
+<td>Тематическое направление материала</td>
+</tr>
+<tr>
+<td>Score</td>
+<td>Оценка важности материала по критериям</td>
+</tr>
+<tr>
+<td>Статус</td>
+<td>Ручная отметка редактора: новая, на проверке, в дайджест, архив</td>
+</tr>
+<tr>
+<td>Дайджест</td>
+<td>Итоговый выпуск из выбранных сигналов</td>
+</tr>
+<tr>
+<td>Pipeline</td>
+<td>Цепочка обработки: текст -&gt; суть -&gt; релевантность -&gt; тег -&gt; score</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_4">Вход и регистрация</h2>
+<ol>
+<li>Откройте адрес админки.</li>
+<li>Если аккаунта нет, нажмите <strong>Зарегистрироваться</strong>.</li>
+<li>Введите email.</li>
+<li>Введите пароль не короче 8 символов.</li>
+<li>После регистрации или входа откроется основной экран.</li>
+</ol>
+<p>Если после входа снова показывается форма авторизации, обновите страницу. Если проблема повторяется, проверьте, что браузер не блокирует cookies.</p>
+<h2 id="_5">Экран "Сигналы"</h2>
+<p><img alt="Экран сигналов" src="../assets/signals-overview.png" /></p>
+<p>Это основной рабочий экран. Здесь находится весь поток найденных материалов.</p>
+<h3 id="_6">Что показывает верхняя панель</h3>
+<table>
+<thead>
+<tr>
+<th>Метрика</th>
+<th>Как читать</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Всего сигналов</td>
+<td>Сколько материалов есть в базе</td>
+</tr>
+<tr>
+<td>Новые</td>
+<td>Сколько материалов еще не отсмотрено</td>
+</tr>
+<tr>
+<td>На проверке</td>
+<td>Сколько материалов требуют ручной оценки</td>
+</tr>
+<tr>
+<td>В дайджест</td>
+<td>Сколько материалов уже выбрано в выпуск</td>
+</tr>
+<tr>
+<td>Обработано</td>
+<td>Сколько материалов прошли полный AI pipeline</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_7">Как искать материал по словам</h3>
+<ol>
+<li>Найдите поле <strong>Поиск</strong>.</li>
+<li>Введите слово, фразу, название компании, технологию или часть заголовка.</li>
+<li>Дождитесь обновления списка.</li>
+<li>Если результатов слишком много, дополнительно выберите тег или источник.</li>
+</ol>
+<p>Примеры запросов:</p>
+<ul>
+<li><code>бурение</code>;</li>
+<li><code>СПГ</code>;</li>
+<li><code>hydrogen</code>;</li>
+<li><code>Wood Mackenzie</code>;</li>
+<li><code>литий</code>;</li>
+<li><code>AI drilling</code>.</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Поиск не обязан быть точным</p>
+<p>Можно вводить часть слова или фразы. Если не нашли материал по русскому слову, попробуйте английский вариант.</p>
+</div>
+<h3 id="_8">Как фильтровать по тегам</h3>
+<ol>
+<li>Нажмите поле <strong>Тег</strong>.</li>
+<li>Начните вводить название направления.</li>
+<li>Выберите нужный тег из списка.</li>
+<li>Список сигналов обновится.</li>
+</ol>
+<p>Используйте теги, когда нужно смотреть не весь поток, а конкретное направление: бурение, геология, цифровизация, рынок, оборудование, энергетика и другие темы.</p>
+<h3 id="_9">Как фильтровать по источнику</h3>
+<ol>
+<li>Найдите поле <strong>Источник</strong>.</li>
+<li>Начните вводить название источника.</li>
+<li>Выберите источник из выпадающего списка.</li>
+<li>Проверьте найденные сигналы.</li>
+</ol>
+<p>Фильтр полезен, если нужно проверить конкретный сайт, Telegram-канал или новостную ленту.</p>
+<h3 id="_10">Как фильтровать по статусу</h3>
+<ol>
+<li>Откройте список <strong>Статус</strong>.</li>
+<li>Выберите нужное значение.</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Статус</th>
+<th>Когда выбирать</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Любой статус</td>
+<td>Показать все материалы</td>
+</tr>
+<tr>
+<td>Новая</td>
+<td>Посмотреть еще не обработанный редактором поток</td>
+</tr>
+<tr>
+<td>На проверке</td>
+<td>Вернуться к спорным материалам</td>
+</tr>
+<tr>
+<td>В дайджест</td>
+<td>Проверить выбранные материалы</td>
+</tr>
+<tr>
+<td>Архив</td>
+<td>Посмотреть отложенные или исключенные материалы</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_11">Как сортировать</h3>
+<table>
+<thead>
+<tr>
+<th>Сортировка</th>
+<th>Когда использовать</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Score: по убыванию</td>
+<td>Когда нужно быстро найти самые важные материалы</td>
+</tr>
+<tr>
+<td>Score: по возрастанию</td>
+<td>Когда нужно проверить слабые или странно оцененные материалы</td>
+</tr>
+<tr>
+<td>Сначала новые</td>
+<td>Когда нужно смотреть свежий поток</td>
+</tr>
+</tbody>
+</table>
+<p>Для подготовки выпуска чаще всего используйте <code>Score: по убыванию</code>.</p>
+<h2 id="_12">Карточка сигнала</h2>
+<p><img alt="Раскрытая карточка сигнала" src="../assets/signal-expanded.png" /></p>
+<p>Сигнал можно смотреть в двух режимах: свернутом и раскрытом.</p>
+<h3 id="_13">Что видно в свернутом виде</h3>
+<p>В свернутой карточке обычно видно:</p>
+<ul>
+<li>заголовок материала;</li>
+<li>источник;</li>
+<li>тег;</li>
+<li>язык;</li>
+<li>дата публикации;</li>
+<li>score;</li>
+<li>статус;</li>
+<li>короткие признаки обработки.</li>
+</ul>
+<h3 id="_14">Как раскрыть сигнал</h3>
+<ol>
+<li>Найдите нужный материал.</li>
+<li>Нажмите стрелку слева от заголовка.</li>
+<li>Карточка раскроется вниз.</li>
+<li>Повторное нажатие свернет карточку.</li>
+</ol>
+<h3 id="_15">Что проверять в раскрытой карточке</h3>
+<p>Проверяйте карточку в таком порядке:</p>
+<ol>
+<li>Прочитайте заголовок.</li>
+<li>Прочитайте AI-суть.</li>
+<li>Проверьте тег.</li>
+<li>Посмотрите score.</li>
+<li>Если score высокий, прочитайте детализацию.</li>
+<li>Откройте оригинальный материал, если нужно убедиться в фактах.</li>
+<li>Поставьте статус.</li>
+</ol>
+<h3 id="_16">Как понять, что материал хороший</h3>
+<p>Материал обычно стоит добавить в дайджест, если:</p>
+<ul>
+<li>он относится к важной технологии или рынку;</li>
+<li>в нем есть конкретное событие, запуск, контракт, сделка, внедрение или исследование;</li>
+<li>источник выглядит надежным;</li>
+<li>AI-суть понятная и не выглядит мусорной;</li>
+<li>score высокий или средний, но тема важна вручную;</li>
+<li>материал не дублирует уже выбранный сигнал.</li>
+</ul>
+<p>Материал обычно не стоит добавлять, если:</p>
+<ul>
+<li>он не относится к теме;</li>
+<li>это короткая проходная новость без значимой сути;</li>
+<li>это дубликат;</li>
+<li>источник сомнительный;</li>
+<li>AI-суть явно не совпадает с заголовком;</li>
+<li>материал устарел для текущего выпуска.</li>
+</ul>
+<h2 id="_17">Статусы сигналов</h2>
+<table>
+<thead>
+<tr>
+<th>Статус</th>
+<th>Что значит</th>
+<th>Когда ставить</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Новая</td>
+<td>Материал еще не отсмотрен</td>
+<td>Система ставит по умолчанию</td>
+</tr>
+<tr>
+<td>На проверке</td>
+<td>Материал спорный или требует решения</td>
+<td>Если нужно вернуться позже</td>
+</tr>
+<tr>
+<td>В дайджест</td>
+<td>Материал выбран в выпуск</td>
+<td>Если сигнал должен попасть в дайджест</td>
+</tr>
+<tr>
+<td>Архив</td>
+<td>Материал не нужен в выпуск</td>
+<td>Если материал просмотрен и исключен</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_18">Как поставить статус "В дайджест"</h3>
+<ol>
+<li>Найдите нужный сигнал.</li>
+<li>При необходимости раскройте карточку.</li>
+<li>Найдите поле <strong>Статус</strong>.</li>
+<li>Выберите <strong>В дайджест</strong>.</li>
+<li>Проверьте, что карточка сохранила новый статус.</li>
+</ol>
+<p>После этого материал появится на странице <strong>Месячный дайджест</strong>.</p>
+<h3 id="_19">Как убрать материал из дайджеста</h3>
+<ol>
+<li>Найдите материал в <strong>Сигналах</strong> или <strong>Месячном дайджесте</strong>.</li>
+<li>Поменяйте статус с <strong>В дайджест</strong> на <strong>Новая</strong>, <strong>На проверке</strong> или <strong>Архив</strong>.</li>
+<li>Обновите страницу дайджеста.</li>
+</ol>
+<h2 id="_20">Месячный дайджест</h2>
+<p><img alt="Месячный дайджест" src="../assets/digest-page.png" /></p>
+<p>На странице дайджеста собирается выпуск из выбранных сигналов.</p>
+<h3 id="_21">Что делать на этой странице</h3>
+<ol>
+<li>Проверьте, что в списке есть нужные материалы.</li>
+<li>Используйте поиск по словам, если выпуск большой.</li>
+<li>Используйте фильтр по тегам, если нужно проверить конкретное направление.</li>
+<li>Уберите лишние материалы через смену статуса.</li>
+<li>Сформируйте preview или экспорт.</li>
+</ol>
+<h3 id="_22">Что означает месяц</h3>
+<p>Месяц нужен, чтобы собрать выпуск за конкретный период. Если выбран режим всех месяцев, система может показать все материалы со статусом <strong>В дайджест</strong>.</p>
+<p>Если в выпуске не хватает материалов, проверьте:</p>
+<ul>
+<li>выбран ли правильный месяц;</li>
+<li>есть ли материалы со статусом <strong>В дайджест</strong>;</li>
+<li>не включен ли лишний фильтр по тегу или словам;</li>
+<li>не устарел ли список, попробуйте нажать обновление.</li>
+</ul>
+<h3 id="html-preview">HTML preview</h3>
+<p>HTML preview нужен, чтобы быстро посмотреть выпуск в браузере.</p>
+<p>Используйте его перед PDF/Word, если нужно проверить:</p>
+<ul>
+<li>порядок материалов;</li>
+<li>заголовки;</li>
+<li>краткие описания;</li>
+<li>теги;</li>
+<li>общее визуальное качество выпуска.</li>
+</ul>
+<h3 id="json">JSON</h3>
+<p>JSON нужен для технической проверки структуры выпуска. Обычному редактору он чаще всего не нужен.</p>
+<h3 id="draft">Draft</h3>
+<p>Draft сохраняет черновик выпуска в базе.</p>
+<p>Используйте draft, когда:</p>
+<ul>
+<li>выпуск еще не финальный;</li>
+<li>нужно вернуться к нему позже;</li>
+<li>нужно зафиксировать промежуточную версию.</li>
+</ul>
+<h3 id="pdf">PDF</h3>
+<p>PDF нужен для финальной отправки или просмотра в неизменяемом формате.</p>
+<p>Порядок:</p>
+<ol>
+<li>Проверьте список материалов.</li>
+<li>Нажмите <strong>PDF</strong>.</li>
+<li>Дождитесь завершения фоновой задачи.</li>
+<li>Скачайте файл.</li>
+<li>Откройте файл и проверьте, что карточки не разрываются некорректно.</li>
+</ol>
+<h3 id="worddocx">Word/DOCX</h3>
+<p>Word нужен, если выпуск будут редактировать вручную после генерации.</p>
+<p>Используйте Word, если:</p>
+<ul>
+<li>нужно поправить формулировки;</li>
+<li>нужно удалить или переставить блоки вручную;</li>
+<li>нужно отправить файл на согласование в редактируемом виде.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Не нажимайте экспорт много раз подряд</p>
+<p>PDF/Word могут формироваться дольше обычного. Если нажать кнопку несколько раз, появится несколько фоновых задач.</p>
+</div>
+<h2 id="_23">Источники</h2>
+<p><img alt="Каталог источников" src="../assets/sources-page.png" /></p>
+<p>Раздел <strong>Источники</strong> нужен для просмотра и обслуживания каналов сбора.</p>
+<h3 id="_24">Что такое источник</h3>
+<p>Источник — это место, откуда система берет материалы:</p>
+<ul>
+<li>RSS-лента;</li>
+<li>сайт с новостной страницей;</li>
+<li>Telegram-канал;</li>
+<li>сайт, которому нужен браузерный сбор через Playwright.</li>
+</ul>
+<h3 id="_25">Основные поля источника</h3>
+<table>
+<thead>
+<tr>
+<th>Поле</th>
+<th>Что означает</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Название</td>
+<td>Понятное имя источника</td>
+</tr>
+<tr>
+<td>URL</td>
+<td>Основная ссылка</td>
+</tr>
+<tr>
+<td>RSS URL</td>
+<td>Ссылка на RSS, если есть</td>
+</tr>
+<tr>
+<td>Parse strategy</td>
+<td>Способ сбора материалов</td>
+</tr>
+<tr>
+<td>Listing URL</td>
+<td>Страница со списком новостей</td>
+</tr>
+<tr>
+<td>Enabled</td>
+<td>Включен источник или нет</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_26">Стратегии парсинга</h3>
+<table>
+<thead>
+<tr>
+<th>Стратегия</th>
+<th>Что значит</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rss</code></td>
+<td>Сбор из RSS-ленты</td>
+</tr>
+<tr>
+<td><code>request</code></td>
+<td>Сбор обычным HTTP-запросом со страницы</td>
+</tr>
+<tr>
+<td><code>telegram</code></td>
+<td>Сбор из Telegram</td>
+</tr>
+<tr>
+<td><code>playwright</code></td>
+<td>Сбор через браузер, если обычный запрос не подходит</td>
+</tr>
+<tr>
+<td><code>none</code></td>
+<td>Источник не собирается автоматически</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_27">Как понять, что с источником проблема</h3>
+<p>Проблема вероятна, если:</p>
+<ul>
+<li>источник включен, но в базе 0 статей;</li>
+<li>давно не появлялись новые материалы;</li>
+<li>диагностика показывает ошибку;</li>
+<li>сайт открывается в браузере, но система ничего не собирает;</li>
+<li>источник часто блокирует запросы.</li>
+</ul>
+<p>Что сделать:</p>
+<ol>
+<li>Проверьте URL источника.</li>
+<li>Проверьте RSS URL, если источник RSS.</li>
+<li>Запустите диагностику, если кнопка доступна.</li>
+<li>Если источник блокирует обычный сбор, переведите его на <code>playwright</code>.</li>
+<li>Если источник недоступен с российского сервера, нужен внешний контур.</li>
+</ol>
+<div class="admonition note">
+<p class="admonition-title">Права на изменение источников</p>
+<p>Если вы не уверены, что менять в источнике, не редактируйте стратегию и URL наугад. Лучше передать ссылку разработчику или администратору.</p>
+</div>
+<h2 id="_28">Скоринг</h2>
+<p><img alt="Скоринг" src="../assets/scoring-page.png" /></p>
+<p>Score помогает быстро понять, какие материалы важнее.</p>
+<h3 id="score">Как читать score</h3>
+<table>
+<thead>
+<tr>
+<th>Score</th>
+<th>Интерпретация</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Высокий</td>
+<td>Материал стоит проверить в первую очередь</td>
+</tr>
+<tr>
+<td>Средний</td>
+<td>Материал может быть полезным, зависит от темы</td>
+</tr>
+<tr>
+<td>Низкий или 0</td>
+<td>Обычно низкий приоритет, но возможны ошибки обработки</td>
+</tr>
+</tbody>
+</table>
+<p>Score не заменяет редакторское решение. Он помогает отсортировать поток, но финальное решение принимает человек.</p>
+<h3 id="score_1">Когда можно игнорировать низкий score</h3>
+<p>Низкий score можно пересмотреть вручную, если:</p>
+<ul>
+<li>источник стратегически важен;</li>
+<li>тема относится к приоритетному направлению;</li>
+<li>заголовок явно важный;</li>
+<li>AI мог не понять материал из-за языка, короткого текста или плохого извлечения.</li>
+</ul>
+<h2 id="_29">Теги</h2>
+<p><img alt="Теги" src="../assets/tags-page.png" /></p>
+<p>Теги нужны для группировки сигналов по темам.</p>
+<h3 id="_30">Как пользоваться тегами</h3>
+<p>Используйте теги, чтобы:</p>
+<ul>
+<li>быстро перейти к нужному направлению;</li>
+<li>собрать тематический выпуск;</li>
+<li>проверить, какие материалы попадают в конкретную область;</li>
+<li>найти ошибки AI-тегирования.</li>
+</ul>
+<h3 id="_31">Что делать, если тег неправильный</h3>
+<p>Если материал явно попал не в тот тег:</p>
+<ol>
+<li>Откройте карточку сигнала.</li>
+<li>Проверьте AI-суть и оригинал.</li>
+<li>Если ошибка подтверждается, зафиксируйте пример.</li>
+<li>Передайте пример администратору или разработчику для настройки тегов.</li>
+</ol>
+<h2 id="_32">Типовой рабочий процесс редактора</h2>
+<h3 id="_33">Ежедневная проверка</h3>
+<ol>
+<li>Откройте <strong>Сигналы</strong>.</li>
+<li>Выберите сортировку <strong>Сначала новые</strong>.</li>
+<li>Просмотрите свежие материалы.</li>
+<li>Сильные материалы переведите в <strong>В дайджест</strong>.</li>
+<li>Спорные материалы переведите в <strong>На проверке</strong>.</li>
+<li>Мусорные материалы переведите в <strong>Архив</strong>.</li>
+</ol>
+<h3 id="_34">Подготовка выпуска</h3>
+<ol>
+<li>Откройте <strong>Сигналы</strong>.</li>
+<li>Выберите <code>Score: по убыванию</code>.</li>
+<li>Пройдитесь по ключевым тегам.</li>
+<li>Добавьте сильные материалы в дайджест.</li>
+<li>Откройте <strong>Месячный дайджест</strong>.</li>
+<li>Проверьте, нет ли дублей.</li>
+<li>Проверьте баланс тем.</li>
+<li>Сформируйте HTML preview.</li>
+<li>Если все нормально, сформируйте PDF или Word.</li>
+</ol>
+<h3 id="_35">Проверка качества выпуска</h3>
+<p>Перед отправкой проверьте:</p>
+<ul>
+<li>нет ли дублей;</li>
+<li>нет ли нерелевантных материалов;</li>
+<li>нет ли слишком длинных описаний;</li>
+<li>не попали ли материалы не за тот месяц;</li>
+<li>нормально ли отображаются теги;</li>
+<li>открываются ли ссылки на оригиналы;</li>
+<li>PDF/Word сформировался без пустых страниц и сломанных карточек.</li>
+</ul>
+<h2 id="_36">Частые проблемы</h2>
+<h3 id="_37">Не вижу нужный материал</h3>
+<p>Проверьте:</p>
+<ol>
+<li>Не включен ли фильтр по тегу.</li>
+<li>Не включен ли фильтр по статусу.</li>
+<li>Правильно ли введен поисковый запрос.</li>
+<li>Попробуйте искать по источнику.</li>
+<li>Попробуйте сортировку <strong>Сначала новые</strong>.</li>
+</ol>
+<h3 id="_38">В дайджесте пусто</h3>
+<p>Причины:</p>
+<ul>
+<li>нет материалов со статусом <strong>В дайджест</strong>;</li>
+<li>выбран не тот месяц;</li>
+<li>включен лишний фильтр;</li>
+<li>материалы еще не обработаны.</li>
+</ul>
+<p>Что сделать:</p>
+<ol>
+<li>Перейдите в <strong>Сигналы</strong>.</li>
+<li>Поставьте нескольким материалам статус <strong>В дайджест</strong>.</li>
+<li>Вернитесь в <strong>Месячный дайджест</strong>.</li>
+<li>Обновите список.</li>
+</ol>
+<h3 id="pdf-word">PDF или Word долго формируется</h3>
+<p>Это нормально для больших выпусков.</p>
+<p>Что делать:</p>
+<ol>
+<li>Не нажимайте кнопку повторно сразу.</li>
+<li>Подождите завершения фоновой задачи.</li>
+<li>Если файл не появился, обновите страницу.</li>
+<li>Если проблема повторяется, передайте администратору время запуска и выбранные фильтры.</li>
+</ol>
+<h3 id="ai-">AI-суть выглядит странно</h3>
+<p>Возможные причины:</p>
+<ul>
+<li>источник отдал короткий или поврежденный текст;</li>
+<li>статья была частично недоступна;</li>
+<li>материал на другом языке;</li>
+<li>сайт заблокировал полный текст;</li>
+<li>AI обработал не тот фрагмент.</li>
+</ul>
+<p>Что сделать:</p>
+<ol>
+<li>Откройте оригинал.</li>
+<li>Сравните оригинал с AI-сутью.</li>
+<li>Если ошибка критичная, не добавляйте материал в дайджест.</li>
+<li>Передайте пример администратору.</li>
+</ol>
+<h3 id="score_2">Score выглядит неправильным</h3>
+<p>Score помогает, но не является абсолютной истиной.</p>
+<p>Что сделать:</p>
+<ol>
+<li>Проверьте оригинальный материал.</li>
+<li>Проверьте детализацию score.</li>
+<li>Если материал важный, добавьте его вручную несмотря на score.</li>
+<li>Если ошибка системная, передайте пример для настройки критериев.</li>
+</ol>
+<h3 id="_39">Источник не обновляется</h3>
+<p>Что проверить:</p>
+<ol>
+<li>Включен ли источник.</li>
+<li>Есть ли у источника правильный URL или RSS URL.</li>
+<li>Не поменялась ли структура сайта.</li>
+<li>Не блокирует ли сайт запросы.</li>
+<li>Нужен ли этому источнику Playwright или внешний контур.</li>
+</ol>
+<h2 id="_40">Что передавать администратору при проблеме</h2>
+<p>Чтобы проблему можно было быстро разобрать, передайте:</p>
+<ul>
+<li>что вы пытались сделать;</li>
+<li>на какой странице возникла проблема;</li>
+<li>какой фильтр был включен;</li>
+<li>ссылку на сигнал или источник;</li>
+<li>примерное время ошибки;</li>
+<li>скриншот, если проблема визуальная;</li>
+<li>что ожидали увидеть;</li>
+<li>что увидели фактически.</li>
+</ul>
+<h2 id="_41">Короткий чеклист перед отправкой дайджеста</h2>
+<ul>
+<li>[ ] В выпуске есть все важные материалы.</li>
+<li>[ ] Дубли удалены.</li>
+<li>[ ] Нерелевантные материалы убраны.</li>
+<li>[ ] Теги выглядят корректно.</li>
+<li>[ ] Описания читаются нормально.</li>
+<li>[ ] Ссылки на оригиналы открываются.</li>
+<li>[ ] PDF или Word успешно скачан.</li>
+<li>[ ] Файл открыт и визуально проверен.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  К началу
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.tabs", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0432 \u0431\u0443\u0444\u0435\u0440", "clipboard.copy": "\u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0432 \u0431\u0443\u0444\u0435\u0440", "search.result.more.one": "\u0415\u0449\u0451 1 \u043d\u0430 \u044d\u0442\u043e\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435", "search.result.more.other": "\u0415\u0449\u0451 # \u043d\u0430 \u044d\u0442\u043e\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435", "search.result.none": "\u0421\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0439 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", "search.result.one": "\u041d\u0430\u0439\u0434\u0435\u043d\u043e 1 \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0435", "search.result.other": "\u041d\u0430\u0439\u0434\u0435\u043d\u043e \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0439: #", "search.result.placeholder": "\u041d\u0430\u0447\u043d\u0438\u0442\u0435 \u043f\u0435\u0447\u0430\u0442\u0430\u0442\u044c \u0434\u043b\u044f \u043f\u043e\u0438\u0441\u043a\u0430", "search.result.term.missing": "\u041e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442", "select.version": "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0432\u0435\u0440\u0441\u0438\u044e"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
