@@ -14,6 +14,9 @@ SEARCH_QUERY_INSTRUCTIONS = """Ты помогаешь искать новые �
 - добавляй слова вроде news, newsroom, press release, technology, oilfield, upstream,
   если они уместны;
 - не предлагай слишком общие запросы;
+- нефтегазовые сокращения трактуй в отраслевом смысле: ГРП = гидроразрыв пласта,
+  hydraulic fracturing, frac, stimulation; не используй gas distribution station,
+  Gas Rising Pressure, fiberglass/GRP и другие не нефтесервисные расшифровки;
 - ответ строго по JSON Schema."""
 
 

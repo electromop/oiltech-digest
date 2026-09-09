@@ -759,7 +759,17 @@ SOURCE_DISCOVERY_SEARCH_PROVIDER=none|brave|serpapi
 BRAVE_SEARCH_API_KEY=...
 SERPAPI_API_KEY=...
 SOURCE_DISCOVERY_SEARCH_TIMEOUT=20
+SOURCE_DISCOVERY_FRESHNESS_DAYS=180
+SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE=1
 ```
+
+`SOURCE_DISCOVERY_FRESHNESS_DAYS` задает, насколько свежими должны быть материалы
+при пробной проверке нового источника. Если агент видит только старые статьи, он
+не создает кандидата.
+
+`SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE` задает допустимый возраст годов в
+поисковой выдаче. При значении `1` в 2026 году выдача с URL или описанием 2024
+года и старше считается устаревшей.
 
 Команды:
 
@@ -1241,6 +1251,8 @@ SOURCE_DISCOVERY_ARTICLE_LIMIT=5
 SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS=4
 SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES=100
 SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS=100
+SOURCE_DISCOVERY_FRESHNESS_DAYS=180
+SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE=1
 ```
 
 Если AI должен выполняться на зарубежном воркере, loop запускается с

@@ -424,3 +424,115 @@ def test_maintenance_cleanup_command_accepts_overrides(monkeypatch, capsys):
     assert "background_job_days=10" in output
     assert "export_jobs=5" in output
     assert "export_job_days=5" in output
+
+
+def test_audit_terminology_command_reports_bad_terms(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+        lambda limit=500, article_id=None: [
+            {
+                "id": 42,
+                "title": "Hydraulic fracturing expands",
+                "raw_text": "Hydraulic fracturing expands in the field.",
+                "language": "en",
+                "source_name": "World Oil",
+                "source_category": "Новости",
+                "title_ru": "",
+                "summary": "Компания расширила фракинг.",
+            }
+        ],
+    )
+
+    cli.cmd_audit_terminology(argparse.Namespace(limit=10, article_id=None, show=5, json=False))
+
+    output = capsys.readouterr().out
+    assert "terminology-audit: проблемных полей=1" in output
+    assert "article=42" in output
+    assert "фракинг -> ГРП" in output
+
+
+def test_repair_terminology_command_dry_run_does_not_update(monkeypatch, capsys):
+    updated = []
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+        lambda limit=500, article_id=None: [
+            {
+                "id": 42,
+                "title": "Hydraulic fracturing expands",
+                "raw_text": "Hydraulic fracturing expands in the field.",
+                "language": "en",
+                "source_name": "World Oil",
+                "source_category": "Новости",
+                "title_ru": "",
+                "summary": "Компания расширила фракинг.",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.update_article_terminology_texts",
+        lambda *args, **kwargs: updated.append((args, kwargs)),
+    )
+
+    cli.cmd_repair_terminology(argparse.Namespace(limit=10, article_id=None, show=5, dry_run=True, json=False))
+
+    output = capsys.readouterr().out
+    assert "terminology-repair [dry-run]" in output
+    assert "полей к исправлению=1" in output
+    assert "ГРП" in output
+    assert updated == []
+
+
+def test_repair_terminology_command_applies_updates(monkeypatch):
+    updated = []
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+        lambda limit=500, article_id=None: [
+            {
+                "id": 42,
+                "title": "Hydraulic fracturing expands",
+                "raw_text": "Hydraulic fracturing expands in the field.",
+                "language": "en",
+                "source_name": "World Oil",
+                "source_category": "Новости",
+                "title_ru": "",
+                "summary": "Компания расширила фракинг.",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.update_article_terminology_texts",
+        lambda *args, **kwargs: updated.append((args, kwargs)),
+    )
+
+    cli.cmd_repair_terminology(argparse.Namespace(limit=10, article_id=None, show=5, dry_run=False, json=False))
+
+    assert updated == [((42,), {"summary": "Компания расширила ГРП.", "title_ru": None})]
+
+
+def test_validate_terminology_command_reports_ok(capsys):
+    cli.cmd_validate_terminology(argparse.Namespace(json=False))
+
+    output = capsys.readouterr().out
+    assert "terminology-validate: ok=True" in output
+    assert "terms=" in output
+    assert "golden_cases=" in output
+
+
+def test_eval_terminology_command_writes_reports(tmp_path, capsys):
+    csv_path = tmp_path / "terminology.csv"
+    md_path = tmp_path / "terminology.md"
+
+    cli.cmd_eval_terminology(
+        argparse.Namespace(
+            limit=100,
+            show=5,
+            csv_path=str(csv_path),
+            markdown_path=str(md_path),
+            json=False,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert "terminology-eval: total=100 passed=100 failed=0" in output
+    assert "Hydraulic fracturing" in csv_path.read_text(encoding="utf-8-sig")
+    assert "Отчет по нефтегазовой терминологии" in md_path.read_text(encoding="utf-8")

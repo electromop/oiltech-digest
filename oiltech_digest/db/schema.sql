@@ -491,10 +491,75 @@ CREATE TABLE IF NOT EXISTS agent_memory (
 CREATE INDEX IF NOT EXISTS idx_agent_memory_type_score ON agent_memory(memory_type, score DESC, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_memory_subject ON agent_memory(subject);
 
+-- =========================================================================
+-- Радар технологических сигналов
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS signal_radar_topics (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name              TEXT NOT NULL UNIQUE,
+  description       TEXT,
+  query_seeds_json  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  industry_scope_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order        INTEGER NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS signals (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  signal_key        TEXT NOT NULL UNIQUE,
+  title             TEXT NOT NULL,
+  title_ru          TEXT,
+  theme             TEXT NOT NULL,
+  summary           TEXT,
+  thesis            TEXT,
+  transferability   TEXT,
+  maturity          TEXT NOT NULL DEFAULT 'watch', -- reject / watch / shortlist / proven
+  confidence        NUMERIC NOT NULL DEFAULT 0,
+  score             NUMERIC NOT NULL DEFAULT 0,
+  why_now           TEXT,
+  why_not_noise     TEXT,
+  companies_json    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  industries_json   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_count    INTEGER NOT NULL DEFAULT 0,
+  first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signals_maturity_score ON signals(maturity, score DESC, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signals_theme_seen ON signals(theme, last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS signal_evidence (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  signal_id         BIGINT REFERENCES signals(id) ON DELETE CASCADE,
+  article_id        BIGINT REFERENCES articles(id) ON DELETE SET NULL,
+  source_url        TEXT NOT NULL,
+  title             TEXT NOT NULL,
+  title_ru          TEXT,
+  publisher         TEXT,
+  published_at      TIMESTAMPTZ,
+  evidence_type     TEXT NOT NULL DEFAULT 'article',
+  extracted_fact    TEXT,
+  summary_ru        TEXT,
+  strength          NUMERIC NOT NULL DEFAULT 0,
+  raw_payload_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_evidence_url ON signal_evidence(source_url);
+CREATE INDEX IF NOT EXISTS idx_signal_evidence_signal ON signal_evidence(signal_id, strength DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_evidence_article ON signal_evidence(article_id);
+
 -- Idempotent upgrades for databases initialized before these columns existed.
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS title_ru TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS title_ru TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS summary TEXT;
+ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
+ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
 ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE tags ADD COLUMN IF NOT EXISTS name_en TEXT;

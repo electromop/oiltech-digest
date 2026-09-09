@@ -123,12 +123,13 @@ OPENAI_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "60"))
 OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "minimal")
 
 # Гейт релевантности — критическая защита от мусора в выборке. Ему можно дать
-# модель сильнее основной и больше reasoning: вызов дешёвый (короткий ответ),
-# а цена ошибки высокая. Если переменные не заданы — откат на основную модель/effort.
+# модель сильнее основной, но reasoning по умолчанию минимальный: ответ строго JSON,
+# и при medium/high Responses API иногда тратит весь output budget на рассуждение.
+# Если переменные не заданы — откат на основную модель с надежным коротким ответом.
 # ВАЖНО (инцидент 2026-06): эти override'ы НЕ в git — прописывать в .env воркера,
 # где реально вызывается OpenAI, иначе гейт тихо откатится на слабую модель.
 OPENAI_RELEVANCE_MODEL = os.environ.get("OPENAI_RELEVANCE_MODEL", "").strip() or OPENAI_MODEL
-OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").strip() or "medium"
+OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").strip() or "minimal"
 
 # Переводчик заголовков — отдельная стадия. Ответ короткий (один заголовок), поэтому
 # по умолчанию хватает основной (дешёвой) модели и минимального reasoning. Можно
@@ -168,6 +169,11 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
 # Поддержанные провайдеры: none / brave / serpapi.
 SOURCE_DISCOVERY_SEARCH_PROVIDER = os.environ.get("SOURCE_DISCOVERY_SEARCH_PROVIDER", "none").strip().lower()
 SOURCE_DISCOVERY_SEARCH_TIMEOUT = int(os.environ.get("SOURCE_DISCOVERY_SEARCH_TIMEOUT", "20"))
+# Агент поиска источников должен отсеивать старые архивы и разделы без живого
+# потока. Порог намеренно отдельный от основного парсинга: тут мы оцениваем новый
+# источник, а не историческую догрузку уже принятого источника.
+SOURCE_DISCOVERY_FRESHNESS_DAYS = int(os.environ.get("SOURCE_DISCOVERY_FRESHNESS_DAYS", "180"))
+SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE = int(os.environ.get("SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE", "1"))
 BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
 SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
 

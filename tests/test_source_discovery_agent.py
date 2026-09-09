@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from oiltech_digest.source_discovery import agent
 from oiltech_digest.ingestion.source_diagnostics import ProbeResult
@@ -80,6 +80,30 @@ def test_generate_search_queries_uses_strategy_specific_templates(monkeypatch):
 
     assert queries[0] == "роботизация бурения technology case study oilfield"
     assert queries[1] == "роботизация бурения technical paper upstream"
+
+
+def test_generate_search_queries_uses_oilfield_meaning_for_grp(monkeypatch):
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+
+    queries = agent.generate_search_queries("ГРП новые технологии", offline=True, limit=4)
+    joined = " ".join(queries).lower()
+
+    assert "hydraulic fracturing" in joined
+    assert "гидроразрыв" in joined
+    assert "gas distribution" not in joined
+    assert "gas rising pressure" not in joined
+
+
+def test_rank_search_results_prefers_fresh_hits(monkeypatch):
+    monkeypatch.setattr(agent.repository, "normalize_domain", lambda url: "example.com")
+    results = [
+        {"url": "https://example.com/news/2023/old", "title": "Old drilling 2023", "query": "q"},
+        {"url": "https://example.com/news", "title": "Fresh drilling 2026", "query": "q"},
+    ]
+
+    ranked = agent._rank_search_results(results, {})
+
+    assert ranked[0]["title"] == "Fresh drilling 2026"
 
 
 def test_score_source_candidate_rewards_relevance():
@@ -234,6 +258,23 @@ def test_discover_sources_persists_query_memory(monkeypatch):
     assert actions[-1][0][1] == "discover_sources_finished"
 
 
+def test_persist_query_memory_ignores_urls_rejected_before_candidate(monkeypatch):
+    memory = []
+    monkeypatch.setattr(agent.repository, "upsert_agent_memory", lambda **kwargs: memory.append(kwargs) or 1)
+
+    agent._persist_query_memory(
+        "бурение",
+        ["q"],
+        "ok",
+        [{"url": "https://old.example.com/news/2023/item", "query": "q"}],
+        [],
+    )
+
+    assert memory[0]["status"] == "muted"
+    assert memory[0]["facts"]["found_candidates"] == 0
+    assert memory[0]["facts"]["empty_result"] is True
+
+
 def test_discover_sources_mutes_empty_queries_after_successful_search(monkeypatch):
     memory = []
     monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
@@ -346,11 +387,9 @@ def test_candidate_urls_normalizes_url_keys_and_keeps_single_candidate():
 
     assert skipped == []
     assert cooldown == []
-    assert result == [{
-        "url": "https://example.com/news",
-        "reason": "Seed URL supplied by operator",
-        "query": "",
-    }]
+    assert result[0]["url"] == "https://example.com/news"
+    assert result[0]["reason"] == "Seed URL supplied by operator"
+    assert result[0]["query"] == ""
 
 
 def test_candidate_urls_matches_existing_source_without_www():
@@ -493,7 +532,7 @@ def test_discover_sources_with_seed_urls_skips_web_search(monkeypatch):
     monkeypatch.setattr(
         agent,
         "test_parse_source",
-        lambda url, article_limit=5: {
+        lambda url, article_limit=5, **kwargs: {
             "url": url,
             "verdict": "ok",
             "metrics": {
@@ -694,7 +733,7 @@ def test_discover_sources_skips_candidates_without_parseable_articles(monkeypatc
     monkeypatch.setattr(
         agent,
         "test_parse_source",
-        lambda url, article_limit=5: {
+        lambda url, article_limit=5, **kwargs: {
             "url": url,
             "verdict": "no_candidates" if "empty" in url else "ok",
             "metrics": {
@@ -719,13 +758,93 @@ def test_discover_sources_skips_candidates_without_parseable_articles(monkeypatc
     assert result["parse_failed_sources_skipped"][0]["reason"] == "no_candidates"
 
 
+def test_discover_sources_hides_rejected_recommendations_from_candidates(monkeypatch):
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(
+        agent,
+        "search_web",
+        lambda queries, limit=20: {
+            "status": "ok",
+            "queries": queries,
+            "limit": limit,
+            "results": [{"url": "https://noisy.example.com/news", "query": "q"}],
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "inspect_source",
+        lambda url, fetch=False: {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Noisy",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 200, "error": None},
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "test_parse_source",
+        lambda url, article_limit=5, **kwargs: {
+            "url": url,
+            "verdict": "ok",
+            "metrics": {
+                "tested_articles": 5,
+                "relevant_articles": 1,
+                "avg_score": 30,
+                "duplicate_count": 0,
+                "noise_count": 4,
+            },
+            "candidates": [],
+        },
+    )
+    monkeypatch.setattr(agent, "recommend_source_action", lambda *args, **kwargs: {"recommended_action": "reject", "reason": "too noisy"})
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        offline=True,
+        dry_run=True,
+        fetch_inspection=True,
+        test_parse=True,
+    ))
+
+    assert result["candidates"] == []
+    assert result["parse_failed_sources_skipped"][0]["reason"] == "recommendation_reject"
+
+
 def test_url_quality_gate_skips_bad_source_entrypoints():
     assert agent._url_quality_gate_reason("https://example.com/files/report.pdf") == "bad_url_type:document"
     assert agent._url_quality_gate_reason("https://example.com/tag/drilling") == "bad_url_type:index_noise"
     assert agent._url_quality_gate_reason("https://example.com/search?q=drilling") == "bad_url_type:index_noise"
+    assert agent._url_quality_gate_reason("https://example.com/category/drilling") == "bad_url_type:index_noise"
+    assert agent._url_quality_gate_reason("https://example.com/topics/drilling") == "bad_url_type:index_noise"
+    assert agent._url_quality_gate_reason("https://example.com/reports/global-robotic-drilling-market") == "bad_url_type:market_report"
     assert agent._url_quality_gate_reason("https://example.com/news/2026/robotic-drilling-system-improves-oilfield-operations") == "single_article_url"
+    assert agent._url_quality_gate_reason("https://example.com/news/very-long-one-off-story-about-drilling-robot-for-data-center.html") == "single_article_url"
+    assert agent._url_quality_gate_reason("https://example.com/newsitem/117091") == "single_article_url"
     assert agent._url_quality_gate_reason("https://example.com/news") is None
     assert agent._url_quality_gate_reason("https://example.com/newsroom") is None
+
+
+def test_search_result_quality_gate_rejects_stale_hits(monkeypatch):
+    monkeypatch.setattr(agent.app_config, "SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE", 1)
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+
+    assert agent._search_result_quality_gate_reason(
+        {"url": "https://example.com/news/2023/robotic-drilling", "title": "Robotic drilling", "snippet": ""},
+        now=now,
+    ) == "stale_search_result:url_year_2023"
+    assert agent._search_result_quality_gate_reason(
+        {"url": "https://example.com/news", "title": "Best drilling news 2024", "snippet": "Archive 2024"},
+        now=now,
+    ) == "stale_search_result:metadata_year_2024"
+    assert agent._search_result_quality_gate_reason(
+        {"url": "https://example.com/news", "title": "Best drilling news 2026", "snippet": "Archive 2024"},
+        now=now,
+    ) is None
 
 
 def test_content_quality_gate_detects_semantic_404_and_antibot():
@@ -778,6 +897,92 @@ def test_discover_sources_skips_quality_gate_candidates(monkeypatch):
     assert [item["reason"] for item in result["quality_gate_sources_skipped"]] == ["bad_url_type:index_noise", "anti_bot"]
 
 
+def test_discover_sources_skips_stale_search_results(monkeypatch):
+    monkeypatch.setattr(agent.app_config, "SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE", 1)
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(
+        agent,
+        "search_web",
+        lambda queries, limit=20: {
+            "status": "ok",
+            "queries": queries,
+            "limit": limit,
+            "results": [
+                {"url": "https://old.example.com/news/2023/robotic-drilling", "query": "q", "title": "Old news"},
+                {"url": "https://good.example.com/news", "query": "q", "title": "Fresh news 2026"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "inspect_source",
+        lambda url, fetch=False: {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Example",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 200, "error": None},
+        },
+    )
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        offline=True,
+        dry_run=True,
+        fetch_inspection=True,
+    ))
+
+    assert [item["url"] for item in result["candidates"]] == ["https://good.example.com/news"]
+    assert result["quality_gate_sources_skipped"][0]["reason"] == "stale_search_result:url_year_2023"
+
+
+def test_discover_sources_looks_past_initial_rejected_search_results(monkeypatch):
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(
+        agent,
+        "search_web",
+        lambda queries, limit=20: {
+            "status": "ok",
+            "queries": queries,
+            "limit": limit,
+            "results": [
+                {"url": "https://bad1.example.com/news/2023/old-robotic-drilling-story", "query": "q"},
+                {"url": "https://bad2.example.com/news/2023/old-robotic-drilling-story", "query": "q"},
+                {"url": "https://good.example.com/news", "query": "q"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        agent,
+        "inspect_source",
+        lambda url, fetch=False: {
+            "url": url,
+            "domain": agent.repository.normalize_domain(url),
+            "name": "Example",
+            "candidate_type": "media",
+            "confidence": 0.55,
+            "fetch_checked": fetch,
+            "probe": {"status": 200, "error": None},
+        },
+    )
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="бурение",
+        limit=1,
+        offline=True,
+        dry_run=True,
+        fetch_inspection=True,
+    ))
+
+    assert [item["url"] for item in result["candidates"]] == ["https://good.example.com/news"]
+
+
 def test_test_parse_source_scores_useful_candidate(monkeypatch):
     listing = b"""
     <html><body>
@@ -805,6 +1010,95 @@ def test_test_parse_source_scores_useful_candidate(monkeypatch):
     assert result["metrics"]["tested_articles"] == 1
     assert result["metrics"]["relevant_articles"] == 1
     assert result["metrics"]["avg_score"] is not None
+
+
+def test_test_parse_source_rejects_sources_with_only_stale_articles(monkeypatch):
+    now = datetime.now(timezone.utc)
+    stale_date = now - timedelta(days=400)
+    listing = b"<html><body><a href='/news/old'>Old robotic drilling news</a></body></html>"
+    article = b"""
+    <html><head><meta property="og:title" content="Old robotic drilling news"></head>
+    <body><article>
+      <time datetime="2025-01-01T10:00:00+00:00">2025</time>
+      <p>The company deployed a robotic drilling system for oilfield well construction.</p>
+      <p>The technology improves uptime, safety and operational control for upstream teams.</p>
+    </article></body></html>
+    """
+
+    monkeypatch.setattr(agent.app_config, "SOURCE_DISCOVERY_FRESHNESS_DAYS", 180)
+    monkeypatch.setattr(
+        agent.request_parser,
+        "extract_candidate_links",
+        lambda *args, **kwargs: [
+            agent.request_parser.CandidateLink("https://example.com/news/old", "Old robotic drilling news", 5, stale_date)
+        ],
+    )
+    monkeypatch.setattr(
+        agent.request_parser,
+        "parse_article_page",
+        lambda content, fallback_title="": ("Old robotic drilling news", stale_date, "robotic drilling oilfield technology " * 20),
+    )
+
+    def fake_probe(url, timeout=20):
+        if url == "https://example.com/news":
+            return ProbeResult(url=url, status=200, bytes=len(listing)), listing
+        return ProbeResult(url=url, status=200, bytes=len(article)), article
+
+    monkeypatch.setattr(agent, "probe_url", fake_probe)
+
+    result = agent.test_parse_source("https://example.com/news", article_limit=3)
+
+    assert result["verdict"] == "stale_articles"
+    assert result["metrics"]["relevant_articles"] == 0
+    assert result["metrics"]["noise_count"] == 1
+    assert result["candidates"][0]["verdict"] == "stale_article"
+
+
+def test_test_parse_source_rejects_generic_construction_drilling_for_oilfield_topic(monkeypatch):
+    listing = b"<html><body><a href='/news/robot-drilling'>Robot drilling for data centers</a></body></html>"
+    article = b"""
+    <html><head><meta property="og:title" content="Robot drilling for data centers"></head>
+    <body><article>
+      <p>DEWALT launched a downward drilling robot for concrete holes at data center construction sites.</p>
+      <p>The robot improves construction productivity and coordinates multiple drills on large building projects.</p>
+    </article></body></html>
+    """
+
+    def fake_probe(url, timeout=20):
+        if url == "https://example.com/news":
+            return ProbeResult(url=url, status=200, bytes=len(listing)), listing
+        return ProbeResult(url=url, status=200, bytes=len(article)), article
+
+    monkeypatch.setattr(agent, "probe_url", fake_probe)
+
+    result = agent.test_parse_source("https://example.com/news", article_limit=3, topic="роботизация бурения")
+
+    assert result["verdict"] == "no_useful_articles"
+    assert result["metrics"]["relevant_articles"] == 0
+    assert result["candidates"][0]["topic_gate_reason"] == "topic_mismatch:oilfield_drilling_context_required"
+
+
+def test_test_parse_source_keeps_oilfield_robotic_drilling_for_topic(monkeypatch):
+    listing = b"<html><body><a href='/news/robotic-rig'>Robotic drilling rig improves well construction</a></body></html>"
+    article = b"""
+    <html><head><meta property="og:title" content="Robotic drilling rig improves well construction"></head>
+    <body><article>
+      <p>The oilfield operator deployed an autonomous drilling rig for upstream well construction.</p>
+      <p>The robotic system improves safety, wellbore quality and drilling performance.</p>
+    </article></body></html>
+    """
+
+    def fake_probe(url, timeout=20):
+        if url == "https://example.com/news":
+            return ProbeResult(url=url, status=200, bytes=len(listing)), listing
+        return ProbeResult(url=url, status=200, bytes=len(article)), article
+
+    monkeypatch.setattr(agent, "probe_url", fake_probe)
+
+    result = agent.test_parse_source("https://example.com/news", article_limit=3, topic="роботизация бурения")
+
+    assert result["verdict"] == "ok"
+    assert result["metrics"]["relevant_articles"] == 1
 
 
 def test_test_source_candidate_updates_assessment(monkeypatch):

@@ -31,6 +31,7 @@ _BAD_LINK_RE = re.compile(
     r"subscribe|signin|login|register|mailto:|javascript:|#)",
     re.I,
 )
+_MEDIA_LINK_EXT_RE = re.compile(r"\.(?:avif|gif|jpe?g|png|svg|webp|bmp|ico|pdf|zip|rar|7z|mp4|mov|webm|mp3|wav)$", re.I)
 _DATE_HINT_RE = re.compile(r"/20\d{2}/\d{1,2}/\d{1,2}/")
 _DATE_TEXT_RE = re.compile(r"\b(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2})\b")
 
@@ -279,6 +280,8 @@ def _build_candidate_from_anchor(home_url: str, base_host: str, node) -> Candida
         return None
     if (parts.netloc or "").lower() != base_host:
         return None
+    if _MEDIA_LINK_EXT_RE.search(parts.path or ""):
+        return None
     # Сохраняем значимую query-строку: у части источников идентификатор статьи именно
     # в ней (?id=, ?p=, ?article=). Раньше query отбрасывалась → разные статьи
     # схлопывались в URL раздела, и «Читать далее» в дайджесте вёл на сайт, а не на
@@ -301,7 +304,7 @@ def _build_candidate_from_anchor(home_url: str, base_host: str, node) -> Candida
     # Главная/раздел без статейного таргета (нет ни пути, ни query) — не статья.
     if not path.rstrip("/") and not query:
         return None
-    title = normalize.clean_html(node.text_content())
+    title = normalize.clean_html(_safe_text_content(node))
     if len(title) < 18:
         return None
     published_at = _parse_datetime(
@@ -336,6 +339,13 @@ def _score_candidate(path: str, title: str) -> int:
     if _BAD_LINK_RE.search(path_lower):
         score -= 5
     return score
+
+
+def _safe_text_content(node) -> str:
+    try:
+        return node.text_content()
+    except UnicodeDecodeError:
+        return ""
 
 
 def _nodes_by_selector(node, selector: str | None) -> list:

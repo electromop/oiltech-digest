@@ -425,6 +425,26 @@ def _run_source_discovery_loop(payload: dict[str, Any], job_id: int) -> dict[str
     return result
 
 
+def _run_signal_discovery(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.signal_discovery import SignalDiscoveryConfig, discover_signals
+
+    repository.update_background_job_progress(job_id, 15)
+    result = discover_signals(SignalDiscoveryConfig(
+        topic=str(payload["topic"]) if payload.get("topic") else None,
+        days=int(payload.get("days") or 14),
+        limit=int(payload.get("limit") or 80),
+        min_score=float(payload.get("min_score") or 40),
+        offline=bool(payload.get("offline", True)),
+        dry_run=bool(payload.get("dry_run", False)),
+        max_signals=int(payload.get("max_signals") or 10),
+        web_search=bool(payload.get("web_search", False)),
+        web_only=bool(payload.get("web_only", False)),
+        web_query_limit=int(payload.get("web_query_limit") or 8),
+    ))
+    repository.update_background_job_progress(job_id, 95)
+    return result
+
+
 def job_download_path(job: dict[str, Any]) -> Path | None:
     result = job.get("result_json") or {}
     path = result.get("path")
@@ -440,4 +460,5 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "source_discovery_plan": _run_source_discovery_plan,
     "source_discovery_loop": _run_source_discovery_loop,
     "discover_source_candidates": _run_discover_source_candidates,
+    "signal_discovery": _run_signal_discovery,
 }

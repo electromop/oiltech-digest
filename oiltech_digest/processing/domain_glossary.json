@@ -1,0 +1,289 @@
+{
+  "terms": [
+    {
+      "source_terms": ["hydraulic fracturing", "fracking", "fracing", "frac stimulation", "hydraulic stimulation", "electric frac", "frac fleet"],
+      "preferred_ru": "ГРП",
+      "full_ru": "гидроразрыв пласта",
+      "forbidden_ru": ["фракинг"],
+      "forbidden_patterns": ["\\bфрак(?:инг|ингу|ингом|инга|инге|ингов|инги|овый|овые|овая|овое)\\b"],
+      "note": "Для дайджеста используем отраслевой термин ГРП."
+    },
+    {
+      "source_terms": ["well completion", "completion", "completions", "well completions", "intelligent completion", "smart completion"],
+      "preferred_ru": "заканчивание скважины",
+      "forbidden_ru": ["завершение скважины", "завершения скважины", "завершении скважины"],
+      "note": "Completion в контексте скважин переводится как заканчивание."
+    },
+    {
+      "source_terms": ["workover", "workovers", "well workover", "workover rig"],
+      "preferred_ru": "КРС",
+      "full_ru": "капитальный ремонт скважин",
+      "forbidden_ru": ["ворковер"],
+      "forbidden_patterns": ["\\bворковер(?:а|ов|ом|е|ы)?\\b"],
+      "note": "Workover в нефтегазовом контексте — КРС."
+    },
+    {
+      "source_terms": ["enhanced oil recovery", "eor", "improved oil recovery", "ior"],
+      "preferred_ru": "МУН",
+      "full_ru": "методы увеличения нефтеотдачи",
+      "forbidden_ru": ["улучшенное извлечение нефти"],
+      "note": "EOR/IOR в дайджесте нормализуем как МУН."
+    },
+    {
+      "source_terms": ["artificial lift", "esp", "electric submersible pump", "rod lift", "gas lift"],
+      "preferred_ru": "механизированная добыча",
+      "forbidden_ru": ["искусственный лифт"]
+    },
+    {
+      "source_terms": ["drilling fluid", "drilling mud", "mud system", "mud motor"],
+      "preferred_ru": "буровой раствор",
+      "forbidden_ru": ["буровая грязь"]
+    },
+    {
+      "source_terms": ["managed pressure drilling", "mpd"],
+      "preferred_ru": "бурение с управляемым давлением"
+    },
+    {
+      "source_terms": ["measurement while drilling", "mwd"],
+      "preferred_ru": "MWD",
+      "full_ru": "измерения в процессе бурения"
+    },
+    {
+      "source_terms": ["logging while drilling", "lwd"],
+      "preferred_ru": "LWD",
+      "full_ru": "каротаж в процессе бурения"
+    },
+    {
+      "source_terms": ["coiled tubing", "ct intervention"],
+      "preferred_ru": "колтюбинг",
+      "forbidden_ru": ["гибкая труба", "свернутая труба"],
+      "note": "В отраслевом тексте предпочтительно колтюбинг."
+    },
+    {
+      "source_terms": ["proppant", "proppants"],
+      "preferred_ru": "проппант"
+    },
+    {
+      "source_terms": ["flowback", "flowback fluid"],
+      "preferred_ru": "жидкость обратного притока",
+      "forbidden_ru": ["флоубэк"],
+      "forbidden_patterns": ["\\bфлоубэк(?:а|ом|е)?\\b"]
+    },
+    {
+      "source_terms": ["produced water"],
+      "preferred_ru": "попутно добываемая вода"
+    },
+    {
+      "source_terms": ["subsea", "subsea production", "subsea tieback"],
+      "preferred_ru": "подводная добыча",
+      "forbidden_ru": ["сабси"],
+      "forbidden_patterns": ["\\bсабси\\b"]
+    },
+    {
+      "source_terms": ["offshore", "offshore drilling", "offshore production"],
+      "preferred_ru": "шельфовый",
+      "forbidden_ru": ["оффшорный", "оффшоре", "оффшора"],
+      "forbidden_patterns": ["\\bоффшор(?:ный|ная|ное|ные|е|а|ом)?\\b"],
+      "note": "В нефтегазовом контексте обычно шельфовый/морской."
+    },
+    {
+      "source_terms": ["upstream"],
+      "preferred_ru": "разведка и добыча",
+      "forbidden_ru": ["апстрим"]
+    },
+    {
+      "source_terms": ["midstream"],
+      "preferred_ru": "транспортировка и хранение",
+      "forbidden_ru": ["мидстрим"]
+    },
+    {
+      "source_terms": ["downstream"],
+      "preferred_ru": "переработка и сбыт",
+      "forbidden_ru": ["даунстрим"]
+    },
+    {
+      "source_terms": ["liquefied natural gas", "lng"],
+      "preferred_ru": "СПГ",
+      "full_ru": "сжиженный природный газ",
+      "forbidden_ru": ["liquefied natural gas"],
+      "note": "Голое LNG может быть частью названия компании, поэтому заменяем его только в безопасных фразах."
+    },
+    {
+      "source_terms": ["carbon capture and storage", "ccs"],
+      "preferred_ru": "CCS",
+      "full_ru": "улавливание и хранение CO2"
+    },
+    {
+      "source_terms": ["carbon capture utilization and storage", "ccus"],
+      "preferred_ru": "CCUS",
+      "full_ru": "улавливание, использование и хранение CO2"
+    },
+    {
+      "source_terms": ["carbon dioxide", "co2"],
+      "preferred_ru": "CO2",
+      "full_ru": "диоксид углерода"
+    },
+    {
+      "source_terms": ["drill bit", "drilling bit"],
+      "preferred_ru": "буровое долото"
+    },
+    {
+      "source_terms": ["bottomhole assembly", "bha"],
+      "preferred_ru": "КНБК",
+      "full_ru": "компоновка низа бурильной колонны",
+      "forbidden_ru": ["bottomhole assembly", "BHA"]
+    },
+    {
+      "source_terms": ["rate of penetration", "rop"],
+      "preferred_ru": "механическая скорость проходки",
+      "forbidden_ru": ["ROP", "rate of penetration"]
+    },
+    {
+      "source_terms": ["wellbore", "well bore"],
+      "preferred_ru": "ствол скважины",
+      "forbidden_ru": ["скважинный ствол"]
+    },
+    {
+      "source_terms": ["casing", "casing string"],
+      "preferred_ru": "обсадная колонна"
+    },
+    {
+      "source_terms": ["cementing", "well cementing"],
+      "preferred_ru": "цементирование скважины"
+    },
+    {
+      "source_terms": ["perforation", "perforating"],
+      "preferred_ru": "перфорация"
+    },
+    {
+      "source_terms": ["stimulation", "well stimulation"],
+      "preferred_ru": "интенсификация притока",
+      "forbidden_ru": ["стимуляция скважины"],
+      "forbidden_patterns": ["\\bстимуляци(?:я|и|ю|ей)\\s+скважин(?:ы|е|ой)?\\b"]
+    },
+    {
+      "source_terms": ["reservoir", "reservoir management"],
+      "preferred_ru": "пласт",
+      "forbidden_ru": ["резервуар"],
+      "forbidden_patterns": ["\\bрезервуар(?:а|у|ом|е|ы|ов|ам|ами|ах)?\\b"],
+      "note": "Reservoir в добыче — пласт, не резервуар."
+    },
+    {
+      "source_terms": ["digital twin", "digital twins"],
+      "preferred_ru": "цифровой двойник"
+    },
+    {
+      "source_terms": ["predictive maintenance"],
+      "preferred_ru": "предиктивное обслуживание"
+    },
+    {
+      "source_terms": ["condition monitoring"],
+      "preferred_ru": "мониторинг состояния оборудования"
+    }
+  ],
+  "phrase_repairs": [
+    ["\\bмощност(?:и|ей|ям|ями|ях)\\s+LNG\\b", "мощности СПГ"],
+    ["\\bLNG-инфраструктур([а-я]*)\\b", "СПГ-инфраструктур\\1"],
+    ["\\bLNG-проект([а-я]*)\\b", "СПГ-проект\\1"],
+    ["\\bLNG-рынк([а-я]*)\\b", "СПГ-рынк\\1"],
+    ["\\bнов(?:ая|ую)\\s+буров(?:ая|ую)\\s+грязь\\s+снизил[ао]?\\b", "новый буровой раствор снизил"],
+    ["\\bнов(?:ая|ую)\\s+буров(?:ая|ую)\\s+грязь\\b", "новый буровой раствор"],
+    ["\\bискусственн(?:ый|ого|ому|ым|ом)\\s+лифт\\s+повысил\\b", "механизированная добыча повысила"],
+    ["\\bповысил[а]?\\s+ROP\\b", "повысила механическую скорость проходки"],
+    ["\\bпров[её]л(?:а|и)?\\s+стимуляци(?:ю|и)\\s+скважин(?:ы|е|ой)?\\b", "провел интенсификацию притока"],
+    ["\\bстимуляци(?:я|и|ю|ей)\\s+скважин(?:ы|е|ой)?\\b", "интенсификация притока"],
+    ["\\bдля\\s+резервуар(?:а|ов)?\\b", "для пласта"],
+    ["\\bв\\s+резервуар(?:е|ах)?\\b", "в пласте"],
+    ["\\bиз\\s+резервуар(?:а|ов)?\\b", "из пласта"],
+    ["\\bрезервуар(?:а|у|ом|е|ы|ов|ам|ами|ах)?\\b", "пласт"],
+    ["\\bна\\s+оффшор(?:е|е)?\\b", "на шельфе"],
+    ["\\bоффшорн(?:ый|ая|ое|ые)\\s+проект\\b", "шельфовый проект"],
+    ["\\bоффшорн(?:ая)\\s+добыч[а-я]*\\b", "шельфовая добыча"],
+    ["\\bоффшорн(?:ое)\\s+бурени[а-я]*\\b", "шельфовое бурение"],
+    ["\\bпосле\\s+фрак(?:инга|инге|ингом)\\b", "после ГРП"],
+    ["\\bфрак(?:инговый|инговая|инговое|инговые)\\s+флот(?:ы|ов|ами|ом)?\\b", "флот ГРП"],
+    ["\\bэлектрическ(?:ий|ая|ое|ие)\\s+фрак(?:инг|инга|инговый|инговая|инговое|инговые)?\\b", "электрический флот ГРП"],
+    ["\\bфлоубэк(?:а|ом|е)?\\s+анализ\\b", "анализ жидкости обратного притока"],
+    ["\\bворковер(?:ов|а)?\\s+программ[а-я]*\\b", "программа КРС"],
+    ["\\bзавершени(?:е|я|ю|ем|и)\\s+скважин(?:ы|е|ой)?\\b", "заканчивание скважины"]
+  ],
+  "golden_cases": [
+    {
+      "name": "ГРП / fracking",
+      "article": {"title": "Electric frac fleet expands hydraulic fracturing", "raw_text": "Electric frac fleet expands hydraulic fracturing operations.", "language": "en"},
+      "bad": "Компания расширила фракинг.",
+      "must_have": ["ГРП"],
+      "must_not": ["фракинг"]
+    },
+    {
+      "name": "КРС / workover",
+      "article": {"title": "Workover improves production", "raw_text": "The workover program improved production.", "language": "en"},
+      "bad": "Ворковер увеличил добычу.",
+      "must_have": ["КРС"],
+      "must_not": ["ворковер"]
+    },
+    {
+      "name": "Заканчивание / completion",
+      "article": {"title": "Well completion system launched", "raw_text": "New well completion system launched.", "language": "en"},
+      "bad": "Завершение скважины ускорило ввод.",
+      "must_have": ["Заканчивание скважины"],
+      "must_not": ["завершение скважины"]
+    },
+    {
+      "name": "Пласт / reservoir",
+      "article": {"title": "Reservoir output improved", "raw_text": "Reservoir output improved after optimization.", "language": "en"},
+      "bad": "Добыча из резервуара выросла.",
+      "must_have": ["пласта"],
+      "must_not": ["резервуар"]
+    },
+    {
+      "name": "Интенсификация / stimulation",
+      "article": {"title": "Well stimulation improves output", "raw_text": "Well stimulation improved output.", "language": "en"},
+      "bad": "Оператор провёл стимуляцию скважины.",
+      "must_have": ["провёл интенсификацию притока"],
+      "must_not": ["стимуляция скважины"]
+    },
+    {
+      "name": "Шельф / offshore",
+      "article": {"title": "Offshore drilling expands", "raw_text": "Offshore drilling expands.", "language": "en"},
+      "bad": "Проект на оффшоре расширился.",
+      "must_have": ["на шельфе"],
+      "must_not": ["оффшор"]
+    },
+    {
+      "name": "Буровой раствор / drilling mud",
+      "article": {"title": "Drilling mud system", "raw_text": "Drilling mud system reduced losses.", "language": "en"},
+      "bad": "Новая буровая грязь снизила потери.",
+      "must_have": ["буровой раствор"],
+      "must_not": ["буровая грязь"]
+    },
+    {
+      "name": "Механизированная добыча / artificial lift",
+      "article": {"title": "Artificial lift system", "raw_text": "Artificial lift system improves production.", "language": "en"},
+      "bad": "Искусственный лифт повысил добычу.",
+      "must_have": ["механизированная добыча"],
+      "must_not": ["искусственный лифт"]
+    },
+    {
+      "name": "СПГ / LNG",
+      "article": {"title": "LNG capacity grows", "raw_text": "Liquefied natural gas capacity grows.", "language": "en"},
+      "bad": "Мощности LNG выросли.",
+      "must_have": ["СПГ"],
+      "must_not": []
+    },
+    {
+      "name": "LNG в названии компании",
+      "article": {"title": "Power LNG develops liquefied natural gas infrastructure", "raw_text": "Power LNG develops LNG infrastructure.", "language": "en"},
+      "bad": "Power LNG развивает LNG-инфраструктуру.",
+      "must_have": ["Power LNG", "СПГ-инфраструктуру"],
+      "must_not": ["Power СПГ"]
+    },
+    {
+      "name": "КНБК / BHA",
+      "article": {"title": "Bottomhole assembly optimization", "raw_text": "Bottomhole assembly optimization improved ROP.", "language": "en"},
+      "bad": "Оптимизация bottomhole assembly повысила ROP.",
+      "must_have": ["КНБК", "механическую скорость проходки"],
+      "must_not": ["bottomhole assembly", "ROP"]
+    }
+  ]
+}

@@ -54,6 +54,17 @@ QUERY_HOME_HTML = b"""
 """
 
 
+MEDIA_HOME_HTML = b"""
+<html>
+  <body>
+    <a href="/wp-content/uploads/2024/03/Oil-Gas-Producer.webp">Oil & Gas Producer / Well Trajectories / Production Bubbles</a>
+    <a href="/files/report.pdf">Hydraulic fracturing technology report</a>
+    <a href="/news/2026/05/field-automation-rollout">Field automation rollout improves wellsite performance</a>
+  </body>
+</html>
+"""
+
+
 def test_extract_candidate_links_prefers_article_like_paths():
     items = request_parser.extract_candidate_links("https://example.com", HOME_HTML, limit=10)
 
@@ -71,6 +82,24 @@ def test_extract_candidate_links_preserves_query_id_and_strips_tracking():
     assert "https://example.com?p=678" in urls               # query-only статья не схлопнулась в главную
     assert all("newsletter" not in url for url in urls)      # трекинг-ссылка на корень отброшена
     assert "https://example.com" not in urls                 # чистая главная не попадает в кандидаты
+
+
+def test_extract_candidate_links_skips_media_files():
+    items = request_parser.extract_candidate_links("https://example.com", MEDIA_HOME_HTML, limit=10)
+    urls = [item.url for item in items]
+
+    assert urls == ["https://example.com/news/2026/05/field-automation-rollout"]
+
+
+def test_extract_candidate_links_skips_anchor_with_broken_encoding(monkeypatch):
+    class BrokenAnchor:
+        def get(self, key):
+            return "/news/broken" if key == "href" else None
+
+        def text_content(self):
+            raise UnicodeDecodeError("utf-8", b"\xc6", 0, 1, "invalid continuation byte")
+
+    assert request_parser._build_candidate_from_anchor("https://example.com", "example.com", BrokenAnchor()) is None
 
 
 def test_clean_query_keeps_meaningful_strips_tracking():

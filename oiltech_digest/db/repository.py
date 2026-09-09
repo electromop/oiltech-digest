@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+import re
 from typing import Literal, NamedTuple, get_args
 from urllib.parse import urlsplit
 
@@ -748,6 +749,261 @@ def source_candidate_article_metrics(candidate_id: int) -> dict:
         }
 
 
+def seed_signal_radar_topics(topics: list[dict]) -> int:
+    changed = 0
+    with get_connection() as conn:
+        for order, topic in enumerate(topics, start=1):
+            cur = conn.execute(
+                """
+                INSERT INTO signal_radar_topics (
+                  name, description, query_seeds_json, industry_scope_json, enabled, sort_order
+                )
+                VALUES (%s, %s, %s, %s, TRUE, %s)
+                ON CONFLICT (name) DO UPDATE SET
+                  description = EXCLUDED.description,
+                  query_seeds_json = EXCLUDED.query_seeds_json,
+                  industry_scope_json = EXCLUDED.industry_scope_json,
+                  enabled = TRUE,
+                  sort_order = EXCLUDED.sort_order,
+                  updated_at = now()
+                RETURNING id
+                """,
+                (
+                    topic["name"],
+                    topic.get("description"),
+                    Json(_jsonable(topic.get("query_seeds") or [])),
+                    Json(_jsonable(topic.get("industry_scope") or [])),
+                    order,
+                ),
+            )
+            if cur.fetchone():
+                changed += 1
+        conn.commit()
+    return changed
+
+
+def list_signal_radar_topics(*, enabled_only: bool = True) -> list[dict]:
+    query = "SELECT * FROM signal_radar_topics"
+    params: list = []
+    if enabled_only:
+        query += " WHERE enabled"
+    query += " ORDER BY sort_order, name"
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(query, params)
+        return cur.fetchall()
+
+
+def list_signal_article_evidence(
+    *,
+    topic: str | None = None,
+    days: int = 14,
+    limit: int = 80,
+    min_score: float = 40,
+) -> list[dict]:
+    clauses = ["a.collected_at >= now() - (%s::text || ' days')::interval"]
+    params: list = [days]
+    if topic:
+        terms = [
+            term
+            for term in dict.fromkeys(part.lower() for part in re.findall(r"[A-Za-zА-Яа-яЁё0-9]{3,}", topic))
+            if term not in {"and", "the", "for", "hse", "oil", "gas"}
+        ][:6]
+        topic_clauses = []
+        for term in terms or [topic]:
+            like = f"%{term}%"
+            topic_clauses.append(
+                """
+                (
+                  COALESCE(t.name, '') ILIKE %s OR COALESCE(t.name_en, '') ILIKE %s
+                  OR COALESCE(ac.summary, '') ILIKE %s OR COALESCE(a.title, '') ILIKE %s
+                  OR COALESCE(a.raw_text, '') ILIKE %s
+                )
+                """
+            )
+            params.extend([like, like, like, like, like])
+        clauses.append(
+            "(" + " OR ".join(topic_clauses) + ")"
+        )
+    params.extend([min_score, limit])
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT
+              a.id AS article_id,
+              a.title,
+              COALESCE(ac.title_ru, a.title) AS title_ru,
+              a.url AS source_url,
+              a.published_at,
+              a.collected_at,
+              a.language,
+              a.raw_text,
+              s.name AS publisher,
+              s.source_type,
+              ac.summary,
+              ac.relevant,
+              ac.relevance_reason,
+              t.name AS tag_name,
+              t.name_en AS tag_name_en,
+              article_scores.total_score,
+              article_scores.score_label,
+              article_scores.explanation AS score_explanation
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            LEFT JOIN article_cards ac ON ac.article_id = a.id
+            LEFT JOIN article_tags at ON at.article_id = a.id
+            LEFT JOIN tags t ON t.id = at.tag_id
+            LEFT JOIN article_scores ON article_scores.article_id = a.id
+            WHERE {" AND ".join(clauses)}
+              AND COALESCE(ac.relevant, TRUE) IS TRUE
+              AND COALESCE(article_scores.total_score, 50) >= %s
+              AND NOT a.pending_deletion
+            ORDER BY COALESCE(article_scores.total_score, 50) DESC, a.collected_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def upsert_signal(signal: dict) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO signals (
+              signal_key, title, title_ru, theme, summary, thesis, transferability, maturity, confidence, score,
+              why_now, why_not_noise, companies_json, industries_json, evidence_count
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (signal_key) DO UPDATE SET
+              title = EXCLUDED.title,
+              title_ru = EXCLUDED.title_ru,
+              theme = EXCLUDED.theme,
+              summary = EXCLUDED.summary,
+              thesis = EXCLUDED.thesis,
+              transferability = EXCLUDED.transferability,
+              maturity = EXCLUDED.maturity,
+              confidence = EXCLUDED.confidence,
+              score = EXCLUDED.score,
+              why_now = EXCLUDED.why_now,
+              why_not_noise = EXCLUDED.why_not_noise,
+              companies_json = EXCLUDED.companies_json,
+              industries_json = EXCLUDED.industries_json,
+              evidence_count = EXCLUDED.evidence_count,
+              last_seen_at = now(),
+              updated_at = now()
+            RETURNING id
+            """,
+            (
+                signal["signal_key"],
+                signal["title"],
+                signal.get("title_ru"),
+                signal["theme"],
+                signal.get("summary"),
+                signal.get("thesis"),
+                signal.get("transferability"),
+                signal.get("maturity") or "watch",
+                float(signal.get("confidence") or 0),
+                float(signal.get("score") or 0),
+                signal.get("why_now"),
+                signal.get("why_not_noise"),
+                Json(_jsonable(signal.get("companies") or [])),
+                Json(_jsonable(signal.get("industries") or [])),
+                int(signal.get("evidence_count") or 0),
+            ),
+        )
+        signal_id = int(cur.fetchone()[0])
+        conn.commit()
+        return signal_id
+
+
+def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO signal_evidence (
+              signal_id, article_id, source_url, title, title_ru, publisher, published_at,
+              evidence_type, extracted_fact, summary_ru, strength, raw_payload_json
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (source_url) DO UPDATE SET
+              signal_id = EXCLUDED.signal_id,
+              article_id = COALESCE(EXCLUDED.article_id, signal_evidence.article_id),
+              title = EXCLUDED.title,
+              title_ru = EXCLUDED.title_ru,
+              publisher = EXCLUDED.publisher,
+              published_at = COALESCE(EXCLUDED.published_at, signal_evidence.published_at),
+              evidence_type = EXCLUDED.evidence_type,
+              extracted_fact = EXCLUDED.extracted_fact,
+              summary_ru = EXCLUDED.summary_ru,
+              strength = EXCLUDED.strength,
+              raw_payload_json = EXCLUDED.raw_payload_json,
+              updated_at = now()
+            RETURNING id
+            """,
+            (
+                signal_id,
+                evidence.get("article_id"),
+                evidence["source_url"],
+                evidence["title"],
+                evidence.get("title_ru"),
+                evidence.get("publisher"),
+                evidence.get("published_at"),
+                evidence.get("evidence_type") or "article",
+                evidence.get("extracted_fact"),
+                evidence.get("summary_ru"),
+                float(evidence.get("strength") or 0),
+                Json(_jsonable(evidence.get("raw_payload") or evidence)),
+            ),
+        )
+        evidence_id = int(cur.fetchone()[0])
+        conn.commit()
+        return evidence_id
+
+
+def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50) -> list[dict]:
+    clauses = []
+    params: list = []
+    if maturity:
+        clauses.append("maturity = %s")
+        params.append(maturity)
+    if theme:
+        clauses.append("theme ILIKE %s")
+        params.append(f"%{theme}%")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT *
+            FROM signals
+            {where}
+            ORDER BY score DESC, last_seen_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def list_signal_evidence(signal_id: int, *, limit: int = 20) -> list[dict]:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT *
+            FROM signal_evidence
+            WHERE signal_id = %s
+            ORDER BY strength DESC, published_at DESC NULLS LAST, created_at DESC
+            LIMIT %s
+            """,
+            (signal_id, limit),
+        )
+        return cur.fetchall()
+
+
 def create_agent_task(
     kind: str,
     *,
@@ -763,7 +1019,7 @@ def create_agent_task(
             VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (kind, status, topic, Json(payload or {}), Json(budget or {})),
+            (kind, status, topic, Json(_jsonable(payload or {})), Json(_jsonable(budget or {}))),
         )
         task_id = int(cur.fetchone()[0])
         conn.commit()
@@ -784,7 +1040,7 @@ def create_agent_run(
             VALUES (%s, %s, %s, %s, now())
             RETURNING id
             """,
-            (kind, status, trigger, Json(payload or {})),
+            (kind, status, trigger, Json(_jsonable(payload or {}))),
         )
         run_id = int(cur.fetchone()[0])
         conn.commit()
@@ -808,7 +1064,7 @@ def finish_agent_run(
                 finished_at = now()
             WHERE id = %s
             """,
-            (status, Json(result or {}), error_message, run_id),
+            (status, Json(_jsonable(result or {})), error_message, run_id),
         )
         conn.commit()
 
@@ -862,7 +1118,7 @@ def record_agent_action(
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (run_id, task_id, action_type, Json(input_payload or {}), Json(output_payload or {}),
+            (run_id, task_id, action_type, Json(_jsonable(input_payload or {})), Json(_jsonable(output_payload or {})),
              cost_usd, duration_ms),
         )
         action_id = int(cur.fetchone()[0])
@@ -1032,7 +1288,7 @@ def upsert_agent_memory(
               updated_at = now()
             RETURNING id
             """,
-            (key, memory_type, subject, status, score, Json(facts or {})),
+            (key, memory_type, subject, status, score, Json(_jsonable(facts or {}))),
         )
         memory_id = int(cur.fetchone()[0])
         conn.commit()
@@ -3233,6 +3489,54 @@ def set_article_title_ru(article_id: int, title_ru: str) -> None:
                 updated_at = now()
             """,
             (article_id, title_ru),
+        )
+        conn.commit()
+
+
+def list_article_texts_for_terminology_audit(limit: int = 200, article_id: int | None = None) -> list[dict]:
+    clauses = ["(COALESCE(c.summary, '') <> '' OR COALESCE(c.title_ru, '') <> '')"]
+    params: list = []
+    if article_id is not None:
+        clauses.append("a.id = %s")
+        params.append(article_id)
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT a.id, a.title, a.raw_text, a.language, s.name AS source_name,
+                   s.category AS source_category, c.summary, c.title_ru
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            JOIN article_cards c ON c.article_id = a.id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def update_article_terminology_texts(article_id: int, *, summary: str | None = None, title_ru: str | None = None) -> None:
+    if summary is None and title_ru is None:
+        return
+    sets = ["updated_at = now()"]
+    params: dict[str, object] = {"article_id": article_id}
+    if summary is not None:
+        sets.append("summary = %(summary)s")
+        params["summary"] = summary
+    if title_ru is not None:
+        sets.append("title_ru = %(title_ru)s")
+        params["title_ru"] = title_ru
+    with get_connection() as conn:
+        conn.execute(
+            f"""
+            UPDATE article_cards
+            SET {", ".join(sets)}
+            WHERE article_id = %(article_id)s
+            """,
+            params,
         )
         conn.commit()
 

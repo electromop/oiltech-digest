@@ -421,6 +421,32 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     assert content["news"][0]["category"] == "Рынок / LNG"
 
 
+def test_build_digest_content_enforces_domain_terms(monkeypatch):
+    monkeypatch.setattr(
+        "oiltech_digest.processing.digest.repository.digest_candidates",
+        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [
+            {
+                "id": 124,
+                "title": "Electric frac fleet expands hydraulic fracturing",
+                "source_name": "World Oil",
+                "url": "https://example.com/a",
+                "published_at": None,
+                "tag_name": "ГРП",
+                "parent_tag_name": "Технологии",
+                "total_score": 88,
+                "score_label": "High",
+                "summary": "Компания расширила фракинг.",
+                "image_url": "",
+            }
+        ],
+    )
+
+    content = build_digest_content("2026-05")
+
+    assert content["news"][0]["summary"] == "Компания расширила ГРП."
+    assert "фракинг" not in content["news"][0]["summary"].lower()
+
+
 def test_render_digest_email_card_tag_and_cta_at_bottom():
     html = render_digest_email(
         {

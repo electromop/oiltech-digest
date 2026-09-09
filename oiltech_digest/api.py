@@ -138,6 +138,19 @@ class SourceCandidatePatch(BaseModel):
     review_comment: str | None = None
 
 
+class SignalDiscoveryRequest(BaseModel):
+    topic: str | None = None
+    days: int = 14
+    limit: int = 80
+    min_score: float = 40
+    max_signals: int = 10
+    offline: bool = True
+    dry_run: bool = False
+    web_search: bool = False
+    web_only: bool = False
+    web_query_limit: int = 8
+
+
 class SourceDiscoveryPlanRequest(BaseModel):
     days: int = 30
     target_per_topic: int = 10
@@ -1395,6 +1408,47 @@ def ai_article_cost(
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.ai_article_cost_report(limit=limit, complete_only=not include_partial)]
+
+
+@app.post("/api/signals/topics/seed")
+def seed_signal_topics(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    from oiltech_digest.signal_discovery import seed_default_radar_topics
+
+    return {"ok": True, "topics": seed_default_radar_topics()}
+
+
+@app.get("/api/signals")
+def list_signals(
+    maturity: str | None = Query(None, pattern="^(watch|shortlist|proven|reject)$"),
+    theme: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    evidence_limit: int = Query(3, ge=0, le=20),
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
+    rows = []
+    for row in repository.list_signals(maturity=maturity, theme=theme, limit=limit):
+        evidence = repository.list_signal_evidence(int(row["id"]), limit=evidence_limit) if evidence_limit else []
+        rows.append(_clean({**row, "evidence": evidence}))
+    return rows
+
+
+@app.post("/api/jobs/signal-discovery")
+def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    if payload.days < 1 or payload.days > 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
+    if payload.limit < 1 or payload.limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    if payload.max_signals < 1 or payload.max_signals > 50:
+        raise HTTPException(status_code=400, detail="max_signals must be between 1 and 50")
+    job = background_jobs.enqueue(
+        "signal_discovery",
+        payload.model_dump(),
+        user_id=int(user["id"]),
+        queue_name="ai" if not payload.offline else "default",
+        execution_region="ru",
+        capability="openai" if not payload.offline else None,
+    )
+    return {"ok": True, "job": _job_payload(job)}
 
 
 @app.get("/api/digest-content")

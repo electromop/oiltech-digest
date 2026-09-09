@@ -63,14 +63,16 @@ def health_comment(health: dict[str, Any] | None) -> str:
 
 def _recommended_action(score: dict[str, Any], regularity: dict[str, Any], health_score: float, base_action: str) -> str:
     regularity_label = str(regularity.get("regularity_label") or "")
+    if score["tested_articles"] >= 3 and score["relevant_articles"] == 0:
+        return "reject"
     if regularity_label in {"archive", "stale"} and score["relevant_articles"] < 3:
+        return "reject"
+    if health_score <= 25:
         return "reject"
     if health_score >= 70 and score["tested_articles"] >= 5 and score["relevant_articles"] >= 3:
         return "add"
     if health_score >= 45 or regularity_label in {"unknown", "active_but_sparse"}:
         return "test_more" if base_action != "reject" else "human_review"
-    if health_score <= 25:
-        return "reject"
     return base_action if base_action in {"add", "test_more", "reject", "human_review"} else "human_review"
 
 

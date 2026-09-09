@@ -7,7 +7,7 @@ source candidates. It does not autonomously crawl the web or activate sources.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -104,10 +104,11 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
     quality_gate_sources_skipped = []
     unavailable_sources_skipped = []
     parse_failed_sources_skipped = []
+    candidate_pool_limit = max(config.limit, config.limit * 3)
     candidate_urls, skipped_existing_sources, skipped_cooldown_sources = _candidate_urls(
         config.seed_urls,
         search_results.get("results") or [],
-        config.limit,
+        candidate_pool_limit,
         rejected_domains=rejected_domains,
         cooldown_domains=cooldown_domains,
         source_inventory=source_inventory,
@@ -116,7 +117,7 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
     cooldown_sources_skipped.extend(skipped_cooldown_sources)
     for url_info in candidate_urls:
         url = url_info["url"]
-        url_gate_reason = _url_quality_gate_reason(url)
+        url_gate_reason = _search_result_quality_gate_reason(url_info) or _url_quality_gate_reason(url)
         if url_gate_reason:
             quality_gate_sources_skipped.append({
                 "url": url,
@@ -147,7 +148,7 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
                 "probe": inspection.get("probe"),
             })
             continue
-        parse_result = test_parse_source(url, article_limit=5) if config.test_parse else None
+        parse_result = test_parse_source(url, article_limit=5, topic=config.topic) if config.test_parse else None
         parse_skip_reason = _parse_skip_reason(parse_result)
         if parse_skip_reason:
             parse_failed_sources_skipped.append({
@@ -170,6 +171,16 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
             offline=config.offline,
             evidence=(parse_result or {}).get("candidates") or [],
         )
+        if recommendation.get("recommended_action") == "reject":
+            parse_failed_sources_skipped.append({
+                "url": url,
+                "domain": repository.normalize_domain(url),
+                "reason": "recommendation_reject",
+                "verdict": parse_result.get("verdict") if parse_result else None,
+                "metrics": metrics,
+                "review_comment": recommendation.get("reason"),
+            })
+            continue
         candidate = {
             "url": url,
             "normalized_domain": repository.normalize_domain(url),
@@ -202,6 +213,8 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
             )
             candidate["id"] = candidate_id
         candidates.append(candidate)
+        if len(candidates) >= config.limit:
+            break
 
     result = {
         "dry_run": config.dry_run,
@@ -264,7 +277,7 @@ def generate_search_queries(
     client = make_client(False)
     response = client.complete_json(
         SEARCH_QUERY_INSTRUCTIONS,
-        f"topic: {topic}\nstrategy: {strategy}\nlimit: {limit}",
+        f"topic: {topic}\nstrategy: {strategy}\nlimit: {limit}\n{_topic_search_context(topic)}",
         SEARCH_QUERY_SCHEMA,
         max_output_tokens=600,
     )
@@ -347,13 +360,62 @@ def _url_quality_gate_reason(url: str) -> str | None:
     last_segment = segments[-1]
     if re.search(r"\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip|rar|7z)(?:$|\?)", path):
         return "bad_url_type:document"
-    if any(segment in {"tag", "tags", "author", "authors", "search"} for segment in segments):
+    if any(segment in {
+        "tag",
+        "tags",
+        "author",
+        "authors",
+        "search",
+        "category",
+        "categories",
+        "rubric",
+        "rubrics",
+        "topic",
+        "topics",
+    } for segment in segments):
         return "bad_url_type:index_noise"
-    if last_segment in {"tag", "tags", "author", "authors", "search"}:
+    if last_segment in {"tag", "tags", "author", "authors", "search", "category", "rubric", "topic"}:
         return "bad_url_type:index_noise"
+    if any(segment in {"report", "reports", "market-report", "market-reports", "research"} for segment in segments[:-1]):
+        if last_segment not in {"report", "reports", "research", "publications", "insights"}:
+            return "bad_url_type:market_report"
     if _looks_like_single_article_path(segments):
         return "single_article_url"
     return None
+
+
+def _search_result_quality_gate_reason(result: dict[str, Any], *, now: datetime | None = None) -> str | None:
+    """Reject search hits that are clearly stale before fetching them.
+
+    Search APIs often return old archive pages for narrow technical topics. For
+    source discovery this is usually noise: the agent needs sources with a
+    current publication flow, not a single historical item.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff_year = now.year - max(0, int(app_config.SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE))
+    url = str(result.get("url") or "")
+    parsed = urlsplit(_normalize_candidate_url(url))
+    url_years = _years_in_text(parsed.path)
+    stale_url_years = [year for year in url_years if year < cutoff_year]
+    if stale_url_years:
+        return f"stale_search_result:url_year_{max(stale_url_years)}"
+
+    title = str(result.get("title") or "")
+    snippet = str(result.get("snippet") or "")
+    metadata_years = _years_in_text(f"{title} {snippet}")
+    if metadata_years and max(metadata_years) < cutoff_year:
+        return f"stale_search_result:metadata_year_{max(metadata_years)}"
+
+    path_segments = [segment for segment in (parsed.path or "").lower().split("/") if segment]
+    if any(segment in {"archive", "archives"} for segment in path_segments) and metadata_years:
+        currentish_years = [year for year in metadata_years if year >= cutoff_year]
+        if not currentish_years:
+            return "stale_search_result:archive"
+    return None
+
+
+def _years_in_text(text: str) -> list[int]:
+    return [int(match) for match in re.findall(r"\b20\d{2}\b", text or "")]
 
 
 def _looks_like_single_article_path(segments: list[str]) -> bool:
@@ -384,6 +446,13 @@ def _looks_like_single_article_path(segments: list[str]) -> bool:
     has_date_segment = any(re.fullmatch(r"20\d{2}", segment) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment) for segment in segments)
     slug_tokens = [token for token in re.split(r"[-_]+", last) if token]
     if has_date_segment and len(slug_tokens) >= 2:
+        return True
+    if re.fullmatch(r"\d{4,}", last) and any(
+        segment in {"news", "newsitem", "article", "articles", "press", "press-release", "press-releases"}
+        for segment in segments[:-1]
+    ):
+        return True
+    if len(slug_tokens) >= 5:
         return True
     if len(segments) >= 3 and len(slug_tokens) >= 5:
         return True
@@ -453,12 +522,66 @@ def _parse_skip_reason(parse_result: dict[str, Any] | None) -> str | None:
     if not parse_result:
         return None
     verdict = parse_result.get("verdict")
-    if verdict in {"listing_fetch_failed", "no_candidates"}:
+    if verdict in {"listing_fetch_failed", "no_candidates", "no_useful_articles", "stale_articles"}:
         return str(verdict)
     return None
 
 
-def test_parse_source(url: str, *, article_limit: int = 5) -> dict[str, Any]:
+def _coerce_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        normalized = value.strip()
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _is_stale_article_date(value: Any, *, now: datetime | None = None) -> bool:
+    published_at = _coerce_datetime(value)
+    if published_at is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    freshness_days = max(1, int(app_config.SOURCE_DISCOVERY_FRESHNESS_DAYS))
+    return published_at < now - timedelta(days=freshness_days)
+
+
+def _article_topic_gate_reason(title: str, text: str, topic: str = "") -> str | None:
+    topic_norm = (topic or "").lower().replace("ё", "е")
+    body = f"{title or ''} {text or ''}".lower().replace("ё", "е")
+    if not topic_norm:
+        return None
+
+    oil_core = (
+        "oil", "gas", "petroleum", "upstream", "oilfield", "wellbore", "reservoir",
+        "нефт", "газ", "скважин", "месторожд", "добыч",
+    )
+    drilling_terms = ("drilling", "drill", "borehole", "rig", "бурени", "буров", "скважин")
+    robot_terms = ("robot", "robotic", "autonomous", "automation", "автоматизац", "робот", "автоном")
+    frac_terms = ("fracturing", "fracking", "frac", "stimulation", "hydraulic fracturing", "грп", "гидроразрыв", "стимуляц")
+
+    def has_any(terms: tuple[str, ...]) -> bool:
+        return any(term in body for term in terms)
+
+    if any(term in topic_norm for term in ("грп", "гидроразрыв", "стимуляц")):
+        if not has_any(frac_terms):
+            return "topic_mismatch:frac_context_required"
+        return None
+
+    if any(term in topic_norm for term in ("бурени", "буров", "drilling")):
+        if not has_any(oil_core) or not has_any(drilling_terms):
+            return "topic_mismatch:oilfield_drilling_context_required"
+        if any(term in topic_norm for term in ("робот", "автоном", "automation", "robot")) and not has_any(robot_terms):
+            return "topic_mismatch:robotic_drilling_context_required"
+    return None
+
+
+def test_parse_source(url: str, *, article_limit: int = 5, topic: str = "") -> dict[str, Any]:
     """Read-only test parse of a source candidate.
 
     This does not insert articles. It only checks whether the page looks like a
@@ -519,9 +642,21 @@ def test_parse_source(url: str, *, article_limit: int = 5) -> dict[str, Any]:
             checks.append(check)
             continue
         title, published_at, raw_text = request_parser.parse_article_page(article_content, candidate.title)
+        final_published_at = published_at or candidate.published_at
+        if _is_stale_article_date(final_published_at):
+            noise_count += 1
+            check.update({
+                "verdict": "stale_article",
+                "title": title,
+                "published_at": final_published_at,
+                "text_chars": len(raw_text or ""),
+            })
+            checks.append(check)
+            continue
         pre_filter = should_keep_article(title, raw_text, source)
         text_chars = len(raw_text or "")
-        is_relevant_like = pre_filter.keep and text_chars >= app_config.MIN_ARTICLE_TEXT_CHARS
+        topic_gate_reason = _article_topic_gate_reason(title, raw_text, topic)
+        is_relevant_like = pre_filter.keep and not topic_gate_reason and text_chars >= app_config.MIN_ARTICLE_TEXT_CHARS
         if is_relevant_like:
             relevant_count += 1
             pseudo_scores.append(min(85, 45 + candidate.score * 5))
@@ -530,12 +665,13 @@ def test_parse_source(url: str, *, article_limit: int = 5) -> dict[str, Any]:
         check.update({
             "verdict": "ok" if is_relevant_like else "not_useful",
             "title": title,
-            "published_at": published_at,
+            "published_at": final_published_at,
             "text_chars": text_chars,
             "prefilter_keep": pre_filter.keep,
             "prefilter_reason": pre_filter.reason,
             "prefilter_noise": list(pre_filter.matched_noise[:5]),
             "prefilter_keywords": list(pre_filter.matched_keywords[:5]),
+            "topic_gate_reason": topic_gate_reason,
         })
         checks.append(check)
 
@@ -549,7 +685,14 @@ def test_parse_source(url: str, *, article_limit: int = 5) -> dict[str, Any]:
         "duplicate_count": duplicate_count,
         "noise_count": noise_count,
     }
-    result["verdict"] = "ok" if relevant_count else ("no_candidates" if not candidates else "no_useful_articles")
+    if relevant_count:
+        result["verdict"] = "ok"
+    elif not candidates:
+        result["verdict"] = "no_candidates"
+    elif checks and all(item.get("verdict") == "stale_article" for item in checks):
+        result["verdict"] = "stale_articles"
+    else:
+        result["verdict"] = "no_useful_articles"
     return result
 
 
@@ -780,6 +923,19 @@ def _compact_source_evidence(evidence: list[dict[str, Any]], *, limit: int = 8) 
 
 def _offline_queries(topic: str, limit: int, *, strategy: str = "balanced") -> list[str]:
     strategy = (strategy or "balanced").strip().lower()
+    topic_norm = (topic or "").lower().replace("ё", "е")
+    if any(term in topic_norm for term in ("грп", "гидроразрыв", "стимуляц")):
+        base = [
+            "hydraulic fracturing technology newsroom oilfield",
+            "frac stimulation technology press release upstream",
+            "well stimulation hydraulic fracturing news oil gas",
+            "ГРП гидроразрыв пласта технологии новости нефтесервис",
+            "технологии ГРП нефтегаз пресс-релиз",
+            "hydraulic fracturing innovation oilfield news",
+            "frac fleet automation stimulation technology news",
+            "proppant hydraulic fracturing technology upstream",
+        ]
+        return base[:limit]
     strategy_queries = {
         "newsroom": [
             f"{topic} newsroom press release oil gas",
@@ -811,6 +967,23 @@ def _offline_queries(topic: str, limit: int, *, strategy: str = "balanced") -> l
         f"{topic} energy industry newsroom",
     ]
     return base[:limit]
+
+
+def _topic_search_context(topic: str) -> str:
+    topic_norm = (topic or "").lower().replace("ё", "е")
+    if any(term in topic_norm for term in ("грп", "гидроразрыв", "стимуляц")):
+        return (
+            "domain glossary: ГРП means гидроразрыв пласта / hydraulic fracturing / frac / "
+            "well stimulation in oilfield services. Avoid gas distribution station, "
+            "Gas Rising Pressure, fiberglass GRP, plastics, and civil engineering meanings."
+        )
+    if any(term in topic_norm for term in ("бурени", "буров")):
+        return (
+            "domain glossary: бурение means oilfield well drilling, drilling rigs, wellbore "
+            "construction, upstream drilling operations. Avoid construction drilling, data "
+            "center concrete drilling, mining-only drilling and generic factory drilling."
+        )
+    return ""
 
 
 def _candidate_type(url: str) -> str:
@@ -1214,9 +1387,27 @@ def _rank_search_results(results: list[dict[str, Any]], learning_policy: dict[st
             score += 120.0
         score += float(query_scores.get(query) or 0) * 0.6
         score += float(domain_scores.get(domain) or 0) * 0.4
+        score += _freshness_rank_bonus(item)
         ranked.append((score, -index, item))
     ranked.sort(reverse=True, key=lambda row: (row[0], row[1]))
     return [item for _, _, item in ranked]
+
+
+def _freshness_rank_bonus(result: dict[str, Any], *, now: datetime | None = None) -> float:
+    now = now or datetime.now(timezone.utc)
+    years = _years_in_text(" ".join([
+        str(result.get("url") or ""),
+        str(result.get("title") or ""),
+        str(result.get("snippet") or ""),
+    ]))
+    if not years:
+        return 0.0
+    newest = max(years)
+    if newest >= now.year:
+        return 12.0
+    if newest == now.year - 1:
+        return 5.0
+    return -12.0
 
 
 def _merge_queries(primary: list[str], fallback: list[str], *, limit: int, exclude: set[str] | None = None) -> list[str]:
@@ -1258,6 +1449,9 @@ def _persist_query_memory(
         query = str(item.get("query") or "").strip()
         if not query:
             continue
+        candidate = by_url.get(str(item.get("url") or ""))
+        if not candidate:
+            continue
         bucket = by_query.setdefault(query, {
             "found_candidates": 0,
             "relevant_articles": 0,
@@ -1265,7 +1459,6 @@ def _persist_query_memory(
             "avg_scores": [],
         })
         bucket["found_candidates"] += 1
-        candidate = by_url.get(str(item.get("url") or "")) or {}
         bucket["relevant_articles"] += int(candidate.get("relevant_articles") or 0)
         bucket["tested_articles"] += int(candidate.get("tested_articles") or 0)
         if candidate.get("avg_score") is not None:
@@ -1333,7 +1526,16 @@ def _candidate_urls(
         domain = repository.normalize_domain(url).lower()
         return source_inventory.get("by_domain", {}).get(domain)
 
-    def add_item(url: str, reason: str, query: str = "", *, bypass_cooldown: bool = False) -> None:
+    def add_item(
+        url: str,
+        reason: str,
+        query: str = "",
+        *,
+        title: str = "",
+        snippet: str = "",
+        provider: str = "",
+        bypass_cooldown: bool = False,
+    ) -> None:
         normalized_url = _normalize_candidate_url(url)
         key = _url_key(normalized_url)
         if not normalized_url or key in seen:
@@ -1367,7 +1569,14 @@ def _candidate_urls(
             return
         if query_key and domain_key and not bypass_cooldown and _combo_policy_key(query_key, domain_key) in blocked_combo_keys:
             return
-        items.append({"url": normalized_url, "reason": reason, "query": query})
+        items.append({
+            "url": normalized_url,
+            "reason": reason,
+            "query": query,
+            "title": title,
+            "snippet": snippet,
+            "provider": provider,
+        })
 
     for url in seed_urls:
         add_item(str(url), "Seed URL supplied by operator", bypass_cooldown=True)
@@ -1379,7 +1588,14 @@ def _candidate_urls(
         if domain and domain in rejected_domains:
             continue
         reason = f"Search result for query: {result.get('query')}" if result.get("query") else "Search result"
-        add_item(normalized, reason, str(result.get("query") or ""))
+        add_item(
+            normalized,
+            reason,
+            str(result.get("query") or ""),
+            title=str(result.get("title") or ""),
+            snippet=str(result.get("snippet") or ""),
+            provider=str(result.get("provider") or ""),
+        )
         if len(items) >= limit:
             break
     return items[:limit], skipped_existing, skipped_cooldown

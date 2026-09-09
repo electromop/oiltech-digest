@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -225,6 +227,198 @@ def cmd_translate(args: argparse.Namespace) -> None:
         f"translate-titles: обработано={stats['processed']}, переведено AI={stats['ai']}, "
         f"ошибок={stats['errors']}"
     )
+
+
+def _terminology_audit_rows(limit: int, article_id: int | None = None) -> list[dict]:
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing.domain_glossary import terminology_warnings
+
+    rows = []
+    for article in repository.list_article_texts_for_terminology_audit(limit=limit, article_id=article_id):
+        for field in ("title_ru", "summary"):
+            value = article.get(field) or ""
+            warnings = terminology_warnings(value, article)
+            if warnings:
+                rows.append({
+                    "article_id": int(article["id"]),
+                    "field": field,
+                    "title": article.get("title"),
+                    "source": article.get("source_name"),
+                    "warnings": warnings,
+                    "text": value,
+                })
+    return rows
+
+
+def cmd_audit_terminology(args: argparse.Namespace) -> None:
+    rows = _terminology_audit_rows(args.limit, article_id=args.article_id)
+    if args.json:
+        print(json.dumps({"issues": len(rows), "rows": rows}, ensure_ascii=False, default=str))
+        return
+    print(f"terminology-audit: проблемных полей={len(rows)}")
+    for row in rows[: args.show]:
+        warning = row["warnings"][0]
+        print(
+            f"  article={row['article_id']} field={row['field']} source={row.get('source') or '—'} "
+            f"bad={warning['forbidden_ru']} -> {warning['preferred_ru']}"
+        )
+        print(f"    {row['text'][:220]}")
+
+
+def cmd_repair_terminology(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing.domain_glossary import enforce_glossary_text
+
+    scanned = changed = 0
+    changes = []
+    for article in repository.list_article_texts_for_terminology_audit(limit=args.limit, article_id=args.article_id):
+        scanned += 1
+        updates: dict[str, str] = {}
+        for field in ("title_ru", "summary"):
+            before = article.get(field)
+            if not before:
+                continue
+            after = enforce_glossary_text(str(before), article)
+            if after != before:
+                updates[field] = after
+                changes.append({
+                    "article_id": int(article["id"]),
+                    "field": field,
+                    "before": before,
+                    "after": after,
+                })
+        if updates:
+            changed += len(updates)
+            if not args.dry_run:
+                repository.update_article_terminology_texts(
+                    int(article["id"]),
+                    summary=updates.get("summary"),
+                    title_ru=updates.get("title_ru"),
+                )
+    if args.json:
+        print(json.dumps({"dry_run": args.dry_run, "scanned": scanned, "changed_fields": changed, "changes": changes[: args.show]}, ensure_ascii=False, default=str))
+        return
+    suffix = " [dry-run]" if args.dry_run else ""
+    print(f"terminology-repair{suffix}: статей проверено={scanned}, полей к исправлению={changed}")
+    for item in changes[: args.show]:
+        print(f"  article={item['article_id']} field={item['field']}")
+        print(f"    before: {str(item['before'])[:180]}")
+        print(f"    after:  {str(item['after'])[:180]}")
+
+
+def cmd_validate_terminology(args: argparse.Namespace) -> None:
+    from oiltech_digest.processing.domain_glossary import (
+        GLOSSARY,
+        PHRASE_REPAIRS,
+        glossary_golden_cases,
+        validate_glossary,
+    )
+
+    errors = validate_glossary()
+    payload = {
+        "ok": not errors,
+        "terms": len(GLOSSARY),
+        "phrase_repairs": len(PHRASE_REPAIRS),
+        "golden_cases": len(glossary_golden_cases()),
+        "errors": errors,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, default=str))
+        return
+    print(
+        f"terminology-validate: ok={payload['ok']} terms={payload['terms']} "
+        f"phrase_repairs={payload['phrase_repairs']} golden_cases={payload['golden_cases']}"
+    )
+    for error in errors:
+        print(f"  - {error}")
+    if errors:
+        raise SystemExit(1)
+
+
+def cmd_eval_terminology(args: argparse.Namespace) -> None:
+    from oiltech_digest.processing.domain_glossary import run_terminology_eval
+
+    report = run_terminology_eval(limit=args.limit)
+    rows = report["rows"]
+    if args.csv_path:
+        csv_path = Path(args.csv_path)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=[
+                    "number",
+                    "source",
+                    "case",
+                    "original_en",
+                    "before",
+                    "after",
+                    "must_have",
+                    "must_not",
+                    "status",
+                    "issues",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+    if args.markdown_path:
+        markdown_path = Path(args.markdown_path)
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        sample_rows = rows[: min(args.show, len(rows))]
+        table = [
+            "| # | Кейс | Оригинал EN | Было плохо | Стало хорошо | Статус |",
+            "|---:|---|---|---|---|---|",
+        ]
+        for row in sample_rows:
+            table.append(
+                "| {number} | {case} | {original_en} | {before} | {after} | {status} |".format(
+                    **{key: _markdown_cell(value) for key, value in row.items()}
+                )
+            )
+        markdown_path.write_text(
+            "\n".join(
+                [
+                    "# Отчет по нефтегазовой терминологии",
+                    "",
+                    "## Итог",
+                    "",
+                    f"- Проверено примеров: {report['total']}",
+                    f"- Успешно: {report['passed']}",
+                    f"- Ошибок: {report['failed']}",
+                    "",
+                    "## Что сделано",
+                    "",
+                    "- Нефтегазовый словарь вынесен в `oiltech_digest/processing/domain_glossary.json`.",
+                    "- Summary и перевод заголовков получают компактный блок релевантных терминов в prompt.",
+                    "- После ответа модели включен детерминированный слой исправления плохих терминов.",
+                    "- Сборка дайджеста дополнительно нормализует старые summary/title перед PDF/DOCX/HTML.",
+                    "- Добавлены команды `validate-terminology`, `audit-terminology`, `repair-terminology`, `eval-terminology`.",
+                    "- Добавлены golden-кейсы и автоматическая проверка словаря в тестах.",
+                    "",
+                    "## Примеры",
+                    "",
+                    *table,
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, default=str))
+        return
+    print(
+        f"terminology-eval: total={report['total']} passed={report['passed']} failed={report['failed']}"
+    )
+    if args.csv_path:
+        print(f"csv: {args.csv_path}")
+    if args.markdown_path:
+        print(f"markdown: {args.markdown_path}")
+    if report["failed"]:
+        raise SystemExit(1)
+
+
+def _markdown_cell(value: object) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
 
 
 def cmd_tag(args: argparse.Namespace) -> None:
@@ -1226,6 +1420,101 @@ def cmd_source_candidate_approve(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_seed_signal_topics(args: argparse.Namespace) -> None:
+    from oiltech_digest.signal_discovery import seed_default_radar_topics
+
+    changed = seed_default_radar_topics()
+    print(f"seed-signal-topics: topics={changed}")
+
+
+def cmd_discover_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest.signal_discovery import SignalDiscoveryConfig, discover_signals
+
+    result = discover_signals(SignalDiscoveryConfig(
+        topic=args.topic,
+        days=args.days,
+        limit=args.limit,
+        min_score=args.min_score,
+        offline=args.offline,
+        dry_run=args.dry_run,
+        max_signals=args.max_signals,
+        web_search=args.web,
+        web_only=args.web_only,
+        web_query_limit=args.web_query_limit,
+    ))
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    suffix = " [dry-run]" if result["dry_run"] else ""
+    print(
+        f"discover-signals{suffix}: topics={len(result['topics'])} "
+        f"signals={len(result['signals'])} days={result['days']} "
+        f"offline={result['offline']} web={result.get('web_search')} web_only={result.get('web_only')}"
+    )
+    if not result["signals"]:
+        print("  сигналов не найдено: расширь topic/days или снизь --min-score")
+        return
+    for item in result["signals"]:
+        print(
+            f"  [{item['maturity']}] score={item['score']:.1f} "
+            f"evidence={item.get('evidence_count', 0)} theme={item['theme']}"
+        )
+        print(f"    {item['title']}")
+        if item.get("thesis"):
+            print(f"    thesis: {item['thesis'][:220]}")
+
+
+def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    payload = {
+        "topic": args.topic,
+        "days": args.days,
+        "limit": args.limit,
+        "min_score": args.min_score,
+        "offline": args.offline,
+        "dry_run": args.dry_run,
+        "max_signals": args.max_signals,
+        "web_search": args.web,
+        "web_only": args.web_only,
+        "web_query_limit": args.web_query_limit,
+    }
+    job = repository.create_background_job(
+        "signal_discovery",
+        payload,
+        queue_name="ai" if not args.offline else "default",
+        execution_region="ru",
+        capability="openai" if not args.offline else None,
+    )
+    print(f"enqueue-signal-discovery: job id={job['id']} queue={job['queue_name']}")
+
+
+def cmd_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    rows = repository.list_signals(maturity=args.maturity, theme=args.theme, limit=args.limit)
+    if args.json:
+        payload = []
+        for row in rows:
+            evidence = repository.list_signal_evidence(int(row["id"]), limit=args.evidence_limit)
+            payload.append({**row, "evidence": evidence})
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return
+    if not rows:
+        print("signals: пусто")
+        return
+    for row in rows:
+        print(
+            f"#{row['id']} [{row['maturity']}] score={float(row['score']):.1f} "
+            f"evidence={row['evidence_count']} theme={row['theme']}"
+        )
+        print(f"  {row['title']}")
+        if row.get("thesis"):
+            print(f"  {str(row['thesis'])[:220]}")
+        for evidence in repository.list_signal_evidence(int(row["id"]), limit=args.evidence_limit):
+            print(f"    - {evidence.get('publisher') or 'source'}: {evidence['source_url']}")
+
+
 def cmd_signal_feedback(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -1324,7 +1613,12 @@ def cmd_discover_sources(args: argparse.Namespace) -> None:
     for query in result["queries"]:
         print(f"  - {query}")
     print("\nПоиск:")
-    print(f"  status={result['search']['status']} reason={result['search']['reason']}")
+    search = result["search"]
+    reason = f" reason={search['reason']}" if search.get("reason") else ""
+    print(
+        f"  status={search.get('status')} provider={search.get('provider') or '-'} "
+        f"results={len(search.get('results') or [])}{reason}"
+    )
     if result["topic_gaps"]:
         print("\nТемы с дефицитом:")
         for gap in result["topic_gaps"][:5]:
@@ -1591,6 +1885,33 @@ def build_parser() -> argparse.ArgumentParser:
     add_ai_args(p_translate)
     p_translate.set_defaults(func=cmd_translate)
 
+    p_audit_terms = sub.add_parser("audit-terminology", help="найти плохие нефтегазовые термины в сохранённых title_ru/summary")
+    p_audit_terms.add_argument("--limit", type=int, default=500)
+    p_audit_terms.add_argument("--article-id", type=int, default=None)
+    p_audit_terms.add_argument("--show", type=int, default=30)
+    p_audit_terms.add_argument("--json", action="store_true")
+    p_audit_terms.set_defaults(func=cmd_audit_terminology)
+
+    p_repair_terms = sub.add_parser("repair-terminology", help="исправить плохие нефтегазовые термины в сохранённых title_ru/summary без OpenAI")
+    p_repair_terms.add_argument("--limit", type=int, default=500)
+    p_repair_terms.add_argument("--article-id", type=int, default=None)
+    p_repair_terms.add_argument("--show", type=int, default=30)
+    p_repair_terms.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_repair_terms.add_argument("--json", action="store_true")
+    p_repair_terms.set_defaults(func=cmd_repair_terminology)
+
+    p_validate_terms = sub.add_parser("validate-terminology", help="проверить нефтегазовый словарь, regex и golden-кейсы")
+    p_validate_terms.add_argument("--json", action="store_true")
+    p_validate_terms.set_defaults(func=cmd_validate_terminology)
+
+    p_eval_terms = sub.add_parser("eval-terminology", help="прогнать оценку нефтегазовой терминологии и собрать отчет")
+    p_eval_terms.add_argument("--limit", type=int, default=100)
+    p_eval_terms.add_argument("--show", type=int, default=30)
+    p_eval_terms.add_argument("--csv-path", default="docs/translation_terminology_100_eval.csv")
+    p_eval_terms.add_argument("--markdown-path", default="docs/translation_terminology_work_report.md")
+    p_eval_terms.add_argument("--json", action="store_true")
+    p_eval_terms.set_defaults(func=cmd_eval_terminology)
+
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)
     p_tag.set_defaults(func=cmd_tag)
@@ -1804,6 +2125,50 @@ def build_parser() -> argparse.ArgumentParser:
     p_source_candidate_approve.add_argument("--priority", type=float, default=1.0)
     p_source_candidate_approve.add_argument("--network-region", choices=["auto", "ru", "external"], default="auto")
     p_source_candidate_approve.set_defaults(func=cmd_source_candidate_approve)
+
+    sub.add_parser("seed-signal-topics", help="создать дефолтные темы радара сигналов").set_defaults(func=cmd_seed_signal_topics)
+
+    p_discover_signals = sub.add_parser("discover-signals", help="найти технологические сигналы поверх обработанных статей")
+    p_discover_signals.add_argument("--topic", default=None, help="тема радара; по умолчанию все активные темы")
+    p_discover_signals.add_argument("--days", type=int, default=14)
+    p_discover_signals.add_argument("--limit", type=int, default=80, help="сколько evidence-статей взять на тему")
+    p_discover_signals.add_argument("--min-score", type=float, default=40)
+    p_discover_signals.add_argument("--max-signals", type=int, default=10)
+    p_discover_signals.add_argument("--web", action="store_true",
+                                    help="искать evidence через web search provider, без привязки к sources")
+    p_discover_signals.add_argument("--web-only", action="store_true",
+                                    help="использовать только web evidence и не брать статьи из локальных sources")
+    p_discover_signals.add_argument("--web-query-limit", type=int, default=8,
+                                    help="сколько поисковых запросов сделать на тему в --web режиме")
+    p_discover_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
+                                    help="offline heuristic вместо LLM-judge")
+    p_discover_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True,
+                                    help="не писать signals/signal_evidence в БД")
+    p_discover_signals.add_argument("--json", action="store_true")
+    p_discover_signals.set_defaults(func=cmd_discover_signals)
+
+    p_enqueue_signals = sub.add_parser("enqueue-signal-discovery", help="поставить радар сигналов в background_jobs")
+    p_enqueue_signals.add_argument("--topic", default=None)
+    p_enqueue_signals.add_argument("--days", type=int, default=14)
+    p_enqueue_signals.add_argument("--limit", type=int, default=80)
+    p_enqueue_signals.add_argument("--min-score", type=float, default=40)
+    p_enqueue_signals.add_argument("--max-signals", type=int, default=10)
+    p_enqueue_signals.add_argument("--web", action="store_true",
+                                   help="искать evidence через web search provider, без привязки к sources")
+    p_enqueue_signals.add_argument("--web-only", action="store_true",
+                                   help="использовать только web evidence и не брать статьи из локальных sources")
+    p_enqueue_signals.add_argument("--web-query-limit", type=int, default=8)
+    p_enqueue_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True)
+    p_enqueue_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
+    p_enqueue_signals.set_defaults(func=cmd_enqueue_signal_discovery)
+
+    p_signals = sub.add_parser("signals", help="список найденных технологических сигналов")
+    p_signals.add_argument("--maturity", choices=["watch", "shortlist", "proven", "reject"], default=None)
+    p_signals.add_argument("--theme", default=None)
+    p_signals.add_argument("--limit", type=int, default=50)
+    p_signals.add_argument("--evidence-limit", type=int, default=3)
+    p_signals.add_argument("--json", action="store_true")
+    p_signals.set_defaults(func=cmd_signals)
 
     p_signal_feedback = sub.add_parser("signal-feedback", help="записать событие обратной связи по сигналу")
     p_signal_feedback.add_argument("article_id", type=int)

@@ -63,3 +63,23 @@ def test_source_health_keeps_unknown_dates_on_more_testing():
     assert health["recommended_action"] == "test_more"
     assert health["verdict"] == "promising_needs_more_data"
     assert "малая выборка" in health["risks"]
+
+
+def test_source_health_rejects_critical_unknown_source():
+    health = assess_source_health(
+        {
+            "tested_articles": 2,
+            "processed_articles": 0,
+            "relevant_articles": 0,
+            "high_score_articles": 0,
+            "avg_score": None,
+            "duplicate_count": 0,
+            "noise_count": 0,
+        },
+        {"recommended_action": "test_more", "reason": "base"},
+        {"quality_label": "шумный", "usefulness_score": 0, "confidence": 0.45},
+        {"regularity_label": "unknown", "dated_articles": 0, "archive_suspected": True},
+    )
+
+    assert health["recommended_action"] == "reject"
+    assert health["verdict"] == "weak_source"

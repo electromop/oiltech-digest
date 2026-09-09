@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
 import re
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -16,60 +20,33 @@ class GlossaryTerm:
     forbidden_patterns: tuple[str, ...] = ()
 
 
-GLOSSARY: tuple[GlossaryTerm, ...] = (
-    GlossaryTerm(("hydraulic fracturing", "fracking", "fracing", "frac stimulation", "hydraulic stimulation", "electric frac", "frac fleet"), "ГРП", "гидроразрыв пласта", ("фракинг",), "Для дайджеста используем отраслевой термин ГРП.", forbidden_patterns=(r"\bфрак(?:инг|ингу|ингом|инга|инге|ингов|инги|овый|овые|овая|овое)\b",)),
-    GlossaryTerm(("well completion", "completion", "completions", "well completions", "intelligent completion", "smart completion"), "заканчивание скважины", None, ("завершение скважины", "завершения скважины", "завершении скважины"), "Completion в контексте скважин переводится как заканчивание."),
-    GlossaryTerm(("workover", "workovers", "well workover", "workover rig"), "КРС", "капитальный ремонт скважин", ("ворковер",), "Workover в нефтегазовом контексте — КРС.", forbidden_patterns=(r"\bворковер(?:а|ов|ом|е|ы)?\b",)),
-    GlossaryTerm(("enhanced oil recovery", "eor", "improved oil recovery", "ior"), "МУН", "методы увеличения нефтеотдачи", ("улучшенное извлечение нефти",), "EOR/IOR в дайджесте нормализуем как МУН."),
-    GlossaryTerm(("artificial lift", "esp", "electric submersible pump", "rod lift", "gas lift"), "механизированная добыча", None, ("искусственный лифт",)),
-    GlossaryTerm(("drilling fluid", "drilling mud", "mud system", "mud motor"), "буровой раствор", None, ("буровая грязь",)),
-    GlossaryTerm(("managed pressure drilling", "mpd"), "бурение с управляемым давлением"),
-    GlossaryTerm(("measurement while drilling", "mwd"), "MWD", "измерения в процессе бурения"),
-    GlossaryTerm(("logging while drilling", "lwd"), "LWD", "каротаж в процессе бурения"),
-    GlossaryTerm(("coiled tubing", "ct intervention"), "колтюбинг", None, ("гибкая труба", "свернутая труба"), "В отраслевом тексте предпочтительно колтюбинг."),
-    GlossaryTerm(("proppant", "proppants"), "проппант"),
-    GlossaryTerm(("flowback", "flowback fluid"), "жидкость обратного притока", None, ("флоубэк",), forbidden_patterns=(r"\bфлоубэк(?:а|ом|е)?\b",)),
-    GlossaryTerm(("produced water",), "попутно добываемая вода"),
-    GlossaryTerm(("subsea", "subsea production", "subsea tieback"), "подводная добыча", None, ("сабси",), forbidden_patterns=(r"\bсабси\b",)),
-    GlossaryTerm(("offshore", "offshore drilling", "offshore production"), "шельфовый", None, ("оффшорный", "оффшоре", "оффшора"), "В нефтегазовом контексте обычно шельфовый/морской.", forbidden_patterns=(r"\bоффшор(?:ный|ная|ное|ные|е|а|ом)?\b",)),
-    GlossaryTerm(("upstream",), "разведка и добыча", None, ("апстрим",)),
-    GlossaryTerm(("midstream",), "транспортировка и хранение", None, ("мидстрим",)),
-    GlossaryTerm(("downstream",), "переработка и сбыт", None, ("даунстрим",)),
-    GlossaryTerm(("liquefied natural gas", "lng"), "СПГ", "сжиженный природный газ"),
-    GlossaryTerm(("carbon capture and storage", "ccs"), "CCS", "улавливание и хранение CO2"),
-    GlossaryTerm(("carbon capture utilization and storage", "ccus"), "CCUS", "улавливание, использование и хранение CO2"),
-    GlossaryTerm(("carbon dioxide", "co2"), "CO2", "диоксид углерода"),
-    GlossaryTerm(("drill bit", "drilling bit"), "буровое долото"),
-    GlossaryTerm(("bottomhole assembly", "bha"), "КНБК", "компоновка низа бурильной колонны"),
-    GlossaryTerm(("rate of penetration", "rop"), "механическая скорость проходки"),
-    GlossaryTerm(("wellbore", "well bore"), "ствол скважины", None, ("скважинный ствол",)),
-    GlossaryTerm(("casing", "casing string"), "обсадная колонна"),
-    GlossaryTerm(("cementing", "well cementing"), "цементирование скважины"),
-    GlossaryTerm(("perforation", "perforating"), "перфорация"),
-    GlossaryTerm(("stimulation", "well stimulation"), "интенсификация притока", None, ("стимуляция скважины",), forbidden_patterns=(r"\bстимуляци(?:я|и|ю|ей)\s+скважин(?:ы|е|ой)?\b",)),
-    GlossaryTerm(("reservoir", "reservoir management"), "пласт", None, ("резервуар",), "Reservoir в добыче — пласт, не резервуар.", forbidden_patterns=(r"\bрезервуар(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b",)),
-    GlossaryTerm(("digital twin", "digital twins"), "цифровой двойник"),
-    GlossaryTerm(("predictive maintenance",), "предиктивное обслуживание"),
-    GlossaryTerm(("condition monitoring",), "мониторинг состояния оборудования"),
-)
+GLOSSARY_PATH = Path(os.environ.get("DOMAIN_GLOSSARY_PATH") or Path(__file__).with_name("domain_glossary.json"))
+_GLOSSARY_DATA = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
 
-PHRASE_REPAIRS: tuple[tuple[str, str], ...] = (
-    (r"\bпров[её]л(?:а|и)?\s+стимуляци(?:ю|и)\s+скважин(?:ы|е|ой)?\b", "провел интенсификацию притока"),
-    (r"\bстимуляци(?:я|и|ю|ей)\s+скважин(?:ы|е|ой)?\b", "интенсификация притока"),
-    (r"\bдля\s+резервуар(?:а|ов)?\b", "для пласта"),
-    (r"\bв\s+резервуар(?:е|ах)?\b", "в пласте"),
-    (r"\bиз\s+резервуар(?:а|ов)?\b", "из пласта"),
-    (r"\bрезервуар(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b", "пласт"),
-    (r"\bна\s+оффшор(?:е|е)?\b", "на шельфе"),
-    (r"\bоффшорн(?:ый|ая|ое|ые)\s+проект\b", "шельфовый проект"),
-    (r"\bоффшорн(?:ая)\s+добыч[а-я]*\b", "шельфовая добыча"),
-    (r"\bоффшорн(?:ое)\s+бурени[а-я]*\b", "шельфовое бурение"),
-    (r"\bпосле\s+фрак(?:инга|инге|ингом)\b", "после ГРП"),
-    (r"\bфрак(?:инговый|инговая|инговое|инговые)\s+флот(?:ы|ов|ами|ом)?\b", "флот ГРП"),
-    (r"\bэлектрическ(?:ий|ая|ое|ие)\s+фрак(?:инг|инга|инговый|инговая|инговое|инговые)?\b", "электрический флот ГРП"),
-    (r"\bфлоубэк(?:а|ом|е)?\s+анализ\b", "анализ жидкости обратного притока"),
-    (r"\bворковер(?:ов|а)?\s+программ[а-я]*\b", "программа КРС"),
-    (r"\bзавершени(?:е|я|ю|ем|и)\s+скважин(?:ы|е|ой)?\b", "заканчивание скважины"),
+
+def _tuple(value: Any) -> tuple[str, ...]:
+    return tuple(str(item) for item in (value or []) if str(item).strip())
+
+
+def _load_glossary_terms(data: dict[str, Any]) -> tuple[GlossaryTerm, ...]:
+    return tuple(
+        GlossaryTerm(
+            source_terms=_tuple(item.get("source_terms")),
+            preferred_ru=str(item.get("preferred_ru") or "").strip(),
+            full_ru=str(item["full_ru"]).strip() if item.get("full_ru") else None,
+            forbidden_ru=_tuple(item.get("forbidden_ru")),
+            note=str(item.get("note") or "").strip(),
+            forbidden_patterns=_tuple(item.get("forbidden_patterns")),
+        )
+        for item in data.get("terms", [])
+    )
+
+
+GLOSSARY: tuple[GlossaryTerm, ...] = _load_glossary_terms(_GLOSSARY_DATA)
+PHRASE_REPAIRS: tuple[tuple[str, str], ...] = tuple(
+    (str(item[0]), str(item[1]))
+    for item in _GLOSSARY_DATA.get("phrase_repairs", [])
+    if isinstance(item, list | tuple) and len(item) == 2
 )
 
 
@@ -132,6 +109,125 @@ def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
     return warnings
 
 
+def validate_glossary() -> list[str]:
+    errors = []
+    seen_source_terms: set[str] = set()
+    seen_forbidden_terms: set[str] = set()
+    if not GLOSSARY:
+        errors.append("terms: пустой словарь")
+    if not PHRASE_REPAIRS:
+        errors.append("phrase_repairs: пустой список фразовых исправлений")
+    for index, term in enumerate(GLOSSARY, start=1):
+        prefix = f"terms[{index}]"
+        if not term.source_terms:
+            errors.append(f"{prefix}: нет source_terms")
+        if not term.preferred_ru:
+            errors.append(f"{prefix}: нет preferred_ru")
+        for source in term.source_terms:
+            key = source.lower()
+            if key in seen_source_terms:
+                errors.append(f"{prefix}: дубль source_terms '{source}'")
+            seen_source_terms.add(key)
+        for forbidden in term.forbidden_ru:
+            key = forbidden.lower()
+            if key in seen_forbidden_terms:
+                errors.append(f"{prefix}: дубль forbidden_ru '{forbidden}'")
+            seen_forbidden_terms.add(key)
+        for pattern in term.forbidden_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                errors.append(f"{prefix}: плохая forbidden_pattern '{pattern}': {exc}")
+    for index, (pattern, _replacement) in enumerate(PHRASE_REPAIRS, start=1):
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            errors.append(f"phrase_repairs[{index}]: плохая regex '{pattern}': {exc}")
+    for index, case in enumerate(glossary_golden_cases(), start=1):
+        for field in ("name", "article", "bad", "must_have", "must_not"):
+            if field not in case:
+                errors.append(f"golden_cases[{index}]: нет поля {field}")
+    return errors
+
+
+def terminology_eval_cases(limit: int = 100) -> list[dict[str, object]]:
+    cases: list[dict[str, object]] = []
+    for case in glossary_golden_cases():
+        cases.append({**case, "source": "golden"})
+
+    templates = (
+        "Материал использует термин {bad} в описании технологии.",
+        "В заголовке остался плохой перевод: {bad}.",
+        "Для дайджеста нужно заменить {bad} на отраслевой термин.",
+        "AI-суть содержит некорректную формулировку {bad}.",
+    )
+    for term in GLOSSARY:
+        if not term.forbidden_ru:
+            continue
+        context = {
+            "title": f"{term.source_terms[0]} technology update",
+            "raw_text": f"The article discusses {term.source_terms[0]} in oil and gas operations.",
+            "language": "en",
+        }
+        for forbidden in term.forbidden_ru:
+            for template in templates:
+                cases.append(
+                    {
+                        "name": f"{term.source_terms[0]} / {forbidden}",
+                        "article": context,
+                        "bad": template.format(bad=forbidden),
+                        "must_have": [term.preferred_ru],
+                        "must_not": [forbidden],
+                        "source": "generated",
+                    }
+                )
+                if len(cases) >= limit:
+                    return cases
+    return cases[:limit]
+
+
+def run_terminology_eval(limit: int = 100) -> dict[str, object]:
+    rows = []
+    for index, case in enumerate(terminology_eval_cases(limit=limit), start=1):
+        article = case["article"]
+        before = str(case["bad"])
+        after = enforce_glossary_text(before, article)
+        after_lower = after.lower()
+        missing = [term for term in case["must_have"] if str(term).lower() not in after_lower]
+        forbidden = [term for term in case["must_not"] if str(term).lower() in after_lower]
+        warnings = terminology_warnings(after, article)
+        ok = not missing and not forbidden and not warnings
+        rows.append(
+            {
+                "number": index,
+                "source": case.get("source") or "",
+                "case": case.get("name") or "",
+                "original_en": (article.get("raw_text") or article.get("title") or "") if isinstance(article, dict) else "",
+                "before": before,
+                "after": after,
+                "must_have": ", ".join(str(item) for item in case["must_have"]),
+                "must_not": ", ".join(str(item) for item in case["must_not"]),
+                "status": "ok" if ok else "fail",
+                "issues": "; ".join(
+                    [*(f"missing={item}" for item in missing), *(f"forbidden={item}" for item in forbidden)]
+                    + [f"warning={item['forbidden_ru']}" for item in warnings]
+                ),
+            }
+        )
+    passed = sum(1 for row in rows if row["status"] == "ok")
+    return {
+        "total": len(rows),
+        "passed": passed,
+        "failed": len(rows) - passed,
+        "rows": rows,
+    }
+
+
+def glossary_golden_cases() -> list[dict[str, object]]:
+    """Regression set for the terminology layer."""
+    return list(_GLOSSARY_DATA.get("golden_cases", []))
+
+
 def _article_text(article: dict) -> str:
     return " ".join(
         str(article.get(field) or "")
@@ -165,10 +261,9 @@ def _polish_repaired_phrases(text: str) -> str:
 
 
 def _capitalize_sentence_starts(text: str) -> str:
-    def repl(match: re.Match[str]) -> str:
-        return f"{match.group(1)}{match.group(2).upper()}"
-
-    return re.sub(r"(^|[.!?]\s+)([а-яё])", repl, text)
+    if not text or not re.match(r"[а-яё]", text[0], flags=re.I):
+        return text
+    return text[0].upper() + text[1:]
 
 
 def _contains_term(text: str, term: str) -> bool:

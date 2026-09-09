@@ -343,14 +343,26 @@ def relevance_article(article: dict, client) -> AIResponse:
     # обязан притягивать любую статью к нефтегазу, и подача его сути на вход гейта
     # давала самосбывающуюся релевантность (мусор проходил). Модель/effort — отдельные,
     # обычно сильнее основных: вызов дешёвый, цена ошибки высокая.
-    return client.complete_json(
-        RELEVANCE_INSTRUCTIONS,
-        _relevance_prompt(article),
-        RELEVANCE_SCHEMA,
-        max_output_tokens=400,
-        model=config.OPENAI_RELEVANCE_MODEL,
-        reasoning_effort=config.OPENAI_RELEVANCE_REASONING,
-    )
+    try:
+        return client.complete_json(
+            RELEVANCE_INSTRUCTIONS,
+            _relevance_prompt(article),
+            RELEVANCE_SCHEMA,
+            max_output_tokens=2500,
+            model=config.OPENAI_RELEVANCE_MODEL,
+            reasoning_effort=config.OPENAI_RELEVANCE_REASONING,
+        )
+    except AIClientError as exc:
+        if "max_output_tokens" not in str(exc):
+            raise
+        return client.complete_json(
+            RELEVANCE_INSTRUCTIONS,
+            _relevance_prompt(article, text_limit=1500),
+            RELEVANCE_SCHEMA,
+            max_output_tokens=2500,
+            model=config.OPENAI_RELEVANCE_MODEL,
+            reasoning_effort="minimal",
+        )
 
 
 def translate_article(article: dict, client) -> AIResponse:
@@ -524,7 +536,7 @@ def _article_prompt(article: dict) -> str:
     return f"{base}\n\n{glossary}" if glossary else base
 
 
-def _relevance_prompt(article: dict) -> str:
+def _relevance_prompt(article: dict, *, text_limit: int = 6000) -> str:
     """Вход гейта релевантности — БЕЗ AI-сути (намеренно): только сырые поля статьи,
     чтобы суждение шло по реальному содержанию, а не по подкрученной нефтегаз-сути."""
     return "\n".join(
@@ -534,7 +546,7 @@ def _relevance_prompt(article: dict) -> str:
             f"url: {article.get('url') or ''}",
             f"language: {article.get('language') or 'unknown'}",
             f"published_at: {article.get('published_at') or ''}",
-            f"text: {_compact(article.get('raw_text') or '', 6000)}",
+            f"text: {_compact(article.get('raw_text') or '', text_limit)}",
         ]
     )
 

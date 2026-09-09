@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from oiltech_digest.db import repository
 
 
@@ -413,6 +415,22 @@ def test_agent_actions_list_includes_task_metadata(isolated_db):
     assert rows[0]["task_topic"] == "бурение"
     assert rows[0]["decision_title"] == "Поиск источников завершён"
     assert "кандидатов" in rows[0]["decision_summary"]
+
+
+def test_record_agent_action_serializes_datetime_payload(isolated_db):
+    created_at = datetime(2026, 9, 9, 12, 30, tzinfo=timezone.utc)
+    action_id = repository.record_agent_action(
+        None,
+        "discover_sources_finished",
+        input_payload={"started_at": created_at},
+        output_payload={"candidates": [{"published_at": created_at}]},
+    )
+
+    rows = repository.list_agent_actions(limit=1)
+
+    assert rows[0]["id"] == action_id
+    assert rows[0]["input_json"]["started_at"] == "2026-09-09T12:30:00+00:00"
+    assert rows[0]["output_json"]["candidates"][0]["published_at"] == "2026-09-09T12:30:00+00:00"
 
 
 def test_agent_actions_list_adds_learning_summary(isolated_db):

@@ -212,3 +212,99 @@ def test_evaluate_source_candidate_uses_ai_recommendation_with_evidence(monkeypa
     assert memory_updates[0]["facts"]["source_health"]["verdict"] == "promising_needs_more_data"
     assert result["review_comment"] == updates[0]["review_comment"]
     assert actions[0]["action_type"] == "evaluate_source_candidate_finished"
+
+
+def test_evaluate_source_candidate_rejects_zero_relevant_after_sandbox(monkeypatch):
+    updates = []
+    articles = [
+        {
+            "title": f"Industry item {index}",
+            "url": f"https://example.com/news/{index}",
+            "relevant": False,
+            "summary": "",
+            "total_score": 0,
+            "score_label": "Без оценки",
+            "processing_status": "rejected",
+        }
+        for index in range(5)
+    ]
+
+    monkeypatch.setattr(
+        sandbox.repository,
+        "get_source_candidate",
+        lambda candidate_id: {
+            "id": candidate_id,
+            "url": "https://example.com/news",
+            "name": "Example",
+            "topic": "ГРП, МГРП и стимуляция",
+        },
+    )
+    monkeypatch.setattr(sandbox.repository, "create_agent_task", lambda *args, **kwargs: 77)
+    monkeypatch.setattr(sandbox, "collect_candidate_articles", lambda candidate, article_limit=5: {"inserted_or_updated": 5, "errors": 0, "articles": []})
+    monkeypatch.setattr(sandbox, "process_candidate_articles", lambda candidate_id, limit=5, offline=True: {"processed": 5, "relevant": 0, "rejected": 5, "errors": 0})
+    monkeypatch.setattr(
+        sandbox.repository,
+        "source_candidate_article_metrics",
+        lambda candidate_id: {
+            "tested_articles": 5,
+            "relevant_articles": 0,
+            "avg_score": 70,
+            "duplicate_count": 0,
+            "noise_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=False: articles,
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "recommend_source_action",
+        lambda metrics, offline=True, evidence=None: {
+            "recommended_action": "human_review",
+            "reason": "Средний балл высокий, но релевантность спорная.",
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_quality",
+        lambda candidate, metrics, evidence, offline=True: {
+            "source": "rules",
+            "quality_label": "перспективный",
+            "usefulness_score": 80,
+            "topic_fit": "",
+            "article_pattern": "",
+            "useful_summary": "",
+            "strengths": [],
+            "risks": [],
+            "next_checks": [],
+            "confidence": 0.5,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_regularity",
+        lambda candidate, collected, evidence: {
+            "regularity_label": "active_but_sparse",
+            "archive_suspected": False,
+            "reason": "",
+            "risks": [],
+            "next_checks": [],
+            "confidence": 0.5,
+        },
+    )
+    monkeypatch.setattr(sandbox, "apply_candidate_learning", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(sandbox.repository, "upsert_agent_memory", lambda **kwargs: 501)
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_assessment",
+        lambda candidate_id, **kwargs: updates.append({"candidate_id": candidate_id, **kwargs}),
+    )
+    monkeypatch.setattr(sandbox.repository, "record_agent_action", lambda *args, **kwargs: None)
+
+    result = sandbox.evaluate_source_candidate(42, article_limit=5, offline=False)
+
+    assert updates[0]["recommended_action"] == "reject"
+    assert updates[0]["status"] == "rejected"
+    assert result["source_health"]["recommended_action"] == "reject"

@@ -46,7 +46,8 @@ sources -> parse -> articles -> fetch-full-text -> summary -> relevance -> tag -
 | `oiltech_digest/background_jobs.py` | DB-backed worker runtime |
 | `oiltech_digest/network_policy.py` | маршрутизация РФ/external задач |
 | `oiltech_digest/external_worker.py` | pull-worker для зарубежного сервера |
-| `oiltech_digest/processing/domain_glossary.py` | нефтегазовый глоссарий для summary/title_ru |
+| `oiltech_digest/processing/domain_glossary.py` | применение и проверка нефтегазового глоссария |
+| `oiltech_digest/processing/domain_glossary.json` | термины, фразовые исправления и golden-кейсы перевода |
 | `oiltech_digest/processing/external_ai.py` | self-contained AI payload |
 | `oiltech_digest/ingestion/external_fetch.py` | external fetch/playwright payload |
 | `frontend/src` | React admin |
@@ -57,7 +58,7 @@ sources -> parse -> articles -> fetch-full-text -> summary -> relevance -> tag -
 Суть сигнала и перевод заголовка используют доменный глоссарий:
 
 ```text
-oiltech_digest/processing/domain_glossary.py
+oiltech_digest/processing/domain_glossary.json
 ```
 
 Задача слоя - не общий машинный перевод, а нормализация отраслевых терминов. Например:
@@ -78,15 +79,24 @@ oiltech_digest/processing/domain_glossary.py
 4. После ответа безопасные запрещенные варианты заменяются детерминированно.
 5. Для частых плохих переводов поддерживаются regex-паттерны падежных форм: например
    `фракинга`, `фракингом`, `ворковеров`, `оффшоре`, `резервуара`.
+6. При сборке дайджеста summary/title дополнительно прогоняются через словарь, чтобы старые
+   карточки в базе не протащили плохой термин в PDF/DOCX.
 
 Расширение словаря:
 
-- добавлять термин в `GLOSSARY`;
+- добавлять термин в `domain_glossary.json`;
 - указывать все частые английские варианты в `source_terms`;
 - фиксировать один продуктовый `preferred_ru`;
 - добавлять `forbidden_ru`, если модель часто выбирает плохой перевод;
 - добавлять `forbidden_patterns`, если плохой перевод встречается в разных падежах;
-- покрывать важные кейсы тестами в `tests/test_processing.py`.
+- добавлять пример в `golden_cases`;
+- проверять словарь командой `python -m oiltech_digest.cli validate-terminology`;
+- искать старые плохие карточки командой `python -m oiltech_digest.cli audit-terminology --limit 1000`;
+- перед массовым исправлением запускать `python -m oiltech_digest.cli repair-terminology --dry-run --limit 1000`;
+- применять исправления только после просмотра dry-run: `python -m oiltech_digest.cli repair-terminology --no-dry-run --limit 1000`.
+
+Если нужно заменить словарь без пересборки образа, смонтируйте JSON-файл в контейнер и задайте
+`DOMAIN_GLOSSARY_PATH=/path/to/domain_glossary.json`.
 
 ## Агент поиска источников
 

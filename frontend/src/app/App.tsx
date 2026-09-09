@@ -83,6 +83,14 @@ const screens: ScreenDef[] = [
     status: "Экран активен",
   },
   {
+    id: "source-agent",
+    label: "Агент источников",
+    eyebrow: "Source Discovery",
+    title: "Агент поиска источников",
+    description: "Поиск новых источников, проверка кандидатов, память агента и рекомендации по действиям доступны только администраторам.",
+    status: "Экран активен",
+  },
+  {
     id: "scoring",
     label: "Скоринг",
     eyebrow: "Config Surface",
@@ -152,7 +160,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Администрирование",
-    screens: ["users", "statistics"],
+    screens: ["users", "statistics", "source-agent"],
   },
   // Прототипы будущих разделов. Оба экрана в ADMIN_SCREENS, поэтому у не-админа фильтр ниже
   // (isAdmin || !ADMIN_SCREENS.has(sid)) вычистит их, visibleScreens станет пустым и вся группа

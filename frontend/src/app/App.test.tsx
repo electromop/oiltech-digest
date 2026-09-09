@@ -536,6 +536,40 @@ describe("App smoke", () => {
     expect(screen.getAllByRole("button", { name: heading }).length).toBeGreaterThanOrEqual(1);
   });
 
+  it("админ видит экран агента источников в навигации", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Агент источников" }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("обычный пользователь не видит экран агента и не открывает его по прямой ссылке", async () => {
+    window.history.replaceState(null, "", "/?screen=source-agent");
+
+    const adminImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
+        return Promise.resolve(jsonResponse({ ok: true, user: { id: 2, email: "user@example.com", role: "user" } }));
+      }
+      return adminImpl!(input, init);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Нет доступа" })).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "Агент источников" })).toHaveLength(0);
+  });
+
   it("обычный пользователь не видит группу «Прототипы» и не открывает их по прямой ссылке", async () => {
     window.history.replaceState(null, "", "/?screen=tech-preview");
 
