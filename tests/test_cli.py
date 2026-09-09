@@ -139,6 +139,208 @@ def test_jobs_requeue_stale_command_uses_config_default(monkeypatch, capsys):
     assert "stale_minutes=75" in output
 
 
+def test_agent_query_memory_command_prints_rows(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.query_memory_report",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "query": "robotic drilling automation newsroom",
+                "topic": "бурение",
+                "score": 76,
+                "status": "active",
+                "found_candidates": 3,
+                "relevance_rate": 0.8,
+                "empty_result": False,
+            }
+        ],
+    )
+
+    cli.cmd_agent_query_memory(argparse.Namespace(status="active", limit=5, json=False))
+
+    out = capsys.readouterr().out
+    assert "agent-query-memory: status=active rows=1" in out
+    assert "robotic drilling automation newsroom" in out
+    assert captured == {"status": "active", "limit": 5}
+
+
+def test_agent_query_memory_command_all_status_passes_none(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.query_memory_report",
+        lambda **kwargs: captured.update(kwargs) or [],
+    )
+
+    cli.cmd_agent_query_memory(argparse.Namespace(status="all", limit=10, json=True))
+
+    assert capsys.readouterr().out.strip() == "[]"
+    assert captured == {"status": None, "limit": 10}
+
+
+def test_agent_readiness_command_prints_issues(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.source_discovery.readiness.source_discovery_readiness",
+        lambda: {
+            "ok": False,
+            "status": "blocked",
+            "checks": {"search": {"ok": False}},
+            "issues": [{"severity": "blocker", "code": "brave_key_missing", "message": "BRAVE_SEARCH_API_KEY пустой"}],
+            "recommendations": ["Заполните BRAVE_SEARCH_API_KEY"],
+        },
+    )
+
+    cli.cmd_agent_readiness(argparse.Namespace(json=False))
+
+    out = capsys.readouterr().out
+    assert "agent-readiness: status=blocked ok=False" in out
+    assert "brave_key_missing" in out
+    assert "Заполните BRAVE_SEARCH_API_KEY" in out
+
+
+def test_agent_loop_command_prints_summary(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.source_discovery.loop.run_agent_loop",
+        lambda config: {
+            "run_id": 77,
+            "iterations": [
+                {
+                    "iteration": 1,
+                    "action_count": 1,
+                    "auto_action_count": 1,
+                    "human_review_count": 0,
+                    "observations": [{"topic": "бурение", "candidate_count": 2, "query_strategy": "balanced", "search_status": "ok"}],
+                }
+            ],
+            "total_candidates": 2,
+            "terminal_reason": "max_iterations_reached",
+        },
+    )
+
+    cli.cmd_agent_loop(argparse.Namespace(
+        goal="найти",
+        days=30,
+        target_per_topic=10,
+        topic_limit=5,
+        candidate_limit=10,
+        max_actions=5,
+        max_iterations=1,
+        offline=True,
+        fetch_inspection=False,
+        test_parse=True,
+        dry_run=False,
+        evaluate=True,
+        article_limit=5,
+        no_memory=False,
+        max_daily_loop_runs=4,
+        max_daily_candidates=100,
+        max_daily_evaluations=100,
+        json=False,
+    ))
+
+    out = capsys.readouterr().out
+    assert "agent-loop: run_id=77 iterations=1 candidates=2" in out
+    assert "бурение: candidates=2 strategy=balanced search=ok" in out
+
+
+def test_enqueue_agent_loop_command_creates_job(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.background_job_status_counts",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.create_background_job",
+        lambda kind, payload, **kwargs: captured.update({"kind": kind, "payload": payload, **kwargs}) or {"id": 91},
+    )
+
+    cli.cmd_enqueue_agent_loop(argparse.Namespace(
+        goal="найти",
+        days=30,
+        target_per_topic=10,
+        topic_limit=5,
+        candidate_limit=10,
+        max_actions=4,
+        max_iterations=2,
+        offline=True,
+        fetch_inspection=False,
+        dry_run=False,
+        evaluate=True,
+        article_limit=5,
+        no_memory=False,
+        max_daily_loop_runs=4,
+        max_daily_candidates=100,
+        max_daily_evaluations=100,
+    ))
+
+    assert captured["kind"] == "source_discovery_loop"
+    assert captured["payload"]["max_iterations"] == 2
+    assert captured["capability"] == "source-discovery"
+    assert "enqueue-agent-loop: job id=91" in capsys.readouterr().out
+
+
+def test_enqueue_agent_loop_command_skips_when_loop_already_active(monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.background_job_status_counts",
+        lambda **kwargs: {"queued": 1},
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.create_background_job",
+        lambda *args, **kwargs: called.append((args, kwargs)) or {"id": 91},
+    )
+
+    cli.cmd_enqueue_agent_loop(argparse.Namespace(
+        goal="найти",
+        days=30,
+        target_per_topic=10,
+        topic_limit=5,
+        candidate_limit=10,
+        max_actions=4,
+        max_iterations=2,
+        offline=True,
+        fetch_inspection=False,
+        dry_run=False,
+        evaluate=True,
+        article_limit=5,
+        no_memory=False,
+        allow_parallel=False,
+        max_daily_loop_runs=4,
+        max_daily_candidates=100,
+        max_daily_evaluations=100,
+    ))
+
+    assert called == []
+    assert "enqueue-agent-loop: skipped active_jobs=1" in capsys.readouterr().out
+
+
+def test_source_candidate_triage_command_prints_rows(monkeypatch, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.source_candidate_triage_report",
+        lambda **kwargs: captured.update(kwargs) or [
+            {
+                "id": 7,
+                "normalized_domain": "example.com",
+                "url": "https://example.com/news",
+                "status": "needs_human_review",
+                "recommended_action": "add",
+                "triage_priority": 120,
+                "tested_articles": 5,
+                "relevant_articles": 4,
+                "avg_score": 80,
+                "topic": "бурение",
+            }
+        ],
+    )
+
+    cli.cmd_source_candidate_triage(argparse.Namespace(limit=5, json=False))
+
+    out = capsys.readouterr().out
+    assert "source-candidate-triage: rows=1" in out
+    assert "example.com" in out
+    assert captured == {"limit": 5}
+
+
 def test_jobs_requeue_stale_command_accepts_override(monkeypatch, capsys):
     monkeypatch.setattr(
         "oiltech_digest.db.repository.requeue_stale_background_jobs",
@@ -222,6 +424,118 @@ def test_maintenance_cleanup_command_accepts_overrides(monkeypatch, capsys):
     assert "background_job_days=10" in output
     assert "export_jobs=5" in output
     assert "export_job_days=5" in output
+
+
+def test_audit_terminology_command_reports_bad_terms(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+        lambda limit=500, article_id=None: [
+            {
+                "id": 42,
+                "title": "Hydraulic fracturing expands",
+                "raw_text": "Hydraulic fracturing expands in the field.",
+                "language": "en",
+                "source_name": "World Oil",
+                "source_category": "Новости",
+                "title_ru": "",
+                "summary": "Компания расширила фракинг.",
+            }
+        ],
+    )
+
+    cli.cmd_audit_terminology(argparse.Namespace(limit=10, article_id=None, show=5, json=False))
+
+    output = capsys.readouterr().out
+    assert "terminology-audit: проблемных полей=1" in output
+    assert "article=42" in output
+    assert "фракинг -> ГРП" in output
+
+
+def test_repair_terminology_command_dry_run_does_not_update(monkeypatch, capsys):
+    updated = []
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+        lambda limit=500, article_id=None: [
+            {
+                "id": 42,
+                "title": "Hydraulic fracturing expands",
+                "raw_text": "Hydraulic fracturing expands in the field.",
+                "language": "en",
+                "source_name": "World Oil",
+                "source_category": "Новости",
+                "title_ru": "",
+                "summary": "Компания расширила фракинг.",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.update_article_terminology_texts",
+        lambda *args, **kwargs: updated.append((args, kwargs)),
+    )
+
+    cli.cmd_repair_terminology(argparse.Namespace(limit=10, article_id=None, show=5, dry_run=True, json=False))
+
+    output = capsys.readouterr().out
+    assert "terminology-repair [dry-run]" in output
+    assert "полей к исправлению=1" in output
+    assert "ГРП" in output
+    assert updated == []
+
+
+def test_repair_terminology_command_applies_updates(monkeypatch):
+    updated = []
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+        lambda limit=500, article_id=None: [
+            {
+                "id": 42,
+                "title": "Hydraulic fracturing expands",
+                "raw_text": "Hydraulic fracturing expands in the field.",
+                "language": "en",
+                "source_name": "World Oil",
+                "source_category": "Новости",
+                "title_ru": "",
+                "summary": "Компания расширила фракинг.",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "oiltech_digest.db.repository.update_article_terminology_texts",
+        lambda *args, **kwargs: updated.append((args, kwargs)),
+    )
+
+    cli.cmd_repair_terminology(argparse.Namespace(limit=10, article_id=None, show=5, dry_run=False, json=False))
+
+    assert updated == [((42,), {"summary": "Компания расширила ГРП.", "title_ru": None})]
+
+
+def test_validate_terminology_command_reports_ok(capsys):
+    cli.cmd_validate_terminology(argparse.Namespace(json=False))
+
+    output = capsys.readouterr().out
+    assert "terminology-validate: ok=True" in output
+    assert "terms=" in output
+    assert "golden_cases=" in output
+
+
+def test_eval_terminology_command_writes_reports(tmp_path, capsys):
+    csv_path = tmp_path / "terminology.csv"
+    md_path = tmp_path / "terminology.md"
+
+    cli.cmd_eval_terminology(
+        argparse.Namespace(
+            limit=100,
+            show=5,
+            csv_path=str(csv_path),
+            markdown_path=str(md_path),
+            json=False,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert "terminology-eval: total=100 passed=100 failed=0" in output
+    assert "ГРП / fracking" in csv_path.read_text(encoding="utf-8-sig")
+    assert "Отчет по нефтегазовой терминологии" in md_path.read_text(encoding="utf-8")
 
 
 def test_apply_source_overrides_prints_missing_and_ambiguous_names(monkeypatch, capsys):

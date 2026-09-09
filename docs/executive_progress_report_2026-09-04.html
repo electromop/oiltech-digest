@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OilTech Digest: отчет о проделанной работе</title>
+  <style>
+    :root {
+      --blue: #0b55c7;
+      --blue-dark: #07377f;
+      --ink: #172033;
+      --muted: #65748b;
+      --line: #d9e4f2;
+      --soft: #f4f8ff;
+      --green: #12805c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #eef5ff;
+      font: 15px/1.55 Arial, sans-serif;
+    }
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 24px 56px;
+    }
+    .hero {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 34px 38px;
+      box-shadow: 0 18px 45px rgba(15, 68, 130, .12);
+    }
+    .eyebrow {
+      color: var(--blue);
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    h1 {
+      margin: 10px 0 12px;
+      font-size: 38px;
+      line-height: 1.1;
+      color: var(--blue-dark);
+    }
+    h2 {
+      margin: 32px 0 14px;
+      font-size: 22px;
+      color: var(--blue-dark);
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+    .lead {
+      max-width: 880px;
+      margin: 0;
+      font-size: 18px;
+      color: #32415a;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      color: var(--blue-dark);
+      font-weight: 700;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0 6px;
+    }
+    .metric, .card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 30px;
+      line-height: 1;
+      color: var(--blue);
+    }
+    .metric span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 11px 13px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #e8f1ff;
+      color: var(--blue-dark);
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .ok {
+      color: var(--green);
+      font-weight: 800;
+    }
+    .section {
+      margin-top: 18px;
+    }
+    .note {
+      padding: 16px 18px;
+      background: #fff;
+      border-left: 4px solid var(--blue);
+      border-radius: 10px;
+      color: #32415a;
+    }
+    code {
+      padding: 2px 5px;
+      background: #eef4fb;
+      border-radius: 5px;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+    }
+    @media print {
+      body { background: #fff; }
+      .page { max-width: none; padding: 16px; }
+      .hero, .metric, .card, table { box-shadow: none; }
+    }
+    @media (max-width: 900px) {
+      .grid, .cards { grid-template-columns: 1fr 1fr; }
+      h1 { font-size: 30px; }
+    }
+    @media (max-width: 620px) {
+      .grid, .cards { grid-template-columns: 1fr; }
+      .hero { padding: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">OilTech Digest · отчет для ЛПР</div>
+      <h1>За две недели продукт усилен по ключевым производственным контурам</h1>
+      <p class="lead">Работа была сфокусирована на том, что влияет на ценность системы: агент поиска источников, качество отбора, объяснимость решений, промышленная терминология перевода и воспроизводимые проверки.</p>
+      <div class="meta">
+        <span class="pill">Период: 21.08–04.09.2026</span>
+        <span class="pill">10 смысловых коммитов</span>
+        <span class="pill">100/100 терминологических проверок</span>
+        <span class="pill">Готово к демонстрации после полного pytest</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="metric"><strong>10</strong><span>смысловых коммитов</span></div>
+      <div class="metric"><strong>57</strong><span>файлов затронуто</span></div>
+      <div class="metric"><strong>8181</strong><span>строка добавлена</span></div>
+      <div class="metric"><strong>0</strong><span>ошибок в 100-case терминологии</span></div>
+    </section>
+
+    <h2>1. Что изменилось продуктово</h2>
+    <section class="cards">
+      <div class="card">
+        <h3>Агент поиска источников</h3>
+        <p>Система теперь не только парсит заданный каталог, но и помогает находить новые источники по темам, памяти и качеству прошлых результатов.</p>
+      </div>
+      <div class="card">
+        <h3>Объяснимое качество</h3>
+        <p>Добавлены проверки регулярности, здоровья источников, шума, дублей и причин рекомендаций. Решение можно защищать фактами.</p>
+      </div>
+      <div class="card">
+        <h3>Отраслевой перевод</h3>
+        <p>Нефтегазовая терминология нормализуется до и после AI-ответа, а дайджест чистит даже старые карточки из базы.</p>
+      </div>
+    </section>
+
+    <h2>2. Агент источников</h2>
+    <table>
+      <thead><tr><th>Блок</th><th>Сделано</th><th>Эффект</th></tr></thead>
+      <tbody>
+        <tr><td>Планировщик</td><td>Agent loop выбирает действия, темы, запросы и лимиты</td><td>Контролируемая автоматизация вместо ручного хаоса</td></tr>
+        <tr><td>Память</td><td>Темы, домены, запросы, стратегии, ручные правила</td><td>Агент не повторяет бесполезные действия</td></tr>
+        <tr><td>Кандидаты</td><td>Песочница, тестовый парсинг, оценка материалов</td><td>Новые источники проходят проверку до добавления</td></tr>
+        <tr><td>Рекомендации</td><td>Добавить, тестировать дальше, отклонить, проверить вручную</td><td>Решение прозрачно для аналитика и руководителя</td></tr>
+        <tr><td>Предохранители</td><td>Дневные бюджеты запусков, кандидатов и оценок</td><td>Нет бесконтрольного расхода API и сетевых ресурсов</td></tr>
+      </tbody>
+    </table>
+
+    <h2>3. Терминология перевода</h2>
+    <table>
+      <thead><tr><th>Оригинал</th><th>Было плохо</th><th>Стало правильно</th></tr></thead>
+      <tbody>
+        <tr><td><code>hydraulic fracturing</code></td><td>Компания расширила фракинг</td><td>Компания расширила ГРП</td></tr>
+        <tr><td><code>workover</code></td><td>Ворковер увеличил добычу</td><td>КРС увеличил добычу</td></tr>
+        <tr><td><code>well completion</code></td><td>Завершение скважины ускорило ввод</td><td>Заканчивание скважины ускорило ввод</td></tr>
+        <tr><td><code>reservoir</code></td><td>Добыча из резервуара выросла</td><td>Добыча из пласта выросла</td></tr>
+        <tr><td><code>drilling mud</code></td><td>Новая буровая грязь снизила потери</td><td>Новый буровой раствор снизил потери</td></tr>
+        <tr><td><code>BHA / ROP</code></td><td>Оптимизация bottomhole assembly повысила ROP</td><td>Оптимизация КНБК повысила механическую скорость проходки</td></tr>
+      </tbody>
+    </table>
+
+    <h2>4. Проверки</h2>
+    <table>
+      <thead><tr><th>Проверка</th><th>Результат</th></tr></thead>
+      <tbody>
+        <tr><td>Валидация словаря</td><td class="ok">ok=True, 34 термина, 24 фразовых исправления, 11 golden-кейсов</td></tr>
+        <tr><td>100-case терминологический тест</td><td class="ok">100 успешно, 0 ошибок</td></tr>
+        <tr><td>Python compile-check</td><td class="ok">Успешно</td></tr>
+        <tr><td>Полный pytest</td><td>Нужно запустить после старта Docker: <code>docker compose run --rm test python -m pytest</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>5. Артефакты для показа</h2>
+    <div class="note">
+      <p><strong>Можно показывать:</strong> экран агента источников, экран кандидатов, документацию <code>/help</code>, CSV на 100 терминологических примеров, свежий дайджест после нормализации терминов.</p>
+      <p><strong>Файлы:</strong> <code>docs/translation_terminology_100_eval.csv</code>, <code>docs/translation_terminology_work_report.md</code>, <code>docs/executive_progress_report_2026-09-04.md</code>.</p>
+    </div>
+
+    <h2>6. Следующий шаг перед демонстрацией</h2>
+    <table>
+      <thead><tr><th>Шаг</th><th>Команда / действие</th></tr></thead>
+      <tbody>
+        <tr><td>Полная проверка</td><td><code>docker compose run --rm test python -m pytest</code></td></tr>
+        <tr><td>Проверка терминологии</td><td><code>python -m oiltech_digest.cli validate-terminology</code></td></tr>
+        <tr><td>Аудит базы</td><td><code>python -m oiltech_digest.cli audit-terminology --limit 1000 --show 50</code></td></tr>
+        <tr><td>Дайджест</td><td>Собрать свежий PDF/DOCX на 7–10 сигналов</td></tr>
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>

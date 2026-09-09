@@ -16,6 +16,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from oiltech_digest import config
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
+from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
 TEMPLATE_DIR = Path(__file__).resolve().parent
 EMAIL_TEMPLATE = "digest_email_template.html"
@@ -282,18 +283,21 @@ def build_digest_content(
         if row.get("parent_tag_name"):
             tag = f"{row['parent_tag_name']} / {tag}"
         published = row["published_at"].date().isoformat() if row.get("published_at") else None
+        glossary_context = _digest_glossary_context(row, tag)
+        title = enforce_glossary_text(row.get("title") or "", glossary_context)
+        summary = enforce_glossary_text(row.get("summary") or "", glossary_context)
         news.append(
             {
                 "category": tag,
                 "article_id": row["id"],
-                "title": row["title"],
+                "title": title,
                 "source": row["source_name"],
                 "url": row["url"],
                 "published_at": published,
                 "tag": tag,
                 "score": float(row["total_score"]) if row.get("total_score") is not None else None,
                 "score_label": row.get("score_label"),
-                "summary": _compact_digest_summary(row.get("summary") or "", row.get("title") or ""),
+                "summary": _compact_digest_summary(summary, title),
                 "image_url": row.get("image_url") or "",
             }
         )
@@ -372,6 +376,17 @@ def render_digest_export_html(content: dict) -> str:
 
 def _html(value: object) -> str:
     return escape("" if value is None else str(value), quote=True)
+
+
+def _digest_glossary_context(row: dict, tag: str) -> dict:
+    return {
+        "title": row.get("title") or "",
+        "title_ru": row.get("title_ru") or "",
+        "summary": row.get("summary") or "",
+        "raw_text": row.get("raw_text") or "",
+        "source_category": tag,
+        "language": row.get("language") or "",
+    }
 
 
 def _compact_digest_summary(summary: str, title: str, max_chars: int = 170) -> str:

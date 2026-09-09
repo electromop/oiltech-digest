@@ -10,6 +10,7 @@ from typing import Any
 from oiltech_digest import config
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
+from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, OfflineAIClient, OpenAIResponsesClient
 from oiltech_digest.processing.prompts import (
     RELEVANCE_INSTRUCTIONS,
@@ -220,13 +221,13 @@ def process_score_articles(articles: list[dict], client) -> dict:
 
 
 def process_full(limit: int = 20, offline: bool = False) -> dict:
-    """Запустить по-статейный конвейер на статьях, у которых ещё нет сути."""
+    """Запустить по-статейный конвейер на статьях с незавершённым AI pipeline."""
     client = make_client(offline)
-    return process_pipeline_articles(repository.get_articles_needing_summary(limit), client)
+    return process_pipeline_articles(repository.get_articles_needing_pipeline(limit), client)
 
 
 def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = True) -> dict:
-    """Полный конвейер по одной статье целиком: full-text → суть → релевантность → тег → скоринг.
+    """Полный конвейер по одной статье целиком: full-text → релевантность → суть → тег → скоринг.
 
     Каждая статья проходит все этапы до конца, прежде чем берётся следующая, —
     готовые карточки появляются по мере обработки, не нужно ждать прогона всего
@@ -256,51 +257,66 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
             # 2. Релевантность ПЕРВОЙ — на сыром тексте, до сути (без bias и без лишних
             #    AI-вызовов на нерелевантном).
-            rel_resp = relevance_article(article, client)
-            relevant = bool(rel_resp.data.get("relevant"))
-            repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
-            _record_run(article, "relevance", client, rel_resp)
+            blocked_reason = _negative_keyword_block(article, tags)
+            if blocked_reason:
+                repository.set_article_relevance(article["id"], False, blocked_reason, "negative-keyword")
+                stats["rejected"] += 1
+                continue
+
+            if article.get("relevant") is True:
+                relevant = True
+            elif article.get("relevant") is False:
+                relevant = False
+            else:
+                rel_resp = relevance_article(article, client)
+                relevant = bool(rel_resp.data.get("relevant"))
+                repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
+                _record_run(article, "relevance", client, rel_resp)
             stats["relevant" if relevant else "rejected"] += 1
             if not relevant:
                 continue
 
             # 3. Суть.
-            summary_resp = summarize_article(article, client)
-            repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
-            _record_run(article, "summary", client, summary_resp)
-            article["summary"] = summary_resp.data["summary"]
-            stats["summary"] += 1
+            if not article.get("summary"):
+                summary_resp = summarize_article(article, client)
+                repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
+                _record_run(article, "summary", client, summary_resp)
+                article["summary"] = summary_resp.data["summary"]
+                stats["summary"] += 1
 
             # 3b. Перевод заголовка — отдельная стадия (AI только для иностранных).
-            title_ru, translate_resp = title_ru_for_article(article, client)
-            if title_ru is not None:
-                repository.set_article_title_ru(article["id"], title_ru)
-                if translate_resp is not None:
-                    _record_run(article, "translation", client, translate_resp)
-                    stats["translated"] += 1
+            if not article.get("title_ru"):
+                title_ru, translate_resp = title_ru_for_article(article, client)
+                if title_ru is not None:
+                    repository.set_article_title_ru(article["id"], title_ru)
+                    if translate_resp is not None:
+                        _record_run(article, "translation", client, translate_resp)
+                        stats["translated"] += 1
 
             # 4. Тег.
-            tag_resp = tag_article(article, tags, client)
-            tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
-            if tag_id == 0:
-                tag_id = keyword_tag(article, tags)["tag_id"]
-            repository.upsert_article_tag(
-                article["id"], tag_id,
-                _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
-                tag_resp.data.get("rationale"), tag_resp.model,
-            )
-            _record_run(article, "tagging", client, tag_resp)
-            stats["tagged"] += 1
+            if article.get("existing_tag_id") is None:
+                tag_resp = tag_article(article, tags, client)
+                tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
+                if tag_id == 0:
+                    tag_id = keyword_tag(article, tags)["tag_id"]
+                repository.upsert_article_tag(
+                    article["id"], tag_id,
+                    _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
+                    tag_resp.data.get("rationale"), tag_resp.model,
+                )
+                _record_run(article, "tagging", client, tag_resp)
+                stats["tagged"] += 1
 
             # 5. Скоринг.
-            score_resp = score_article(article, criteria, client)
-            payload = normalize_score_payload(article, criteria, score_resp.data)
-            repository.replace_article_score(
-                article["id"], payload["total_score"], payload["score_label"],
-                payload["explanation"], payload["items"], score_resp.model,
-            )
-            _record_run(article, "scoring", client, score_resp)
-            stats["scored"] += 1
+            if article.get("existing_score_id") is None:
+                score_resp = score_article(article, criteria, client)
+                payload = normalize_score_payload(article, criteria, score_resp.data)
+                repository.replace_article_score(
+                    article["id"], payload["total_score"], payload["score_label"],
+                    payload["explanation"], payload["items"], score_resp.model,
+                )
+                _record_run(article, "scoring", client, score_resp)
+                stats["scored"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
             _record_error(article, "pipeline", client, exc)
             stats["errors"] += 1
@@ -308,11 +324,17 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
 
 def summarize_article(article: dict, client) -> AIResponse:
-    return client.complete_json(
+    response = client.complete_json(
         SUMMARY_INSTRUCTIONS,
         _article_prompt(article),
         SUMMARY_SCHEMA,
         max_output_tokens=1200,
+    )
+    return AIResponse(
+        data={**response.data, "summary": enforce_glossary_text(str(response.data.get("summary") or ""), article)},
+        model=response.model,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
     )
 
 
@@ -321,26 +343,44 @@ def relevance_article(article: dict, client) -> AIResponse:
     # обязан притягивать любую статью к нефтегазу, и подача его сути на вход гейта
     # давала самосбывающуюся релевантность (мусор проходил). Модель/effort — отдельные,
     # обычно сильнее основных: вызов дешёвый, цена ошибки высокая.
-    return client.complete_json(
-        RELEVANCE_INSTRUCTIONS,
-        _relevance_prompt(article),
-        RELEVANCE_SCHEMA,
-        max_output_tokens=400,
-        model=config.OPENAI_RELEVANCE_MODEL,
-        reasoning_effort=config.OPENAI_RELEVANCE_REASONING,
-    )
+    try:
+        return client.complete_json(
+            RELEVANCE_INSTRUCTIONS,
+            _relevance_prompt(article),
+            RELEVANCE_SCHEMA,
+            max_output_tokens=2500,
+            model=config.OPENAI_RELEVANCE_MODEL,
+            reasoning_effort=config.OPENAI_RELEVANCE_REASONING,
+        )
+    except AIClientError as exc:
+        if "max_output_tokens" not in str(exc):
+            raise
+        return client.complete_json(
+            RELEVANCE_INSTRUCTIONS,
+            _relevance_prompt(article, text_limit=1500),
+            RELEVANCE_SCHEMA,
+            max_output_tokens=2500,
+            model=config.OPENAI_RELEVANCE_MODEL,
+            reasoning_effort="minimal",
+        )
 
 
 def translate_article(article: dict, client) -> AIResponse:
     """AI-перевод заголовка на русский. Отдельная стадия (раньше был частью summary).
     Модель/effort — собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
-    return client.complete_json(
+    response = client.complete_json(
         TRANSLATE_INSTRUCTIONS,
         _title_prompt(article),
         TRANSLATE_SCHEMA,
         max_output_tokens=300,
         model=config.OPENAI_TRANSLATE_MODEL,
         reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
+    )
+    return AIResponse(
+        data={**response.data, "title_ru": enforce_glossary_text(str(response.data.get("title_ru") or ""), article)},
+        model=response.model,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
     )
 
 
@@ -481,7 +521,7 @@ def score_label(score: float) -> str:
 
 
 def _article_prompt(article: dict) -> str:
-    return "\n".join(
+    base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
             f"source: {article.get('source_name') or ''}",
@@ -492,9 +532,11 @@ def _article_prompt(article: dict) -> str:
             f"text: {_compact(article.get('raw_text') or '', 6000)}",
         ]
     )
+    glossary = glossary_prompt_block(article)
+    return f"{base}\n\n{glossary}" if glossary else base
 
 
-def _relevance_prompt(article: dict) -> str:
+def _relevance_prompt(article: dict, *, text_limit: int = 6000) -> str:
     """Вход гейта релевантности — БЕЗ AI-сути (намеренно): только сырые поля статьи,
     чтобы суждение шло по реальному содержанию, а не по подкрученной нефтегаз-сути."""
     return "\n".join(
@@ -504,20 +546,23 @@ def _relevance_prompt(article: dict) -> str:
             f"url: {article.get('url') or ''}",
             f"language: {article.get('language') or 'unknown'}",
             f"published_at: {article.get('published_at') or ''}",
-            f"text: {_compact(article.get('raw_text') or '', 6000)}",
+            f"text: {_compact(article.get('raw_text') or '', text_limit)}",
         ]
     )
 
 
 def _title_prompt(article: dict) -> str:
     """Вход переводчика — только заголовок и контекст источника (дёшево, без полного текста)."""
-    return "\n".join(
+    base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
             f"source: {article.get('source_name') or ''}",
             f"language: {article.get('language') or 'unknown'}",
+            f"context: {_compact(article.get('raw_text') or article.get('summary') or '', 900)}",
         ]
     )
+    glossary = glossary_prompt_block(article, limit=8)
+    return f"{base}\n\n{glossary}" if glossary else base
 
 
 def _negative_keyword_block(article: dict, tags: list[dict]) -> str | None:

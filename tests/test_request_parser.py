@@ -28,6 +28,20 @@ ARTICLE_HTML = b"""
 </html>
 """
 
+SHORT_ARTICLE_HTML = b"""
+<html>
+  <head>
+    <meta property="og:title" content="SLB and Liberty advance digital completions">
+  </head>
+  <body>
+    <article>
+      <p>SLB and Liberty Energy announced a digital completions collaboration for oilfield service operations.</p>
+      <p>The release is brief but relevant for upstream technology monitoring.</p>
+    </article>
+  </body>
+</html>
+"""
+
 
 QUERY_HOME_HTML = b"""
 <html>
@@ -35,6 +49,17 @@ QUERY_HOME_HTML = b"""
     <a href="/news.php?id=12345&utm_source=rss">Field automation rollout improves wellsite performance metrics</a>
     <a href="/?p=678">Drilling analytics platform expands to offshore assets across the region</a>
     <a href="/?utm_source=newsletter">Subscribe to our newsletter for the latest updates</a>
+  </body>
+</html>
+"""
+
+
+MEDIA_HOME_HTML = b"""
+<html>
+  <body>
+    <a href="/wp-content/uploads/2024/03/Oil-Gas-Producer.webp">Oil & Gas Producer / Well Trajectories / Production Bubbles</a>
+    <a href="/files/report.pdf">Hydraulic fracturing technology report</a>
+    <a href="/news/2026/05/field-automation-rollout">Field automation rollout improves wellsite performance</a>
   </body>
 </html>
 """
@@ -59,6 +84,24 @@ def test_extract_candidate_links_preserves_query_id_and_strips_tracking():
     assert "https://example.com" not in urls                 # чистая главная не попадает в кандидаты
 
 
+def test_extract_candidate_links_skips_media_files():
+    items = request_parser.extract_candidate_links("https://example.com", MEDIA_HOME_HTML, limit=10)
+    urls = [item.url for item in items]
+
+    assert urls == ["https://example.com/news/2026/05/field-automation-rollout"]
+
+
+def test_extract_candidate_links_skips_anchor_with_broken_encoding(monkeypatch):
+    class BrokenAnchor:
+        def get(self, key):
+            return "/news/broken" if key == "href" else None
+
+        def text_content(self):
+            raise UnicodeDecodeError("utf-8", b"\xc6", 0, 1, "invalid continuation byte")
+
+    assert request_parser._build_candidate_from_anchor("https://example.com", "example.com", BrokenAnchor()) is None
+
+
 def test_clean_query_keeps_meaningful_strips_tracking():
     assert request_parser._clean_query("id=42&utm_source=x&utm_medium=y") == "id=42"
     assert request_parser._clean_query("utm_source=x&fbclid=z") == ""
@@ -72,6 +115,25 @@ def test_parse_article_page_extracts_title_date_and_body():
     assert "Field automation rollout" in title
     assert published_at is not None
     assert "reduced manual interventions" in raw_text
+
+
+def test_fetch_article_candidate_keeps_short_relevant_press_release(monkeypatch):
+    monkeypatch.setattr(request_parser, "fetch", lambda url: SHORT_ARTICLE_HTML)
+    candidate = request_parser.CandidateLink(
+        url="https://example.com/news/short-release",
+        title="SLB and Liberty advance digital completions",
+        score=8,
+        published_at=None,
+    )
+
+    article = request_parser.fetch_article_candidate(
+        candidate,
+        {"id": 7, "name": "SLB", "category": "международные"},
+    )
+
+    assert article is not None
+    assert article["url"] == candidate.url
+    assert len(article["raw_text"]) >= 120
 
 
 def test_parse_source_uses_listing_page_and_updates_last_seen(monkeypatch):

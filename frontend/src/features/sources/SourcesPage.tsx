@@ -24,6 +24,16 @@ type Props = {
 type DraftMap = Record<number, SourcePatch>;
 type PendingJobMap = Record<number, { kind: "diagnose" | "scrape"; jobId: number; label: string }>;
 
+function initialFocusedSourceId() {
+  const value = Number(new URLSearchParams(window.location.search).get("source_id") || 0);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function initialSuggestedFrequency() {
+  const value = new URLSearchParams(window.location.search).get("update_frequency") || "";
+  return ["ежечасно", "ежедневно", "еженедельно"].includes(value) ? value : "";
+}
+
 export function SourcesPage({ onUnauthorized, showToast }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [health, setHealth] = useState<SourceHealth[]>([]);
@@ -43,6 +53,8 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   const [manualArticleUrl, setManualArticleUrl] = useState("");
   const [manualArticleSourceId, setManualArticleSourceId] = useState("");
   const [manualArticleProcess, setManualArticleProcess] = useState(true);
+  const [focusedSourceId, setFocusedSourceId] = useState<number | null>(() => initialFocusedSourceId());
+  const [suggestedFrequency] = useState(() => initialSuggestedFrequency());
 
   useEffect(() => {
     void reload();
@@ -177,6 +189,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
       .filter((source) => {
         const sourceHealth = getSourceHealth(source.id);
         const hay = [
+          String(source.id),
           source.name,
           source.url,
           source.rss_url,
@@ -207,6 +220,30 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
         return left.name.localeCompare(right.name, "ru");
       });
   }, [diagnostics, enabled, health, healthVerdict, search, sources, strategy, triageKey]);
+
+  useEffect(() => {
+    if (!focusedSourceId || loading) return;
+    const node = document.getElementById(`source-${focusedSourceId}`);
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusedSourceId, loading, filteredSources.length]);
+
+  useEffect(() => {
+    if (!focusedSourceId || !suggestedFrequency || loading) return;
+    const source = sources.find((item) => item.id === focusedSourceId);
+    if (!source || source.update_frequency === suggestedFrequency) return;
+    setDrafts((prev) => {
+      const current = prev[focusedSourceId];
+      if (current?.update_frequency === suggestedFrequency) return prev;
+      return {
+        ...prev,
+        [focusedSourceId]: {
+          ...(current ?? {}),
+          update_frequency: suggestedFrequency,
+        },
+      };
+    });
+  }, [focusedSourceId, loading, sources, suggestedFrequency]);
 
   function currentPatch(source: Source) {
     return drafts[source.id] ?? {};
@@ -344,7 +381,17 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
         <div>
           <h1>Источники</h1>
         </div>
-        <div className="statusPill">{filteredSources.length} источников</div>
+        <div className="panelActions">
+          {focusedSourceId && suggestedFrequency ? (
+            <span className="statusPill">Рекомендация: {suggestedFrequency}</span>
+          ) : null}
+          {focusedSourceId ? (
+            <button type="button" className="ghostButton compactButton" onClick={() => setFocusedSourceId(null)}>
+              Все источники
+            </button>
+          ) : null}
+          <div className="statusPill">{filteredSources.length} источников</div>
+        </div>
       </header>
 
       <section className="panel">
@@ -510,6 +557,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
                   hasDraft={hasDraft}
                   pending={Boolean(pendingJobs[source.id])}
                   pendingLabel={pendingJobs[source.id]?.label || null}
+                  focused={focusedSourceId === source.id}
                   currentField={(field) => String(currentField(source, field))}
                   onDraftChange={(field, value) => updateDraft(source.id, field, value)}
                   onToggle={(nextEnabled) => void handleToggleSource(source, nextEnabled)}

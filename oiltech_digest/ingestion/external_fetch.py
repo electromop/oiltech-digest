@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from oiltech_digest.config import REQUEST_ARTICLE_LIMIT
+from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
@@ -112,7 +112,7 @@ def _process_playwright(source: dict[str, Any], payload: dict[str, Any]) -> dict
             return None
         title, published_at, raw_text = parse_article_page(article_content, candidate.title)
         final_published = published_at or candidate.published_at
-        if not title or len(raw_text) < 200:
+        if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
             return None
         return {
             "source_id": source["id"],

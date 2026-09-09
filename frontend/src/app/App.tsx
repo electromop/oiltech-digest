@@ -12,6 +12,8 @@ import { JobsPage } from "../features/jobs/JobsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
+import { SourceAgentPage } from "../features/sources/SourceAgentPage";
+import { SourceCandidatesPage } from "../features/sources/SourceCandidatesPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { UsersPage } from "../features/users/UsersPage";
@@ -26,14 +28,14 @@ const TechnologiesPreview = lazy(() =>
 );
 
 type ScreenId =
-  | "articles" | "digest" | "documents" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "articles" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
   | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 // Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
 // случайно открыть обычный пользователь и принять за настоящую аналитику.
 const ADMIN_SCREENS = new Set<ScreenId>([
-  "sources", "scoring", "tags", "users", "jobs", "maintenance",
+  "sources", "source-candidates", "source-agent", "scoring", "tags", "users", "jobs", "maintenance",
   // Приём файлов — admin-only и на сервере (POST /api/documents требует require_admin):
   // фронтовый гейт без серверного был бы дырой, а серверный без фронтового — кнопкой,
   // которая у обычного пользователя всегда отвечает 403.
@@ -90,6 +92,14 @@ const screens: ScreenDef[] = [
     eyebrow: "Source Control",
     title: "Каталог источников",
     description: "Упрощённые карточки, фильтры, диагностика и настройки парсинга теперь собраны в отдельном экране.",
+    status: "Экран активен",
+  },
+  {
+    id: "source-agent",
+    label: "Агент источников",
+    eyebrow: "Source Discovery",
+    title: "Агент поиска источников",
+    description: "Поиск новых источников, проверка кандидатов, память агента и рекомендации по действиям доступны только администраторам.",
     status: "Экран активен",
   },
   {
@@ -162,7 +172,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Администрирование",
-    screens: ["users", "statistics"],
+    screens: ["users", "statistics", "source-agent"],
   },
   // Прототипы будущих разделов. Оба экрана в ADMIN_SCREENS, поэтому у не-админа фильтр ниже
   // (isAdmin || !ADMIN_SCREENS.has(sid)) вычистит их, visibleScreens станет пустым и вся группа
@@ -175,7 +185,7 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
@@ -256,6 +266,14 @@ export function App() {
 
   if (activeScreen === "sources") {
     currentScreen = <SourcesPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "source-candidates") {
+    currentScreen = <SourceCandidatesPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "source-agent") {
+    currentScreen = <SourceAgentPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "documents") {

@@ -122,6 +122,32 @@ python -m oiltech_digest.cli ai-cost-report
 python -m oiltech_digest.cli ai-article-cost-report
 ```
 
+## 6. Проверка нефтегазовой терминологии
+
+Перед демо или массовым экспортом дайджеста проверьте словарь:
+
+```bash
+python -m oiltech_digest.cli validate-terminology
+```
+
+Найти старые карточки с плохими терминами:
+
+```bash
+python -m oiltech_digest.cli audit-terminology --limit 1000 --show 50
+```
+
+Посмотреть, что будет исправлено без записи в БД:
+
+```bash
+python -m oiltech_digest.cli repair-terminology --dry-run --limit 1000 --show 50
+```
+
+Применить исправления после ручной проверки dry-run:
+
+```bash
+python -m oiltech_digest.cli repair-terminology --no-dry-run --limit 1000
+```
+
 Ожидаемо:
 
 - появляются `article_cards`;

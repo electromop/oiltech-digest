@@ -1,8 +1,16 @@
 from oiltech_digest.processing import pipeline
+from oiltech_digest.processing.domain_glossary import (
+    enforce_glossary_text,
+    glossary_golden_cases,
+    glossary_prompt_block,
+    run_terminology_eval,
+    terminology_warnings,
+    validate_glossary,
+)
 from oiltech_digest.processing import digest
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient, _extract_output_text
-from oiltech_digest.processing.seed import DEFAULT_SCORING_CRITERIA, _split_keywords
+from oiltech_digest.processing.seed import DEFAULT_SCORING_CRITERIA, _split_keywords, _tag_signal_enrichment
 
 
 class _RecordingClient:
@@ -17,7 +25,13 @@ class _RecordingClient:
     def complete_json(self, instructions, user_input, schema, max_output_tokens=900,
                       model=None, reasoning_effort=None):
         name = schema["name"]
-        self.calls.append({"name": name, "model": model, "reasoning": reasoning_effort, "input": user_input})
+        self.calls.append({
+            "name": name,
+            "model": model,
+            "reasoning": reasoning_effort,
+            "input": user_input,
+            "max_output_tokens": max_output_tokens,
+        })
         if name == "article_relevance":
             return AIResponse(data={"relevant": self.relevant, "reason": "x"}, model=model or "fake")
         if name == "article_summary":
@@ -95,7 +109,43 @@ def test_relevance_article_uses_relevance_model_and_reasoning(monkeypatch):
     assert call["name"] == "article_relevance"
     assert call["model"] == "strong-model"
     assert call["reasoning"] == "high"
+    assert call["max_output_tokens"] == 2500
     assert "S" not in call["input"]  # суть не в промпте гейта
+
+
+def test_relevance_article_retries_with_compact_prompt_on_output_limit(monkeypatch):
+    from oiltech_digest.processing.openai_client import AIClientError
+
+    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_MODEL", "gpt-5-nano")
+    monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_REASONING", "medium")
+
+    class FlakyClient:
+        model = "fake"
+
+        def __init__(self):
+            self.calls = []
+
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            self.calls.append({
+                "input": user_input,
+                "model": model,
+                "reasoning": reasoning_effort,
+                "max_output_tokens": max_output_tokens,
+            })
+            if len(self.calls) == 1:
+                raise AIClientError("OpenAI response does not contain output text (incomplete_details={'reason': 'max_output_tokens'})")
+            return AIResponse(data={"relevant": False, "reason": "нет связи с нефтегазом"}, model=model or "fake")
+
+    client = FlakyClient()
+    long_text = "бурение " * 1200
+
+    response = pipeline.relevance_article({"title": "t", "raw_text": long_text, "summary": "S"}, client)
+
+    assert response.data["relevant"] is False
+    assert len(client.calls) == 2
+    assert client.calls[0]["reasoning"] == "medium"
+    assert client.calls[1]["reasoning"] == "minimal"
+    assert len(client.calls[1]["input"]) < len(client.calls[0]["input"])
 
 
 def test_reasoning_effort_across_gpt5_generations():
@@ -136,6 +186,14 @@ def test_split_keywords_semicolon_and_newline():
     assert _split_keywords("ГРП; бурение\nцементирование") == ["ГРП", "бурение", "цементирование"]
 
 
+def test_signal_enrichment_adds_chinese_hse_keywords():
+    extra = _tag_signal_enrichment("Экология, промышленная безопасность, HSE и устойчивое развитие")
+
+    assert "predictive HSE" in extra["keywords_en"]
+    assert "电子作业票" in extra["keywords_cn"]
+    assert "防碰撞系统" in extra["keywords_cn"]
+
+
 def test_default_scoring_weights_equal_100():
     assert sum(item["weight"] for item in DEFAULT_SCORING_CRITERIA) == 100
 
@@ -150,6 +208,137 @@ def test_keyword_tag_selects_best_tag():
         {"id": 2, "keywords_json": ["ГРП"], "keywords_en_json": ["electric frac", "hydraulic fracturing"]},
     ]
     assert pipeline.keyword_tag(article, tags)["tag_id"] == 2
+
+
+def test_glossary_prompt_selects_relevant_oilfield_terms():
+    article = {
+        "title": "Electric frac fleet expands hydraulic fracturing operations",
+        "raw_text": "The company uses electric frac units and proppant for hydraulic fracturing.",
+    }
+
+    block = glossary_prompt_block(article)
+
+    assert "hydraulic fracturing" in block
+    assert "preferred_ru: ГРП" in block
+    assert "forbidden_ru: фракинг" in block
+    assert "proppant" in block
+
+
+def test_summary_enforces_oilfield_preferred_terms():
+    class BadTranslatorClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            assert "preferred_ru: ГРП" in user_input
+            return AIResponse(
+                data={"summary": "Компания расширила фракинг и закупила новые флоты."},
+                model="fake",
+            )
+
+    article = {
+        "title": "Electric frac fleet expands hydraulic fracturing operations",
+        "raw_text": "Electric frac fleet expands hydraulic fracturing operations in oilfields.",
+    }
+
+    response = pipeline.summarize_article(article, BadTranslatorClient())
+
+    assert "ГРП" in response.data["summary"]
+    assert "фракинг" not in response.data["summary"].lower()
+    assert terminology_warnings(response.data["summary"], article) == []
+
+
+def test_glossary_enforces_inflected_bad_terms():
+    class BadTranslatorClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            return AIResponse(
+                data={"summary": "После фракинга на оффшоре компания провела флоубэка анализ и ворковеров программу."},
+                model="fake",
+            )
+
+    article = {
+        "title": "Offshore fracking flowback and workover program",
+        "raw_text": "Offshore hydraulic fracturing generated flowback and required workover operations.",
+    }
+
+    response = pipeline.summarize_article(article, BadTranslatorClient())
+    summary = response.data["summary"].lower()
+
+    assert "грп" in summary
+    assert "на шельфе" in summary
+    assert "анализ жидкости обратного притока" in summary
+    assert "крс" in summary
+    assert "фракинг" not in summary
+    assert "оффшор" not in summary
+    assert "флоубэк" not in summary
+    assert "ворковер" not in summary
+
+
+def test_glossary_catches_reservoir_and_stimulation_calques():
+    class BadTranslatorClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            assert "preferred_ru: пласт" in user_input
+            assert "preferred_ru: интенсификация притока" in user_input
+            return AIResponse(
+                data={"summary": "Оператор провёл стимуляцию скважины для резервуара."},
+                model="fake",
+            )
+
+    article = {
+        "title": "Well stimulation improves reservoir output",
+        "raw_text": "Well stimulation improved reservoir output in the producing formation.",
+    }
+
+    response = pipeline.summarize_article(article, BadTranslatorClient())
+
+    assert "провёл интенсификацию притока" in response.data["summary"]
+    assert "для пласта" in response.data["summary"]
+    assert "стимуляция скважины" not in response.data["summary"]
+    assert "резервуар" not in response.data["summary"]
+
+
+def test_glossary_golden_cases_pass():
+    for case in glossary_golden_cases():
+        fixed = enforce_glossary_text(str(case["bad"]), case["article"])
+        fixed_lower = fixed.lower()
+        missing = [term for term in case["must_have"] if term.lower() not in fixed_lower]
+        forbidden = [term for term in case["must_not"] if term.lower() in fixed_lower]
+
+        assert not missing, f"{case['name']}: {fixed}; missing={missing}"
+        assert not forbidden, f"{case['name']}: {fixed}; forbidden={forbidden}"
+
+
+def test_domain_glossary_definition_is_valid():
+    assert validate_glossary() == []
+
+
+def test_terminology_eval_passes_100_examples():
+    report = run_terminology_eval(limit=100)
+
+    assert report["total"] == 100
+    assert report["failed"] == 0
+    assert report["passed"] == 100
+
+
+def test_title_translation_enforces_completion_and_workover_terms():
+    class BadTitleClient:
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            assert "preferred_ru: заканчивание скважины" in user_input
+            assert "preferred_ru: КРС" in user_input
+            return AIResponse(
+                data={"title_ru": "Завершение скважины и ворковер увеличили добычу"},
+                model="fake",
+            )
+
+    article = {
+        "title": "Well completion and workover improve production",
+        "raw_text": "The article describes well completion and workover operations.",
+        "language": "en",
+    }
+
+    title_ru, response = pipeline.title_ru_for_article(article, BadTitleClient())
+
+    assert response is not None
+    assert "заканчивание скважины" in title_ru.lower()
+    assert "КРС" in title_ru
+    assert "ворковер" not in title_ru.lower()
 
 
 def test_offline_summary_is_deterministic():

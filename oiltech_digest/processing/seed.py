@@ -50,6 +50,222 @@ DEFAULT_SCORING_CRITERIA = [
 ]
 
 
+TAG_SIGNAL_ENRICHMENT = [
+    {
+        "match": ("робот", "автоном"),
+        "keywords_ru": [
+            "роботизация опасных операций",
+            "автономная инспекция",
+            "робот-инспектор",
+            "снижение присутствия человека",
+            "опасная зона",
+            "дистанционный обход",
+            "физический ИИ",
+        ],
+        "keywords_en": [
+            "physical AI",
+            "autonomous inspection robot",
+            "robotic inspection",
+            "hazardous area robot",
+            "remote inspection",
+            "reduce human exposure",
+            "robotic drilling",
+            "red zone removal",
+            "autonomous mobile robot",
+        ],
+        "keywords_cn": [
+            "具身智能",
+            "物理人工智能",
+            "巡检机器人",
+            "防爆巡检机器人",
+            "自主巡检",
+            "危险作业机器人",
+            "井场机器人",
+            "油气机器人",
+            "无人化巡检",
+        ],
+    },
+    {
+        "match": ("экология", "промышленная безопасность", "hse", "устойчив"),
+        "keywords_ru": [
+            "предиктивная безопасность",
+            "предотвращение инцидентов",
+            "контроль опасных зон",
+            "цифровой наряд-допуск",
+            "динамический наряд-допуск",
+            "LOTO",
+            "SIMOPS",
+            "усталость водителя",
+            "предотвращение столкновений",
+        ],
+        "keywords_en": [
+            "predictive HSE",
+            "predictive safety",
+            "preventive safety",
+            "continuous control assurance",
+            "digital permit to work",
+            "dynamic permit to work",
+            "control of work",
+            "LOTO",
+            "SIMOPS",
+            "fatigue detection",
+            "collision avoidance",
+            "near miss",
+            "danger zone detection",
+        ],
+        "keywords_cn": [
+            "预测性安全",
+            "智能安全",
+            "作业许可",
+            "电子作业票",
+            "特殊作业票",
+            "安全生产",
+            "双重预防机制",
+            "风险分级管控",
+            "隐患排查治理",
+            "疲劳驾驶监测",
+            "防碰撞系统",
+            "人员定位",
+        ],
+    },
+    {
+        "match": ("логистика", "транспорт", "supply chain"),
+        "keywords_ru": [
+            "автономное вмешательство",
+            "предотвращение столкновений",
+            "усталость оператора",
+            "слепая зона",
+            "телематика спецтехники",
+            "опасное сближение",
+        ],
+        "keywords_en": [
+            "vehicle intervention system",
+            "collision intervention",
+            "collision avoidance system",
+            "EMESRT Level 9",
+            "operator alertness",
+            "fatigue monitoring",
+            "blind spot detection",
+            "proximity detection",
+            "heavy equipment safety",
+        ],
+        "keywords_cn": [
+            "矿卡防碰撞",
+            "车辆干预系统",
+            "主动防碰撞",
+            "盲区监测",
+            "疲劳监测",
+            "矿山无人驾驶",
+            "智能矿卡",
+            "人员车辆防碰撞",
+        ],
+    },
+    {
+        "match": ("бурение", "буровое"),
+        "keywords_ru": [
+            "автоматизированная буровая",
+            "роботизация буровой",
+            "красная зона буровой",
+            "удаленное управление буровой",
+            "автоматизация спуско-подъемных операций",
+        ],
+        "keywords_en": [
+            "automated drilling rig",
+            "robotic drilling",
+            "drill floor automation",
+            "red zone automation",
+            "remote drilling operations",
+            "pipe handling robot",
+            "automated pipe handling",
+        ],
+        "keywords_cn": [
+            "自动化钻机",
+            "智能钻井",
+            "钻台自动化",
+            "管柱自动处理",
+            "钻井机器人",
+            "远程钻井",
+        ],
+    },
+    {
+        "match": ("добыча", "механизирован"),
+        "keywords_ru": [
+            "предиктивная диагностика оборудования",
+            "состояние оборудования",
+            "автоматический обход",
+            "цифровой двойник промысла",
+        ],
+        "keywords_en": [
+            "predictive maintenance",
+            "condition monitoring",
+            "autonomous field inspection",
+            "digital twin operations",
+            "equipment health monitoring",
+        ],
+        "keywords_cn": [
+            "预测性维护",
+            "设备状态监测",
+            "智能油田",
+            "数字孪生油田",
+            "油田无人巡检",
+        ],
+    },
+    {
+        "match": ("промысловая инфраструктура", "surface facilities", "обустрой"),
+        "keywords_ru": [
+            "безлюдный объект",
+            "автономная инспекция объекта",
+            "мониторинг утечек",
+            "газоанализ",
+            "цифровой двойник объекта",
+        ],
+        "keywords_en": [
+            "unmanned facility",
+            "autonomous plant inspection",
+            "gas leak detection",
+            "remote operations center",
+            "site surveillance",
+            "environmental monitoring",
+        ],
+        "keywords_cn": [
+            "无人站场",
+            "无人值守",
+            "智能巡检",
+            "泄漏检测",
+            "气体检测",
+            "远程运维",
+            "油气站场",
+        ],
+    },
+    {
+        "match": ("рынок", "экономика", "контракт", "m&a"),
+        "keywords_ru": [
+            "масштабирование технологии",
+            "промышленное внедрение",
+            "поставщик технологии",
+            "рамочный контракт",
+            "совместная разработка",
+        ],
+        "keywords_en": [
+            "commercial deployment",
+            "technology supplier",
+            "framework agreement",
+            "strategic partnership",
+            "joint development",
+            "field deployment",
+        ],
+        "keywords_cn": [
+            "商业化应用",
+            "规模化应用",
+            "战略合作",
+            "联合研发",
+            "示范应用",
+            "现场应用",
+        ],
+    },
+]
+
+
 def seed_tags_from_directions(path=DIRECTIONS_XLSX) -> dict:
     """Load D01-D18 as top-level tags with RU/EN keywords."""
     wb = openpyxl.load_workbook(path, data_only=True)
@@ -63,14 +279,20 @@ def seed_tags_from_directions(path=DIRECTIONS_XLSX) -> dict:
             if not direction_id:
                 continue
             keywords = keyword_rows.get(direction_id, {})
+            ru_keywords = _split_keywords(keywords.get("Ключевые слова RU"))
+            en_keywords = _split_keywords(keywords.get("Keywords EN"))
+            extra = _tag_signal_enrichment(
+                row.get("Направление RU") or "",
+                row.get("Direction EN") or "",
+            )
             repository.upsert_tag(
                 {
                     "parent_id": None,
                     "name": row.get("Направление RU") or row.get("Direction EN"),
                     "name_en": row.get("Direction EN"),
                     "description": row.get("Что покрывает"),
-                    "keywords_json": _split_keywords(keywords.get("Ключевые слова RU")),
-                    "keywords_en_json": _split_keywords(keywords.get("Keywords EN")),
+                    "keywords_json": _dedupe([*ru_keywords, *extra["keywords_ru"]]),
+                    "keywords_en_json": _dedupe([*en_keywords, *extra["keywords_en"], *extra["keywords_cn"]]),
                     "sort_order": order,
                 }
             )
@@ -106,3 +328,25 @@ def _split_keywords(value: str | None) -> list[str]:
         return []
     return [part.strip() for part in re.split(r";|\n", value) if part and part.strip()]
 
+
+def _tag_signal_enrichment(name_ru: str, name_en: str = "") -> dict[str, list[str]]:
+    haystack = f"{name_ru} {name_en}".lower()
+    result = {"keywords_ru": [], "keywords_en": [], "keywords_cn": []}
+    for item in TAG_SIGNAL_ENRICHMENT:
+        if any(token.lower() in haystack for token in item["match"]):
+            result["keywords_ru"].extend(item.get("keywords_ru", []))
+            result["keywords_en"].extend(item.get("keywords_en", []))
+            result["keywords_cn"].extend(item.get("keywords_cn", []))
+    return {key: _dedupe(value) for key, value in result.items()}
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    result = []
+    seen = set()
+    for value in values:
+        item = str(value or "").strip()
+        key = item.casefold()
+        if item and key not in seen:
+            result.append(item)
+            seen.add(key)
+    return result
