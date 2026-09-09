@@ -47,3 +47,11 @@ frontend/*.tsbuildinfo
 frontend/vite.config.d.ts
 frontend/vite.config.js
 docs/help/site/
+
+# Локальный каталог оригиналов при запуске scripts/run-local.sh
+.local-documents/
+
+# Мусор macOS
+.DS_Store
+Icon?
+._*

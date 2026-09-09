@@ -150,21 +150,21 @@ FastAPI отдаёт собранный `frontend/dist`. Старый `web/app.h
 
 ### Frontend
 
-- [frontend/src/app/App.tsx](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/frontend/src/app/App.tsx)
-- [frontend/src/styles/globals.css](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/frontend/src/styles/globals.css)
-- [frontend/src/features/articles/ArticlesPage.tsx](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/frontend/src/features/articles/ArticlesPage.tsx)
-- [frontend/src/features/digest/DigestPage.tsx](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/frontend/src/features/digest/DigestPage.tsx)
-- [frontend/src/features/sources/SourcesPage.tsx](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/frontend/src/features/sources/SourcesPage.tsx)
-- [frontend/src/features/sources/SourceCard.tsx](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/frontend/src/features/sources/SourceCard.tsx)
-- [frontend/src/features/tags/TagsPage.tsx](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/frontend/src/features/tags/TagsPage.tsx)
+- [frontend/src/app/App.tsx](../../frontend/src/app/App.tsx)
+- [frontend/src/styles/globals.css](../../frontend/src/styles/globals.css)
+- [frontend/src/features/articles/ArticlesPage.tsx](../../frontend/src/features/articles/ArticlesPage.tsx)
+- [frontend/src/features/digest/DigestPage.tsx](../../frontend/src/features/digest/DigestPage.tsx)
+- [frontend/src/features/sources/SourcesPage.tsx](../../frontend/src/features/sources/SourcesPage.tsx)
+- [frontend/src/features/sources/SourceCard.tsx](../../frontend/src/features/sources/SourceCard.tsx)
+- [frontend/src/features/tags/TagsPage.tsx](../../frontend/src/features/tags/TagsPage.tsx)
 
 ### Backend
 
-- [oiltech_digest/api.py](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/oiltech_digest/api.py)
-- [oiltech_digest/db/repository.py](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/oiltech_digest/db/repository.py)
-- [oiltech_digest/processing/digest.py](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/oiltech_digest/processing/digest.py)
-- [oiltech_digest/processing/digest_email_template.html](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/oiltech_digest/processing/digest_email_template.html)
-- [BACKLOG.md](/Users/g.fink/Documents/GitHub/libsolution_org/oiltech-digest/BACKLOG.md)
+- [oiltech_digest/api.py](../../oiltech_digest/api.py)
+- [oiltech_digest/db/repository.py](../../oiltech_digest/db/repository.py)
+- [oiltech_digest/processing/digest.py](../../oiltech_digest/processing/digest.py)
+- [oiltech_digest/processing/digest_email_template.html](../../oiltech_digest/processing/digest_email_template.html)
+- [BACKLOG.md](../../BACKLOG.md)
 
 ---
 

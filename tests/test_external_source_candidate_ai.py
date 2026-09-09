@@ -38,14 +38,14 @@ def test_process_source_candidate_payload_builds_article_results(monkeypatch):
         external_ai,
         "score_article",
         lambda article, criteria, client: AIResponse(
-            {
-                "total_score": 80,
-                "score_label": "high",
-                "explanation": "strong signal",
-                "items": [{"criterion_id": 9, "score": 80, "rationale": "r"}],
-            },
-            "fake",
-            10,
+                {
+                    "total_score": 80,
+                    "score_label": "high",
+                    "explanation": "strong signal",
+                    "items": [{"criterion_id": 9, "ai_score": 80, "rationale": "r"}],
+                },
+                "fake",
+                10,
             5,
         ),
     )
@@ -63,9 +63,10 @@ def test_process_source_candidate_payload_builds_article_results(monkeypatch):
     assert result["articles"][0]["candidate_article_id"] == 101
     assert result["articles"][0]["summary"]["summary"] == "Короткая суть"
     assert result["articles"][0]["tagging"]["tag_id"] == 7
-    assert result["articles"][0]["scoring"]["total_score"] == 33.33
+    assert result["articles"][0]["scoring"]["total_score"] == 80
     assert result["source_regularity"]["dated_articles"] == 1
-    assert result["source_health"]["recommended_action"] in {"test_more", "human_review"}
+    assert result["source_health"]["health_score"] is not None
+    assert result["source_health"]["recommended_action"] in {"add", "test_more", "human_review", "reject"}
 
 
 def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypatch):

@@ -534,5 +534,28 @@ def test_eval_terminology_command_writes_reports(tmp_path, capsys):
 
     output = capsys.readouterr().out
     assert "terminology-eval: total=100 passed=100 failed=0" in output
-    assert "Hydraulic fracturing" in csv_path.read_text(encoding="utf-8-sig")
+    assert "ГРП / fracking" in csv_path.read_text(encoding="utf-8-sig")
     assert "Отчет по нефтегазовой терминологии" in md_path.read_text(encoding="utf-8")
+
+
+def test_apply_source_overrides_prints_missing_and_ambiguous_names(monkeypatch, capsys):
+    """Промах реестра виден в ВЫВОДЕ команды, а не только в логе.
+
+    Вызов в bootstrap обёрнут в `|| true` (docker-compose) и идёт через необязательный
+    run_step (docker-scheduler), поэтому код возврата до глаз не доходит. Если печатать
+    только счётчики, «не найдено=1» теряется среди строк деплоя — и молчащий источник
+    выглядит как успешно применённый оверрайд. Имя обязано быть в stdout.
+    """
+    monkeypatch.setattr(
+        "oiltech_digest.ingestion.source_overrides.apply_overrides",
+        lambda: {"changed": 2, "unchanged": 44, "not_found": 1, "ambiguous": 1,
+                 "missing_names": ["РБК Энергетика [Media]"],
+                 "ambiguous_names": ["Neftegaz.ru"]},
+    )
+
+    cli.cmd_apply_source_overrides(argparse.Namespace())
+
+    out = capsys.readouterr().out
+    assert "РБК Энергетика [Media]" in out
+    assert "Neftegaz.ru" in out
+    assert "source_type" in out          # подсказка, чем чинить неоднозначность

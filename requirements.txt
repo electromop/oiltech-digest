@@ -3,6 +3,10 @@ feedparser==6.0.11
 requests==2.32.3
 python-dateutil==2.9.0
 lxml>=4.9.0
+# CSS-селекторы listing_selector/article_link_selector: lxml делегирует .cssselect()
+# сюда. Без пакета вызов кидает ImportError, и селектор молча деградирует в «вся
+# страница» — то есть выглядит применённым, но не фильтрует (#61).
+cssselect>=1.2.0
 trafilatura>=1.12.0
 openpyxl==3.1.5
 python-dotenv==1.0.1
@@ -10,3 +14,6 @@ fastapi==0.125.0
 uvicorn[standard]==0.38.0
 playwright>=1.40  # PDF-экспорт дайджеста через headless Chromium (см. Dockerfile)
 python-docx==1.2.0
+python-multipart==0.0.20  # приём файлов: FastAPI требует его для UploadFile — без него падает ОПРЕДЕЛЕНИЕ маршрута, не запрос
+pypdf==6.16.1  # разбор PDF. Выбран замером 20.08: 35 МБ пик против 511 МБ у pdfplumber; лицензия BSD против AGPL у pymupdf
+python-pptx==1.0.2  # разбор презентаций (MIT)

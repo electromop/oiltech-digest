@@ -82,8 +82,18 @@ def get_sources_for_discovery(only_missing: bool = True,
 
     `playwright` — осознанно выставленная вручную стратегия (JS/WAF-сайты); discover-rss
     НЕ должен её сбрасывать в request, иначе оверрайды откатываются на каждом цикле.
+
+    По той же причине исключаются источники с заданным `listing_url`: он ставится только
+    осознанно (реестр оверрайдов или админка), а discover_feed пробует НЕ его, а `url` —
+    главную страницу издания. У федеральных СМИ главная всегда рекламирует RSS, поэтому
+    update_source_rss перезаписал бы parse_strategy на 'rss' с ОБЩИМ фидом издания —
+    ровно тем мусором, ради которого источник и правился (#61). Порядок на деплое делает
+    это неизбежным: bootstrap применяет реестр, а первый же цикл планировщика запускает
+    discover-rss (RUN_DISCOVER_ON_START=1), то есть откат случился бы до первого парса.
     """
-    query = "SELECT * FROM sources WHERE enabled = TRUE AND parse_strategy NOT IN ('telegram', 'playwright')"
+    query = ("SELECT * FROM sources WHERE enabled = TRUE "
+             "AND parse_strategy NOT IN ('telegram', 'playwright') "
+             "AND (listing_url IS NULL OR listing_url = '')")
     params: list = []
     if only_missing:
         query += " AND (rss_url IS NULL OR rss_url = '')"
@@ -2711,11 +2721,16 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
 
     retry_too_short=True also includes articles previously marked too_short so they
     can be re-attempted (e.g. after trafilatura is added to the extraction chain).
+
+    Сюда же берём no_gain: этот статус выделен из too_short позже, и в базе с
+    прежних прогонов лежат строки, где «нет прироста» записано как too_short.
+    Если брать только одно из двух значений, часть статей молча выпадет из
+    повтора — поэтому список, а не равенство.
     """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         status_filter = (
-            "AND (a.full_text_status IS NULL OR a.full_text_status = 'too_short')"
+            "AND (a.full_text_status IS NULL OR a.full_text_status IN ('too_short', 'no_gain'))"
             if retry_too_short
             else "AND a.full_text_status IS NULL"
         )

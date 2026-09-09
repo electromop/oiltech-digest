@@ -7,6 +7,7 @@ import type { Article, DashboardStats, User } from "../api/types";
 import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles/ArticlesPage";
 import { BacklogPage } from "../features/backlog/BacklogPage";
 import { DigestPage } from "../features/digest/DigestPage";
+import { DocumentsPage } from "../features/documents/DocumentsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
@@ -27,15 +28,18 @@ const TechnologiesPreview = lazy(() =>
 );
 
 type ScreenId =
-  | "articles" | "digest" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "articles" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
   | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 // Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
 // случайно открыть обычный пользователь и принять за настоящую аналитику.
 const ADMIN_SCREENS = new Set<ScreenId>([
-  "sources", "source-candidates", "scoring", "tags", "users", "jobs", "maintenance",
-  "source-agent",
+  "sources", "source-candidates", "source-agent", "scoring", "tags", "users", "jobs", "maintenance",
+  // Приём файлов — admin-only и на сервере (POST /api/documents требует require_admin):
+  // фронтовый гейт без серверного был бы дырой, а серверный без фронтового — кнопкой,
+  // которая у обычного пользователя всегда отвечает 403.
+  "documents",
   // Статистика сводная (видно работу КАЖДОГО пользователя) — решение владельца:
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
   // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
@@ -72,6 +76,14 @@ const screens: ScreenDef[] = [
     eyebrow: "Editorial Output",
     title: "Сборка выпуска",
     description: "Выборка материалов, preview, draft и экспорт опираются на тот же backend API, но уже через новый интерфейс.",
+    status: "Экран активен",
+  },
+  {
+    id: "documents",
+    label: "Материалы",
+    eyebrow: "Documents",
+    title: "Материалы",
+    description: "Загрузка внутренних документов и их разбор: паспорт, суть, сводка и факты с привязкой к месту в файле.",
     status: "Экран активен",
   },
   {
@@ -152,7 +164,7 @@ const appHighlights = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["articles", "digest"],
+    screens: ["articles", "digest", "documents"],
   },
   {
     label: "Настройки",
@@ -173,7 +185,7 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["sources", "jobs", "maintenance", "source-candidates", "source-agent", "tech-preview", "analytics-preview"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
@@ -262,6 +274,10 @@ export function App() {
 
   if (activeScreen === "source-agent") {
     currentScreen = <SourceAgentPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "documents") {
+    currentScreen = <DocumentsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "articles") {
@@ -638,6 +654,15 @@ function ScreenIcon(props: { screenId: ScreenId }) {
       <svg {...common}>
         <path d="M3 4.5h10M3 8h10M3 11.5h6" />
         <circle cx="11.5" cy="11.5" r="2" />
+      </svg>
+    );
+  }
+
+  if (props.screenId === "documents") {
+    return (
+      <svg {...common}>
+        <path d="M4 2.5h5l3 3v8H4z" strokeLinejoin="round" />
+        <path d="M9 2.5v3h3M6 8h4M6 10.5h4" />
       </svg>
     );
   }

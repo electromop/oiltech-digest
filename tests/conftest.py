@@ -6,7 +6,7 @@ import psycopg
 import pytest
 
 from oiltech_digest.db import connection
-from oiltech_digest.db import repository
+from oiltech_digest.db import documents_repo, repository
 from oiltech_digest import api
 from oiltech_digest import config
 from oiltech_digest.config import DATABASE_URL
@@ -38,6 +38,10 @@ def isolated_db(monkeypatch):
     # поэтому патч самого модуля connection его НЕ перехватывает — без этой строки
     # apply_overrides() в тестах ходит в НАСТОЯЩУЮ базу вместо изолированной схемы.
     monkeypatch.setattr(source_overrides, "get_connection", connect)
+    # documents_repo зовёт connection.get_connection() атрибутом модуля, поэтому
+    # подмены выше ему хватает. Строка здесь — чтобы при рефакторинге на прямой
+    # импорт дефект вскрылся сразу, а не тихой записью в боевую схему.
+    monkeypatch.setattr(documents_repo, "_conn", connect, raising=False)
 
     try:
         connection.init_db()

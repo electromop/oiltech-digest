@@ -34,6 +34,13 @@ _BAD_LINK_RE = re.compile(
 _MEDIA_LINK_EXT_RE = re.compile(r"\.(?:avif|gif|jpe?g|png|svg|webp|bmp|ico|pdf|zip|rar|7z|mp4|mov|webm|mp3|wav)$", re.I)
 _DATE_HINT_RE = re.compile(r"/20\d{2}/\d{1,2}/\d{1,2}/")
 _DATE_TEXT_RE = re.compile(r"\b(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2})\b")
+# Форма даты внутри более длинной строки: ISO, «19 August 2026», «August 25, 2026».
+# Используется только как запасной путь в _parse_datetime — см. комментарий там.
+_DATE_IN_TEXT_RE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}\b"
+    r"|\b[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}\b"
+)
 
 
 @dataclass(frozen=True)
@@ -232,6 +239,12 @@ def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> li
     base_host = (urlsplit(listing_url).netloc or "").lower()
     nodes = _nodes_by_selector(doc, listing_selector) if listing_selector else []
     if not nodes:
+        if listing_selector:
+            # Фоллбэк на весь документ — самый коварный исход: источник с настроенным
+            # селектором собирает ссылки отовсюду (у СМИ это сквозной сайдбар общей ленты),
+            # и выглядит это как рабочая настройка. Пусть будет видно в логе.
+            logger.warning("listing_selector %r не нашёл узлов — беру всю страницу",
+                           listing_selector)
         nodes = [doc]
 
     seen: set[str] = set()
@@ -358,7 +371,11 @@ def _nodes_by_selector(node, selector: str | None) -> list:
         if selector.startswith(("/", ".//", "(")):
             return list(node.xpath(selector))
         return list(node.cssselect(selector))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - кривой селектор не должен валить парс источника
+        # Молчать здесь нельзя: вызывающий код при пустом результате берёт ВСЮ страницу,
+        # то есть отказ селектора выглядит как успешная фильтрация. Так пропал целый
+        # ImportError — cssselect не был в requirements, и любой CSS-селектор был no-op.
+        logger.warning("селектор %r не отработал (%s: %s)", selector, type(exc).__name__, exc)
         return []
 
 
@@ -383,13 +400,30 @@ def _guess_date_from_text(raw: str) -> str:
     return match.group(1) if match else ""
 
 
+def _try_parse_datetime(raw: str) -> datetime | None:
+    try:
+        return dateparser.parse(raw)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def _parse_datetime(raw: str) -> datetime | None:
     if not raw:
         return None
-    try:
-        parsed = dateparser.parse(raw)
-    except (ValueError, TypeError, OverflowError):
-        return None
+    parsed = _try_parse_datetime(raw)
+    if parsed is None:
+        # В карточке листинга дата почти никогда не лежит одна: рядом автор и название
+        # издания («August 25, 2026 • JPT Staff • Journal of Petroleum Technology»).
+        # Строгий разбор на такой строке падает, и источник годами идёт с пустым
+        # published_at — ровно это было у JPT.
+        #
+        # dateparser.parse(fuzzy=True) сюда НЕ годится, проверено на реальных строках:
+        # он выдумывает дату там, где её нет — «Section 5 of 12» превращалось в
+        # 2026-05-12, а «Halliburton 2026 Q3 results webcast» в 2026-03-25. Поэтому
+        # сначала вырезаем ФОРМУ даты, и разбираем только её.
+        match = _DATE_IN_TEXT_RE.search(raw)
+        if match:
+            parsed = _try_parse_datetime(match.group(0))
     if parsed is None:
         return None
     if parsed.tzinfo is None:

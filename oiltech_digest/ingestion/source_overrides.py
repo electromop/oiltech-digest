@@ -23,8 +23,15 @@ from oiltech_digest.db.connection import get_connection
 logger = logging.getLogger(__name__)
 
 # Ключ — точное имя источника (sources.name). Значения:
+#   source_type    — опционально, но ОБЯЗАТЕЛЬНО для неуникальных имён: естественный ключ
+#     таблицы — пара (name, source_type), одно издание живёт двумя строками (сайт 'Media' +
+#     'Telegram'-канал) под общим именем. Без него имя с двумя строками считается
+#     неоднозначным и оверрайд НЕ применяется (шумно, см. apply_overrides).
 #   parse_strategy — обязательно ('playwright' для JS/WAF-сайтов, 'rss' для лент);
 #   listing_url    — опционально; None = не трогать (берётся из url/сидера).
+#   listing_selector — опционально; CSS/XPath карточек листинга. Нужен, когда на странице
+#     НЕСКОЛЬКО блоков ссылок и «чужой» побеждает по очкам (сквозной сайдбар общей ленты
+#     у федеральных СМИ). При заданном селекторе кандидаты берутся ТОЛЬКО из него.
 #   rss_url        — опционально; для RSS-лент с нестандартным/сменившимся URL фида.
 #   url            — опционально; для telegram/прочих с исправленным каналом/адресом.
 #   network_region — опционально ('external' = фетчить через зарубежный воркер).
@@ -89,7 +96,21 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "Aker Solutions": {"parse_strategy": "playwright",
                        "listing_url": "https://www.akersolutions.com/news/news-archive/"},
     "Rystad Energy": {"parse_strategy": "playwright", "listing_url": "https://www.rystadenergy.com/news"},  # рендер ✓ (свежак 08 июня), scheduler собирает в фоне
-    "Journal of Petroleum Technology": {"parse_strategy": "playwright", "listing_url": "https://jpt.spe.org/latest-news"},  # рендер ✓ (свежак 09 июня, даты извлекаются)
+    # JPT — личная просьба заказчика (24.08: «для нефтянки это маст хэв, номер 1 в мире,
+    # а оттуда мало что подтягивается»). Рендер всегда был исправен (219 КБ, ни WAF, ни
+    # блокировки) — теряли на разборе. Замер по сохранённой странице: без селекторов
+    # якорный путь давал 42 кандидата, из них 30 — рубрики `/topic/...`, и рубрика же
+    # шла ПЕРВОЙ по оценке, занимая слот в выдаче. Дат не было ни у одного.
+    # Разметка ленты — Arc Publishing: карточки .PromoB (12 шт.) и .PromoA (2 шт.),
+    # ссылка в *-title, дата в *-by-line. Комментарий «даты извлекаются» здесь стоял
+    # ошибочно: last_seen_published_at у источника был пуст.
+    "Journal of Petroleum Technology": {
+        "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/latest-news",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+    },
     # НЕ в реестре — listing отдаёт навигацию/SPA-оболочку вместо статей, нужен
     # listing_selector или другой URL (тюнинг отдельной задачей):
     #   Wood Mackenzie #16 (/press-releases/ → blogs/sign-up/topics)
@@ -165,6 +186,44 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "СПбГУ": {"parse_strategy": "rss", "rss_url": "https://spbu.ru/news-events.xml"},
     "МГУ": {"parse_strategy": "playwright", "listing_url": "https://www.msu.ru/news/"},  # сайт — SPA
 
+    # ==== Ревизия 2026-08-22 (#61): федеральные СМИ собирали ОБЩУЮ ленту издания ====
+    # Та же болезнь, что у РФ-блока выше, но на самых объёмных источниках: профиль издания
+    # жил ТОЛЬКО в поле name («Энергетика», «ТЭК»), а на настройку не влиял — у РБК не задан
+    # listing_url (фоллбэк на url = главная rbc.ru), у Интерфакса rss_url = общий фид издания.
+    # В ленту нефтесервисного дайджеста попадали кот Ларри, приговор экс-генералу Росгвардии
+    # и танк «Пантера» — заказчику это видно.
+    # `source_type` здесь ОБЯЗАТЕЛЕН: у обоих изданий есть telegram-двойник с ТЕМ ЖЕ именем
+    # (#59), и до правки apply_overrides ниже оверрайд мог лечь на него (см. её докстринг).
+    "Интерфакс ТЭК": {
+        "source_type": "Media", "parse_strategy": "request",
+        # Проверено живым diagnose_source 22.08: verdict=ok, 8 кандидатов, заголовки
+        # отраслевые («Минпромторг хочет к 2030 году довести долю поставляемого оборудования
+        # РФ для ТЭК до 90%», «Изменения в топливном демпфере и налоговые послабления в ТЭК»).
+        # ⚠️ ФОРМАТ URL: у Интерфакса тег живёт в ПУТИ. Форма `?tag=…` отдаёт 200 и кандидатов,
+        # но это ОБЩАЯ лента: замер 22.08 — ?tag=ТЭК, ?tag=нефть, ?tag=энергетика вернули ОДИН
+        # И ТОТ ЖЕ список (Wildberries, ЦИК, погода в Москве). Неверный URL здесь не падает,
+        # а тихо отдаёт мусор — то есть выглядит как успешно применённый оверрайд.
+        "listing_url": "https://www.interfax.ru/tags/%D0%A2%D0%AD%D0%9A/"},
+    # NB: rss_url Интерфакса остаётся общей лентой издания. При parse_strategy='request' он не
+    # читается (диспетчер в rss_parser.parse_all жёстко по parse_strategy), но возврат стратегии
+    # на 'rss' — хоть руками, хоть discover-rss — вернёт мусор. Профильного фида у тега нет.
+    "РБК Энергетика": {
+        "source_type": "Media", "parse_strategy": "playwright",
+        # Замер на проде 24.08 (rbc.ru закрыт для не-РФ IP, поэтому проверка шла на сервере).
+        # Выдача тега рисуется на JS: request отдаёт 226 КБ / 266 анкеров, playwright на том
+        # же URL — 377 КБ / 376 анкеров, и только во втором появляется блок
+        # `div.search-item__wrap` с нефтегазовыми заголовками (Brent, Shell покупает ARC
+        # Resources, налог на сверхприбыль энергокомпаний, Saudi Aramco).
+        # listing_selector ОБЯЗАТЕЛЕН, и это не косметика: на отрендеренной странице ДВА
+        # блока ссылок — выдача тега и сквозной сайдбар общей ленты `div.js-news-feed-list`
+        # (Марадона, теннисист, Львова-Белова). Без селектора кандидаты берутся из обоих, и
+        # сайдбар выигрывает по очкам: замер дал 8 кандидатов из сайдбара и НОЛЬ из тега —
+        # то есть источник выглядел бы починенным, а тащил бы ровно тот же мусор.
+        # Известное ограничение: тег пополняется медленно — на 24.08 свежайшая статья от
+        # 04.08, дальше вглубь до 2021. Мало, но профильно; объём тюнить отдельно.
+        "listing_url": "https://www.rbc.ru/tags/?tag=%D0%BD%D0%B5%D1%84%D1%82%D1%8C+%D0%B8+%D0%B3%D0%B0%D0%B7",
+        "listing_selector": ".search-item__wrap"},
+
     # -- Гос-агентства: сайты таймаутят с прода (20с×3), но у них есть официальные telegram-каналы --
     # Telegram с РФ-сервера работает С ПЕРЕБОЯМИ (в логах бывает Network is unreachable), но
     # 7 telegram-источников живы и свежие — канал надёжнее, чем таймаутящий сайт.
@@ -180,10 +239,24 @@ SOURCE_OVERRIDES: dict[str, dict] = {
 
 def apply_overrides() -> dict:
     """Идемпотентно применить оверрайды. Меняет строку только если что-то реально
-    изменилось, и тогда же сбрасывает request-состояние. Возвращает статистику."""
+    изменилось, и тогда же сбрасывает request-состояние. Возвращает статистику.
+
+    Выбор строки идёт по паре `(name, source_type)` — естественному ключу таблицы
+    (`idx_sources_name_type`), а не по одному имени: одно издание живёт двумя строками
+    (сайт + telegram-канал) под общим именем. Поиск по одному `name` с `fetchone()`
+    отдавал строку на усмотрение плана запроса — на seq scan оверрайд ложился на
+    выключенный telegram-двойник, и `changed=1` означал «починен не тот источник».
+
+    Неоднозначность (имя без `source_type` совпало с несколькими строками) — это ОТКАЗ
+    с именем в отчёте, а не выбор наугад: молча испорченный второй источник дороже
+    непримененного оверрайда.
+    """
     changed = 0
     unchanged = 0
     not_found = 0
+    ambiguous = 0
+    missing_names: list[str] = []
+    ambiguous_names: list[str] = []
     with get_connection() as conn:
         for name, fields in SOURCE_OVERRIDES.items():
             new_strategy = fields["parse_strategy"]
@@ -191,21 +264,51 @@ def apply_overrides() -> dict:
             new_rss = fields.get("rss_url")
             new_url = fields.get("url")
             new_region = fields.get("network_region")
-            row = conn.execute(
-                "SELECT id, parse_strategy, listing_url, rss_url, url, network_region FROM sources WHERE name = %s",
-                (name,),
-            ).fetchone()
-            if row is None:
+            new_selector = fields.get("listing_selector")
+            # Эти два оверрайд раньше НЕ умел: прописанные в реестре, они молча
+            # никуда не доезжали. Именно их не хватает JPT, чтобы брать карточки
+            # ленты, а не рубрики, и видеть дату публикации.
+            new_link_selector = fields.get("article_link_selector")
+            new_date_selector = fields.get("article_date_selector")
+            want_type = fields.get("source_type")
+            select = ("SELECT id, parse_strategy, listing_url, rss_url, url, network_region, "
+                      "source_type, listing_selector, article_link_selector, "
+                      "article_date_selector FROM sources WHERE name = %s")
+            select_params: tuple = (name,)
+            if want_type is not None:
+                select += " AND source_type = %s"
+                select_params += (want_type,)
+            rows = conn.execute(select + " ORDER BY id", select_params).fetchall()
+            if not rows:
                 not_found += 1
-                logger.warning("source override: источник %r не найден в БД", name)
+                missing_names.append(name if want_type is None else f"{name} [{want_type}]")
+                logger.warning("source override: источник %r (source_type=%r) не найден в БД",
+                               name, want_type)
                 continue
-            source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region = row
+            if len(rows) > 1:
+                # Сузить ключ может только сам реестр — угадывать здесь нечего.
+                ambiguous += 1
+                ambiguous_names.append(name)
+                logger.error(
+                    "source override: имя %r неоднозначно (совпало строк: %d — %s) — оверрайд "
+                    "НЕ применён, добавьте source_type в запись реестра",
+                    name, len(rows), ", ".join(f"id={r[0]} {r[6]}" for r in rows),
+                )
+                continue
+            (source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region, _,
+             cur_selector, cur_link_selector, cur_date_selector) = rows[0]
             listing_changed = new_listing is not None and (cur_listing or "") != new_listing
             rss_changed = new_rss is not None and (cur_rss or "") != new_rss
             url_changed = new_url is not None and (cur_url or "") != new_url
             region_changed = new_region is not None and (cur_region or "auto") != new_region
+            selector_changed = new_selector is not None and (cur_selector or "") != new_selector
+            link_selector_changed = (new_link_selector is not None
+                                     and (cur_link_selector or "") != new_link_selector)
+            date_selector_changed = (new_date_selector is not None
+                                     and (cur_date_selector or "") != new_date_selector)
             if (cur_strategy == new_strategy and not listing_changed and not rss_changed
-                    and not url_changed and not region_changed):
+                    and not url_changed and not region_changed and not selector_changed
+                    and not link_selector_changed and not date_selector_changed):
                 unchanged += 1
                 continue
 
@@ -229,12 +332,26 @@ def apply_overrides() -> dict:
             if new_region is not None:
                 sets.append("network_region = %(network_region)s")
                 params["network_region"] = new_region
+            if new_selector is not None:
+                sets.append("listing_selector = %(listing_selector)s")
+                params["listing_selector"] = new_selector
+            if new_link_selector is not None:
+                sets.append("article_link_selector = %(article_link_selector)s")
+                params["article_link_selector"] = new_link_selector
+            if new_date_selector is not None:
+                sets.append("article_date_selector = %(article_date_selector)s")
+                params["article_date_selector"] = new_date_selector
             conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = %(id)s", params)
             changed += 1
-            logger.info("source override: %s → %s%s%s%s%s", name, new_strategy,
+            logger.info("source override: %s → %s%s%s%s%s%s%s%s", name, new_strategy,
                         f" listing={new_listing}" if new_listing else "",
+                        f" selector={new_selector}" if new_selector else "",
+                        f" link_selector={new_link_selector}" if new_link_selector else "",
+                        f" date_selector={new_date_selector}" if new_date_selector else "",
                         f" rss={new_rss}" if new_rss else "",
                         f" url={new_url}" if new_url else "",
                         f" region={new_region}" if new_region else "")
         conn.commit()
-    return {"changed": changed, "unchanged": unchanged, "not_found": not_found}
+    return {"changed": changed, "unchanged": unchanged, "not_found": not_found,
+            "ambiguous": ambiguous, "missing_names": missing_names,
+            "ambiguous_names": ambiguous_names}

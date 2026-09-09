@@ -146,6 +146,20 @@ OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").st
 OPENAI_SCORE_MODEL = os.environ.get("OPENAI_SCORE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SCORE_REASONING = os.environ.get("OPENAI_SCORE_REASONING", "").strip() or "medium"
 
+# Модель разбора ДОКУМЕНТОВ. Своя переменная, и намеренно БЕЗ отката на OPENAI_MODEL.
+# Пер-стадийные переменные читаются из окружения того процесса, который реально зовёт
+# модель, — это внешний воркер, чей .env не в git. Тихий откат на основную модель уже
+# случался (инцидент 2026-06): дефолт — самая дешёвая gpt-5-nano, она ЕСТЬ в таблице
+# ставок, поэтому счёт бы сошёлся, а корпус разобрала бы слабейшая модель, и никто
+# не заметил бы. Пусто → стадия падает с явной ошибкой, а не работает молча.
+OPENAI_DOC_MODEL = os.environ.get("OPENAI_DOC_MODEL", "").strip() or None
+OPENAI_DOC_REASONING = os.environ.get("OPENAI_DOC_REASONING", "").strip() or "medium"
+
+# Приём файлов: переключатель и границы. Лимиты подтверждены владельцем 20.08.
+UPLOAD_DOCS_ENABLED = os.environ.get("UPLOAD_DOCS_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+UPLOAD_MAX_FILE_BYTES = int(os.environ.get("UPLOAD_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "").strip() or "/data/documents"
+
 # USD per 1M tokens. Fallback-ставки, если модель не найдена в таблице ниже.
 # Дефолт (0.05/0.40) — это прайс gpt-5-nano; для конкретных моделей берётся
 # OPENAI_MODEL_PRICES, иначе экран «AI-затраты» занижает стоимость в разы.
@@ -157,10 +171,18 @@ OPENAI_OUTPUT_USD_PER_MTOK = float(os.environ.get("OPENAI_OUTPUT_USD_PER_MTOK", 
 # gpt-5.5 ~100× (тех-долг T4). Матчинг по префиксу имени: в БД модель хранится
 # с датой-суффиксом ("gpt-5.5-2026-04-23"), поэтому сравниваем startswith, и более
 # длинный/специфичный префикс выигрывает ("gpt-5-mini" раньше гипотетического "gpt-5").
+# Ставки сверены с прайс-листом OpenAI 21.08.2026 (developers.openai.com/api/docs/pricing).
+# Тогда же вскрылись две ошибки: gpt-5-mini стоял как 0.75/4.5 при публикуемых 0.25/2.00
+# (счёт завышался втрое), а gpt-5.4-mini и gpt-5.4-nano отсутствовали вовсе — и по
+# префиксному матчингу попадали бы под "gpt-5.4" со ставкой 2.5/15, то есть mini
+# считался бы втрое дороже себя. Более длинный префикс выигрывает, поэтому обе
+# записи обязаны стоять здесь явно.
 OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5.5": (5.0, 30.0),
+    "gpt-5.4-mini": (0.75, 4.5),
+    "gpt-5.4-nano": (0.20, 1.25),
     "gpt-5.4": (2.5, 15.0),
-    "gpt-5-mini": (0.75, 4.5),
+    "gpt-5-mini": (0.25, 2.0),
     "gpt-5-nano": (0.05, 0.40),
 }
 
