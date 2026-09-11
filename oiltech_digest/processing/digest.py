@@ -22,7 +22,7 @@ TEMPLATE_DIR = Path(__file__).resolve().parent
 EMAIL_TEMPLATE = "digest_email_template.html"
 BRANDING_CONFIG = "digest_branding.json"
 ASSETS_DIR = TEMPLATE_DIR / "assets"
-HERO_ASSET = "oiltech_digest_hero_600x360.png"
+HERO_ASSET = "oiltech_digest_hero_600x305.png"
 HERO_ALT = "Нефтесервисный дайджест — технологии, рынок и возможности для бизнеса"
 
 # Корпоративный шрифт GPN Din для PDF (Chromium рендерит @font-face). В email
@@ -50,8 +50,12 @@ def _asset_bytes(name: str) -> bytes | None:
 
 
 def _hero_data_uri() -> str:
-    """Утверждённый hero-баннер (600×360) как self-contained data-URI: работает и в
-    email, и в PDF (Chromium рендерит из строки, без сервера), и оффлайн."""
+    """Hero-баннер (600×305) как self-contained data-URI: работает и в email,
+    и в PDF (Chromium рендерит из строки, без сервера), и оффлайн.
+
+    Прежний баннер 600×360 нёс в верхней полосе логотип заказчика, его слоган и
+    название подразделения. По требованию правообладателя (письмо 11.09.2026)
+    полоса срезана — на ресурсе не должно быть корпоративной символики."""
     data = _asset_bytes(HERO_ASSET)
     return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else ""
 
@@ -102,9 +106,9 @@ def _branding_read_path() -> Path | None:
 def _load_digest_branding() -> dict:
     defaults = {
         "header": {
-            "brand_text": "ГАЗПРОМ НЕФТЬ",
-            "brand_suffix": "ЭНЕРГИЯ В ЛЮДЯХ",
-            "department_text": "БЛОК РАЗВИТИЯ БИЗНЕСА",
+            "brand_text": "НЕФТЕСЕРВИСНЫЙ ДАЙДЖЕСТ",
+            "brand_suffix": "",
+            "department_text": "",
         },
         "hero": {
             "badge": "НОВОСТИ",
@@ -134,9 +138,9 @@ def _load_digest_branding() -> dict:
             "preview_empty_text": "В текущей выборке нет сигналов для превью.",
         },
         "footer": {
-            "contact_text": "При возникновении вопросов обращайтесь в Блок развития бизнеса",
-            "contact_email": "Rodionov.VVL@gazprom-neft.ru",
-            "note": "Внутренняя корпоративная рассылка",
+            "contact_text": "",
+            "contact_email": "",
+            "note": "Информационная рассылка",
             "socials": [],
         },
         "highlights": {
@@ -338,6 +342,33 @@ def build_digest_content(
     }
 
 
+
+def _render_footer_contact(footer: dict) -> str:
+    """Футер письма: контактная строка собирается ТОЛЬКО из непустых частей.
+
+    Раньше адрес и текст подставлялись в шаблон напрямую, и пустой контакт давал
+    висящую ссылку `mailto:` и осиротевший разделитель. После снятия корпоративного
+    адреса (требование правообладателя, 11.09.2026) пустой контакт — штатный случай,
+    поэтому блок рендерится по частям."""
+    contact_text = (footer.get("contact_text") or "").strip()
+    contact_email = (footer.get("contact_email") or "").strip()
+    note = (footer.get("note") or "").strip()
+
+    lines = []
+    if contact_text:
+        lines.append(
+            f'<span style="color:#ffffff;font-weight:bold;">{_html(contact_text)}</span>'
+        )
+    tail = []
+    if contact_email:
+        tail.append(f'<a href="mailto:{_html(contact_email)}">{_html(contact_email)}</a>')
+    if note:
+        tail.append(_html(note))
+    if tail:
+        lines.append(" &middot; ".join(tail))
+    return "<br>".join(lines)
+
+
 def render_digest_email(content: dict) -> str:
     """Render the branded Gazprom Neft digest HTML from issue/hero/news/footer.
 
@@ -361,9 +392,7 @@ def render_digest_email(content: dict) -> str:
         # Hero — утверждённый баннер: внешний URL из brandinга, иначе встроенная картинка.
         "hero_img_src": _html(content.get("hero", {}).get("image_url")) or _hero_data_uri(),
         "hero_alt": _html(HERO_ALT),
-        "footer_contact_text": _html(content.get("footer", {}).get("contact_text")),
-        "footer_contact_email": _html(content.get("footer", {}).get("contact_email")),
-        "footer_note": _html(content.get("footer", {}).get("note")),
+        "footer_contact_block": _render_footer_contact(content.get("footer", {})),
         "footer_socials_html": _render_footer_socials(content.get("footer", {}).get("socials") or branding.get("footer", {}).get("socials") or []),
     }
     return template.format(**values)

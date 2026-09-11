@@ -1,8 +1,8 @@
 {
   "header": {
-    "brand_text": "ГАЗПРОМ НЕФТЬ",
-    "brand_suffix": "ЭНЕРГИЯ В ЛЮДЯХ",
-    "department_text": "БЛОК РАЗВИТИЯ БИЗНЕСА"
+    "brand_text": "НЕФТЕСЕРВИСНЫЙ ДАЙДЖЕСТ",
+    "brand_suffix": "",
+    "department_text": ""
   },
   "hero": {
     "badge": "НОВОСТИ",
@@ -24,26 +24,78 @@
     "preview_empty_text": "В текущей выборке нет сигналов для превью."
   },
   "footer": {
-    "contact_text": "При возникновении вопросов обращайтесь в Блок развития бизнеса",
-    "contact_email": "Rodionov.VVL@gazprom-neft.ru",
-    "note": "Внутренняя корпоративная рассылка",
-    "socials": [
-      { "label": "VK", "accent": "#0077ff", "text": "VK" },
-      { "label": "Telegram", "accent": "#29a9eb", "text": "✈" },
-      { "label": "YouTube", "accent": "#ff0000", "text": "▶" },
-      { "label": "RT", "accent": "#262d3c", "text": "RT" },
-      { "label": "Дзен", "accent": "#262d3c", "text": "Д" },
-      { "label": "Энергия+", "accent": "#e83d08", "text": "Э+" }
-    ]
+    "contact_text": "",
+    "contact_email": "",
+    "note": "Информационная рассылка",
+    "socials": []
   },
   "highlights": {
-    "analytics_source_keywords": ["mckinsey", "wood mac", "woodmac", "wood mackenzie", "rystad", "deloitte", "iea", "eia", "bcg", "petroleum economist", "hart", "rigzone", "s&p", "ihs", "mit", "bloomberg"],
-    "analytics_category_keywords": ["аналит", "обзор", "прогноз", "рынок", "исследов", "report"],
-    "business_category_keywords": ["бизнес", "m&a", "сделк", "инвест", "контракт", "возможност", "партнёрств", "партнерств", "локализац", "экспорт"],
+    "analytics_source_keywords": [
+      "mckinsey",
+      "wood mac",
+      "woodmac",
+      "wood mackenzie",
+      "rystad",
+      "deloitte",
+      "iea",
+      "eia",
+      "bcg",
+      "petroleum economist",
+      "hart",
+      "rigzone",
+      "s&p",
+      "ihs",
+      "mit",
+      "bloomberg"
+    ],
+    "analytics_category_keywords": [
+      "аналит",
+      "обзор",
+      "прогноз",
+      "рынок",
+      "исследов",
+      "report"
+    ],
+    "business_category_keywords": [
+      "бизнес",
+      "m&a",
+      "сделк",
+      "инвест",
+      "контракт",
+      "возможност",
+      "партнёрств",
+      "партнерств",
+      "локализац",
+      "экспорт"
+    ],
     "cards": [
-      { "metric": "total", "icon": "doc", "prefix": "", "suffix": "", "noun_one": "новость", "noun_few": "новости", "noun_many": "новостей" },
-      { "metric": "analytics", "icon": "chart", "prefix": "аналитических", "suffix": "", "noun_one": "материал", "noun_few": "материала", "noun_many": "материалов" },
-      { "metric": "business", "icon": "people", "prefix": "", "suffix": "для бизнеса", "noun_one": "возможность", "noun_few": "возможности", "noun_many": "возможностей" }
+      {
+        "metric": "total",
+        "icon": "doc",
+        "prefix": "",
+        "suffix": "",
+        "noun_one": "новость",
+        "noun_few": "новости",
+        "noun_many": "новостей"
+      },
+      {
+        "metric": "analytics",
+        "icon": "chart",
+        "prefix": "аналитических",
+        "suffix": "",
+        "noun_one": "материал",
+        "noun_few": "материала",
+        "noun_many": "материалов"
+      },
+      {
+        "metric": "business",
+        "icon": "people",
+        "prefix": "",
+        "suffix": "для бизнеса",
+        "noun_one": "возможность",
+        "noun_few": "возможности",
+        "noun_many": "возможностей"
+      }
     ]
   }
 }

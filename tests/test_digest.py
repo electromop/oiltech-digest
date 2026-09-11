@@ -215,7 +215,7 @@ def test_render_digest_export_html_contains_cards():
         }
     )
 
-    assert "ГАЗПРОМ НЕФТЬ" in html  # экспорт = тот же фирменный шаблон, что и письмо
+    assert "digest-frame" in html  # экспорт = тот же шаблон, что и письмо
     assert "Export article" in html
     assert "https://example.com/export-article" in html
 
@@ -833,3 +833,36 @@ def test_branding_falls_back_to_packaged_default_when_volume_empty(tmp_path, mon
     branding = digest_module.get_digest_branding()
     assert branding["header"]["brand_text"]
     assert "socials" in branding["footer"]
+
+
+def test_digest_export_has_no_customer_branding():
+    """Ни в одном виде выгрузки не должно быть символики заказчика и корпоративной почты.
+
+    Требование правообладателя от 11.09.2026: на ресурсе не размещаются корпоративная
+    символика и корпоративные адреса сотрудников. Раньше строка «ГАЗПРОМ НЕФТЬ» жила
+    в HTML-комментарии шаблона и уезжала в каждую выгрузку невидимой для глаза.
+    """
+    html = render_digest_export_html(
+        {
+            "issue": {"title": "Test digest", "intro": "Export intro"},
+            "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
+            "news": [],
+            "footer": {"contact_text": "", "contact_email": "", "note": "Информационная рассылка"},
+        }
+    )
+    lowered = html.lower()
+    for forbidden in ("газпром", "gazprom", "энергия в людях", "блок развития бизнеса"):
+        assert forbidden not in lowered, f"в выгрузке осталось: {forbidden}"
+    assert "@gazprom-neft.ru" not in lowered
+    assert "mailto:\"" not in html  # пустой контакт не должен давать битую ссылку
+
+
+def test_digest_default_branding_is_neutral():
+    """Дефолты брендинга не содержат символики заказчика — даже если том с настройками пуст."""
+    from oiltech_digest.processing.digest import _load_digest_branding
+
+    branding = _load_digest_branding()
+    blob = str(branding).lower()
+    for forbidden in ("газпром", "gazprom", "энергия в людях", "блок развития бизнеса"):
+        assert forbidden not in blob, f"в дефолтном брендинге осталось: {forbidden}"
+    assert not (branding.get("footer", {}).get("socials") or []), "соцсети заказчика вернулись в дефолты"

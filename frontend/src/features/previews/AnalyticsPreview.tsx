@@ -407,7 +407,7 @@ const TABS = [
   "Технологические тренды",
   "Бизнес-сигналы",
   "Компании и рынки",
-  "Возможности для ГПН",
+  "Возможности для бизнеса",
   "Benchmark",
 ];
 
@@ -723,7 +723,7 @@ export function AnalyticsPreview() {
             {/* (d) Правая колонка */}
             <div className={styles.rail}>
               <article className={styles.card}>
-                <CardHead title="Возможности для ГПН" sub="топ актуальных направлений" />
+                <CardHead title="Возможности для бизнеса" sub="топ актуальных направлений" />
                 <div className={styles.rowList}>
                   {OPPORTUNITIES.map((item) => (
                     <div key={item.title} className={styles.listRow}>

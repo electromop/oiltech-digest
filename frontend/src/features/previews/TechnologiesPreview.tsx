@@ -352,7 +352,7 @@ const FILTERS: { label: string; value: string }[] = [
   { label: "Направление", value: "Все направления" },
   { label: "Зрелость", value: "Все уровни" },
   { label: "Статус", value: "Все статусы" },
-  { label: "Потенциал для ГПН", value: "Все уровни" },
+  { label: "Потенциал применения", value: "Все уровни" },
 ];
 
 const CATALOG_TABS = [
@@ -448,7 +448,7 @@ function TechCard({
         </span>
 
         <span className={styles.metric}>
-          <span className={styles.metricLabel}>Потенциал для ГПН</span>
+          <span className={styles.metricLabel}>Потенциал применения</span>
           <PotentialValue potential={tech.potential} />
         </span>
 
@@ -502,7 +502,7 @@ function OverviewTab({ tech }: { tech: Technology }) {
           </div>
 
           <div className={styles.kvRow}>
-            <span className={styles.kvLabel}>Потенциал для ГПН</span>
+            <span className={styles.kvLabel}>Потенциал применения</span>
             <span className={styles.kvValue}>
               <span className={`${styles.dot} ${ok ? styles.dotOk : styles.dotWarn}`} />
               <span className={ok ? styles.textOk : styles.textWarn}>{tech.potential}</span>
@@ -548,7 +548,7 @@ function OverviewTab({ tech }: { tech: Technology }) {
       </div>
 
       <section className={styles.subCard}>
-        <h3 className={styles.cardTitle}>Потенциал применения в ГПН</h3>
+        <h3 className={styles.cardTitle}>Потенциал применения</h3>
         <div className={styles.potentialHead}>
           <span className={`${styles.dot} ${ok ? styles.dotOk : styles.dotWarn}`} />
           <span className={ok ? styles.textOk : styles.textWarn}>{tech.potential} потенциал</span>

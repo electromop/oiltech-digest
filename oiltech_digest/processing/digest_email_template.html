@@ -158,11 +158,12 @@
       <td align="center" style="padding:24px 12px;">
         <table class="digest-frame" role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#ffffff;">
 
-          <!-- HERO: утверждённый баннер 600×360 (логотип ГАЗПРОМ НЕФТЬ, бейдж, заголовок
-               и подзаголовок запечены в картинке). <img>, а не background — надёжно в Outlook. -->
+          <!-- HERO: баннер 600×305 (бейдж, заголовок и подзаголовок запечены в
+               картинке). Корпоративной символики не содержит — верхняя полоса срезана
+               по требованию правообладателя. <img>, а не background — надёжно в Outlook. -->
           <tr>
             <td style="padding:0;margin:0;font-size:0;line-height:0;">
-              <img src="{hero_img_src}" width="600" height="360" alt="{hero_alt}" style="display:block;width:600px;height:360px;border:0;outline:none;text-decoration:none;">
+              <img src="{hero_img_src}" width="600" height="305" alt="{hero_alt}" style="display:block;width:600px;height:305px;border:0;outline:none;text-decoration:none;">
             </td>
           </tr>
 
@@ -198,8 +199,7 @@
                 </tr>
                 <tr>
                   <td align="center" class="footer-note">
-                    <span style="color:#ffffff;font-weight:bold;">{footer_contact_text}</span><br>
-                    <a href="mailto:{footer_contact_email}">{footer_contact_email}</a> &middot; {footer_note}
+                    {footer_contact_block}
                   </td>
                 </tr>
               </table>

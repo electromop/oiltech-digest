@@ -153,8 +153,8 @@ const maintenanceBenchmark = {
 
 const digestBranding = {
   header: {
-    brand_text: "ГАЗПРОМ НЕФТЬ",
-    brand_suffix: "ЭНЕРГИЯ В ЛЮДЯХ",
+    brand_text: "НЕФТЕСЕРВИСНЫЙ ДАЙДЖЕСТ",
+    brand_suffix: "",
     department_text: "БЛОК РАЗВИТИЯ БИЗНЕСА",
   },
   hero: {
@@ -180,7 +180,7 @@ const digestBranding = {
   },
   footer: {
     contact_text: "При возникновении вопросов обращайтесь в Блок развития бизнеса",
-    contact_email: "Rodionov.VVL@gazprom-neft.ru",
+    contact_email: "digest@example.com",
     note: "Внутренняя корпоративная рассылка",
     socials: [{ label: "VK", accent: "#0077ff", text: "VK" }],
   },

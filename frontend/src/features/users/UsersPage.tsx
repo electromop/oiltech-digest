@@ -125,7 +125,7 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
         <div className="userAddGrid">
           <label className="field">
             <span>Эл. почта</span>
-            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="user@gpn.ru" />
+            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="user@example.com" />
           </label>
           <label className="field">
             <span>Пароль</span>
