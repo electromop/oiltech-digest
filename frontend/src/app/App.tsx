@@ -12,6 +12,7 @@ import { JobsPage } from "../features/jobs/JobsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
+import { SignalRadarPage } from "../features/signals/SignalRadarPage";
 import { SourceAgentPage } from "../features/sources/SourceAgentPage";
 import { SourceCandidatesPage } from "../features/sources/SourceCandidatesPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
@@ -28,7 +29,7 @@ const TechnologiesPreview = lazy(() =>
 );
 
 type ScreenId =
-  | "articles" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "articles" | "signal-radar" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
   | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
@@ -76,6 +77,14 @@ const screens: ScreenDef[] = [
     eyebrow: "Editorial Output",
     title: "Сборка выпуска",
     description: "Выборка материалов, preview, draft и экспорт опираются на тот же backend API, но уже через новый интерфейс.",
+    status: "Экран активен",
+  },
+  {
+    id: "signal-radar",
+    label: "Радар сигналов",
+    eyebrow: "Signal Discovery",
+    title: "Радар сигналов",
+    description: "Сигналы, найденные новым поисковым агентом: evidence, переносимость, развернутая ОС и выбор в дайджест.",
     status: "Экран активен",
   },
   {
@@ -164,7 +173,7 @@ const appHighlights = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["articles", "digest", "documents"],
+    screens: ["articles", "signal-radar", "digest", "documents"],
   },
   {
     label: "Настройки",
@@ -185,7 +194,7 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent", "signal-radar"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
@@ -291,6 +300,10 @@ export function App() {
         onStatsReloaded={setStats}
       />
     );
+  }
+
+  if (activeScreen === "signal-radar") {
+    currentScreen = <SignalRadarPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
   }
 
   if (activeScreen === "digest") {

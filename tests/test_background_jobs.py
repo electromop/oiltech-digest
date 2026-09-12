@@ -119,6 +119,60 @@ def test_process_job_marks_ai_started_before_first_model_call(monkeypatch):
     )
 
 
+def test_enqueue_daily_signal_discovery_skips_existing_daily_job(monkeypatch):
+    called = []
+
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_LOOKBACK_HOURS", 24)
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "has_recent_background_job",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(background_jobs, "enqueue", lambda *args, **kwargs: called.append((args, kwargs)))
+
+    result = background_jobs.enqueue_daily_signal_discovery()
+
+    assert result == {"enqueued": False, "reason": "already_scheduled", "lookback_hours": 24}
+    assert called == []
+
+
+def test_enqueue_daily_signal_discovery_creates_web_only_ai_job(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_LOOKBACK_HOURS", 24)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAYS", 14)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_LIMIT", 120)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_MIN_SCORE", 40)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_MAX_SIGNALS", 20)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_WEB_QUERY_LIMIT", 8)
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "has_recent_background_job",
+        lambda **kwargs: False,
+    )
+
+    def fake_enqueue(kind, payload, **kwargs):
+        captured.update({"kind": kind, "payload": payload, **kwargs})
+        return {"id": 92, "kind": kind, "queue_name": kwargs["queue_name"], "payload_json": payload}
+
+    monkeypatch.setattr(background_jobs, "enqueue", fake_enqueue)
+
+    result = background_jobs.enqueue_daily_signal_discovery()
+
+    assert result["enqueued"] is True
+    assert captured["kind"] == "signal_discovery"
+    assert captured["queue_name"] == "ai"
+    assert captured["capability"] == "openai"
+    assert captured["max_attempts"] == 1
+    assert captured["payload"]["offline"] is False
+    assert captured["payload"]["web_search"] is True
+    assert captured["payload"]["web_only"] is True
+    assert captured["payload"]["max_signals"] == 20
+    assert captured["payload"]["schedule"] == "daily_signal_discovery"
+
+
 def test_discover_source_candidates_job_uses_topic_gaps_and_evaluates(monkeypatch):
     from oiltech_digest.source_discovery import agent
     from oiltech_digest.source_discovery import sandbox

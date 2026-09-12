@@ -154,6 +154,27 @@ class SignalDiscoveryRequest(BaseModel):
     web_query_limit: int = 8
 
 
+class SignalFeedbackCreate(BaseModel):
+    article_id: int | None = None
+    signal_id: int | None = None
+    signal_evidence_id: int | None = None
+    source_url: str | None = None
+    signal_title: str | None = None
+    source: str | None = None
+    comment: str = ""
+    verdict: str | None = None
+    reason: str | None = None
+    corrected_title: str | None = None
+    corrected_thesis: str | None = None
+    duplicate_of_signal_id: int | None = None
+
+
+class SignalPatch(BaseModel):
+    status: str | None = None
+    selected_for_digest: bool | None = None
+    analyst_comment: str | None = None
+
+
 class SourceDiscoveryPlanRequest(BaseModel):
     days: int = 30
     target_per_topic: int = 10
@@ -1601,10 +1622,87 @@ def list_signals(
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
     rows = []
-    for row in repository.list_signals(maturity=maturity, theme=theme, limit=limit):
+    for row in repository.list_signals(maturity=maturity, theme=theme, limit=limit, user_id=int(user["id"])):
         evidence = repository.list_signal_evidence(int(row["id"]), limit=evidence_limit) if evidence_limit else []
         rows.append(_clean({**row, "evidence": evidence}))
     return rows
+
+
+@app.patch("/api/signals/{signal_id}")
+def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    target_status = patch.status
+    if target_status is None and patch.selected_for_digest is not None:
+        target_status = "digest" if patch.selected_for_digest else "watch"
+    if target_status is not None and target_status not in {"watch", "digest", "archive", "noise", "duplicate"}:
+        raise HTTPException(status_code=400, detail="Unknown signal status")
+    try:
+        repository.set_user_signal_status(
+            int(user["id"]),
+            signal_id,
+            status=target_status,
+            analyst_comment=patch.analyst_comment,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    if target_status == "digest":
+        repository.record_signal_feedback_event(
+            None,
+            "added_to_digest",
+            signal_id=signal_id,
+            user_id=int(user["id"]),
+            comment=patch.analyst_comment,
+        )
+    return {"ok": True}
+
+
+@app.post("/api/signals/feedback")
+def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    from oiltech_digest.signal_feedback import store_signal_feedback
+
+    if not any([
+        payload.comment.strip(),
+        (payload.verdict or "").strip(),
+        (payload.reason or "").strip(),
+        (payload.corrected_title or "").strip(),
+        (payload.corrected_thesis or "").strip(),
+        payload.duplicate_of_signal_id,
+    ]):
+        raise HTTPException(status_code=400, detail="comment or structured feedback is required")
+    if payload.article_id is None and payload.signal_id is None and not payload.source_url:
+        raise HTTPException(status_code=400, detail="article_id, signal_id or source_url is required")
+    result = store_signal_feedback(
+        {
+            "article_id": payload.article_id,
+            "signal_id": payload.signal_id,
+            "signal_evidence_id": payload.signal_evidence_id,
+            "source_url": payload.source_url,
+            "signal_title": payload.signal_title,
+            "source": payload.source,
+            "comment": payload.comment,
+            "verdict": payload.verdict,
+            "reason": payload.reason,
+            "corrected_title": payload.corrected_title,
+            "corrected_thesis": payload.corrected_thesis,
+            "duplicate_of_signal_id": payload.duplicate_of_signal_id,
+        },
+        user_id=int(user["id"]),
+    )
+    return {"ok": True, **result}
+
+
+@app.get("/api/signals/memory")
+def signal_memory(
+    memory_type: str | None = Query(None),
+    status: str | None = Query("active"),
+    limit: int = Query(100, ge=1, le=500),
+    user: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    from oiltech_digest.signal_feedback import FEEDBACK_MEMORY_TYPES
+
+    if memory_type and memory_type not in FEEDBACK_MEMORY_TYPES:
+        raise HTTPException(status_code=400, detail="Unknown signal memory type")
+    normalized_status = status.strip() if isinstance(status, str) and status.strip() else None
+    return [_clean(row) for row in repository.list_signal_agent_memory(memory_type=memory_type, status=normalized_status, limit=limit)]
 
 
 @app.post("/api/jobs/signal-discovery")

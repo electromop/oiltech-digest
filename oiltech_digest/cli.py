@@ -1502,6 +1502,20 @@ def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
     print(f"enqueue-signal-discovery: job id={job['id']} queue={job['queue_name']}")
 
 
+def cmd_enqueue_daily_signal_discovery(args: argparse.Namespace) -> None:
+    from oiltech_digest import background_jobs
+
+    result = background_jobs.enqueue_daily_signal_discovery(force=args.force)
+    if not result["enqueued"]:
+        print(f"enqueue-daily-signal-discovery: skipped reason={result['reason']}")
+        return
+    job = result["job"]
+    print(
+        f"enqueue-daily-signal-discovery: job id={job['id']} "
+        f"queue={job['queue_name']} max_signals={job['payload_json']['max_signals']}"
+    )
+
+
 def cmd_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -1534,12 +1548,87 @@ def cmd_signal_feedback(args: argparse.Namespace) -> None:
     event_id = repository.record_signal_feedback_event(
         args.article_id,
         args.event_type,
+        signal_id=args.signal_id,
+        signal_evidence_id=args.signal_evidence_id,
+        source_url=args.source_url,
+        signal_title=args.signal_title,
         user_id=args.user_id,
         old_value=args.old_value,
         new_value=args.new_value,
         comment=args.comment,
+        verdict=args.verdict,
+        reason=args.reason,
+        corrected_title=args.corrected_title,
+        corrected_thesis=args.corrected_thesis,
+        duplicate_of_signal_id=args.duplicate_of_signal_id,
     )
-    print(f"signal-feedback: id={event_id} article_id={args.article_id} event={args.event_type}")
+    target = args.article_id or args.signal_id or args.source_url
+    print(f"signal-feedback: id={event_id} target={target} event={args.event_type}")
+
+
+def cmd_import_signal_feedback(args: argparse.Namespace) -> None:
+    from oiltech_digest.signal_feedback import import_signal_feedback_csv
+
+    result = import_signal_feedback_csv(args.path, user_id=args.user_id, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    print(
+        "import-signal-feedback: "
+        f"rows={result['rows']} events={result['feedback_events']} "
+        f"memories={result['memories']} dry_run={result['dry_run']}"
+    )
+
+
+def cmd_export_signal_training_jsonl(args: argparse.Namespace) -> None:
+    from oiltech_digest.signal_training import export_signal_training_jsonl
+
+    result = export_signal_training_jsonl(
+        args.path,
+        limit=args.limit,
+        with_feedback_only=not args.all,
+        verdict=args.verdict,
+    )
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    print(
+        "export-signal-training-jsonl: "
+        f"examples={result['examples']} path={result['path']} "
+        f"with_feedback_only={result['with_feedback_only']}"
+    )
+
+
+def cmd_export_signal_context(args: argparse.Namespace) -> None:
+    from oiltech_digest.signal_training import export_signal_context_bundle
+
+    result = export_signal_context_bundle(
+        args.path,
+        include_rejected=args.include_rejected,
+    )
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    print(
+        "export-signal-context: "
+        f"path={result['path']} signals={result['signals']} evidence={result['evidence']} "
+        f"memories={result['memories']} feedback_events={result['feedback_events']}"
+    )
+
+
+def cmd_import_signal_context(args: argparse.Namespace) -> None:
+    from oiltech_digest.signal_training import import_signal_context_bundle
+
+    result = import_signal_context_bundle(args.path, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    suffix = " [dry-run]" if result["dry_run"] else ""
+    print(
+        "import-signal-context"
+        f"{suffix}: path={result['path']} signals={result['signals']} evidence={result['evidence']} "
+        f"memories={result['memories']} feedback_events={result['feedback_events']}"
+    )
 
 
 def cmd_source_quality(args: argparse.Namespace) -> None:
@@ -2175,6 +2264,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
     p_enqueue_signals.set_defaults(func=cmd_enqueue_signal_discovery)
 
+    p_enqueue_daily_signals = sub.add_parser(
+        "enqueue-daily-signal-discovery",
+        help="поставить ежедневный web-only радар сигналов в очередь один раз за окно",
+    )
+    p_enqueue_daily_signals.add_argument("--force", action="store_true", help="игнорировать daily-idempotency")
+    p_enqueue_daily_signals.set_defaults(func=cmd_enqueue_daily_signal_discovery)
+
     p_signals = sub.add_parser("signals", help="список найденных технологических сигналов")
     p_signals.add_argument("--maturity", choices=["watch", "shortlist", "proven", "reject"], default=None)
     p_signals.add_argument("--theme", default=None)
@@ -2184,7 +2280,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_signals.set_defaults(func=cmd_signals)
 
     p_signal_feedback = sub.add_parser("signal-feedback", help="записать событие обратной связи по сигналу")
-    p_signal_feedback.add_argument("article_id", type=int)
     p_signal_feedback.add_argument("event_type", choices=[
         "added_to_digest",
         "marked_noise",
@@ -2194,11 +2289,83 @@ def build_parser() -> argparse.ArgumentParser:
         "status_changed",
         "comment_added",
     ])
+    p_signal_feedback.add_argument("--article-id", type=int, default=None)
+    p_signal_feedback.add_argument("--signal-id", type=int, default=None)
+    p_signal_feedback.add_argument("--signal-evidence-id", type=int, default=None)
+    p_signal_feedback.add_argument("--source-url", default=None)
+    p_signal_feedback.add_argument("--signal-title", default=None)
     p_signal_feedback.add_argument("--user-id", type=int, default=None)
     p_signal_feedback.add_argument("--old-value", default=None)
     p_signal_feedback.add_argument("--new-value", default=None)
     p_signal_feedback.add_argument("--comment", default=None)
+    p_signal_feedback.add_argument("--verdict", choices=["approved", "reject", "duplicate", "needs_context"], default=None)
+    p_signal_feedback.add_argument("--reason", default=None)
+    p_signal_feedback.add_argument("--corrected-title", default=None)
+    p_signal_feedback.add_argument("--corrected-thesis", default=None)
+    p_signal_feedback.add_argument("--duplicate-of-signal-id", type=int, default=None)
     p_signal_feedback.set_defaults(func=cmd_signal_feedback)
+
+    p_import_signal_feedback = sub.add_parser("import-signal-feedback", help="импортировать ОС по сигналам из CSV")
+    p_import_signal_feedback.add_argument("path")
+    p_import_signal_feedback.add_argument("--user-id", type=int, default=None)
+    p_import_signal_feedback.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_import_signal_feedback.add_argument("--json", action="store_true")
+    p_import_signal_feedback.set_defaults(func=cmd_import_signal_feedback)
+
+    p_export_signal_training = sub.add_parser(
+        "export-signal-training-jsonl",
+        help="выгрузить snapshot'ы сигналов с ОС в JSONL для eval/training",
+    )
+    p_export_signal_training.add_argument("--path", default=None)
+    p_export_signal_training.add_argument("--limit", type=int, default=1000)
+    p_export_signal_training.add_argument("--all", action="store_true", help="включить примеры без человеческой ОС")
+    p_export_signal_training.add_argument("--verdict", choices=["approved", "reject", "duplicate", "needs_context"], default=None)
+    p_export_signal_training.add_argument("--json", action="store_true")
+    p_export_signal_training.set_defaults(func=cmd_export_signal_training_jsonl)
+
+    p_export_signal_context = sub.add_parser(
+        "export-signal-context",
+        help="выгрузить переносимый bundle сигналов/evidence/памяти/ОС для переноса на сервер",
+    )
+    p_export_signal_context.add_argument("--path", default=None)
+    p_export_signal_context.add_argument("--include-rejected", action="store_true")
+    p_export_signal_context.add_argument("--json", action="store_true")
+    p_export_signal_context.set_defaults(func=cmd_export_signal_context)
+
+    p_import_signal_context = sub.add_parser(
+        "import-signal-context",
+        help="импортировать переносимый bundle сигналов/evidence/памяти/ОС",
+    )
+    p_import_signal_context.add_argument("path")
+    p_import_signal_context.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_import_signal_context.add_argument("--json", action="store_true")
+    p_import_signal_context.set_defaults(func=cmd_import_signal_context)
+
+    p_legacy_signal_feedback = sub.add_parser("article-signal-feedback", help="legacy: записать ОС по article_id")
+    p_legacy_signal_feedback.add_argument("article_id", type=int)
+    p_legacy_signal_feedback.add_argument("event_type", choices=[
+        "added_to_digest",
+        "marked_noise",
+        "marked_duplicate",
+        "tag_changed",
+        "score_changed",
+        "status_changed",
+        "comment_added",
+    ])
+    p_legacy_signal_feedback.add_argument("--signal-id", type=int, default=None)
+    p_legacy_signal_feedback.add_argument("--signal-evidence-id", type=int, default=None)
+    p_legacy_signal_feedback.add_argument("--source-url", default=None)
+    p_legacy_signal_feedback.add_argument("--signal-title", default=None)
+    p_legacy_signal_feedback.add_argument("--user-id", type=int, default=None)
+    p_legacy_signal_feedback.add_argument("--old-value", default=None)
+    p_legacy_signal_feedback.add_argument("--new-value", default=None)
+    p_legacy_signal_feedback.add_argument("--comment", default=None)
+    p_legacy_signal_feedback.add_argument("--verdict", choices=["approved", "reject", "duplicate", "needs_context"], default=None)
+    p_legacy_signal_feedback.add_argument("--reason", default=None)
+    p_legacy_signal_feedback.add_argument("--corrected-title", default=None)
+    p_legacy_signal_feedback.add_argument("--corrected-thesis", default=None)
+    p_legacy_signal_feedback.add_argument("--duplicate-of-signal-id", type=int, default=None)
+    p_legacy_signal_feedback.set_defaults(func=cmd_signal_feedback)
 
     p_source_quality = sub.add_parser("source-quality", help="посчитать качество источников за период")
     p_source_quality.add_argument("--days", type=int, default=30)

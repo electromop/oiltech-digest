@@ -258,6 +258,7 @@ parse                     → сбор со всех включённых ист
 fetch-full-text           → дозагрузка + страж принадлежности
 process | enqueue-process → AI локально ИЛИ задача во внешнюю очередь
 enqueue-external-scrape   → если FETCH_EXTERNAL_ENABLED=1
+enqueue-daily-signal-discovery → web-only радар сигналов, один раз за 24 часа
 stats
 ```
 
@@ -304,6 +305,8 @@ stats
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | базовые параметры LLM |
 | `OPENAI_RELEVANCE_MODEL` / `_SCORE_MODEL` / `_TRANSLATE_MODEL` | пер-стадийные модели |
 | `CYCLE_INTERVAL_SECONDS` | период цикла scheduler |
+| `SIGNAL_DISCOVERY_DAILY_ENABLED` | ежедневный запуск нового агента поиска сигналов |
+| `SIGNAL_DISCOVERY_MAX_SIGNALS` | сколько сигналов агент пытается сохранить за daily-прогон |
 | `AUTH_COOKIE_SECURE` | `0` только для локальной разработки по http |
 
 Секреты в git не попадают. Отдельного хранилища секретов нет.

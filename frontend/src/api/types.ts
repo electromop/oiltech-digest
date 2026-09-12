@@ -197,6 +197,74 @@ export type AgentMemory = {
   updated_at: string | null;
 };
 
+export type SignalEvidence = {
+  id: number;
+  signal_id: number;
+  article_id: number | null;
+  source_url: string;
+  title: string;
+  title_ru: string | null;
+  publisher: string | null;
+  published_at: string | null;
+  evidence_type: string;
+  extracted_fact: string | null;
+  summary_ru: string | null;
+  strength: number;
+  raw_payload_json: Record<string, unknown>;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type Signal = {
+  id: number;
+  signal_key: string;
+  title: string;
+  title_ru: string | null;
+  theme: string;
+  summary: string | null;
+  thesis: string | null;
+  transferability: string | null;
+  maturity: "reject" | "watch" | "shortlist" | "proven" | string;
+  confidence: number;
+  score: number;
+  why_now: string | null;
+  why_not_noise: string | null;
+  companies_json: string[] | null;
+  industries_json: string[] | null;
+  evidence_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  user_status?: "watch" | "digest" | "archive" | "noise" | "duplicate" | string;
+  selected_for_digest?: boolean;
+  user_comment?: string | null;
+  user_status_updated_at?: string | null;
+  feedback_count?: number;
+  evidence?: SignalEvidence[];
+};
+
+export type SignalPatch = {
+  status?: "watch" | "digest" | "archive" | "noise" | "duplicate";
+  selected_for_digest?: boolean;
+  analyst_comment?: string | null;
+};
+
+export type SignalFeedbackPayload = {
+  article_id?: number | null;
+  signal_id?: number | null;
+  signal_evidence_id?: number | null;
+  source_url?: string | null;
+  signal_title?: string | null;
+  source?: string | null;
+  comment: string;
+  verdict?: "approved" | "reject" | "merge_duplicate" | "needs_better_source" | "wrong_domain" | "bad_translation" | "too_generic" | null;
+  reason?: string | null;
+  corrected_title?: string | null;
+  corrected_thesis?: string | null;
+  duplicate_of_signal_id?: number | null;
+};
+
 export type AgentAction = {
   id: number;
   task_id: number | null;

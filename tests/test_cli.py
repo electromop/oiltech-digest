@@ -17,6 +17,97 @@ def test_schema_check_command_reports_ok(monkeypatch, capsys):
     assert "schema-check: ok" in capsys.readouterr().out
 
 
+def test_export_signal_training_jsonl_command_prints_stats(monkeypatch, capsys, tmp_path):
+    path = tmp_path / "signals.jsonl"
+    captured = {}
+
+    def fake_export_signal_training_jsonl(output_path, **kwargs):
+        captured["path"] = output_path
+        captured.update(kwargs)
+        return {
+            "path": str(path),
+            "examples": 2,
+            "with_feedback_only": kwargs["with_feedback_only"],
+            "verdict": kwargs["verdict"],
+        }
+
+    monkeypatch.setattr(
+        "oiltech_digest.signal_training.export_signal_training_jsonl",
+        fake_export_signal_training_jsonl,
+    )
+
+    cli.cmd_export_signal_training_jsonl(
+        argparse.Namespace(path=str(path), limit=20, all=False, verdict="approved", json=False)
+    )
+
+    out = capsys.readouterr().out
+    assert "export-signal-training-jsonl: examples=2" in out
+    assert str(path) in out
+    assert captured == {
+        "path": str(path),
+        "limit": 20,
+        "with_feedback_only": True,
+        "verdict": "approved",
+    }
+
+
+def test_export_signal_context_command_prints_stats(monkeypatch, capsys, tmp_path):
+    path = tmp_path / "bundle.json"
+    captured = {}
+
+    def fake_export_signal_context_bundle(output_path, **kwargs):
+        captured["path"] = output_path
+        captured.update(kwargs)
+        return {
+            "path": str(path),
+            "signals": 38,
+            "evidence": 79,
+            "memories": 12,
+            "feedback_events": 6,
+        }
+
+    monkeypatch.setattr(
+        "oiltech_digest.signal_training.export_signal_context_bundle",
+        fake_export_signal_context_bundle,
+    )
+
+    cli.cmd_export_signal_context(argparse.Namespace(path=str(path), include_rejected=False, json=False))
+
+    out = capsys.readouterr().out
+    assert "export-signal-context: path=" in out
+    assert "signals=38" in out
+    assert captured == {"path": str(path), "include_rejected": False}
+
+
+def test_import_signal_context_command_prints_dry_run(monkeypatch, capsys, tmp_path):
+    path = tmp_path / "bundle.json"
+    captured = {}
+
+    def fake_import_signal_context_bundle(input_path, **kwargs):
+        captured["path"] = input_path
+        captured.update(kwargs)
+        return {
+            "path": str(path),
+            "dry_run": True,
+            "signals": 38,
+            "evidence": 79,
+            "memories": 12,
+            "feedback_events": 6,
+        }
+
+    monkeypatch.setattr(
+        "oiltech_digest.signal_training.import_signal_context_bundle",
+        fake_import_signal_context_bundle,
+    )
+
+    cli.cmd_import_signal_context(argparse.Namespace(path=str(path), dry_run=True, json=False))
+
+    out = capsys.readouterr().out
+    assert "import-signal-context [dry-run]" in out
+    assert "signals=38" in out
+    assert captured == {"path": str(path), "dry_run": True}
+
+
 def test_schema_check_command_exits_non_zero_when_missing_tables(monkeypatch, capsys):
     monkeypatch.setattr(
         "oiltech_digest.readiness.schema_check",
@@ -311,6 +402,31 @@ def test_enqueue_agent_loop_command_skips_when_loop_already_active(monkeypatch, 
 
     assert called == []
     assert "enqueue-agent-loop: skipped active_jobs=1" in capsys.readouterr().out
+
+
+def test_enqueue_daily_signal_discovery_command_prints_created_job(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.background_jobs.enqueue_daily_signal_discovery",
+        lambda force=False: {
+            "enqueued": True,
+            "job": {"id": 92, "queue_name": "ai", "payload_json": {"max_signals": 20}},
+        },
+    )
+
+    cli.cmd_enqueue_daily_signal_discovery(argparse.Namespace(force=False))
+
+    assert "enqueue-daily-signal-discovery: job id=92 queue=ai max_signals=20" in capsys.readouterr().out
+
+
+def test_enqueue_daily_signal_discovery_command_prints_skip(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oiltech_digest.background_jobs.enqueue_daily_signal_discovery",
+        lambda force=False: {"enqueued": False, "reason": "already_scheduled"},
+    )
+
+    cli.cmd_enqueue_daily_signal_discovery(argparse.Namespace(force=False))
+
+    assert "enqueue-daily-signal-discovery: skipped reason=already_scheduled" in capsys.readouterr().out
 
 
 def test_source_candidate_triage_command_prints_rows(monkeypatch, capsys):

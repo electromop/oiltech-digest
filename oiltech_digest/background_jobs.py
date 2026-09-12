@@ -25,6 +25,52 @@ from oiltech_digest.processing.pipeline import (
 
 _executor = ThreadPoolExecutor(max_workers=max(1, config.BACKGROUND_JOB_WORKERS))
 logger = logging.getLogger(__name__)
+DAILY_SIGNAL_DISCOVERY_MARKER = "daily_signal_discovery"
+
+
+def daily_signal_discovery_payload() -> dict[str, Any]:
+    return {
+        "topic": None,
+        "days": config.SIGNAL_DISCOVERY_DAYS,
+        "limit": config.SIGNAL_DISCOVERY_LIMIT,
+        "min_score": config.SIGNAL_DISCOVERY_MIN_SCORE,
+        "offline": False,
+        "dry_run": False,
+        "max_signals": config.SIGNAL_DISCOVERY_MAX_SIGNALS,
+        "web_search": True,
+        "web_only": True,
+        "web_query_limit": config.SIGNAL_DISCOVERY_WEB_QUERY_LIMIT,
+        "trigger": "scheduler_daily",
+        "schedule": DAILY_SIGNAL_DISCOVERY_MARKER,
+    }
+
+
+def enqueue_daily_signal_discovery(*, force: bool = False) -> dict[str, Any]:
+    if not config.SIGNAL_DISCOVERY_DAILY_ENABLED and not force:
+        return {"enqueued": False, "reason": "disabled"}
+
+    marker = {"schedule": DAILY_SIGNAL_DISCOVERY_MARKER}
+    lookback_hours = max(1, config.SIGNAL_DISCOVERY_DAILY_LOOKBACK_HOURS)
+    if not force and repository.has_recent_background_job(
+        kind="signal_discovery",
+        payload_subset=marker,
+        lookback_hours=lookback_hours,
+    ):
+        return {
+            "enqueued": False,
+            "reason": "already_scheduled",
+            "lookback_hours": lookback_hours,
+        }
+
+    job = enqueue(
+        "signal_discovery",
+        daily_signal_discovery_payload(),
+        queue_name="ai",
+        execution_region="ru",
+        capability="openai",
+        max_attempts=1,
+    )
+    return {"enqueued": True, "job": job, "lookback_hours": lookback_hours}
 
 
 def enqueue(
@@ -440,6 +486,7 @@ def _run_signal_discovery(payload: dict[str, Any], job_id: int) -> dict[str, Any
         web_search=bool(payload.get("web_search", False)),
         web_only=bool(payload.get("web_only", False)),
         web_query_limit=int(payload.get("web_query_limit") or 8),
+        background_job_id=job_id,
     ))
     repository.update_background_job_progress(job_id, 95)
     return result

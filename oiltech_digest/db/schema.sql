@@ -364,12 +364,21 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_queue_ready ON background_jobs(qu
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS signal_feedback_events (
   id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  article_id  BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  article_id  BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+  signal_id   BIGINT,
+  signal_evidence_id BIGINT,
+  source_url  TEXT,
+  signal_title TEXT,
   user_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
   event_type  TEXT NOT NULL,                  -- added_to_digest / marked_noise / marked_duplicate / tag_changed / score_changed / status_changed / comment_added
   old_value   TEXT,
   new_value   TEXT,
   comment     TEXT,
+  verdict     TEXT,
+  reason      TEXT,
+  corrected_title TEXT,
+  corrected_thesis TEXT,
+  duplicate_of_signal_id BIGINT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_signal_feedback_article_created ON signal_feedback_events(article_id, created_at DESC);
@@ -625,6 +634,65 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_evidence_url ON signal_evidence(sou
 CREATE INDEX IF NOT EXISTS idx_signal_evidence_signal ON signal_evidence(signal_id, strength DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_evidence_article ON signal_evidence(article_id);
 
+CREATE TABLE IF NOT EXISTS signal_generation_runs (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  background_job_id BIGINT REFERENCES background_jobs(id) ON DELETE SET NULL,
+  trigger           TEXT,
+  status            TEXT NOT NULL DEFAULT 'running',
+  config_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error_message     TEXT,
+  started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at       TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signal_generation_runs_status_created ON signal_generation_runs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_generation_runs_job ON signal_generation_runs(background_job_id);
+
+CREATE TABLE IF NOT EXISTS signal_training_examples (
+  id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  generation_run_id      BIGINT REFERENCES signal_generation_runs(id) ON DELETE SET NULL,
+  signal_id              BIGINT REFERENCES signals(id) ON DELETE SET NULL,
+  feedback_event_id      BIGINT REFERENCES signal_feedback_events(id) ON DELETE SET NULL,
+  topic                  TEXT NOT NULL,
+  signal_key             TEXT,
+  pipeline_verdict       TEXT NOT NULL,
+  input_json             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  raw_output_json        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  normalized_output_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signal_training_examples_run ON signal_training_examples(generation_run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_training_examples_signal ON signal_training_examples(signal_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_training_examples_verdict ON signal_training_examples(pipeline_verdict, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_training_examples_topic ON signal_training_examples(topic);
+
+CREATE TABLE IF NOT EXISTS user_signal_states (
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  signal_id       BIGINT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL DEFAULT 'watch',  -- watch / digest / archive / noise / duplicate
+  analyst_comment TEXT,
+  updated_at      TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (user_id, signal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_signal_states_user_status ON user_signal_states(user_id, status);
+
+CREATE TABLE IF NOT EXISTS signal_agent_memory (
+  id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  memory_key      TEXT NOT NULL UNIQUE,
+  memory_type     TEXT NOT NULL,
+  subject         TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active',
+  score           NUMERIC NOT NULL DEFAULT 0,
+  facts_json      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signal_agent_memory_type_score ON signal_agent_memory(memory_type, score DESC, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_agent_memory_subject_hash ON signal_agent_memory((md5(subject)));
+
 -- Idempotent upgrades for databases initialized before these columns existed.
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_model TEXT;
 ALTER TABLE article_cards ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ;
@@ -633,6 +701,33 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS summary TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
+ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS signal_id BIGINT REFERENCES signals(id) ON DELETE CASCADE;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS signal_evidence_id BIGINT REFERENCES signal_evidence(id) ON DELETE SET NULL;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS signal_title TEXT;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS verdict TEXT;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS reason TEXT;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS corrected_title TEXT;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS corrected_thesis TEXT;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS duplicate_of_signal_id BIGINT REFERENCES signals(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_signal_feedback_signal_created ON signal_feedback_events(signal_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_feedback_url_created ON signal_feedback_events(source_url, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_feedback_verdict_created ON signal_feedback_events(verdict, created_at DESC);
+INSERT INTO signal_agent_memory
+  (memory_key, memory_type, subject, status, score, facts_json, last_seen_at, created_at, updated_at)
+SELECT memory_key, memory_type, subject, status, score, facts_json, last_seen_at, created_at, updated_at
+FROM agent_memory
+WHERE memory_type LIKE 'signal\_%' ESCAPE '\'
+ON CONFLICT (memory_key) DO UPDATE SET
+  memory_type = EXCLUDED.memory_type,
+  subject = EXCLUDED.subject,
+  status = EXCLUDED.status,
+  score = EXCLUDED.score,
+  facts_json = EXCLUDED.facts_json,
+  last_seen_at = EXCLUDED.last_seen_at,
+  updated_at = now();
+DELETE FROM agent_memory WHERE memory_type LIKE 'signal\_%' ESCAPE '\';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
 ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE tags ADD COLUMN IF NOT EXISTS name_en TEXT;

@@ -103,6 +103,134 @@ def test_source_diagnose_endpoint(monkeypatch):
     }
 
 
+def test_signal_feedback_endpoint_stores_learning(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_admin] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+
+    captured = {}
+
+    def fake_store_signal_feedback(row, user_id=None, import_source=None, extracted_items=None):
+        captured["row"] = row
+        captured["user_id"] = user_id
+        return {"event_id": 11, "memory_ids": [21, 22], "memories": 2}
+
+    from oiltech_digest import signal_feedback
+
+    monkeypatch.setattr(signal_feedback, "store_signal_feedback", fake_store_signal_feedback)
+    try:
+        response = TestClient(app).post(
+            "/api/signals/feedback",
+            json={
+                "signal_id": 7,
+                "source_url": "https://example.com/signal",
+                "signal_title": "Closed-loop drilling",
+                "comment": "closed-loop control -> управление с замкнутым контуром",
+                "verdict": "approved",
+                "reason": "Есть внедрение",
+                "corrected_title": "Управление бурением с замкнутым контуром",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "event_id": 11, "memory_ids": [21, 22], "memories": 2}
+    assert captured["row"]["signal_id"] == 7
+    assert captured["row"]["verdict"] == "approved"
+    assert captured["row"]["corrected_title"] == "Управление бурением с замкнутым контуром"
+    assert captured["user_id"] == 1
+
+
+def test_signal_feedback_endpoint_accepts_structured_feedback_without_comment(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_admin] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+
+    captured = {}
+
+    def fake_store_signal_feedback(row, user_id=None, import_source=None, extracted_items=None):
+        captured["row"] = row
+        return {"event_id": 12, "memory_ids": [31], "memories": 1}
+
+    from oiltech_digest import signal_feedback
+
+    monkeypatch.setattr(signal_feedback, "store_signal_feedback", fake_store_signal_feedback)
+    try:
+        response = TestClient(app).post(
+            "/api/signals/feedback",
+            json={
+                "signal_id": 7,
+                "comment": "",
+                "verdict": "merge_duplicate",
+                "duplicate_of_signal_id": 3,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured["row"]["verdict"] == "merge_duplicate"
+    assert captured["row"]["duplicate_of_signal_id"] == 3
+
+
+def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "admin"}
+
+    captured = {}
+    events = []
+    monkeypatch.setattr(
+        api.repository,
+        "set_user_signal_status",
+        lambda user_id, signal_id, **kwargs: captured.update({"user_id": user_id, "signal_id": signal_id, **kwargs}),
+    )
+    monkeypatch.setattr(
+        api.repository,
+        "record_signal_feedback_event",
+        lambda *args, **kwargs: events.append((args, kwargs)) or 12,
+    )
+    try:
+        response = TestClient(app).patch("/api/signals/7", json={"selected_for_digest": True, "analyst_comment": "Берём в выпуск"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert captured == {"user_id": 3, "signal_id": 7, "status": "digest", "analyst_comment": "Берём в выпуск"}
+    assert events[0][1]["signal_id"] == 7
+    assert events[0][1]["user_id"] == 3
+
+
+def test_signal_memory_endpoint_uses_signal_agent_memory(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_admin] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+
+    captured = {}
+    monkeypatch.setattr(
+        api.repository,
+        "list_signal_agent_memory",
+        lambda memory_type=None, status="active", limit=100: captured.update(
+            {"memory_type": memory_type, "status": status, "limit": limit}
+        ) or [
+            {
+                "id": 5,
+                "memory_type": memory_type,
+                "subject": "closed-loop control",
+                "status": status,
+                "score": 85,
+                "facts_json": {"preferred_ru": "управление с замкнутым контуром"},
+            }
+        ],
+    )
+    try:
+        response = TestClient(app).get("/api/signals/memory?memory_type=signal_glossary&limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["subject"] == "closed-loop control"
+    assert captured == {"memory_type": "signal_glossary", "status": "active", "limit": 10}
+
+
 def test_source_candidates_endpoint(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}

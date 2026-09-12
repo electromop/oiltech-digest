@@ -199,6 +199,23 @@ SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE = int(os.environ.get("SOURCE_DISCOVERY_
 BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
 SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
 
+# --- Signal discovery ---
+# Ежедневный радар сигналов ставится scheduler'ом в очередь один раз за окно.
+# Дефолты намеренно web-only и не-offline: это новый агент поиска сигналов, который
+# ищет гибко по web/китайским запросам, а не только по уже заведённым sources.
+SIGNAL_DISCOVERY_DAILY_ENABLED = os.environ.get("SIGNAL_DISCOVERY_DAILY_ENABLED", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SIGNAL_DISCOVERY_DAILY_LOOKBACK_HOURS = int(os.environ.get("SIGNAL_DISCOVERY_DAILY_LOOKBACK_HOURS", "24"))
+SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
+SIGNAL_DISCOVERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_LIMIT", "120"))
+SIGNAL_DISCOVERY_MIN_SCORE = float(os.environ.get("SIGNAL_DISCOVERY_MIN_SCORE", "40"))
+SIGNAL_DISCOVERY_MAX_SIGNALS = int(os.environ.get("SIGNAL_DISCOVERY_MAX_SIGNALS", "20"))
+SIGNAL_DISCOVERY_WEB_QUERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_WEB_QUERY_LIMIT", "8"))
+
 
 def price_for_model(model: str | None) -> tuple[float, float]:
     """USD/1М-токенов (input, output) для модели по префиксу имени.

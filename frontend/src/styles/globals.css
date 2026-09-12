@@ -5164,7 +5164,219 @@ button {
   background: var(--sem-bad-bg);
 }
 
+.signalRadarToolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(210px, 280px) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.signalRadarToolbar label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.signalRadarToolbar span,
+.signalFeedbackBox span,
+.signalRadarColumns span {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.signalRadarSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.signalRadarSummary > div {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.signalRadarSummary strong {
+  display: block;
+  font-size: 1.35rem;
+  line-height: 1.1;
+  color: var(--brand);
+}
+
+.signalRadarSummary span {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+}
+
+.signalRadarList {
+  display: grid;
+  gap: 12px;
+}
+
+.signalRadarCard {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.signalRadarCardTop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.signalRadarCard h2 {
+  margin: 7px 0 0;
+  font-size: 1.08rem;
+  line-height: 1.28;
+  color: #0f172a;
+}
+
+.signalRadarMeta,
+.signalRadarActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.signalRadarMeta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.85);
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.signalRadarSummaryText {
+  margin: 0;
+  max-width: none;
+  color: #1e293b;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.signalRadarColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.signalRadarColumns > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.95);
+}
+
+.signalRadarColumns p {
+  margin: 5px 0 0;
+  max-width: none;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: #334155;
+}
+
+.signalEvidenceList {
+  display: grid;
+  gap: 8px;
+}
+
+.signalEvidenceRow {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid rgba(203, 213, 225, 0.75);
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.signalEvidenceRow:hover {
+  border-color: rgba(0, 61, 166, 0.35);
+  background: rgba(239, 246, 255, 0.75);
+}
+
+.signalEvidenceRow span {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--brand);
+  text-transform: uppercase;
+}
+
+.signalEvidenceRow strong {
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.signalEvidenceRow small {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.signalFeedbackBox {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.signalFeedbackBox textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+}
+
+.signalFeedbackGrid {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(120px, 180px);
+  gap: 8px;
+}
+
+.signalFeedbackGrid label,
+.signalFeedbackField {
+  display: grid;
+  gap: 4px;
+}
+
+.signalFeedbackField textarea {
+  min-height: 72px;
+}
+
+.signalFeedbackActions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 900px) {
+  .signalRadarToolbar,
+  .signalRadarCardTop,
+  .signalRadarColumns,
+  .signalFeedbackGrid,
+  .signalRadarSummary {
+    grid-template-columns: 1fr;
+  }
+
   .documentUploadGrid {
     grid-template-columns: 1fr;
   }

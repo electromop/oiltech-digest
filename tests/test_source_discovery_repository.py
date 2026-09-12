@@ -324,6 +324,132 @@ def test_agent_memory_upsert_and_list(isolated_db):
     assert rows[0]["facts_json"] == {"gap": 2}
 
 
+def test_signal_agent_memory_is_separate_from_source_agent_memory(isolated_db):
+    signal_memory_id = repository.upsert_signal_agent_memory(
+        memory_key="signal_glossary:closed-loop",
+        memory_type="signal_glossary",
+        subject="closed-loop control",
+        score=85,
+        facts={"preferred_ru": "управление с замкнутым контуром"},
+    )
+    source_memory_id = repository.upsert_agent_memory(
+        memory_key="query:robots",
+        memory_type="query",
+        subject="inspection robots",
+        score=40,
+        facts={"topic": "robotics"},
+    )
+
+    signal_rows = repository.list_signal_agent_memory(memory_type="signal_glossary", limit=10)
+    source_rows = repository.list_agent_memory(status=None, limit=10)
+
+    assert signal_rows[0]["id"] == signal_memory_id
+    assert signal_rows[0]["facts_json"] == {"preferred_ru": "управление с замкнутым контуром"}
+    assert source_memory_id in {row["id"] for row in source_rows}
+    assert all(row["memory_type"] != "signal_glossary" for row in source_rows)
+
+
+def test_signal_training_example_links_generation_input_and_feedback(isolated_db):
+    signal_id = repository.upsert_signal({
+        "signal_key": "training-example-signal",
+        "title": "Closed-loop drilling deployment",
+        "title_ru": "Внедрение управления бурением с замкнутым контуром",
+        "theme": "Бурение",
+        "summary": "Оператор внедрил closed-loop drilling.",
+        "thesis": "Оператор внедрил closed-loop drilling.",
+        "transferability": "Применимо к бурению.",
+        "maturity": "watch",
+        "confidence": 0.8,
+        "score": 72,
+        "why_now": "Есть внедрение.",
+        "why_not_noise": "Есть оператор и объект.",
+        "companies": ["Example Oil"],
+        "industries": ["oil and gas"],
+        "evidence_count": 1,
+    })
+    generation_run_id = repository.create_signal_generation_run(
+        config_payload={"days": 14, "web_only": True},
+        trigger="signal_discovery",
+        background_job_id=None,
+    )
+    example_id = repository.create_signal_training_example(
+        generation_run_id=generation_run_id,
+        signal_id=signal_id,
+        topic="Бурение",
+        signal_key="training-example-signal",
+        pipeline_verdict="accepted",
+        input_payload={"topic": "Бурение", "evidence": [{"source_url": "https://example.com/signal"}]},
+        raw_output={"score": 0.72},
+        normalized_output={"score": 72},
+    )
+    event_id = repository.record_signal_feedback_event(
+        None,
+        "comment_added",
+        signal_id=signal_id,
+        user_id=None,
+        comment="Полезный сигнал",
+        verdict="approved",
+    )
+
+    linked = repository.attach_feedback_to_signal_training_examples(event_id, signal_id=signal_id)
+
+    assert linked == 1
+    exported = repository.list_signal_training_examples(limit=10, with_feedback_only=True)
+    assert exported[0]["id"] == example_id
+    assert exported[0]["feedback_event_id"] == event_id
+    assert exported[0]["feedback_verdict"] == "approved"
+    assert exported[0]["signal_title"] == "Closed-loop drilling deployment"
+    with repository.get_connection() as conn:
+        row = conn.execute(
+            "SELECT feedback_event_id, input_json, normalized_output_json FROM signal_training_examples WHERE id = %s",
+            (example_id,),
+        ).fetchone()
+    assert row[0] == event_id
+    assert row[1]["evidence"][0]["source_url"] == "https://example.com/signal"
+    assert row[2]["score"] == 72
+
+
+def test_digest_candidates_include_selected_signal_agent_items(isolated_db):
+    user = repository.create_user("signal-editor@example.com", "password123", role="admin")
+    signal_id = repository.upsert_signal({
+        "signal_key": "closed-loop-frac-test",
+        "title": "Closed-loop frac deployment",
+        "title_ru": "ГРП с замкнутым контуром управления",
+        "theme": "ГРП, МГРП и стимуляция",
+        "summary": "Halliburton развивает автономное исполнение дизайна стадии ГРП.",
+        "thesis": "Переход от мониторинга к управлению обработкой.",
+        "transferability": "Применимо к флотам ГРП и центрам удаленных операций.",
+        "maturity": "shortlist",
+        "confidence": 0.82,
+        "score": 91,
+        "why_now": "Есть field deployment.",
+        "why_not_noise": "Есть техническое evidence.",
+        "companies": ["Halliburton"],
+        "industries": ["oil and gas"],
+        "evidence_count": 1,
+    })
+    repository.upsert_signal_evidence(signal_id, {
+        "source_url": "https://example.com/closed-loop-frac",
+        "title": "Closed-loop frac deployment",
+        "title_ru": "ГРП с замкнутым контуром",
+        "publisher": "JPT",
+        "published_at": datetime(2026, 9, 1, tzinfo=timezone.utc),
+        "evidence_type": "technical case study",
+        "extracted_fact": "Technical case study.",
+        "summary_ru": "Технический разбор применения.",
+        "strength": 0.9,
+    })
+    repository.set_user_signal_status(user["id"], signal_id, status="digest")
+
+    rows = repository.digest_candidates(user_id=user["id"], min_score=60, limit=10)
+
+    signal_rows = [row for row in rows if row.get("item_type") == "signal"]
+    assert signal_rows
+    assert signal_rows[0]["id"] == signal_id
+    assert signal_rows[0]["source_name"] == "JPT"
+    assert signal_rows[0]["tag_name"] == "ГРП, МГРП и стимуляция"
+
+
 def test_update_agent_memory_status(isolated_db):
     memory_id = repository.upsert_agent_memory(
         memory_key="strategy:test",

@@ -75,6 +75,7 @@ SIGNAL_DISCOVERY_OFFLINE="${SIGNAL_DISCOVERY_OFFLINE:-1}"
 SIGNAL_DISCOVERY_WEB="${SIGNAL_DISCOVERY_WEB:-0}"
 SIGNAL_DISCOVERY_WEB_ONLY="${SIGNAL_DISCOVERY_WEB_ONLY:-0}"
 SIGNAL_DISCOVERY_WEB_QUERY_LIMIT="${SIGNAL_DISCOVERY_WEB_QUERY_LIMIT:-8}"
+SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -200,6 +201,10 @@ while true; do
         run_step "enqueue-source-discovery" python -m oiltech_digest.cli enqueue-source-discovery "$@"
       fi
     fi
+  fi
+
+  if [ "$SIGNAL_DISCOVERY_DAILY_ENABLED" = "1" ]; then
+    run_step "enqueue-daily-signal-discovery" python -m oiltech_digest.cli enqueue-daily-signal-discovery
   fi
 
   if [ "$SIGNAL_DISCOVERY_ENABLED" = "1" ]; then

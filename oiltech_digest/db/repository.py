@@ -277,25 +277,54 @@ def normalize_domain(url: str) -> str:
 
 
 def record_signal_feedback_event(
-    article_id: int,
+    article_id: int | None,
     event_type: str,
     *,
+    signal_id: int | None = None,
+    signal_evidence_id: int | None = None,
+    source_url: str | None = None,
+    signal_title: str | None = None,
     user_id: int | None = None,
     old_value: str | None = None,
     new_value: str | None = None,
     comment: str | None = None,
+    verdict: str | None = None,
+    reason: str | None = None,
+    corrected_title: str | None = None,
+    corrected_thesis: str | None = None,
+    duplicate_of_signal_id: int | None = None,
 ) -> int:
     if event_type not in SIGNAL_FEEDBACK_EVENTS:
         raise ValueError(f"Unknown signal feedback event_type: {event_type}")
+    if article_id is None and signal_id is None and not source_url:
+        raise ValueError("signal feedback requires article_id, signal_id or source_url")
     with get_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO signal_feedback_events
-              (article_id, user_id, event_type, old_value, new_value, comment)
-            VALUES (%s, %s, %s, %s, %s, %s)
+              (article_id, signal_id, signal_evidence_id, source_url, signal_title,
+               user_id, event_type, old_value, new_value, comment,
+               verdict, reason, corrected_title, corrected_thesis, duplicate_of_signal_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (article_id, user_id, event_type, old_value, new_value, comment),
+            (
+                article_id,
+                signal_id,
+                signal_evidence_id,
+                source_url,
+                signal_title,
+                user_id,
+                event_type,
+                old_value,
+                new_value,
+                comment,
+                verdict,
+                reason,
+                corrected_title,
+                corrected_thesis,
+                duplicate_of_signal_id,
+            ),
         )
         event_id = int(cur.fetchone()[0])
         conn.commit()
@@ -982,30 +1011,260 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
         return evidence_id
 
 
-def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50) -> list[dict]:
-    clauses = []
+def refresh_signal_evidence_count(signal_id: int) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE signals
+            SET evidence_count = (
+                  SELECT COUNT(*)::int
+                  FROM signal_evidence
+                  WHERE signal_id = %s
+                ),
+                updated_at = now()
+            WHERE id = %s
+            RETURNING evidence_count
+            """,
+            (signal_id, signal_id),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return int(row[0]) if row else 0
+
+
+def create_signal_generation_run(
+    *,
+    config_payload: dict,
+    trigger: str | None = None,
+    background_job_id: int | None = None,
+) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO signal_generation_runs (background_job_id, trigger, status, config_json)
+            VALUES (%s, %s, 'running', %s)
+            RETURNING id
+            """,
+            (background_job_id, trigger, Json(_jsonable(config_payload))),
+        )
+        run_id = int(cur.fetchone()[0])
+        conn.commit()
+        return run_id
+
+
+def finish_signal_generation_run(
+    run_id: int,
+    *,
+    status: str,
+    result: dict | None = None,
+    error_message: str | None = None,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE signal_generation_runs
+            SET status = %s,
+                result_json = %s,
+                error_message = %s,
+                finished_at = now()
+            WHERE id = %s
+            """,
+            (status, Json(_jsonable(result or {})), error_message, run_id),
+        )
+        conn.commit()
+
+
+def create_signal_training_example(
+    *,
+    generation_run_id: int | None,
+    signal_id: int | None = None,
+    topic: str,
+    signal_key: str | None,
+    pipeline_verdict: str,
+    input_payload: dict,
+    raw_output: dict | None = None,
+    normalized_output: dict | None = None,
+) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO signal_training_examples (
+              generation_run_id, signal_id, topic, signal_key, pipeline_verdict,
+              input_json, raw_output_json, normalized_output_json
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                generation_run_id,
+                signal_id,
+                topic,
+                signal_key,
+                pipeline_verdict,
+                Json(_jsonable(input_payload)),
+                Json(_jsonable(raw_output or {})),
+                Json(_jsonable(normalized_output or {})),
+            ),
+        )
+        example_id = int(cur.fetchone()[0])
+        conn.commit()
+        return example_id
+
+
+def attach_feedback_to_signal_training_examples(
+    feedback_event_id: int,
+    *,
+    signal_id: int | None = None,
+    limit: int = 20,
+) -> int:
+    if signal_id is None:
+        return 0
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            WITH target AS (
+              SELECT id
+              FROM signal_training_examples
+              WHERE signal_id = %s
+                AND feedback_event_id IS NULL
+              ORDER BY created_at DESC, id DESC
+              LIMIT %s
+            )
+            UPDATE signal_training_examples ste
+            SET feedback_event_id = %s,
+                updated_at = now()
+            FROM target
+            WHERE ste.id = target.id
+            """,
+            (signal_id, limit, feedback_event_id),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def list_signal_training_examples(
+    *,
+    limit: int = 1000,
+    with_feedback_only: bool = True,
+    verdict: str | None = None,
+) -> list[dict]:
+    clauses: list[str] = []
     params: list = []
-    if maturity:
-        clauses.append("maturity = %s")
-        params.append(maturity)
-    if theme:
-        clauses.append("theme ILIKE %s")
-        params.append(f"%{theme}%")
+    if with_feedback_only:
+        clauses.append("ste.feedback_event_id IS NOT NULL")
+    if verdict:
+        clauses.append("sfe.verdict = %s")
+        params.append(verdict)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.append(limit)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT *
-            FROM signals
+            SELECT
+              ste.id,
+              ste.generation_run_id,
+              ste.signal_id,
+              ste.feedback_event_id,
+              ste.topic,
+              ste.signal_key,
+              ste.pipeline_verdict,
+              ste.input_json,
+              ste.raw_output_json,
+              ste.normalized_output_json,
+              ste.created_at,
+              ste.updated_at,
+              sfe.event_type AS feedback_event_type,
+              sfe.verdict AS feedback_verdict,
+              sfe.reason AS feedback_reason,
+              sfe.corrected_title AS feedback_corrected_title,
+              sfe.corrected_thesis AS feedback_corrected_thesis,
+              sfe.duplicate_of_signal_id AS feedback_duplicate_of_signal_id,
+              sfe.comment AS feedback_comment,
+              sfe.created_at AS feedback_created_at,
+              s.title AS signal_title,
+              s.title_ru AS signal_title_ru,
+              s.theme AS signal_theme,
+              s.score AS signal_score,
+              s.maturity AS signal_maturity
+            FROM signal_training_examples ste
+            LEFT JOIN signal_feedback_events sfe ON sfe.id = ste.feedback_event_id
+            LEFT JOIN signals s ON s.id = ste.signal_id
             {where}
-            ORDER BY score DESC, last_seen_at DESC
+            ORDER BY ste.created_at DESC, ste.id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return list(cur.fetchall())
+
+
+def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50,
+                 user_id: int | None = None) -> list[dict]:
+    clauses = []
+    params: list = []
+    if maturity:
+        clauses.append("s.maturity = %s")
+        params.append(maturity)
+    if theme:
+        clauses.append("s.theme ILIKE %s")
+        params.append(f"%{theme}%")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params = [user_id, *params, limit]
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT s.*,
+                   COALESCE(uss.status, 'watch') AS user_status,
+                   (COALESCE(uss.status, 'watch') = 'digest') AS selected_for_digest,
+                   uss.analyst_comment AS user_comment,
+                   uss.updated_at AS user_status_updated_at,
+                   (
+                     SELECT COUNT(*)
+                     FROM signal_feedback_events sfe
+                     WHERE sfe.signal_id = s.id
+                        OR (sfe.source_url IS NOT NULL AND EXISTS (
+                             SELECT 1 FROM signal_evidence se
+                             WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
+                           ))
+                   ) AS feedback_count
+            FROM signals s
+            LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
+            {where}
+            ORDER BY s.score DESC, s.last_seen_at DESC
             LIMIT %s
             """,
             params,
         )
         return cur.fetchall()
+
+
+def set_user_signal_status(
+    user_id: int,
+    signal_id: int,
+    *,
+    status: str | None = None,
+    analyst_comment: str | None = None,
+) -> None:
+    if status is None and analyst_comment is None:
+        return
+    with get_connection() as conn:
+        exists = conn.execute("SELECT 1 FROM signals WHERE id = %s", (signal_id,)).fetchone()
+        if not exists:
+            raise KeyError(f"Signal not found: {signal_id}")
+        conn.execute(
+            """
+            INSERT INTO user_signal_states (user_id, signal_id, status, analyst_comment)
+            VALUES (%s, %s, COALESCE(%s, 'watch'), %s)
+            ON CONFLICT (user_id, signal_id) DO UPDATE SET
+              status = COALESCE(%s, user_signal_states.status),
+              analyst_comment = COALESCE(%s, user_signal_states.analyst_comment),
+              updated_at = now()
+            """,
+            (user_id, signal_id, status, analyst_comment, status, analyst_comment),
+        )
+        conn.commit()
 
 
 def list_signal_evidence(signal_id: int, *, limit: int = 20) -> list[dict]:
@@ -1337,6 +1596,72 @@ def list_agent_memory(
             f"""
             SELECT *
             FROM agent_memory
+            {where}
+            ORDER BY score DESC, updated_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def upsert_signal_agent_memory(
+    *,
+    memory_key: str,
+    memory_type: str,
+    subject: str,
+    status: str = "active",
+    score: float = 0,
+    facts: dict | None = None,
+) -> int:
+    key = memory_key.strip()
+    if not key:
+        raise ValueError("signal agent memory_key is required")
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO signal_agent_memory
+              (memory_key, memory_type, subject, status, score, facts_json, last_seen_at)
+            VALUES (%s, %s, %s, %s, %s, %s, now())
+            ON CONFLICT (memory_key) DO UPDATE SET
+              memory_type = EXCLUDED.memory_type,
+              subject = EXCLUDED.subject,
+              status = EXCLUDED.status,
+              score = EXCLUDED.score,
+              facts_json = EXCLUDED.facts_json,
+              last_seen_at = now(),
+              updated_at = now()
+            RETURNING id
+            """,
+            (key, memory_type, subject, status, score, Json(_jsonable(facts or {}))),
+        )
+        memory_id = int(cur.fetchone()[0])
+        conn.commit()
+        return memory_id
+
+
+def list_signal_agent_memory(
+    *,
+    memory_type: str | None = None,
+    status: str | None = "active",
+    limit: int = 50,
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list = []
+    if memory_type:
+        clauses.append("memory_type = %s")
+        params.append(memory_type)
+    if status:
+        clauses.append("status = %s")
+        params.append(status)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(limit)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT *
+            FROM signal_agent_memory
             {where}
             ORDER BY score DESC, updated_at DESC
             LIMIT %s
@@ -1870,6 +2195,30 @@ def create_background_job(
         job = cur.fetchone()
         conn.commit()
         return job
+
+
+def has_recent_background_job(
+    *,
+    kind: str,
+    payload_subset: dict,
+    lookback_hours: int,
+    statuses: tuple[str, ...] = ("queued", "running", "finalizing", "ok"),
+) -> bool:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT 1
+            FROM background_jobs
+            WHERE kind = %s
+              AND status = ANY(%s)
+              AND created_at >= now() - (%s::text || ' hours')::interval
+              AND payload_json @> %s::jsonb
+            LIMIT 1
+            """,
+            (kind, list(statuses), lookback_hours, Json(_jsonable(payload_subset))),
+        )
+        return cur.fetchone() is not None
 
 
 def get_background_job(job_id: int, *, user_id: int | None = None) -> dict | None:
@@ -4178,7 +4527,72 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             """,
             params,
         )
-        return cur.fetchall()
+        article_rows = cur.fetchall()
+        signal_params = dict(params)
+        signal_month_clause = ""
+        signal_search_clause = ""
+        signal_tag_clause = ""
+        if month:
+            signal_month_clause = "AND to_char(COALESCE(best_evidence.published_at, sig.last_seen_at, sig.created_at), 'YYYY-MM') = %(month)s"
+        if search:
+            signal_search_clause = """
+              AND (
+                   COALESCE(sig.title_ru, sig.title) ILIKE %(search)s
+                OR COALESCE(sig.summary, '') ILIKE %(search)s
+                OR COALESCE(sig.thesis, '') ILIKE %(search)s
+                OR COALESCE(sig.theme, '') ILIKE %(search)s
+              )
+            """
+        if top_tag:
+            signal_tag_clause = "AND sig.theme = %(top_tag)s"
+        cur.execute(
+            f"""
+            SELECT sig.id,
+                   COALESCE(sig.title_ru, sig.title) AS title,
+                   COALESCE(best_evidence.source_url, '') AS url,
+                   COALESCE(best_evidence.published_at, sig.last_seen_at) AS published_at,
+                   'mixed' AS language,
+                   '' AS image_url,
+                   COALESCE(best_evidence.publisher, 'Радар сигналов') AS source_name,
+                   COALESCE(sig.summary, sig.thesis, '') AS summary,
+                   TRUE AS selected_for_digest,
+                   sig.score AS total_score,
+                   sig.maturity AS score_label,
+                   sig.theme AS tag_name,
+                   NULL AS parent_tag_name,
+                   'signal' AS item_type
+            FROM signals sig
+            JOIN user_signal_states uss ON uss.signal_id = sig.id AND uss.user_id = %(user_id)s
+            LEFT JOIN LATERAL (
+              SELECT source_url, publisher, published_at
+              FROM signal_evidence
+              WHERE signal_id = sig.id
+              ORDER BY strength DESC, published_at DESC NULLS LAST, created_at DESC
+              LIMIT 1
+            ) best_evidence ON TRUE
+            WHERE uss.status = 'digest'
+              AND sig.maturity <> 'reject'
+              AND sig.score >= %(min_score)s
+              {max_score_clause.replace('COALESCE(sc.total_score, 0)', 'sig.score')}
+              {signal_month_clause}
+              {signal_search_clause}
+              {signal_tag_clause}
+            ORDER BY sig.score DESC NULLS LAST,
+                     COALESCE(best_evidence.published_at, sig.last_seen_at) DESC NULLS LAST
+            LIMIT %(limit)s
+            """,
+            signal_params,
+        )
+        signal_rows = cur.fetchall()
+        combined = [*article_rows, *signal_rows]
+        combined.sort(
+            key=lambda row: (
+                float(row.get("total_score") or 0),
+                row.get("published_at") or datetime.min.replace(tzinfo=timezone.utc),
+            ),
+            reverse=True,
+        )
+        return combined[:limit]
 
 
 def save_monthly_digest(
