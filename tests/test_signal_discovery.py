@@ -511,3 +511,123 @@ def test_web_search_prioritizes_feedback_query_hints(monkeypatch):
 
     assert captured["queries"][0] == "2026 closed-loop rig automation oil gas deployment"
     assert result["evidence"]
+
+
+def test_web_search_enriches_queries_with_tag_keywords(monkeypatch):
+    from oiltech_digest.source_discovery import agent as source_agent
+
+    captured = {}
+    monkeypatch.setattr(signal_discovery, "feedback_query_hints", lambda topic, limit=8: [])
+    monkeypatch.setattr(
+        signal_discovery.repository,
+        "list_enabled_tags",
+        lambda: [
+            {
+                "id": 1,
+                "parent_id": None,
+                "name": "Бурение",
+                "name_en": "Drilling",
+                "description": "Строительство нефтяных скважин",
+                "keywords_json": ["управление бурением с замкнутым контуром"],
+                "keywords_en_json": ["closed-loop drilling", "automated drilling rig"],
+                "negative_keywords_json": ["construction drilling"],
+            },
+            {
+                "id": 2,
+                "parent_id": 1,
+                "name": "Направленное бурение",
+                "name_en": "Directional drilling",
+                "description": "",
+                "keywords_json": ["геонавигация"],
+                "keywords_en_json": ["geosteering"],
+                "negative_keywords_json": [],
+            },
+        ],
+    )
+    def fake_generate_search_queries(topic, offline=True, limit=8, strategy="broad"):
+        captured["generation_topic"] = topic
+        return ["generic drilling news"]
+
+    monkeypatch.setattr(source_agent, "generate_search_queries", fake_generate_search_queries)
+
+    def fake_search_web(queries, limit=80):
+        captured["queries"] = queries
+        return {
+            "status": "ok",
+            "provider": "test",
+            "results": [
+                {
+                    "url": "https://example.com/closed-loop",
+                    "title": "Oil and gas operator deploys closed-loop drilling",
+                    "snippet": "Closed-loop drilling improves well construction in oil and gas.",
+                    "provider": "test",
+                    "query": queries[0],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(source_agent, "search_web", fake_search_web)
+
+    result = signal_discovery._search_web_evidence(
+        {"name": "Бурение, направленное бурение, растворы и буровое оборудование", "query_seeds_json": []},
+        signal_discovery.SignalDiscoveryConfig(web_query_limit=5, limit=5),
+    )
+
+    assert any("closed-loop drilling" in query for query in captured["queries"])
+    assert "closed-loop drilling" in captured["generation_topic"]
+    assert "construction drilling" in captured["generation_topic"]
+    assert result["tag_context"]["keywords_en"][0] == "closed-loop drilling"
+    assert result["evidence"]
+
+
+def test_web_search_filters_results_by_tag_negative_keywords(monkeypatch):
+    from oiltech_digest.source_discovery import agent as source_agent
+
+    monkeypatch.setattr(signal_discovery, "feedback_query_hints", lambda topic, limit=8: [])
+    monkeypatch.setattr(
+        signal_discovery.repository,
+        "list_enabled_tags",
+        lambda: [
+            {
+                "id": 1,
+                "parent_id": None,
+                "name": "Бурение",
+                "name_en": "Drilling",
+                "description": "",
+                "keywords_json": ["бурение"],
+                "keywords_en_json": ["drilling"],
+                "negative_keywords_json": ["construction drilling"],
+            }
+        ],
+    )
+    monkeypatch.setattr(source_agent, "generate_search_queries", lambda topic, offline=True, limit=8, strategy="broad": [])
+
+    def fake_search_web(queries, limit=80):
+        return {
+            "status": "ok",
+            "provider": "test",
+            "results": [
+                {
+                    "url": "https://example.com/noise",
+                    "title": "Construction drilling robots for concrete sites",
+                    "snippet": "No oil and gas deployment, only construction drilling equipment.",
+                    "provider": "test",
+                },
+                {
+                    "url": "https://example.com/useful",
+                    "title": "Oil and gas operator deploys automated drilling rig",
+                    "snippet": "The drilling system works on oil and gas wells.",
+                    "provider": "test",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(source_agent, "search_web", fake_search_web)
+
+    result = signal_discovery._search_web_evidence(
+        {"name": "Бурение", "query_seeds_json": []},
+        signal_discovery.SignalDiscoveryConfig(web_query_limit=4, limit=5),
+    )
+
+    urls = [item["source_url"] for item in result["evidence"]]
+    assert urls == ["https://example.com/useful"]

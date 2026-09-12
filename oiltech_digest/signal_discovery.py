@@ -566,10 +566,12 @@ def _search_web_evidence(topic: dict[str, Any], config: SignalDiscoveryConfig) -
     from oiltech_digest.source_discovery.agent import generate_search_queries, search_web
 
     topic_name = str(topic.get("name") or config.topic or "").strip()
-    seed_queries = _topic_seed_queries(topic, year=2026)
+    tag_context = _topic_tag_context(topic_name)
+    seed_queries = _topic_seed_queries(topic, year=2026, tag_context=tag_context)
     feedback_queries = feedback_query_hints(topic_name, limit=config.web_query_limit)
+    generation_topic = _query_generation_topic(topic, tag_context)
     generated_queries = generate_search_queries(
-        topic_name,
+        generation_topic,
         offline=config.offline,
         limit=config.web_query_limit,
         strategy="broad",
@@ -580,7 +582,7 @@ def _search_web_evidence(topic: dict[str, Any], config: SignalDiscoveryConfig) -
     evidence = [
         item
         for item in (_search_result_to_evidence(row, topic_name) for row in results)
-        if item and _has_industry_context(item)
+        if item and _has_industry_context(item) and not _blocked_by_tag_negative_keywords(item, tag_context)
     ]
     return {
         "status": search.get("status"),
@@ -589,17 +591,20 @@ def _search_web_evidence(topic: dict[str, Any], config: SignalDiscoveryConfig) -
         "queries": queries,
         "results": len(results),
         "evidence": evidence,
+        "tag_context": _tag_context_snapshot(tag_context),
         "errors": search.get("errors") or [],
     }
 
 
-def _topic_seed_queries(topic: dict[str, Any], *, year: int) -> list[str]:
+def _topic_seed_queries(topic: dict[str, Any], *, year: int, tag_context: dict[str, Any] | None = None) -> list[str]:
     topic_name = str(topic.get("name") or "").strip()
     description = str(topic.get("description") or "").strip()
     raw_seeds = topic.get("query_seeds_json")
     if raw_seeds is None:
         raw_seeds = topic.get("query_seeds") or []
     seeds = [str(item).strip() for item in raw_seeds or [] if str(item).strip()]
+    if tag_context:
+        seeds.extend(_tag_context_seed_terms(tag_context))
     queries = []
     for seed in seeds + [topic_name, description]:
         if not seed:
@@ -608,6 +613,156 @@ def _topic_seed_queries(topic: dict[str, Any], *, year: int) -> list[str]:
         if _contains_cjk(seed):
             queries.append(f"{year} {seed} 新闻 石油 天然气 石化 矿山")
     return _dedupe(queries)
+
+
+def _topic_tag_context(topic_name: str) -> dict[str, Any]:
+    try:
+        tags = repository.list_enabled_tags()
+    except Exception:  # noqa: BLE001 - tag context is an enrichment, not a hard dependency for search
+        tags = []
+    selected = _select_topic_tags(topic_name, tags)
+    return {
+        "tags": selected,
+        "keywords_ru": _dedupe(_flatten_tag_values(selected, "keywords_json"))[:20],
+        "keywords_en": _dedupe(_flatten_tag_values(selected, "keywords_en_json"))[:20],
+        "negative_keywords": _dedupe(_flatten_tag_values(selected, "negative_keywords_json"))[:30],
+        "descriptions": _dedupe([str(row.get("description") or "").strip() for row in selected if row.get("description")])[:8],
+    }
+
+
+def _select_topic_tags(topic_name: str, tags: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not topic_name or not tags:
+        return []
+    topic_norm = _norm_match_text(topic_name)
+    direct_ids: set[int] = set()
+    direct_parent_ids: set[int] = set()
+    for tag in tags:
+        if _tag_matches_topic(tag, topic_norm):
+            tag_id = tag.get("id")
+            parent_id = tag.get("parent_id")
+            if tag_id is not None:
+                direct_ids.add(int(tag_id))
+            if parent_id is not None:
+                direct_parent_ids.add(int(parent_id))
+
+    selected = []
+    for tag in tags:
+        tag_id = tag.get("id")
+        parent_id = tag.get("parent_id")
+        include = False
+        if tag_id is not None and int(tag_id) in direct_ids:
+            include = True
+        if tag_id is not None and int(tag_id) in direct_parent_ids:
+            include = True
+        if parent_id is not None and int(parent_id) in direct_ids:
+            include = True
+        if include:
+            selected.append(tag)
+    return selected[:24]
+
+
+def _tag_matches_topic(tag: dict[str, Any], topic_norm: str) -> bool:
+    fields = [
+        tag.get("name"),
+        tag.get("name_en"),
+        tag.get("parent_name"),
+        tag.get("parent_name_en"),
+        tag.get("description"),
+    ]
+    for field in fields:
+        field_norm = _norm_match_text(str(field or ""))
+        if field_norm and (field_norm in topic_norm or topic_norm in field_norm):
+            return True
+        if field_norm and _meaningful_token_overlap(topic_norm, field_norm):
+            return True
+    for keyword in (tag.get("keywords_json") or []) + (tag.get("keywords_en_json") or []):
+        keyword_norm = _norm_match_text(str(keyword or ""))
+        if keyword_norm and (keyword_norm in topic_norm or _meaningful_token_overlap(topic_norm, keyword_norm)):
+            return True
+    return False
+
+
+def _meaningful_token_overlap(left: str, right: str) -> bool:
+    left_tokens = {token for token in re.findall(r"[a-zа-яё0-9]{4,}", left) if token not in {"and", "with", "news"}}
+    right_tokens = {token for token in re.findall(r"[a-zа-яё0-9]{4,}", right) if token not in {"and", "with", "news"}}
+    return bool(left_tokens & right_tokens)
+
+
+def _norm_match_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").lower().replace("ё", "е")).strip()
+
+
+def _flatten_tag_values(tags: list[dict[str, Any]], field: str) -> list[str]:
+    values: list[str] = []
+    for tag in tags:
+        for value in tag.get(field) or []:
+            text = str(value or "").strip()
+            if text:
+                values.append(text)
+    return values
+
+
+def _tag_context_seed_terms(tag_context: dict[str, Any]) -> list[str]:
+    tags = tag_context.get("tags") or []
+    names = []
+    for tag in tags[:8]:
+        for field in ("name_en", "name"):
+            value = str(tag.get(field) or "").strip()
+            if value:
+                names.append(value)
+    return _dedupe([
+        *tag_context.get("keywords_en", [])[:10],
+        *tag_context.get("keywords_ru", [])[:8],
+        *names,
+    ])[:18]
+
+
+def _query_generation_topic(topic: dict[str, Any], tag_context: dict[str, Any]) -> str:
+    topic_name = str(topic.get("name") or "").strip()
+    description = str(topic.get("description") or "").strip()
+    parts = [topic_name]
+    if description:
+        parts.append(f"description: {description}")
+    if tag_context.get("keywords_en"):
+        parts.append("english keywords: " + ", ".join(tag_context["keywords_en"][:12]))
+    if tag_context.get("keywords_ru"):
+        parts.append("russian keywords: " + ", ".join(tag_context["keywords_ru"][:10]))
+    if tag_context.get("negative_keywords"):
+        parts.append("avoid meanings: " + ", ".join(tag_context["negative_keywords"][:12]))
+    return "\n".join(part for part in parts if part)
+
+
+def _blocked_by_tag_negative_keywords(evidence: dict[str, Any], tag_context: dict[str, Any]) -> bool:
+    negative_keywords = tag_context.get("negative_keywords") or []
+    if not negative_keywords:
+        return False
+    text = _norm_match_text(" ".join(
+        str(evidence.get(field) or "")
+        for field in ("title", "title_ru", "extracted_fact", "summary_ru", "publisher")
+    ))
+    return any(_contains_negative_keyword(text, keyword) for keyword in negative_keywords)
+
+
+def _contains_negative_keyword(text: str, keyword: str) -> bool:
+    keyword_norm = _norm_match_text(keyword)
+    if not keyword_norm:
+        return False
+    if re.search(r"[\u3400-\u9fff]", keyword_norm):
+        return keyword_norm in text
+    if re.fullmatch(r"[a-zа-яё0-9 ]+", keyword_norm):
+        pattern = r"(?<![a-zа-яё0-9])" + re.escape(keyword_norm) + r"(?![a-zа-яё0-9])"
+        return bool(re.search(pattern, text))
+    return keyword_norm in text
+
+
+def _tag_context_snapshot(tag_context: dict[str, Any]) -> dict[str, Any]:
+    tags = tag_context.get("tags") or []
+    return {
+        "tag_names": [row.get("name") for row in tags[:12] if row.get("name")],
+        "keywords_ru": tag_context.get("keywords_ru", [])[:12],
+        "keywords_en": tag_context.get("keywords_en", [])[:12],
+        "negative_keywords": tag_context.get("negative_keywords", [])[:12],
+    }
 
 
 def _search_result_to_evidence(row: dict[str, Any], topic: str) -> dict[str, Any] | None:
