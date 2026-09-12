@@ -876,3 +876,39 @@ def test_renaming_parent_tag_does_not_silently_orphan_subtags(isolated_db):
         assert "корневыми" in orphan.json()["detail"]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_seed_tags_merges_keywords_instead_of_overwriting(isolated_db):
+    """Сид обязан ДОПОЛНЯТЬ ключевые слова, а не заменять.
+
+    С 12.09 их можно править в UI («Теги» → «Ключевые слова RU/EN»), а seed-tags
+    запускается сам в bootstrap на каждом деплое. Прежняя перезапись молча стирала бы
+    правки заказчика — и он бы об этом даже не узнал.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO tags (name, name_en, enabled, sort_order, keywords_json, keywords_en_json) "
+            "VALUES ('Бурение', 'Drilling', TRUE, 1, '[\"правка Виктора\"]'::jsonb, '[\"viktor edit\"]'::jsonb)"
+        )
+        conn.commit()
+
+    repository.upsert_tag({
+        "parent_id": None, "name": "Бурение", "name_en": "Drilling",
+        "description": "из сида",
+        "keywords_json": ["бурение", "правка Виктора"],
+        "keywords_en_json": ["drilling", "自动化钻机"],
+        "sort_order": 1,
+    })
+
+    with connection.get_connection() as conn:
+        ru, en = conn.execute(
+            "SELECT keywords_json, keywords_en_json FROM tags WHERE name = 'Бурение'"
+        ).fetchone()
+
+    assert "правка Виктора" in ru, "сид затёр ручную правку"
+    assert "бурение" in ru, "сид не добавил своё ключевое слово"
+    assert "viktor edit" in en and "自动化钻机" in en
+    # Без дублей: «правка Виктора» пришла и из базы, и из сида.
+    assert ru.count("правка Виктора") == 1

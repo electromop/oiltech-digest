@@ -3601,6 +3601,24 @@ def upsert_tag(rec: dict) -> int:
         row = cur.fetchone()
         if row:
             tag_id = row[0]
+            # Сид ДОПОЛНЯЕТ ключевые слова, а не заменяет. С 12.09 их можно править в UI
+            # («Теги» → «Ключевые слова RU/EN»), и прежняя перезапись молча стирала бы
+            # правки заказчика при каждом повторном прогоне seed-tags — а прогон случается
+            # сам, в bootstrap на деплое. Порядок сохраняем: сначала то, что уже было.
+            existing = conn.execute(
+                "SELECT COALESCE(keywords_json, '[]'::jsonb), COALESCE(keywords_en_json, '[]'::jsonb) "
+                "FROM tags WHERE id = %s", (tag_id,)
+            ).fetchone()
+
+            def _merge(current, incoming):
+                merged, seen = [], set()
+                for word in [*(current or []), *(incoming or [])]:
+                    key = str(word).strip().lower()
+                    if key and key not in seen:
+                        seen.add(key)
+                        merged.append(word)
+                return merged
+
             conn.execute(
                 """
                 UPDATE tags
@@ -3615,8 +3633,8 @@ def upsert_tag(rec: dict) -> int:
                 {
                     **rec,
                     "id": tag_id,
-                    "keywords_json": Json(rec.get("keywords_json") or []),
-                    "keywords_en_json": Json(rec.get("keywords_en_json") or []),
+                    "keywords_json": Json(_merge(existing[0], rec.get("keywords_json"))),
+                    "keywords_en_json": Json(_merge(existing[1], rec.get("keywords_en_json"))),
                 },
             )
             conn.commit()
