@@ -912,3 +912,63 @@ def test_seed_tags_merges_keywords_instead_of_overwriting(isolated_db):
     assert "viktor edit" in en and "自动化钻机" in en
     # Без дублей: «правка Виктора» пришла и из базы, и из сида.
     assert ru.count("правка Виктора") == 1
+
+
+def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
+    """Мина, найденная на проде 12.09: пересчёт джойнил критерии БЕЗ фильтра enabled.
+
+    Заказчик 11.09 сменил профиль: пять активных дают ровно 100, но три ВЫКЛЮЧЕННЫХ
+    несут ещё 75. Без фильтра сумма весов у старой статьи становилась 175 вместо 100 —
+    баллы уезжали вверх без причины. И отдельно: статью, оценённую только по ныне
+    выключенным критериям, пересчёт обнулил бы молча.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('S', 'Media', 'https://s.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        live = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Активный', 100, TRUE, 1) RETURNING id"
+        ).fetchone()[0]
+        dead = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Выключенный', 75, FALSE, 2) RETURNING id"
+        ).fetchone()[0]
+
+        def add_article(url: str, criteria: list[int]) -> int:
+            aid = conn.execute(
+                "INSERT INTO articles (source_id, title, url, collected_at, raw_text, language) "
+                "VALUES (%s, 'T', %s, now(), 'x', 'ru') RETURNING id", (source_id, url)
+            ).fetchone()[0]
+            sid = conn.execute(
+                "INSERT INTO article_scores (article_id, total_score, score_label) "
+                "VALUES (%s, 50, 'Средняя') RETURNING id", (aid,)
+            ).fetchone()[0]
+            for cid in criteria:
+                conn.execute(
+                    "INSERT INTO article_score_items (article_score_id, criterion_id, ai_score, "
+                    "keyword_score, final_score) VALUES (%s, %s, 80, 0, 80)", (sid, cid),
+                )
+            return aid
+
+        mixed = add_article("https://s.example/mixed", [live, dead])
+        orphan = add_article("https://s.example/orphan", [dead])
+        conn.commit()
+
+    repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8)
+
+    with connection.get_connection() as conn:
+        mixed_total = conn.execute(
+            "SELECT total_score FROM article_scores WHERE article_id = %s", (mixed,)
+        ).fetchone()[0]
+        orphan_total = conn.execute(
+            "SELECT total_score FROM article_scores WHERE article_id = %s", (orphan,)
+        ).fetchone()[0]
+
+    # 80 * 100/100 = 80. С выключенным критерием было бы 80*175/100 = 140 → клампилось в 100.
+    assert float(mixed_total) == 80, f"выключенный критерий всё ещё считается: {mixed_total}"
+    # Статью без единого активного критерия не трогаем, а не обнуляем.
+    assert float(orphan_total) == 50, "статью без активных критериев нельзя обнулять молча"

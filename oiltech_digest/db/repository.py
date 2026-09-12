@@ -3984,12 +3984,22 @@ def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -
         )
         cur = conn.execute(
             """
+            -- ТОЛЬКО активные критерии. Без фильтра выключенные продолжали вносить вклад:
+            -- на проде 12.09 три выключенных критерия несут вес 35+30+10 = 75, и сумма
+            -- весов у старой статьи становилась 175 вместо 100 — баллы уезжали вверх без
+            -- всякой причины. Заказчик 11.09 как раз сменил профиль критериев, так что
+            -- «старые items + новые веса» — это не теория, а текущее состояние базы.
             WITH recomputed AS (
                 SELECT i.article_score_id,
-                       SUM(i.final_score * c.weight / 100.0) AS total
+                       SUM(i.final_score * c.weight / 100.0) AS total,
+                       SUM(c.weight) AS weight_sum
                 FROM article_score_items i
-                JOIN scoring_criteria c ON c.id = i.criterion_id
+                JOIN scoring_criteria c ON c.id = i.criterion_id AND c.enabled
                 GROUP BY i.article_score_id
+                -- Статьи, оценённые ТОЛЬКО по ныне выключенным критериям, пропускаем:
+                -- их «пересчёт» дал бы 0 и молча обнулил ленту. Им нужен полноценный
+                -- перепрогон скоринга, а не пересчёт блендинга.
+                HAVING SUM(c.weight) > 0
             )
             UPDATE article_scores s
             SET total_score = ROUND(LEAST(GREATEST(r.total, 0), 100)::numeric, 2),
