@@ -3801,13 +3801,30 @@ def upsert_scoring_criterion(rec: dict) -> int:
                                           keywords_en_json, enabled, sort_order)
             VALUES (%(name)s, %(description)s, %(weight)s, %(keywords_json)s,
                     %(keywords_en_json)s, TRUE, %(sort_order)s)
+            -- Сид ГАРАНТИРУЕТ СУЩЕСТВОВАНИЕ критериев по умолчанию, но НЕ переопределяет
+            -- решения человека. Раньше здесь стояло `enabled = TRUE`, и каждый деплой
+            -- воскрешал критерии, которые заказчик выключил в UI. Это не теория: 11.09
+            -- заказчик утром перестроил профиль (5 критериев, сумма ровно 100), в 11:40
+            -- прошёл деплой брендинга, bootstrap поднял обратно три старых — и через две
+            -- минуты он написал «а что случилось со скорингом? там сейчас 9 параметров».
+            -- Хуже того, сумма весов стала бы 175 вместо 100, и стадия скоринга падает
+            -- целиком на первой же статье (_validate_weights).
+            -- Вес и флаг — территория человека (экран «Скоринг»), сид их не трогает.
+            -- Ключевые слова дополняем, а не заменяем: их там тоже правят руками.
             ON CONFLICT (name) DO UPDATE SET
-                description = EXCLUDED.description,
-                weight = EXCLUDED.weight,
-                keywords_json = EXCLUDED.keywords_json,
-                keywords_en_json = EXCLUDED.keywords_en_json,
-                enabled = TRUE,
-                sort_order = EXCLUDED.sort_order,
+                description = COALESCE(scoring_criteria.description, EXCLUDED.description),
+                keywords_json = (
+                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                    FROM jsonb_array_elements(
+                        COALESCE(scoring_criteria.keywords_json, '[]'::jsonb) || EXCLUDED.keywords_json
+                    ) AS w
+                ),
+                keywords_en_json = (
+                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                    FROM jsonb_array_elements(
+                        COALESCE(scoring_criteria.keywords_en_json, '[]'::jsonb) || EXCLUDED.keywords_en_json
+                    ) AS w
+                ),
                 updated_at = now()
             RETURNING id
             """,

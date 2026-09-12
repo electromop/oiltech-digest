@@ -972,3 +972,41 @@ def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
     assert float(mixed_total) == 80, f"выключенный критерий всё ещё считается: {mixed_total}"
     # Статью без единого активного критерия не трогаем, а не обнуляем.
     assert float(orphan_total) == 50, "статью без активных критериев нельзя обнулять молча"
+
+
+def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
+    """Мина, которая УЖЕ сработала на проде 11.09.
+
+    `seed-scoring` запускается в bootstrap на КАЖДОМ деплое и делал
+    `ON CONFLICT (name) DO UPDATE SET enabled = TRUE` — то есть воскрешал критерии,
+    которые заказчик выключил в UI. 11.09 он утром собрал профиль из пяти критериев
+    (сумма ровно 100), в 11:40 прошёл деплой, и через две минуты он написал
+    «а что случилось со скорингом? там сейчас 9 параметров».
+
+    Сумма весов при этом становится 175 вместо 100, и стадия скоринга падает целиком
+    на первой же статье. Вес и флаг — территория человека, сид их не трогает.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order, keywords_json) "
+            "VALUES ('Технологическая новизна', 35, FALSE, 1, '[\"ручная правка\"]'::jsonb)"
+        )
+        conn.commit()
+
+    repository.upsert_scoring_criterion({
+        "name": "Технологическая новизна", "description": "из сида", "weight": 35,
+        "keywords_json": ["из сида"], "keywords_en_json": [], "sort_order": 1,
+    })
+
+    with connection.get_connection() as conn:
+        enabled, weight, kw = conn.execute(
+            "SELECT enabled, weight, keywords_json FROM scoring_criteria "
+            "WHERE name = 'Технологическая новизна'"
+        ).fetchone()
+
+    assert enabled is False, "сид воскресил выключенный заказчиком критерий"
+    assert float(weight) == 35
+    assert "ручная правка" in kw, "сид затёр ручные ключевые слова"
+    assert "из сида" in kw, "сид не добавил своё"
