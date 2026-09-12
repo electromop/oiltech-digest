@@ -739,9 +739,37 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
         exists = conn.execute("SELECT 1 FROM articles WHERE id = %s", (article_id,)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Article not found")
+    previous = repository.get_user_article_status(int(user["id"]), article_id)
     repository.set_user_article_status(
         int(user["id"]), article_id, status=target_status, analyst_comment=patch.analyst_comment
     )
+    # Журнал обратной связи. До 12.09 таблица signal_feedback_events была мёртвой:
+    # писала в неё ОДНА CLI-команда, которую никто не звал, а боевой путь пометки —
+    # вот этот эндпоинт — не писал вовсе. Поэтому на вопрос заказчика «я всё что
+    # выделил как шум, он на этом обучился?» честный ответ был «обучаться не на чем».
+    # Старый статус читаем ДО записи: в user_article_states одна строка на пару,
+    # истории переходов там нет, после UPDATE прежнее значение уже не достать.
+    event = {
+        "noise": "marked_noise",
+        "duplicate": "marked_duplicate",
+        "digest": "added_to_digest",
+    }.get(target_status or "", "status_changed")
+    try:
+        if target_status is not None:
+            repository.record_signal_feedback_event(
+                article_id, event, user_id=int(user["id"]),
+                old_value=previous, new_value=target_status,
+                comment=patch.analyst_comment,
+            )
+        elif patch.analyst_comment:
+            repository.record_signal_feedback_event(
+                article_id, "comment_added", user_id=int(user["id"]),
+                comment=patch.analyst_comment,
+            )
+    except Exception:  # noqa: BLE001
+        # Журнал не должен ронять саму пометку: потерять событие — неприятно,
+        # не дать человеку пометить статью — хуже.
+        logger.exception("не удалось записать событие обратной связи article_id=%s", article_id)
     return {"ok": True}
 
 
@@ -1446,6 +1474,82 @@ def delete_scoring_criterion(criterion_id: int, user: dict[str, Any] = Depends(r
         # Удаление, ломающее сумму весов, обрушило бы всю стадию скоринга.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
+
+
+class FeedbackIn(BaseModel):
+    article_id: int | None = None
+    source_id: int | None = None
+    reason: str | None = None
+    usefulness: int | None = None
+    translation: int | None = None
+    source_quality: int | None = None
+    comment: str | None = None
+
+
+@app.get("/api/feedback/reasons")
+def feedback_reasons(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
+    """Словарь быстрых причин. Фронт не хранит свою копию — иначе списки разойдутся,
+    как уже разошлись четыре независимых списка статусов статьи."""
+    labels = {
+        "off_topic": "Не наша тема",
+        "incomplete_text": "Обрывок текста",
+        "duplicate": "Уже было",
+        "bad_translation": "Плохой перевод",
+        "bad_source": "Дело в источнике",
+        "good": "Годный сигнал",
+        "other": "Другое",
+    }
+    return [{"value": value, "label": labels[value]} for value in repository.FEEDBACK_REASONS]
+
+
+@app.get("/api/feedback")
+def get_feedback(article_id: int | None = None, source_id: int | None = None,
+                 user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    if article_id is None and source_id is None:
+        raise HTTPException(status_code=400, detail="Нужен article_id или source_id")
+    entry = repository.get_feedback_entry(int(user["id"]), article_id=article_id, source_id=source_id)
+    return {"ok": True, "entry": _clean(entry) if entry else None}
+
+
+@app.post("/api/feedback")
+def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Оставить ОС по сигналу или по источнику: оценки 1–5, быстрая причина, комментарий.
+
+    Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
+    (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
+    """
+    try:
+        entry = repository.save_feedback_entry(
+            int(user["id"]),
+            article_id=payload.article_id,
+            source_id=payload.source_id,
+            reason=payload.reason,
+            usefulness=payload.usefulness,
+            translation=payload.translation,
+            source_quality=payload.source_quality,
+            comment=(payload.comment or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "entry": _clean(entry)}
+
+
+@app.get("/api/feedback/sources")
+def feedback_sources(limit: int = Query(300, ge=1, le=1000),
+                     user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
+    """Свод оценок по источникам — на что люди жалуются системно."""
+    return [_clean(row) for row in repository.feedback_source_summary(limit=limit)]
+
+
+@app.get("/api/feedback/training-set")
+def feedback_training_set(limit: int = Query(500, ge=1, le=2000), reason: str | None = None,
+                          user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
+    """Накопленная ОС в виде, пригодном для обучения агентов.
+
+    Самодостаточна намеренно: ИИ на проде считается на внешнем воркере БЕЗ доступа к БД,
+    поэтому выборка везёт с собой заголовок, суть и имя источника.
+    """
+    return [_clean(row) for row in repository.feedback_training_set(limit=limit, reason=reason)]
 
 
 @app.get("/api/reports/ai-cost")

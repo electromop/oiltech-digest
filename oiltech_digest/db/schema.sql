@@ -376,6 +376,51 @@ CREATE INDEX IF NOT EXISTS idx_signal_feedback_article_created ON signal_feedbac
 CREATE INDEX IF NOT EXISTS idx_signal_feedback_user_created ON signal_feedback_events(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_feedback_event_created ON signal_feedback_events(event_type, created_at DESC);
 
+-- =========================================================================
+-- Обратная связь человека: оценки + комментарий (требование владельца 12.09)
+-- =========================================================================
+-- Зачем отдельная таблица, а не signal_feedback_events: та — append-only ЖУРНАЛ
+-- («статус сменился с X на Y»), а это ДОКУМЕНТ, который автор правит. Разные формы
+-- жизни. Журнал отвечает «что произошло», эта таблица — «что человек об этом думает».
+--
+-- Поля выбраны не из головы: ровно так заказчик уже пишет ОС руками (чат 10.09) —
+-- «1. Корректировка названия… 2. Статья интересная и актуальная. 3. Источник отличный.
+-- 4. Перевод: walking island rig → шагающая буровая…». Отсюда три оценки и текст.
+--
+-- article_id и source_id оба необязательны, но хотя бы один обязан быть: ОС бывает
+-- и про конкретный сигнал, и про источник целиком («канал никто не ведёт»).
+-- Оценка по источнику проставляется и при ОС о сигнале — тогда source_id берётся
+-- из статьи, и накопленное можно свернуть по источнику без джойнов по всей ленте.
+CREATE TABLE IF NOT EXISTS feedback_entries (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  article_id     BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+  source_id      BIGINT REFERENCES sources(id) ON DELETE CASCADE,
+  reason         TEXT,        -- быстрая причина в один клик (см. FEEDBACK_REASONS)
+  usefulness     SMALLINT,    -- 1..5 «полезен ли сигнал»
+  translation    SMALLINT,    -- 1..5 «качество перевода и заголовка»
+  source_quality SMALLINT,    -- 1..5 «стоит ли держать этот источник»
+  comment        TEXT,        -- свободный текст: правки терминов, предостережения
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT feedback_entries_target_not_empty
+    CHECK (article_id IS NOT NULL OR source_id IS NOT NULL),
+  CONSTRAINT feedback_entries_scores_in_range
+    CHECK (
+      (usefulness     IS NULL OR usefulness     BETWEEN 1 AND 5) AND
+      (translation    IS NULL OR translation    BETWEEN 1 AND 5) AND
+      (source_quality IS NULL OR source_quality BETWEEN 1 AND 5)
+    )
+);
+-- Одна карточка ОС на пару «человек × сигнал»: повторное сохранение правит её,
+-- а не плодит дубли. Для ОС об источнике без статьи — своя пара.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_user_article
+  ON feedback_entries(user_id, article_id) WHERE article_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_user_source_only
+  ON feedback_entries(user_id, source_id) WHERE article_id IS NULL AND source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_feedback_source_created ON feedback_entries(source_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_reason_created ON feedback_entries(reason, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS source_quality_snapshots (
   id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   source_id           BIGINT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,

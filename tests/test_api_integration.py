@@ -715,3 +715,108 @@ def test_deleting_scoring_criterion_refuses_to_break_weight_sum(isolated_db):
         assert client.delete(f"/api/scoring-criteria/{drop_id}").status_code == 200
     finally:
         app.dependency_overrides.clear()
+
+
+def _feedback_fixture(conn, email: str = "fb@example.com"):
+    user_id = conn.execute(
+        "INSERT INTO users (email, password_salt, password_hash, role) "
+        "VALUES (%s, 'salt', 'hash', 'admin') RETURNING id", (email,)
+    ).fetchone()[0]
+    source_id = conn.execute(
+        "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+        "VALUES ('Neftegaz.ru', 'Media', 'https://neftegaz.example', TRUE, 'request') RETURNING id"
+    ).fetchone()[0]
+    article_id = conn.execute(
+        "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
+        "VALUES (%s, 'Статья про ГРП', 'https://neftegaz.example/a1', now(), now(), 'Текст.', 'ru') "
+        "RETURNING id", (source_id,)
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, 'Суть', TRUE)",
+        (article_id,),
+    )
+    conn.commit()
+    return user_id, source_id, article_id
+
+
+def test_feedback_saves_scores_and_comment_and_is_editable(isolated_db):
+    """ОС по сигналу: оценки 1–5 + быстрая причина + комментарий, одна карточка на пару.
+
+    Повторное сохранение ПРАВИТ карточку, а не плодит дубли — иначе обучающая выборка
+    перекосится теми статьями, которые человек открывал чаще.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, source_id, article_id = _feedback_fixture(conn)
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "fb@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "fb@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        first = client.post("/api/feedback", json={
+            "article_id": article_id, "reason": "bad_translation",
+            "usefulness": 4, "translation": 2,
+            "comment": "walking island rig → шагающая буровая для искусственных островов",
+        })
+        assert first.status_code == 200, first.text
+        entry = first.json()["entry"]
+        assert entry["usefulness"] == 4 and entry["translation"] == 2
+        # source_id подставился из статьи, хотя его не передавали.
+        assert entry["source_id"] == source_id
+
+        # Частичное сохранение не должно стирать уже написанный комментарий.
+        second = client.post("/api/feedback", json={"article_id": article_id, "source_quality": 5})
+        assert second.status_code == 200
+        updated = second.json()["entry"]
+        assert updated["source_quality"] == 5
+        assert "шагающая буровая" in updated["comment"], "комментарий затёрся частичным сохранением"
+        assert updated["id"] == entry["id"], "должна править ту же карточку, а не создавать новую"
+
+        loaded = client.get("/api/feedback", params={"article_id": article_id}).json()["entry"]
+        assert loaded["reason"] == "bad_translation"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_feedback_rejects_bad_scores_and_empty_target(isolated_db):
+    """Границы проверяем на входе: мусорная оценка испортит обучающую выборку молча."""
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, _source_id, article_id = _feedback_fixture(conn, "fb2@example.com")
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "fb2@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        assert client.post("/api/feedback", json={"article_id": article_id, "usefulness": 9}).status_code == 400
+        assert client.post("/api/feedback", json={"article_id": article_id, "reason": "неведомая"}).status_code == 400
+        assert client.post("/api/feedback", json={"comment": "без цели"}).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
+    """Ответ на вопрос заказчика «я всё что выделил как шум — он на этом обучился?».
+
+    До 12.09 signal_feedback_events была мёртвой: писала в неё одна CLI-команда, а
+    боевой путь пометки не писал вовсе. Теперь каждая пометка оставляет след с
+    ПРЕЖНИМ значением — без него нельзя отличить «пометил шумом» от «передумал».
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, _source_id, article_id = _feedback_fixture(conn, "fb3@example.com")
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "fb3@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        assert client.patch(f"/api/articles/{article_id}", json={"status": "digest"}).status_code == 200
+        assert client.patch(f"/api/articles/{article_id}", json={"status": "noise"}).status_code == 200
+
+        with connection.get_connection() as conn:
+            events = conn.execute(
+                "SELECT event_type, old_value, new_value FROM signal_feedback_events "
+                "WHERE article_id = %s ORDER BY id", (article_id,)
+            ).fetchall()
+        assert [e[0] for e in events] == ["added_to_digest", "marked_noise"]
+        assert events[0][1] is None, "первая пометка: прежнего статуса не было"
+        assert events[1][1] == "digest", "во второй записи обязан быть прежний статус"
+        assert events[1][2] == "noise"
+    finally:
+        app.dependency_overrides.clear()

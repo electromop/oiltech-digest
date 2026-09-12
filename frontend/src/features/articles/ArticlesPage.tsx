@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_ARTICLE_LIMIT, listArticles, type ArticleQuery, updateArticle } from "../../api/articles";
 import { getDashboardStats } from "../../api/stats";
 import type { Article, DashboardStats } from "../../api/types";
+import { FeedbackPanel } from "../feedback/FeedbackPanel";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -712,6 +713,14 @@ export function ArticlesPage(props: Props) {
                                 </div>
                               </div>
                             </div>
+                            {/* ОС по сигналу — прямо в раскрытой карточке, чтобы не уводить
+                                человека со страницы. Сохраняется по клику, без кнопки
+                                «Отправить»: разметка идёт десятками карточек за заход. */}
+                            <FeedbackPanel
+                              articleId={article.id}
+                              onSaved={() => props.showToast("Обратная связь сохранена")}
+                              onError={(error) => handleError(error, "Не удалось сохранить обратную связь")}
+                            />
                           </div>
                         ) : null}
                       </article>

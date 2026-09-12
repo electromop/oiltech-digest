@@ -4272,3 +4272,178 @@ def get_articles_needing_summary_after(after_id: int, limit: int = 20) -> list[d
             (after_id, limit),
         )
         return cur.fetchall()
+
+
+# ---------------------------------------------------------------------------
+#  Обратная связь человека: оценки + комментарий (требование владельца 12.09)
+# ---------------------------------------------------------------------------
+# Быстрые причины в один клик. Набор выведен из того, за что заказчик РЕАЛЬНО ставит
+# «Шум»: замер 03.09 — 239 пометок, из них 34 оказались не «не по теме», а обрывками.
+# Без причины эти два случая сливаются, и обучать гейт на такой смеси нельзя: система
+# выучит «короткие статьи нерелевантны» вместо «эта тема не наша».
+FEEDBACK_REASONS = (
+    "off_topic",        # не наша тема
+    "incomplete_text",  # обрывок, судить не о чем
+    "duplicate",        # уже было
+    "bad_translation",  # смысл искажён переводом
+    "bad_source",       # дело не в статье, а в источнике
+    "good",             # годный сигнал — положительный пример тоже обучает
+    "other",
+)
+
+
+def get_user_article_status(user_id: int, article_id: int) -> str | None:
+    """Текущий статус статьи у этого человека, или None если он её не трогал.
+
+    Нужен, чтобы записать в журнал ПРЕЖНЕЕ значение: в user_article_states одна строка
+    на пару «человек × статья», истории переходов нет, и после UPDATE старое уже не достать.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM user_article_states WHERE user_id = %s AND article_id = %s",
+            (user_id, article_id),
+        ).fetchone()
+        return row[0] if row else None
+
+
+def save_feedback_entry(user_id: int, *, article_id: int | None = None,
+                        source_id: int | None = None, reason: str | None = None,
+                        usefulness: int | None = None, translation: int | None = None,
+                        source_quality: int | None = None,
+                        comment: str | None = None) -> dict:
+    """Сохранить или обновить карточку обратной связи.
+
+    Одна карточка на пару «человек × сигнал»: повторное сохранение ПРАВИТ её, а не
+    плодит дубли — иначе обучающая выборка окажется перекошена теми статьями, которые
+    человек открывал чаще.
+
+    `source_id` при ОС о сигнале подставляется из статьи, даже если не передан: так
+    накопленное сворачивается по источнику без прохода по всей ленте.
+    """
+    if article_id is None and source_id is None:
+        raise ValueError("Обратная связь должна быть привязана к сигналу или к источнику")
+    if reason is not None and reason not in FEEDBACK_REASONS:
+        raise ValueError(f"Неизвестная причина: {reason}")
+    for name, value in (("usefulness", usefulness), ("translation", translation),
+                        ("source_quality", source_quality)):
+        if value is not None and not 1 <= int(value) <= 5:
+            raise ValueError(f"Оценка «{name}» должна быть от 1 до 5, получено {value}")
+
+    with get_connection() as conn:
+        if article_id is not None and source_id is None:
+            row = conn.execute("SELECT source_id FROM articles WHERE id = %s", (article_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"Статья {article_id} не найдена")
+            source_id = int(row[0])
+
+        # COALESCE на UPDATE: частичное сохранение (поставил только оценку) не должно
+        # стирать уже написанный комментарий — правка карточки идёт по кусочкам.
+        conflict = ("(user_id, article_id) WHERE article_id IS NOT NULL" if article_id is not None
+                    else "(user_id, source_id) WHERE article_id IS NULL AND source_id IS NOT NULL")
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            INSERT INTO feedback_entries
+              (user_id, article_id, source_id, reason, usefulness, translation, source_quality, comment)
+            VALUES (%(user_id)s, %(article_id)s, %(source_id)s, %(reason)s,
+                    %(usefulness)s, %(translation)s, %(source_quality)s, %(comment)s)
+            ON CONFLICT {conflict} DO UPDATE SET
+              source_id      = COALESCE(EXCLUDED.source_id, feedback_entries.source_id),
+              reason         = COALESCE(EXCLUDED.reason, feedback_entries.reason),
+              usefulness     = COALESCE(EXCLUDED.usefulness, feedback_entries.usefulness),
+              translation    = COALESCE(EXCLUDED.translation, feedback_entries.translation),
+              source_quality = COALESCE(EXCLUDED.source_quality, feedback_entries.source_quality),
+              comment        = COALESCE(EXCLUDED.comment, feedback_entries.comment),
+              updated_at     = now()
+            RETURNING *
+            """,
+            {"user_id": user_id, "article_id": article_id, "source_id": source_id,
+             "reason": reason, "usefulness": usefulness, "translation": translation,
+             "source_quality": source_quality, "comment": comment},
+        )
+        saved = cur.fetchone()
+        conn.commit()
+        return saved
+
+
+def get_feedback_entry(user_id: int, article_id: int | None = None,
+                       source_id: int | None = None) -> dict | None:
+    """Карточка ОС этого человека по сигналу или по источнику."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if article_id is not None:
+            cur.execute(
+                "SELECT * FROM feedback_entries WHERE user_id = %s AND article_id = %s",
+                (user_id, article_id),
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM feedback_entries "
+                "WHERE user_id = %s AND source_id = %s AND article_id IS NULL",
+                (user_id, source_id),
+            )
+        return cur.fetchone()
+
+
+def feedback_training_set(limit: int = 500, reason: str | None = None) -> list[dict]:
+    """Выгрузка обратной связи для обучения агентов.
+
+    Отдаёт то, чего у модели нет из самой статьи: вердикт человека, его оценки и текст.
+    Заголовок и суть приложены, чтобы набор был самодостаточным — агент читает его без
+    доступа к БД (ИИ на проде считается на внешнем воркере, у него БД нет).
+    """
+    clauses, params = ["f.comment IS NOT NULL OR f.reason IS NOT NULL"], []
+    if reason:
+        clauses.append("f.reason = %s")
+        params.append(reason)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT f.id, f.reason, f.usefulness, f.translation, f.source_quality,
+                   f.comment, f.created_at,
+                   a.id AS article_id, a.title, a.url,
+                   c.title_ru, c.summary,
+                   s.id AS source_id, s.name AS source_name
+            FROM feedback_entries f
+            LEFT JOIN articles a ON a.id = f.article_id
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            LEFT JOIN sources s ON s.id = f.source_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY f.created_at DESC
+            LIMIT %s
+            """,
+            [*params, limit],
+        )
+        return cur.fetchall()
+
+
+def feedback_source_summary(limit: int = 300) -> list[dict]:
+    """Свод оценок по источникам: на что человек жалуется чаще всего.
+
+    Это прямой ответ на «почему не идут технологические новости» и на запрос заказчика
+    убрать мёртвые источники: видно, какие источники люди системно метят как негодные.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT s.id AS source_id, s.name AS source_name,
+                   count(*) AS entries,
+                   round(avg(f.usefulness)::numeric, 2)     AS avg_usefulness,
+                   round(avg(f.translation)::numeric, 2)    AS avg_translation,
+                   round(avg(f.source_quality)::numeric, 2) AS avg_source_quality,
+                   count(*) FILTER (WHERE f.reason = 'off_topic')       AS off_topic,
+                   count(*) FILTER (WHERE f.reason = 'incomplete_text') AS incomplete_text,
+                   count(*) FILTER (WHERE f.reason = 'duplicate')       AS duplicate,
+                   count(*) FILTER (WHERE f.reason = 'bad_translation') AS bad_translation,
+                   count(*) FILTER (WHERE f.reason = 'good')            AS good
+            FROM feedback_entries f
+            JOIN sources s ON s.id = f.source_id
+            GROUP BY s.id, s.name
+            ORDER BY count(*) DESC, s.name
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()

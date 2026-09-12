@@ -1,4 +1,5 @@
 import type { Source, SourceDiagnostics, SourceHealth, SourcePatch } from "../../api/types";
+import { FeedbackPanel } from "../feedback/FeedbackPanel";
 import { diagnosticText, diagnosticVerdictClass, diagnosticVerdictLabel, getSourceTriage, healthClass, healthLabel, strategyLabel } from "./sourceUtils";
 
 type Props = {
@@ -92,6 +93,12 @@ export function SourceCard(props: Props) {
           <span className="metaText">последний найденный материал {String(source.last_seen_published_at).slice(0, 10)}</span>
         ) : null}
       </div>
+
+      <details className="sourceFeedbackReact">
+        <summary>Обратная связь по источнику</summary>
+        {/* Шкала перевода тут не нужна — она про конкретный текст, а не про источник. */}
+        <FeedbackPanel sourceId={source.id} withTranslation={false} />
+      </details>
 
       <details className="sourceAdvancedReact" open={focused || undefined}>
         <summary>{`Настройка ${source.parse_strategy === "request" ? "и диагностика" : ""}`}</summary>

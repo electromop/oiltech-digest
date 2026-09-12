@@ -987,3 +987,36 @@ export type DocumentUploadResult = {
   document: UploadedDocument;
   job_id?: number;
 };
+
+// Обратная связь человека: оценки 1–5 + быстрая причина + комментарий.
+// Поля выведены из того, как заказчик уже пишет ОС руками (чат 10.09):
+// корректировка заголовка, актуальность статьи, качество источника, правки перевода.
+export type FeedbackEntry = {
+  id: number;
+  user_id: number;
+  article_id: number | null;
+  source_id: number | null;
+  reason: string | null;
+  usefulness: number | null;
+  translation: number | null;
+  source_quality: number | null;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReason = { value: string; label: string };
+
+export type FeedbackSourceSummary = {
+  source_id: number;
+  source_name: string;
+  entries: number;
+  avg_usefulness: number | null;
+  avg_translation: number | null;
+  avg_source_quality: number | null;
+  off_topic: number;
+  incomplete_text: number;
+  duplicate: number;
+  bad_translation: number;
+  good: number;
+};
