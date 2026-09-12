@@ -225,3 +225,19 @@ export function importArticleByUrl(payload: ManualArticleImportPayload) {
     body: JSON.stringify(payload),
   });
 }
+
+// Архив источника: не опрашивается И его статьи уходят из ленты. Жёсткого удаления нет
+// намеренно — articles.source_id ссылается на sources БЕЗ ON DELETE, Postgres откажет.
+export function archiveSource(sourceId: number) {
+  return apiFetch<{ ok: boolean; id: number; name: string; archived: boolean }>(
+    `/api/sources/${sourceId}/archive`,
+    { method: "POST" },
+  );
+}
+
+export function unarchiveSource(sourceId: number) {
+  return apiFetch<{ ok: boolean; id: number; name: string; archived: boolean }>(
+    `/api/sources/${sourceId}/unarchive`,
+    { method: "POST" },
+  );
+}

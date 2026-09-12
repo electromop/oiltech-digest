@@ -16,6 +16,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from oiltech_digest import config
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
+from oiltech_digest.ingestion.normalize import strip_emoji
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
 TEMPLATE_DIR = Path(__file__).resolve().parent
@@ -288,8 +289,12 @@ def build_digest_content(
             tag = f"{row['parent_tag_name']} / {tag}"
         published = row["published_at"].date().isoformat() if row.get("published_at") else None
         glossary_context = _digest_glossary_context(row, tag)
-        title = enforce_glossary_text(row.get("title") or "", glossary_context)
-        summary = enforce_glossary_text(row.get("summary") or "", glossary_context)
+        # Эмодзи — после глоссария и до вёрстки: из этой одной структуры `news`
+        # растут все три формата (HTML, DOCX, PDF), поэтому шов здесь единственный.
+        # Заголовок берётся ОРИГИНАЛЬНЫЙ (не title_ru), а телеграм-заголовок лепится
+        # из первого предложения поста — без чистки «🔥» уезжает прямо в выпуск.
+        title = strip_emoji(enforce_glossary_text(row.get("title") or "", glossary_context))
+        summary = strip_emoji(enforce_glossary_text(row.get("summary") or "", glossary_context))
         news.append(
             {
                 "category": tag,

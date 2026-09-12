@@ -21,7 +21,13 @@ from oiltech_digest.db.connection import get_connection
 # api.ArticlePatch.status импортирует ArticleStatus отсюда (валидация 422), dashboard_stats
 # проецирует счётчики по ARTICLE_STATUS_VALUES — так Python-половина не рассинхронится:
 # добавил статус в Literal → он автоматически появился и в кортеже (get_args).
-ArticleStatus = Literal["new", "review", "digest", "archive", "noise", "duplicate"]
+# 12.09: статус `review` («На проверке») убран по требованию заказчика. Он был
+# декоративным — ничего не скрывал и ни на что не влиял, но при этом был ЕДИНСТВЕННЫМ
+# статусом, который система ставила сама (снятие статьи из дайджеста). Теперь этот
+# переход ведёт в `archive`, а сам `archive` из пустого счётчика стал рабочим: он
+# скрывает статью из ленты, как `noise`/`duplicate`, но без штрафа баллу источника
+# (см. api.list_articles и repository.compute_source_quality_rows).
+ArticleStatus = Literal["new", "digest", "archive", "noise", "duplicate"]
 ARTICLE_STATUS_VALUES: tuple[ArticleStatus, ...] = get_args(ArticleStatus)
 
 # ---------------------------------------------------------------------------
@@ -142,7 +148,11 @@ def add_rss_source(name: str, rss_url: str, source_type: str = "RSS",
             ON CONFLICT (name, source_type) DO UPDATE SET
                 url = EXCLUDED.url,
                 rss_url = EXCLUDED.rss_url,
-                enabled = TRUE,
+                -- Архивный источник повторным добавлением НЕ воскрешаем. Иначе получилось
+                -- бы худшее из двух: сбор возобновился (enabled=TRUE), а статьи всё равно
+                -- скрыты (archived_at не NULL) — источник молча жжёт ИИ в никуда.
+                -- Вернуть в работу можно только явно, через /api/sources/{id}/unarchive.
+                enabled = (sources.archived_at IS NULL),
                 parse_strategy = EXCLUDED.parse_strategy,
                 category = EXCLUDED.category,
                 update_frequency = EXCLUDED.update_frequency,
@@ -3591,6 +3601,24 @@ def upsert_tag(rec: dict) -> int:
         row = cur.fetchone()
         if row:
             tag_id = row[0]
+            # Сид ДОПОЛНЯЕТ ключевые слова, а не заменяет. С 12.09 их можно править в UI
+            # («Теги» → «Ключевые слова RU/EN»), и прежняя перезапись молча стирала бы
+            # правки заказчика при каждом повторном прогоне seed-tags — а прогон случается
+            # сам, в bootstrap на деплое. Порядок сохраняем: сначала то, что уже было.
+            existing = conn.execute(
+                "SELECT COALESCE(keywords_json, '[]'::jsonb), COALESCE(keywords_en_json, '[]'::jsonb) "
+                "FROM tags WHERE id = %s", (tag_id,)
+            ).fetchone()
+
+            def _merge(current, incoming):
+                merged, seen = [], set()
+                for word in [*(current or []), *(incoming or [])]:
+                    key = str(word).strip().lower()
+                    if key and key not in seen:
+                        seen.add(key)
+                        merged.append(word)
+                return merged
+
             conn.execute(
                 """
                 UPDATE tags
@@ -3605,8 +3633,8 @@ def upsert_tag(rec: dict) -> int:
                 {
                     **rec,
                     "id": tag_id,
-                    "keywords_json": Json(rec.get("keywords_json") or []),
-                    "keywords_en_json": Json(rec.get("keywords_en_json") or []),
+                    "keywords_json": Json(_merge(existing[0], rec.get("keywords_json"))),
+                    "keywords_en_json": Json(_merge(existing[1], rec.get("keywords_en_json"))),
                 },
             )
             conn.commit()
@@ -3656,7 +3684,20 @@ def save_tags(items: list[dict]) -> dict:
     ordered = [i for i in items if not i.get("parent_name")] + [i for i in items if i.get("parent_name")]
     with get_connection() as conn:
         for it in ordered:
-            parent_id = name_to_id.get(it.get("parent_name")) if it.get("parent_name") else None
+            parent_id = None
+            parent_name = it.get("parent_name")
+            if parent_name:
+                # `parent_id` (если фронт его прислал) НАДЁЖНЕЕ имени: раньше связь искалась
+                # только по имени, и переименование родителя в UI молча делало все его
+                # подтеги КОРНЕВЫМИ — без ошибки и без предупреждения. Дерево разваливалось
+                # на первом же редактировании, а заказчик как раз собирался расширять теги.
+                parent_id = it.get("parent_id") or name_to_id.get(parent_name)
+                if parent_id is None:
+                    raise ValueError(
+                        f"Подтег «{it['name']}» ссылается на родителя «{parent_name}», "
+                        "которого нет в сохраняемом списке. Сохранение отменено, "
+                        "чтобы подтеги не стали корневыми молча."
+                    )
             payload = {
                 "parent_id": parent_id,
                 "name": it["name"],
@@ -3668,7 +3709,10 @@ def save_tags(items: list[dict]) -> dict:
                 "enabled": bool(it.get("enabled", True)),
                 "sort_order": it.get("sort_order") or 0,
             }
+            previous_name: str | None = None
             if it.get("id"):
+                row = conn.execute("SELECT name FROM tags WHERE id = %s", (int(it["id"]),)).fetchone()
+                previous_name = row[0] if row else None
                 conn.execute(
                     """
                     UPDATE tags SET parent_id=%(parent_id)s, name=%(name)s, name_en=%(name_en)s,
@@ -3681,18 +3725,38 @@ def save_tags(items: list[dict]) -> dict:
                 )
                 tag_id = int(it["id"])
             else:
+                # UPSERT, а не голый INSERT: тег с таким именем под тем же родителем мог
+                # существовать и быть выключённым (delete_tag — мягкое удаление). Раньше
+                # повторное добавление роняло запрос UniqueViolation → 500 у заказчика,
+                # и «удалил, потом снова добавил» превращалось в тупик.
+                # Конфликт по тому же выражению, что и idx_tags_name_parent.
                 cur = conn.execute(
                     """
                     INSERT INTO tags (parent_id, name, name_en, description, keywords_json,
                                       keywords_en_json, negative_keywords_json, enabled, sort_order)
                     VALUES (%(parent_id)s, %(name)s, %(name_en)s, %(description)s,
                             %(keywords_json)s, %(keywords_en_json)s, %(negative_keywords_json)s, %(enabled)s, %(sort_order)s)
+                    ON CONFLICT (name, (COALESCE(parent_id, 0))) DO UPDATE SET
+                        parent_id = EXCLUDED.parent_id,
+                        name_en = EXCLUDED.name_en,
+                        description = EXCLUDED.description,
+                        keywords_json = EXCLUDED.keywords_json,
+                        keywords_en_json = EXCLUDED.keywords_en_json,
+                        negative_keywords_json = EXCLUDED.negative_keywords_json,
+                        enabled = EXCLUDED.enabled,
+                        sort_order = EXCLUDED.sort_order,
+                        updated_at = now()
                     RETURNING id
                     """,
                     payload,
                 )
                 tag_id = int(cur.fetchone()[0])
             name_to_id[it["name"]] = tag_id
+            # СТАРОЕ имя тоже обязано вести к этому id: подтеги в запросе всё ещё несут
+            # прежний parent_name, если родителя только что переименовали. Берём его из
+            # БД по id — это не зависит от того, прислал ли фронт original_name.
+            if previous_name and previous_name != it["name"]:
+                name_to_id.setdefault(previous_name, tag_id)
             keep.append(tag_id)
         if keep:
             conn.execute("UPDATE tags SET enabled=FALSE WHERE id <> ALL(%s)", (keep,))
@@ -3737,13 +3801,30 @@ def upsert_scoring_criterion(rec: dict) -> int:
                                           keywords_en_json, enabled, sort_order)
             VALUES (%(name)s, %(description)s, %(weight)s, %(keywords_json)s,
                     %(keywords_en_json)s, TRUE, %(sort_order)s)
+            -- Сид ГАРАНТИРУЕТ СУЩЕСТВОВАНИЕ критериев по умолчанию, но НЕ переопределяет
+            -- решения человека. Раньше здесь стояло `enabled = TRUE`, и каждый деплой
+            -- воскрешал критерии, которые заказчик выключил в UI. Это не теория: 11.09
+            -- заказчик утром перестроил профиль (5 критериев, сумма ровно 100), в 11:40
+            -- прошёл деплой брендинга, bootstrap поднял обратно три старых — и через две
+            -- минуты он написал «а что случилось со скорингом? там сейчас 9 параметров».
+            -- Хуже того, сумма весов стала бы 175 вместо 100, и стадия скоринга падает
+            -- целиком на первой же статье (_validate_weights).
+            -- Вес и флаг — территория человека (экран «Скоринг»), сид их не трогает.
+            -- Ключевые слова дополняем, а не заменяем: их там тоже правят руками.
             ON CONFLICT (name) DO UPDATE SET
-                description = EXCLUDED.description,
-                weight = EXCLUDED.weight,
-                keywords_json = EXCLUDED.keywords_json,
-                keywords_en_json = EXCLUDED.keywords_en_json,
-                enabled = TRUE,
-                sort_order = EXCLUDED.sort_order,
+                description = COALESCE(scoring_criteria.description, EXCLUDED.description),
+                keywords_json = (
+                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                    FROM jsonb_array_elements(
+                        COALESCE(scoring_criteria.keywords_json, '[]'::jsonb) || EXCLUDED.keywords_json
+                    ) AS w
+                ),
+                keywords_en_json = (
+                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                    FROM jsonb_array_elements(
+                        COALESCE(scoring_criteria.keywords_en_json, '[]'::jsonb) || EXCLUDED.keywords_en_json
+                    ) AS w
+                ),
                 updated_at = now()
             RETURNING id
             """,
@@ -3773,8 +3854,28 @@ def list_enabled_scoring_criteria() -> list[dict]:
 
 
 def delete_scoring_criterion(criterion_id: int) -> None:
-    """Мягкое удаление критерия (enabled=FALSE) — не рвём FK на article_score_items."""
+    """Мягкое удаление критерия (enabled=FALSE) — не рвём FK на article_score_items.
+
+    ПРОВЕРЯЕМ сумму весов оставшихся активных критериев. Раньше не проверяли, и это было
+    миной: «Сохранить» сумму валидирует, а «Удалить» уходило в БД немедленно. Стоило уйти
+    со страницы, не добив веса до 100, — и следующая стадия скоринга падала ЦЕЛИКОМ, ещё
+    до первой статьи (`_validate_weights`, pipeline.py). Заказчик 11.09 как раз просил
+    «убрать старые, не актуальные» критерии — по одному это гарантированно ломало бы
+    скоринг на каждом шаге. Теперь удаление отклоняется с понятным текстом, а привести
+    профиль в порядок можно одним «Сохранить» (bulk), где веса пересчитываются вместе.
+    """
     with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(weight), 0) FROM scoring_criteria "
+            "WHERE enabled = TRUE AND id <> %s",
+            (criterion_id,),
+        ).fetchone()
+        remaining = round(float(row[0]), 2)
+        if remaining != 100:
+            raise ValueError(
+                f"После удаления сумма весов активных критериев станет {remaining}, а нужна 100. "
+                "Сначала перераспределите веса и нажмите «Сохранить» — тогда скоринг не упадёт."
+            )
         conn.execute(
             "UPDATE scoring_criteria SET enabled = FALSE, updated_at = now() WHERE id = %s",
             (criterion_id,),
@@ -3900,12 +4001,22 @@ def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -
         )
         cur = conn.execute(
             """
+            -- ТОЛЬКО активные критерии. Без фильтра выключенные продолжали вносить вклад:
+            -- на проде 12.09 три выключенных критерия несут вес 35+30+10 = 75, и сумма
+            -- весов у старой статьи становилась 175 вместо 100 — баллы уезжали вверх без
+            -- всякой причины. Заказчик 11.09 как раз сменил профиль критериев, так что
+            -- «старые items + новые веса» — это не теория, а текущее состояние базы.
             WITH recomputed AS (
                 SELECT i.article_score_id,
-                       SUM(i.final_score * c.weight / 100.0) AS total
+                       SUM(i.final_score * c.weight / 100.0) AS total,
+                       SUM(c.weight) AS weight_sum
                 FROM article_score_items i
-                JOIN scoring_criteria c ON c.id = i.criterion_id
+                JOIN scoring_criteria c ON c.id = i.criterion_id AND c.enabled
                 GROUP BY i.article_score_id
+                -- Статьи, оценённые ТОЛЬКО по ныне выключенным критериям, пропускаем:
+                -- их «пересчёт» дал бы 0 и молча обнулил ленту. Им нужен полноценный
+                -- перепрогон скоринга, а не пересчёт блендинга.
+                HAVING SUM(c.weight) > 0
             )
             UPDATE article_scores s
             SET total_score = ROUND(LEAST(GREATEST(r.total, 0), 100)::numeric, 2),
@@ -4053,6 +4164,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             WHERE uas.status = 'digest'
+              AND s.archived_at IS NULL          -- архивный источник не попадает и в выпуск
               AND c.relevant IS NOT FALSE
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
               AND COALESCE(sc.total_score, 0) >= %(min_score)s
@@ -4239,5 +4351,180 @@ def get_articles_needing_summary_after(after_id: int, limit: int = 20) -> list[d
             LIMIT %s
             """,
             (after_id, limit),
+        )
+        return cur.fetchall()
+
+
+# ---------------------------------------------------------------------------
+#  Обратная связь человека: оценки + комментарий (требование владельца 12.09)
+# ---------------------------------------------------------------------------
+# Быстрые причины в один клик. Набор выведен из того, за что заказчик РЕАЛЬНО ставит
+# «Шум»: замер 03.09 — 239 пометок, из них 34 оказались не «не по теме», а обрывками.
+# Без причины эти два случая сливаются, и обучать гейт на такой смеси нельзя: система
+# выучит «короткие статьи нерелевантны» вместо «эта тема не наша».
+FEEDBACK_REASONS = (
+    "off_topic",        # не наша тема
+    "incomplete_text",  # обрывок, судить не о чем
+    "duplicate",        # уже было
+    "bad_translation",  # смысл искажён переводом
+    "bad_source",       # дело не в статье, а в источнике
+    "good",             # годный сигнал — положительный пример тоже обучает
+    "other",
+)
+
+
+def get_user_article_status(user_id: int, article_id: int) -> str | None:
+    """Текущий статус статьи у этого человека, или None если он её не трогал.
+
+    Нужен, чтобы записать в журнал ПРЕЖНЕЕ значение: в user_article_states одна строка
+    на пару «человек × статья», истории переходов нет, и после UPDATE старое уже не достать.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM user_article_states WHERE user_id = %s AND article_id = %s",
+            (user_id, article_id),
+        ).fetchone()
+        return row[0] if row else None
+
+
+def save_feedback_entry(user_id: int, *, article_id: int | None = None,
+                        source_id: int | None = None, reason: str | None = None,
+                        usefulness: int | None = None, translation: int | None = None,
+                        source_quality: int | None = None,
+                        comment: str | None = None) -> dict:
+    """Сохранить или обновить карточку обратной связи.
+
+    Одна карточка на пару «человек × сигнал»: повторное сохранение ПРАВИТ её, а не
+    плодит дубли — иначе обучающая выборка окажется перекошена теми статьями, которые
+    человек открывал чаще.
+
+    `source_id` при ОС о сигнале подставляется из статьи, даже если не передан: так
+    накопленное сворачивается по источнику без прохода по всей ленте.
+    """
+    if article_id is None and source_id is None:
+        raise ValueError("Обратная связь должна быть привязана к сигналу или к источнику")
+    if reason is not None and reason not in FEEDBACK_REASONS:
+        raise ValueError(f"Неизвестная причина: {reason}")
+    for name, value in (("usefulness", usefulness), ("translation", translation),
+                        ("source_quality", source_quality)):
+        if value is not None and not 1 <= int(value) <= 5:
+            raise ValueError(f"Оценка «{name}» должна быть от 1 до 5, получено {value}")
+
+    with get_connection() as conn:
+        if article_id is not None and source_id is None:
+            row = conn.execute("SELECT source_id FROM articles WHERE id = %s", (article_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"Статья {article_id} не найдена")
+            source_id = int(row[0])
+
+        # COALESCE на UPDATE: частичное сохранение (поставил только оценку) не должно
+        # стирать уже написанный комментарий — правка карточки идёт по кусочкам.
+        conflict = ("(user_id, article_id) WHERE article_id IS NOT NULL" if article_id is not None
+                    else "(user_id, source_id) WHERE article_id IS NULL AND source_id IS NOT NULL")
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            INSERT INTO feedback_entries
+              (user_id, article_id, source_id, reason, usefulness, translation, source_quality, comment)
+            VALUES (%(user_id)s, %(article_id)s, %(source_id)s, %(reason)s,
+                    %(usefulness)s, %(translation)s, %(source_quality)s, %(comment)s)
+            ON CONFLICT {conflict} DO UPDATE SET
+              source_id      = COALESCE(EXCLUDED.source_id, feedback_entries.source_id),
+              reason         = COALESCE(EXCLUDED.reason, feedback_entries.reason),
+              usefulness     = COALESCE(EXCLUDED.usefulness, feedback_entries.usefulness),
+              translation    = COALESCE(EXCLUDED.translation, feedback_entries.translation),
+              source_quality = COALESCE(EXCLUDED.source_quality, feedback_entries.source_quality),
+              comment        = COALESCE(EXCLUDED.comment, feedback_entries.comment),
+              updated_at     = now()
+            RETURNING *
+            """,
+            {"user_id": user_id, "article_id": article_id, "source_id": source_id,
+             "reason": reason, "usefulness": usefulness, "translation": translation,
+             "source_quality": source_quality, "comment": comment},
+        )
+        saved = cur.fetchone()
+        conn.commit()
+        return saved
+
+
+def get_feedback_entry(user_id: int, article_id: int | None = None,
+                       source_id: int | None = None) -> dict | None:
+    """Карточка ОС этого человека по сигналу или по источнику."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if article_id is not None:
+            cur.execute(
+                "SELECT * FROM feedback_entries WHERE user_id = %s AND article_id = %s",
+                (user_id, article_id),
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM feedback_entries "
+                "WHERE user_id = %s AND source_id = %s AND article_id IS NULL",
+                (user_id, source_id),
+            )
+        return cur.fetchone()
+
+
+def feedback_training_set(limit: int = 500, reason: str | None = None) -> list[dict]:
+    """Выгрузка обратной связи для обучения агентов.
+
+    Отдаёт то, чего у модели нет из самой статьи: вердикт человека, его оценки и текст.
+    Заголовок и суть приложены, чтобы набор был самодостаточным — агент читает его без
+    доступа к БД (ИИ на проде считается на внешнем воркере, у него БД нет).
+    """
+    clauses, params = ["f.comment IS NOT NULL OR f.reason IS NOT NULL"], []
+    if reason:
+        clauses.append("f.reason = %s")
+        params.append(reason)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT f.id, f.reason, f.usefulness, f.translation, f.source_quality,
+                   f.comment, f.created_at,
+                   a.id AS article_id, a.title, a.url,
+                   c.title_ru, c.summary,
+                   s.id AS source_id, s.name AS source_name
+            FROM feedback_entries f
+            LEFT JOIN articles a ON a.id = f.article_id
+            LEFT JOIN article_cards c ON c.article_id = a.id
+            LEFT JOIN sources s ON s.id = f.source_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY f.created_at DESC
+            LIMIT %s
+            """,
+            [*params, limit],
+        )
+        return cur.fetchall()
+
+
+def feedback_source_summary(limit: int = 300) -> list[dict]:
+    """Свод оценок по источникам: на что человек жалуется чаще всего.
+
+    Это прямой ответ на «почему не идут технологические новости» и на запрос заказчика
+    убрать мёртвые источники: видно, какие источники люди системно метят как негодные.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT s.id AS source_id, s.name AS source_name,
+                   count(*) AS entries,
+                   round(avg(f.usefulness)::numeric, 2)     AS avg_usefulness,
+                   round(avg(f.translation)::numeric, 2)    AS avg_translation,
+                   round(avg(f.source_quality)::numeric, 2) AS avg_source_quality,
+                   count(*) FILTER (WHERE f.reason = 'off_topic')       AS off_topic,
+                   count(*) FILTER (WHERE f.reason = 'incomplete_text') AS incomplete_text,
+                   count(*) FILTER (WHERE f.reason = 'duplicate')       AS duplicate,
+                   count(*) FILTER (WHERE f.reason = 'bad_translation') AS bad_translation,
+                   count(*) FILTER (WHERE f.reason = 'good')            AS good
+            FROM feedback_entries f
+            JOIN sources s ON s.id = f.source_id
+            GROUP BY s.id, s.name
+            ORDER BY count(*) DESC, s.name
+            LIMIT %s
+            """,
+            (limit,),
         )
         return cur.fetchall()

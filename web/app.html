@@ -214,7 +214,7 @@
     const $$ = (s) => [...document.querySelectorAll(s)];
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const state = { user:null, stats:null, articles:[], sources:[], sourceHealth:[], tags:[], criteria:[], costs:[], articleCosts:[], expanded:new Set(), selectedSource:'', sourceDiagnostics:{}, renderLimit:200, articleSig:'' };
-    const statuses = ['new','review','digest','archive'];
+    const statuses = ['new','digest','archive'];
     const statusLabels = {new:'Новая',review:'На проверке',digest:'В дайджест',archive:'Архив'};
     const ARTICLE_PAGE = 200;
     async function api(path, options={}) {

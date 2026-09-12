@@ -55,17 +55,17 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
         conn.execute(
             """
             INSERT INTO article_cards (article_id, summary, relevant, status, selected_for_digest)
-            VALUES (%s, 'AI summary for drilling automation', TRUE, 'review', FALSE)
+            VALUES (%s, 'AI summary for drilling automation', TRUE, 'digest', FALSE)
             """,
             (article_id,),
         )
         # Рабочий статус статьи ПЕР-ЮЗЕРНЫЙ (#12): /api/articles фильтрует по
         # COALESCE(uas.status, 'new'), а не по article_cards.status. Без строки в
-        # user_article_states статус читается как 'new' и фильтр status=review даёт 0 строк.
+        # user_article_states статус читается как 'new' и фильтр status=digest даёт 0 строк.
         conn.execute(
             """
             INSERT INTO user_article_states (user_id, article_id, status)
-            VALUES (%s, %s, 'review')
+            VALUES (%s, %s, 'digest')
             """,
             (user_id, article_id),
         )
@@ -104,7 +104,7 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
                 "search": "directional",
                 "source": "World Oil",
                 "tag": "Технологии",
-                "status": "review",
+                "status": "digest",
                 "min_score": 80,
                 "limit": 10,
             },
@@ -116,8 +116,8 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
         assert payload[0]["source"] == "World Oil"
         assert payload[0]["tag"] == "Технологии / Бурение"
         assert payload[0]["score"] == 87
-        assert payload[0]["status"] == "review"
-        assert payload[0]["digest"] is False
+        assert payload[0]["status"] == "digest"
+        assert payload[0]["digest"] is True
         assert payload[0]["score_items"] == [
             {
                 "name": "Технологическая значимость",
@@ -270,7 +270,6 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
 
         n1_id = add_article("n1", status=None)      # без строки состояния → считается 'new'
         add_article("n2", status="new")
-        add_article("r1", status="review")
         add_article("noise1", status="noise")
         add_article("dup1", status="duplicate")
         add_article("dup2", status="duplicate")
@@ -308,7 +307,6 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
     # Отклонённый гейтом и помеченный на удаление в 'new' НЕ попали (их 2, оба со статусом new).
     assert counts == {
         "new": 2,
-        "review": 1,
         "digest": 1,
         "archive": 1,
         "noise": 1,
@@ -367,7 +365,7 @@ def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db
             ).fetchone()
         assert stored is None, "невалидный статус не должен создавать строку состояния"
 
-        for status in ("new", "review", "digest", "archive", "noise", "duplicate"):
+        for status in ("new", "digest", "archive", "noise", "duplicate"):
             ok = client.patch(f"/api/articles/{article_id}", json={"status": status})
             assert ok.status_code == 200, f"статус {status} должен приниматься"
             with connection.get_connection() as conn:
@@ -589,3 +587,426 @@ def test_background_job_download_rejects_unfinished_and_missing_files(isolated_d
     assert queued_response.json()["detail"] == "Job is not finished"
     assert missing_file_response.status_code == 404
     assert missing_file_response.json()["detail"] == "Job result file not found"
+
+
+def test_archived_source_disappears_from_feed_and_digest(isolated_db):
+    """Требование заказчика 12.09: архивный источник уносит с собой свои статьи.
+
+    Именно этого НЕ делало `enabled = FALSE`: сбор прекращался, а накопленные статьи
+    продолжали висеть в ленте у всех — 08.09 заказчик прислал пять таких источников
+    («сайт всё», «тоже шляпа», «канал никто не ведёт») с просьбой их убрать.
+    """
+    app = api.app
+    now = datetime.now(timezone.utc)
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('arch@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Мёртвый источник', 'Media', 'https://dead.example', TRUE, 'request') RETURNING id"
+        ).fetchone()[0]
+        article_id = conn.execute(
+            "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
+            "VALUES (%s, 'Статья мёртвого источника', 'https://dead.example/a1', %s, %s, %s, 'ru') "
+            "RETURNING id",
+            (source_id, now - timedelta(days=1), now - timedelta(days=1), "Текст про бурение. " * 30),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, 'Суть', TRUE)",
+            (article_id,),
+        )
+        conn.commit()
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "arch@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "arch@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        before = [row["id"] for row in client.get("/api/articles", params={"limit": 5000}).json()]
+        assert article_id in before, "до архивации статья обязана быть в ленте"
+
+        assert client.post(f"/api/sources/{source_id}/archive").status_code == 200
+        after = [row["id"] for row in client.get("/api/articles", params={"limit": 5000}).json()]
+        assert article_id not in after, "после архивации статья обязана уйти из ленты"
+
+        with connection.get_connection() as conn:
+            enabled, archived = conn.execute(
+                "SELECT enabled, archived_at FROM sources WHERE id = %s", (source_id,)
+            ).fetchone()
+        assert enabled is False, "архивный источник не должен опрашиваться"
+        assert archived is not None
+
+        # Обратимость: разархивация возвращает статьи в ленту.
+        assert client.post(f"/api/sources/{source_id}/unarchive").status_code == 200
+        restored = [row["id"] for row in client.get("/api/articles", params={"limit": 5000}).json()]
+        assert article_id in restored, "разархивация обязана вернуть статьи в ленту"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_readding_archived_source_does_not_resurrect_it(isolated_db):
+    """`ON CONFLICT ... SET enabled = TRUE` воскрешал бы архивный источник молча.
+
+    Худшее из двух состояний: сбор идёт, а статьи скрыты — источник жжёт ИИ в никуда.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, archived_at) "
+            "VALUES ('Архивный дубль', 'Media', 'https://arch.example', FALSE, 'rss', now())"
+        )
+        conn.commit()
+
+    repository.add_rss_source(
+        name="Архивный дубль", rss_url="https://arch.example/feed",
+        source_type="Media", url="https://arch.example",
+    )
+
+    with connection.get_connection() as conn:
+        enabled, archived = conn.execute(
+            "SELECT enabled, archived_at FROM sources WHERE name = 'Архивный дубль'"
+        ).fetchone()
+    assert enabled is False, "повторное добавление не должно включать архивный источник"
+    assert archived is not None, "архивная пометка должна пережить повторное добавление"
+
+
+def test_deleting_scoring_criterion_refuses_to_break_weight_sum(isolated_db):
+    """Мина, найденная 11.09: «Сохранить» сумму весов проверяет, а «Удалить» — нет.
+
+    Заказчик в тот день просил «убрать старые, не актуальные» критерии. По одному это
+    оставляло сумму != 100, и следующая стадия скоринга падала ЦЕЛИКОМ, ещё до первой
+    статьи (_validate_weights в pipeline). Удаление обязано отказывать, а не ломать.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('score@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        keep_id = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Технологическая новизна', 70, TRUE, 1) RETURNING id"
+        ).fetchone()[0]
+        drop_id = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Устаревший критерий', 30, TRUE, 2) RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "score@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        response = client.delete(f"/api/scoring-criteria/{drop_id}")
+        assert response.status_code == 400, "удаление, ломающее сумму весов, обязано отклоняться"
+        assert "100" in response.json()["detail"]
+
+        with connection.get_connection() as conn:
+            still_enabled = conn.execute(
+                "SELECT enabled FROM scoring_criteria WHERE id = %s", (drop_id,)
+            ).fetchone()[0]
+        assert still_enabled is True, "отклонённое удаление не должно ничего менять"
+
+        # Довели оставшийся критерий до 100 — теперь удаление разрешено.
+        with connection.get_connection() as conn:
+            conn.execute("UPDATE scoring_criteria SET weight = 100 WHERE id = %s", (keep_id,))
+            conn.commit()
+        assert client.delete(f"/api/scoring-criteria/{drop_id}").status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _feedback_fixture(conn, email: str = "fb@example.com"):
+    user_id = conn.execute(
+        "INSERT INTO users (email, password_salt, password_hash, role) "
+        "VALUES (%s, 'salt', 'hash', 'admin') RETURNING id", (email,)
+    ).fetchone()[0]
+    source_id = conn.execute(
+        "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+        "VALUES ('Neftegaz.ru', 'Media', 'https://neftegaz.example', TRUE, 'request') RETURNING id"
+    ).fetchone()[0]
+    article_id = conn.execute(
+        "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
+        "VALUES (%s, 'Статья про ГРП', 'https://neftegaz.example/a1', now(), now(), 'Текст.', 'ru') "
+        "RETURNING id", (source_id,)
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, 'Суть', TRUE)",
+        (article_id,),
+    )
+    conn.commit()
+    return user_id, source_id, article_id
+
+
+def test_feedback_saves_scores_and_comment_and_is_editable(isolated_db):
+    """ОС по сигналу: оценки 1–5 + быстрая причина + комментарий, одна карточка на пару.
+
+    Повторное сохранение ПРАВИТ карточку, а не плодит дубли — иначе обучающая выборка
+    перекосится теми статьями, которые человек открывал чаще.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, source_id, article_id = _feedback_fixture(conn)
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "fb@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "fb@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        first = client.post("/api/feedback", json={
+            "article_id": article_id, "reason": "bad_translation",
+            "usefulness": 4, "translation": 2,
+            "comment": "walking island rig → шагающая буровая для искусственных островов",
+        })
+        assert first.status_code == 200, first.text
+        entry = first.json()["entry"]
+        assert entry["usefulness"] == 4 and entry["translation"] == 2
+        # source_id подставился из статьи, хотя его не передавали.
+        assert entry["source_id"] == source_id
+
+        # Частичное сохранение не должно стирать уже написанный комментарий.
+        second = client.post("/api/feedback", json={"article_id": article_id, "source_quality": 5})
+        assert second.status_code == 200
+        updated = second.json()["entry"]
+        assert updated["source_quality"] == 5
+        assert "шагающая буровая" in updated["comment"], "комментарий затёрся частичным сохранением"
+        assert updated["id"] == entry["id"], "должна править ту же карточку, а не создавать новую"
+
+        loaded = client.get("/api/feedback", params={"article_id": article_id}).json()["entry"]
+        assert loaded["reason"] == "bad_translation"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_feedback_rejects_bad_scores_and_empty_target(isolated_db):
+    """Границы проверяем на входе: мусорная оценка испортит обучающую выборку молча."""
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, _source_id, article_id = _feedback_fixture(conn, "fb2@example.com")
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "fb2@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        assert client.post("/api/feedback", json={"article_id": article_id, "usefulness": 9}).status_code == 400
+        assert client.post("/api/feedback", json={"article_id": article_id, "reason": "неведомая"}).status_code == 400
+        assert client.post("/api/feedback", json={"comment": "без цели"}).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
+    """Ответ на вопрос заказчика «я всё что выделил как шум — он на этом обучился?».
+
+    До 12.09 signal_feedback_events была мёртвой: писала в неё одна CLI-команда, а
+    боевой путь пометки не писал вовсе. Теперь каждая пометка оставляет след с
+    ПРЕЖНИМ значением — без него нельзя отличить «пометил шумом» от «передумал».
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, _source_id, article_id = _feedback_fixture(conn, "fb3@example.com")
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "fb3@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        assert client.patch(f"/api/articles/{article_id}", json={"status": "digest"}).status_code == 200
+        assert client.patch(f"/api/articles/{article_id}", json={"status": "noise"}).status_code == 200
+
+        with connection.get_connection() as conn:
+            events = conn.execute(
+                "SELECT event_type, old_value, new_value FROM signal_feedback_events "
+                "WHERE article_id = %s ORDER BY id", (article_id,)
+            ).fetchall()
+        assert [e[0] for e in events] == ["added_to_digest", "marked_noise"]
+        assert events[0][1] is None, "первая пометка: прежнего статуса не было"
+        assert events[1][1] == "digest", "во второй записи обязан быть прежний статус"
+        assert events[1][2] == "noise"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_renaming_parent_tag_does_not_silently_orphan_subtags(isolated_db):
+    """Тихий дефект: связь родитель-подтег хранилась ИМЕНЕМ, и переименование родителя
+    делало все его подтеги КОРНЕВЫМИ — без ошибки и без предупреждения.
+
+    Заказчик 07.09 сказал, что будет расширять теги («решил их расширить»), так что
+    дерево разваливалось бы на первом же редактировании. Сохранение с разорванной
+    связью теперь отклоняется целиком, а не портит дерево наполовину.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('tags@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "tags@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "tags@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        saved = client.put("/api/tags", json=[
+            {"name": "Бурение", "enabled": True, "sort_order": 1,
+             "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]},
+            {"name": "Направленное бурение", "parent_name": "Бурение", "enabled": True, "sort_order": 2},
+        ])
+        assert saved.status_code == 200, saved.text
+
+        with connection.get_connection() as conn:
+            parent_id, = conn.execute("SELECT id FROM tags WHERE name = 'Бурение'").fetchone()
+            child_parent, = conn.execute(
+                "SELECT parent_id FROM tags WHERE name = 'Направленное бурение'"
+            ).fetchone()
+        assert child_parent == parent_id
+
+        # Родителя переименовали, а подтег всё ещё ссылается на СТАРОЕ имя.
+        broken = client.put("/api/tags", json=[
+            {"id": parent_id, "name": "Бурение и заканчивание", "enabled": True, "sort_order": 1},
+            {"name": "Направленное бурение", "parent_name": "Бурение", "enabled": True, "sort_order": 2},
+        ])
+        assert broken.status_code == 200, "старое имя обязано продолжать вести к тому же родителю"
+        with connection.get_connection() as conn:
+            still_child, = conn.execute(
+                "SELECT parent_id FROM tags WHERE name = 'Направленное бурение'"
+            ).fetchone()
+        assert still_child == parent_id, "подтег не должен стать корневым после переименования"
+
+        # А вот ссылка на родителя, которого в списке нет вовсе, — это ошибка, а не тишина.
+        orphan = client.put("/api/tags", json=[
+            {"name": "Совсем другой", "enabled": True, "sort_order": 1},
+            {"name": "Сирота", "parent_name": "Несуществующий", "enabled": True, "sort_order": 2},
+        ])
+        assert orphan.status_code == 400
+        assert "корневыми" in orphan.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_seed_tags_merges_keywords_instead_of_overwriting(isolated_db):
+    """Сид обязан ДОПОЛНЯТЬ ключевые слова, а не заменять.
+
+    С 12.09 их можно править в UI («Теги» → «Ключевые слова RU/EN»), а seed-tags
+    запускается сам в bootstrap на каждом деплое. Прежняя перезапись молча стирала бы
+    правки заказчика — и он бы об этом даже не узнал.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO tags (name, name_en, enabled, sort_order, keywords_json, keywords_en_json) "
+            "VALUES ('Бурение', 'Drilling', TRUE, 1, '[\"правка Виктора\"]'::jsonb, '[\"viktor edit\"]'::jsonb)"
+        )
+        conn.commit()
+
+    repository.upsert_tag({
+        "parent_id": None, "name": "Бурение", "name_en": "Drilling",
+        "description": "из сида",
+        "keywords_json": ["бурение", "правка Виктора"],
+        "keywords_en_json": ["drilling", "自动化钻机"],
+        "sort_order": 1,
+    })
+
+    with connection.get_connection() as conn:
+        ru, en = conn.execute(
+            "SELECT keywords_json, keywords_en_json FROM tags WHERE name = 'Бурение'"
+        ).fetchone()
+
+    assert "правка Виктора" in ru, "сид затёр ручную правку"
+    assert "бурение" in ru, "сид не добавил своё ключевое слово"
+    assert "viktor edit" in en and "自动化钻机" in en
+    # Без дублей: «правка Виктора» пришла и из базы, и из сида.
+    assert ru.count("правка Виктора") == 1
+
+
+def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
+    """Мина, найденная на проде 12.09: пересчёт джойнил критерии БЕЗ фильтра enabled.
+
+    Заказчик 11.09 сменил профиль: пять активных дают ровно 100, но три ВЫКЛЮЧЕННЫХ
+    несут ещё 75. Без фильтра сумма весов у старой статьи становилась 175 вместо 100 —
+    баллы уезжали вверх без причины. И отдельно: статью, оценённую только по ныне
+    выключенным критериям, пересчёт обнулил бы молча.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('S', 'Media', 'https://s.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        live = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Активный', 100, TRUE, 1) RETURNING id"
+        ).fetchone()[0]
+        dead = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Выключенный', 75, FALSE, 2) RETURNING id"
+        ).fetchone()[0]
+
+        def add_article(url: str, criteria: list[int]) -> int:
+            aid = conn.execute(
+                "INSERT INTO articles (source_id, title, url, collected_at, raw_text, language) "
+                "VALUES (%s, 'T', %s, now(), 'x', 'ru') RETURNING id", (source_id, url)
+            ).fetchone()[0]
+            sid = conn.execute(
+                "INSERT INTO article_scores (article_id, total_score, score_label) "
+                "VALUES (%s, 50, 'Средняя') RETURNING id", (aid,)
+            ).fetchone()[0]
+            for cid in criteria:
+                conn.execute(
+                    "INSERT INTO article_score_items (article_score_id, criterion_id, ai_score, "
+                    "keyword_score, final_score) VALUES (%s, %s, 80, 0, 80)", (sid, cid),
+                )
+            return aid
+
+        mixed = add_article("https://s.example/mixed", [live, dead])
+        orphan = add_article("https://s.example/orphan", [dead])
+        conn.commit()
+
+    repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8)
+
+    with connection.get_connection() as conn:
+        mixed_total = conn.execute(
+            "SELECT total_score FROM article_scores WHERE article_id = %s", (mixed,)
+        ).fetchone()[0]
+        orphan_total = conn.execute(
+            "SELECT total_score FROM article_scores WHERE article_id = %s", (orphan,)
+        ).fetchone()[0]
+
+    # 80 * 100/100 = 80. С выключенным критерием было бы 80*175/100 = 140 → клампилось в 100.
+    assert float(mixed_total) == 80, f"выключенный критерий всё ещё считается: {mixed_total}"
+    # Статью без единого активного критерия не трогаем, а не обнуляем.
+    assert float(orphan_total) == 50, "статью без активных критериев нельзя обнулять молча"
+
+
+def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
+    """Мина, которая УЖЕ сработала на проде 11.09.
+
+    `seed-scoring` запускается в bootstrap на КАЖДОМ деплое и делал
+    `ON CONFLICT (name) DO UPDATE SET enabled = TRUE` — то есть воскрешал критерии,
+    которые заказчик выключил в UI. 11.09 он утром собрал профиль из пяти критериев
+    (сумма ровно 100), в 11:40 прошёл деплой, и через две минуты он написал
+    «а что случилось со скорингом? там сейчас 9 параметров».
+
+    Сумма весов при этом становится 175 вместо 100, и стадия скоринга падает целиком
+    на первой же статье. Вес и флаг — территория человека, сид их не трогает.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order, keywords_json) "
+            "VALUES ('Технологическая новизна', 35, FALSE, 1, '[\"ручная правка\"]'::jsonb)"
+        )
+        conn.commit()
+
+    repository.upsert_scoring_criterion({
+        "name": "Технологическая новизна", "description": "из сида", "weight": 35,
+        "keywords_json": ["из сида"], "keywords_en_json": [], "sort_order": 1,
+    })
+
+    with connection.get_connection() as conn:
+        enabled, weight, kw = conn.execute(
+            "SELECT enabled, weight, keywords_json FROM scoring_criteria "
+            "WHERE name = 'Технологическая новизна'"
+        ).fetchone()
+
+    assert enabled is False, "сид воскресил выключенный заказчиком критерий"
+    assert float(weight) == 35
+    assert "ручная правка" in kw, "сид затёр ручные ключевые слова"
+    assert "из сида" in kw, "сид не добавил своё"

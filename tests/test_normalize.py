@@ -97,3 +97,36 @@ def test_compute_body_hash_ignores_whitespace_but_separates_texts():
     assert a != normalize.compute_body_hash("Другой текст про газ")
     assert normalize.compute_body_hash("") is None
     assert normalize.compute_body_hash(None) is None
+
+
+def test_strip_emoji_removes_default_emoji_from_title():
+    """Телеграм-заголовок лепится из первого предложения поста, и «🔥» едет в дайджест."""
+    assert normalize.strip_emoji("🔥 Срочно! Роснефть запустила установку") == (
+        "Срочно! Роснефть запустила установку"
+    )
+    assert normalize.strip_emoji("Итоги ✅ и 🚀 планы") == "Итоги и планы"
+
+
+def test_strip_emoji_keeps_meaningful_symbols():
+    """Замер 12.09: наивная регулярка на \\p{Emoji} дала 100% ложных именно на этих знаках.
+
+    Стрелки и градусы несут смысл в отраслевых формулировках — резать их нельзя.
+    """
+    legit = "Добыча ↓ 3% при ±5 °C — Baker Hughes © 2026, ГОСТ™ и ® знак, проверено ✓"
+    assert normalize.strip_emoji(legit) == legit
+
+
+def test_strip_emoji_drops_modifiers_but_keeps_base_glyph():
+    """VS16/ZWJ/тон кожи уходят всегда; базовый текстовый символ остаётся читаемым."""
+    assert normalize.strip_emoji("Итоги ⚠️ риски") == "Итоги ⚠ риски"
+    assert normalize.strip_emoji("1️⃣ Первый пункт") == "1 Первый пункт"
+    assert normalize.strip_emoji("Команда 👨‍👩‍👧‍👦 и 👍🏽 результат") == (
+        "Команда и результат"
+    )
+
+
+def test_strip_emoji_collapses_gap_and_handles_empty():
+    """На месте вырезанного не должно оставаться двойных пробелов и краевого мусора."""
+    assert normalize.strip_emoji("Роснефть 🔥 — запустила") == "Роснефть — запустила"
+    assert normalize.strip_emoji("") == ""
+    assert normalize.strip_emoji(None) == ""

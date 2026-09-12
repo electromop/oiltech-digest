@@ -57,6 +57,16 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS external_cooldown_until TIMESTAMPTZ
 CREATE INDEX IF NOT EXISTS idx_sources_last_seen_published_at ON sources(last_seen_published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sources_network_region ON sources(network_region, enabled);
 
+-- Архив источника (требование заказчика 12.09: «выключаем источник — не парсится больше,
+-- уходит в архив, его статьи уходят из выборки»). Отдельно от `enabled`, потому что это
+-- РАЗНЫЕ вещи: выключенный источник просто не опрашивается, но его накопленные статьи
+-- продолжают висеть в ленте у всех (лента джойнит sources без условия на enabled).
+-- Архивный — и не опрашивается, и не показывает свои статьи. Обратимо: NULL = активен.
+-- Жёсткого DELETE нет намеренно: articles.source_id ссылается на sources БЕЗ ON DELETE,
+-- то есть Postgres просто откажет удалить источник, у которого есть хоть одна статья.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_sources_archived_at ON sources(archived_at) WHERE archived_at IS NOT NULL;
+
 -- =========================================================================
 -- Статьи (сырые, до обработки)
 -- =========================================================================
@@ -106,7 +116,8 @@ CREATE TABLE IF NOT EXISTS article_cards (
   relevant            BOOLEAN,                    -- AI-фильтр релевантности (Issue: AI-gate)
   relevance_reason    TEXT,
   relevance_model     TEXT,
-  status              TEXT DEFAULT 'new',         -- new / review / digest / archive / noise / duplicate / rejected
+  status              TEXT DEFAULT 'new',         -- new / digest / archive / noise / duplicate / rejected
+                                                  -- ЛЕГАСИ: глобальная колонка, вытеснена user_article_states
   selected_for_digest BOOLEAN DEFAULT FALSE,
   digest_month        TEXT,
   analyst_comment     TEXT,
@@ -258,12 +269,27 @@ END $$;
 CREATE TABLE IF NOT EXISTS user_article_states (
   user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   article_id      BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-  status          TEXT NOT NULL DEFAULT 'new',  -- new / review / digest / archive / noise / duplicate
+  status          TEXT NOT NULL DEFAULT 'new',  -- new / digest / archive / noise / duplicate
+                                                -- archive скрывает из ленты (как noise/duplicate),
+                                                -- но БЕЗ штрафа баллу качества источника
   analyst_comment TEXT,
   updated_at      TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (user_id, article_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_article_states_user_status ON user_article_states(user_id, status);
+
+-- 12.09.2026: статус `review` («На проверке») убран из набора (решение заказчика).
+-- Существующие строки переводим в `new`, а НЕ в `archive`, хотя новый переход
+-- «снял из дайджеста» ведёт именно в archive. Причина: `review` использовался как
+-- «посмотрите, тут косяк» — 22.08 заказчика прямо просили ставить этот статус, чтобы
+-- системно отловить дефекты. `archive` теперь СКРЫВАЕТ статью из ленты, и миграция в
+-- него спрятала бы ровно те статьи, ради которых пометка ставилась. `new` возвращает
+-- их в общий поток — ничего не теряется.
+-- Идемпотентно: повторный запуск не находит строк и ничего не делает.
+UPDATE user_article_states SET status = 'new' WHERE status = 'review';
+-- Та же чистка в легаси-колонке article_cards.status (её читает только
+-- migrate_global_status_to_user), чтобы комментарии схемы не расходились с данными.
+UPDATE article_cards SET status = 'new' WHERE status = 'review';
 
 CREATE TABLE IF NOT EXISTS user_sessions (
   id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -349,6 +375,51 @@ CREATE TABLE IF NOT EXISTS signal_feedback_events (
 CREATE INDEX IF NOT EXISTS idx_signal_feedback_article_created ON signal_feedback_events(article_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_feedback_user_created ON signal_feedback_events(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_feedback_event_created ON signal_feedback_events(event_type, created_at DESC);
+
+-- =========================================================================
+-- Обратная связь человека: оценки + комментарий (требование владельца 12.09)
+-- =========================================================================
+-- Зачем отдельная таблица, а не signal_feedback_events: та — append-only ЖУРНАЛ
+-- («статус сменился с X на Y»), а это ДОКУМЕНТ, который автор правит. Разные формы
+-- жизни. Журнал отвечает «что произошло», эта таблица — «что человек об этом думает».
+--
+-- Поля выбраны не из головы: ровно так заказчик уже пишет ОС руками (чат 10.09) —
+-- «1. Корректировка названия… 2. Статья интересная и актуальная. 3. Источник отличный.
+-- 4. Перевод: walking island rig → шагающая буровая…». Отсюда три оценки и текст.
+--
+-- article_id и source_id оба необязательны, но хотя бы один обязан быть: ОС бывает
+-- и про конкретный сигнал, и про источник целиком («канал никто не ведёт»).
+-- Оценка по источнику проставляется и при ОС о сигнале — тогда source_id берётся
+-- из статьи, и накопленное можно свернуть по источнику без джойнов по всей ленте.
+CREATE TABLE IF NOT EXISTS feedback_entries (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  article_id     BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+  source_id      BIGINT REFERENCES sources(id) ON DELETE CASCADE,
+  reason         TEXT,        -- быстрая причина в один клик (см. FEEDBACK_REASONS)
+  usefulness     SMALLINT,    -- 1..5 «полезен ли сигнал»
+  translation    SMALLINT,    -- 1..5 «качество перевода и заголовка»
+  source_quality SMALLINT,    -- 1..5 «стоит ли держать этот источник»
+  comment        TEXT,        -- свободный текст: правки терминов, предостережения
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT feedback_entries_target_not_empty
+    CHECK (article_id IS NOT NULL OR source_id IS NOT NULL),
+  CONSTRAINT feedback_entries_scores_in_range
+    CHECK (
+      (usefulness     IS NULL OR usefulness     BETWEEN 1 AND 5) AND
+      (translation    IS NULL OR translation    BETWEEN 1 AND 5) AND
+      (source_quality IS NULL OR source_quality BETWEEN 1 AND 5)
+    )
+);
+-- Одна карточка ОС на пару «человек × сигнал»: повторное сохранение правит её,
+-- а не плодит дубли. Для ОС об источнике без статьи — своя пара.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_user_article
+  ON feedback_entries(user_id, article_id) WHERE article_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_user_source_only
+  ON feedback_entries(user_id, source_id) WHERE article_id IS NULL AND source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_feedback_source_created ON feedback_entries(source_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_reason_created ON feedback_entries(reason, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS source_quality_snapshots (
   id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

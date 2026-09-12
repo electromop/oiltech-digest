@@ -1345,7 +1345,11 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert payload[0]["score_items"][0]["name"] == "Технологическая значимость"
 
     articles_sql, articles_params = fake_conn.executed[0]
-    assert "LOWER(a.title" in articles_sql
+    # Поиск идёт по видимому заголовку (title_ru с откатом на оригинал), телу, сути И тегу —
+    # проверяем состав, а не точную склейку строки, иначе тест ломается от переносов.
+    assert "LOWER(" in articles_sql and "LIKE %s" in articles_sql
+    for fragment in ("c.title_ru", "a.title", "a.raw_text", "c.summary", "t.name", "parent.name"):
+        assert fragment in articles_sql, f"поиск обязан покрывать {fragment}"
     assert "s.name = %s" in articles_sql
     assert "(t.name = %s OR parent.name = %s)" in articles_sql
     assert "user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s" in articles_sql  # пер-юзерный статус (#12)
@@ -2476,9 +2480,13 @@ def _articles_sql(monkeypatch) -> str:
     return captured
 
 
-def test_feed_hides_own_noise_and_duplicate(monkeypatch):
+def test_feed_hides_own_noise_duplicate_and_archive(monkeypatch):
     """Задача 19: пометка «Шум»/«Дубликат» обязана убирать статью из ЛИЧНОЙ ленты.
-    Замер 24.07: 104 помеченных статьи продолжали висеть — фильтра по статусу не было вовсе."""
+    Замер 24.07: 104 помеченных статьи продолжали висеть — фильтра по статусу не было вовсе.
+
+    12.09: к ним добавлен `archive`. Раньше он был декоративным счётчиком и ничего не делал;
+    теперь это целевой статус для «снял из дайджеста», и он обязан убирать с глаз —
+    иначе снятая статья остаётся в ленте и операция выглядит как не сработавшая."""
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
     captured = _articles_sql(monkeypatch)
@@ -2487,7 +2495,9 @@ def test_feed_hides_own_noise_and_duplicate(monkeypatch):
     finally:
         app.dependency_overrides.clear()
 
-    assert "NOT IN ('noise', 'duplicate')" in captured["sql"]
+    assert "NOT IN ('noise', 'duplicate', 'archive')" in captured["sql"]
+    # Статус `review` убран из набора: его не должно остаться ни в одном запросе ленты.
+    assert "review" not in captured["sql"]
 
 
 def test_feed_still_shows_noise_when_explicitly_filtered(monkeypatch):
@@ -2546,3 +2556,63 @@ def test_monthly_stats_is_admin_only(monkeypatch):
         app.dependency_overrides.clear()
     assert seen["user_id"] is None, "админ должен видеть активность всех пользователей"
     assert body["activity_scope"] == "all"
+
+
+def test_article_payload_strips_emoji_from_title_and_summary():
+    """Пункт 6 Виктора: в показе сигнала эмодзи быть не должно — ни в названии, ни в сути.
+
+    Чистим на выдаче, а не при вставке (решение владельца 12.09), поэтому проверяем
+    именно сериализатор: через него идут лента, поиск и карточка статьи.
+    Телеграм-заголовок лепится из первого предложения поста, поэтому «🔥» оказывается
+    ПЕРВЫМИ символами articles.title и без чистки уезжает в интерфейс и в дайджест.
+    """
+    row = {
+        "id": 1,
+        "title": "🔥 Срочно! Роснефть запустила установку 🚀",
+        "url": "https://example.com/a",
+        "source_name": "Neftegaz.ru",
+        "summary": "Команда 👍🏽 сообщила: добыча ↓ 3% при ±5 °C",
+        "language": "ru",
+    }
+    payload = api._article_payload(row)
+    assert payload["title"] == "Срочно! Роснефть запустила установку"
+    # Стрелка, знак ± и градусы — законная отраслевая запись, их резать нельзя:
+    # замер 12.09 показал, что наивная регулярка на \p{Emoji} била именно по ним.
+    assert payload["summary"] == "Команда сообщила: добыча ↓ 3% при ±5 °C"
+
+
+def test_article_payload_keeps_plain_text_untouched():
+    """Чистка не должна трогать обычный текст — иначе она незаметно портит корпус."""
+    row = {
+        "id": 2,
+        "title": "«Газпром нефть» ввела НПЗ мощностью 15 000 барр./сут",
+        "url": "https://example.com/b",
+        "source_name": "Интерфакс ТЭК",
+        "summary": "Baker Hughes © 2026, ГОСТ™ и ® знак — проверено ✓",
+        "language": "ru",
+    }
+    payload = api._article_payload(row)
+    assert payload["title"] == row["title"]
+    assert payload["summary"] == row["summary"]
+
+
+def test_feed_search_covers_translated_title_and_tag(monkeypatch):
+    """Поиск обязан находить то, что человек ВИДИТ на экране, и работать по тегу.
+
+    Два расхождения, которые чинит эта правка:
+    (1) на карточке показывается COALESCE(c.title_ru, a.title), а искали только по
+        a.title — русский заголовок иностранной статьи не находился;
+    (2) теги в поиск не входили вовсе, хотя в сборщике дайджеста такой поиск уже был.
+    Требование владельца 12.09: теги влияют и на парсинг, и на выдачу.
+    """
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
+    captured = _articles_sql(monkeypatch)
+    try:
+        TestClient(app).get("/api/articles", params={"search": "бурение"})
+    finally:
+        app.dependency_overrides.clear()
+
+    sql = captured["sql"]
+    assert "c.title_ru" in sql, "поиск обязан покрывать переведённый заголовок"
+    assert "t.name" in sql and "parent.name" in sql, "поиск обязан покрывать тег и родителя"

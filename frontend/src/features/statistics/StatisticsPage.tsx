@@ -11,11 +11,10 @@ type Props = {
 
 // Порядок и подписи статусов разметки. Держим здесь один раз: и колонки таблицы,
 // и подсчёт итогов идут по этому списку, поэтому новый статус добавляется в одном месте.
-const MARK_STATUSES = ["noise", "duplicate", "review", "digest", "archive"] as const;
+const MARK_STATUSES = ["noise", "duplicate", "digest", "archive"] as const;
 const MARK_LABELS: Record<string, string> = {
   noise: "Шум",
   duplicate: "Дубликаты",
-  review: "На проверке",
   digest: "В дайджест",
   archive: "Архив",
 };

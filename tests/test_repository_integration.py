@@ -161,7 +161,6 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
         # как 'new', «Digest candidate» выбран аналитиком в дайджест.
         "status_counts": {
             "new": 1,
-            "review": 0,
             "digest": 1,
             "archive": 0,
             "noise": 0,

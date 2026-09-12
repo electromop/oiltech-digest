@@ -2787,6 +2787,20 @@ button {
   background: var(--sem-muted-bg);
 }
 
+/* Вид источника (ЧЕМ читаем: RSS / страница / браузер / Telegram).
+   НАМЕРЕННО нейтральный, без семантики .ok/.warn/.bad: у вида источника нет
+   качества, и покрасить «telegram» в красный значило бы сказать, что он сломан.
+   Семантические токены выше означают «работает / застой / сломан» — их не трогаем. */
+.typePill {
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--sem-muted-bg);
+}
+
 /* draft/info = намеренный «info»-токен (требует действия), не случайный цвет. */
 .miniPill.draft,
 .miniPill.info {
@@ -5154,4 +5168,130 @@ button {
   .documentUploadGrid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Архив источников — отдельный свёрнутый раздел внизу каталога. */
+.sourceArchiveSection {
+  margin-top: 24px;
+  border-top: 1px solid var(--sem-muted-bg);
+  padding-top: 16px;
+}
+
+.sourceArchiveSection > summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.sourceArchiveSection > .sourceCardGrid {
+  margin-top: 12px;
+  opacity: 0.75;
+}
+
+/* ---------------------------------------------------------------------------
+   Обратная связь: оценки + причина + комментарий.
+   Всё сохраняется по клику, поэтому визуально это не «форма», а набор
+   переключателей — кнопки «Отправить» нет намеренно.
+   --------------------------------------------------------------------------- */
+.feedbackPanel {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--sem-muted-bg);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.feedbackHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.feedbackTitle {
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+
+.feedbackReasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feedbackChip {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--sem-muted-bg);
+}
+
+.feedbackChip:hover:not(:disabled) {
+  border-color: var(--sem-info-fg, var(--text-muted));
+}
+
+.feedbackChip.active {
+  color: var(--sem-info-fg, #1d4ed8);
+  background: var(--sem-info-bg, #eff6ff);
+  border-color: currentColor;
+}
+
+.feedbackScale {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.feedbackScaleLabel {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  min-width: 180px;
+}
+
+.feedbackStars {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.feedbackStar {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 2px;
+  color: var(--sem-muted-bg);
+}
+
+.feedbackStar.on {
+  color: #f59e0b;
+}
+
+.feedbackStar:disabled {
+  cursor: default;
+}
+
+.feedbackComment {
+  width: 100%;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid var(--sem-muted-bg);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.sourceFeedbackReact > summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 6px 0;
 }

@@ -42,12 +42,27 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
   const parents = useMemo(() => tags.filter((tag) => !tag.parent_name), [tags]);
 
   function updateTag(index: number, field: keyof Tag, value: string | boolean | string[]) {
-    setTags((prev) =>
-      prev.map((item, currentIndex) => {
-        if (currentIndex !== index) return item;
-        return { ...item, [field]: value };
-      }),
-    );
+    setTags((prev) => {
+      const target = prev[index];
+      // Переименование РОДИТЕЛЯ обязано протянуться в его подтеги. Связь хранится
+      // именем, и без этого каскада сохранение делало все подтеги корневыми — молча,
+      // без ошибки. Бэкенд теперь такое отклоняет, но чинить надо здесь, в источнике.
+      const renamingParent =
+        field === "name" && !target.parent_name && typeof value === "string" && value !== target.name;
+      const previousName = target.name;
+      return prev.map((item, currentIndex) => {
+        if (currentIndex === index) return { ...item, [field]: value };
+        if (renamingParent && item.parent_name === previousName) {
+          return { ...item, parent_name: value as string };
+        }
+        return item;
+      });
+    });
+  }
+
+  /** Список через запятую ⇄ массив. Пустые куски отбрасываем, иначе в промпт уедет мусор. */
+  function splitKeywords(raw: string): string[] {
+    return raw.split(",").map((word) => word.trim()).filter(Boolean);
   }
 
   function addParentTag() {
@@ -161,6 +176,22 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                       <input value={parent.description || ""} onChange={(event) => updateTag(parentIndex, "description", event.target.value)} />
                     </label>
                     <label className="field fieldWide">
+                      <span>Ключевые слова RU (по ним ищем и тегируем)</span>
+                      <input
+                        value={(parent.keywords_json || []).join(", ")}
+                        onChange={(event) => updateTag(parentIndex, "keywords_json", splitKeywords(event.target.value))}
+                        placeholder="напр.: ГРП, гидроразрыв, проппант"
+                      />
+                    </label>
+                    <label className="field fieldWide">
+                      <span>Keywords EN</span>
+                      <input
+                        value={(parent.keywords_en_json || []).join(", ")}
+                        onChange={(event) => updateTag(parentIndex, "keywords_en_json", splitKeywords(event.target.value))}
+                        placeholder="e.g.: hydraulic fracturing, proppant"
+                      />
+                    </label>
+                    <label className="field fieldWide">
                       <span>Стоп-слова (исключают статью; через запятую)</span>
                       <input
                         value={(parent.negative_keywords_json || []).join(", ")}
@@ -204,6 +235,20 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                           <label className="field fieldWide">
                             <span>Описание для AI</span>
                             <input value={child.description || ""} onChange={(event) => updateTag(childIndex, "description", event.target.value)} />
+                          </label>
+                          <label className="field fieldWide">
+                            <span>Ключевые слова RU</span>
+                            <input
+                              value={(child.keywords_json || []).join(", ")}
+                              onChange={(event) => updateTag(childIndex, "keywords_json", splitKeywords(event.target.value))}
+                            />
+                          </label>
+                          <label className="field fieldWide">
+                            <span>Keywords EN</span>
+                            <input
+                              value={(child.keywords_en_json || []).join(", ")}
+                              onChange={(event) => updateTag(childIndex, "keywords_en_json", splitKeywords(event.target.value))}
+                            />
                           </label>
                           <button type="button" className="ghostButton dangerButton" onClick={() => void removeTag(childIndex)}>
                             Удалить

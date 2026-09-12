@@ -208,7 +208,13 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
     title = _first_non_empty(
         doc.xpath("string(//meta[@property='og:title']/@content)"),
         doc.xpath("string(//meta[@name='twitter:title']/@content)"),
-        doc.xpath("string(//h1[1])"),
+        # НЕ string(//h1[1]): XPath string() склеивает текст всех потомков БЕЗ разделителя.
+        # У Neftegaz.ru лид лежит внутри того же <h1>, и на выходе получалось
+        # «…развивает российские технологии ГРПНа Южно-Приобском месторождении…» —
+        # заказчик присылал это дважды (22.08 «текст сливается», 08.09 «потеряли Ва»).
+        # Склейка ломала и дедуп: content_hash считается по заголовку, поэтому одна
+        # публикация с лидом и без лида давала разные хэши.
+        _text_with_separators(doc, "//h1[1]"),
         doc.xpath("string(//title)"),
         fallback_title,
     )
@@ -384,6 +390,20 @@ def _node_text(node) -> str:
         return normalize.clean_html(node.text_content())
     except Exception:
         return ""
+
+
+def _text_with_separators(doc, xpath: str) -> str:
+    """Текст узла с ПРОБЕЛОМ между вложенными элементами.
+
+    Замена XPath `string(...)`, который склеивает соседние текстовые узлы вплотную.
+    Пустые узлы отбрасываем, остальное соединяем одним пробелом; схлопывание
+    повторов делает `normalize.clean_html` выше по стеку.
+    """
+    try:
+        parts = [str(part).strip() for part in doc.xpath(f"{xpath}//text()")]
+    except Exception:  # noqa: BLE001 — битый XPath не должен ронять разбор статьи
+        return ""
+    return " ".join(part for part in parts if part)
 
 
 def _first_non_empty(*values: str) -> str:

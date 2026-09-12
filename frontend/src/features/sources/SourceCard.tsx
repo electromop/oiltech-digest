@@ -1,5 +1,6 @@
 import type { Source, SourceDiagnostics, SourceHealth, SourcePatch } from "../../api/types";
-import { diagnosticText, diagnosticVerdictClass, diagnosticVerdictLabel, getSourceTriage, healthClass, healthLabel } from "./sourceUtils";
+import { FeedbackPanel } from "../feedback/FeedbackPanel";
+import { diagnosticText, diagnosticVerdictClass, diagnosticVerdictLabel, getSourceTriage, healthClass, healthLabel, strategyLabel } from "./sourceUtils";
 
 type Props = {
   source: Source;
@@ -15,6 +16,8 @@ type Props = {
   onSave: () => void;
   onDiagnose: () => void;
   onScrape: () => void;
+  onArchive: () => void;
+  onUnarchive: () => void;
 };
 
 export function SourceCard(props: Props) {
@@ -39,7 +42,7 @@ export function SourceCard(props: Props) {
           <div className="sourceMeta">
             <span className={`miniPill ${healthClass(health?.verdict)}`}>{healthLabel(health?.verdict)}</span>
             <span className="miniPill muted">{Number(health?.articles || 0)} статей</span>
-            <span className="metaText">{(source.parse_strategy || "—") + " · " + (source.source_type || "—")}</span>
+            <span className={`typePill ${source.parse_strategy || "none"}`}>{strategyLabel(source.parse_strategy)}</span>
             {health?.last_article_at ? <span className="metaText">последняя статья {String(health.last_article_at).slice(0, 10)}</span> : null}
             {hasDraft ? <span className="miniPill draft">есть правки</span> : null}
             {pendingLabel ? (
@@ -77,10 +80,25 @@ export function SourceCard(props: Props) {
             Проверить страницу новостей
           </button>
         ) : null}
+        {source.archived_at ? (
+          <button type="button" className="ghostButton" disabled={pending} onClick={props.onUnarchive}>
+            Вернуть из архива
+          </button>
+        ) : (
+          <button type="button" className="ghostButton danger" disabled={pending} onClick={props.onArchive}>
+            В архив
+          </button>
+        )}
         {source.last_seen_published_at ? (
           <span className="metaText">последний найденный материал {String(source.last_seen_published_at).slice(0, 10)}</span>
         ) : null}
       </div>
+
+      <details className="sourceFeedbackReact">
+        <summary>Обратная связь по источнику</summary>
+        {/* Шкала перевода тут не нужна — она про конкретный текст, а не про источник. */}
+        <FeedbackPanel sourceId={source.id} withTranslation={false} />
+      </details>
 
       <details className="sourceAdvancedReact" open={focused || undefined}>
         <summary>{`Настройка ${source.parse_strategy === "request" ? "и диагностика" : ""}`}</summary>

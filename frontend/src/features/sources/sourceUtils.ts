@@ -11,6 +11,22 @@ export function healthLabel(verdict?: SourceHealth["verdict"]) {
   );
 }
 
+// Вид источника — ЧЕМ его читаем. Берём parse_strategy, а не source_type: в
+// source_type лежит свободный текст из xlsx заказчика (33 разных значения: Company,
+// Journal, "Company / NOC", "University / R&D"…), и он ВРЁТ на всём, что добавлено
+// через форму — там срабатывает дефолт "RSS" независимо от выбранной стратегии.
+// Из-за этого на карточке печаталось самопротиворечивое «request · RSS».
+export function strategyLabel(strategy?: string | null) {
+  return (
+    {
+      rss: "RSS-лента",
+      request: "разбор страницы",
+      playwright: "браузер",
+      telegram: "Telegram",
+    }[strategy || ""] || "не задана"
+  );
+}
+
 export function healthClass(verdict?: SourceHealth["verdict"]) {
   if (verdict === "ok") return "ok";
   if (verdict === "stale") return "warn";

@@ -14,13 +14,16 @@ type Props = {
   onReset: () => void;
 };
 
-const STRATEGY_OPTIONS = ["rss", "request", "telegram", "none"];
+// playwright отсутствовал, хотя это рабочая стратегия десятков источников —
+// отфильтровать их было нельзя. "none" наоборот не ставит НИКТО: в БД там NULL,
+// а фильтр сравнивает строгим равенством, поэтому опция была мёртвой.
+const STRATEGY_OPTIONS = ["rss", "request", "playwright", "telegram"];
 
 const STRATEGY_LABELS: Record<string, string> = {
-  rss: "RSS",
-  request: "Запрос",
+  rss: "RSS-лента",
+  request: "Разбор страницы",
+  playwright: "Браузер",
   telegram: "Telegram",
-  none: "Нет",
 };
 
 export function SourceFilters(props: Props) {

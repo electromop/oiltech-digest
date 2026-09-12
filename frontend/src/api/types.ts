@@ -27,6 +27,9 @@ export type Source = {
   external_cooldown_until: string | null;
   last_seen_article_url: string | null;
   last_seen_published_at: string | null;
+  // Архив источника: не опрашивается И его статьи не показываются в ленте.
+  // NULL = активен. Отдельно от enabled — выключение ленту не чистило.
+  archived_at: string | null;
 };
 
 export type SourceHealth = {
@@ -532,7 +535,7 @@ export type Article = {
   summary: string;
   score: number;
   rating: string;
-  status: "new" | "review" | "digest" | "archive" | "noise" | "duplicate";
+  status: "new" | "digest" | "archive" | "noise" | "duplicate";
   language: string | null;
   date: string | null;
   collected: string | null;
@@ -983,4 +986,37 @@ export type DocumentUploadResult = {
   duplicate: boolean;
   document: UploadedDocument;
   job_id?: number;
+};
+
+// Обратная связь человека: оценки 1–5 + быстрая причина + комментарий.
+// Поля выведены из того, как заказчик уже пишет ОС руками (чат 10.09):
+// корректировка заголовка, актуальность статьи, качество источника, правки перевода.
+export type FeedbackEntry = {
+  id: number;
+  user_id: number;
+  article_id: number | null;
+  source_id: number | null;
+  reason: string | null;
+  usefulness: number | null;
+  translation: number | null;
+  source_quality: number | null;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReason = { value: string; label: string };
+
+export type FeedbackSourceSummary = {
+  source_id: number;
+  source_name: string;
+  entries: number;
+  avg_usefulness: number | null;
+  avg_translation: number | null;
+  avg_source_quality: number | null;
+  off_topic: number;
+  incomplete_text: number;
+  duplicate: number;
+  bad_translation: number;
+  good: number;
 };

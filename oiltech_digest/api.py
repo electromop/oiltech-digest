@@ -219,6 +219,9 @@ class ScoringCriterionIn(BaseModel):
 class TagIn(BaseModel):
     id: int | None = None
     parent_name: str | None = None
+    # Надёжная связь с родителем: имя переживает переименование плохо (см. save_tags).
+    parent_id: int | None = None
+    original_name: str | None = None
     name: str
     name_en: str | None = None
     description: str | None = None
@@ -569,8 +572,19 @@ def list_articles(
     clauses = []
     params: list[Any] = []
     if search:
+        # Ищем по тому, ЧТО ЧЕЛОВЕК ВИДИТ, и по тегу. Раньше было два расхождения:
+        # (1) поиск шёл по a.title, а на экране COALESCE(c.title_ru, a.title) — русский
+        #     заголовок иностранной статьи поиском НЕ находился;
+        # (2) теги в поиск не входили вовсе: набрать «Бурение» и получить статьи этого
+        #     направления было нельзя, хотя в сборщике дайджеста такой поиск уже есть
+        #     (repository.digest_candidates). Два разных поиска в двух файлах.
+        # Требование владельца 12.09: теги влияют и на парсинг, и на выдачу.
         clauses.append(
-            "LOWER(a.title || ' ' || COALESCE(a.raw_text, '') || ' ' || COALESCE(c.summary, '')) LIKE %s"
+            "LOWER("
+            "COALESCE(c.title_ru, '') || ' ' || a.title || ' ' "
+            "|| COALESCE(a.raw_text, '') || ' ' || COALESCE(c.summary, '') || ' ' "
+            "|| COALESCE(t.name, '') || ' ' || COALESCE(parent.name, '')"
+            ") LIKE %s"
         )
         params.append(f"%{search.lower()}%")
     if source:
@@ -589,7 +603,9 @@ def list_articles(
         # Фильтр ПЕР-ЮЗЕРНЫЙ: uas приджойнен по текущему пользователю, чужие пометки
         # ничего не скрывают. Явный фильтр по статусу и вкладка «Со статусом»
         # (changed_only) по-прежнему показывают помеченное — иначе его не пересмотреть.
-        clauses.append("COALESCE(uas.status, 'new') NOT IN ('noise', 'duplicate')")
+        # `archive` добавлен 12.09: он перестал быть пустым счётчиком и означает
+        # «отработано, с глаз долой» — в том числе после снятия статьи из дайджеста.
+        clauses.append("COALESCE(uas.status, 'new') NOT IN ('noise', 'duplicate', 'archive')")
     if changed_only:
         clauses.append("COALESCE(uas.status, 'new') <> 'new'")
     if language:
@@ -618,6 +634,10 @@ def list_articles(
     # Скрываем помеченные на удаление (recheck --mark): исчезают из ленты, но физически
     # ещё в БД (восстановимы recheck-unmark до recheck-purge).
     clauses.append("NOT a.pending_deletion")
+    # Архивный источник уносит с собой свои статьи (требование заказчика 12.09).
+    # Именно этого не делало `enabled = FALSE`: сбор прекращался, а накопленный мусор
+    # продолжал висеть в ленте у ВСЕХ пользователей — лента джойнит sources без условия.
+    clauses.append("s.archived_at IS NULL")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     order_by = {
         "date_desc": "a.published_at DESC NULLS LAST, COALESCE(sc.total_score, 0) DESC, a.id DESC",
@@ -726,14 +746,44 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
     # Статус и выбор в дайджест — ПЕР-ЮЗЕРНЫЕ (#12). selected_for_digest сводится к статусу.
     target_status = patch.status
     if target_status is None and patch.selected_for_digest is not None:
-        target_status = "digest" if patch.selected_for_digest else "review"
+        # Снятие из дайджеста ведёт в `archive` (решение владельца 12.09; раньше был
+        # `review`, который ничего не делал). `archive` теперь скрывает статью из ленты.
+        target_status = "digest" if patch.selected_for_digest else "archive"
     with get_connection() as conn:
         exists = conn.execute("SELECT 1 FROM articles WHERE id = %s", (article_id,)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Article not found")
+    previous = repository.get_user_article_status(int(user["id"]), article_id)
     repository.set_user_article_status(
         int(user["id"]), article_id, status=target_status, analyst_comment=patch.analyst_comment
     )
+    # Журнал обратной связи. До 12.09 таблица signal_feedback_events была мёртвой:
+    # писала в неё ОДНА CLI-команда, которую никто не звал, а боевой путь пометки —
+    # вот этот эндпоинт — не писал вовсе. Поэтому на вопрос заказчика «я всё что
+    # выделил как шум, он на этом обучился?» честный ответ был «обучаться не на чем».
+    # Старый статус читаем ДО записи: в user_article_states одна строка на пару,
+    # истории переходов там нет, после UPDATE прежнее значение уже не достать.
+    event = {
+        "noise": "marked_noise",
+        "duplicate": "marked_duplicate",
+        "digest": "added_to_digest",
+    }.get(target_status or "", "status_changed")
+    try:
+        if target_status is not None:
+            repository.record_signal_feedback_event(
+                article_id, event, user_id=int(user["id"]),
+                old_value=previous, new_value=target_status,
+                comment=patch.analyst_comment,
+            )
+        elif patch.analyst_comment:
+            repository.record_signal_feedback_event(
+                article_id, "comment_added", user_id=int(user["id"]),
+                comment=patch.analyst_comment,
+            )
+    except Exception:  # noqa: BLE001
+        # Журнал не должен ронять саму пометку: потерять событие — неприятно,
+        # не дать человеку пометить статью — хуже.
+        logger.exception("не удалось записать событие обратной связи article_id=%s", article_id)
     return {"ok": True}
 
 
@@ -1297,6 +1347,43 @@ def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Dep
     return {"ok": True}
 
 
+@app.post("/api/sources/{source_id}/archive")
+def archive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Убрать источник из работы: перестать опрашивать И убрать его статьи из ленты.
+
+    Требование заказчика 12.09 («выключаем источник — не парсится больше, уходит в архив,
+    его статьи уходят из выборки»). Жёсткого DELETE намеренно нет: articles.source_id
+    ссылается на sources БЕЗ ON DELETE, поэтому удаление источника со статьями Postgres
+    просто отклонит, а каскад уничтожил бы корпус и историю ИИ-затрат. Архив обратим.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE sources SET archived_at = now(), enabled = FALSE, updated_at = now() "
+            "WHERE id = %s RETURNING id, name",
+            (source_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Source not found")
+        conn.commit()
+    return {"ok": True, "id": row[0], "name": row[1], "archived": True}
+
+
+@app.post("/api/sources/{source_id}/unarchive")
+def unarchive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Вернуть источник из архива. Включать сбор НЕ начинаем — это отдельное решение."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE sources SET archived_at = NULL, updated_at = now() WHERE id = %s RETURNING id, name",
+            (source_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Source not found")
+        conn.commit()
+    return {"ok": True, "id": row[0], "name": row[1], "archived": False}
+
+
 @app.post("/api/sources/{source_id}/scrape")
 def scrape_source(
     source_id: int,
@@ -1369,7 +1456,12 @@ def list_tags(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, An
 
 @app.put("/api/tags")
 def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    result = repository.save_tags([i.model_dump() for i in items])
+    try:
+        result = repository.save_tags([i.model_dump() for i in items])
+    except ValueError as exc:
+        # Разорванная связь родитель-подтег — не 500, а внятный отказ: сохранение целиком
+        # отменяется, дерево остаётся прежним.
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **result}
 
 
@@ -1395,8 +1487,88 @@ def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] 
 
 @app.delete("/api/scoring-criteria/{criterion_id}")
 def delete_scoring_criterion(criterion_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    repository.delete_scoring_criterion(criterion_id)
+    try:
+        repository.delete_scoring_criterion(criterion_id)
+    except ValueError as exc:
+        # Удаление, ломающее сумму весов, обрушило бы всю стадию скоринга.
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
+
+
+class FeedbackIn(BaseModel):
+    article_id: int | None = None
+    source_id: int | None = None
+    reason: str | None = None
+    usefulness: int | None = None
+    translation: int | None = None
+    source_quality: int | None = None
+    comment: str | None = None
+
+
+@app.get("/api/feedback/reasons")
+def feedback_reasons(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
+    """Словарь быстрых причин. Фронт не хранит свою копию — иначе списки разойдутся,
+    как уже разошлись четыре независимых списка статусов статьи."""
+    labels = {
+        "off_topic": "Не наша тема",
+        "incomplete_text": "Обрывок текста",
+        "duplicate": "Уже было",
+        "bad_translation": "Плохой перевод",
+        "bad_source": "Дело в источнике",
+        "good": "Годный сигнал",
+        "other": "Другое",
+    }
+    return [{"value": value, "label": labels[value]} for value in repository.FEEDBACK_REASONS]
+
+
+@app.get("/api/feedback")
+def get_feedback(article_id: int | None = None, source_id: int | None = None,
+                 user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    if article_id is None and source_id is None:
+        raise HTTPException(status_code=400, detail="Нужен article_id или source_id")
+    entry = repository.get_feedback_entry(int(user["id"]), article_id=article_id, source_id=source_id)
+    return {"ok": True, "entry": _clean(entry) if entry else None}
+
+
+@app.post("/api/feedback")
+def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Оставить ОС по сигналу или по источнику: оценки 1–5, быстрая причина, комментарий.
+
+    Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
+    (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
+    """
+    try:
+        entry = repository.save_feedback_entry(
+            int(user["id"]),
+            article_id=payload.article_id,
+            source_id=payload.source_id,
+            reason=payload.reason,
+            usefulness=payload.usefulness,
+            translation=payload.translation,
+            source_quality=payload.source_quality,
+            comment=(payload.comment or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "entry": _clean(entry)}
+
+
+@app.get("/api/feedback/sources")
+def feedback_sources(limit: int = Query(300, ge=1, le=1000),
+                     user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
+    """Свод оценок по источникам — на что люди жалуются системно."""
+    return [_clean(row) for row in repository.feedback_source_summary(limit=limit)]
+
+
+@app.get("/api/feedback/training-set")
+def feedback_training_set(limit: int = Query(500, ge=1, le=2000), reason: str | None = None,
+                          user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
+    """Накопленная ОС в виде, пригодном для обучения агентов.
+
+    Самодостаточна намеренно: ИИ на проде считается на внешнем воркере БЕЗ доступа к БД,
+    поэтому выборка везёт с собой заголовок, суть и имя источника.
+    """
+    return [_clean(row) for row in repository.feedback_training_set(limit=limit, reason=reason)]
 
 
 @app.get("/api/reports/ai-cost")
@@ -2172,9 +2344,15 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
     tag = row.get("tag_name") or "Без тега"
     if row.get("parent_tag_name"):
         tag = f"{row['parent_tag_name']} / {tag}"
+    # Эмодзи снимаем НА ВЫДАЧЕ, а не при вставке (решение владельца 12.09:
+    # «чтобы в любой части сигнала — название, суть и так далее — не было эмодзи»).
+    # Этот сериализатор — единственный шов, через который лента, поиск и карточка
+    # получают текст, поэтому чистка здесь накрывает весь пользовательский показ.
+    # Исходники в БД не трогаем: content_hash остаётся прежним, бэкфилл не нужен,
+    # решение обратимо. Экспорт дайджеста идёт мимо — он чистится в processing/digest.py.
     return {
         "id": row["id"],
-        "title": row["title"],
+        "title": normalize.strip_emoji(row["title"]),
         "url": row["url"],
         "source": row["source_name"],
         "language": row.get("language"),
@@ -2182,7 +2360,7 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         "published_at": _date(row.get("published_at")),
         "collected": _date(row.get("collected_at")),
         "future_date": normalize.is_future_date(row.get("published_at")),
-        "summary": row.get("summary") or "",
+        "summary": normalize.strip_emoji(row.get("summary")),
         "tag": tag,
         "score": float(row["total_score"]) if row.get("total_score") is not None else 0,
         "rating": row.get("score_label") or "Без оценки",

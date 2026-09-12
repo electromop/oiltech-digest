@@ -350,7 +350,7 @@ describe("App smoke", () => {
             // загруженными фикстурами (все 3 — 'digest'): так тест отличает серверную
             // привязку от клиентского фолбэка `?? articles.filter(...)`, который дал бы 0.
             cleaned_articles: 42,
-            status_counts: { new: 5, review: 2, digest: 1, archive: 3, noise: 999, duplicate: 7 },
+            status_counts: { new: 5, digest: 1, archive: 3, noise: 999, duplicate: 7 },
           }),
         );
       }
@@ -699,7 +699,10 @@ describe("App smoke", () => {
     // Всего = Почищено + остаётся в работе.
     expect(tileValue("Почищено")).toBe("42");
     expect(tileValue("Новые")).toBeNull();
-    expect(tileValue("На проверке")).toBe("2");
+    // 12.09: плитка «На проверке» заменена на «В архиве» — статус `review` убран,
+    // а `archive` стал рабочим (скрывает из ленты, целевой для «снял из дайджеста»).
+    expect(tileValue("На проверке")).toBeNull();
+    expect(tileValue("В архиве")).toBe("3");
   });
 
   // Регресс на бесконечный цикл переподгрузки ленты.
