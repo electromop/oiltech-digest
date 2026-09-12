@@ -820,3 +820,59 @@ def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
         assert events[1][2] == "noise"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_renaming_parent_tag_does_not_silently_orphan_subtags(isolated_db):
+    """Тихий дефект: связь родитель-подтег хранилась ИМЕНЕМ, и переименование родителя
+    делало все его подтеги КОРНЕВЫМИ — без ошибки и без предупреждения.
+
+    Заказчик 07.09 сказал, что будет расширять теги («решил их расширить»), так что
+    дерево разваливалось бы на первом же редактировании. Сохранение с разорванной
+    связью теперь отклоняется целиком, а не портит дерево наполовину.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('tags@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "tags@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "tags@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        saved = client.put("/api/tags", json=[
+            {"name": "Бурение", "enabled": True, "sort_order": 1,
+             "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]},
+            {"name": "Направленное бурение", "parent_name": "Бурение", "enabled": True, "sort_order": 2},
+        ])
+        assert saved.status_code == 200, saved.text
+
+        with connection.get_connection() as conn:
+            parent_id, = conn.execute("SELECT id FROM tags WHERE name = 'Бурение'").fetchone()
+            child_parent, = conn.execute(
+                "SELECT parent_id FROM tags WHERE name = 'Направленное бурение'"
+            ).fetchone()
+        assert child_parent == parent_id
+
+        # Родителя переименовали, а подтег всё ещё ссылается на СТАРОЕ имя.
+        broken = client.put("/api/tags", json=[
+            {"id": parent_id, "name": "Бурение и заканчивание", "enabled": True, "sort_order": 1},
+            {"name": "Направленное бурение", "parent_name": "Бурение", "enabled": True, "sort_order": 2},
+        ])
+        assert broken.status_code == 200, "старое имя обязано продолжать вести к тому же родителю"
+        with connection.get_connection() as conn:
+            still_child, = conn.execute(
+                "SELECT parent_id FROM tags WHERE name = 'Направленное бурение'"
+            ).fetchone()
+        assert still_child == parent_id, "подтег не должен стать корневым после переименования"
+
+        # А вот ссылка на родителя, которого в списке нет вовсе, — это ошибка, а не тишина.
+        orphan = client.put("/api/tags", json=[
+            {"name": "Совсем другой", "enabled": True, "sort_order": 1},
+            {"name": "Сирота", "parent_name": "Несуществующий", "enabled": True, "sort_order": 2},
+        ])
+        assert orphan.status_code == 400
+        assert "корневыми" in orphan.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()

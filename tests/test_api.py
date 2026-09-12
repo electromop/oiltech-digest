@@ -1345,7 +1345,11 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert payload[0]["score_items"][0]["name"] == "Технологическая значимость"
 
     articles_sql, articles_params = fake_conn.executed[0]
-    assert "LOWER(a.title" in articles_sql
+    # Поиск идёт по видимому заголовку (title_ru с откатом на оригинал), телу, сути И тегу —
+    # проверяем состав, а не точную склейку строки, иначе тест ломается от переносов.
+    assert "LOWER(" in articles_sql and "LIKE %s" in articles_sql
+    for fragment in ("c.title_ru", "a.title", "a.raw_text", "c.summary", "t.name", "parent.name"):
+        assert fragment in articles_sql, f"поиск обязан покрывать {fragment}"
     assert "s.name = %s" in articles_sql
     assert "(t.name = %s OR parent.name = %s)" in articles_sql
     assert "user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s" in articles_sql  # пер-юзерный статус (#12)
@@ -2590,3 +2594,25 @@ def test_article_payload_keeps_plain_text_untouched():
     payload = api._article_payload(row)
     assert payload["title"] == row["title"]
     assert payload["summary"] == row["summary"]
+
+
+def test_feed_search_covers_translated_title_and_tag(monkeypatch):
+    """Поиск обязан находить то, что человек ВИДИТ на экране, и работать по тегу.
+
+    Два расхождения, которые чинит эта правка:
+    (1) на карточке показывается COALESCE(c.title_ru, a.title), а искали только по
+        a.title — русский заголовок иностранной статьи не находился;
+    (2) теги в поиск не входили вовсе, хотя в сборщике дайджеста такой поиск уже был.
+    Требование владельца 12.09: теги влияют и на парсинг, и на выдачу.
+    """
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
+    captured = _articles_sql(monkeypatch)
+    try:
+        TestClient(app).get("/api/articles", params={"search": "бурение"})
+    finally:
+        app.dependency_overrides.clear()
+
+    sql = captured["sql"]
+    assert "c.title_ru" in sql, "поиск обязан покрывать переведённый заголовок"
+    assert "t.name" in sql and "parent.name" in sql, "поиск обязан покрывать тег и родителя"

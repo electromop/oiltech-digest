@@ -219,6 +219,9 @@ class ScoringCriterionIn(BaseModel):
 class TagIn(BaseModel):
     id: int | None = None
     parent_name: str | None = None
+    # Надёжная связь с родителем: имя переживает переименование плохо (см. save_tags).
+    parent_id: int | None = None
+    original_name: str | None = None
     name: str
     name_en: str | None = None
     description: str | None = None
@@ -569,8 +572,19 @@ def list_articles(
     clauses = []
     params: list[Any] = []
     if search:
+        # Ищем по тому, ЧТО ЧЕЛОВЕК ВИДИТ, и по тегу. Раньше было два расхождения:
+        # (1) поиск шёл по a.title, а на экране COALESCE(c.title_ru, a.title) — русский
+        #     заголовок иностранной статьи поиском НЕ находился;
+        # (2) теги в поиск не входили вовсе: набрать «Бурение» и получить статьи этого
+        #     направления было нельзя, хотя в сборщике дайджеста такой поиск уже есть
+        #     (repository.digest_candidates). Два разных поиска в двух файлах.
+        # Требование владельца 12.09: теги влияют и на парсинг, и на выдачу.
         clauses.append(
-            "LOWER(a.title || ' ' || COALESCE(a.raw_text, '') || ' ' || COALESCE(c.summary, '')) LIKE %s"
+            "LOWER("
+            "COALESCE(c.title_ru, '') || ' ' || a.title || ' ' "
+            "|| COALESCE(a.raw_text, '') || ' ' || COALESCE(c.summary, '') || ' ' "
+            "|| COALESCE(t.name, '') || ' ' || COALESCE(parent.name, '')"
+            ") LIKE %s"
         )
         params.append(f"%{search.lower()}%")
     if source:
@@ -1442,7 +1456,12 @@ def list_tags(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, An
 
 @app.put("/api/tags")
 def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    result = repository.save_tags([i.model_dump() for i in items])
+    try:
+        result = repository.save_tags([i.model_dump() for i in items])
+    except ValueError as exc:
+        # Разорванная связь родитель-подтег — не 500, а внятный отказ: сохранение целиком
+        # отменяется, дерево остаётся прежним.
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **result}
 
 

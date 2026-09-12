@@ -3666,7 +3666,20 @@ def save_tags(items: list[dict]) -> dict:
     ordered = [i for i in items if not i.get("parent_name")] + [i for i in items if i.get("parent_name")]
     with get_connection() as conn:
         for it in ordered:
-            parent_id = name_to_id.get(it.get("parent_name")) if it.get("parent_name") else None
+            parent_id = None
+            parent_name = it.get("parent_name")
+            if parent_name:
+                # `parent_id` (если фронт его прислал) НАДЁЖНЕЕ имени: раньше связь искалась
+                # только по имени, и переименование родителя в UI молча делало все его
+                # подтеги КОРНЕВЫМИ — без ошибки и без предупреждения. Дерево разваливалось
+                # на первом же редактировании, а заказчик как раз собирался расширять теги.
+                parent_id = it.get("parent_id") or name_to_id.get(parent_name)
+                if parent_id is None:
+                    raise ValueError(
+                        f"Подтег «{it['name']}» ссылается на родителя «{parent_name}», "
+                        "которого нет в сохраняемом списке. Сохранение отменено, "
+                        "чтобы подтеги не стали корневыми молча."
+                    )
             payload = {
                 "parent_id": parent_id,
                 "name": it["name"],
@@ -3678,7 +3691,10 @@ def save_tags(items: list[dict]) -> dict:
                 "enabled": bool(it.get("enabled", True)),
                 "sort_order": it.get("sort_order") or 0,
             }
+            previous_name: str | None = None
             if it.get("id"):
+                row = conn.execute("SELECT name FROM tags WHERE id = %s", (int(it["id"]),)).fetchone()
+                previous_name = row[0] if row else None
                 conn.execute(
                     """
                     UPDATE tags SET parent_id=%(parent_id)s, name=%(name)s, name_en=%(name_en)s,
@@ -3691,18 +3707,38 @@ def save_tags(items: list[dict]) -> dict:
                 )
                 tag_id = int(it["id"])
             else:
+                # UPSERT, а не голый INSERT: тег с таким именем под тем же родителем мог
+                # существовать и быть выключённым (delete_tag — мягкое удаление). Раньше
+                # повторное добавление роняло запрос UniqueViolation → 500 у заказчика,
+                # и «удалил, потом снова добавил» превращалось в тупик.
+                # Конфликт по тому же выражению, что и idx_tags_name_parent.
                 cur = conn.execute(
                     """
                     INSERT INTO tags (parent_id, name, name_en, description, keywords_json,
                                       keywords_en_json, negative_keywords_json, enabled, sort_order)
                     VALUES (%(parent_id)s, %(name)s, %(name_en)s, %(description)s,
                             %(keywords_json)s, %(keywords_en_json)s, %(negative_keywords_json)s, %(enabled)s, %(sort_order)s)
+                    ON CONFLICT (name, (COALESCE(parent_id, 0))) DO UPDATE SET
+                        parent_id = EXCLUDED.parent_id,
+                        name_en = EXCLUDED.name_en,
+                        description = EXCLUDED.description,
+                        keywords_json = EXCLUDED.keywords_json,
+                        keywords_en_json = EXCLUDED.keywords_en_json,
+                        negative_keywords_json = EXCLUDED.negative_keywords_json,
+                        enabled = EXCLUDED.enabled,
+                        sort_order = EXCLUDED.sort_order,
+                        updated_at = now()
                     RETURNING id
                     """,
                     payload,
                 )
                 tag_id = int(cur.fetchone()[0])
             name_to_id[it["name"]] = tag_id
+            # СТАРОЕ имя тоже обязано вести к этому id: подтеги в запросе всё ещё несут
+            # прежний parent_name, если родителя только что переименовали. Берём его из
+            # БД по id — это не зависит от того, прислал ли фронт original_name.
+            if previous_name and previous_name != it["name"]:
+                name_to_id.setdefault(previous_name, tag_id)
             keep.append(tag_id)
         if keep:
             conn.execute("UPDATE tags SET enabled=FALSE WHERE id <> ALL(%s)", (keep,))
