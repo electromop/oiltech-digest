@@ -27,6 +27,9 @@ export type Source = {
   external_cooldown_until: string | null;
   last_seen_article_url: string | null;
   last_seen_published_at: string | null;
+  // Архив источника: не опрашивается И его статьи не показываются в ленте.
+  // NULL = активен. Отдельно от enabled — выключение ленту не чистило.
+  archived_at: string | null;
 };
 
 export type SourceHealth = {
@@ -532,7 +535,7 @@ export type Article = {
   summary: string;
   score: number;
   rating: string;
-  status: "new" | "review" | "digest" | "archive" | "noise" | "duplicate";
+  status: "new" | "digest" | "archive" | "noise" | "duplicate";
   language: string | null;
   date: string | null;
   collected: string | null;

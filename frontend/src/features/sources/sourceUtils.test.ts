@@ -24,6 +24,7 @@ const baseSource: Source = {
   external_cooldown_until: null,
   last_seen_article_url: null,
   last_seen_published_at: null,
+  archived_at: null,
 };
 
 describe("source triage", () => {

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  archiveSource,
   createSource,
   diagnoseSourceJob,
   importArticleByUrl,
   listSourceHealth,
   listSources,
   scrapeSourceJob,
+  unarchiveSource,
   updateSource,
 } from "../../api/sources";
 import { getJob } from "../../api/jobs";
@@ -201,6 +203,9 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
           .toLowerCase();
 
         return (
+          // Архивные живут в СВОЁМ разделе внизу (требование заказчика 12.09:
+          // «уходит в архив — доп раздел внутри источников»), в общий список не лезут.
+          !source.archived_at &&
           (!q || hay.includes(q)) &&
           (!strategy || source.parse_strategy === strategy) &&
           (!enabled || (enabled === "on" ? source.enabled : !source.enabled)) &&
@@ -220,6 +225,16 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
         return left.name.localeCompare(right.name, "ru");
       });
   }, [diagnostics, enabled, health, healthVerdict, search, sources, strategy, triageKey]);
+
+  // Архив: отдельный раздел. Поиск на него распространяется, остальные фильтры — нет:
+  // они про «почему источник не работает», а у архивного этот вопрос уже закрыт.
+  const archivedSources = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return sources
+      .filter((source) => Boolean(source.archived_at))
+      .filter((source) => !q || `${source.id} ${source.name} ${source.url || ""}`.toLowerCase().includes(q))
+      .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  }, [search, sources]);
 
   useEffect(() => {
     if (!focusedSourceId || loading) return;
@@ -320,6 +335,39 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
       await reload();
     } catch (error) {
       handleError(error, "Не удалось изменить статус источника");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleArchiveSource(source: Source) {
+    // Подтверждение обязательно: архив уносит из ленты ВСЕ статьи источника,
+    // а не только прекращает сбор. Операция обратима — «Вернуть из архива».
+    const articles = health.find((item) => item.id === source.id)?.articles ?? 0;
+    const warning = articles
+      ? `«${source.name}»: ${articles} статей уйдут из ленты. Источник перестанет опрашиваться. Продолжить?`
+      : `Убрать «${source.name}» в архив? Источник перестанет опрашиваться.`;
+    if (!window.confirm(warning)) return;
+    try {
+      setBusy(true);
+      await archiveSource(source.id);
+      showToast(`«${source.name}» — в архиве`);
+      await reload();
+    } catch (error) {
+      handleError(error, "Не удалось убрать источник в архив");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUnarchiveSource(source: Source) {
+    try {
+      setBusy(true);
+      await unarchiveSource(source.id);
+      showToast(`«${source.name}» возвращён из архива. Сбор включите отдельно.`);
+      await reload();
+    } catch (error) {
+      handleError(error, "Не удалось вернуть источник из архива");
     } finally {
       setBusy(false);
     }
@@ -564,6 +612,8 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
                   onSave={() => void handleSaveSource(source)}
                   onDiagnose={() => void handleDiagnoseSource(source)}
                   onScrape={() => void handleScrapeSource(source)}
+                  onArchive={() => void handleArchiveSource(source)}
+                  onUnarchive={() => void handleUnarchiveSource(source)}
                 />
               );
             })}
@@ -571,6 +621,37 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
         ) : (
           <div className="emptyState">Источники не найдены.</div>
         )}
+
+        {archivedSources.length ? (
+          <details className="sourceArchiveSection">
+            <summary>
+              Архив источников — {archivedSources.length}
+              <span className="metaText"> · не опрашиваются, их статьи скрыты из ленты</span>
+            </summary>
+            <div className="sourceCardGrid">
+              {archivedSources.map((source) => (
+                <SourceCard
+                  key={source.id}
+                  source={source}
+                  health={getSourceHealth(source.id)}
+                  diagnostic={diagnostics[source.id]}
+                  hasDraft={Object.keys(currentPatch(source)).length > 0}
+                  pending={Boolean(pendingJobs[source.id])}
+                  pendingLabel={pendingJobs[source.id]?.label || null}
+                  focused={focusedSourceId === source.id}
+                  currentField={(field) => String(currentField(source, field))}
+                  onDraftChange={(field, value) => updateDraft(source.id, field, value)}
+                  onToggle={(nextEnabled) => void handleToggleSource(source, nextEnabled)}
+                  onSave={() => void handleSaveSource(source)}
+                  onDiagnose={() => void handleDiagnoseSource(source)}
+                  onScrape={() => void handleScrapeSource(source)}
+                  onArchive={() => void handleArchiveSource(source)}
+                  onUnarchive={() => void handleUnarchiveSource(source)}
+                />
+              ))}
+            </div>
+          </details>
+        ) : null}
       </section>
     </section>
   );

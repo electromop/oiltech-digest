@@ -2787,6 +2787,20 @@ button {
   background: var(--sem-muted-bg);
 }
 
+/* Вид источника (ЧЕМ читаем: RSS / страница / браузер / Telegram).
+   НАМЕРЕННО нейтральный, без семантики .ok/.warn/.bad: у вида источника нет
+   качества, и покрасить «telegram» в красный значило бы сказать, что он сломан.
+   Семантические токены выше означают «работает / застой / сломан» — их не трогаем. */
+.typePill {
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--sem-muted-bg);
+}
+
 /* draft/info = намеренный «info»-токен (требует действия), не случайный цвет. */
 .miniPill.draft,
 .miniPill.info {
@@ -5154,4 +5168,23 @@ button {
   .documentUploadGrid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Архив источников — отдельный свёрнутый раздел внизу каталога. */
+.sourceArchiveSection {
+  margin-top: 24px;
+  border-top: 1px solid var(--sem-muted-bg);
+  padding-top: 16px;
+}
+
+.sourceArchiveSection > summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.sourceArchiveSection > .sourceCardGrid {
+  margin-top: 12px;
+  opacity: 0.75;
 }

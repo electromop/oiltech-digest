@@ -402,3 +402,31 @@ def test_promo_selectors_take_articles_with_dates_and_skip_topic_links():
     assert not any("/topic/" in u for u in urls), urls
     assert all(c.published_at is not None for c in candidates)
     assert {c.published_at.date().isoformat() for c in candidates} == {"2026-08-25", "2026-08-17"}
+
+
+def test_parse_article_page_does_not_glue_headline_with_lead():
+    """#55 / жалобы заказчика 22.08 «текст сливается» и 08.09 «потеряли Ва».
+
+    У Neftegaz.ru лид лежит ВНУТРИ того же <h1>, а XPath string() склеивает текст
+    соседних узлов вплотную — получалось «технологии ГРПНа Южно-Приобском».
+    Здесь проверяем именно разделитель, а не весь заголовок целиком.
+    """
+    markup = (
+        "<html><body><h1>«Газпромнефть-Хантос» развивает российские технологии ГРП"
+        "<span class='lead'>На Южно-Приобском месторождении работает первый "
+        "российский серийный флот гидроразрыва</span></h1>"
+        "<p>" + ("Текст статьи про бурение и ГРП. " * 40) + "</p></body></html>"
+    )
+    title, _published, _text = request_parser.parse_article_page(markup)
+    assert "ГРПНа" not in title, "заголовок склеен с лидом без пробела"
+    assert "ГРП На Южно-Приобском" in title
+
+
+def test_parse_article_page_keeps_plain_headline_unchanged():
+    """Обычный заголовок без вложенных элементов правка не должна трогать."""
+    markup = (
+        "<html><body><h1>Газпром нефть испытала буровые установки на Ямале</h1>"
+        "<p>" + ("Текст статьи про сейсморазведку. " * 40) + "</p></body></html>"
+    )
+    title, _published, _text = request_parser.parse_article_page(markup)
+    assert title == "Газпром нефть испытала буровые установки на Ямале"

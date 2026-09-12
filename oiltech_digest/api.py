@@ -589,7 +589,9 @@ def list_articles(
         # Фильтр ПЕР-ЮЗЕРНЫЙ: uas приджойнен по текущему пользователю, чужие пометки
         # ничего не скрывают. Явный фильтр по статусу и вкладка «Со статусом»
         # (changed_only) по-прежнему показывают помеченное — иначе его не пересмотреть.
-        clauses.append("COALESCE(uas.status, 'new') NOT IN ('noise', 'duplicate')")
+        # `archive` добавлен 12.09: он перестал быть пустым счётчиком и означает
+        # «отработано, с глаз долой» — в том числе после снятия статьи из дайджеста.
+        clauses.append("COALESCE(uas.status, 'new') NOT IN ('noise', 'duplicate', 'archive')")
     if changed_only:
         clauses.append("COALESCE(uas.status, 'new') <> 'new'")
     if language:
@@ -618,6 +620,10 @@ def list_articles(
     # Скрываем помеченные на удаление (recheck --mark): исчезают из ленты, но физически
     # ещё в БД (восстановимы recheck-unmark до recheck-purge).
     clauses.append("NOT a.pending_deletion")
+    # Архивный источник уносит с собой свои статьи (требование заказчика 12.09).
+    # Именно этого не делало `enabled = FALSE`: сбор прекращался, а накопленный мусор
+    # продолжал висеть в ленте у ВСЕХ пользователей — лента джойнит sources без условия.
+    clauses.append("s.archived_at IS NULL")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     order_by = {
         "date_desc": "a.published_at DESC NULLS LAST, COALESCE(sc.total_score, 0) DESC, a.id DESC",
@@ -726,7 +732,9 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
     # Статус и выбор в дайджест — ПЕР-ЮЗЕРНЫЕ (#12). selected_for_digest сводится к статусу.
     target_status = patch.status
     if target_status is None and patch.selected_for_digest is not None:
-        target_status = "digest" if patch.selected_for_digest else "review"
+        # Снятие из дайджеста ведёт в `archive` (решение владельца 12.09; раньше был
+        # `review`, который ничего не делал). `archive` теперь скрывает статью из ленты.
+        target_status = "digest" if patch.selected_for_digest else "archive"
     with get_connection() as conn:
         exists = conn.execute("SELECT 1 FROM articles WHERE id = %s", (article_id,)).fetchone()
         if not exists:
@@ -1297,6 +1305,43 @@ def update_source(source_id: int, patch: SourcePatch, user: dict[str, Any] = Dep
     return {"ok": True}
 
 
+@app.post("/api/sources/{source_id}/archive")
+def archive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Убрать источник из работы: перестать опрашивать И убрать его статьи из ленты.
+
+    Требование заказчика 12.09 («выключаем источник — не парсится больше, уходит в архив,
+    его статьи уходят из выборки»). Жёсткого DELETE намеренно нет: articles.source_id
+    ссылается на sources БЕЗ ON DELETE, поэтому удаление источника со статьями Postgres
+    просто отклонит, а каскад уничтожил бы корпус и историю ИИ-затрат. Архив обратим.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE sources SET archived_at = now(), enabled = FALSE, updated_at = now() "
+            "WHERE id = %s RETURNING id, name",
+            (source_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Source not found")
+        conn.commit()
+    return {"ok": True, "id": row[0], "name": row[1], "archived": True}
+
+
+@app.post("/api/sources/{source_id}/unarchive")
+def unarchive_source(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Вернуть источник из архива. Включать сбор НЕ начинаем — это отдельное решение."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE sources SET archived_at = NULL, updated_at = now() WHERE id = %s RETURNING id, name",
+            (source_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Source not found")
+        conn.commit()
+    return {"ok": True, "id": row[0], "name": row[1], "archived": False}
+
+
 @app.post("/api/sources/{source_id}/scrape")
 def scrape_source(
     source_id: int,
@@ -1395,7 +1440,11 @@ def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] 
 
 @app.delete("/api/scoring-criteria/{criterion_id}")
 def delete_scoring_criterion(criterion_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    repository.delete_scoring_criterion(criterion_id)
+    try:
+        repository.delete_scoring_criterion(criterion_id)
+    except ValueError as exc:
+        # Удаление, ломающее сумму весов, обрушило бы всю стадию скоринга.
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
 
 
@@ -2172,9 +2221,15 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
     tag = row.get("tag_name") or "Без тега"
     if row.get("parent_tag_name"):
         tag = f"{row['parent_tag_name']} / {tag}"
+    # Эмодзи снимаем НА ВЫДАЧЕ, а не при вставке (решение владельца 12.09:
+    # «чтобы в любой части сигнала — название, суть и так далее — не было эмодзи»).
+    # Этот сериализатор — единственный шов, через который лента, поиск и карточка
+    # получают текст, поэтому чистка здесь накрывает весь пользовательский показ.
+    # Исходники в БД не трогаем: content_hash остаётся прежним, бэкфилл не нужен,
+    # решение обратимо. Экспорт дайджеста идёт мимо — он чистится в processing/digest.py.
     return {
         "id": row["id"],
-        "title": row["title"],
+        "title": normalize.strip_emoji(row["title"]),
         "url": row["url"],
         "source": row["source_name"],
         "language": row.get("language"),
@@ -2182,7 +2237,7 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         "published_at": _date(row.get("published_at")),
         "collected": _date(row.get("collected_at")),
         "future_date": normalize.is_future_date(row.get("published_at")),
-        "summary": row.get("summary") or "",
+        "summary": normalize.strip_emoji(row.get("summary")),
         "tag": tag,
         "score": float(row["total_score"]) if row.get("total_score") is not None else 0,
         "rating": row.get("score_label") or "Без оценки",

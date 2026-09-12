@@ -55,17 +55,17 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
         conn.execute(
             """
             INSERT INTO article_cards (article_id, summary, relevant, status, selected_for_digest)
-            VALUES (%s, 'AI summary for drilling automation', TRUE, 'review', FALSE)
+            VALUES (%s, 'AI summary for drilling automation', TRUE, 'digest', FALSE)
             """,
             (article_id,),
         )
         # Рабочий статус статьи ПЕР-ЮЗЕРНЫЙ (#12): /api/articles фильтрует по
         # COALESCE(uas.status, 'new'), а не по article_cards.status. Без строки в
-        # user_article_states статус читается как 'new' и фильтр status=review даёт 0 строк.
+        # user_article_states статус читается как 'new' и фильтр status=digest даёт 0 строк.
         conn.execute(
             """
             INSERT INTO user_article_states (user_id, article_id, status)
-            VALUES (%s, %s, 'review')
+            VALUES (%s, %s, 'digest')
             """,
             (user_id, article_id),
         )
@@ -104,7 +104,7 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
                 "search": "directional",
                 "source": "World Oil",
                 "tag": "Технологии",
-                "status": "review",
+                "status": "digest",
                 "min_score": 80,
                 "limit": 10,
             },
@@ -116,8 +116,8 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
         assert payload[0]["source"] == "World Oil"
         assert payload[0]["tag"] == "Технологии / Бурение"
         assert payload[0]["score"] == 87
-        assert payload[0]["status"] == "review"
-        assert payload[0]["digest"] is False
+        assert payload[0]["status"] == "digest"
+        assert payload[0]["digest"] is True
         assert payload[0]["score_items"] == [
             {
                 "name": "Технологическая значимость",
@@ -270,7 +270,6 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
 
         n1_id = add_article("n1", status=None)      # без строки состояния → считается 'new'
         add_article("n2", status="new")
-        add_article("r1", status="review")
         add_article("noise1", status="noise")
         add_article("dup1", status="duplicate")
         add_article("dup2", status="duplicate")
@@ -308,7 +307,6 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
     # Отклонённый гейтом и помеченный на удаление в 'new' НЕ попали (их 2, оба со статусом new).
     assert counts == {
         "new": 2,
-        "review": 1,
         "digest": 1,
         "archive": 1,
         "noise": 1,
@@ -367,7 +365,7 @@ def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db
             ).fetchone()
         assert stored is None, "невалидный статус не должен создавать строку состояния"
 
-        for status in ("new", "review", "digest", "archive", "noise", "duplicate"):
+        for status in ("new", "digest", "archive", "noise", "duplicate"):
             ok = client.patch(f"/api/articles/{article_id}", json={"status": status})
             assert ok.status_code == 200, f"статус {status} должен приниматься"
             with connection.get_connection() as conn:
@@ -589,3 +587,131 @@ def test_background_job_download_rejects_unfinished_and_missing_files(isolated_d
     assert queued_response.json()["detail"] == "Job is not finished"
     assert missing_file_response.status_code == 404
     assert missing_file_response.json()["detail"] == "Job result file not found"
+
+
+def test_archived_source_disappears_from_feed_and_digest(isolated_db):
+    """Требование заказчика 12.09: архивный источник уносит с собой свои статьи.
+
+    Именно этого НЕ делало `enabled = FALSE`: сбор прекращался, а накопленные статьи
+    продолжали висеть в ленте у всех — 08.09 заказчик прислал пять таких источников
+    («сайт всё», «тоже шляпа», «канал никто не ведёт») с просьбой их убрать.
+    """
+    app = api.app
+    now = datetime.now(timezone.utc)
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('arch@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Мёртвый источник', 'Media', 'https://dead.example', TRUE, 'request') RETURNING id"
+        ).fetchone()[0]
+        article_id = conn.execute(
+            "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
+            "VALUES (%s, 'Статья мёртвого источника', 'https://dead.example/a1', %s, %s, %s, 'ru') "
+            "RETURNING id",
+            (source_id, now - timedelta(days=1), now - timedelta(days=1), "Текст про бурение. " * 30),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, 'Суть', TRUE)",
+            (article_id,),
+        )
+        conn.commit()
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "arch@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "arch@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        before = [row["id"] for row in client.get("/api/articles", params={"limit": 5000}).json()]
+        assert article_id in before, "до архивации статья обязана быть в ленте"
+
+        assert client.post(f"/api/sources/{source_id}/archive").status_code == 200
+        after = [row["id"] for row in client.get("/api/articles", params={"limit": 5000}).json()]
+        assert article_id not in after, "после архивации статья обязана уйти из ленты"
+
+        with connection.get_connection() as conn:
+            enabled, archived = conn.execute(
+                "SELECT enabled, archived_at FROM sources WHERE id = %s", (source_id,)
+            ).fetchone()
+        assert enabled is False, "архивный источник не должен опрашиваться"
+        assert archived is not None
+
+        # Обратимость: разархивация возвращает статьи в ленту.
+        assert client.post(f"/api/sources/{source_id}/unarchive").status_code == 200
+        restored = [row["id"] for row in client.get("/api/articles", params={"limit": 5000}).json()]
+        assert article_id in restored, "разархивация обязана вернуть статьи в ленту"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_readding_archived_source_does_not_resurrect_it(isolated_db):
+    """`ON CONFLICT ... SET enabled = TRUE` воскрешал бы архивный источник молча.
+
+    Худшее из двух состояний: сбор идёт, а статьи скрыты — источник жжёт ИИ в никуда.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, archived_at) "
+            "VALUES ('Архивный дубль', 'Media', 'https://arch.example', FALSE, 'rss', now())"
+        )
+        conn.commit()
+
+    repository.add_rss_source(
+        name="Архивный дубль", rss_url="https://arch.example/feed",
+        source_type="Media", url="https://arch.example",
+    )
+
+    with connection.get_connection() as conn:
+        enabled, archived = conn.execute(
+            "SELECT enabled, archived_at FROM sources WHERE name = 'Архивный дубль'"
+        ).fetchone()
+    assert enabled is False, "повторное добавление не должно включать архивный источник"
+    assert archived is not None, "архивная пометка должна пережить повторное добавление"
+
+
+def test_deleting_scoring_criterion_refuses_to_break_weight_sum(isolated_db):
+    """Мина, найденная 11.09: «Сохранить» сумму весов проверяет, а «Удалить» — нет.
+
+    Заказчик в тот день просил «убрать старые, не актуальные» критерии. По одному это
+    оставляло сумму != 100, и следующая стадия скоринга падала ЦЕЛИКОМ, ещё до первой
+    статьи (_validate_weights в pipeline). Удаление обязано отказывать, а не ломать.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('score@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        keep_id = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Технологическая новизна', 70, TRUE, 1) RETURNING id"
+        ).fetchone()[0]
+        drop_id = conn.execute(
+            "INSERT INTO scoring_criteria (name, weight, enabled, sort_order) "
+            "VALUES ('Устаревший критерий', 30, TRUE, 2) RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "score@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        response = client.delete(f"/api/scoring-criteria/{drop_id}")
+        assert response.status_code == 400, "удаление, ломающее сумму весов, обязано отклоняться"
+        assert "100" in response.json()["detail"]
+
+        with connection.get_connection() as conn:
+            still_enabled = conn.execute(
+                "SELECT enabled FROM scoring_criteria WHERE id = %s", (drop_id,)
+            ).fetchone()[0]
+        assert still_enabled is True, "отклонённое удаление не должно ничего менять"
+
+        # Довели оставшийся критерий до 100 — теперь удаление разрешено.
+        with connection.get_connection() as conn:
+            conn.execute("UPDATE scoring_criteria SET weight = 100 WHERE id = %s", (keep_id,))
+            conn.commit()
+        assert client.delete(f"/api/scoring-criteria/{drop_id}").status_code == 200
+    finally:
+        app.dependency_overrides.clear()

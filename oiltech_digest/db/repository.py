@@ -21,7 +21,13 @@ from oiltech_digest.db.connection import get_connection
 # api.ArticlePatch.status импортирует ArticleStatus отсюда (валидация 422), dashboard_stats
 # проецирует счётчики по ARTICLE_STATUS_VALUES — так Python-половина не рассинхронится:
 # добавил статус в Literal → он автоматически появился и в кортеже (get_args).
-ArticleStatus = Literal["new", "review", "digest", "archive", "noise", "duplicate"]
+# 12.09: статус `review` («На проверке») убран по требованию заказчика. Он был
+# декоративным — ничего не скрывал и ни на что не влиял, но при этом был ЕДИНСТВЕННЫМ
+# статусом, который система ставила сама (снятие статьи из дайджеста). Теперь этот
+# переход ведёт в `archive`, а сам `archive` из пустого счётчика стал рабочим: он
+# скрывает статью из ленты, как `noise`/`duplicate`, но без штрафа баллу источника
+# (см. api.list_articles и repository.compute_source_quality_rows).
+ArticleStatus = Literal["new", "digest", "archive", "noise", "duplicate"]
 ARTICLE_STATUS_VALUES: tuple[ArticleStatus, ...] = get_args(ArticleStatus)
 
 # ---------------------------------------------------------------------------
@@ -142,7 +148,11 @@ def add_rss_source(name: str, rss_url: str, source_type: str = "RSS",
             ON CONFLICT (name, source_type) DO UPDATE SET
                 url = EXCLUDED.url,
                 rss_url = EXCLUDED.rss_url,
-                enabled = TRUE,
+                -- Архивный источник повторным добавлением НЕ воскрешаем. Иначе получилось
+                -- бы худшее из двух: сбор возобновился (enabled=TRUE), а статьи всё равно
+                -- скрыты (archived_at не NULL) — источник молча жжёт ИИ в никуда.
+                -- Вернуть в работу можно только явно, через /api/sources/{id}/unarchive.
+                enabled = (sources.archived_at IS NULL),
                 parse_strategy = EXCLUDED.parse_strategy,
                 category = EXCLUDED.category,
                 update_frequency = EXCLUDED.update_frequency,
@@ -3773,8 +3783,28 @@ def list_enabled_scoring_criteria() -> list[dict]:
 
 
 def delete_scoring_criterion(criterion_id: int) -> None:
-    """Мягкое удаление критерия (enabled=FALSE) — не рвём FK на article_score_items."""
+    """Мягкое удаление критерия (enabled=FALSE) — не рвём FK на article_score_items.
+
+    ПРОВЕРЯЕМ сумму весов оставшихся активных критериев. Раньше не проверяли, и это было
+    миной: «Сохранить» сумму валидирует, а «Удалить» уходило в БД немедленно. Стоило уйти
+    со страницы, не добив веса до 100, — и следующая стадия скоринга падала ЦЕЛИКОМ, ещё
+    до первой статьи (`_validate_weights`, pipeline.py). Заказчик 11.09 как раз просил
+    «убрать старые, не актуальные» критерии — по одному это гарантированно ломало бы
+    скоринг на каждом шаге. Теперь удаление отклоняется с понятным текстом, а привести
+    профиль в порядок можно одним «Сохранить» (bulk), где веса пересчитываются вместе.
+    """
     with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(weight), 0) FROM scoring_criteria "
+            "WHERE enabled = TRUE AND id <> %s",
+            (criterion_id,),
+        ).fetchone()
+        remaining = round(float(row[0]), 2)
+        if remaining != 100:
+            raise ValueError(
+                f"После удаления сумма весов активных критериев станет {remaining}, а нужна 100. "
+                "Сначала перераспределите веса и нажмите «Сохранить» — тогда скоринг не упадёт."
+            )
         conn.execute(
             "UPDATE scoring_criteria SET enabled = FALSE, updated_at = now() WHERE id = %s",
             (criterion_id,),
@@ -4053,6 +4083,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             WHERE uas.status = 'digest'
+              AND s.archived_at IS NULL          -- архивный источник не попадает и в выпуск
               AND c.relevant IS NOT FALSE
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
               AND COALESCE(sc.total_score, 0) >= %(min_score)s

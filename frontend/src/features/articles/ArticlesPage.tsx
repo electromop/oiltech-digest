@@ -24,12 +24,11 @@ export const DEFAULT_SIGNAL_ARTICLE_QUERY: ArticleQuery = {
   sort: DEFAULT_SIGNAL_SORT,
 };
 
-const STATUSES: Array<Article["status"]> = ["new", "review", "digest", "archive", "noise", "duplicate"];
+const STATUSES: Array<Article["status"]> = ["new", "digest", "archive", "noise", "duplicate"];
 const STATUS_LABELS: Record<Article["status"], string> = {
   new: "Новая",
-  review: "На проверке",
   digest: "В дайджест",
-  archive: "Архив",
+  archive: "Архив (скрыть)",
   noise: "Шум",
   duplicate: "Дубликат",
 };
@@ -283,7 +282,7 @@ export function ArticlesPage(props: Props) {
     // Заменила плашку «Новые»: та показывала пер-юзерный статус и не сходилась ни с чем.
     // Теперь тройка читается арифметически: Всего = Почищено + остаётся в работе.
     const cleanedCount = stats?.cleaned_articles ?? 0;
-    const reviewCount = countByStatus("review");
+    const archiveCount = countByStatus("archive");
     const digestCount = stats?.selected_for_digest ?? articles.filter((item) => item.digest).length;
     const noiseCount = countByStatus("noise");
     const duplicateCount = countByStatus("duplicate");
@@ -301,7 +300,7 @@ export function ArticlesPage(props: Props) {
       { label: "Всего сигналов", value: total },
       { label: "Обработано", value: processedCount },
       { label: "Почищено", value: cleanedCount },
-      { label: "На проверке", value: reviewCount },
+      { label: "В архиве", value: archiveCount },
       { label: "В дайджест", value: digestCount },
       { label: "Шум", value: noiseCount },
       { label: "Дубликаты", value: duplicateCount },
@@ -646,10 +645,14 @@ export function ArticlesPage(props: Props) {
                               {article.source} · {article.tag} · {article.language || "язык не определён"} · {article.raw_text_chars || 0} симв.
                               {article.digest ? " · в дайджесте" : ""}
                             </div>
-                            {article.relevant === false || article.text_truncated || article.future_date ? (
+                            {/* Плашки «неполный текст» нет намеренно (решение владельца 12.09):
+                                платформа выходит на корпоративный портал, и признак обрезанного
+                                текста читателю не показываем. Сам признак жив — `text_truncated`
+                                по-прежнему приезжает в payload и используется дозагрузкой;
+                                косвенный сигнал полноты остаётся счётчиком «N симв.» выше. */}
+                            {article.relevant === false || article.future_date ? (
                               <div className="articleFlags">
                                 {article.relevant === false ? <span className="miniPill bad">нерелевантно</span> : null}
-                                {article.text_truncated ? <span className="miniPill warn">неполный текст</span> : null}
                                 {article.future_date ? <span className="miniPill warn">дата в будущем</span> : null}
                               </div>
                             ) : null}

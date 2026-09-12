@@ -57,6 +57,16 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS external_cooldown_until TIMESTAMPTZ
 CREATE INDEX IF NOT EXISTS idx_sources_last_seen_published_at ON sources(last_seen_published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sources_network_region ON sources(network_region, enabled);
 
+-- Архив источника (требование заказчика 12.09: «выключаем источник — не парсится больше,
+-- уходит в архив, его статьи уходят из выборки»). Отдельно от `enabled`, потому что это
+-- РАЗНЫЕ вещи: выключенный источник просто не опрашивается, но его накопленные статьи
+-- продолжают висеть в ленте у всех (лента джойнит sources без условия на enabled).
+-- Архивный — и не опрашивается, и не показывает свои статьи. Обратимо: NULL = активен.
+-- Жёсткого DELETE нет намеренно: articles.source_id ссылается на sources БЕЗ ON DELETE,
+-- то есть Postgres просто откажет удалить источник, у которого есть хоть одна статья.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_sources_archived_at ON sources(archived_at) WHERE archived_at IS NOT NULL;
+
 -- =========================================================================
 -- Статьи (сырые, до обработки)
 -- =========================================================================
@@ -106,7 +116,8 @@ CREATE TABLE IF NOT EXISTS article_cards (
   relevant            BOOLEAN,                    -- AI-фильтр релевантности (Issue: AI-gate)
   relevance_reason    TEXT,
   relevance_model     TEXT,
-  status              TEXT DEFAULT 'new',         -- new / review / digest / archive / noise / duplicate / rejected
+  status              TEXT DEFAULT 'new',         -- new / digest / archive / noise / duplicate / rejected
+                                                  -- ЛЕГАСИ: глобальная колонка, вытеснена user_article_states
   selected_for_digest BOOLEAN DEFAULT FALSE,
   digest_month        TEXT,
   analyst_comment     TEXT,
@@ -258,12 +269,27 @@ END $$;
 CREATE TABLE IF NOT EXISTS user_article_states (
   user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   article_id      BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-  status          TEXT NOT NULL DEFAULT 'new',  -- new / review / digest / archive / noise / duplicate
+  status          TEXT NOT NULL DEFAULT 'new',  -- new / digest / archive / noise / duplicate
+                                                -- archive скрывает из ленты (как noise/duplicate),
+                                                -- но БЕЗ штрафа баллу качества источника
   analyst_comment TEXT,
   updated_at      TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (user_id, article_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_article_states_user_status ON user_article_states(user_id, status);
+
+-- 12.09.2026: статус `review` («На проверке») убран из набора (решение заказчика).
+-- Существующие строки переводим в `new`, а НЕ в `archive`, хотя новый переход
+-- «снял из дайджеста» ведёт именно в archive. Причина: `review` использовался как
+-- «посмотрите, тут косяк» — 22.08 заказчика прямо просили ставить этот статус, чтобы
+-- системно отловить дефекты. `archive` теперь СКРЫВАЕТ статью из ленты, и миграция в
+-- него спрятала бы ровно те статьи, ради которых пометка ставилась. `new` возвращает
+-- их в общий поток — ничего не теряется.
+-- Идемпотентно: повторный запуск не находит строк и ничего не делает.
+UPDATE user_article_states SET status = 'new' WHERE status = 'review';
+-- Та же чистка в легаси-колонке article_cards.status (её читает только
+-- migrate_global_status_to_user), чтобы комментарии схемы не расходились с данными.
+UPDATE article_cards SET status = 'new' WHERE status = 'review';
 
 CREATE TABLE IF NOT EXISTS user_sessions (
   id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

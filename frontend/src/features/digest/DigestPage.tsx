@@ -177,7 +177,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   async function removeFromDigest(articleId: number) {
     try {
       setBusy(true);
-      await updateArticle(articleId, { status: "review" });
+      await updateArticle(articleId, { status: "archive" });
       await reload();
       onArticlesChanged?.();
       showToast("Статья убрана из дайджеста");
