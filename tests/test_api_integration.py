@@ -1265,3 +1265,61 @@ def test_saving_incomplete_tag_list_is_refused(isolated_db):
         assert ok.status_code == 200, ok.text
     finally:
         app.dependency_overrides.clear()
+
+
+def test_system_tag_survives_save_and_delete(isolated_db):
+    """Тег-приёмник «Не классифицировано» нельзя выключить обычной работой с экраном.
+
+    13.09 он выключился молча: сохранение прислало 13 тематик, его среди них не было,
+    и страховка «больше половины» не сработала — один тег из четырнадцати. Итог:
+    pipeline._fallback_tag не находил приёмник и уводил весь непонятый поток в первый
+    тег списка, то есть в «Геологоразведку». Это ровно тот дефект, ради которого
+    приёмник и заводили.
+    """
+    from oiltech_digest.db import repository
+
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('systag@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        for i in range(1, 5):
+            conn.execute(
+                "INSERT INTO tags (name, enabled, sort_order) VALUES (%s, TRUE, %s)",
+                (f"Тема {i}", i),
+            )
+        system_id = conn.execute(
+            "INSERT INTO tags (name, enabled, sort_order) VALUES (%s, TRUE, 99) RETURNING id",
+            (repository.SYSTEM_TAG_UNCLASSIFIED,),
+        ).fetchone()[0]
+        conn.commit()
+
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "s@e.ru", "role": "admin"}
+    try:
+        client = TestClient(app)
+        # Экран прислал только тематики — приёмника в списке нет.
+        response = client.put("/api/tags", json=[
+            {"id": None, "parent_name": None, "name": f"Тема {i}", "name_en": None,
+             "description": None, "keywords_json": None, "keywords_en_json": None,
+             "negative_keywords_json": None, "enabled": True, "sort_order": i}
+            for i in range(1, 5)
+        ])
+        assert response.status_code == 200, response.text
+
+        with connection.get_connection() as conn:
+            still_on = conn.execute(
+                "SELECT enabled FROM tags WHERE id = %s", (system_id,)
+            ).fetchone()[0]
+        assert still_on is True, "приёмник обязан пережить сохранение без него в списке"
+
+        # И удалить его руками тоже нельзя — это не тематика.
+        deleted = client.delete(f"/api/tags/{system_id}")
+        assert deleted.status_code == 400, deleted.text
+        assert "служебный приёмник" in deleted.json()["detail"]
+        with connection.get_connection() as conn:
+            assert conn.execute(
+                "SELECT enabled FROM tags WHERE id = %s", (system_id,)
+            ).fetchone()[0] is True
+    finally:
+        app.dependency_overrides.clear()

@@ -371,7 +371,7 @@ TAGS_13_FILE = "tags_13_tematik.md"
 # Discovery Agent не был ограничен текущей taxonomy».
 # Он же закрывает найденный дефект: при неудачном тегировании статья молча уезжала
 # в ПЕРВЫЙ тег списка (pipeline.keyword_tag → tags[0]), то есть в «Геологоразведку».
-UNCLASSIFIED_TAG = "Не классифицировано / новая тема"
+UNCLASSIFIED_TAG = repository.SYSTEM_TAG_UNCLASSIFIED
 
 
 def _parse_tags_13(text: str) -> list[dict]:

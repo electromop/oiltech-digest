@@ -30,6 +30,13 @@ from oiltech_digest.db.connection import get_connection
 ArticleStatus = Literal["new", "digest", "archive", "noise", "duplicate"]
 ARTICLE_STATUS_VALUES: tuple[ArticleStatus, ...] = get_args(ArticleStatus)
 
+# Служебный тег-приёмник: сюда падает статья, не совпавшая ни с одной тематикой
+# (pipeline._fallback_tag). Он не тематика, а предохранитель — без него классификация
+# уводит весь непонятый поток в ПЕРВЫЙ тег списка. Поэтому его нельзя выключить ни
+# сохранением экрана тегов, ни удалением: 13.09 он выключился именно так и молча,
+# а страховка «больше половины» такой случай не ловит (один тег из четырнадцати).
+SYSTEM_TAG_UNCLASSIFIED = "Не классифицировано / новая тема"
+
 # ---------------------------------------------------------------------------
 #  sources
 # ---------------------------------------------------------------------------
@@ -4165,6 +4172,11 @@ def save_tags(items: list[dict]) -> dict:
                     "больше половины справочника. Похоже, список пришёл неполным. "
                     "Изменения отменены; смена таксономии целиком делается командой retire-tags."
                 )
+            system_row = conn.execute(
+                "SELECT id FROM tags WHERE name = %s", (SYSTEM_TAG_UNCLASSIFIED,)
+            ).fetchone()
+            if system_row and int(system_row[0]) not in keep:
+                keep.append(int(system_row[0]))
             conn.execute("UPDATE tags SET enabled=FALSE WHERE id <> ALL(%s)", (keep,))
         conn.commit()
     return {"saved": len(items)}
@@ -4221,6 +4233,12 @@ def disable_tags_except(names: list[str]) -> int:
 def delete_tag(tag_id: int) -> None:
     """Мягкое удаление тега и его подтегов (enabled=FALSE) — FK на article_tags не рвём."""
     with get_connection() as conn:
+        row = conn.execute("SELECT name FROM tags WHERE id = %s", (tag_id,)).fetchone()
+        if row and row[0] == SYSTEM_TAG_UNCLASSIFIED:
+            raise ValueError(
+                f"«{SYSTEM_TAG_UNCLASSIFIED}» — служебный приёмник, а не тематика. "
+                "Без него статьи, не подошедшие ни к одной теме, уедут в первый тег списка."
+            )
         conn.execute(
             "UPDATE tags SET enabled=FALSE, updated_at=now() WHERE id=%s OR parent_id=%s",
             (tag_id, tag_id),

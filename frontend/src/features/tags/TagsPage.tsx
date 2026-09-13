@@ -4,6 +4,11 @@ import type { Tag } from "../../api/types";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
+// Служебный тег-приёмник: не тематика, а предохранитель классификации. Сервер запрещает
+// его удалять и выключать (repository.SYSTEM_TAG_UNCLASSIFIED), здесь прячем кнопку
+// «Удалить» и подписываем строку, чтобы не выглядело недоработкой экрана.
+const SYSTEM_TAG_UNCLASSIFIED = "Не классифицировано / новая тема";
+
 type Props = {
   onUnauthorized: () => void;
   showToast: ToastWriter;
@@ -209,9 +214,15 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                       <button type="button" className="ghostButton" onClick={() => addSubtag(parent.name)}>
                         + Подтег
                       </button>
-                      <button type="button" className="ghostButton dangerButton" onClick={() => void removeTag(parentIndex)}>
-                        Удалить
-                      </button>
+                      {parent.name === SYSTEM_TAG_UNCLASSIFIED ? (
+                        <span className="muted">
+                          Служебный тег: сюда попадают статьи, не подошедшие ни к одной тематике. Удалить нельзя.
+                        </span>
+                      ) : (
+                        <button type="button" className="ghostButton dangerButton" onClick={() => void removeTag(parentIndex)}>
+                          Удалить
+                        </button>
+                      )}
                     </div>
                   </div>
 

@@ -1496,7 +1496,11 @@ def save_tags(items: list[TagIn], user: dict[str, Any] = Depends(require_admin))
 
 @app.delete("/api/tags/{tag_id}")
 def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    repository.delete_tag(tag_id)
+    try:
+        repository.delete_tag(tag_id)
+    except ValueError as exc:
+        # Служебный тег-приёмник удалить нельзя — объясняем, а не 500.
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
 
 

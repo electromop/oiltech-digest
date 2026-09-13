@@ -447,7 +447,9 @@ def score_article(article: dict, criteria: list[dict], client) -> AIResponse:
 # Заказчик 13.09 сам предложил решение: «если статья не совпадает ни с одной тематикой,
 # она должна попадать в Unclassified / потенциально новая тема, чтобы Discovery Agent
 # не был ограничен текущей taxonomy».
-UNCLASSIFIED_TAG_NAME = "Не классифицировано / новая тема"
+# Имя одно на всю систему: repository защищает этот тег от выключения, сид его создаёт,
+# классификация на него падает. Три копии строки разъехались бы молча.
+UNCLASSIFIED_TAG_NAME = repository.SYSTEM_TAG_UNCLASSIFIED
 
 
 def _fallback_tag(tags: list[dict]) -> dict:
