@@ -1216,3 +1216,52 @@ def test_seed_does_not_disable_tags_renamed_by_customer(isolated_db):
     with connection.get_connection() as conn:
         retired, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег Виктора'").fetchone()
     assert retired is False
+
+
+def test_saving_incomplete_tag_list_is_refused(isolated_db):
+    """Страховка от потери таксономии одним нажатием «Сохранить».
+
+    Сохранение выключает всё, чего нет в присланном списке. 13.09 проверочный запрос
+    с ОДНИМ тегом выключил разом все 14 — неполный список (обрыв загрузки, частичный
+    рендер) стирал бы справочник молча. Порог мягкий: сокращение набора законно
+    (мы сами ужали 18 направлений до 13), запрещаем только обвал больше чем наполовину.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('guard@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        for i in range(1, 7):
+            conn.execute(
+                "INSERT INTO tags (name, enabled, sort_order) VALUES (%s, TRUE, %s)",
+                (f"Тема {i}", i),
+            )
+        conn.commit()
+
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "g@e.ru", "role": "admin"}
+    try:
+        client = TestClient(app)
+        # Прислали один тег вместо шести — это выключило бы пять из шести.
+        response = client.put("/api/tags", json=[
+            {"id": None, "parent_name": None, "name": "Тема 1", "name_en": None,
+             "description": None, "keywords_json": None, "keywords_en_json": None,
+             "negative_keywords_json": None, "enabled": True, "sort_order": 1},
+        ])
+        assert response.status_code == 400, "неполный список обязан отклоняться"
+        assert "больше половины" in response.json()["detail"]
+
+        with connection.get_connection() as conn:
+            still_on = conn.execute("SELECT count(*) FROM tags WHERE enabled").fetchone()[0]
+        assert still_on == 6, "отклонённое сохранение не должно ничего менять"
+
+        # Законное сокращение (4 из 6) по-прежнему проходит.
+        ok = client.put("/api/tags", json=[
+            {"id": None, "parent_name": None, "name": f"Тема {i}", "name_en": None,
+             "description": None, "keywords_json": None, "keywords_en_json": None,
+             "negative_keywords_json": None, "enabled": True, "sort_order": i}
+            for i in range(1, 5)
+        ])
+        assert ok.status_code == 200, ok.text
+    finally:
+        app.dependency_overrides.clear()

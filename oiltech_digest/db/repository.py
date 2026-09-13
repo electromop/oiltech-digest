@@ -4144,6 +4144,27 @@ def save_tags(items: list[dict]) -> dict:
                 name_to_id.setdefault(previous_name, tag_id)
             keep.append(tag_id)
         if keep:
+            # СТРАХОВКА от потери таксономии одним нажатием. Сохранение выключает всё,
+            # чего нет в присланном списке, — и это правильно, пока фронт шлёт ВЕСЬ
+            # список. Но 13.09 проверочный запрос с одним тегом выключил разом все 14:
+            # неполный список (обрыв загрузки, частичный рендер, чужой скрипт) стирает
+            # справочник молча и без следа.
+            # Порог намеренно мягкий: сокращение набора — законная операция (мы сами
+            # ужали 18 направлений до 13), поэтому запрещаем только обвал БОЛЬШЕ чем
+            # наполовину. Осознанная смена таксономии идёт отдельной командой
+            # `retire-tags`, которой этот предохранитель не мешает.
+            enabled_before = conn.execute(
+                "SELECT count(*) FROM tags WHERE enabled"
+            ).fetchone()[0]
+            would_disable = conn.execute(
+                "SELECT count(*) FROM tags WHERE enabled AND id <> ALL(%s)", (keep,)
+            ).fetchone()[0]
+            if enabled_before >= 4 and would_disable * 2 > enabled_before:
+                raise ValueError(
+                    f"Сохранение выключило бы {would_disable} тегов из {enabled_before} — "
+                    "больше половины справочника. Похоже, список пришёл неполным. "
+                    "Изменения отменены; смена таксономии целиком делается командой retire-tags."
+                )
             conn.execute("UPDATE tags SET enabled=FALSE WHERE id <> ALL(%s)", (keep,))
         conn.commit()
     return {"saved": len(items)}
