@@ -194,10 +194,13 @@ def cmd_cleanup_future_dates(args: argparse.Namespace) -> None:
 
 
 def cmd_seed_tags(args: argparse.Namespace) -> None:
-    from oiltech_digest.processing.seed import seed_tags_from_directions
+    # 13.09: перешли с 18 направлений D01–D18 из xlsx на 13 тематик заказчика
+    # (data/seed/tags_13_tematik.md). Прежние теги выключаются, а не удаляются:
+    # на них ссылается article_tags со всей историей классификации.
+    from oiltech_digest.processing.seed import seed_tags_13
 
-    stats = seed_tags_from_directions()
-    print(f"Seed тегов: {stats['tags']}")
+    stats = seed_tags_13()
+    print(f"Seed тегов: заведено {stats['tags']}, выключено прежних {stats['disabled']}")
 
 
 def cmd_seed_scoring(args: argparse.Namespace) -> None:
@@ -439,6 +442,19 @@ def cmd_tag(args: argparse.Namespace) -> None:
 
     stats = process_tags(limit=args.limit, offline=args.offline)
     print(f"tagging: обработано={stats['processed']}, ошибок={stats['errors']}")
+
+
+def cmd_retag_reset(args: argparse.Namespace) -> None:
+    """Снять классификацию по выключенным тегам, чтобы статьи перетегировались заново.
+
+    Сама по себе ничего не тегирует и ничего не тратит: возвращает статьи в очередь,
+    а разметку делает обычная стадия `tag` (или планировщик). Разделено намеренно —
+    перетегирование 11 тысяч статей платное, и запускать его надо осознанно.
+    """
+    from oiltech_digest.db import repository
+
+    removed = repository.clear_article_tags_for_disabled(limit=args.limit)
+    print(f"retag-reset: снято тегов={removed} (статьи вернулись в очередь тегирования)")
 
 
 def cmd_score(args: argparse.Namespace) -> None:
@@ -1967,7 +1983,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="сколько дней вперёд считать допустимыми")
     p_cf.set_defaults(func=cmd_cleanup_future_dates)
 
-    sub.add_parser("seed-tags", help="загрузить теги из направлений D01-D18").set_defaults(func=cmd_seed_tags)
+    sub.add_parser("seed-tags", help="загрузить 13 тематик заказчика").set_defaults(func=cmd_seed_tags)
     sub.add_parser("seed-scoring", help="создать базовые критерии скоринга").set_defaults(func=cmd_seed_scoring)
     sub.add_parser("apply-source-overrides", help="применить playwright/listing-оверрайды источников").set_defaults(func=cmd_apply_source_overrides)
 
@@ -2017,6 +2033,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)
     p_tag.set_defaults(func=cmd_tag)
+
+    p_retag = sub.add_parser(
+        "retag-reset",
+        help="снять классификацию по выключенным тегам — статьи вернутся в очередь тегирования",
+    )
+    p_retag.add_argument("--limit", type=int, default=None,
+                         help="сколько связей снять за прогон (по умолчанию все)")
+    p_retag.set_defaults(func=cmd_retag_reset)
 
     p_score = sub.add_parser("score", help="рассчитать скоринг статей")
     add_ai_args(p_score)

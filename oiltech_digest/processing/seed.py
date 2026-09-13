@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import re
 
 import openpyxl
@@ -350,3 +351,101 @@ def _dedupe(values: list[str]) -> list[str]:
             result.append(item)
             seen.add(key)
     return result
+
+
+# =========================================================================
+# 13 тематик заказчика (13.09.2026) — заменяют 18 направлений D01–D18
+# =========================================================================
+# Список прислан заказчиком файлом «Теги платформы, 13 тематик»: у каждой тематики
+# описание для модели, ключевые слова RU и EN и стоп-слова. Исходник лежит рядом
+# с сидером (data/seed/tags_13_tematik.md) — теги обязаны быть воспроизводимы из
+# репозитория, а не существовать только в проде.
+#
+# Прежние 18 направлений НЕ удаляются, а выключаются: на них ссылается article_tags,
+# и удаление уничтожило бы историю классификации 11 тысяч статей.
+TAGS_13_FILE = "tags_13_tematik.md"
+
+# Явный тег для непопавшего. Прямая рекомендация заказчика в том же файле: «родительский
+# тег не должен быть фильтром допуска статьи; если статья не совпадает ни с одной
+# тематикой, она должна попадать в Unclassified / потенциально новая тема, чтобы
+# Discovery Agent не был ограничен текущей taxonomy».
+# Он же закрывает найденный дефект: при неудачном тегировании статья молча уезжала
+# в ПЕРВЫЙ тег списка (pipeline.keyword_tag → tags[0]), то есть в «Геологоразведку».
+UNCLASSIFIED_TAG = "Не классифицировано / новая тема"
+
+
+def _parse_tags_13(text: str) -> list[dict]:
+    """Разобрать файл заказчика в записи тегов.
+
+    Формат жёсткий и задан им же: «## N. Название», затем блоки «**Описание для AI**»,
+    «**Ключевые слова RU**», «**Keywords EN**», «**Стоп-слова**». Прочерк «—» в
+    стоп-словах означает «их нет», а не название стоп-слова.
+    """
+    records: list[dict] = []
+    parts = re.split(r"\n## (\d+)\. ", text)[1:]
+    for i in range(0, len(parts), 2):
+        number, body = parts[i], parts[i + 1]
+        name = body.split("\n")[0].strip()
+
+        def grab(label: str) -> str:
+            m = re.search(rf"\*\*{label}\*\*\s*\n(.+?)(?=\n\n\*\*|\n\n## |\Z)", body, re.S)
+            return m.group(1).strip() if m else ""
+
+        def split_list(raw: str) -> list[str]:
+            # Прочерк «—» в файле означает «их нет». Плюс у последней тематики в этот же
+            # блок попадает горизонтальная линейка «---», которой файл отделяет
+            # рекомендации — её тоже надо отбросить, иначе «---» уедет в стоп-слово
+            # и начнёт отбивать статьи по подстроке.
+            raw = " ".join(raw.split())
+            words = [w.strip() for w in raw.split(",")]
+            return [w for w in words if w and w.strip("—-–— ")]
+
+        records.append({
+            "sort_order": int(number),
+            "name": name,
+            "description": " ".join(grab("Описание для AI").split()),
+            "keywords_json": split_list(grab("Ключевые слова RU")),
+            "keywords_en_json": split_list(grab("Keywords EN")),
+            "negative_keywords_json": split_list(grab("Стоп-слова")),
+        })
+    return records
+
+
+def seed_tags_13(path: str | None = None) -> dict:
+    """Завести 13 тематик заказчика и выключить всё, чего нет в списке.
+
+    Возвращает, сколько заведено и сколько прежних тегов выключено — цифры уходят
+    в вывод CLI, чтобы результат прогона был виден, а не молчалив.
+    """
+    source = pathlib.Path(path) if path else pathlib.Path(DIRECTIONS_XLSX).parent / TAGS_13_FILE
+    records = _parse_tags_13(source.read_text(encoding="utf-8"))
+    if len(records) != 13:
+        raise ValueError(f"Ожидалось 13 тематик, разобрано {len(records)} — проверьте {source}")
+
+    keep_names = []
+    for rec in records:
+        repository.upsert_tag({
+            "parent_id": None,
+            "name": rec["name"],
+            "name_en": None,
+            "description": rec["description"],
+            "keywords_json": rec["keywords_json"],
+            "keywords_en_json": rec["keywords_en_json"],
+            "negative_keywords_json": rec["negative_keywords_json"],
+            "sort_order": rec["sort_order"],
+        })
+        keep_names.append(rec["name"])
+
+    # Тег-приёмник идёт последним по порядку и БЕЗ ключевых слов: он не должен
+    # выигрывать сопоставление, он нужен только как явное «не подошло ни к чему».
+    repository.upsert_tag({
+        "parent_id": None, "name": UNCLASSIFIED_TAG, "name_en": "Unclassified",
+        "description": ("Статья не отнесена ни к одной тематике. Не фильтр допуска, а "
+                        "признак того, что тему стоит рассмотреть как новую."),
+        "keywords_json": [], "keywords_en_json": [], "negative_keywords_json": [],
+        "sort_order": 99,
+    })
+    keep_names.append(UNCLASSIFIED_TAG)
+
+    disabled = repository.disable_tags_except(keep_names)
+    return {"tags": len(records) + 1, "disabled": disabled}

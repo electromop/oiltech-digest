@@ -232,8 +232,9 @@ class ScoringCriterionIn(BaseModel):
     name: str
     description: str | None = None
     weight: float
-    keywords_json: list[str] = []
-    keywords_en_json: list[str] = []
+    # Та же ловушка, что у TagIn: явный null из БД отвергался бы 422-м.
+    keywords_json: list[str] | None = None
+    keywords_en_json: list[str] | None = None
     sort_order: int = 0
 
 
@@ -246,9 +247,16 @@ class TagIn(BaseModel):
     name: str
     name_en: str | None = None
     description: str | None = None
-    keywords_json: list[str] = []
-    keywords_en_json: list[str] = []
-    negative_keywords_json: list[str] = []
+    # `| None` ОБЯЗАТЕЛЕН, а не «на всякий случай». Значение по умолчанию срабатывает
+    # только когда ключ ОТСУТСТВУЕТ; пришедший явно `null` Pydantic отвергает 422-й.
+    # А приходит он всегда: в БД `negative_keywords_json` равен NULL у ВСЕХ тегов,
+    # `list_enabled_tags` отдаёт `SELECT child.*` как есть, фронт возвращает то же самое —
+    # и сохранение экрана «Теги» падало ЦЕЛИКОМ на каждой попытке (скрин заказчика 13.09:
+    # девять строк «Input should be a valid list», input: null). Репозиторий None
+    # переваривает сам (`or []`), поэтому достаточно расширить тип.
+    keywords_json: list[str] | None = None
+    keywords_en_json: list[str] | None = None
+    negative_keywords_json: list[str] | None = None
     enabled: bool = True
     sort_order: int = 0
 

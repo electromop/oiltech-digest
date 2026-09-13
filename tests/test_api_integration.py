@@ -1051,3 +1051,136 @@ def test_insert_article_dedups_url_variants(isolated_db):
             "SELECT count(*) FROM articles WHERE source_id = %s", (source_id,)
         ).fetchone()[0]
     assert total == 2, f"должно остаться 2 статьи, а не {total}"
+
+
+def test_saving_tags_survives_null_keyword_lists(isolated_db):
+    """Скрин заказчика 13.09: сохранение экрана «Теги» падало 422 на девяти строках подряд —
+    «Input should be a valid list», input: null.
+
+    Причина: `negative_keywords_json` равен NULL у ВСЕХ тегов в БД, `list_enabled_tags`
+    отдаёт его как есть, фронт возвращает то же самое, а значение по умолчанию в Pydantic
+    срабатывает только когда ключ ОТСУТСТВУЕТ. То есть экран не сохранялся вообще никогда.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('nulls@example.com', 'salt', 'hash', 'admin') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+    app.dependency_overrides[api.require_admin] = lambda: {"id": user_id, "email": "n@e.ru", "role": "admin"}
+    app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "n@e.ru", "role": "admin"}
+    try:
+        client = TestClient(app)
+        # Ровно та форма, что уходит с фронта после чтения тега из БД.
+        response = client.put("/api/tags", json=[{
+            "id": None, "parent_name": None, "name": "Бурение",
+            "name_en": None, "description": "Описание",
+            "keywords_json": None, "keywords_en_json": None,
+            "negative_keywords_json": None,
+            "enabled": True, "sort_order": 1,
+        }])
+        assert response.status_code == 200, f"сохранение тегов снова падает: {response.text}"
+
+        with connection.get_connection() as conn:
+            kw, neg = conn.execute(
+                "SELECT keywords_json, negative_keywords_json FROM tags WHERE name = 'Бурение'"
+            ).fetchone()
+        assert kw == [] and neg == [], "null должен превращаться в пустой список, а не падать"
+
+        # Критерии скоринга страдали тем же — проверяем и их.
+        assert client.put("/api/scoring-criteria", json=[{
+            "id": None, "name": "Единственный", "description": None, "weight": 100,
+            "keywords_json": None, "keywords_en_json": None, "enabled": True, "sort_order": 1,
+        }]).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_seed_13_themes_replaces_old_taxonomy(isolated_db):
+    """13.09: заказчик прислал список из 13 тематик — оставить только их.
+
+    Прежние теги ВЫКЛЮЧАЮТСЯ, а не удаляются: на них ссылается article_tags со всей
+    историей классификации корпуса.
+    """
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing.seed import seed_tags_13, UNCLASSIFIED_TAG
+
+    with connection.get_connection() as conn:
+        conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Старое направление', TRUE, 1)")
+        conn.commit()
+
+    stats = seed_tags_13()
+    assert stats["tags"] == 14, "13 тематик заказчика плюс приёмник для неклассифицированного"
+    assert stats["disabled"] >= 1, "прежние теги обязаны выключиться"
+
+    with connection.get_connection() as conn:
+        old_enabled, = conn.execute(
+            "SELECT enabled FROM tags WHERE name = 'Старое направление'"
+        ).fetchone()
+        enabled_names = [r[0] for r in conn.execute("SELECT name FROM tags WHERE enabled ORDER BY sort_order")]
+        stops = conn.execute(
+            "SELECT COALESCE(SUM(jsonb_array_length(COALESCE(negative_keywords_json,'[]'::jsonb))),0) "
+            "FROM tags WHERE enabled"
+        ).fetchone()[0]
+
+    assert old_enabled is False, "старый тег выключен, но не удалён"
+    assert len(enabled_names) == 14
+    assert UNCLASSIFIED_TAG in enabled_names, "нужен явный приёмник, иначе статья молча уедет в первый тег"
+    # Стоп-слова из файла заказчика обязаны доехать: раньше upsert_tag их не писал ВООБЩЕ,
+    # и механизм подавления шума стоял пустым на всём проде.
+    assert stops > 0, "стоп-слова из файла заказчика не доехали до базы"
+
+    with connection.get_connection() as conn:
+        neg = conn.execute(
+            "SELECT negative_keywords_json FROM tags WHERE name LIKE 'Бурение%' AND enabled"
+        ).fetchone()[0]
+    assert "oil painting" in neg, "конкретное стоп-слово из файла не сохранилось"
+    # Разделитель «---» из конца файла не должен попасть в стоп-слова: как подстрока
+    # он отбивал бы статьи пачками.
+    assert not any(str(w).strip("—-– ") == "" for w in neg)
+
+
+def test_retag_reset_returns_articles_to_tagging_queue(isolated_db):
+    """Смена таксономии оставляет 11 тысяч статей с классификацией по мёртвому справочнику.
+
+    Выборка тегирования берёт статьи БЕЗ тега, поэтому снятие связи — и есть способ
+    вернуть статью в очередь. Снимаются только связи с ВЫКЛЮЧЕННЫМИ тегами.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('S', 'Media', 'https://s.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        old_tag = conn.execute(
+            "INSERT INTO tags (name, enabled, sort_order) VALUES ('Мёртвый тег', FALSE, 1) RETURNING id"
+        ).fetchone()[0]
+        live_tag = conn.execute(
+            "INSERT INTO tags (name, enabled, sort_order) VALUES ('Живой тег', TRUE, 2) RETURNING id"
+        ).fetchone()[0]
+
+        def add(url: str, tag_id: int) -> int:
+            aid = conn.execute(
+                "INSERT INTO articles (source_id, title, url, collected_at, raw_text, language) "
+                "VALUES (%s, 'T', %s, now(), 'x', 'ru') RETURNING id", (source_id, url)
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO article_tags (article_id, tag_id, confidence) VALUES (%s, %s, 0.9)",
+                (aid, tag_id),
+            )
+            return aid
+
+        stale = add("https://s.example/stale", old_tag)
+        fresh = add("https://s.example/fresh", live_tag)
+        conn.commit()
+
+    removed = repository.clear_article_tags_for_disabled()
+    assert removed == 1, "снять нужно только связь с выключенным тегом"
+
+    with connection.get_connection() as conn:
+        assert conn.execute("SELECT count(*) FROM article_tags WHERE article_id = %s", (stale,)).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM article_tags WHERE article_id = %s", (fresh,)).fetchone()[0] == 1
+        # Сами статьи не тронуты.
+        assert conn.execute("SELECT count(*) FROM articles WHERE id IN (%s,%s)", (stale, fresh)).fetchone()[0] == 2

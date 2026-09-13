@@ -3976,7 +3976,8 @@ def upsert_tag(rec: dict) -> int:
             # правки заказчика при каждом повторном прогоне seed-tags — а прогон случается
             # сам, в bootstrap на деплое. Порядок сохраняем: сначала то, что уже было.
             existing = conn.execute(
-                "SELECT COALESCE(keywords_json, '[]'::jsonb), COALESCE(keywords_en_json, '[]'::jsonb) "
+                "SELECT COALESCE(keywords_json, '[]'::jsonb), COALESCE(keywords_en_json, '[]'::jsonb), "
+                "COALESCE(negative_keywords_json, '[]'::jsonb) "
                 "FROM tags WHERE id = %s", (tag_id,)
             ).fetchone()
 
@@ -3996,6 +3997,10 @@ def upsert_tag(rec: dict) -> int:
                     description = %(description)s,
                     keywords_json = %(keywords_json)s,
                     keywords_en_json = %(keywords_en_json)s,
+                    -- Стоп-слова сид РАНЬШЕ НЕ ПИСАЛ ВООБЩЕ: ни в UPDATE, ни в INSERT.
+                    -- Поэтому в проде они были NULL у всех 18 тегов, механизм подавления
+                    -- шума стоял пустым, и он же ломал сохранение экрана «Теги» (422).
+                    negative_keywords_json = %(negative_keywords_json)s,
                     sort_order = %(sort_order)s,
                     updated_at = now()
                 WHERE id = %(id)s
@@ -4005,6 +4010,14 @@ def upsert_tag(rec: dict) -> int:
                     "id": tag_id,
                     "keywords_json": Json(_merge(existing[0], rec.get("keywords_json"))),
                     "keywords_en_json": Json(_merge(existing[1], rec.get("keywords_en_json"))),
+                    # Стоп-слова ЗАМЕНЯЕМ, а не сливаем: они запрещают, и «случайно
+                    # накопленный» запрет молча выкашивал бы статьи. Если вызывающий их
+                    # не передал (None) — оставляем набранное руками, не затираем.
+                    "negative_keywords_json": Json(
+                        rec["negative_keywords_json"]
+                        if rec.get("negative_keywords_json") is not None
+                        else (existing[2] or [])
+                    ),
                 },
             )
             conn.commit()
@@ -4013,15 +4026,17 @@ def upsert_tag(rec: dict) -> int:
         cur = conn.execute(
             """
             INSERT INTO tags (parent_id, name, name_en, description, keywords_json,
-                              keywords_en_json, enabled, sort_order)
+                              keywords_en_json, negative_keywords_json, enabled, sort_order)
             VALUES (%(parent_id)s, %(name)s, %(name_en)s, %(description)s,
-                    %(keywords_json)s, %(keywords_en_json)s, TRUE, %(sort_order)s)
+                    %(keywords_json)s, %(keywords_en_json)s,
+                    %(negative_keywords_json)s, TRUE, %(sort_order)s)
             RETURNING id
             """,
             {
                 **rec,
                 "keywords_json": Json(rec.get("keywords_json") or []),
                 "keywords_en_json": Json(rec.get("keywords_en_json") or []),
+                "negative_keywords_json": Json(rec.get("negative_keywords_json") or []),
             },
         )
         tag_id = cur.fetchone()[0]
@@ -4132,6 +4147,54 @@ def save_tags(items: list[dict]) -> dict:
             conn.execute("UPDATE tags SET enabled=FALSE WHERE id <> ALL(%s)", (keep,))
         conn.commit()
     return {"saved": len(items)}
+
+
+def clear_article_tags_for_disabled(limit: int | None = None) -> int:
+    """Снять теги, присвоенные ныне ВЫКЛЮЧЕННЫМИ тегами. Возвращает, сколько снято.
+
+    Нужно при смене таксономии: 13.09 набор из 18 направлений заменён на 13 тематик
+    заказчика, и 11 тысяч статей остались с классификацией по несуществующему больше
+    справочнику. Выборка тегирования берёт статьи, у которых тега НЕТ
+    (`get_articles_needing_tags`: `at.id IS NULL`), поэтому снятие строки — и есть
+    способ вернуть статью в очередь.
+
+    Удаляются только строки связи, сами статьи и их суть не трогаются.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM article_tags
+            WHERE id IN (
+                SELECT at.id FROM article_tags at
+                JOIN tags t ON t.id = at.tag_id
+                WHERE NOT t.enabled
+                ORDER BY at.id
+                LIMIT %s
+            )
+            """,
+            (limit if limit is not None else 10_000_000,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def disable_tags_except(names: list[str]) -> int:
+    """Выключить все теги, кроме перечисленных. Возвращает, сколько выключено.
+
+    Мягко: на теги ссылается article_tags, и удаление уничтожило бы историю
+    классификации всего корпуса. Выключенный тег не предлагается модели
+    (list_enabled_tags фильтрует по enabled) и не участвует в новой разметке.
+    """
+    if not names:
+        raise ValueError("Пустой список тегов к сохранению — это выключило бы все теги разом")
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE tags SET enabled = FALSE, updated_at = now() "
+            "WHERE enabled AND name <> ALL(%s)",
+            (names,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
 
 
 def delete_tag(tag_id: int) -> None:
