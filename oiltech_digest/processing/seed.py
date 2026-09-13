@@ -447,5 +447,22 @@ def seed_tags_13(path: str | None = None) -> dict:
     })
     keep_names.append(UNCLASSIFIED_TAG)
 
-    disabled = repository.disable_tags_except(keep_names)
-    return {"tags": len(records) + 1, "disabled": disabled}
+    # ВАЖНО: сид ГАРАНТИРУЕТ существование 13 тематик и БОЛЬШЕ НИЧЕГО не выключает.
+    # Он запускается в bootstrap на КАЖДОМ деплое. Если бы он гасил всё, чего нет в
+    # файле, то первое же переименование тега заказчиком в UI было бы отменено
+    # следующей выкаткой: сид создал бы тег с исходным именем, а переименованный
+    # выключил. Ровно этот класс ошибки уже сработал с критериями скоринга 11.09.
+    # Выключение прежней таксономии — разовая миграция, отдельной командой `retire-tags`.
+    return {"tags": len(records) + 1, "disabled": 0}
+
+
+def retire_old_tags(path: str | None = None) -> dict:
+    """Разовая миграция: выключить всё, чего нет в списке заказчика.
+
+    Отделена от сида намеренно (см. комментарий выше): сид идёт на каждом деплое,
+    а эта операция — осознанное решение человека сменить таксономию.
+    """
+    source = pathlib.Path(path) if path else pathlib.Path(DIRECTIONS_XLSX).parent / TAGS_13_FILE
+    keep = [rec["name"] for rec in _parse_tags_13(source.read_text(encoding="utf-8"))]
+    keep.append(UNCLASSIFIED_TAG)
+    return {"disabled": repository.disable_tags_except(keep)}

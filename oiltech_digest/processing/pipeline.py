@@ -440,9 +440,27 @@ def score_article(article: dict, criteria: list[dict], client) -> AIResponse:
     )
 
 
+# Куда падает статья, не совпавшая НИ С ОДНИМ ключевым словом. Раньше — в tags[0],
+# то есть в первый тег по порядку: при таксономии D01–D18 это была «Сейсморазведка»,
+# при 13 тематиках заказчика стала бы «Геологоразведка». Мусор копился в одном
+# направлении и выглядел как обычная классификация.
+# Заказчик 13.09 сам предложил решение: «если статья не совпадает ни с одной тематикой,
+# она должна попадать в Unclassified / потенциально новая тема, чтобы Discovery Agent
+# не был ограничен текущей taxonomy».
+UNCLASSIFIED_TAG_NAME = "Не классифицировано / новая тема"
+
+
+def _fallback_tag(tags: list[dict]) -> dict:
+    """Тег-приёмник, если он заведён; иначе — прежнее поведение (первый по порядку)."""
+    for tag in tags:
+        if tag.get("name") == UNCLASSIFIED_TAG_NAME:
+            return tag
+    return tags[0]
+
+
 def keyword_tag(article: dict, tags: list[dict]) -> dict:
     text = _search_text(article)
-    best = {"tag_id": tags[0]["id"], "confidence": 0.15, "matches": 0}
+    best = {"tag_id": _fallback_tag(tags)["id"], "confidence": 0.15, "matches": 0}
     for tag in tags:
         keywords = (tag.get("keywords_json") or []) + (tag.get("keywords_en_json") or [])
         matches = sum(1 for keyword in keywords if _contains_keyword(text, keyword))

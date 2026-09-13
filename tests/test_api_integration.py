@@ -1110,9 +1110,14 @@ def test_seed_13_themes_replaces_old_taxonomy(isolated_db):
         conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Старое направление', TRUE, 1)")
         conn.commit()
 
+    from oiltech_digest.processing.seed import retire_old_tags
+
     stats = seed_tags_13()
     assert stats["tags"] == 14, "13 тематик заказчика плюс приёмник для неклассифицированного"
-    assert stats["disabled"] >= 1, "прежние теги обязаны выключиться"
+    # Выключение прежней таксономии — ОТДЕЛЬНАЯ команда: сид идёт на каждом деплое и не
+    # имеет права отменять правки заказчика (см. test_seed_does_not_disable_tags_renamed…).
+    assert stats["disabled"] == 0
+    assert retire_old_tags()["disabled"] >= 1, "разовая миграция обязана выключить прежние"
 
     with connection.get_connection() as conn:
         old_enabled, = conn.execute(
@@ -1184,3 +1189,30 @@ def test_retag_reset_returns_articles_to_tagging_queue(isolated_db):
         assert conn.execute("SELECT count(*) FROM article_tags WHERE article_id = %s", (fresh,)).fetchone()[0] == 1
         # Сами статьи не тронуты.
         assert conn.execute("SELECT count(*) FROM articles WHERE id IN (%s,%s)", (stale, fresh)).fetchone()[0] == 2
+
+
+def test_seed_does_not_disable_tags_renamed_by_customer(isolated_db):
+    """Сид идёт на КАЖДОМ деплое и не должен отменять правки заказчика.
+
+    Если бы он гасил всё, чего нет в файле, первое же переименование тега в UI
+    отменялось бы следующей выкаткой: сид создал бы тег с исходным именем, а
+    переименованный выключил. Этот класс ошибки уже сработал с критериями скоринга 11.09.
+    """
+    from oiltech_digest.processing.seed import seed_tags_13, retire_old_tags
+
+    with connection.get_connection() as conn:
+        conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Тег Виктора', TRUE, 1)")
+        conn.commit()
+
+    stats = seed_tags_13()
+    assert stats["disabled"] == 0, "сид не имеет права ничего выключать"
+
+    with connection.get_connection() as conn:
+        alive, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег Виктора'").fetchone()
+    assert alive is True, "сид погасил тег, которого нет в его файле"
+
+    # Смена таксономии — отдельная осознанная команда.
+    assert retire_old_tags()["disabled"] >= 1
+    with connection.get_connection() as conn:
+        retired, = conn.execute("SELECT enabled FROM tags WHERE name = 'Тег Виктора'").fetchone()
+    assert retired is False

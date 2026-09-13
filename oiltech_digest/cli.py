@@ -444,6 +444,14 @@ def cmd_tag(args: argparse.Namespace) -> None:
     print(f"tagging: обработано={stats['processed']}, ошибок={stats['errors']}")
 
 
+def cmd_retire_tags(args: argparse.Namespace) -> None:
+    """Разовая миграция таксономии: выключить теги, которых нет в списке заказчика."""
+    from oiltech_digest.processing.seed import retire_old_tags
+
+    stats = retire_old_tags()
+    print(f"retire-tags: выключено прежних тегов={stats['disabled']}")
+
+
 def cmd_retag_reset(args: argparse.Namespace) -> None:
     """Снять классификацию по выключенным тегам, чтобы статьи перетегировались заново.
 
@@ -2033,6 +2041,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)
     p_tag.set_defaults(func=cmd_tag)
+
+    sub.add_parser(
+        "retire-tags",
+        help="разово выключить теги вне списка заказчика (смена таксономии)",
+    ).set_defaults(func=cmd_retire_tags)
 
     p_retag = sub.add_parser(
         "retag-reset",

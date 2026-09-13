@@ -511,3 +511,37 @@ def test_ai_response_cost_unknown_model_falls_back():
     response = AIResponse(data={}, model="some-future-model", input_tokens=1_000_000, output_tokens=1_000_000)
     expected = config.OPENAI_INPUT_USD_PER_MTOK + config.OPENAI_OUTPUT_USD_PER_MTOK
     assert abs(response.cost_usd - expected) < 1e-9
+
+
+def test_keyword_tag_falls_back_to_unclassified_not_first_tag():
+    """Статья, не совпавшая ни с одним ключевым словом, не должна молча уезжать в первый тег.
+
+    Раньше фоллбэк брал tags[0]: при таксономии D01–D18 это была «Сейсморазведка», при
+    13 тематиках заказчика стала бы «Геологоразведка». Мусор копился в одном направлении
+    и выглядел как обычная классификация. Заказчик 13.09 сам предложил приёмник.
+    """
+    from oiltech_digest.processing import pipeline
+
+    tags = [
+        {"id": 1, "name": "Геологоразведка", "keywords_json": ["сейсморазведка"], "keywords_en_json": []},
+        {"id": 2, "name": "Бурение", "keywords_json": ["бурение"], "keywords_en_json": []},
+        {"id": 99, "name": pipeline.UNCLASSIFIED_TAG_NAME, "keywords_json": [], "keywords_en_json": []},
+    ]
+    article = {"title": "Совершенно посторонний текст", "summary": "", "raw_text": "про котиков"}
+    assert pipeline.keyword_tag(article, tags)["tag_id"] == 99
+
+    # Совпадение по ключевому слову по-прежнему выигрывает у приёмника.
+    drilling = {"title": "Новое бурение на кусте", "summary": "", "raw_text": "бурение"}
+    assert pipeline.keyword_tag(drilling, tags)["tag_id"] == 2
+
+
+def test_keyword_tag_keeps_old_behaviour_without_unclassified_tag():
+    """Если приёмник не заведён, поведение прежнее — иначе упали бы старые установки."""
+    from oiltech_digest.processing import pipeline
+
+    tags = [
+        {"id": 1, "name": "Первый", "keywords_json": [], "keywords_en_json": []},
+        {"id": 2, "name": "Второй", "keywords_json": [], "keywords_en_json": []},
+    ]
+    article = {"title": "Ничего не совпадает", "summary": "", "raw_text": ""}
+    assert pipeline.keyword_tag(article, tags)["tag_id"] == 1
