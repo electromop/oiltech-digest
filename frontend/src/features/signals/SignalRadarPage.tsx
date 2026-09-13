@@ -54,6 +54,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [theme, setTheme] = useState("");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
 
@@ -166,6 +167,15 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     });
   }
 
+  function toggleFeedback(signalId: number) {
+    setFeedbackOpen((current) => {
+      const next = new Set(current);
+      if (next.has(signalId)) next.delete(signalId);
+      else next.add(signalId);
+      return next;
+    });
+  }
+
   function updateFeedbackDraft(signalId: number, patch: Partial<FeedbackDraft>) {
     setFeedbackDrafts((current) => ({
       ...current,
@@ -173,17 +183,21 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     }));
   }
 
+  const digestCount = visibleSignals.filter((signal) => signal.selected_for_digest).length;
+  const feedbackCount = visibleSignals.reduce((sum, signal) => sum + Number(signal.feedback_count || 0), 0);
+
   return (
     <section className="screenStack">
       <header className="screenHeader">
         <div>
           <div className="eyebrow">Signal Discovery</div>
           <h1>Радар сигналов</h1>
-          <p>Сигналы, найденные новым агентом: кластеры evidence, переносимость в нефтесервис и обратная связь для обучения поисковых углов.</p>
         </div>
-        <button type="button" className="primaryButton" disabled={busy} onClick={() => void reload()}>
-          Обновить
-        </button>
+        <div className="signalRadarHeaderStats" aria-label="Сводка радара">
+          <span><strong>{visibleSignals.length}</strong> сигналов</span>
+          <span><strong>{digestCount}</strong> в дайджесте</span>
+          <span><strong>{feedbackCount}</strong> ОС</span>
+        </div>
       </header>
 
       <section className="signalRadarToolbar">
@@ -209,15 +223,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           </select>
         </label>
         <button type="button" className="ghostButton" disabled={busy} onClick={() => void reload()}>
-          Применить
+          {busy ? "Обновляем" : "Обновить"}
         </button>
       </section>
-
-      <div className="signalRadarSummary">
-        <div><strong>{visibleSignals.length}</strong><span>сигналов</span></div>
-        <div><strong>{visibleSignals.filter((signal) => signal.selected_for_digest).length}</strong><span>в дайджесте</span></div>
-        <div><strong>{visibleSignals.reduce((sum, signal) => sum + Number(signal.feedback_count || 0), 0)}</strong><span>комментариев ОС</span></div>
-      </div>
 
       <section className="signalRadarList">
         {busy ? (
@@ -225,23 +233,29 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         ) : visibleSignals.length ? (
           visibleSignals.map((signal) => {
             const isExpanded = expanded.has(signal.id);
+            const isFeedbackOpen = feedbackOpen.has(signal.id);
             const savingThis = Boolean(saving[signal.id]);
             return (
               <article className="signalRadarCard" key={signal.id}>
                 <div className="signalRadarCardTop">
                   <div>
                     <div className="signalRadarMeta">
-                      <span>{signal.theme}</span>
+                      <span className="signalTheme">{signal.theme}</span>
                       <span>{MATURITY_LABELS[signal.maturity] || signal.maturity}</span>
-                      <span>score {Math.round(Number(signal.score || 0))}</span>
-                      <span>{signal.evidence_count} evidence</span>
+                      <span>{Math.round(Number(signal.score || 0))} баллов</span>
+                      <span>{signal.evidence_count} ссылок</span>
                     </div>
                     <h2>{signal.title_ru || signal.title}</h2>
                   </div>
                   <div className="signalRadarActions">
                     <button type="button" className="ghostButton compactButton" onClick={() => toggleExpanded(signal.id)}>
-                      {isExpanded ? "Свернуть" : "Evidence"}
+                      {isExpanded ? "Скрыть" : "Ссылки"}
                     </button>
+                    {isAdmin ? (
+                      <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
+                        ОС
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className={signal.selected_for_digest ? "dangerButton compactButton" : "primaryButton compactButton"}
@@ -253,15 +267,17 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   </div>
                 </div>
 
-                <p className="signalRadarSummaryText">{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
-                <div className="signalRadarColumns">
-                  <div>
-                    <span>Почему сейчас</span>
-                    <p>{signal.why_now || "Нет объяснения"}</p>
-                  </div>
-                  <div>
-                    <span>Переносимость</span>
-                    <p>{signal.transferability || "Нет оценки"}</p>
+                <div className="signalRadarBody">
+                  <p className="signalRadarSummaryText">{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
+                  <div className="signalRadarFacts">
+                    <div>
+                      <span>Почему сейчас</span>
+                      <p>{signal.why_now || "Нет объяснения"}</p>
+                    </div>
+                    <div>
+                      <span>Переносимость</span>
+                      <p>{signal.transferability || "Нет оценки"}</p>
+                    </div>
                   </div>
                 </div>
 
@@ -277,7 +293,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   </div>
                 ) : null}
 
-                {isAdmin ? (
+                {isAdmin && isFeedbackOpen ? (
                   <div className="signalFeedbackBox">
                     <div className="signalFeedbackGrid">
                       <label>
@@ -324,20 +340,27 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                       <textarea
                         value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedThesis}
                         onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
-                        placeholder="эталонная формулировка сути сигнала для будущего датасета"
+                        placeholder="эталонная формулировка сути сигнала"
                       />
                     </label>
                     <textarea
                       value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).comment}
                       onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
-                      placeholder="Дополнительная ОС: термины, поисковый угол, сильный источник, что запомнить..."
+                      placeholder="Дополнительная ОС: термины, поисковый угол, сильный источник..."
                     />
                     <div className="signalFeedbackActions">
-                      <span>{signal.feedback_count || 0} комментариев сохранено</span>
+                      <span>{signal.feedback_count || 0} ОС сохранено</span>
                       <button type="button" className="primaryButton compactButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
-                        Сохранить ОС
+                        Сохранить
                       </button>
                     </div>
+                  </div>
+                ) : isAdmin ? (
+                  <div className="signalFeedbackCollapsed">
+                    <span>{signal.feedback_count || 0} ОС сохранено</span>
+                    <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
+                      Добавить ОС
+                    </button>
                   </div>
                 ) : null}
               </article>

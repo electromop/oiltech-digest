@@ -5164,11 +5164,36 @@ button {
   background: var(--sem-bad-bg);
 }
 
+.signalRadarHeaderStats {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: var(--text-soft);
+  font-size: 0.84rem;
+}
+
+.signalRadarHeaderStats span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+.signalRadarHeaderStats strong {
+  color: #0f172a;
+  font-size: 1rem;
+}
+
 .signalRadarToolbar {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(210px, 280px) auto;
-  gap: 10px;
+  gap: 8px;
   align-items: end;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .signalRadarToolbar label {
@@ -5179,54 +5204,27 @@ button {
 
 .signalRadarToolbar span,
 .signalFeedbackBox span,
-.signalRadarColumns span {
+.signalFeedbackCollapsed span,
+.signalRadarFacts span {
   font-size: 0.72rem;
   font-weight: 800;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.signalRadarSummary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.signalRadarSummary > div {
-  min-width: 0;
-  padding: 12px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.88);
-}
-
-.signalRadarSummary strong {
-  display: block;
-  font-size: 1.35rem;
-  line-height: 1.1;
-  color: var(--brand);
-}
-
-.signalRadarSummary span {
-  display: block;
-  margin-top: 4px;
-  font-size: 0.78rem;
-  color: var(--text-soft);
+  letter-spacing: 0;
 }
 
 .signalRadarList {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .signalRadarCard {
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 8px;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .signalRadarCardTop {
@@ -5237,9 +5235,9 @@ button {
 }
 
 .signalRadarCard h2 {
-  margin: 7px 0 0;
-  font-size: 1.08rem;
-  line-height: 1.28;
+  margin: 6px 0 0;
+  font-size: 1rem;
+  line-height: 1.32;
   color: #0f172a;
 }
 
@@ -5254,58 +5252,69 @@ button {
 .signalRadarMeta span {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 3px 8px;
+  min-height: 22px;
+  padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(241, 245, 249, 0.85);
+  background: rgba(241, 245, 249, 0.8);
   color: var(--text-soft);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: 0.71rem;
+  font-weight: 700;
+}
+
+.signalRadarMeta .signalTheme {
+  color: #0f172a;
+  background: rgba(226, 232, 240, 0.88);
+}
+
+.signalRadarBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  gap: 14px;
+  align-items: start;
 }
 
 .signalRadarSummaryText {
   margin: 0;
   max-width: none;
   color: #1e293b;
-  font-size: 0.92rem;
-  line-height: 1.5;
+  font-size: 0.9rem;
+  line-height: 1.48;
 }
 
-.signalRadarColumns {
+.signalRadarFacts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
-.signalRadarColumns > div {
+.signalRadarFacts > div {
   min-width: 0;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgba(248, 250, 252, 0.95);
+  padding-left: 10px;
+  border-left: 2px solid rgba(148, 163, 184, 0.34);
 }
 
-.signalRadarColumns p {
-  margin: 5px 0 0;
+.signalRadarFacts p {
+  margin: 3px 0 0;
   max-width: none;
-  font-size: 0.84rem;
+  font-size: 0.82rem;
   line-height: 1.45;
-  color: #334155;
+  color: var(--text-soft);
 }
 
 .signalEvidenceList {
   display: grid;
-  gap: 8px;
+  gap: 6px;
+  padding-top: 4px;
 }
 
 .signalEvidenceRow {
   display: grid;
   gap: 3px;
-  padding: 10px 12px;
-  border: 1px solid rgba(203, 213, 225, 0.75);
+  padding: 8px 10px;
+  border: 1px solid rgba(203, 213, 225, 0.55);
   border-radius: 8px;
   color: inherit;
   text-decoration: none;
-  background: rgba(248, 250, 252, 0.9);
+  background: rgba(248, 250, 252, 0.7);
 }
 
 .signalEvidenceRow:hover {
@@ -5316,8 +5325,9 @@ button {
 .signalEvidenceRow span {
   font-size: 0.72rem;
   font-weight: 800;
-  color: var(--brand);
+  color: var(--text-muted);
   text-transform: uppercase;
+  letter-spacing: 0;
 }
 
 .signalEvidenceRow strong {
@@ -5334,13 +5344,16 @@ button {
 .signalFeedbackBox {
   display: grid;
   gap: 8px;
-  padding-top: 10px;
+  margin-top: 2px;
+  padding: 10px;
   border-top: 1px solid rgba(226, 232, 240, 0.9);
+  background: rgba(248, 250, 252, 0.7);
+  border-radius: 8px;
 }
 
 .signalFeedbackBox textarea {
   width: 100%;
-  min-height: 96px;
+  min-height: 78px;
   resize: vertical;
 }
 
@@ -5368,13 +5381,27 @@ button {
   flex-wrap: wrap;
 }
 
+.signalFeedbackCollapsed {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(226, 232, 240, 0.65);
+}
+
 @media (max-width: 900px) {
   .signalRadarToolbar,
   .signalRadarCardTop,
-  .signalRadarColumns,
+  .signalRadarBody,
   .signalFeedbackGrid,
-  .signalRadarSummary {
+  .signalRadarHeaderStats {
     grid-template-columns: 1fr;
+  }
+
+  .signalRadarHeaderStats,
+  .signalFeedbackCollapsed {
+    align-items: flex-start;
   }
 
   .documentUploadGrid {
