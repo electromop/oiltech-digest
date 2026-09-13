@@ -99,6 +99,25 @@ def _normalize_url(url: str) -> str:
         return (url or "").strip().lower()
 
 
+def url_key(url: str) -> str:
+    """Ключ тождества статьи по адресу: host+path, без схемы, www, query и слэша.
+
+    Замер прода 13.09: за 90 дней 940 лишних статей — это ОДИН И ТОТ ЖЕ адрес в разных
+    написаниях. Три причины поимённо: query-хвосты (`?from=main_lines_11` против
+    `?from=newsfeed` у РБК), схема (`http://` против `https://` у Ростеха) и хвостовой
+    слэш (Wood Mackenzie). Каждая такая копия проходила полный ИИ-конвейер заново и
+    занимала отдельную карточку в ленте — ровно то, на что жаловался заказчик
+    («все 4 новости об одном»).
+
+    ОТДЕЛЬНАЯ функция, а не вызов `_normalize_url`, по двум причинам: здесь дополнительно
+    снимается `www.` (тот же материал приходит и с ним, и без), и по этому ключу строится
+    уникальность в БД — менять `_normalize_url` нельзя, на нём висят уже посчитанные
+    `content_hash` всего корпуса.
+    """
+    base = _normalize_url(url)
+    return base[4:] if base.startswith("www.") else base
+
+
 def compute_content_hash(title: str, url: str) -> str:
     """sha256 от нормализованных title|url. Мягкий сигнал кросс-источниковых дублей."""
     basis = f"{_normalize_title(title)}|{_normalize_url(url)}"
