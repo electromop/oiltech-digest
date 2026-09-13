@@ -136,12 +136,14 @@ def save_card(document_id: int, card: dict[str, Any], model: str | None) -> None
     with _conn() as conn:
         conn.execute(
             """
-            INSERT INTO document_cards (document_id, doc_type, publisher, doc_date, language,
-                                        essence, summary_json, claims_json, model, generated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            INSERT INTO document_cards (document_id, doc_type, publisher, doc_date, date_source,
+                                        language, essence, summary_json, claims_json, model,
+                                        generated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
             ON CONFLICT (document_id) DO UPDATE SET
                 doc_type = EXCLUDED.doc_type, publisher = EXCLUDED.publisher,
-                doc_date = EXCLUDED.doc_date, language = EXCLUDED.language,
+                doc_date = EXCLUDED.doc_date, date_source = EXCLUDED.date_source,
+                language = EXCLUDED.language,
                 essence = EXCLUDED.essence, summary_json = EXCLUDED.summary_json,
                 claims_json = EXCLUDED.claims_json, model = EXCLUDED.model,
                 generated_at = now()
@@ -151,6 +153,7 @@ def save_card(document_id: int, card: dict[str, Any], model: str | None) -> None
                 card.get("doc_type"),
                 card.get("publisher"),
                 card.get("doc_date"),
+                card.get("date_source"),
                 card.get("language"),
                 card.get("essence"),
                 __import__("json").dumps(card.get("summary") or [], ensure_ascii=False),

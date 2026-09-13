@@ -26,10 +26,11 @@ type Props = {
   onError?: (error: unknown) => void;
 };
 
+// Формулировки заказчика (13.09): официальный тон для корпоративного портала ГПН.
 const SCALES: Array<{ key: "usefulness" | "translation" | "source_quality"; label: string; hint: string }> = [
-  { key: "usefulness", label: "Полезность сигнала", hint: "1 — мимо, 5 — берём в дайджест" },
-  { key: "translation", label: "Заголовок и перевод", hint: "1 — смысл искажён, 5 — править нечего" },
-  { key: "source_quality", label: "Качество источника", hint: "1 — выключать, 5 — держать в фокусе" },
+  { key: "usefulness", label: "Практическая ценность сигнала", hint: "1 — не применимо, 5 — берём в дайджест" },
+  { key: "translation", label: "Качество заголовка и перевода", hint: "1 — смысл искажён, 5 — править нечего" },
+  { key: "source_quality", label: "Надёжность источника", hint: "1 — исключить, 5 — держать в фокусе" },
 ];
 
 export function FeedbackPanel(props: Props) {

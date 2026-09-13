@@ -269,3 +269,64 @@ def test_document_without_empty_anchors_reports_zero(isolated_db, client):
         assert client.get(f"/api/documents/{document_id}").json()["document"]["empty_anchors"] == 0
     finally:
         api.app.dependency_overrides.clear()
+
+
+def test_filename_reaches_card_stage_for_date(isolated_db, client):
+    """Тикет #50: дата документа часто есть ТОЛЬКО в названии файла.
+
+    На проде 13.09 два документа из четырёх получили «дата: не указано», хотя месяц и
+    год стояли в имени («Атон_Нефтегазовый_сектор_август_2026.pdf»). Причина не в модели:
+    инструкция намеренно запрещает выводить дату из годов в тексте, а имя файла ей просто
+    НЕ передавалось — увидеть его было неоткуда.
+    """
+    admin_id = _make_user(isolated_db, "a7@example.com", "admin")
+    api.app.dependency_overrides[api.require_admin] = _as("admin", admin_id)
+    api.app.dependency_overrides[api.require_user] = _as("admin", admin_id)
+    try:
+        document_id = client.post(
+            "/api/documents",
+            files={"file": ("Атон_Нефтегазовый_сектор_август_2026.docx", _docx_bytes([
+                "Обзор рынка нефтесервиса",
+                "Добыча составила 1 234 тыс. тонн за квартал.",
+            ]))},
+            data={"attested": "true"},
+        ).json()["document"]["id"]
+
+        payload = documents_external.build_document_payload({"document_id": document_id, "offline": True})
+        assert payload.get("filename") == "Атон_Нефтегазовый_сектор_август_2026.docx", (
+            "имя файла обязано доходить до воркера — иначе дату брать неоткуда"
+        )
+    finally:
+        api.app.dependency_overrides.clear()
+
+
+def test_card_carries_date_source_through_to_api(isolated_db, client):
+    """Читатель обязан видеть, ОТКУДА дата: из текста или из названия файла.
+
+    Название мог поменять кто угодно, поэтому дата из него менее надёжна, и в карточке
+    это помечается. Проверяем весь путь: сохранение → чтение через API.
+    """
+    from oiltech_digest.db import documents_repo
+
+    admin_id = _make_user(isolated_db, "a8@example.com", "admin")
+    api.app.dependency_overrides[api.require_admin] = _as("admin", admin_id)
+    api.app.dependency_overrides[api.require_user] = _as("admin", admin_id)
+    try:
+        document_id = client.post(
+            "/api/documents",
+            files={"file": ("отчёт_март_2026.docx", _docx_bytes(["Текст документа про бурение."]))},
+            data={"attested": "true"},
+        ).json()["document"]["id"]
+
+        documents_repo.save_card(document_id, {
+            "doc_type": "обзор рынка", "publisher": "не указано",
+            "doc_date": "март 2026", "date_source": "имя файла",
+            "language": "русский", "essence": "Суть документа.",
+            "summary": [], "claims": [],
+        }, model="test")
+
+        card = client.get(f"/api/documents/{document_id}").json()["card"]
+        assert card["doc_date"] == "март 2026"
+        assert card["date_source"] == "имя файла", "пометка источника даты не дошла до интерфейса"
+    finally:
+        api.app.dependency_overrides.clear()

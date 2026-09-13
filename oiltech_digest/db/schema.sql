@@ -898,6 +898,7 @@ CREATE TABLE IF NOT EXISTS document_cards (
   doc_type        TEXT,      -- отчёт / презентация / статья / КП / иное
   publisher       TEXT,
   doc_date        TEXT,      -- как в документе, строкой: датой бывает «II квартал 2025»
+  date_source     TEXT,      -- документ / имя файла / нет — чему доверять (тикет #50)
   language        TEXT,
   essence         TEXT,      -- СУТЬ: что это за документ и зачем
   summary_json    JSONB,     -- СВОДКА: пункты по разделам
@@ -908,6 +909,11 @@ CREATE TABLE IF NOT EXISTS document_cards (
 
 -- Извлечённые числа. verified проставляет КОД, сверяя значение с текстом якоря,
 -- а не модель о себе. Неподтверждённый факт хранится и показывается с пометкой.
+-- Дата документа часто есть только в НАЗВАНИИ файла: на проде 13.09 два документа
+-- из четырёх получили «дата: не указано» при дате в имени. Пометка обязательна —
+-- название мог поменять кто угодно, и это менее надёжно, чем дата из текста.
+ALTER TABLE document_cards ADD COLUMN IF NOT EXISTS date_source TEXT;
+
 CREATE TABLE IF NOT EXISTS document_facts (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   document_id   BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

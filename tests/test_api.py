@@ -2744,3 +2744,25 @@ def test_feed_search_covers_translated_title_and_tag(monkeypatch):
     sql = captured["sql"]
     assert "c.title_ru" in sql, "поиск обязан покрывать переведённый заголовок"
     assert "t.name" in sql and "parent.name" in sql, "поиск обязан покрывать тег и родителя"
+
+
+def test_feedback_reasons_use_official_wording():
+    """Формулировки заказчика 13.09: «придать более официальный статус платформы».
+
+    Платформа выходит на корпоративный портал ГПН, разговорный тон там неуместен.
+    Закрепляем тестом, чтобы правка не отъехала при следующем редактировании словаря.
+    """
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "u@e.ru", "role": "user"}
+    try:
+        payload = TestClient(app).get("/api/feedback/reasons").json()
+    finally:
+        app.dependency_overrides.clear()
+
+    labels = {row["value"]: row["label"] for row in payload}
+    assert labels["off_topic"] == "Не соответствует тематике"
+    assert labels["incomplete_text"] == "Неполный материал"
+    assert labels["duplicate"] == "Повторный сигнал"
+    assert labels["bad_translation"] == "Некорректный перевод"
+    assert labels["bad_source"] == "Низкое качество источника"
+    assert labels["good"] == "Ценный сигнал"

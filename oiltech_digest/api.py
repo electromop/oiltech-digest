@@ -1530,13 +1530,16 @@ class FeedbackIn(BaseModel):
 def feedback_reasons(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
     """Словарь быстрых причин. Фронт не хранит свою копию — иначе списки разойдутся,
     как уже разошлись четыре независимых списка статусов статьи."""
+    # Формулировки заказчика (13.09): «пару моментов, чтобы придать более официальный
+    # статус платформы». Платформа выходит на корпоративный портал ГПН, и разговорный
+    # тон («Уже было», «Годный сигнал») там неуместен.
     labels = {
-        "off_topic": "Не наша тема",
-        "incomplete_text": "Обрывок текста",
-        "duplicate": "Уже было",
-        "bad_translation": "Плохой перевод",
-        "bad_source": "Дело в источнике",
-        "good": "Годный сигнал",
+        "off_topic": "Не соответствует тематике",
+        "incomplete_text": "Неполный материал",
+        "duplicate": "Повторный сигнал",
+        "bad_translation": "Некорректный перевод",
+        "bad_source": "Низкое качество источника",
+        "good": "Ценный сигнал",
         "other": "Другое",
     }
     return [{"value": value, "label": labels[value]} for value in repository.FEEDBACK_REASONS]
