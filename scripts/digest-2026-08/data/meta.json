@@ -1,0 +1,152 @@
+[
+  {
+    "n": "1",
+    "url": "https://jpt.spe.org/case-study-closing-the-loop-on-fracture-execution-with-real-time-subsurface-measurements",
+    "ok": true,
+    "title": "Case Study: Closing the Loop on Fracture Execution With Real-Time Subsurface Measurements",
+    "published_at": "2026-08-01T05:01:00+00:00",
+    "image_url": "https://assets.spe.org/dims4/default/89c8f68/2147483647/strip/true/crop/850x446+0+80/resize/1200x630!/quality/90/?url=http%3A%2F%2Fspe-brightspot.s3.us-east-2.amazonaws.com%2F9d%2Fee%2F4bcdabf141e8897d520e8646240c%2Fjpt-2026-08-csseismos-hero-bs.jpg",
+    "chars": 10948,
+    "error": null
+  },
+  {
+    "n": "2",
+    "url": "https://www.oilfieldtechnology.com/product-news/19082026/new-wellbore-cleaning-solution-trials-at-heart-of-pipetechs-performance/",
+    "ok": true,
+    "title": "New wellbore cleaning solution trials at heart of Pipetech's performance",
+    "published_at": "2026-08-19T12:30:00+00:00",
+    "image_url": "https://dovsgkvc993ul.cloudfront.net/media/articles/pop/304196.jpg",
+    "chars": 4333,
+    "error": null
+  },
+  {
+    "n": "3",
+    "url": "https://www.oilfieldtechnology.com/",
+    "ok": true,
+    "title": "The latest upstream news",
+    "published_at": "2026-08-24T11:30:00+00:00",
+    "image_url": "",
+    "chars": 1945,
+    "error": null
+  },
+  {
+    "n": "4",
+    "url": "https://ir.bypresidio.com/sec-filings/all-sec-filings/content/0001213900-26-090532/ea030229001ex99-1.htm",
+    "ok": true,
+    "title": "August 17, 2026 - INVESTOR PRESENTATION, DATED AUGUST 2026 - 8-K: Current report | Presidio Production Company (FTW)",
+    "published_at": null,
+    "image_url": "https://d1io3yog0oux5.cloudfront.net/_97f7a8ab05c3ac9ab46a3038bdb9fe45/presidio/db/3699/33432/social_image_resized.jpg",
+    "chars": 40297,
+    "error": null
+  },
+  {
+    "n": "5",
+    "url": "https://vertechs.com/news-detail/featured-in-oilfield-technology-vertechs-realologydr-enables-automated-drilling-fluid-performance-maintenance",
+    "ok": true,
+    "title": "Featured in Oilfield Technology: Vertechs REALologyDR Enables Automated Drilling Fluid Performance Maintenance",
+    "published_at": null,
+    "image_url": "",
+    "chars": 3334,
+    "error": null
+  },
+  {
+    "n": "6",
+    "url": "https://jpt.spe.org/ai-eyes-on-the-rig-computer-vision-boosts-oilfield-safety",
+    "ok": true,
+    "title": "AI Eyes on the Rig: Computer Vision Boosts Oilfield Safety",
+    "published_at": "2026-08-05T05:01:00+00:00",
+    "image_url": "https://assets.spe.org/dims4/default/a09735c/2147483647/strip/true/crop/1100x578+0+0/resize/1200x630!/quality/90/?url=http%3A%2F%2Fspe-brightspot.s3.us-east-2.amazonaws.com%2Fd2%2F03%2F81884a20486885cd5a860aecbec6%2Fcomputer-vision-hero.jpg",
+    "chars": 10104,
+    "error": null
+  },
+  {
+    "n": "7",
+    "url": "https://scientificrussia.ru/articles/ucenye-sozdali-umnye-kapsuly-kotorye-udesevlaut-dobycu-nefti-vtroe",
+    "ok": false,
+    "title": null,
+    "published_at": null,
+    "image_url": null,
+    "chars": 0,
+    "error": "fetch вернул пусто"
+  },
+  {
+    "n": "8",
+    "url": "https://www.eia.gov/todayinenergy/detail.php?id=67984",
+    "ok": true,
+    "title": "Longer wells boost Permian crude oil and natural gas production - U.S. Energy Information Administration (EIA)",
+    "published_at": null,
+    "image_url": "https://www.eia.gov/todayinenergy/images/2026.08.19/main.png?1787577750",
+    "chars": 2143,
+    "error": null
+  },
+  {
+    "n": "9",
+    "url": "https://www.interfax.ru/russia/1108038",
+    "ok": true,
+    "title": "Ведомства с недропользователями прорабатывают вопрос о льготах для газовых ТРИЗ",
+    "published_at": "2026-08-07T12:18:00+03:00",
+    "image_url": "https://www.interfax.ru/aspimg/1108038.jpg",
+    "chars": 2860,
+    "error": null
+  },
+  {
+    "n": "10",
+    "url": "https://www.slb.com/newsroom/updates/2026/2026-0804-slb-adnoc-rtoc",
+    "ok": true,
+    "title": "ADNOC Deploys SLB Technology Across its Rig Fleet Through AI-Enabled Operations Center",
+    "published_at": null,
+    "image_url": "",
+    "chars": 2653,
+    "error": null
+  },
+  {
+    "n": "11",
+    "url": "https://www.oilfieldtechnology.com/digital-oilfield/05082026/agr-and-thf-partner-to-advance-ai-enabled-well-engineering/amp/",
+    "ok": true,
+    "title": "AGR and THF partner to advance AI-enabled well engineering",
+    "published_at": "2026-08-05T09:15:00+00:00",
+    "image_url": "https://dovsgkvc993ul.cloudfront.net/media/articles/pop/303923.jpg",
+    "chars": 2277,
+    "error": null
+  },
+  {
+    "n": "12",
+    "url": "https://worldoil.com/news/2026/8/11/emerson-expands-industrial-edge-ai-capabilities-with-pacedge-3-0/",
+    "ok": true,
+    "title": "Emerson expands industrial edge AI capabilities with PACEdge 3.0",
+    "published_at": null,
+    "image_url": "https://www.worldoil.com/media/3wqbxfhl/emerson-paceedge-3-0.png",
+    "chars": 2034,
+    "error": null
+  },
+  {
+    "n": "13",
+    "url": "",
+    "ok": false,
+    "title": null,
+    "published_at": null,
+    "image_url": null,
+    "chars": 0,
+    "error": "нет ссылки в файле"
+  },
+  {
+    "n": "14",
+    "url": "https://www.oilfieldtechnology.com/special-reports/17082026/the-industrialisation-of-engineering-intelligence/",
+    "ok": true,
+    "title": "The industrialisation of engineering intelligence",
+    "published_at": "2026-08-17T10:15:00+00:00",
+    "image_url": "https://dovsgkvc993ul.cloudfront.net/media/articles/pop/304132.jpg",
+    "chars": 9452,
+    "error": null
+  },
+  {
+    "n": "15",
+    "url": "https://ifactoryapp.com/industries/oil-and-gas/ai-permit-to-work-compliance-monitoring-refineries",
+    "ok": true,
+    "title": "AI for Permit-to-Work Compliance Monitoring in Refineries",
+    "published_at": null,
+    "image_url": "https://ifactoryapp.com/industries/oil-and-gas/manage-post-2k26/uploads/ai-permit-to-work-compliance-monitoring-refineries.png",
+    "chars": 1201,
+    "error": null
+  }
+]

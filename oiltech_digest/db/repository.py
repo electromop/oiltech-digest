@@ -2988,17 +2988,38 @@ def _jsonable(value):
 # ---------------------------------------------------------------------------
 
 def insert_article(rec: dict) -> bool:
-    """Вставить статью. Дубликаты по url игнорируются (ON CONFLICT DO NOTHING).
-    Возвращает True, если строка реально вставлена."""
+    """Вставить статью. Дубликаты игнорируются. Возвращает True, если строка вставлена.
+
+    Тождество статьи — по НОРМАЛИЗОВАННОМУ адресу (`normalize.url_key`), а не по сырому
+    url. Замер прода 13.09: на сыром url за 90 дней накопилось 940 лишних статей, и
+    причины ровно три — query-хвосты (`?from=main_lines_11` против `?from=newsfeed` у
+    РБК), схема (`http://` против `https://` у Ростеха) и хвостовой слэш (Wood Mackenzie).
+    Каждая копия проходила полный ИИ-конвейер заново и занимала отдельную карточку в
+    ленте: заказчик 08.09 прислал скрин «все 4 новости об одном».
+
+    ДВА ON CONFLICT нужны оба: по `url` — исторический уникальный индекс, он никуда не
+    делся; по `url_key` — новый частичный (скрытые копии его не занимают). Пишем первым
+    попавшийся конфликт, поэтому проверку по ключу делаем явным запросом до вставки:
+    ON CONFLICT умеет целиться только в один индекс за раз.
+    """
+    url_key = normalize.url_key(rec.get("url") or "")
     rec = {**rec, "image_url": rec.get("image_url"),
-           "body_hash": normalize.compute_body_hash(rec.get("raw_text"))}
+           "body_hash": normalize.compute_body_hash(rec.get("raw_text")),
+           "url_key": url_key}
     with get_connection() as conn:
+        if url_key:
+            seen = conn.execute(
+                "SELECT 1 FROM articles WHERE url_key = %s AND NOT pending_deletion LIMIT 1",
+                (url_key,),
+            ).fetchone()
+            if seen is not None:
+                return False
         cur = conn.execute(
             """
-            INSERT INTO articles (source_id, title, url, published_at,
+            INSERT INTO articles (source_id, title, url, url_key, published_at,
                                   raw_text, text_truncated, language, content_hash, image_url,
                                   body_hash)
-            VALUES (%(source_id)s, %(title)s, %(url)s, %(published_at)s,
+            VALUES (%(source_id)s, %(title)s, %(url)s, %(url_key)s, %(published_at)s,
                     %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s,
                     %(content_hash)s, %(image_url)s, %(body_hash)s)
             ON CONFLICT (url) DO NOTHING

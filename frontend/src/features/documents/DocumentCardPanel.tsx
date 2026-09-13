@@ -31,7 +31,19 @@ export function DocumentCardPanel({ details }: Props) {
       <div className="documentPassport">
         <PassportItem label="Тип документа" value={toText(card?.doc_type ?? document.doc_type)} />
         <PassportItem label="Издатель" value={toText(card?.publisher ?? document.publisher)} />
-        <PassportItem label="Дата документа" value={toText(card?.doc_date)} />
+        <PassportItem
+          label="Дата документа"
+          // Источник даты показываем рядом со значением, а не отдельной строкой: без него
+          // «август 2026» из названия файла выглядит так же надёжно, как дата из текста.
+          value={
+            card?.doc_date
+              ? card.date_source === "имя файла"
+                ? `${card.doc_date} (из названия файла)`
+                : toText(card.doc_date)
+              : "—"
+          }
+          warn={card?.date_source === "имя файла"}
+        />
         <PassportItem label="Язык" value={toText(card?.language)} />
         <PassportItem label="Формат" value={toText(document.kind)} />
         <PassportItem label="Размер" value={formatSize(document.size_bytes)} />

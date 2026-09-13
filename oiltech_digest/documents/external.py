@@ -110,6 +110,10 @@ def build_document_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": "process_document",
         "document_id": document_id,
+        # Имя файла нужно стадии свёртки: дата документа часто есть только в названии
+        # («Атон_Нефтегазовый_сектор_август_2026.pdf»), а модель его не видела вовсе —
+        # на проде два документа из четырёх получили «дата: не указано» при дате в имени.
+        "filename": document.get("filename") or "",
         "anchor_unit": document.get("anchor_unit") or "блок",
         "chunks_total": len(chunks),
         "chunks": sent,
@@ -175,8 +179,14 @@ def process_document_payload(
     card: dict[str, Any] = {}
     if chunk_notes:
         try:
+            filename = str(payload.get("filename") or "").strip()
+            card_input = "\n".join(chunk_notes)[:60000]
+            if filename:
+                # Отдельной строкой и ПОСЛЕ текста: имя файла — запасной источник даты,
+                # а не часть содержания, и не должно влиять на суть и сводку.
+                card_input = f"{card_input}\n\nимя файла: {filename}"
             resp = client.complete_json(
-                prompts.DOC_CARD_INSTRUCTIONS, "\n".join(chunk_notes)[:60000],
+                prompts.DOC_CARD_INSTRUCTIONS, card_input,
                 prompts.DOC_CARD_SCHEMA, max_output_tokens=CARD_MAX_OUTPUT_TOKENS,
                 model=model, reasoning_effort=reasoning,
             )
@@ -187,6 +197,7 @@ def process_document_payload(
                 "doc_type": passport.get("doc_type"),
                 "publisher": passport.get("publisher"),
                 "doc_date": passport.get("date"),
+                "date_source": passport.get("date_source"),
                 "language": passport.get("language"),
                 "essence": data.get("essence"),
                 "summary": data.get("summary") or [],

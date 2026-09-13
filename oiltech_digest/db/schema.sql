@@ -103,6 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_articles_source_body_hash ON articles(source_id, 
 CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
 CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
 
+
 -- =========================================================================
 -- Карточки статей (рабочее представление в «Все статьи») — будущее
 -- =========================================================================
@@ -749,6 +750,45 @@ ALTER TABLE articles ADD COLUMN IF NOT EXISTS pending_deletion BOOLEAN NOT NULL 
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS deletion_reason TEXT;
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS marked_for_deletion_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_articles_pending_deletion ON articles(pending_deletion) WHERE pending_deletion;
+
+-- =========================================================================
+-- url_key: тождество статьи по адресу (13.09)
+-- =========================================================================
+-- Уникальность держалась на СЫРОМ url, и один материал заводился по нескольку раз:
+-- замер прода 13.09 — за 90 дней 940 лишних статей, три причины поимённо:
+--   ?from=main_lines_11 против ?from=newsfeed (РБК)   — query-хвосты
+--   http:// против https://            (Ростех)        — схема
+--   /topics/x против /topics/x/        (Wood Mackenzie)— хвостовой слэш
+-- Каждая копия проходила полный ИИ-конвейер заново и занимала отдельную карточку —
+-- ровно то, на что жаловался заказчик 08.09 («все 4 новости об одном»).
+-- Ключ = host+path без схемы, www, query и слэша (normalize.url_key).
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS url_key TEXT;
+
+-- Бэкфилл: считаем тем же правилом, что и Python-функция.
+UPDATE articles
+SET url_key = rtrim(regexp_replace(regexp_replace(lower(url), '^https?://(www\.)?', ''), '[?#].*$', ''), '/')
+WHERE url_key IS NULL;
+
+-- Схлопывание УЖЕ накопленных дублей: оставляем самую полную копию (длиннее тело,
+-- при равенстве — раньше пришедшую), остальные прячем через существующий мягкий
+-- механизм pending_deletion. НЕ удаляем: вместе со статьёй ушла бы история ИИ-затрат.
+UPDATE articles a
+SET pending_deletion = TRUE
+FROM (
+  SELECT id FROM (
+    SELECT id, row_number() OVER (
+             PARTITION BY url_key
+             ORDER BY length(COALESCE(raw_text,'')) DESC, id
+           ) AS rn
+    FROM articles WHERE url_key IS NOT NULL AND NOT pending_deletion
+  ) t WHERE rn > 1
+) dup
+WHERE a.id = dup.id AND NOT a.pending_deletion;
+
+-- Уникальность ЧАСТИЧНАЯ: скрытые копии не мешают, а новая вставка с тем же ключом
+-- отбивается. ON CONFLICT в insert_article целится ровно в этот индекс.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_url_key
+  ON articles(url_key) WHERE url_key IS NOT NULL AND NOT pending_deletion;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS queue_name TEXT NOT NULL DEFAULT 'default';
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS user_id BIGINT;
 ALTER TABLE background_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
@@ -858,6 +898,7 @@ CREATE TABLE IF NOT EXISTS document_cards (
   doc_type        TEXT,      -- отчёт / презентация / статья / КП / иное
   publisher       TEXT,
   doc_date        TEXT,      -- как в документе, строкой: датой бывает «II квартал 2025»
+  date_source     TEXT,      -- документ / имя файла / нет — чему доверять (тикет #50)
   language        TEXT,
   essence         TEXT,      -- СУТЬ: что это за документ и зачем
   summary_json    JSONB,     -- СВОДКА: пункты по разделам
@@ -868,6 +909,11 @@ CREATE TABLE IF NOT EXISTS document_cards (
 
 -- Извлечённые числа. verified проставляет КОД, сверяя значение с текстом якоря,
 -- а не модель о себе. Неподтверждённый факт хранится и показывается с пометкой.
+-- Дата документа часто есть только в НАЗВАНИИ файла: на проде 13.09 два документа
+-- из четырёх получили «дата: не указано» при дате в имени. Пометка обязательна —
+-- название мог поменять кто угодно, и это менее надёжно, чем дата из текста.
+ALTER TABLE document_cards ADD COLUMN IF NOT EXISTS date_source TEXT;
+
 CREATE TABLE IF NOT EXISTS document_facts (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   document_id   BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

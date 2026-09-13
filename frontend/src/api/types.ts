@@ -1023,6 +1023,9 @@ export type DocumentCard = {
   doc_type: string | null;
   publisher: string | null;
   doc_date: string | null;
+  // Откуда взята дата: «документ» / «имя файла» / «нет». Название файла мог поменять
+  // кто угодно, поэтому в карточке это помечается (тикет #50).
+  date_source?: string | null;
   language: string | null;
   essence: string | null;
   summary_json: unknown;

@@ -1010,3 +1010,44 @@ def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
     assert float(weight) == 35
     assert "ручная правка" in kw, "сид затёр ручные ключевые слова"
     assert "из сида" in kw, "сид не добавил своё"
+
+
+def test_insert_article_dedups_url_variants(isolated_db):
+    """Один и тот же материал заводился по нескольку раз: уникальность держалась на СЫРОМ url.
+
+    Замер прода 13.09: за 90 дней 940 лишних статей, причины ровно три —
+    query-хвосты (?from=main_lines_11 против ?from=newsfeed у РБК), схема (http против
+    https у Ростеха) и хвостовой слэш (Wood Mackenzie). Каждая копия жгла полный
+    ИИ-конвейер заново и занимала отдельную карточку — заказчик 08.09 прислал скрин
+    «все 4 новости об одном».
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('РБК', 'Media', 'https://rbc.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    def add(url: str) -> bool:
+        return repository.insert_article({
+            "source_id": source_id, "title": "Одна и та же новость", "url": url,
+            "published_at": None, "raw_text": "Текст статьи." * 30,
+            "text_truncated": False, "language": "ru",
+            "content_hash": f"h-{url}", "image_url": None,
+        })
+
+    assert add("https://www.rbc.example/news/123?from=main_lines_11") is True
+    # Те же три варианта, что реально встретились на проде.
+    assert add("https://www.rbc.example/news/123?from=newsfeed") is False, "query-хвост"
+    assert add("http://rbc.example/news/123") is False, "другая схема и без www"
+    assert add("https://www.rbc.example/news/123/") is False, "хвостовой слэш"
+    # Другая статья того же источника обязана пройти.
+    assert add("https://www.rbc.example/news/999") is True
+
+    with connection.get_connection() as conn:
+        total = conn.execute(
+            "SELECT count(*) FROM articles WHERE source_id = %s", (source_id,)
+        ).fetchone()[0]
+    assert total == 2, f"должно остаться 2 статьи, а не {total}"
