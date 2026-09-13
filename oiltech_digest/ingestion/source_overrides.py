@@ -41,6 +41,57 @@ logger = logging.getLogger(__name__)
 #     enqueue-external-scrape). Каптча/hard-WAF (Cloudflare/Akamai) сюда НЕ помечаем —
 #     они 403 и из NL (нужен challenge-solver, отдельный проект).
 SOURCE_OVERRIDES: dict[str, dict] = {
+    # --- JPT по разделам (13.09) ---------------------------------------------
+    # Издание читалось ОДНОЙ страницей /latest-news — 14 карточек, ~5 статей в неделю.
+    # Замер 13.09: у JPT 40+ тематических разделов, 11 из них дают 99 уникальных статей,
+    # и 66 из них у нас НЕ БЫЛО. Заказчик 24.08: «обратите внимание на источник JPT,
+    # для нефтянки это маст хэв, номер 1 в мире, а оттуда мало что подтягивается».
+    # Первый прогон восьми разделов принёс 23 статьи — ровно технологические
+    # («Autonomous Robot for Gas Detection», «Digital Twin of Completions Operations»,
+    # «Quantum Computing Use Cases for the Oil and Gas Industry»).
+    # Сами строки источников заводит scripts/add_jpt_sections.sql — реестр их только
+    # настраивает: apply_overrides UPDATE'ит существующие, а не создаёт.
+    "JPT — R&D и инновации": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/r-d-innovation",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+    "JPT — Роботизация": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/robotics-unmanned-systems",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+    "JPT — Бурение": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/drilling",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+    "JPT — Заканчивание": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/completions",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+    "JPT — Внутрискважинные работы": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/well-intervention",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+    "JPT — Инспекция и ТОиР": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/inspection-maintenance",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+    "JPT — Промышленная безопасность": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/safety",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+    "JPT — Водоподготовка": {"source_type": "Journal", "parse_strategy": "playwright",
+        "listing_url": "https://jpt.spe.org/topic/water-management",
+        "listing_selector": ".PromoB, .PromoA",
+        "article_link_selector": ".PromoB-title a, .PromoA-title a",
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+
     # Проверено на проде:
     # Ревизия 17.07: без listing_url скребли главную и замолчали с 01.07. Явный newsroom
     # подтверждён рендером: «Shell to sell Sprng Energy group...» 13 Jul 2026.
