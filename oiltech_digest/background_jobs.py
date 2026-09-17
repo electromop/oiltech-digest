@@ -268,10 +268,40 @@ def job_download_path(job: dict[str, Any]) -> Path | None:
     return Path(path) if path else None
 
 
+def _run_reprint_review(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Судья перепечаток. Регистрируется и здесь, а не только в external_worker:
+    задачу может исполнить как внешний воркер, так и локальный путь, и без этой
+    записи она отвечает «Unsupported job kind» и висит в очереди."""
+    from oiltech_digest.processing import external_ai
+
+    repository.update_background_job_progress(job_id, 20)
+    result = external_ai.process_reprint_review_payload(
+        external_ai.build_reprint_review_payload(payload)
+    )
+    applied = external_ai.apply_reprint_review_result(result, job_id=job_id)
+    repository.update_background_job_progress(job_id, 95)
+    return {**result, "applied": applied}
+
+
+def _run_refetch_text(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Дозаполнение тела статей-обрывков — та же причина регистрации."""
+    from oiltech_digest.ingestion import external_fetch
+
+    repository.update_background_job_progress(job_id, 20)
+    result = external_fetch.process_refetch_text_payload(
+        external_fetch.build_refetch_text_payload(payload)
+    )
+    applied = external_fetch.apply_refetch_text_result(result)
+    repository.update_background_job_progress(job_id, 95)
+    return {**result, "applied": applied}
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "digest_export": _run_digest_export,
     "process_articles": _run_process_articles,
     "parse_source_once": _run_parse_source_once,
     "scrape_source": _run_scrape_source,
     "diagnose_source": _run_diagnose_source,
+    "reprint_review": _run_reprint_review,
+    "refetch_text": _run_refetch_text,
 }
