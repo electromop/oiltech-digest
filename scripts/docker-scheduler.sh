@@ -50,6 +50,14 @@ FULLTEXT_RETRY_TOO_SHORT="${FULLTEXT_RETRY_TOO_SHORT:-0}"
 # их в external-fetch/external-playwright; команда сама no-op при выключенном контуре.
 FETCH_EXTERNAL_ENABLED="${FETCH_EXTERNAL_ENABLED:-0}"
 EXTERNAL_REFETCH_LIMIT="${EXTERNAL_REFETCH_LIMIT:-100}"
+# Перепечатки (№21): одна новость, разошедшаяся по изданиям. Правило сужает корпус
+# до десятков пар, решает модель, копия помечается (не удаляется) и уходит из ленты.
+# Окно намеренно шире периода запуска: уже помеченные пары правило не выдаёт
+# повторно, поэтому перекрытие почти ничего не стоит, а пропуск дубля стоит того,
+# что заказчик снова видит четыре карточки одной новости.
+REPRINTS_EVERY_CYCLES="${REPRINTS_EVERY_CYCLES:-24}"
+REPRINTS_DAYS="${REPRINTS_DAYS:-7}"
+REPRINTS_LIMIT="${REPRINTS_LIMIT:-200}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -120,6 +128,18 @@ while true; do
     # берёт (403 с РФ-адреса, попытка одна навсегда). Тело добирает воркер.
     run_step "enqueue-external-refetch" python -m oiltech_digest.cli enqueue-external-refetch \
       --limit "$EXTERNAL_REFETCH_LIMIT"
+  fi
+
+  # Не на нулевом цикле: иначе прогон повторялся бы при каждом перезапуске
+  # планировщика, а в день выката их бывает несколько.
+  if [ "$REPRINTS_EVERY_CYCLES" -gt 0 ] && [ "$cycle" -gt 0 ] \
+     && [ $((cycle % REPRINTS_EVERY_CYCLES)) -eq 0 ]; then
+    if [ "$AI_OFFLINE" = "1" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+      run_step "find-reprints" python -m oiltech_digest.cli find-reprints \
+        --days "$REPRINTS_DAYS" --limit "$REPRINTS_LIMIT" --apply
+    else
+      log "SKIP find-reprints: OPENAI_API_KEY is empty"
+    fi
   fi
 
   run_step "stats" python -m oiltech_digest.cli stats
