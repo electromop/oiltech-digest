@@ -12,9 +12,6 @@ import { JobsPage } from "../features/jobs/JobsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
-import { SignalRadarPage } from "../features/signals/SignalRadarPage";
-import { SourceAgentPage } from "../features/sources/SourceAgentPage";
-import { SourceCandidatesPage } from "../features/sources/SourceCandidatesPage";
 import { SourcesPage } from "../features/sources/SourcesPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { UsersPage } from "../features/users/UsersPage";
@@ -29,14 +26,14 @@ const TechnologiesPreview = lazy(() =>
 );
 
 type ScreenId =
-  | "articles" | "signal-radar" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "articles" | "digest" | "documents" | "sources" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
   | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 // Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
 // случайно открыть обычный пользователь и принять за настоящую аналитику.
 const ADMIN_SCREENS = new Set<ScreenId>([
-  "sources", "source-candidates", "source-agent", "scoring", "tags", "users", "jobs", "maintenance",
+  "sources", "scoring", "tags", "users", "jobs", "maintenance",
   // Приём файлов — admin-only и на сервере (POST /api/documents требует require_admin):
   // фронтовый гейт без серверного был бы дырой, а серверный без фронтового — кнопкой,
   // которая у обычного пользователя всегда отвечает 403.
@@ -45,8 +42,7 @@ const ADMIN_SCREENS = new Set<ScreenId>([
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
   // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
   "statistics",
-  "analytics-preview", "tech-preview",
-]);
+  "analytics-preview", "tech-preview"]);
 
 type ScreenDef = {
   id: ScreenId;
@@ -80,14 +76,6 @@ const screens: ScreenDef[] = [
     status: "Экран активен",
   },
   {
-    id: "signal-radar",
-    label: "Радар сигналов",
-    eyebrow: "Signal Discovery",
-    title: "Радар сигналов",
-    description: "Сигналы, найденные новым поисковым агентом: evidence, переносимость, развернутая ОС и выбор в дайджест.",
-    status: "Экран активен",
-  },
-  {
     id: "documents",
     label: "Материалы",
     eyebrow: "Documents",
@@ -101,14 +89,6 @@ const screens: ScreenDef[] = [
     eyebrow: "Source Control",
     title: "Каталог источников",
     description: "Упрощённые карточки, фильтры, диагностика и настройки парсинга теперь собраны в отдельном экране.",
-    status: "Экран активен",
-  },
-  {
-    id: "source-agent",
-    label: "Агент источников",
-    eyebrow: "Source Discovery",
-    title: "Агент поиска источников",
-    description: "Поиск новых источников, проверка кандидатов, память агента и рекомендации по действиям доступны только администраторам.",
     status: "Экран активен",
   },
   {
@@ -158,8 +138,7 @@ const screens: ScreenDef[] = [
     title: "Аналитика для БРБ",
     description: "Статичный прототип раздела аналитики: демонстрационные данные, без логики.",
     status: "Прототип",
-  },
-];
+  }];
 
 const appHighlights = [
   "Общий auth gate и session flow",
@@ -167,13 +146,12 @@ const appHighlights = [
   "Источники и диагностика",
   "Месячный дайджест и экспорт",
   "Скоринг и дерево тегов",
-  "Каталог сигналов",
-];
+  "Каталог сигналов"];
 
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["articles", "signal-radar", "digest", "documents"],
+    screens: ["articles", "digest", "documents"],
   },
   {
     label: "Настройки",
@@ -181,7 +159,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Администрирование",
-    screens: ["users", "statistics", "source-agent"],
+    screens: ["users", "statistics"],
   },
   // Прототипы будущих разделов. Оба экрана в ADMIN_SCREENS, поэтому у не-админа фильтр ниже
   // (isAdmin || !ADMIN_SCREENS.has(sid)) вычистит их, visibleScreens станет пустым и вся группа
@@ -189,12 +167,11 @@ const navGroups: NavGroup[] = [
   {
     label: "Прототипы",
     screens: ["tech-preview", "analytics-preview"],
-  },
-];
+  }];
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent", "signal-radar"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
@@ -277,14 +254,6 @@ export function App() {
     currentScreen = <SourcesPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
-  if (activeScreen === "source-candidates") {
-    currentScreen = <SourceCandidatesPage onUnauthorized={resetSession} showToast={showToast} />;
-  }
-
-  if (activeScreen === "source-agent") {
-    currentScreen = <SourceAgentPage onUnauthorized={resetSession} showToast={showToast} />;
-  }
-
   if (activeScreen === "documents") {
     currentScreen = <DocumentsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
@@ -300,10 +269,6 @@ export function App() {
         onStatsReloaded={setStats}
       />
     );
-  }
-
-  if (activeScreen === "signal-radar") {
-    currentScreen = <SignalRadarPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
   }
 
   if (activeScreen === "digest") {

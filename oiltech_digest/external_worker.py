@@ -162,14 +162,6 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
             )
             client.progress(job, 90)
             client.complete(job, result)
-        elif job.get("kind") == "source_candidate_evaluate":
-            client.progress(job, 20)
-            result = external_ai.process_source_candidate_payload(
-                job.get("payload") or {},
-                heartbeat=lambda: _safe_heartbeat(client, job),
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
         elif job.get("kind") == "process_document":
             client.progress(job, 20)
             result = documents_external.process_document_payload(
