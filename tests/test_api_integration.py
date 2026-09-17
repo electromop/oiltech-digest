@@ -1457,6 +1457,87 @@ def test_feed_and_digest_skip_reprints(isolated_db):
     assert kept == 1, "главная копия обязана остаться"
 
 
+def test_reprint_rejected_when_primary_is_invisible(isolated_db):
+    """Главной копией не может стать статья, которой в ленте нет.
+
+    Замер на проде 17.09 (71 пара, признанная судьёй дублем): в 6 парах главной
+    становилась невидимая статья — архивный источник или отбитая гейтом. Пометка
+    тогда не схлопывает дубль, а убирает новость из ленты целиком: видимую копию
+    прячем, а взамен не показывается ничего. Это ровно та жалоба заказчика
+    («материалы исчезают»), ради которой перепечатки вообще помечаются, а не
+    удаляются.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        live = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Живой', 'Media', 'https://live.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        archived = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, archived_at) "
+            "VALUES ('Архивный', 'Media', 'https://arch.example', TRUE, 'rss', now()) RETURNING id"
+        ).fetchone()[0]
+        visible_id = conn.execute(
+            "INSERT INTO articles (source_id, title, url, raw_text, language) "
+            "VALUES (%s, 'Видимая копия', 'https://live.example/x', 'короткий', 'ru') RETURNING id",
+            (live,),
+        ).fetchone()[0]
+        hidden_id = conn.execute(
+            "INSERT INTO articles (source_id, title, url, raw_text, language) "
+            "VALUES (%s, 'Копия из архива', 'https://arch.example/x', 'текст длиннее', 'ru') RETURNING id",
+            (archived,),
+        ).fetchone()[0]
+        conn.commit()
+
+    with pytest.raises(ValueError, match="не видна в ленте"):
+        repository.mark_article_reprint(
+            article_id=visible_id, primary_id=hidden_id, similarity=0.7,
+            reason="одно событие", decided_by="test",
+        )
+
+    with connection.get_connection() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM article_reprints WHERE article_id = %s", (visible_id,)
+        ).fetchone()[0] == 0, "видимая копия обязана остаться в ленте"
+
+
+def test_reprint_candidates_skip_invisible_articles(isolated_db):
+    """Правило не должно предлагать судье статьи, которых никто не видит.
+
+    Там же, в замере 17.09: 39 пар из 71 состояли ИЗ ДВУХ невидимых статей —
+    модель звали и платили за неё впустую, схлопывать было нечего.
+    """
+    from oiltech_digest.db import repository
+
+    title_a = "Газпром нефть испытала российские буровые установки на Ямале"
+    title_b = "Газпром нефть испытала российские буровые установки в Арктике"
+    with connection.get_connection() as conn:
+        live = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Живой2', 'Media', 'https://live2.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        archived = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, archived_at) "
+            "VALUES ('Архивный2', 'Media', 'https://arch2.example', TRUE, 'rss', now()) RETURNING id"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO articles (source_id, title, url, raw_text, language, published_at) "
+            "VALUES (%s, %s, 'https://live2.example/x', 'текст', 'ru', now())",
+            (live, title_a),
+        )
+        conn.execute(
+            "INSERT INTO articles (source_id, title, url, raw_text, language, published_at) "
+            "VALUES (%s, %s, 'https://arch2.example/x', 'текст', 'ru', now())",
+            (archived, title_b),
+        )
+        conn.commit()
+
+    pairs = repository.reprint_candidates(days=7, min_overlap=0.3, limit=50)
+    titles = {str(p["a_title"]) for p in pairs} | {str(p["b_title"]) for p in pairs}
+    assert title_b not in titles, "статья из архивного источника не должна попадать в кандидаты"
+
+
 def test_marking_article_as_its_own_reprint_is_rejected(isolated_db):
     from oiltech_digest.db import repository
 

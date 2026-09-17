@@ -3605,9 +3605,20 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
                            WHERE length(w) >= 5) AS toks
               FROM articles a
               LEFT JOIN article_reprints r ON r.article_id = a.id
+              JOIN sources s ON s.id = a.source_id
+              LEFT JOIN article_cards c ON c.article_id = a.id
               WHERE a.created_at > now() - make_interval(days => %(days)s)
                 AND length(a.title) > 25
                 AND r.article_id IS NULL
+                -- Только то, что реально видно в ленте. Замер 17.09 на 71 паре,
+                -- признанной дублем: 39 пар состояли ИЗ ДВУХ невидимых статей
+                -- (модель звали впустую), а в 6 главной копией становилась
+                -- невидимая — то есть пометка не схлопывала дубль, а убирала
+                -- новость из ленты совсем. Полезными были 21 пара из 71.
+                -- Условия те же, что в ленте (api.articles_feed) и в выпуске.
+                AND s.archived_at IS NULL
+                AND NOT a.pending_deletion
+                AND c.relevant IS NOT FALSE
             )
             SELECT x.id AS a_id, y.id AS b_id,
                    x.title AS a_title, y.title AS b_title,
@@ -3667,6 +3678,29 @@ def resolve_reprint_root(conn, article_id: int, *, max_hops: int = 8) -> int:
     return current
 
 
+def article_visible_in_feed(conn, article_id: int) -> bool:
+    """Видна ли статья в ленте — теми же условиями, что и сама лента.
+
+    Заведено не ради стройности: перепечатки решает модель на внешнем воркере, а
+    её ответ это недоверенный вход. Пометка прячет копию, и если главной окажется
+    статья, которой в ленте нет (архивный источник, помечена на удаление, отбита
+    гейтом), то новость исчезнет целиком вместо схлопывания дубля.
+    """
+    row = conn.execute(
+        """
+        SELECT 1 FROM articles a
+        JOIN sources s ON s.id = a.source_id
+        LEFT JOIN article_cards c ON c.article_id = a.id
+        WHERE a.id = %s
+          AND s.archived_at IS NULL
+          AND NOT a.pending_deletion
+          AND c.relevant IS NOT FALSE
+        """,
+        (int(article_id),),
+    ).fetchone()
+    return row is not None
+
+
 def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float | None,
                          reason: str | None, decided_by: str = "ai",
                          model: str | None = None) -> None:
@@ -3679,6 +3713,11 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
         primary_id = resolve_reprint_root(conn, int(primary_id))
         if int(article_id) == int(primary_id):
             raise ValueError("статья уже является корнем своей группы перепечаток")
+        # Прятать копию можно только в пользу той, которую читатель увидит.
+        if not article_visible_in_feed(conn, primary_id):
+            raise ValueError(
+                f"главная копия {primary_id} не видна в ленте — пометка убрала бы новость целиком"
+            )
         conn.execute(
             """
             INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)

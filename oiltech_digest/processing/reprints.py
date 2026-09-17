@@ -76,7 +76,7 @@ def judge_pair(left: dict, right: dict, client) -> AIResponse:
 
 def review_candidates(candidates: list[dict], client, *, dry_run: bool = True) -> dict[str, Any]:
     """Прогнать кандидатов через судью и, если не сухой прогон, записать решения."""
-    stats = {"checked": 0, "reprints": 0, "distinct": 0, "errors": 0}
+    stats = {"checked": 0, "reprints": 0, "distinct": 0, "errors": 0, "skipped": 0}
     decisions: list[dict[str, Any]] = []
     for pair in candidates:
         left = repository.get_article(int(pair["a_id"]))
@@ -106,11 +106,18 @@ def review_candidates(candidates: list[dict], client, *, dry_run: bool = True) -
             "duplicate_id": duplicate_id, "reason": reason,
         })
         if not dry_run:
-            repository.mark_article_reprint(
-                article_id=duplicate_id, primary_id=primary_id,
-                similarity=pair.get("overlap"), reason=reason,
-                decided_by="ai", model=response.model,
-            )
+            try:
+                repository.mark_article_reprint(
+                    article_id=duplicate_id, primary_id=primary_id,
+                    similarity=pair.get("overlap"), reason=reason,
+                    decided_by="ai", model=response.model,
+                )
+            except ValueError as exc:
+                # Инварианты пометки отбивают одну пару, а не весь прогон.
+                logger.warning("reprint_mark_skipped a=%s b=%s: %s",
+                               pair["a_id"], pair["b_id"], exc)
+                stats["skipped"] += 1
+                stats["reprints"] -= 1
     return {"stats": stats, "decisions": decisions, "dry_run": dry_run}
 
 

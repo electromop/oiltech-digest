@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any, Callable
 
 from oiltech_digest.db import repository
@@ -18,6 +19,8 @@ from oiltech_digest.processing.pipeline import (
     tag_article,
     title_ru_for_article,
 )
+
+logger = logging.getLogger(__name__)
 
 RECHECK_BATCH_DEFAULT = 100
 TRANSLATE_BATCH_DEFAULT = 100
@@ -534,6 +537,7 @@ def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = 
         return {"applied": 0, "dry_run": True}
 
     applied = 0
+    skipped = 0
     for verdict in result.get("verdicts") or []:
         if verdict.get("error") or not verdict.get("same_event"):
             continue
@@ -550,10 +554,17 @@ def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = 
             b_id, int(verdict.get("b_len") or 0),
         )
         duplicate = b_id if primary == a_id else a_id
-        repository.mark_article_reprint(
-            article_id=duplicate, primary_id=primary,
-            similarity=verdict.get("overlap"), reason=verdict.get("reason"),
-            decided_by="ai", model=verdict.get("model"),
-        )
+        try:
+            repository.mark_article_reprint(
+                article_id=duplicate, primary_id=primary,
+                similarity=verdict.get("overlap"), reason=verdict.get("reason"),
+                decided_by="ai", model=verdict.get("model"),
+            )
+        except ValueError as exc:
+            # Инварианты пометки (сам себе перепечатка, невидимая главная копия)
+            # отбивают одну пару, а не всю пачку: остальные вердикты годны.
+            logger.warning("reprint_mark_skipped a=%s b=%s: %s", a_id, b_id, exc)
+            skipped += 1
+            continue
         applied += 1
-    return {"applied": applied}
+    return {"applied": applied, "skipped": skipped}
