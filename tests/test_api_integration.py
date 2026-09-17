@@ -1030,12 +1030,18 @@ def test_insert_article_dedups_url_variants(isolated_db):
         ).fetchone()[0]
         conn.commit()
 
-    def add(url: str) -> bool:
+    def add(url: str, text: str = "Текст статьи." * 30) -> bool:
+
         return repository.insert_article({
+
             "source_id": source_id, "title": "Одна и та же новость", "url": url,
-            "published_at": None, "raw_text": "Текст статьи." * 30,
+
+            "published_at": None, "raw_text": text,
+
             "text_truncated": False, "language": "ru",
+
             "content_hash": f"h-{url}", "image_url": None,
+
         })
 
     assert add("https://www.rbc.example/news/123?from=main_lines_11") is True
@@ -1043,8 +1049,14 @@ def test_insert_article_dedups_url_variants(isolated_db):
     assert add("https://www.rbc.example/news/123?from=newsfeed") is False, "query-хвост"
     assert add("http://rbc.example/news/123") is False, "другая схема и без www"
     assert add("https://www.rbc.example/news/123/") is False, "хвостовой слэш"
-    # Другая статья того же источника обязана пройти.
-    assert add("https://www.rbc.example/news/999") is True
+    # Другая статья того же источника обязана пройти — со СВОИМ телом: одинаковый
+    # текст у разных адресов одного источника отбивает отдельная защита ниже.
+    assert add("https://www.rbc.example/news/999", "Совсем другой текст. " * 30) is True
+
+    # Третий рубеж: тело уже есть у другой статьи этого источника. Так на проде
+    # набралось 830 «статей» — страницы навигации сайта, на которые сервер отдаёт
+    # одну и ту же оболочку (у Новатэка 82 из 86).
+    assert add("https://www.rbc.example/about/contacts", "Совсем другой текст. " * 30) is False, "повтор тела"
 
     with connection.get_connection() as conn:
         total = conn.execute(
