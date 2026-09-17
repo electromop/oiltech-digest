@@ -3154,6 +3154,12 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             WHERE a.url IS NOT NULL
+              -- Источники зарубежного контура пропускаем: они там именно потому, что
+              -- с РФ-адреса закрыты, и локальная дозагрузка ловит на них 403
+              -- гарантированно. Попытка ОДНА и навсегда — статья получила бы
+              -- full_text_status='failed' и больше никогда не переспрашивалась, даже
+              -- когда тело уже добрал зарубежный воркер (external_fetch).
+              AND COALESCE(s.network_region, 'auto') <> 'external'
               {status_filter}
               AND (
                 COALESCE(a.text_truncated, FALSE) = TRUE

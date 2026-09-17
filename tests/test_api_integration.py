@@ -1335,3 +1335,34 @@ def test_system_tag_survives_save_and_delete(isolated_db):
             ).fetchone()[0] is True
     finally:
         app.dependency_overrides.clear()
+
+
+def test_full_text_refetch_skips_external_sources(isolated_db):
+    """Источники зарубежного контура пропускаются локальной дозагрузкой.
+
+    Попытка одна и навсегда: 403 с РФ-адреса пометил бы статью failed, и она больше
+    никогда не переспрашивалась бы — даже когда тело уже добрал зарубежный воркер.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        ru = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, network_region) "
+            "VALUES ('РФ', 'Media', 'https://ru.example', TRUE, 'rss', 'auto') RETURNING id"
+        ).fetchone()[0]
+        ext = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, network_region) "
+            "VALUES ('Запад', 'Media', 'https://west.example', TRUE, 'rss', 'external') RETURNING id"
+        ).fetchone()[0]
+        for sid, slug in ((ru, "ru"), (ext, "ext")):
+            conn.execute(
+                "INSERT INTO articles (source_id, title, url, raw_text, text_truncated, language) "
+                "VALUES (%s, 't', %s, 'коротко', TRUE, 'ru')",
+                (sid, f"https://{slug}.example/a"),
+            )
+        conn.commit()
+
+    rows = repository.get_articles_needing_full_text(limit=50)
+    source_ids = {row["source_id"] for row in rows}
+    assert ru in source_ids, "локальный источник должен попасть в дозагрузку"
+    assert ext not in source_ids, "внешний источник дозагружается воркером, не локально"

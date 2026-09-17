@@ -73,9 +73,15 @@ def _process_rss(source: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
         rss_parser.extract_articles_from_feed(source, content, max_age_days)
         if content else ([], {"skipped_old": 0, "skipped_irrelevant": 0})
     )
+    # Лента отдаёт заголовок и анонс, а не статью. Для источников зарубежного
+    # контура это тупик: они там именно потому, что с РФ-адреса закрыты, и локальная
+    # дозагрузка на них гарантированно ловит 403 и помечает failed НАВСЕГДА (одна
+    # попытка). Замер 17.09: у Oil & Gas Journal и Offshore Magazine 25 из 25 статей
+    # короче 600 знаков, средняя длина 183. Поэтому тело добираем здесь же, на
+    # воркере, которому сайт отвечает.
     articles = [
         _jsonable_dict({k: v for k, v in rec.items() if k != "source_id"})
-        for rec in recs
+        for rec in _fill_bodies_from_source(source, recs)
     ]
     return {
         "external_fetch": True,
@@ -188,3 +194,32 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Дотянуть полный текст статей ленты со страницы издания.
+
+    Работает только там, где вызвано, — на воркере зарубежного контура. Берём
+    страницу лишь когда анонс короче порога: у лент с полным текстом ходить
+    незачем. Неудача не отбрасывает запись — остаётся анонс, как было раньше.
+    """
+    from oiltech_digest.ingestion import normalize
+    from oiltech_digest.ingestion.article_fetcher import extract_main_text
+    from oiltech_digest.ingestion.http_client import fetch
+
+    filled: list[dict[str, Any]] = []
+    for rec in recs:
+        text = str(rec.get("raw_text") or "")
+        url = str(rec.get("url") or "")
+        if len(text) >= MIN_ARTICLE_TEXT_CHARS or not url:
+            filled.append(rec)
+            continue
+        try:
+            content = fetch(url)
+            body = extract_main_text(content) if content else ""
+        except Exception:  # noqa: BLE001 - одна статья не валит прогон источника
+            body = ""
+        if body and len(body) > len(text):
+            rec = {**rec, "raw_text": body, "text_truncated": normalize.is_truncated(body)}
+        filled.append(rec)
+    return filled

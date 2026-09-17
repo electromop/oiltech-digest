@@ -5534,3 +5534,14 @@ button {
   color: var(--text-muted);
   padding: 6px 0;
 }
+
+/* Списки ключевых слов на экране «Теги»: по одному в строке.
+   В однострочном поле при 33–52 ключах на тематику не видно ничего —
+   просьба заказчика от 13.09. */
+.keywordList {
+  min-height: 84px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  resize: vertical;
+}

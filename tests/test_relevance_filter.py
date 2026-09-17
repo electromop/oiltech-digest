@@ -96,3 +96,19 @@ def test_prefilter_ignores_too_short_tag_keywords(monkeypatch):
     )
     positive, _ = relevance_filter.tag_keywords()
     assert positive == ()
+
+
+def test_prefilter_stop_words_block_article(monkeypatch):
+    """Стоп-слова тематик реально отбивают статью — это то новое, что теги дают
+    предфильтру (он разрешительный, позитивные слова меняют исход редко)."""
+    from oiltech_digest.db import repository
+
+    relevance_filter._TAG_KEYWORDS_CACHE.update({"positive": (), "negative": (), "at": 0.0})
+    monkeypatch.setattr(
+        repository, "list_enabled_tags",
+        lambda: [{"keywords_json": [], "keywords_en_json": [],
+                  "negative_keywords_json": ["вакансия"]}],
+    )
+    result = relevance_filter.should_keep_article("Открыта вакансия оператора", "")
+    assert result.keep is False
+    assert "вакансия" in result.matched_noise

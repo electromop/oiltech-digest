@@ -185,25 +185,6 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5-nano": (0.05, 0.40),
 }
 
-# --- Source discovery ---
-# По умолчанию внешний поиск выключен: MVP можно гонять через --seed-url без ключей.
-# Поддержанные провайдеры: none / brave / serpapi.
-# Агент поиска источников должен отсеивать старые архивы и разделы без живого
-# потока. Порог намеренно отдельный от основного парсинга: тут мы оцениваем новый
-# источник, а не историческую догрузку уже принятого источника.
-BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
-SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
-
-# --- Signal discovery ---
-# Ежедневный радар сигналов ставится scheduler'ом в очередь один раз за окно.
-# Дефолты намеренно web-only и не-offline: это новый агент поиска сигналов, который
-# ищет гибко по web/китайским запросам, а не только по уже заведённым sources.
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-
 def price_for_model(model: str | None) -> tuple[float, float]:
     """USD/1М-токенов (input, output) для модели по префиксу имени.
     Откат на OPENAI_INPUT/OUTPUT_USD_PER_MTOK, если модель не в таблице."""
