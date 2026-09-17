@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from oiltech_digest import config
 from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
@@ -223,3 +224,100 @@ def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]])
             rec = {**rec, "raw_text": body, "text_truncated": normalize.is_truncated(body)}
         filled.append(rec)
     return filled
+
+
+def build_refetch_text_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Пакет статей-обрывков на дозаполнение зарубежным воркером.
+
+    Локальная дозагрузка эти статьи не берёт (repository.get_articles_needing_full_text
+    пропускает network_region='external'): с РФ-адреса они отдают 403, а попытка там
+    ОДНА — статья получила бы failed навсегда. Тело есть кому добрать только на
+    воркере, которому сайт отвечает.
+
+    Шлём минимум — id, адрес и заголовок: заголовок нужен воркеру не для отображения,
+    а чтобы отбить подменённый текст до того, как он поедет обратно.
+    """
+    ids = [int(x) for x in (payload.get("article_ids") or [])]
+    if not ids:
+        raise ValueError("refetch_text: пустой список article_ids")
+    rows = repository.get_articles_for_external_refetch(ids)
+    return {
+        "kind": "refetch_text",
+        "articles": [
+            {"id": int(r["id"]), "url": r["url"], "title": r.get("title") or ""}
+            for r in rows
+        ],
+        "min_chars": int(payload.get("min_chars") or config.MIN_FULL_TEXT_CHARS),
+    }
+
+
+def process_refetch_text_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Сторона воркера: скачать страницы и вернуть тела. В базу не ходит."""
+    from oiltech_digest.ingestion.article_fetcher import extract_main_text
+    from oiltech_digest.ingestion.http_client import fetch
+
+    min_chars = int(payload.get("min_chars") or 0)
+    out: list[dict[str, Any]] = []
+    for item in payload.get("articles") or []:
+        url = str(item.get("url") or "")
+        record: dict[str, Any] = {"id": int(item["id"]), "status": "failed", "text": None}
+        if url:
+            try:
+                content = fetch(url)
+                body = extract_main_text(content) if content else ""
+            except Exception as exc:  # noqa: BLE001 - одна статья не валит пакет
+                body = ""
+                record["error"] = str(exc)[:200]
+            if body and len(body) >= min_chars:
+                record.update({"status": "ok", "text": body})
+            elif body:
+                record.update({"status": "too_short", "text": body})
+        out.append(record)
+    return {
+        "external_fetch": True,
+        "kind": "refetch_text",
+        "results": out,
+        "stats": {
+            "attempted": len(out),
+            "ok": sum(1 for r in out if r["status"] == "ok"),
+            "failed": sum(1 for r in out if r["status"] == "failed"),
+        },
+    }
+
+
+def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Сторона ядра: записать тела, пропустив подменённые.
+
+    Страж принадлежности (задача №24) обязателен и здесь: воркер отдаёт то, что
+    выдал сайт, а сайт умеет отдавать пейвол или листинг на любой адрес. Без этой
+    проверки мы бы аккуратно разложили чужой текст по статьям.
+    """
+    from oiltech_digest.ingestion.article_fetcher import _ownership_rejection
+    from oiltech_digest.ingestion import normalize
+
+    applied = skipped = mismatched = 0
+    for row in result.get("results") or []:
+        article_id = int(row.get("id") or 0)
+        text = row.get("text")
+        status = str(row.get("status") or "failed")
+        if not article_id:
+            continue
+        if status == "failed" or not text:
+            repository.update_article_full_text(
+                article_id, None, True, "failed", "external", error=row.get("error"))
+            skipped += 1
+            continue
+        article = repository.get_article(article_id)
+        if article is None:
+            skipped += 1
+            continue
+        rejection = _ownership_rejection(article, article.get("title") or "", text)
+        if rejection:
+            repository.update_article_full_text(
+                article_id, None, True, "mismatch", "external", error=rejection)
+            mismatched += 1
+            continue
+        repository.update_article_full_text(
+            article_id, text, normalize.is_truncated(text), status, "external")
+        applied += 1
+    return {"applied": applied, "skipped": skipped, "mismatched": mismatched}

@@ -175,6 +175,11 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
             result = external_fetch.process_payload(job.get("payload") or {})
             client.progress(job, 90)
             client.complete(job, result)
+        elif job.get("kind") == "refetch_text":
+            client.progress(job, 20)
+            result = external_fetch.process_refetch_text_payload(job.get("payload") or {})
+            client.progress(job, 90)
+            client.complete(job, result)
         else:
             raise ValueError(f"Unsupported external job kind: {job.get('kind')}")
         logger.info("external_job_finished job_id=%s kind=%s", job["id"], job.get("kind"))

@@ -3522,6 +3522,139 @@ def cross_dup_candidates() -> int:
 #  AI processing: articles, cards, tags, scoring, metrics
 # ---------------------------------------------------------------------------
 
+def external_refetch_candidates(limit: int = 200) -> list[dict]:
+    """Статьи-обрывки у источников зарубежного контура — кандидаты на дозаполнение.
+
+    Локальная дозагрузка их не берёт намеренно (см. get_articles_needing_full_text):
+    с РФ-адреса эти сайты отдают 403, а попытка одна и навсегда. Тело для них может
+    добрать только внешний воркер, и до 17.09 такого пути не было вовсе — замер
+    показал 25 из 25 статей короче 600 знаков у Oil & Gas Journal и Offshore Magazine.
+
+    Берём и уже помеченные failed: прежние пометки ставились локальной дозагрузкой,
+    то есть отражают недоступность с РФ, а не непригодность статьи.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT a.id, a.url, a.title
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            WHERE a.url IS NOT NULL
+              AND s.network_region = 'external'
+              AND s.archived_at IS NULL
+              AND (a.full_text_status IS NULL OR a.full_text_status IN ('failed', 'too_short'))
+              AND length(COALESCE(a.raw_text, '')) < %s
+            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+            LIMIT %s
+            """,
+            (config.MIN_FULL_TEXT_CHARS, limit),
+        )
+        return cur.fetchall()
+
+
+def get_articles_for_external_refetch(article_ids: list[int]) -> list[dict]:
+    """Адреса и заголовки по списку id — то, что уезжает на воркер без базы."""
+    if not article_ids:
+        return []
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT id, url, title FROM articles WHERE id = ANY(%s) AND url IS NOT NULL",
+            (list(article_ids),),
+        )
+        return cur.fetchall()
+
+
+def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
+                       max_days_apart: int = 5, limit: int = 200) -> list[dict]:
+    """Пары-кандидаты в перепечатки: разные источники, близкие даты, общие слова.
+
+    Правило намеренно широкое — оно отвечает за полноту, а решает модель. Замер на
+    случае заказчика от 08.09: настоящие дубли дали пересечение от 36% до 78%, то
+    есть порога, который ловит все и не ловит лишнего, не существует.
+
+    Слова режем до 6 знаков вместо лемматизации: «установки/установок/установках»
+    сходятся, а тащить морфологию в SQL ради этого незачем. Короче 5 знаков
+    отбрасываем — предлоги и «нефть» есть почти везде и только шумят.
+
+    Разные источники — условие, а не настройка: внутри одного издания повтор
+    заголовка это серийная сводка, и схлопывание таких пар уже уничтожало сотни
+    статей в июле.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            r"""
+            WITH t AS (
+              SELECT a.id, a.source_id, a.title, a.published_at,
+                     ARRAY(SELECT DISTINCT left(w, 6)
+                           FROM unnest(regexp_split_to_array(
+                                lower(regexp_replace(a.title, '[^[:alnum:][:space:]]', ' ', 'g')),
+                                '\s+')) w
+                           WHERE length(w) >= 5) AS toks
+              FROM articles a
+              LEFT JOIN article_reprints r ON r.article_id = a.id
+              WHERE a.created_at > now() - make_interval(days => %(days)s)
+                AND length(a.title) > 25
+                AND r.article_id IS NULL
+            )
+            SELECT x.id AS a_id, y.id AS b_id,
+                   x.title AS a_title, y.title AS b_title,
+                   round(
+                     cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
+                     / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0),
+                   3) AS overlap
+            FROM t x
+            JOIN t y ON y.id > x.id
+                    AND y.source_id <> x.source_id
+                    AND (x.published_at IS NULL OR y.published_at IS NULL
+                         OR abs(EXTRACT(EPOCH FROM (x.published_at - y.published_at)))
+                            < %(apart)s * 86400)
+            WHERE cardinality(x.toks) >= 3 AND cardinality(y.toks) >= 3
+              AND cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
+                  / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0)
+                  >= %(overlap)s
+            ORDER BY overlap DESC
+            LIMIT %(limit)s
+            """,
+            {"days": days, "apart": max_days_apart, "overlap": min_overlap, "limit": limit},
+        )
+        return cur.fetchall()
+
+
+def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float | None,
+                         reason: str | None, decided_by: str = "ai",
+                         model: str | None = None) -> None:
+    """Пометить статью перепечаткой. Запись обратима: удаления нет намеренно."""
+    if int(article_id) == int(primary_id):
+        raise ValueError("статья не может быть перепечаткой самой себя")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (article_id) DO UPDATE
+               SET primary_id = EXCLUDED.primary_id,
+                   similarity = EXCLUDED.similarity,
+                   reason = EXCLUDED.reason,
+                   decided_by = EXCLUDED.decided_by,
+                   model = EXCLUDED.model
+            """,
+            (int(article_id), int(primary_id), similarity, reason, decided_by, model),
+        )
+        conn.commit()
+
+
+def reprint_stats() -> dict:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT count(*) AS total, count(DISTINCT primary_id) AS groups FROM article_reprints"
+        )
+        return cur.fetchone() or {"total": 0, "groups": 0}
+
+
 def get_article(article_id: int) -> dict | None:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

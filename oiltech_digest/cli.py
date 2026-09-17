@@ -712,6 +712,81 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_find_reprints(args: argparse.Namespace) -> None:
+    """Найти перепечатки: правило даёт кандидатов, модель решает (№21).
+
+    По умолчанию СУХОЙ прогон — ничего не помечается. Так задумано: схлопывание
+    убирает материал из ленты, а заказчик уже жаловался на исчезновение статей.
+    Сначала он смотрит список, потом --apply."""
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing import reprints
+    from oiltech_digest.processing.pipeline import make_client
+
+    candidates = reprints.find_candidates(
+        days=args.days, min_overlap=args.min_overlap,
+        max_days_apart=args.max_days_apart, limit=args.limit,
+    )
+    print(f"кандидатов по правилу: {len(candidates)} "
+          f"(окно {args.days} дн., порог {args.min_overlap:.0%}, разрыв ≤{args.max_days_apart} дн.)")
+    if not candidates or args.candidates_only:
+        for c in candidates[:args.show]:
+            print(f"  {c['overlap']:.0%}  {str(c['a_title'])[:52]} || {str(c['b_title'])[:52]}")
+        return
+
+    client = make_client(offline=args.offline)
+    result = reprints.review_candidates(candidates, client, dry_run=not args.apply)
+    st = result["stats"]
+    print(f"проверено моделью: {st['checked']}, перепечаток: {st['reprints']}, "
+          f"разные события: {st['distinct']}, ошибок: {st['errors']}")
+    if not args.apply:
+        print("СУХОЙ ПРОГОН — ничего не помечено. Для записи добавьте --apply")
+    for d in result["decisions"][:args.show]:
+        mark = "ДУБЛЬ" if d["same_event"] else "разные"
+        print(f"  [{mark}] {d['overlap']:.0%}  {str(d['a_title'])[:44]} || {str(d['b_title'])[:44]}")
+        print(f"          {d['reason'][:110]}")
+    if args.apply:
+        stats = repository.reprint_stats()
+        print(f"в базе помечено перепечаток: {stats['total']} в {stats['groups']} группах")
+
+
+def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
+    """Дозаполнить тело статей-обрывков у источников зарубежного контура.
+
+    Локальная дозагрузка их не берёт намеренно: с РФ-адреса эти сайты отдают 403, а
+    попытка там одна и навсегда. Замер 17.09 — у Oil & Gas Journal и Offshore Magazine
+    25 статей из 25 короче 600 знаков, средняя длина 183; у McKinsey 76 из 78.
+
+    Ставится пакетами: воркер качает страницы, ядро записывает тела, пропуская
+    подменённые через стража принадлежности (задача №24)."""
+    from oiltech_digest import config, network_policy
+    from oiltech_digest.db import repository
+
+    if not (config.EXTERNAL_WORKERS_ENABLED and config.FETCH_EXTERNAL_ENABLED):
+        print("enqueue-external-refetch: внешний фетч-контур выключен — пропуск")
+        return
+
+    rows = repository.external_refetch_candidates(limit=args.limit)
+    if not rows:
+        print("enqueue-external-refetch: обрывков у внешних источников нет")
+        return
+
+    ids = [int(r["id"]) for r in rows]
+    decision = network_policy.route_ai_processing()
+    queue = "external-fetch" if decision.execution_region == "external" else "default"
+    enq = 0
+    for start in range(0, len(ids), args.batch):
+        chunk = ids[start:start + args.batch]
+        repository.create_background_job(
+            "refetch_text",
+            {"article_ids": chunk, "min_chars": config.MIN_FULL_TEXT_CHARS},
+            queue_name=queue,
+            execution_region="external",
+            capability="http_fetch",
+        )
+        enq += 1
+    print(f"enqueue-external-refetch: статей={len(ids)}, задач={enq}, очередь={queue}")
+
+
 def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
     """Поставить в очередь фетч источников network_region='external' через зарубежный воркер.
 
@@ -1536,6 +1611,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_external = sub.add_parser("enqueue-external-scrape", help="фетч источников network_region=external через зарубежный воркер (no-op без FETCH_EXTERNAL_ENABLED)")
     p_enqueue_external.add_argument("--max-age-days", type=int, default=None, help="окно свежести статей (по умолчанию без ограничения)")
     p_enqueue_external.set_defaults(func=cmd_enqueue_external_scrape)
+
+    p_reprints = sub.add_parser(
+        "find-reprints", help="перепечатки между источниками: правило + ИИ-судья (№21)")
+    p_reprints.add_argument("--days", type=int, default=14, help="окно поиска")
+    p_reprints.add_argument("--min-overlap", type=float, default=0.35, help="порог пересечения слов")
+    p_reprints.add_argument("--max-days-apart", type=int, default=5, help="разрыв дат в паре")
+    p_reprints.add_argument("--limit", type=int, default=100, help="сколько пар проверить")
+    p_reprints.add_argument("--show", type=int, default=20, help="сколько строк показать")
+    p_reprints.add_argument("--candidates-only", action="store_true", help="только правило, без модели")
+    p_reprints.add_argument("--offline", action="store_true", help="заглушка вместо модели")
+    p_reprints.add_argument("--apply", action="store_true", help="ЗАПИСАТЬ пометки (по умолчанию сухой прогон)")
+    p_reprints.set_defaults(func=cmd_find_reprints)
+
+    p_ext_refetch = sub.add_parser(
+        "enqueue-external-refetch",
+        help="дозаполнить тело обрывков у источников network_region=external через зарубежный воркер")
+    p_ext_refetch.add_argument("--limit", type=int, default=200, help="сколько статей взять за прогон")
+    p_ext_refetch.add_argument("--batch", type=int, default=25, help="статей в одной задаче")
+    p_ext_refetch.set_defaults(func=cmd_enqueue_external_refetch)
 
     p_set_region = sub.add_parser("set-source-region", help="проставить network_region (auto|ru|external) источникам по id")
     p_set_region.add_argument("--ids", required=True, help="список id через запятую, напр. 16,84,64")

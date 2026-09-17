@@ -1366,3 +1366,40 @@ def test_full_text_refetch_skips_external_sources(isolated_db):
     source_ids = {row["source_id"] for row in rows}
     assert ru in source_ids, "локальный источник должен попасть в дозагрузку"
     assert ext not in source_ids, "внешний источник дозагружается воркером, не локально"
+
+
+def test_external_refetch_candidates_only_external_stubs(isolated_db):
+    """Кандидаты на дозаполнение — только обрывки внешних источников.
+
+    Локальные берёт обычная дозагрузка; полные статьи трогать незачем.
+    Уже помеченные failed берём: пометка ставилась локальной попыткой и отражает
+    недоступность с РФ-адреса, а не непригодность статьи.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        ext = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, network_region) "
+            "VALUES ('Запад', 'Media', 'https://w.example', TRUE, 'rss', 'external') RETURNING id"
+        ).fetchone()[0]
+        ru = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, network_region) "
+            "VALUES ('РФ', 'Media', 'https://r.example', TRUE, 'rss', 'auto') RETURNING id"
+        ).fetchone()[0]
+        rows = [
+            (ext, "https://w.example/stub", "коротко", None),
+            (ext, "https://w.example/failed", "коротко", "failed"),
+            (ext, "https://w.example/full", "длинный текст " * 200, None),
+            (ru, "https://r.example/stub", "коротко", None),
+        ]
+        for sid, url, text, status in rows:
+            conn.execute(
+                "INSERT INTO articles (source_id, title, url, raw_text, language, full_text_status) "
+                "VALUES (%s, 't', %s, %s, 'ru', %s)", (sid, url, text, status))
+        conn.commit()
+
+    urls = {r["url"] for r in repository.external_refetch_candidates(limit=50)}
+    assert "https://w.example/stub" in urls
+    assert "https://w.example/failed" in urls, "failed ставила локальная попытка, повторяем через воркер"
+    assert "https://w.example/full" not in urls, "полная статья не нуждается в дозаполнении"
+    assert "https://r.example/stub" not in urls, "локальный источник берёт обычная дозагрузка"

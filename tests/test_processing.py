@@ -633,3 +633,65 @@ def test_tags_scope_excludes_catch_all_tag():
     ])
     assert "Не классифицировано" not in block
     assert "Бурение" in block
+
+
+def test_external_refetch_rejects_substituted_body(monkeypatch):
+    """Страж принадлежности обязателен и на внешнем пути: воркер отдаёт то, что выдал
+    сайт, а сайт умеет отдавать пейвол или листинг на любой адрес (задача №24)."""
+    from oiltech_digest.ingestion import external_fetch
+
+    stored: list = []
+    monkeypatch.setattr(external_fetch.repository, "get_article",
+                        lambda aid: {"id": aid, "title": "Совсем про другое", "source_id": 1})
+    monkeypatch.setattr(external_fetch.repository, "update_article_full_text",
+                        lambda *a, **k: stored.append((a, k)))
+    monkeypatch.setattr(
+        "oiltech_digest.ingestion.article_fetcher._ownership_rejection",
+        lambda article, title, text: "title does not match body",
+    )
+
+    out = external_fetch.apply_refetch_text_result(
+        {"kind": "refetch_text", "results": [{"id": 5, "status": "ok", "text": "чужой текст " * 50}]}
+    )
+    assert out["mismatched"] == 1
+    assert out["applied"] == 0
+
+
+def test_reprint_primary_falls_back_to_longer_copy():
+    """Модель вернула чужой id — берём копию длиннее, а не первую попавшуюся.
+
+    В случае заказчика от 08.09 копии были 1026, 2327, 2366 и 3181 знак, и
+    короткая оказалась обрывком с дефектом склейки заголовка.
+    """
+    from oiltech_digest.processing import reprints
+
+    left = {"id": 10, "raw_text": "к" * 1026}
+    right = {"id": 20, "raw_text": "д" * 3181}
+    assert reprints._resolve_primary(999, left, right) == 20
+    assert reprints._resolve_primary(None, left, right) == 20
+    assert reprints._resolve_primary(10, left, right) == 10, "валидный id модели уважаем"
+
+
+def test_reprint_review_dry_run_writes_nothing(monkeypatch):
+    """Сухой прогон ничего не помечает: схлопывание убирает материал из ленты."""
+    from oiltech_digest.processing import reprints
+
+    written: list = []
+    monkeypatch.setattr(reprints.repository, "get_article",
+                        lambda aid: {"id": aid, "title": "t", "raw_text": "текст" * 50})
+    monkeypatch.setattr(reprints.repository, "mark_article_reprint",
+                        lambda **kw: written.append(kw))
+
+    class _Client:
+        model = "test-model"
+
+        def complete_json(self, *a, **k):
+            from oiltech_digest.processing.openai_client import AIResponse
+            return AIResponse(data={"same_event": True, "primary_id": 1, "reason": "одно испытание"},
+                              model="test-model")
+
+    out = reprints.review_candidates(
+        [{"a_id": 1, "b_id": 2, "a_title": "A", "b_title": "B", "overlap": 0.5}],
+        _Client(), dry_run=True)
+    assert out["stats"]["reprints"] == 1
+    assert written == [], "сухой прогон записал пометку"

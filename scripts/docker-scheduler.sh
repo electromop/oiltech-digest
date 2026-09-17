@@ -49,6 +49,7 @@ FULLTEXT_RETRY_TOO_SHORT="${FULLTEXT_RETRY_TOO_SHORT:-0}"
 # с РФ-сервера) фетчатся через зарубежный воркер. Шаг enqueue-external-scrape ставит
 # их в external-fetch/external-playwright; команда сама no-op при выключенном контуре.
 FETCH_EXTERNAL_ENABLED="${FETCH_EXTERNAL_ENABLED:-0}"
+EXTERNAL_REFETCH_LIMIT="${EXTERNAL_REFETCH_LIMIT:-100}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -115,6 +116,10 @@ while true; do
     # Западные источники (network_region='external') фетчим через зарубежный воркер —
     # с РФ-сервера к ним нет доступа. Задачи разберёт NL external-worker.
     run_step "enqueue-external-scrape" python -m oiltech_digest.cli enqueue-external-scrape
+    # Обрывки у тех же источников: лента даёт анонс, а локальная дозагрузка их не
+    # берёт (403 с РФ-адреса, попытка одна навсегда). Тело добирает воркер.
+    run_step "enqueue-external-refetch" python -m oiltech_digest.cli enqueue-external-refetch \
+      --limit "$EXTERNAL_REFETCH_LIMIT"
   fi
 
   run_step "stats" python -m oiltech_digest.cli stats
