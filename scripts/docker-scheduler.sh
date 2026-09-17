@@ -49,33 +49,6 @@ FULLTEXT_RETRY_TOO_SHORT="${FULLTEXT_RETRY_TOO_SHORT:-0}"
 # с РФ-сервера) фетчатся через зарубежный воркер. Шаг enqueue-external-scrape ставит
 # их в external-fetch/external-playwright; команда сама no-op при выключенном контуре.
 FETCH_EXTERNAL_ENABLED="${FETCH_EXTERNAL_ENABLED:-0}"
-SOURCE_DISCOVERY_ENABLED="${SOURCE_DISCOVERY_ENABLED:-0}"
-SOURCE_DISCOVERY_EVERY_CYCLES="${SOURCE_DISCOVERY_EVERY_CYCLES:-24}"
-SOURCE_DISCOVERY_TOPIC_LIMIT="${SOURCE_DISCOVERY_TOPIC_LIMIT:-3}"
-SOURCE_DISCOVERY_LIMIT="${SOURCE_DISCOVERY_LIMIT:-10}"
-SOURCE_DISCOVERY_ARTICLE_LIMIT="${SOURCE_DISCOVERY_ARTICLE_LIMIT:-5}"
-SOURCE_DISCOVERY_OFFLINE="${SOURCE_DISCOVERY_OFFLINE:-1}"
-SOURCE_DISCOVERY_EVALUATE="${SOURCE_DISCOVERY_EVALUATE:-1}"
-SOURCE_DISCOVERY_TOPICS="${SOURCE_DISCOVERY_TOPICS:-}"
-SOURCE_DISCOVERY_PLANNER_ENABLED="${SOURCE_DISCOVERY_PLANNER_ENABLED:-1}"
-SOURCE_DISCOVERY_MODE="${SOURCE_DISCOVERY_MODE:-plan}"
-SOURCE_DISCOVERY_TARGET_PER_TOPIC="${SOURCE_DISCOVERY_TARGET_PER_TOPIC:-10}"
-SOURCE_DISCOVERY_MAX_ACTIONS="${SOURCE_DISCOVERY_MAX_ACTIONS:-5}"
-SOURCE_DISCOVERY_MAX_ITERATIONS="${SOURCE_DISCOVERY_MAX_ITERATIONS:-3}"
-SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS="${SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS:-4}"
-SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES="${SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES:-100}"
-SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS="${SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS:-100}"
-SIGNAL_DISCOVERY_ENABLED="${SIGNAL_DISCOVERY_ENABLED:-0}"
-SIGNAL_DISCOVERY_EVERY_CYCLES="${SIGNAL_DISCOVERY_EVERY_CYCLES:-4}"
-SIGNAL_DISCOVERY_DAYS="${SIGNAL_DISCOVERY_DAYS:-14}"
-SIGNAL_DISCOVERY_LIMIT="${SIGNAL_DISCOVERY_LIMIT:-80}"
-SIGNAL_DISCOVERY_MIN_SCORE="${SIGNAL_DISCOVERY_MIN_SCORE:-40}"
-SIGNAL_DISCOVERY_MAX_SIGNALS="${SIGNAL_DISCOVERY_MAX_SIGNALS:-10}"
-SIGNAL_DISCOVERY_OFFLINE="${SIGNAL_DISCOVERY_OFFLINE:-1}"
-SIGNAL_DISCOVERY_WEB="${SIGNAL_DISCOVERY_WEB:-0}"
-SIGNAL_DISCOVERY_WEB_ONLY="${SIGNAL_DISCOVERY_WEB_ONLY:-0}"
-SIGNAL_DISCOVERY_WEB_QUERY_LIMIT="${SIGNAL_DISCOVERY_WEB_QUERY_LIMIT:-8}"
-SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -83,7 +56,6 @@ if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   run_required_step "seed-sources" python -m oiltech_digest.cli seed-sources
   run_required_step "seed-tags" python -m oiltech_digest.cli seed-tags
   run_required_step "seed-scoring" python -m oiltech_digest.cli seed-scoring
-  run_step "seed-signal-topics" python -m oiltech_digest.cli seed-signal-topics
   run_step "apply-source-overrides" python -m oiltech_digest.cli apply-source-overrides
 fi
 
@@ -143,94 +115,6 @@ while true; do
     # Западные источники (network_region='external') фетчим через зарубежный воркер —
     # с РФ-сервера к ним нет доступа. Задачи разберёт NL external-worker.
     run_step "enqueue-external-scrape" python -m oiltech_digest.cli enqueue-external-scrape
-  fi
-
-  if [ "$SOURCE_DISCOVERY_ENABLED" = "1" ]; then
-    if [ "$SOURCE_DISCOVERY_EVERY_CYCLES" -gt 0 ] && [ $((cycle % SOURCE_DISCOVERY_EVERY_CYCLES)) -eq 0 ]; then
-      _source_discovery_offline_flag=""
-      if [ "$SOURCE_DISCOVERY_OFFLINE" = "1" ]; then
-        _source_discovery_offline_flag="--offline"
-      fi
-
-      _source_discovery_evaluate_flag="--no-evaluate"
-      if [ "$SOURCE_DISCOVERY_EVALUATE" = "1" ]; then
-        _source_discovery_evaluate_flag="--evaluate"
-      fi
-
-      if [ "$SOURCE_DISCOVERY_MODE" = "loop" ] && [ -z "$SOURCE_DISCOVERY_TOPICS" ]; then
-        run_step "enqueue-agent-loop" python -m oiltech_digest.cli enqueue-agent-loop \
-          --target-per-topic "$SOURCE_DISCOVERY_TARGET_PER_TOPIC" \
-          --topic-limit "$SOURCE_DISCOVERY_TOPIC_LIMIT" \
-          --candidate-limit "$SOURCE_DISCOVERY_LIMIT" \
-          --max-actions "$SOURCE_DISCOVERY_MAX_ACTIONS" \
-          --max-iterations "$SOURCE_DISCOVERY_MAX_ITERATIONS" \
-          --article-limit "$SOURCE_DISCOVERY_ARTICLE_LIMIT" \
-          --max-daily-loop-runs "$SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS" \
-          --max-daily-candidates "$SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES" \
-          --max-daily-evaluations "$SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS" \
-          $_source_discovery_offline_flag \
-          $_source_discovery_evaluate_flag
-      elif [ "$SOURCE_DISCOVERY_PLANNER_ENABLED" = "1" ] && [ -z "$SOURCE_DISCOVERY_TOPICS" ]; then
-        run_step "enqueue-agent-plan" python -m oiltech_digest.cli enqueue-agent-plan \
-          --target-per-topic "$SOURCE_DISCOVERY_TARGET_PER_TOPIC" \
-          --topic-limit "$SOURCE_DISCOVERY_TOPIC_LIMIT" \
-          --candidate-limit "$SOURCE_DISCOVERY_LIMIT" \
-          --max-actions "$SOURCE_DISCOVERY_MAX_ACTIONS" \
-          $_source_discovery_offline_flag \
-          $_source_discovery_evaluate_flag
-      else
-        set -- \
-          --topic-limit "$SOURCE_DISCOVERY_TOPIC_LIMIT" \
-          --limit "$SOURCE_DISCOVERY_LIMIT" \
-          --article-limit "$SOURCE_DISCOVERY_ARTICLE_LIMIT" \
-          $_source_discovery_offline_flag \
-          $_source_discovery_evaluate_flag
-
-        if [ -n "$SOURCE_DISCOVERY_TOPICS" ]; then
-          old_ifs="$IFS"
-          IFS=","
-          for topic in $SOURCE_DISCOVERY_TOPICS; do
-            topic="$(printf '%s' "$topic" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            if [ -n "$topic" ]; then
-              set -- "$@" --topic "$topic"
-            fi
-          done
-          IFS="$old_ifs"
-        fi
-
-        run_step "enqueue-source-discovery" python -m oiltech_digest.cli enqueue-source-discovery "$@"
-      fi
-    fi
-  fi
-
-  if [ "$SIGNAL_DISCOVERY_DAILY_ENABLED" = "1" ]; then
-    run_step "enqueue-daily-signal-discovery" python -m oiltech_digest.cli enqueue-daily-signal-discovery
-  fi
-
-  if [ "$SIGNAL_DISCOVERY_ENABLED" = "1" ]; then
-    if [ "$SIGNAL_DISCOVERY_EVERY_CYCLES" -gt 0 ] && [ $((cycle % SIGNAL_DISCOVERY_EVERY_CYCLES)) -eq 0 ]; then
-      _signal_offline_flag="--offline"
-      if [ "$SIGNAL_DISCOVERY_OFFLINE" != "1" ]; then
-        _signal_offline_flag="--no-offline"
-      fi
-      _signal_web_flag=""
-      if [ "$SIGNAL_DISCOVERY_WEB" = "1" ]; then
-        _signal_web_flag="--web"
-      fi
-      _signal_web_only_flag=""
-      if [ "$SIGNAL_DISCOVERY_WEB_ONLY" = "1" ]; then
-        _signal_web_only_flag="--web-only"
-      fi
-      run_step "enqueue-signal-discovery" python -m oiltech_digest.cli enqueue-signal-discovery \
-        --days "$SIGNAL_DISCOVERY_DAYS" \
-        --limit "$SIGNAL_DISCOVERY_LIMIT" \
-        --min-score "$SIGNAL_DISCOVERY_MIN_SCORE" \
-        --max-signals "$SIGNAL_DISCOVERY_MAX_SIGNALS" \
-        --web-query-limit "$SIGNAL_DISCOVERY_WEB_QUERY_LIMIT" \
-        $_signal_web_flag \
-        $_signal_web_only_flag \
-        $_signal_offline_flag
-    fi
   fi
 
   run_step "stats" python -m oiltech_digest.cli stats

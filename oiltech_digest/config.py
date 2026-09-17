@@ -108,7 +108,6 @@ def _parse_proxy_host_overrides(raw: str) -> dict[str, str]:
             overrides[host] = proxy_url
     return overrides
 
-
 # Карта "домен → строка прокси". Совпавший суффикс хоста имеет приоритет
 # над PROXY_URL: например, override для "rbc.ru" сработает и для "www.rbc.ru".
 PROXY_HOST_OVERRIDES: dict[str, str] = _parse_proxy_host_overrides(
@@ -186,37 +185,6 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5-nano": (0.05, 0.40),
 }
 
-# --- Source discovery ---
-# По умолчанию внешний поиск выключен: MVP можно гонять через --seed-url без ключей.
-# Поддержанные провайдеры: none / brave / serpapi.
-SOURCE_DISCOVERY_SEARCH_PROVIDER = os.environ.get("SOURCE_DISCOVERY_SEARCH_PROVIDER", "none").strip().lower()
-SOURCE_DISCOVERY_SEARCH_TIMEOUT = int(os.environ.get("SOURCE_DISCOVERY_SEARCH_TIMEOUT", "20"))
-# Агент поиска источников должен отсеивать старые архивы и разделы без живого
-# потока. Порог намеренно отдельный от основного парсинга: тут мы оцениваем новый
-# источник, а не историческую догрузку уже принятого источника.
-SOURCE_DISCOVERY_FRESHNESS_DAYS = int(os.environ.get("SOURCE_DISCOVERY_FRESHNESS_DAYS", "180"))
-SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE = int(os.environ.get("SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE", "1"))
-BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
-SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
-
-# --- Signal discovery ---
-# Ежедневный радар сигналов ставится scheduler'ом в очередь один раз за окно.
-# Дефолты намеренно web-only и не-offline: это новый агент поиска сигналов, который
-# ищет гибко по web/китайским запросам, а не только по уже заведённым sources.
-SIGNAL_DISCOVERY_DAILY_ENABLED = os.environ.get("SIGNAL_DISCOVERY_DAILY_ENABLED", "1").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-SIGNAL_DISCOVERY_DAILY_LOOKBACK_HOURS = int(os.environ.get("SIGNAL_DISCOVERY_DAILY_LOOKBACK_HOURS", "24"))
-SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
-SIGNAL_DISCOVERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_LIMIT", "120"))
-SIGNAL_DISCOVERY_MIN_SCORE = float(os.environ.get("SIGNAL_DISCOVERY_MIN_SCORE", "40"))
-SIGNAL_DISCOVERY_MAX_SIGNALS = int(os.environ.get("SIGNAL_DISCOVERY_MAX_SIGNALS", "20"))
-SIGNAL_DISCOVERY_WEB_QUERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_WEB_QUERY_LIMIT", "8"))
-
-
 def price_for_model(model: str | None) -> tuple[float, float]:
     """USD/1М-токенов (input, output) для модели по префиксу имени.
     Откат на OPENAI_INPUT/OUTPUT_USD_PER_MTOK, если модель не в таблице."""
@@ -225,7 +193,6 @@ def price_for_model(model: str | None) -> tuple[float, float]:
             if model.startswith(prefix):
                 return OPENAI_MODEL_PRICES[prefix]
     return (OPENAI_INPUT_USD_PER_MTOK, OPENAI_OUTPUT_USD_PER_MTOK)
-
 
 # --- Брендинг дайджеста ---
 # Путь к digest_branding.json. Пусто — файл берётся из пакета (локальная разработка,
@@ -242,4 +209,12 @@ AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))
 # Флаг Secure на сессионной cookie. Прод за HTTPS (Caddy) → должно быть True (тех-долг T8).
 # Для локальной разработки по http:// выставить AUTH_COOKIE_SECURE=0, иначе браузер
 # не сохранит cookie и вход не сработает.
+# Открытая регистрация: по умолчанию ЗАКРЫТА. Платформа выходит на корпоративный
+# портал заказчика, и /api/auth/register позволял любому завести себе учётку —
+# предусловие релиза #33. Пользователей заводит администратор: экран «Пользователи»
+# или CLI create-user. Первый администратор создаётся так же, до открытия доступа.
+AUTH_ALLOW_SELF_REGISTRATION = os.environ.get(
+    "AUTH_ALLOW_SELF_REGISTRATION", "false"
+).strip().lower() in ("1", "true", "yes", "on")
+
 AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower() in ("1", "true", "yes", "on")

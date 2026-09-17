@@ -8,7 +8,11 @@ industrial or business-development signal in the RSS title/summary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
+import time
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,54 @@ NOISE_KEYWORDS = (
 _WORD_RE = re.compile(r"\s+")
 
 
+_TAG_KEYWORDS_CACHE: dict[str, object] = {"positive": (), "negative": (), "at": 0.0}
+_TAG_KEYWORDS_TTL_SECONDS = 300
+_MIN_TAG_KEYWORD_LEN = 4
+
+
+def tag_keywords() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Ключевые и стоп-слова активных тематик заказчика.
+
+    До 17.09 предфильтр работал на статическом словаре в коде, а тематики заказчика
+    на отбор не влияли вообще: он правил их на экране и получал только другую
+    раскладку по полкам. Здесь его словарь впервые участвует в решении «тащить или
+    не тащить».
+
+    Слова короче четырёх символов отбрасываем: в справочниках попадаются «ГРП», «AI»,
+    «КРС», и на нормализованном тексте такие куски дают ложные совпадения чаще, чем
+    пользу. Стоп-слова тематик добавляются к шумовым, но НЕ перебивают позитивное
+    совпадение в самой статье — иначе одно неудачное слово выкосило бы поток.
+
+    Импорт repository внутри функции: модуль фильтра тянут парсеры, которым база
+    может быть не нужна вовсе. Сбой чтения не должен ронять сбор — работаем на
+    статическом словаре, как раньше.
+    """
+    now = time.monotonic()
+    if now - float(_TAG_KEYWORDS_CACHE.get("at") or 0) < _TAG_KEYWORDS_TTL_SECONDS:
+        return _TAG_KEYWORDS_CACHE["positive"], _TAG_KEYWORDS_CACHE["negative"]  # type: ignore[return-value]
+    positive: list[str] = []
+    negative: list[str] = []
+    try:
+        from oiltech_digest.db import repository
+
+        for tag in repository.list_enabled_tags():
+            for field in ("keywords_json", "keywords_en_json"):
+                for value in tag.get(field) or []:
+                    word = _normalize(str(value))
+                    if len(word) >= _MIN_TAG_KEYWORD_LEN:
+                        positive.append(word)
+            for value in tag.get("negative_keywords_json") or []:
+                word = _normalize(str(value))
+                if len(word) >= _MIN_TAG_KEYWORD_LEN:
+                    negative.append(word)
+    except Exception:  # noqa: BLE001 - тематики это дополнение, а не обязательный вход
+        logger.warning("не удалось прочитать тематики для предфильтра")
+    _TAG_KEYWORDS_CACHE["positive"] = tuple(dict.fromkeys(positive))
+    _TAG_KEYWORDS_CACHE["negative"] = tuple(dict.fromkeys(negative))
+    _TAG_KEYWORDS_CACHE["at"] = now
+    return _TAG_KEYWORDS_CACHE["positive"], _TAG_KEYWORDS_CACHE["negative"]  # type: ignore[return-value]
+
+
 def should_keep_article(title: str, summary: str = "", source: dict | None = None) -> PreFilterResult:
     article_text = _normalize(" ".join([title or "", summary or ""]))
     source_text = _normalize(" ".join([
@@ -92,9 +144,11 @@ def should_keep_article(title: str, summary: str = "", source: dict | None = Non
         (source or {}).get("category") or "",
         (source or {}).get("source_type") or "",
     ]))
-    article_positive = _matches(article_text, POSITIVE_KEYWORDS)
-    positive = article_positive or _matches(source_text, POSITIVE_KEYWORDS)
-    noise = _matches(article_text, NOISE_KEYWORDS)
+    tag_positive, tag_negative = tag_keywords()
+    all_positive = POSITIVE_KEYWORDS + tag_positive
+    article_positive = _matches(article_text, all_positive)
+    positive = article_positive or _matches(source_text, all_positive)
+    noise = _matches(article_text, NOISE_KEYWORDS + tag_negative)
 
     if noise and not article_positive:
         return PreFilterResult(False, "obvious non-domain noise without positive signal", (), noise)

@@ -3021,6 +3021,32 @@ def insert_article(rec: dict) -> bool:
             ).fetchone()
             if seen is not None:
                 return False
+        # Третий рубеж: одинаковое ТЕЛО у того же источника. Такая же проверка уже
+        # стояла в дозагрузке (article_fetcher), но только на замену текста — на
+        # первичной вставке её не было, и брак заезжал свободно.
+        #
+        # Замер прода 17.09: 830 статей с повторяющимся телом, 311 у активных
+        # источников, за 134 уже заплачен ИИ. У Новатэка так набралось 82 «статьи»
+        # из 86 — это оказались страницы навигации сайта (/ru/esg, /ru/press/
+        # calculator, даже PDF политики конфиденциальности): парсер берёт из
+        # листинга все ссылки подряд, включая меню, а сайт отдаёт на них одну и ту
+        # же оболочку. Разные статьи одного источника не совпадают телом побайтово,
+        # поэтому проверка безопасна. Перепечатки между источниками НЕ трогаем —
+        # это задача №21, и там нужен семантический дедуп, а не хэш.
+        body_hash = rec.get("body_hash")
+        source_id = rec.get("source_id")
+        if body_hash and source_id is not None:
+            # NOT pending_deletion — как на соседнем рубеже по url_key. Скрытая копия
+            # иначе блокировала бы пересбор навсегда: у RSS телом на вставке служит
+            # summary ленты, и один постоянный тизер-заглушка отрезал бы источник
+            # целиком после первой же статьи.
+            twin = conn.execute(
+                "SELECT 1 FROM articles WHERE source_id = %s AND body_hash = %s "
+                "AND NOT pending_deletion LIMIT 1",
+                (int(source_id), body_hash),
+            ).fetchone()
+            if twin is not None:
+                return False
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, url_key, published_at,
