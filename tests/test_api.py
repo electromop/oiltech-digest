@@ -781,6 +781,9 @@ def test_scrape_source_endpoint_rejects_non_scraper_strategy(monkeypatch):
 
 
 def test_auth_register_login_me_and_logout(monkeypatch):
+    # Самостоятельная регистрация по умолчанию закрыта (#33) — здесь включаем её
+    # явно, чтобы проверять сам сценарий, а не запрет.
+    monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", True)
     app = api.app
     sessions = {}
     users = {"user@example.com": {"id": 1, "email": "user@example.com"}}
@@ -813,6 +816,11 @@ def test_auth_rejects_invalid_payloads_and_missing_session(monkeypatch):
     client = TestClient(api.app)
 
     assert client.get("/api/auth/me").status_code == 401
+
+    # Закрытая регистрация отвечает 403 ДО валидации полей: путь существует, но выключен.
+    assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 403
+
+    monkeypatch.setattr(api.config, "AUTH_ALLOW_SELF_REGISTRATION", True)
     assert client.post("/api/auth/register", json={"email": "bad", "password": "12345678"}).status_code == 400
     assert client.post("/api/auth/register", json={"email": "user@example.com", "password": "1234567"}).status_code == 400
 
@@ -1806,3 +1814,14 @@ def test_feedback_reasons_use_official_wording():
     assert labels["bad_translation"] == "Некорректный перевод"
     assert labels["bad_source"] == "Низкое качество источника"
     assert labels["good"] == "Ценный сигнал"
+
+
+def test_self_registration_closed_by_default():
+    """Предусловие релиза #33: платформа выходит на корпоративный портал заказчика,
+    и /api/auth/register позволял любому завести себе учётку."""
+    client = TestClient(api.app)
+    response = client.post(
+        "/api/auth/register", json={"email": "stranger@example.com", "password": "12345678"}
+    )
+    assert response.status_code == 403
+    assert "администратор" in response.json()["detail"]

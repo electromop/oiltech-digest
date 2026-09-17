@@ -242,4 +242,12 @@ AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))
 # Флаг Secure на сессионной cookie. Прод за HTTPS (Caddy) → должно быть True (тех-долг T8).
 # Для локальной разработки по http:// выставить AUTH_COOKIE_SECURE=0, иначе браузер
 # не сохранит cookie и вход не сработает.
+# Открытая регистрация: по умолчанию ЗАКРЫТА. Платформа выходит на корпоративный
+# портал заказчика, и /api/auth/register позволял любому завести себе учётку —
+# предусловие релиза #33. Пользователей заводит администратор: экран «Пользователи»
+# или CLI create-user. Первый администратор создаётся так же, до открытия доступа.
+AUTH_ALLOW_SELF_REGISTRATION = os.environ.get(
+    "AUTH_ALLOW_SELF_REGISTRATION", "false"
+).strip().lower() in ("1", "true", "yes", "on")
+
 AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower() in ("1", "true", "yes", "on")

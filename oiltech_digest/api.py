@@ -478,6 +478,11 @@ def auth_me(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
 
 @app.post("/api/auth/register")
 def auth_register(payload: AuthPayload, response: Response) -> dict[str, Any]:
+    if not config.AUTH_ALLOW_SELF_REGISTRATION:
+        # Самостоятельная регистрация закрыта (#33). Учётки заводит администратор:
+        # экран «Пользователи» или CLI create-user. 403, а не 404: путь существует,
+        # просто выключен, и честный код помогает разобраться при настройке.
+        raise HTTPException(status_code=403, detail="Регистрация закрыта, обратитесь к администратору")
     email = auth.normalize_email(payload.email)
     if not auth.validate_email(email):
         raise HTTPException(status_code=400, detail="Некорректный email")
