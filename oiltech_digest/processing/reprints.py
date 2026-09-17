@@ -48,7 +48,8 @@ BODY_LIMIT = 2500
 
 
 def find_candidates(days: int = 14, min_overlap: float = DEFAULT_MIN_OVERLAP,
-                    max_days_apart: int = DEFAULT_MAX_DAYS, limit: int = 200) -> list[dict]:
+                    max_days_apart: int = DEFAULT_MAX_DAYS, limit: int = 200,
+                    max_overlap: float = 1.0) -> list[dict]:
     """Пары-кандидаты: разные источники, близкие даты, пересечение значимых слов.
 
     Разные источники — обязательное условие, а не настройка. Внутри одного
@@ -57,7 +58,8 @@ def find_candidates(days: int = 14, min_overlap: float = DEFAULT_MIN_OVERLAP,
     заголовку в июле.
     """
     return repository.reprint_candidates(
-        days=days, min_overlap=min_overlap, max_days_apart=max_days_apart, limit=limit,
+        days=days, min_overlap=min_overlap, max_overlap=max_overlap,
+        max_days_apart=max_days_apart, limit=limit,
     )
 
 

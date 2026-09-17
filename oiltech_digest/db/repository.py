@@ -3576,6 +3576,7 @@ def get_articles_for_external_refetch(article_ids: list[int]) -> list[dict]:
 
 
 def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
+                       max_overlap: float = 1.0,
                        max_days_apart: int = 5, limit: int = 200) -> list[dict]:
     """Пары-кандидаты в перепечатки: разные источники, близкие даты, общие слова.
 
@@ -3624,10 +3625,21 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
               AND cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
                   / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0)
                   >= %(overlap)s
-            ORDER BY overlap DESC
+              AND cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
+                  / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0)
+                  <= %(max_overlap)s
+            -- Порядок намеренно НЕ по overlap. Замер 17.09 на живом корпусе: из 318
+            -- пар за 14 дней только 57 тривиальных (100%%), а полоса, ради которой
+            -- судья и заведён (35-49%% — случай заказчика от 08.09), самая большая:
+            -- 132 пары. При ORDER BY overlap DESC любой LIMIT отдавал модели ровно
+            -- верхушку, и спорные пары не доезжали до неё никогда. md5 по паре id
+            -- даёт порядок, не связанный с силой совпадения, и при этом устойчивый
+            -- между прогонами.
+            ORDER BY md5(x.id::text || ':' || y.id::text)
             LIMIT %(limit)s
             """,
-            {"days": days, "apart": max_days_apart, "overlap": min_overlap, "limit": limit},
+            {"days": days, "apart": max_days_apart, "overlap": min_overlap,
+             "max_overlap": max_overlap, "limit": limit},
         )
         return cur.fetchall()
 

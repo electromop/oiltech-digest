@@ -747,15 +747,18 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
 
     if not 0 < args.min_overlap <= 1:
         raise SystemExit("--min-overlap задаётся долей от 0 до 1 (напр. 0.35)")
+    if not 0 < args.max_overlap <= 1 or args.max_overlap < args.min_overlap:
+        raise SystemExit("--max-overlap задаётся долей от 0 до 1 и не меньше --min-overlap")
     if args.days < 1 or args.limit < 1 or args.max_days_apart < 0:
         raise SystemExit("--days и --limit должны быть положительными, --max-days-apart неотрицательным")
 
     candidates = reprints.find_candidates(
-        days=args.days, min_overlap=args.min_overlap,
+        days=args.days, min_overlap=args.min_overlap, max_overlap=args.max_overlap,
         max_days_apart=args.max_days_apart, limit=args.limit,
     )
+    band = f"{args.min_overlap:.0%}" if args.max_overlap >= 1 else f"{args.min_overlap:.0%}–{args.max_overlap:.0%}"
     print(f"кандидатов по правилу: {len(candidates)} "
-          f"(окно {args.days} дн., порог {args.min_overlap:.0%}, разрыв ≤{args.max_days_apart} дн.)")
+          f"(окно {args.days} дн., полоса {band}, разрыв ≤{args.max_days_apart} дн.)")
     if not candidates or args.candidates_only:
         for c in candidates[:args.show]:
             print(f"  {c['overlap']:.0%}  {str(c['a_title'])[:52]} || {str(c['b_title'])[:52]}")
@@ -1678,6 +1681,9 @@ def build_parser() -> argparse.ArgumentParser:
         "find-reprints", help="перепечатки между источниками: правило + ИИ-судья (№21)")
     p_reprints.add_argument("--days", type=int, default=14, help="окно поиска")
     p_reprints.add_argument("--min-overlap", type=float, default=0.35, help="порог пересечения слов")
+    p_reprints.add_argument("--max-overlap", type=float, default=1.0,
+                            help="верхняя граница пересечения — чтобы прицельно проверить "
+                                 "спорную полосу (напр. --max-overlap 0.6)")
     p_reprints.add_argument("--max-days-apart", type=int, default=5, help="разрыв дат в паре")
     p_reprints.add_argument("--limit", type=int, default=100, help="сколько пар проверить")
     p_reprints.add_argument("--show", type=int, default=20, help="сколько строк показать")

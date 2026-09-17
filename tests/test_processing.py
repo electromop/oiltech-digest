@@ -721,3 +721,43 @@ def test_reprint_apply_rejects_foreign_primary_id():
     assert len(written) == 1
     assert written[0]["primary_id"] == 20, "главной должна стать длинная копия"
     assert written[0]["article_id"] == 10
+
+
+def test_reprint_candidates_band_is_passed_through(monkeypatch):
+    """Полосу задаёт вызывающий, а не запрос.
+
+    Замер на живом корпусе 17.09: из 318 пар за 14 дней тривиальных (100%)
+    только 57, а полоса случая заказчика (35–49%) — 132 пары. Пока выборка
+    резалась по `ORDER BY overlap DESC`, спорные пары до модели не доезжали,
+    и судью нечем было проверить на том, ради чего он заведён.
+    """
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing import reprints
+
+    seen = {}
+    monkeypatch.setattr(repository, "reprint_candidates",
+                        lambda **kw: seen.update(kw) or [])
+
+    reprints.find_candidates(days=14, min_overlap=0.35, max_overlap=0.6, limit=40)
+
+    assert seen["min_overlap"] == 0.35
+    assert seen["max_overlap"] == 0.6, "верхняя граница полосы должна доезжать до запроса"
+
+
+def test_reprint_candidate_order_is_not_by_overlap():
+    """Порядок выборки не должен коррелировать с силой совпадения."""
+    import inspect
+    import re
+    from oiltech_digest.db import repository
+
+    # Комментарии выкидываем: объяснение, ПОЧЕМУ так нельзя, само содержит
+    # запрещённую строку — на этом тест и споткнулся в первой редакции.
+    sql = inspect.getsource(repository.reprint_candidates)
+    code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    orders = re.findall(r"ORDER BY .*", code)
+
+    assert orders, "в запросе должен быть явный порядок"
+    assert not any("overlap" in o for o in orders), (
+        f"срез по overlap отдаёт модели только тривиальные пары: {orders}"
+    )
+    assert any(o.startswith("ORDER BY md5(") for o in orders)
