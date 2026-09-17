@@ -695,3 +695,29 @@ def test_reprint_review_dry_run_writes_nothing(monkeypatch):
         _Client(), dry_run=True)
     assert out["stats"]["reprints"] == 1
     assert written == [], "сухой прогон записал пометку"
+
+
+def test_reprint_apply_rejects_foreign_primary_id():
+    """Модель вернула id не из пары — дублем пометили бы не ту статью.
+
+    Падаем на длину: короткая копия обычно и есть обрывок (в случае заказчика
+    копия на 1026 знаков была склейкой заголовка с лидом).
+    """
+    from oiltech_digest.processing import external_ai
+
+    written: list = []
+    import oiltech_digest.db.repository as repo
+    orig = repo.mark_article_reprint
+    repo.mark_article_reprint = lambda **kw: written.append(kw)
+    try:
+        external_ai.apply_reprint_review_result({
+            "reprint_review": True,
+            "verdicts": [{"a_id": 10, "b_id": 20, "same_event": True,
+                          "primary_id": 999, "a_len": 1026, "b_len": 3181,
+                          "reason": "одно испытание", "overlap": 0.5}],
+        })
+    finally:
+        repo.mark_article_reprint = orig
+    assert len(written) == 1
+    assert written[0]["primary_id"] == 20, "главной должна стать длинная копия"
+    assert written[0]["article_id"] == 10

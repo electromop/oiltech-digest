@@ -733,6 +733,25 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
             print(f"  {c['overlap']:.0%}  {str(c['a_title'])[:52]} || {str(c['b_title'])[:52]}")
         return
 
+    if args.apply and not args.local:
+        # Судья зовёт OpenAI, а с РФ-адреса OpenAI отвечает 403 по географии —
+        # первый прогон 17.09 дал 12 ошибок из 12. Поэтому запись идёт через тот же
+        # внешний контур, что и остальные ИИ-стадии, а не прямым вызовом.
+        from oiltech_digest import network_policy
+
+        decision = network_policy.route_ai_processing()
+        pairs = [{"a_id": int(c["a_id"]), "b_id": int(c["b_id"]), "overlap": c.get("overlap")}
+                 for c in candidates]
+        job = repository.create_background_job(
+            "reprint_review", {"pairs": pairs},
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
+        )
+        print(f"find-reprints: задача {job['id']} в очереди {job['queue_name']}, пар={len(pairs)}")
+        print("Результат применится, когда воркер её разберёт.")
+        return
+
     client = make_client(offline=args.offline)
     result = reprints.review_candidates(candidates, client, dry_run=not args.apply)
     st = result["stats"]
@@ -1622,6 +1641,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_reprints.add_argument("--candidates-only", action="store_true", help="только правило, без модели")
     p_reprints.add_argument("--offline", action="store_true", help="заглушка вместо модели")
     p_reprints.add_argument("--apply", action="store_true", help="ЗАПИСАТЬ пометки (по умолчанию сухой прогон)")
+    p_reprints.add_argument("--local", action="store_true",
+                            help="считать здесь, а не через внешний воркер (только для offline-проверок: "
+                                 "с РФ-адреса OpenAI отвечает 403)")
     p_reprints.set_defaults(func=cmd_find_reprints)
 
     p_ext_refetch = sub.add_parser(

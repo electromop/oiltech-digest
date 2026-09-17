@@ -1369,6 +1369,8 @@ def external_worker_complete(
             result = {**documents_external.scrub_result(result), "applied": applied}
         if job.get("kind") == "scrape_source" and result.get("external_fetch"):
             result = {**result, "applied": external_fetch.apply_scrape_result(result)}
+        if job.get("kind") == "reprint_review" and result.get("reprint_review"):
+            result = {**result, "applied": external_ai.apply_reprint_review_result(result, job_id=job_id)}
         if job.get("kind") == "refetch_text" and result.get("kind") == "refetch_text":
             result = {**result, "applied": external_fetch.apply_refetch_text_result(result)}
     except Exception:
@@ -1595,6 +1597,8 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
         return _clean(documents_external.build_document_payload(payload))
     if row.get("kind") == "scrape_source" and str(row.get("queue_name") or "").startswith("external-"):
         return _clean(external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload))
+    if row.get("kind") == "reprint_review" and row.get("queue_name") == "external-ai":
+        return _clean(external_ai.build_reprint_review_payload(payload))
     if row.get("kind") == "refetch_text" and str(row.get("queue_name") or "").startswith("external-"):
         return _clean(external_fetch.build_refetch_text_payload(payload))
     return _clean(payload)
