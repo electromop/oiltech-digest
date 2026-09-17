@@ -3036,8 +3036,13 @@ def insert_article(rec: dict) -> bool:
         body_hash = rec.get("body_hash")
         source_id = rec.get("source_id")
         if body_hash and source_id is not None:
+            # NOT pending_deletion — как на соседнем рубеже по url_key. Скрытая копия
+            # иначе блокировала бы пересбор навсегда: у RSS телом на вставке служит
+            # summary ленты, и один постоянный тизер-заглушка отрезал бы источник
+            # целиком после первой же статьи.
             twin = conn.execute(
-                "SELECT 1 FROM articles WHERE source_id = %s AND body_hash = %s LIMIT 1",
+                "SELECT 1 FROM articles WHERE source_id = %s AND body_hash = %s "
+                "AND NOT pending_deletion LIMIT 1",
                 (int(source_id), body_hash),
             ).fetchone()
             if twin is not None:

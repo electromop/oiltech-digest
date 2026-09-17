@@ -104,7 +104,7 @@ def process_relevance_articles(articles: list[dict], client) -> dict:
                 stats["processed"] += 1
                 stats["rejected"] += 1
                 continue
-            response = relevance_article(article, client)
+            response = relevance_article(article, client, tags=tags)
             relevant = bool(response.data.get("relevant"))
             repository.set_article_relevance(
                 article["id"], relevant, response.data.get("reason"), response.model
@@ -151,7 +151,7 @@ def recheck_relevance_articles(articles: list[dict], client, *, force: bool = Fa
             if blocked_reason:
                 relevant, reason, model = False, blocked_reason, "negative-keyword"
             else:
-                resp = relevance_article(article, client)
+                resp = relevance_article(article, client, tags=tags)
                 relevant = bool(resp.data.get("relevant"))
                 reason, model = resp.data.get("reason"), resp.model
                 _record_run(article, "relevance", client, resp)
@@ -275,7 +275,7 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
             elif article.get("relevant") is False:
                 relevant = False
             else:
-                rel_resp = relevance_article(article, client)
+                rel_resp = relevance_article(article, client, tags=tags)
                 relevant = bool(rel_resp.data.get("relevant"))
                 repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
                 _record_run(article, "relevance", client, rel_resp)
@@ -345,7 +345,7 @@ def summarize_article(article: dict, client) -> AIResponse:
     )
 
 
-def relevance_article(article: dict, client) -> AIResponse:
+def relevance_article(article: dict, client, tags: list[dict] | None = None) -> AIResponse:
     # Гейт судит по СЫРОМУ тексту (title+source+text), БЕЗ AI-сути: суммаризатор
     # обязан притягивать любую статью к нефтегазу, и подача его сути на вход гейта
     # давала самосбывающуюся релевантность (мусор проходил). Модель/effort — отдельные,
@@ -353,7 +353,7 @@ def relevance_article(article: dict, client) -> AIResponse:
     try:
         return client.complete_json(
             RELEVANCE_INSTRUCTIONS,
-            _relevance_prompt(article),
+            _relevance_prompt(article, tags=tags),
             RELEVANCE_SCHEMA,
             max_output_tokens=2500,
             model=config.OPENAI_RELEVANCE_MODEL,
@@ -364,7 +364,7 @@ def relevance_article(article: dict, client) -> AIResponse:
             raise
         return client.complete_json(
             RELEVANCE_INSTRUCTIONS,
-            _relevance_prompt(article, text_limit=1500),
+            _relevance_prompt(article, tags=tags, text_limit=1500),
             RELEVANCE_SCHEMA,
             max_output_tokens=2500,
             model=config.OPENAI_RELEVANCE_MODEL,
@@ -589,7 +589,7 @@ def _tags_scope() -> str:
     return block
 
 
-def _relevance_prompt(article: dict, *, text_limit: int = 6000) -> str:
+def _relevance_prompt(article: dict, *, tags: list[dict] | None = None, text_limit: int = 6000) -> str:
     """Вход гейта релевантности — БЕЗ AI-сути (намеренно): только сырые поля статьи,
     чтобы суждение шло по реальному содержанию, а не по подкрученной нефтегаз-сути.
 
@@ -606,7 +606,13 @@ def _relevance_prompt(article: dict, *, text_limit: int = 6000) -> str:
         f"published_at: {article.get('published_at') or ''}",
         f"text: {_compact(article.get('raw_text') or '', text_limit)}",
     ]
-    scope = _tags_scope()
+    # Тематики берём из переданного списка, если он есть, и только иначе идём в базу.
+    # Это не оптимизация: на проде стадия исполняется на зарубежном воркере, у
+    # которого БАЗЫ НЕТ (docker-compose.external-worker.yml без DATABASE_URL).
+    # Там чтение падало бы в except и блок молча уезжал пустым — то есть тематики
+    # не влияли бы ни на что именно в боевом режиме. Теги в payload воркера уже
+    # кладутся для стадии тегирования (external_ai.build_process_articles_payload).
+    scope = tags_scope_block(tags) if tags else _tags_scope()
     if scope:
         lines.append("")
         lines.append(scope)

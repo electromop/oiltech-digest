@@ -586,3 +586,50 @@ def test_relevance_prompt_survives_tag_read_failure(monkeypatch):
     prompt = pipeline._relevance_prompt({"title": "t", "raw_text": "x"})
     assert "title: t" in prompt
     assert "тематики заказчика" not in prompt
+
+
+def test_relevance_prompt_prefers_passed_tags_over_database(monkeypatch):
+    """Ключевое для прода: ИИ-стадия исполняется на зарубежном воркере, у которого
+    БАЗЫ НЕТ. Теги обязаны приезжать параметром, иначе чтение падает в except и
+    тематики молча не влияют ни на что именно в боевом режиме."""
+    def must_not_be_called():
+        raise AssertionError("гейт полез в базу вместо переданных тегов")
+
+    monkeypatch.setattr(pipeline.repository, "list_enabled_tags", must_not_be_called)
+    prompt = pipeline._relevance_prompt(
+        {"title": "t", "raw_text": "x"},
+        tags=[{"name": "Бурение", "keywords_json": ["направленное бурение"],
+               "keywords_en_json": [], "negative_keywords_json": []}],
+    )
+    assert "тематики заказчика:" in prompt
+    assert "Бурение" in prompt
+
+
+def test_tags_scope_keeps_english_keywords_when_russian_list_is_long():
+    """Общий срез ключей съедался русскими (их 33-52 на тематику) и до промпта не
+    доезжал ни один английский — а гейт судит и англоязычные тексты."""
+    from oiltech_digest.processing.prompts import tags_scope_block
+
+    block = tags_scope_block([{
+        "name": "Автоматизация", "name_en": "Industrial AI",
+        "keywords_json": [f"ключ{i}" for i in range(40)],
+        "keywords_en_json": ["SCADA", "digital twin"],
+        "negative_keywords_json": [],
+    }])
+    assert "SCADA" in block
+    assert "digital twin" in block
+
+
+def test_tags_scope_excludes_catch_all_tag():
+    """Служебный приёмник «Не классифицировано» — не тематика заказчика: по правилу
+    2б попадание в тематику это довод ЗА, и приёмник делал бы доводом ЗА всё непонятое."""
+    from oiltech_digest.processing.prompts import tags_scope_block
+
+    block = tags_scope_block([
+        {"name": "Не классифицировано / новая тема", "keywords_json": [],
+         "keywords_en_json": [], "negative_keywords_json": []},
+        {"name": "Бурение", "keywords_json": ["ГРП-флот"], "keywords_en_json": [],
+         "negative_keywords_json": []},
+    ])
+    assert "Не классифицировано" not in block
+    assert "Бурение" in block

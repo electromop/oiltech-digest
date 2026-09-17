@@ -215,41 +215,59 @@ SCORE_SCHEMA = {
 }
 
 
-def tags_scope_block(tags: list[dict], *, limit_keywords: int = 10) -> str:
+def tags_scope_block(tags: list[dict], *, per_language: int = 6) -> str:
     """Блок «тематики заказчика» для гейта релевантности.
 
     До 17.09 теги влияли ТОЛЬКО на классификацию уже отобранного: ни предфильтр, ни
     гейт их не читали. Заказчик этого не знал — 07.09 он прямо спросил, влияют ли
     теги на то, попадёт ли статья в список, и расширял их в расчёте на выборку.
-    Здесь тематики впервые попадают в решение «брать или не брать».
 
-    Отдаём имя, английское имя и по несколько ключей каждого языка: гейт судит и
-    русские, и английские, и китайские тексты. Стоп-слова идут отдельной пометкой
-    `минус:` — они работают как довод против, а не как жёсткий запрет, иначе одно
-    неудачное слово в справочнике молча выкосило бы целую тематику.
+    Ключи берём ПОКВОТНО с каждого языка, а не общим срезом: при общем срезе русские
+    ключи (их в справочнике 33-52 на тематику) съедали лимит целиком и до промпта не
+    доезжало ни одного английского — проверено прогоном 17.09. Гейт судит и
+    англоязычные тексты, и это ровно те источники, ради которых включали зарубежный
+    контур.
+
+    Служебный приёмник «Не классифицировано» в блок не попадает: по правилу 2б
+    попадание в тематику — довод ЗА, и приёмник делал бы доводом ЗА всё непонятое.
+
+    Стоп-слова идут пометкой `минус:` — довод против, а не жёсткий запрет: одно
+    неудачное слово в справочнике иначе молча выкосило бы целую тематику.
     """
     lines: list[str] = []
     for tag in tags:
         name = str(tag.get("name") or "").strip()
-        if not name:
+        if not name or is_catch_all_tag(tag):
             continue
         parts = [name]
         name_en = str(tag.get("name_en") or "").strip()
         if name_en:
             parts.append(f"EN: {name_en}")
-        keys: list[str] = []
-        for field in ("keywords_json", "keywords_en_json"):
-            values = tag.get(field) or []
-            keys.extend(str(v).strip() for v in values if str(v).strip())
+        ru = _clean_values(tag.get("keywords_json"))[:per_language]
+        en = _clean_values(tag.get("keywords_en_json"))[:per_language]
+        keys = _dedupe_keep_order(ru + en)
         if keys:
-            parts.append("ключи: " + ", ".join(_dedupe_keep_order(keys)[:limit_keywords]))
-        stop = [str(v).strip() for v in (tag.get("negative_keywords_json") or []) if str(v).strip()]
+            parts.append("ключи: " + ", ".join(keys))
+        stop = _dedupe_keep_order(_clean_values(tag.get("negative_keywords_json")))[:6]
         if stop:
-            parts.append("минус: " + ", ".join(_dedupe_keep_order(stop)[:6]))
+            parts.append("минус: " + ", ".join(stop))
         lines.append(" | ".join(parts))
     if not lines:
         return ""
     return "тематики заказчика:\n" + "\n".join(f"- {line}" for line in lines)
+
+
+CATCH_ALL_TAG_MARKERS = ("не классифицировано", "не определено", "новая тема")
+
+
+def is_catch_all_tag(tag: dict) -> bool:
+    """Служебный тег-приёмник, куда падает непонятое. Тематикой заказчика не является."""
+    name = str(tag.get("name") or "").casefold()
+    return any(marker in name for marker in CATCH_ALL_TAG_MARKERS)
+
+
+def _clean_values(values: object) -> list[str]:
+    return [str(v).strip() for v in (values or []) if str(v).strip()]  # type: ignore[union-attr]
 
 
 def _dedupe_keep_order(values: list[str]) -> list[str]:

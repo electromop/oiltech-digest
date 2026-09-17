@@ -108,7 +108,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | Non
                 continue
             # Гейт релевантности ПЕРВЫМ — на сыром тексте, до суммаризации.
             # Нерелевантное дальше не суммируем/не тегируем/не скорим (чистота + экономия).
-            relevance_resp = relevance_article(article, client)
+            relevance_resp = relevance_article(article, client, tags=tags)
             relevant = bool(relevance_resp.data.get("relevant"))
             item["relevance"] = _response_payload(
                 relevance_resp,
@@ -203,7 +203,7 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], Non
                 item["relevance"] = {"relevant": False, "reason": blocked_reason, "model": "negative-keyword"}
                 result["stats"]["rejected"] += 1
             else:
-                resp = relevance_article(article, client)
+                resp = relevance_article(article, client, tags=tags)
                 relevant = bool(resp.data.get("relevant"))
                 item["relevance"] = _response_payload(resp, {"relevant": relevant, "reason": resp.data.get("reason")})
                 result["stats"]["relevant" if relevant else "rejected"] += 1

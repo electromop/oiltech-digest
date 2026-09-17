@@ -116,114 +116,15 @@ class SourceCreate(BaseModel):
     update_frequency: str | None = None
 
 
-class SourceCandidateEvaluateRequest(BaseModel):
-    article_limit: int = 5
-    offline: bool = True
-    collect: bool = True
-    process: bool = True
 
 
-class SourceCandidateApproveRequest(BaseModel):
-    name: str | None = None
-    source_type: str = "Discovered"
-    parse_strategy: str | None = None
-    enabled: bool = False
-    category: str | None = None
-    priority: float = 1.0
-    network_region: str = "auto"
-    scrape_after_approve: bool = True
 
 
-class SourceCandidatePatch(BaseModel):
-    status: str | None = None
-    recommended_action: str | None = None
-    review_comment: str | None = None
 
 
-class SignalDiscoveryRequest(BaseModel):
-    topic: str | None = None
-    days: int = 14
-    limit: int = 80
-    min_score: float = 40
-    max_signals: int = 10
-    offline: bool = True
-    dry_run: bool = False
-    web_search: bool = False
-    web_only: bool = False
-    web_query_limit: int = 8
 
 
-class SignalFeedbackCreate(BaseModel):
-    article_id: int | None = None
-    signal_id: int | None = None
-    signal_evidence_id: int | None = None
-    source_url: str | None = None
-    signal_title: str | None = None
-    source: str | None = None
-    comment: str = ""
-    verdict: str | None = None
-    reason: str | None = None
-    corrected_title: str | None = None
-    corrected_thesis: str | None = None
-    duplicate_of_signal_id: int | None = None
 
-
-class SignalPatch(BaseModel):
-    status: str | None = None
-    selected_for_digest: bool | None = None
-    analyst_comment: str | None = None
-
-
-class SourceDiscoveryPlanRequest(BaseModel):
-    days: int = 30
-    target_per_topic: int = 10
-    topic_limit: int = 5
-    candidate_limit: int = 10
-    max_actions: int = 5
-    persist_memory: bool = True
-    offline: bool = True
-    evaluate: bool = True
-
-
-class SourceDiscoveryDiscoverRequest(BaseModel):
-    topic: str
-    seed_url: str
-    limit: int = 20
-    offline: bool = True
-    fetch_inspection: bool = False
-    test_parse: bool = False
-
-
-class SourceDiscoveryLoopRequest(BaseModel):
-    goal: str = "Найти новые полезные источники сигналов"
-    days: int = 30
-    target_per_topic: int = 10
-    topic_limit: int = 5
-    candidate_limit: int = 10
-    max_actions: int = 5
-    max_iterations: int = 3
-    offline: bool = True
-    fetch_inspection: bool = True
-    test_parse: bool = True
-    dry_run: bool = False
-    auto_evaluate: bool = True
-    article_limit: int = 5
-    persist_memory: bool = True
-    max_daily_loop_runs: int = 4
-    max_daily_candidates: int = 100
-    max_daily_evaluations: int = 100
-
-
-class AgentMemoryPatch(BaseModel):
-    status: str
-
-
-class AgentMemoryCreate(BaseModel):
-    memory_type: str
-    subject: str
-    status: str = "active"
-    score: float = 50
-    facts: dict[str, Any] | None = None
 
 
 class ScoringCriterionIn(BaseModel):
