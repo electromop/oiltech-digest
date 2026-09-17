@@ -112,22 +112,33 @@ def review_candidates(candidates: list[dict], client, *, dry_run: bool = True) -
     return {"stats": stats, "decisions": decisions, "dry_run": dry_run}
 
 
-def _resolve_primary(raw: Any, left: dict, right: dict) -> int:
+def resolve_primary(raw: Any, a_id: int, a_len: int, b_id: int, b_len: int) -> int:
     """Главная копия — та, что полнее как самостоятельный материал.
 
-    Ответ модели принимаем, только если это один из двух наших id: получив чужое
-    число, мы пометили бы дублем не ту статью. Иначе решаем длиной — в случае
+    ЕДИНСТВЕННОЕ место этого правила: раньше оно жило двумя копиями — здесь и в
+    external_ai.apply_reprint_review_result, — и молча разъехалось бы при первой
+    же правке.
+
+    Ответ модели принимаем, только если это один из двух наших id: с посторонним
+    числом мы пометили бы дублем не ту статью. Иначе решаем длиной — в случае
     заказчика копии были 1026, 2327, 2366 и 3181 знак, и короткая оказалась
     обрывком с дефектом склейки заголовка.
     """
-    ids = {int(left["id"]), int(right["id"])}
     try:
         candidate = int(raw)
     except (TypeError, ValueError):
         candidate = 0
-    if candidate in ids:
+    if candidate in (int(a_id), int(b_id)):
         return candidate
-    return int(left["id"]) if len(left.get("raw_text") or "") >= len(right.get("raw_text") or "") else int(right["id"])
+    return int(a_id) if int(a_len) >= int(b_len) else int(b_id)
+
+
+def _resolve_primary(raw: Any, left: dict, right: dict) -> int:
+    return resolve_primary(
+        raw,
+        int(left["id"]), len(left.get("raw_text") or ""),
+        int(right["id"]), len(right.get("raw_text") or ""),
+    )
 
 
 def _pair_prompt(left: dict, right: dict) -> str:

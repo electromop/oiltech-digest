@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api
@@ -1403,3 +1404,122 @@ def test_external_refetch_candidates_only_external_stubs(isolated_db):
     assert "https://w.example/failed" in urls, "failed ставила локальная попытка, повторяем через воркер"
     assert "https://w.example/full" not in urls, "полная статья не нуждается в дозаполнении"
     assert "https://r.example/stub" not in urls, "локальный источник берёт обычная дозагрузка"
+
+
+def test_feed_and_digest_skip_reprints(isolated_db):
+    """Пометка перепечатки должна что-то значить: копия уходит из ленты и из выпуска.
+
+    Без этого условия таблица была бы мёртвой записью — заполняется, а заказчик
+    по-прежнему видит четыре карточки одной новости, ровно как 08.09.
+    """
+    with connection.get_connection() as conn:
+        s1 = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('A', 'Media', 'https://a.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        s2 = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('B', 'Media', 'https://b.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        main_id = conn.execute(
+            "INSERT INTO articles (source_id, title, url, raw_text, language) "
+            "VALUES (%s, 'Главная копия', 'https://a.example/x', 'текст', 'ru') RETURNING id",
+            (s1,),
+        ).fetchone()[0]
+        copy_id = conn.execute(
+            "INSERT INTO articles (source_id, title, url, raw_text, language) "
+            "VALUES (%s, 'Перепечатка', 'https://b.example/x', 'текст', 'ru') RETURNING id",
+            (s2,),
+        ).fetchone()[0]
+        conn.commit()
+
+    from oiltech_digest.db import repository
+
+    repository.mark_article_reprint(
+        article_id=copy_id, primary_id=main_id, similarity=0.7,
+        reason="одно событие", decided_by="test",
+    )
+
+    with connection.get_connection() as conn:
+        hidden = conn.execute(
+            "SELECT count(*) FROM articles a "
+            "WHERE a.id = %s AND NOT EXISTS "
+            "(SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)",
+            (copy_id,),
+        ).fetchone()[0]
+        kept = conn.execute(
+            "SELECT count(*) FROM articles a "
+            "WHERE a.id = %s AND NOT EXISTS "
+            "(SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)",
+            (main_id,),
+        ).fetchone()[0]
+    assert hidden == 0, "копия обязана уйти из выборки"
+    assert kept == 1, "главная копия обязана остаться"
+
+
+def test_marking_article_as_its_own_reprint_is_rejected(isolated_db):
+    from oiltech_digest.db import repository
+
+    with pytest.raises(ValueError):
+        repository.mark_article_reprint(
+            article_id=1, primary_id=1, similarity=None, reason=None)
+
+
+def test_reprint_chain_resolves_to_group_root(isolated_db):
+    """Пометки попарные, поэтому главной назначается КОРЕНЬ группы, а не сосед.
+
+    Без этого получалась бы цепочка C→A→D, и фильтр ленты унёс бы из выборки всю
+    группу вместе с оригиналом.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        src = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('S', 'Media', 'https://s.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        ids = []
+        for n in ("A", "B", "C"):
+            ids.append(conn.execute(
+                "INSERT INTO articles (source_id, title, url, raw_text, language) "
+                "VALUES (%s, %s, %s, 'текст', 'ru') RETURNING id",
+                (src, n, f"https://s.example/{n}"),
+            ).fetchone()[0])
+        conn.commit()
+    a, b, c = ids
+
+    repository.mark_article_reprint(article_id=b, primary_id=a, similarity=0.6,
+                                    reason="одно событие", decided_by="test")
+    # Просим сделать главной B, которая сама уже копия A → корень остаётся A.
+    repository.mark_article_reprint(article_id=c, primary_id=b, similarity=0.6,
+                                    reason="одно событие", decided_by="test")
+
+    with connection.get_connection() as conn:
+        rows = dict(conn.execute(
+            "SELECT article_id, primary_id FROM article_reprints").fetchall())
+    assert rows[b] == a
+    assert rows[c] == a, "цепочка не разрешена до корня — оригинал исчез бы из ленты"
+    assert a not in rows, "корень группы не может быть помечен копией"
+
+
+def test_unmark_returns_article_to_feed(isolated_db):
+    """Решение принимает модель — у человека должен быть способ его отменить."""
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        src = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('S2', 'Media', 'https://s2.example', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        a = conn.execute("INSERT INTO articles (source_id, title, url, raw_text, language) "
+                         "VALUES (%s,'A','https://s2.example/a','t','ru') RETURNING id",
+                         (src,)).fetchone()[0]
+        b = conn.execute("INSERT INTO articles (source_id, title, url, raw_text, language) "
+                         "VALUES (%s,'B','https://s2.example/b','t','ru') RETURNING id",
+                         (src,)).fetchone()[0]
+        conn.commit()
+
+    repository.mark_article_reprint(article_id=b, primary_id=a, similarity=0.5,
+                                    reason="r", decided_by="test")
+    assert repository.unmark_article_reprint(b) is True
+    assert repository.unmark_article_reprint(b) is False, "повторное снятие — не ошибка, но и не успех"

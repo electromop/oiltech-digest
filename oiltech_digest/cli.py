@@ -712,6 +712,29 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_reprints(args: argparse.Namespace) -> None:
+    """Показать помеченные перепечатки или снять пометку.
+
+    Снятие обязательно: решение принимает модель, и у человека должен быть способ
+    её отменить — иначе ошибка ИИ необратима так же, как удаление."""
+    from oiltech_digest.db import repository
+
+    if args.unmark:
+        ok = repository.unmark_article_reprint(args.unmark)
+        print(f"пометка со статьи {args.unmark}: {'снята, статья вернулась в ленту' if ok else 'не найдена'}")
+        return
+    rows = repository.list_article_reprints(limit=args.limit)
+    stats = repository.reprint_stats()
+    print(f"перепечаток помечено: {stats['total']} в {stats['groups']} группах")
+    for r in rows:
+        sim = f"{float(r['similarity']):.0%}" if r.get("similarity") is not None else "—"
+        print(f"  {r['article_id']} ← дубль {r['primary_id']} ({sim}, {r['decided_by']})")
+        print(f"    копия:   {str(r['duplicate_source'])[:18]} · {str(r['duplicate_title'])[:58]}")
+        print(f"    главная: {str(r['primary_source'])[:18]} · {str(r['primary_title'])[:58]}")
+        if r.get("reason"):
+            print(f"    почему:  {str(r['reason'])[:90]}")
+
+
 def cmd_find_reprints(args: argparse.Namespace) -> None:
     """Найти перепечатки: правило даёт кандидатов, модель решает (№21).
 
@@ -721,6 +744,11 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
     from oiltech_digest.processing import reprints
     from oiltech_digest.processing.pipeline import make_client
+
+    if not 0 < args.min_overlap <= 1:
+        raise SystemExit("--min-overlap задаётся долей от 0 до 1 (напр. 0.35)")
+    if args.days < 1 or args.limit < 1 or args.max_days_apart < 0:
+        raise SystemExit("--days и --limit должны быть положительными, --max-days-apart неотрицательным")
 
     candidates = reprints.find_candidates(
         days=args.days, min_overlap=args.min_overlap,
@@ -733,7 +761,11 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
             print(f"  {c['overlap']:.0%}  {str(c['a_title'])[:52]} || {str(c['b_title'])[:52]}")
         return
 
-    if args.apply and not args.local:
+    # ЛЮБОЙ прогон с моделью идёт через контур, а не только --apply: сухой прогон
+    # тоже зовёт OpenAI, и с РФ-адреса он ловит 403 по географии. Именно на этом
+    # первый прогон 17.09 дал 12 ошибок из 12 — а сухой прогон здесь умолчание,
+    # то есть сломан был основной путь.
+    if not args.local:
         # Судья зовёт OpenAI, а с РФ-адреса OpenAI отвечает 403 по географии —
         # первый прогон 17.09 дал 12 ошибок из 12. Поэтому запись идёт через тот же
         # внешний контур, что и остальные ИИ-стадии, а не прямым вызовом.
@@ -743,13 +775,14 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         pairs = [{"a_id": int(c["a_id"]), "b_id": int(c["b_id"]), "overlap": c.get("overlap")}
                  for c in candidates]
         job = repository.create_background_job(
-            "reprint_review", {"pairs": pairs},
+            "reprint_review", {"pairs": pairs, "dry_run": not args.apply},
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,
         )
-        print(f"find-reprints: задача {job['id']} в очереди {job['queue_name']}, пар={len(pairs)}")
-        print("Результат применится, когда воркер её разберёт.")
+        mode = "СУХОЙ ПРОГОН (ничего не помечается)" if not args.apply else "С ЗАПИСЬЮ пометок"
+        print(f"find-reprints: задача {job['id']} в очереди {job['queue_name']}, пар={len(pairs)}, режим: {mode}")
+        print(f"Смотреть результат: cli jobs-show {job['id']} или таблица article_reprints")
         return
 
     client = make_client(offline=args.offline)
@@ -790,20 +823,24 @@ def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
         return
 
     ids = [int(r["id"]) for r in rows]
-    decision = network_policy.route_ai_processing()
-    queue = "external-fetch" if decision.execution_region == "external" else "default"
+    # Маршрут спрашиваем как у ФЕТЧ-задачи, а не у ИИ: это скачивание страниц.
+    # Раньше здесь стоял route_ai_processing и хардкод очереди, из-за чего при
+    # неexternal-решении задача уезжала в 'default' с execution_region='external' —
+    # несогласованная пара, которую никто бы не разобрал.
+    probe = {"parse_strategy": "request", "network_region": "external", "network_profile": "direct"}
+    decision = network_policy.route_source_task(probe, task_kind="refetch")
     enq = 0
     for start in range(0, len(ids), args.batch):
         chunk = ids[start:start + args.batch]
         repository.create_background_job(
             "refetch_text",
             {"article_ids": chunk, "min_chars": config.MIN_FULL_TEXT_CHARS},
-            queue_name=queue,
-            execution_region="external",
-            capability="http_fetch",
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
         )
         enq += 1
-    print(f"enqueue-external-refetch: статей={len(ids)}, задач={enq}, очередь={queue}")
+    print(f"enqueue-external-refetch: статей={len(ids)}, задач={enq}, очередь={decision.queue_name}")
 
 
 def cmd_enqueue_external_scrape(args: argparse.Namespace) -> None:
@@ -1630,6 +1667,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_external = sub.add_parser("enqueue-external-scrape", help="фетч источников network_region=external через зарубежный воркер (no-op без FETCH_EXTERNAL_ENABLED)")
     p_enqueue_external.add_argument("--max-age-days", type=int, default=None, help="окно свежести статей (по умолчанию без ограничения)")
     p_enqueue_external.set_defaults(func=cmd_enqueue_external_scrape)
+
+    p_repr_list = sub.add_parser("reprints", help="показать помеченные перепечатки или снять пометку")
+    p_repr_list.add_argument("--limit", type=int, default=20)
+    p_repr_list.add_argument("--unmark", type=int, default=None,
+                             help="снять пометку с article_id — статья вернётся в ленту")
+    p_repr_list.set_defaults(func=cmd_reprints)
 
     p_reprints = sub.add_parser(
         "find-reprints", help="перепечатки между источниками: правило + ИИ-судья (№21)")

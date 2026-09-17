@@ -3543,7 +3543,16 @@ def external_refetch_candidates(limit: int = 200) -> list[dict]:
             WHERE a.url IS NOT NULL
               AND s.network_region = 'external'
               AND s.archived_at IS NULL
-              AND (a.full_text_status IS NULL OR a.full_text_status IN ('failed', 'too_short'))
+              AND (
+                a.full_text_status IS NULL
+                -- Повтор после неудачи — но НЕ каждый цикл. Статусы failed/too_short
+                -- ставит сама же внешняя попытка, поэтому без паузы статья
+                -- переочередивалась бы вечно: в июле так задача 1181 крутилась в
+                -- петле по часу и жгла деньги. Даём сутки на остыть.
+                OR (a.full_text_status IN ('failed', 'too_short')
+                    AND (a.full_text_fetched_at IS NULL
+                         OR a.full_text_fetched_at < now() - interval '1 day'))
+              )
               AND length(COALESCE(a.raw_text, '')) < %s
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
@@ -3623,6 +3632,29 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
         return cur.fetchall()
 
 
+def resolve_reprint_root(conn, article_id: int, *, max_hops: int = 8) -> int:
+    """Корень группы перепечаток: главная копия, которая сама ничьей копией не является.
+
+    Пометки ставятся ПОПАРНО, и без разрешения до корня получалась бы цепочка
+    C→A→D: каждая пара выбирает главную независимо. С фильтром ленты, который
+    прячет всё, что значится копией, такая цепочка унесла бы из выборки ВСЮ группу
+    вместе с оригиналом. Ограничение по шагам — защита от кольца в уже накопленных
+    данных, а не теоретическая.
+    """
+    current = int(article_id)
+    for _ in range(max_hops):
+        row = conn.execute(
+            "SELECT primary_id FROM article_reprints WHERE article_id = %s", (current,)
+        ).fetchone()
+        if row is None:
+            return current
+        nxt = int(row[0])
+        if nxt == current:
+            return current
+        current = nxt
+    return current
+
+
 def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float | None,
                          reason: str | None, decided_by: str = "ai",
                          model: str | None = None) -> None:
@@ -3630,6 +3662,11 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
     if int(article_id) == int(primary_id):
         raise ValueError("статья не может быть перепечаткой самой себя")
     with get_connection() as conn:
+        # Главной назначаем КОРЕНЬ группы, а не соседа по паре: иначе цепочка
+        # C→A→D спрячет из ленты и оригинал.
+        primary_id = resolve_reprint_root(conn, int(primary_id))
+        if int(article_id) == int(primary_id):
+            raise ValueError("статья уже является корнем своей группы перепечаток")
         conn.execute(
             """
             INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)
@@ -3644,6 +3681,45 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             (int(article_id), int(primary_id), similarity, reason, decided_by, model),
         )
         conn.commit()
+
+
+def unmark_article_reprint(article_id: int) -> bool:
+    """Снять пометку перепечатки — статья возвращается в ленту и в выпуск.
+
+    Без этой операции «обратимо» было бы только на словах: пометка ставится ИИ, и
+    у человека должен быть способ её отменить, иначе ошибка модели становится
+    необратимой ровно так же, как удаление.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM article_reprints WHERE article_id = %s RETURNING article_id",
+            (int(article_id),),
+        )
+        removed = cur.fetchone() is not None
+        conn.commit()
+    return removed
+
+
+def list_article_reprints(limit: int = 50) -> list[dict]:
+    """Помеченные перепечатки с объяснением — чтобы решение можно было проверить."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT r.article_id, r.primary_id, r.similarity, r.reason, r.decided_by,
+                   r.created_at, d.title AS duplicate_title, p.title AS primary_title,
+                   ds.name AS duplicate_source, ps.name AS primary_source
+            FROM article_reprints r
+            JOIN articles d ON d.id = r.article_id
+            JOIN articles p ON p.id = r.primary_id
+            JOIN sources ds ON ds.id = d.source_id
+            JOIN sources ps ON ps.id = p.source_id
+            ORDER BY r.created_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
 
 
 def reprint_stats() -> dict:
@@ -4802,6 +4878,10 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             LEFT JOIN tags parent ON parent.id = t.parent_id
             WHERE uas.status = 'digest'
               AND s.archived_at IS NULL          -- архивный источник не попадает и в выпуск
+              -- Перепечатка в выпуск не идёт: в дайджесте нужна одна копия новости,
+              -- и это ровно то, что заказчик делает руками («одну заберу в дайджест,
+              -- вторую отмечу как дубликат», 22.08).
+              AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
               AND c.relevant IS NOT FALSE
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
               AND COALESCE(sc.total_score, 0) >= %(min_score)s

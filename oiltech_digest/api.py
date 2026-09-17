@@ -572,6 +572,12 @@ def list_articles(
     # Именно этого не делало `enabled = FALSE`: сбор прекращался, а накопленный мусор
     # продолжал висеть в ленте у ВСЕХ пользователей — лента джойнит sources без условия.
     clauses.append("s.archived_at IS NULL")
+    # Перепечатка не показывается: в ленте остаётся одна главная копия группы.
+    # Без этого условия пометка была бы мёртвой записью — таблица заполняется, а
+    # заказчик по-прежнему видит четыре карточки одной новости, ровно как 08.09.
+    # Скрыта именно КОПИЯ: главная (primary_id) в таблице не значится и остаётся.
+    # Запись обратима — удаления нет, строку можно снять и статья вернётся.
+    clauses.append("NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     order_by = {
         "date_desc": "a.published_at DESC NULLS LAST, COALESCE(sc.total_score, 0) DESC, a.id DESC",

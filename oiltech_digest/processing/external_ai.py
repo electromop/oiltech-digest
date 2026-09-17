@@ -455,6 +455,10 @@ def build_reprint_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
     from oiltech_digest.db import repository
 
     pairs = payload.get("pairs") or []
+    if not pairs:
+        # Пустой список — это ошибка постановки, а не «нечего делать»: молча вернув
+        # пустой пакет, задача завершилась бы «успехом» и скрыла проблему.
+        raise ValueError("reprint_review: пустой список pairs")
     packed: list[dict[str, Any]] = []
     for pair in pairs:
         left = repository.get_article(int(pair["a_id"]))
@@ -466,7 +470,7 @@ def build_reprint_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "a": _compact_article_for_reprint(left),
             "b": _compact_article_for_reprint(right),
         })
-    return {"kind": "reprint_review", "pairs": packed}
+    return {"kind": "reprint_review", "pairs": packed, "dry_run": bool(payload.get("dry_run"))}
 
 
 def _compact_article_for_reprint(article: dict[str, Any]) -> dict[str, Any]:
@@ -509,6 +513,7 @@ def process_reprint_review_payload(payload: dict[str, Any],
     return {
         "reprint_review": True,
         "kind": "reprint_review",
+        "dry_run": bool(payload.get("dry_run")),
         "verdicts": verdicts,
         "stats": {
             "checked": len(verdicts),
@@ -521,21 +526,29 @@ def process_reprint_review_payload(payload: dict[str, Any],
 def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
     """Сторона ядра: записать пометки. Удаления нет намеренно — запись обратима."""
     from oiltech_digest.db import repository
+    from oiltech_digest.processing.reprints import resolve_primary as reprints_resolve_primary
+
+    if result.get("dry_run"):
+        # Сухой прогон ничего не пишет — это умолчание CLI и главный сценарий
+        # показа заказчику перед тем, как что-то схлопывать.
+        return {"applied": 0, "dry_run": True}
 
     applied = 0
     for verdict in result.get("verdicts") or []:
         if verdict.get("error") or not verdict.get("same_event"):
             continue
-        a_id, b_id = int(verdict["a_id"]), int(verdict["b_id"])
-        raw_primary = verdict.get("primary_id")
         try:
-            primary = int(raw_primary)
-        except (TypeError, ValueError):
-            primary = 0
-        if primary not in (a_id, b_id):
-            # Чужой id от модели не принимаем: пометили бы дублем не ту статью.
-            # Падаем на длину — короткая копия обычно и есть обрывок.
-            primary = a_id if int(verdict.get("a_len") or 0) >= int(verdict.get("b_len") or 0) else b_id
+            a_id, b_id = int(verdict["a_id"]), int(verdict["b_id"])
+        except (KeyError, TypeError, ValueError):
+            # Ответ воркера — недоверенный вход: битую запись пропускаем, а не падаем
+            # на всей пачке.
+            continue
+        # Правило выбора главной копии живёт в reprints.resolve_primary и только там.
+        primary = reprints_resolve_primary(
+            verdict.get("primary_id"),
+            a_id, int(verdict.get("a_len") or 0),
+            b_id, int(verdict.get("b_len") or 0),
+        )
         duplicate = b_id if primary == a_id else a_id
         repository.mark_article_reprint(
             article_id=duplicate, primary_id=primary,
