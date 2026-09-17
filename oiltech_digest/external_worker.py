@@ -172,7 +172,10 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
             client.complete(job, result)
         elif job.get("kind") == "scrape_source":
             client.progress(job, 20)
-            result = external_fetch.process_payload(job.get("payload") or {})
+            result = external_fetch.process_payload(
+                job.get("payload") or {},
+                heartbeat=lambda: _safe_heartbeat(client, job),
+            )
             client.progress(job, 90)
             client.complete(job, result)
         elif job.get("kind") == "reprint_review":
@@ -185,7 +188,10 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
             client.complete(job, result)
         elif job.get("kind") == "refetch_text":
             client.progress(job, 20)
-            result = external_fetch.process_refetch_text_payload(job.get("payload") or {})
+            result = external_fetch.process_refetch_text_payload(
+                job.get("payload") or {},
+                heartbeat=lambda: _safe_heartbeat(client, job),
+            )
             client.progress(job, 90)
             client.complete(job, result)
         else:

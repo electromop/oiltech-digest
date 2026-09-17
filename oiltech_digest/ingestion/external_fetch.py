@@ -23,7 +23,7 @@ def build_scrape_source_payload(source_id: int, payload: dict[str, Any]) -> dict
     }
 
 
-def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def process_payload(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     source = payload["source"]
     strategy = source.get("parse_strategy")
     if strategy == "playwright":
@@ -31,7 +31,7 @@ def process_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if strategy == "request":
         return _process_request(source, payload)
     if strategy == "rss":
-        return _process_rss(source, payload)
+        return _process_rss(source, payload, heartbeat=heartbeat)
     raise ValueError(f"Unsupported external scrape strategy: {strategy}")
 
 
@@ -63,7 +63,7 @@ def _process_request(source: dict[str, Any], payload: dict[str, Any]) -> dict[st
     return _articles_from_candidates(source, candidates, payload, fetch_article_candidate, _listing_hash)
 
 
-def _process_rss(source: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _process_rss(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     from oiltech_digest.ingestion.http_client import fetch
     from oiltech_digest.ingestion import rss_parser
 
@@ -82,7 +82,7 @@ def _process_rss(source: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
     # воркере, которому сайт отвечает.
     articles = [
         _jsonable_dict({k: v for k, v in rec.items() if k != "source_id"})
-        for rec in _fill_bodies_from_source(source, recs)
+        for rec in _fill_bodies_from_source(source, recs, heartbeat=heartbeat)
     ]
     return {
         "external_fetch": True,
@@ -197,7 +197,8 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]],
+                             heartbeat=None) -> list[dict[str, Any]]:
     """Дотянуть полный текст статей ленты со страницы издания.
 
     Работает только там, где вызвано, — на воркере зарубежного контура. Берём
@@ -210,6 +211,8 @@ def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]])
 
     filled: list[dict[str, Any]] = []
     for rec in recs:
+        if heartbeat:
+            heartbeat()
         text = str(rec.get("raw_text") or "")
         url = str(rec.get("url") or "")
         if len(text) >= MIN_ARTICLE_TEXT_CHARS or not url:
@@ -251,14 +254,24 @@ def build_refetch_text_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def process_refetch_text_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Сторона воркера: скачать страницы и вернуть тела. В базу не ходит."""
+def process_refetch_text_payload(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
+    """Сторона воркера: скачать страницы и вернуть тела. В базу не ходит.
+
+    Биение на каждую статью обязательно: один недоступный хост стоит до 63 с
+    (3 попытки по 20 с), lease внешней задачи — 600 с. Без биения пакет из 25
+    статей не доживал до конца — его забирал реапер протухших lease на девятой,
+    задача уходила в ретрай и на третьей попытке умирала вместе со всем пакетом.
+    Ровно этот урок уже был получен на ИИ-обработчиках (T2/24.07), но загрузочные
+    написаны позже и его не унаследовали.
+    """
     from oiltech_digest.ingestion.article_fetcher import extract_main_text
     from oiltech_digest.ingestion.http_client import fetch
 
     min_chars = int(payload.get("min_chars") or 0)
     out: list[dict[str, Any]] = []
     for item in payload.get("articles") or []:
+        if heartbeat:
+            heartbeat()
         url = str(item.get("url") or "")
         record: dict[str, Any] = {"id": int(item["id"]), "status": "failed", "text": None}
         if url:

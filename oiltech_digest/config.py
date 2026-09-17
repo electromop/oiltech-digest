@@ -32,6 +32,11 @@ RETRY_BACKOFF_BASE = 1.0      # базовая задержка backoff (1с, 2�
 HTTP_MIN_INTERVAL_SECONDS = float(os.environ.get("HTTP_MIN_INTERVAL_SECONDS", "1.5"))
 HTTP_JITTER_SECONDS = float(os.environ.get("HTTP_JITTER_SECONDS", "0.4"))
 HTTP_BLOCK_COOLDOWN_SECONDS = int(os.environ.get("HTTP_BLOCK_COOLDOWN_SECONDS", "900"))
+# Хост, который МОЛЧИТ (таймаут), должен стоить столько же, сколько хост, который
+# отказал вслух (403). Пауза короче, чем при блокировке: таймаут бывает разовым,
+# а бан — нет. Ставится только после исчерпания всех попыток, т.е. когда хост не
+# ответил три раза подряд.
+HTTP_DEAD_HOST_COOLDOWN_SECONDS = int(os.environ.get("HTTP_DEAD_HOST_COOLDOWN_SECONDS", "300"))
 REQUEST_ARTICLE_LIMIT = int(os.environ.get("REQUEST_ARTICLE_LIMIT", "6"))
 # Минимум значимого текста для первичной вставки request/playwright-статей.
 # Корпоративные новости и press release бывают короткими; старый порог 200 символов
