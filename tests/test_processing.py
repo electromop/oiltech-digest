@@ -103,14 +103,20 @@ def test_relevance_article_uses_relevance_model_and_reasoning(monkeypatch):
     monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_REASONING", "high")
     client = _RecordingClient(relevant=True)
 
-    pipeline.relevance_article({"title": "t", "raw_text": "x", "summary": "S"}, client)
+    # Суть — различимая строка, а не одна буква: в промпте гейта с 17.09 есть блок
+    # тематик заказчика, и проверка на односимвольное «S» ловила бы любую тематику
+    # с латинской S в названии, а не подачу сути.
+    pipeline.relevance_article(
+        {"title": "t", "raw_text": "x", "summary": "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ"}, client
+    )
 
     call = client.calls[-1]
     assert call["name"] == "article_relevance"
     assert call["model"] == "strong-model"
     assert call["reasoning"] == "high"
     assert call["max_output_tokens"] == 2500
-    assert "S" not in call["input"]  # суть не в промпте гейта
+    assert "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ" not in call["input"]  # суть не в промпте гейта
+    assert "summary:" not in call["input"]
 
 
 def test_relevance_article_retries_with_compact_prompt_on_output_limit(monkeypatch):
@@ -545,3 +551,38 @@ def test_keyword_tag_keeps_old_behaviour_without_unclassified_tag():
     ]
     article = {"title": "Ничего не совпадает", "summary": "", "raw_text": ""}
     assert pipeline.keyword_tag(article, tags)["tag_id"] == 1
+
+
+def test_relevance_prompt_carries_customer_topics(monkeypatch):
+    """Тематики заказчика доезжают до гейта.
+
+    До 17.09 теги влияли только на классификацию уже отобранного: заказчик правил их
+    на экране и выборка не менялась вообще. Он спрашивал об этом прямо 07.09.
+    """
+    pipeline._TAGS_SCOPE_CACHE.update({"block": None, "at": 0.0})
+    monkeypatch.setattr(
+        pipeline.repository, "list_enabled_tags",
+        lambda: [{
+            "id": 26, "name": "Автоматизация и промышленный AI", "name_en": "Industrial AI",
+            "keywords_json": ["АСУ ТП", "телеметрия"], "keywords_en_json": ["SCADA"],
+            "negative_keywords_json": ["смартфон"],
+        }],
+    )
+    prompt = pipeline._relevance_prompt({"title": "t", "raw_text": "x"})
+    assert "тематики заказчика:" in prompt
+    assert "Автоматизация и промышленный AI" in prompt
+    assert "SCADA" in prompt
+    assert "минус: смартфон" in prompt
+
+
+def test_relevance_prompt_survives_tag_read_failure(monkeypatch):
+    """Сбой чтения тематик не роняет гейт — судим без них, как раньше."""
+    pipeline._TAGS_SCOPE_CACHE.update({"block": None, "at": 0.0})
+
+    def boom():
+        raise RuntimeError("база недоступна")
+
+    monkeypatch.setattr(pipeline.repository, "list_enabled_tags", boom)
+    prompt = pipeline._relevance_prompt({"title": "t", "raw_text": "x"})
+    assert "title: t" in prompt
+    assert "тематики заказчика" not in prompt
