@@ -20,16 +20,20 @@ def build_scrape_source_payload(source_id: int, payload: dict[str, Any]) -> dict
         "source": _jsonable_dict(source),
         "max_age_days": payload.get("max_age_days"),
         "article_limit": int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT),
+        "known_urls": repository.recent_article_urls_for_site(source.get("listing_url") or source.get("url")),
     }
 
 
 def process_payload(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     source = payload["source"]
     strategy = source.get("parse_strategy")
+    # heartbeat — всем стратегиям, а не только RSS. До 18.09 request и playwright шли
+    # без него при lease в 600 с: браузерная статья — до 30 с на загрузку плюс
+    # ожидание, и пакет из десятка статей упирался в lease так же, как задача 3908.
     if strategy == "playwright":
-        return _process_playwright(source, payload)
+        return _process_playwright(source, payload, heartbeat=heartbeat)
     if strategy == "request":
-        return _process_request(source, payload)
+        return _process_request(source, payload, heartbeat=heartbeat)
     if strategy == "rss":
         return _process_rss(source, payload, heartbeat=heartbeat)
     raise ValueError(f"Unsupported external scrape strategy: {strategy}")
@@ -53,14 +57,15 @@ def apply_scrape_result(result: dict[str, Any]) -> dict[str, Any]:
     return {"inserted": inserted, "duplicates": duplicates, "source_id": source_id}
 
 
-def _process_request(source: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _process_request(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     from oiltech_digest.ingestion.request_parser import extract_candidate_links, fetch_article_candidate, _listing_hash
     from oiltech_digest.ingestion.http_client import fetch
 
     listing_url = source.get("listing_url") or source.get("url")
     content = fetch(listing_url) if listing_url else None
     candidates = extract_candidate_links(source, listing_url, content, limit=int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)) if content else []
-    return _articles_from_candidates(source, candidates, payload, fetch_article_candidate, _listing_hash)
+    return _articles_from_candidates(source, candidates, payload, fetch_article_candidate, _listing_hash,
+                                     heartbeat=heartbeat)
 
 
 def _process_rss(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
@@ -104,46 +109,37 @@ def _process_rss(source: dict[str, Any], payload: dict[str, Any], heartbeat=None
     }
 
 
-def _process_playwright(source: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    from oiltech_digest.ingestion import normalize
-    from oiltech_digest.ingestion.playwright_parser import fetch_rendered
-    from oiltech_digest.ingestion.request_parser import CandidateLink, extract_candidate_links, parse_article_page, _listing_hash
+def _process_playwright(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
+    from oiltech_digest.ingestion.playwright_parser import render_listing_candidates, rendered_article
+    from oiltech_digest.ingestion.request_parser import _listing_hash
 
     listing_url = source.get("listing_url") or source.get("url")
-    content = fetch_rendered(listing_url, settle_ms=5000) if listing_url else None
-    candidates = extract_candidate_links(source, listing_url, content, limit=int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)) if content else []
-
-    def fetch_rendered_article(candidate: CandidateLink, source: dict) -> dict | None:
-        article_content = fetch_rendered(candidate.url)
-        if article_content is None:
-            return None
-        title, published_at, raw_text = parse_article_page(article_content, candidate.title)
-        final_published = published_at or candidate.published_at
-        if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
-            return None
-        return {
-            "source_id": source["id"],
-            "title": title[:500],
-            "url": candidate.url,
-            "published_at": final_published,
-            "raw_text": raw_text,
-            "text_truncated": normalize.is_truncated(raw_text),
-            "language": _guess_language(source),
-            "content_hash": normalize.compute_content_hash(title, candidate.url),
-        }
-
-    return _articles_from_candidates(source, candidates, payload, fetch_rendered_article, _listing_hash)
+    limit = int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)
+    # Та же пара попыток, что у ядра, — общей функцией, а не копией.
+    candidates = render_listing_candidates(source, listing_url, limit=limit) if listing_url else []
+    return _articles_from_candidates(source, candidates, payload, rendered_article, _listing_hash,
+                                     heartbeat=heartbeat)
 
 
-def _articles_from_candidates(source: dict[str, Any], candidates: list, payload: dict[str, Any], article_fetcher, listing_hash_fn) -> dict[str, Any]:
+def _articles_from_candidates(source: dict[str, Any], candidates: list, payload: dict[str, Any], article_fetcher,
+                              listing_hash_fn, heartbeat=None) -> dict[str, Any]:
     cutoff = None
     if payload.get("max_age_days") is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(payload["max_age_days"]))
-    stats = {"attempted": 0, "skipped_old": 0, "skipped_irrelevant": 0, "failed_fetch": 0}
+    # Базы у воркера нет, и раньше он качал КАЖДУЮ статью листинга на каждом цикле:
+    # ядро отбрасывало знакомые только при вставке. Список известных адресов даёт
+    # ядро в payload — данные параметром, а не чтение базы (правило §11.4).
+    known = set(payload.get("known_urls") or [])
+    stats = {"attempted": 0, "skipped_old": 0, "skipped_irrelevant": 0, "failed_fetch": 0, "skipped_known": 0}
     articles: list[dict[str, Any]] = []
     newest_seen_url = candidates[0].url if candidates else None
     newest_seen_published = candidates[0].published_at if candidates else None
     for candidate in candidates:
+        if candidate.url in known:
+            stats["skipped_known"] += 1
+            continue
+        if heartbeat is not None:
+            heartbeat()
         if cutoff is not None and candidate.published_at and candidate.published_at < cutoff:
             stats["skipped_old"] += 1
             continue
@@ -172,15 +168,6 @@ def _articles_from_candidates(source: dict[str, Any], candidates: list, payload:
         "last_seen_published_at": newest_seen_published,
         "last_listing_hash": listing_hash_fn(candidates),
     }
-
-
-def _guess_language(source: dict) -> str | None:
-    category = (source.get("category") or "").lower()
-    if any(marker in category for marker in ("рф", "снг", "россий", "telegram")):
-        return "ru"
-    if "международ" in category:
-        return "en"
-    return None
 
 
 def _jsonable_dict(row: dict[str, Any]) -> dict[str, Any]:

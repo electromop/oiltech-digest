@@ -12,7 +12,6 @@ import json
 import logging
 import re
 
-from lxml import html
 
 from oiltech_digest import config
 from oiltech_digest.db import repository
@@ -61,7 +60,7 @@ def extract_og_image(content: bytes | str) -> str:
     if not content:
         return ""
     try:
-        doc = html.fromstring(content)
+        doc = normalize.parse_html(content)
     except (ValueError, TypeError):
         return ""
     for xpath in _OG_IMAGE_XPATHS:
@@ -224,7 +223,7 @@ def extract_main_text(content: bytes | str) -> str:
     if not content:
         return ""
     try:
-        doc = html.fromstring(content)
+        doc = normalize.parse_html(content)
     except (ValueError, TypeError):
         return ""
 

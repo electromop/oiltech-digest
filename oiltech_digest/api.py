@@ -39,7 +39,7 @@ from oiltech_digest.documents import external as documents_external
 from oiltech_digest.documents import parsing as doc_parsing
 from oiltech_digest.documents.model import DocumentError
 from oiltech_digest.ingestion.manual_import import ManualImportError, import_article as import_manual_article
-from oiltech_digest.ingestion.source_diagnostics import diagnose_source
+from oiltech_digest.ingestion.source_diagnostics import diagnose_source, probe_strategies
 from oiltech_digest.processing.digest import (
     build_digest_content,
     get_digest_branding,
@@ -748,19 +748,28 @@ def source_health(
 
 @app.post("/api/sources")
 def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    # Пользователь вставляет просто ссылку на источник — система сама ищет RSS-ленту.
-    # Нашла → parse_strategy='rss' с найденным фидом; не нашла → 'request' (скрейп
-    # страницы новостей). RSS можно передать и явно (тогда discover пропускается).
+    # Пользователь вставляет просто ссылку — система пробует к ней КАЖДУЮ стратегию:
+    # RSS-ленту (и проверяет, что она не мёртвая), обычный запрос, браузер; если с
+    # РФ-ядра сайт закрыт — ставит сбор через зарубежный воркер. До 18.09 здесь был
+    # только поиск RSS, а без него — молча `request` по введённому адресу: так
+    # заводились источники, не давшие ни одной статьи никогда. RSS, переданный явно,
+    # берётся как есть.
     site_url = (payload.url or payload.rss_url or "").strip()
     rss_url = (payload.rss_url or "").strip()
-    parse_strategy = "rss"
+    parse_strategy, listing_url, network_region, enabled, probe = "rss", None, "auto", True, None
     if not rss_url and site_url:
-        from oiltech_digest.ingestion.rss_discovery import discover_feed
-        found = discover_feed(site_url)
-        if found:
-            rss_url = found
+        probe = probe_strategies(site_url)
+        chosen = probe.get("chosen")
+        if chosen:
+            parse_strategy = chosen["parse_strategy"]
+            rss_url = chosen.get("rss_url") or ""
+            listing_url = chosen.get("listing_url")
+            network_region = chosen.get("network_region") or "auto"
         else:
-            parse_strategy = "request"
+            # Сайт открылся, но статей не дала ни одна стратегия. Заводим выключенным:
+            # включённый он опрашивался бы вечно впустую. Настроить селектор и
+            # включить — руками, отчёт перебора в ответе.
+            parse_strategy, listing_url, enabled = "request", site_url, False
     source_id = repository.add_rss_source(
         name=payload.name,
         rss_url=rss_url,
@@ -770,7 +779,11 @@ def create_source(payload: SourceCreate, user: dict[str, Any] = Depends(require_
         update_frequency=payload.update_frequency,
         parse_strategy=parse_strategy,
     )
-    return {"ok": True, "id": source_id, "rss_url": rss_url or None, "parse_strategy": parse_strategy}
+    repository.set_source_collection(source_id, listing_url=listing_url, network_region=network_region,
+                                     enabled=enabled)
+    return {"ok": True, "id": source_id, "rss_url": rss_url or None, "parse_strategy": parse_strategy,
+            "listing_url": listing_url, "network_region": network_region, "enabled": enabled,
+            "probe": _clean(probe) if probe else None}
 
 
 @app.post("/api/articles/import")

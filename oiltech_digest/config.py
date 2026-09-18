@@ -37,7 +37,7 @@ HTTP_BLOCK_COOLDOWN_SECONDS = int(os.environ.get("HTTP_BLOCK_COOLDOWN_SECONDS", 
 # а бан — нет. Ставится только после исчерпания всех попыток, т.е. когда хост не
 # ответил три раза подряд.
 HTTP_DEAD_HOST_COOLDOWN_SECONDS = int(os.environ.get("HTTP_DEAD_HOST_COOLDOWN_SECONDS", "300"))
-REQUEST_ARTICLE_LIMIT = int(os.environ.get("REQUEST_ARTICLE_LIMIT", "6"))
+REQUEST_ARTICLE_LIMIT = int(os.environ.get("REQUEST_ARTICLE_LIMIT", "12"))
 # Минимум значимого текста для первичной вставки request/playwright-статей.
 # Корпоративные новости и press release бывают короткими; старый порог 200 символов
 # отбрасывал часть релевантных заметок ещё до AI-гейта.

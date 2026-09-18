@@ -162,6 +162,12 @@ def find_or_create_source(article_url: str, explicit_source_id: int | None) -> d
         url=f"{urlparse(article_url).scheme}://{host}",
         parse_strategy="request",
     )
+    # Держатель для вручную внесённой статьи, а не подписка на сайт: выключен.
+    # Включённым он опрашивался `request` по главной вечно — так 17.09 в ленту
+    # заехали 223 статьи научпопа с scientificrussia.ru. Статья видна в ленте и так
+    # (скрывает только архив). Подписаться на сайт — через добавление источника,
+    # где к ссылке пробуется каждая стратегия.
+    repository.set_source_collection(source_id, listing_url=None, network_region="auto", enabled=False)
     source = repository.get_source(source_id)
     if source is None:
         raise ManualImportError("fallback source was not created")

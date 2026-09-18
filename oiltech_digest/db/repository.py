@@ -1911,6 +1911,50 @@ def article_exists(url: str) -> bool:
         return row is not None
 
 
+def set_source_collection(source_id: int, *, listing_url: str | None, network_region: str,
+                          enabled: bool) -> None:
+    """Записать, чем и откуда собирать источник, — итог перебора стратегий.
+
+    Архивный источник этим не воскрешается: `enabled` ставится только вместе с
+    `archived_at IS NULL`, как и в add_rss_source.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE sources
+            SET listing_url = %s, network_region = %s,
+                enabled = (%s AND archived_at IS NULL), updated_at = now()
+            WHERE id = %s
+            """,
+            (listing_url, network_region, bool(enabled), int(source_id)),
+        )
+        conn.commit()
+
+
+def recent_article_urls_for_site(site_url: str | None, limit: int = 500) -> list[str]:
+    """Последние адреса статей этого сайта и его поддоменов — от любого источника.
+
+    Для внешнего воркера: базы у него нет, и без этого списка он качает каждую статью
+    листинга на каждом цикле. Сайт, а не источник: у JPT восемь разделов-источников
+    делят одни статьи, и знакомую для соседа статью качать тоже незачем.
+    """
+    host = (urlsplit(site_url or "").netloc or "").lower().removeprefix("www.")
+    if not host:
+        return []
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT url FROM articles
+            WHERE lower(split_part(url, '/', 3)) IN (%s, %s)
+               OR lower(split_part(url, '/', 3)) LIKE %s
+            ORDER BY id DESC
+            LIMIT %s
+            """,
+            (host, "www." + host, "%." + host, int(limit)),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
 def update_source_request_state(
     source_id: int,
     *,

@@ -430,3 +430,108 @@ def test_parse_article_page_keeps_plain_headline_unchanged():
     )
     title, _published, _text = request_parser.parse_article_page(markup)
     assert title == "Газпром нефть испытала буровые установки на Ямале"
+
+
+# --- Выбор ссылок внутри источника (18.09) -----------------------------------
+# Каждый тест ниже воспроизводит источник из обхода 30 молчащих: без правки он
+# падает, потому что парсер брал не те ссылки или не брал никаких.
+
+NEWSROOM_HTML = b"""
+<html><body>
+  <ul class="news">
+    <li class="item"><a href="/news/zeta-old-release">Zeta: pinned release about company fraud warning</a><span>02.04.2025</span></li>
+    <li class="item"><a href="/news/beta-fresh-contract">Beta contract awarded for deepwater completions</a><span>17.09.2026</span></li>
+    <li class="item"><a href="/news/alpha-middle-news">Alpha acquisition closes after regulatory approval</a><span>01.09.2026</span></li>
+  </ul>
+</body></html>
+"""
+
+
+def test_candidates_go_newest_first_not_oldest_or_alphabetical():
+    """Прежняя сортировка отдавала под лимит самые СТАРЫЕ из датированных, а при
+    равенстве — первые по алфавиту адреса. Закреплённое предупреждение (2025) и
+    «alpha» по алфавиту вытесняли свежий контракт."""
+    candidates = request_parser.extract_candidate_links("https://example.com/news", NEWSROOM_HTML, limit=2)
+    assert [c.url.rsplit("/", 1)[-1] for c in candidates] == ["beta-fresh-contract", "alpha-middle-news"]
+    assert candidates[0].published_at.date().isoformat() == "2026-09-17"
+
+
+def test_selector_keeps_page_order_when_items_have_no_dates():
+    html = b"""<html><body><div class="feed">
+      <a class="t" href="/p/zulu-first-on-page">Zulu is first on the page and the freshest item</a>
+      <a class="t" href="/p/alpha-second-on-page">Alpha is second on the page and older item</a>
+    </div></body></html>"""
+    source = {"article_link_selector": ".feed a.t"}
+    candidates = request_parser.extract_candidate_links(source, "https://example.com/p", html, limit=1)
+    assert candidates[0].url.endswith("zulu-first-on-page"), "селектор задан под ленту — её порядок и есть свежесть"
+
+
+def test_image_only_link_takes_title_from_its_card():
+    """Белоруснефть: ссылка обёрнута вокруг картинки, заголовок — в h3 карточки.
+    Раньше такая ссылка отбрасывалась (текст < 18), и лента не давала ни одной статьи."""
+    html = """<html><body><ul>
+      <li class="tile"><a href="/ru/detail-pages/event/-2026.09.17-00001/"><img src="x.jpg" alt=""></a>
+        <h3>Стартовал прием заявок на Хакатон «Код Будущего»</h3><span>17 сентября 2026</span></li>
+      <li class="tile"><a href="/ru/detail-pages/event/-2026.09.15-00002/"><img src="y.jpg" alt=""></a>
+        <h3>Белоруснефть подписала соглашение о сотрудничестве</h3><span>15 сентября 2026</span></li>
+    </ul></body></html>""".encode()
+    # Как источник и настроен: селектор под плитки ленты. Без него ссылки с «event» в
+    # адресе режет общий фильтр календарей мероприятий — селектор человека главнее.
+    source = {"article_link_selector": "li.tile a[href*='/detail-pages/']"}
+    candidates = request_parser.extract_candidate_links(
+        source, "https://www.belorusneft.by/ru/mediacenter/news/", html, limit=5)
+    assert [c.title for c in candidates] == [
+        "Стартовал прием заявок на Хакатон «Код Будущего»",
+        "Белоруснефть подписала соглашение о сотрудничестве",
+    ]
+    assert candidates[0].published_at.date().isoformat() == "2026-09-17", "дата — из карточки своей статьи"
+
+
+def test_generic_link_text_is_not_used_as_title():
+    """Weatherford: «View Press Release» — ровно 18 знаков, прежний порог его пропускал
+    заголовком статьи."""
+    html = b"""<html><body><table><tr>
+      <td>03 Sep 2026</td><td><h4>Weatherford Shareholders Approve Redomestication to Delaware</h4></td>
+      <td><a href="/news/news-article/?ItemID=18811">View Press Release</a></td>
+    </tr></table></body></html>"""
+    candidates = request_parser.extract_candidate_links("https://www.weatherford.com/news/", html, limit=5)
+    assert len(candidates) == 1
+    assert candidates[0].title == "Weatherford Shareholders Approve Redomestication to Delaware"
+    assert candidates[0].url.endswith("?ItemID=18811")
+
+
+def test_subdomain_links_belong_to_the_source_but_lookalike_domains_do_not():
+    """ТПУ: новости на news.tpu.ru, источник заведён на tpu.ru — строгое равенство
+    хостов отсекало их все. Похожий домен mytpu.ru своим не становится."""
+    html = b"""<html><body>
+      <a href="https://news.tpu.ru/news/v-tpu-nashli-metod-ochistki-vody">V TPU nashli metod ochistki vody iz othodov</a>
+      <a href="https://mytpu.ru/news/chuzhaya-novost-pro-drugoy-vuz">Chuzhaya novost pro drugoy vuz i ego zhizn</a>
+    </body></html>"""
+    urls = [c.url for c in request_parser.extract_candidate_links("https://tpu.ru", html, limit=5)]
+    assert urls == ["https://news.tpu.ru/news/v-tpu-nashli-metod-ochistki-vody"]
+
+
+def test_list_dates_in_real_formats_are_recognised():
+    """Формы дат из обхода 18.09 — прежний разбор знал только 2026-09-17."""
+    from oiltech_digest.ingestion import dates
+
+    cases = {
+        "17.09.2026": "2026-09-17", "17 сентября 2026": "2026-09-17", "24/08/2026": "2026-08-24",
+        "Sep 18, 2026": "2026-09-18", "10 Sept 2026": "2026-09-10", "September 17, 2026": "2026-09-17",
+    }
+    for text, expected in cases.items():
+        assert dates.date_from_text(text).date().isoformat() == expected, text
+    assert dates.date_from_text("Section 5 of 12") is None, "дату не выдумываем"
+    assert dates.date_from_url("https://tedo.ru/press-center/news-14092026").date().isoformat() == "2026-09-14"
+
+
+def test_page_without_declared_charset_is_not_turned_into_mojibake():
+    """58 статей на проде с «Ð¡Ñ…» в заголовке и тексте: кодировка у сайта объявлена
+    только в HTTP-заголовке, и lxml читал UTF-8 как Latin-1."""
+    body = ("<html><head><title>Сколтех</title></head><body><h1>Новые данные о гидратах</h1>"
+            "<article><p>" + "Учёные Сколтеха измерили газопроницаемость гидратов. " * 10 + "</p></article>"
+            "</body></html>")
+    for raw in (body.encode("utf-8"), body.encode("cp1251")):
+        title, _, text = request_parser.parse_article_page(raw)
+        assert title == "Новые данные о гидратах"
+        assert "газопроницаемость" in text

@@ -137,56 +137,77 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
         )
         return _empty_stats()
 
-    from oiltech_digest.ingestion.request_parser import (
-        CandidateLink,
-        extract_candidate_links,
-        insert_candidates,
-        parse_article_page,
-    )
+    from oiltech_digest.ingestion.request_parser import insert_candidates
 
     listing_url = source.get("listing_url") or source.get("url")
     if not listing_url:
         return _empty_stats()
 
-    content = fetch_rendered(listing_url, settle_ms=5000)
-    candidates = extract_candidate_links(source, listing_url, content, limit=article_limit) if content else []
-    if not candidates:
-        # JS-листинг мог не успеть дорендерить ссылки за первый проход (наблюдалось на
-        # bakerhughes.com: «то 6, то 0 кандидатов»). Даём ещё одну попытку с большим settle.
-        logger.info("playwright: 0 кандидатов на первом проходе для %s — ретрай с большим settle", source.get("name"))
-        content = fetch_rendered(listing_url, settle_ms=12000)
-        candidates = extract_candidate_links(source, listing_url, content, limit=article_limit) if content else []
+    candidates = render_listing_candidates(source, listing_url, limit=article_limit)
     if not candidates:
         logger.info("playwright: no candidates found for source %s (%s)", source.get("name"), listing_url)
         return _empty_stats()
-
-    def fetch_rendered_article(candidate: CandidateLink, source: dict) -> dict | None:
-        article_content = fetch_rendered(candidate.url)
-        if article_content is None:
-            return None
-        title, published_at, raw_text = parse_article_page(article_content, candidate.title)
-        final_published = published_at or candidate.published_at
-        if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
-            return None
-        return {
-            "source_id": source["id"],
-            "title": title[:500],
-            "url": candidate.url,
-            "published_at": final_published,
-            "raw_text": raw_text,
-            "text_truncated": normalize.is_truncated(raw_text),
-            "language": _guess_language(source),
-            "content_hash": normalize.compute_content_hash(title, candidate.url),
-        }
 
     stats = insert_candidates(
         source,
         candidates,
         max_age_days=max_age_days,
-        article_fetcher=fetch_rendered_article,
+        article_fetcher=rendered_article,
     )
     repository.touch_last_parsed(source["id"])
     return stats
+
+
+# Сколько ждать, пока страница дорисуется: первая попытка и вторая, если первая дала
+# пусто. Одна попытка — это то, на чём сидел NL-воркер: у ядра повтор для листинга
+# был (замечено на bakerhughes.com: «то 6, то 0 кандидатов»), а воркер его не
+# унаследовал, как и heartbeat 17.09. Страница статьи повтора не имела нигде.
+LISTING_SETTLE_MS = (5000, 12000)
+ARTICLE_SETTLE_MS = (3500, 9000)
+
+
+def render_listing_candidates(source: dict, listing_url: str, limit: int = REQUEST_ARTICLE_LIMIT) -> list:
+    """Отрисовать листинг и извлечь кандидатов; пусто — ещё раз с ожиданием дольше.
+
+    Единственное место этой логики: ядро, NL-воркер и диагностика зовут её, а не свою
+    копию, — иначе одна из копий снова останется без повтора.
+    """
+    from oiltech_digest.ingestion.request_parser import extract_candidate_links
+
+    for attempt, settle_ms in enumerate(LISTING_SETTLE_MS, start=1):
+        content = fetch_rendered(listing_url, settle_ms=settle_ms)
+        candidates = extract_candidate_links(source, listing_url, content, limit=limit) if content else []
+        if candidates:
+            return candidates
+        if attempt < len(LISTING_SETTLE_MS):
+            logger.info("playwright: 0 кандидатов у %s за %d мс — ещё попытка", source.get("name"), settle_ms)
+    return []
+
+
+def rendered_article(candidate, source: dict) -> dict | None:
+    """Статья через браузер. Текст короче порога — ещё попытка с ожиданием дольше.
+
+    Блок (403/429/503) повтором не лечится — тогда выходим сразу.
+    """
+    from oiltech_digest.ingestion.request_parser import parse_article_page
+
+    for settle_ms in ARTICLE_SETTLE_MS:
+        content = fetch_rendered(candidate.url, settle_ms=settle_ms)
+        if content is None:
+            return None
+        title, published_at, raw_text = parse_article_page(content, candidate.title)
+        if title and len(raw_text) >= MIN_ARTICLE_TEXT_CHARS:
+            return {
+                "source_id": source["id"],
+                "title": title[:500],
+                "url": candidate.url,
+                "published_at": published_at or candidate.published_at,
+                "raw_text": raw_text,
+                "text_truncated": normalize.is_truncated(raw_text),
+                "language": _guess_language(source),
+                "content_hash": normalize.compute_content_hash(title, candidate.url),
+            }
+    return None
 
 
 def _empty_stats() -> dict[str, Any]:

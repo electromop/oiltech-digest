@@ -114,3 +114,52 @@ def test_external_fetch_apply_inserts_articles(monkeypatch):
     assert touched == [7]
     assert state_updates[0][1]["last_listing_hash"] == "hash"
 
+
+
+def _stub_request_path(monkeypatch, candidates, fetched):
+    monkeypatch.setattr(external_fetch, "should_keep_article", lambda title, text, source: type("R", (), {"keep": True})())
+    monkeypatch.setattr("oiltech_digest.ingestion.http_client.fetch", lambda url: b"<html></html>")
+    monkeypatch.setattr("oiltech_digest.ingestion.request_parser.extract_candidate_links", lambda *a, **k: candidates)
+
+    def fake_fetch(candidate, source):
+        fetched.append(candidate.url)
+        return {"source_id": source["id"], "title": candidate.title, "url": candidate.url,
+                "published_at": None, "raw_text": "text " * 50, "text_truncated": False,
+                "language": "en", "content_hash": candidate.url}
+    monkeypatch.setattr("oiltech_digest.ingestion.request_parser.fetch_article_candidate", fake_fetch)
+
+
+def test_worker_skips_urls_the_core_already_has(monkeypatch):
+    """Базы у воркера нет: без списка от ядра он качал каждую статью листинга на
+    каждом цикле, а ядро отбрасывало знакомые только при вставке."""
+    known = CandidateLink("https://example.com/known", "Known article already in core database", 5)
+    fresh = CandidateLink("https://example.com/fresh", "Fresh article the core has not seen", 5)
+    fetched: list[str] = []
+    _stub_request_path(monkeypatch, [known, fresh], fetched)
+    source = {"id": 7, "name": "S", "parse_strategy": "request", "url": "https://example.com"}
+
+    result = external_fetch.process_payload({"source": source, "known_urls": [known.url]})
+
+    assert fetched == [fresh.url], "знакомую статью качать нельзя"
+    assert result["stats"]["skipped_known"] == 1
+    assert [a["url"] for a in result["articles"]] == [fresh.url]
+
+
+def test_worker_heartbeats_for_request_and_playwright_not_only_rss(monkeypatch):
+    """До 18.09 heartbeat получал только RSS-сбор; request и playwright шли без него
+    при lease 600 с — пакет из десятка браузерных статей упирался в lease."""
+    beats: list[str] = []
+    candidates = [CandidateLink(f"https://example.com/a{i}", f"Article number {i} long enough title", 5) for i in range(3)]
+    _stub_request_path(monkeypatch, candidates, [])
+    source = {"id": 7, "name": "S", "parse_strategy": "request", "url": "https://example.com"}
+    external_fetch.process_payload({"source": source}, heartbeat=lambda: beats.append("request"))
+    assert beats.count("request") == 3
+
+    monkeypatch.setattr("oiltech_digest.ingestion.playwright_parser.render_listing_candidates",
+                        lambda source, url, limit=12: candidates)
+    monkeypatch.setattr("oiltech_digest.ingestion.playwright_parser.rendered_article",
+                        lambda candidate, source: {"source_id": 7, "title": candidate.title, "url": candidate.url,
+                                                   "published_at": None, "raw_text": "t " * 100})
+    source = {**source, "parse_strategy": "playwright"}
+    external_fetch.process_payload({"source": source}, heartbeat=lambda: beats.append("playwright"))
+    assert beats.count("playwright") == 3

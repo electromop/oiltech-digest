@@ -1604,3 +1604,51 @@ def test_unmark_returns_article_to_feed(isolated_db):
                                     reason="r", decided_by="test")
     assert repository.unmark_article_reprint(b) is True
     assert repository.unmark_article_reprint(b) is False, "повторное снятие — не ошибка, но и не успех"
+
+
+def _create_source_with_probe(monkeypatch, probe: dict, name: str) -> dict:
+    monkeypatch.setattr(api, "probe_strategies", lambda url: probe)
+    app = api.app
+    app.dependency_overrides[api.require_admin] = lambda: {"id": 1, "email": "admin@example.com", "role": "admin"}
+    try:
+        response = TestClient(app).post("/api/sources", json={"name": name, "url": "https://site.example/news"})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    body = response.json()
+    with connection.get_connection() as conn:
+        row = conn.execute(
+            "SELECT parse_strategy, listing_url, network_region, enabled FROM sources WHERE id = %s",
+            (body["id"],),
+        ).fetchone()
+    return {"body": body, "row": row}
+
+
+def test_create_source_stores_what_the_strategy_probe_chose(monkeypatch, isolated_db):
+    """Ручной ввод ссылки: к ней пробуется каждая стратегия, и в источник пишется
+    выбор — стратегия, лента и маршрут. До 18.09 без RSS молча ставился `request`."""
+    probe = {"url": "https://site.example/news", "attempts": [],
+             "chosen": {"parse_strategy": "playwright", "listing_url": "https://site.example/news",
+                        "network_region": "external"}}
+    got = _create_source_with_probe(monkeypatch, probe, "Probe chose external")
+    assert got["row"] == ("playwright", "https://site.example/news", "external", True)
+    assert got["body"]["probe"]["chosen"]["network_region"] == "external"
+
+
+def test_create_source_is_disabled_when_no_strategy_found_articles(monkeypatch, isolated_db):
+    """Сайт открылся, но статей не дала ни одна стратегия — включённым такой
+    источник опрашивался бы вечно впустую."""
+    got = _create_source_with_probe(monkeypatch, {"url": "https://site.example/news", "attempts": [],
+                                                  "chosen": None}, "Probe found nothing")
+    assert got["row"][3] is False
+    assert got["body"]["enabled"] is False
+
+
+def test_manual_import_holder_source_is_not_polled(isolated_db):
+    """Держатель вручную внесённой статьи — не подписка на сайт. Включённым он
+    опрашивался `request` по главной вечно (223 статьи научпопа 17.09)."""
+    from oiltech_digest.ingestion import manual_import
+
+    source = manual_import.find_or_create_source("https://new-domain.example/news/1", None)
+    assert source["enabled"] is False
+    assert source["name"] == "Manual import: new-domain.example"

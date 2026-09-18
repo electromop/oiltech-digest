@@ -909,10 +909,9 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
     Уважает стратегию (playwright → рендер, иначе http_client.fetch с боевыми SSL-фоллбэками).
     Печатает href + текст + контейнер (тег.class родителя) — этого достаточно, чтобы понять,
     каким селектором цеплять ссылки на статьи."""
-    from lxml import html as lxml_html
 
     from oiltech_digest.db import repository
-    from oiltech_digest.ingestion import http_client
+    from oiltech_digest.ingestion import http_client, normalize
 
     source = repository.get_source(args.source_id)
     if source is None:
@@ -934,7 +933,7 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
         raise SystemExit("листинг не получен (см. логи fetch выше)")
     print(f"получено байт: {len(content)}")
 
-    doc = lxml_html.fromstring(content)
+    doc = normalize.parse_html(content)
     try:
         doc.make_links_absolute(listing_url)
     except Exception:  # noqa: BLE001 — относительные ссылки тоже информативны

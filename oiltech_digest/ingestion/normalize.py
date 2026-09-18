@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from dateutil import parser as dateparser
+from lxml import html as lxml_html
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
@@ -326,3 +327,36 @@ def strip_emoji(text: str | None) -> str:
     cleaned = _EMOJI_MODIFIER_RE.sub("", cleaned)
     cleaned = _EMOJI_GAP_RE.sub(" ", cleaned)
     return cleaned.strip(" \t  ")
+
+
+_META_CHARSET_RE = re.compile(rb"<meta[^>]+charset\s*=\s*[\"']?[a-zA-Z0-9_-]+", re.I)
+
+
+def parse_html(content: bytes | str):
+    """lxml-документ страницы с верной кодировкой.
+
+    Загрузчик отдаёт сырые байты, а у части сайтов кодировка объявлена только в
+    HTTP-заголовке, не в разметке. lxml такой документ читает как Latin-1, и
+    кириллица UTF-8 превращается в «Ð¡Ñ…». Замер 18.09: 58 статей с испорченными
+    заголовком и текстом (Сколково Energy, Белоруснефть, ТПУ, РАН, Сколтех), 14 из
+    них видны в ленте.
+
+    Кодировка в разметке объявлена — отдаём байты lxml как есть, он её учтёт. Не
+    объявлена — декодируем сами: строгий UTF-8, иначе cp1251 (старые российские
+    сайты), иначе Latin-1 — то, что сделал бы и сам lxml.
+    """
+    if isinstance(content, (bytes, bytearray)) and not _META_CHARSET_RE.search(bytes(content[:4096])):
+        raw = bytes(content)
+        for encoding in ("utf-8", "cp1251", "latin-1"):
+            try:
+                text = raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+            try:
+                return lxml_html.fromstring(text)
+            except ValueError:
+                # «Unicode strings with encoding declaration are not supported»: у
+                # страницы есть XML-декларация кодировки — её lxml учтёт из байтов.
+                break
+    return lxml_html.fromstring(content)
+
