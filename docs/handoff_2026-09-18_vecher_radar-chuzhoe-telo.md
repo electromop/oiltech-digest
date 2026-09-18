@@ -31,13 +31,16 @@
    Признак: у задачи 4469 в базе агентов появится `claimed_by = agents-nl-1`, затем новые
    сигналы (темы = 13 тегов). Контейнер `oiltech_agents_external_worker`, очередь только
    `external-ai` — воркер MVP-1 (`oiltech_external_worker`) не задевается.
-3. **Пересобрать NL-воркер MVP-1** — на нём старый код без трёх правок `efbaefe`
-   (тематики предфильтра из payload, якорь по заголовку и страж принадлежности при
-   заполнении тел):
+3. **Пересобрать NL-воркер MVP-1 — теперь это две полосы** (`docker-compose.external-worker.yml`):
+   `oiltech_external_worker` берёт только ИИ (`nl-ai-1`), новый `oiltech_external_worker_fetch` —
+   только сбор (`nl-fetch-1`). До этого один воркер брал задачи по одной, и 30 пакетов
+   пересчёта держали за собой 42 задачи сбора. Заодно доезжают правки `efbaefe` на NL.
    ```bash
-   cd /root/oiltech-digest && git fetch origin && git reset --hard origin/main && docker compose -f docker-compose.external-worker.yml up -d --build
+   cd /root/oiltech-digest && git fetch origin && git reset --hard origin/main && docker compose -f docker-compose.external-worker.yml up -d --build && docker ps --format '{{.Names}} {{.Status}}'
    ```
-   **Не раньше, чем опустеет очередь ИИ** (сейчас там ~36 пакетов пересчёта, до ночи).
+   Цена рестарта: пакет ИИ, идущий в эту минуту, повторится после истечения аренды (≤10 мин) —
+   до 25 статей, ≈ $0,4. Второй ИИ-воркер не добавлять, пока нет резерва статей при выдаче
+   (два воркера выбрали бы одни и те же статьи и оплатили их дважды).
 4. Решения: Energy Voice (рассылка / запрос издателю) · 5 электроэнергетических (до 20.09) ·
    перетегирование корпуса на выходных (п.20) · вынос бэкапа · смена секретов — **к токену
    бота и ssh-паролю добавился ключ OpenAI**: он тоже открытым текстом в переписке 14.09/16.09.
