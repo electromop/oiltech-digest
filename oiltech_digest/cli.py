@@ -804,6 +804,49 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         print(f"в базе помечено перепечаток: {stats['total']} в {stats['groups']} группах")
 
 
+def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
+    """Перекачать тела статей с дефектом (чужое/кракозябры/простыня) новым извлечением.
+
+    По умолчанию сухой прогон. С --apply тела заменяются, а по заменённым ставится
+    перерасчёт ИИ (суть, релевантность, тег, баллы посчитаны по старому тексту) —
+    пакетами через тот же маршрут, что и обычная обработка."""
+    from oiltech_digest import network_policy
+    from oiltech_digest.db import repository
+    from oiltech_digest.ingestion import body_repair
+
+    ids = [int(item) for item in args.ids.split(",") if item.strip()] if args.ids else None
+    if not ids and args.source_id is None:
+        raise SystemExit("repair-article-bodies: нужен --ids или --source-id")
+    articles = body_repair.candidate_articles(source_id=args.source_id, days=args.days, ids=ids)
+    if args.limit:
+        articles = articles[: args.limit]
+    result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause)
+    jobs = []
+    if args.apply and args.reprocess and result["replaced_ids"]:
+        decision = network_policy.route_ai_processing()
+        replaced = result["replaced_ids"]
+        for start in range(0, len(replaced), args.batch):
+            chunk = replaced[start:start + args.batch]
+            job = repository.create_background_job(
+                "process_articles",
+                {"article_ids": chunk, "limit": len(chunk)},
+                queue_name=decision.queue_name,
+                execution_region=decision.execution_region,
+                capability=decision.capability,
+            )
+            jobs.append(int(job["id"]))
+    result["reprocess_jobs"] = jobs
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    print(
+        f"repair-article-bodies: checked={result['checked']} replaced={result['replaced']} "
+        f"apply={result['apply']} reprocess_jobs={len(jobs)}"
+    )
+    for key, count in result["stats"].items():
+        print(f"  {key}: {count}")
+
+
 def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
     """Дозаполнить тело статей-обрывков у источников зарубежного контура.
 
@@ -1700,6 +1743,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_ext_refetch.add_argument("--limit", type=int, default=200, help="сколько статей взять за прогон")
     p_ext_refetch.add_argument("--batch", type=int, default=25, help="статей в одной задаче")
     p_ext_refetch.set_defaults(func=cmd_enqueue_external_refetch)
+
+    p_repair_bodies = sub.add_parser(
+        "repair-article-bodies",
+        help="перекачать тела статей с дефектом (чужое тело, кракозябры, простыня) новым извлечением")
+    p_repair_bodies.add_argument("--ids", default="", help="id статей через запятую")
+    p_repair_bodies.add_argument("--source-id", type=int, default=None, help="все статьи источника за --days")
+    p_repair_bodies.add_argument("--days", type=int, default=60)
+    p_repair_bodies.add_argument("--limit", type=int, default=0, help="не больше N статей (0 — все)")
+    p_repair_bodies.add_argument("--pause", type=float, default=0.5, help="пауза между страницами, с")
+    p_repair_bodies.add_argument("--apply", action="store_true", help="записать тела (без флага — сухой прогон)")
+    p_repair_bodies.add_argument("--reprocess", action=argparse.BooleanOptionalAction, default=True,
+                                 help="после --apply поставить перерасчёт ИИ по заменённым")
+    p_repair_bodies.add_argument("--batch", type=int, default=25, help="статей в задаче перерасчёта")
+    p_repair_bodies.add_argument("--json", action="store_true")
+    p_repair_bodies.set_defaults(func=cmd_repair_article_bodies)
 
     p_set_region = sub.add_parser("set-source-region", help="проставить network_region (auto|ru|external) источникам по id")
     p_set_region.add_argument("--ids", required=True, help="список id через запятую, напр. 16,84,64")

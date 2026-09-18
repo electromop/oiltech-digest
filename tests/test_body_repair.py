@@ -1,0 +1,83 @@
+"""Починка сохранённых тел: заменяем только доказуемо дефектное и только своим."""
+
+from oiltech_digest.ingestion import body_repair
+from tests.test_article_fetcher import FEED_HTML, OWN_BODY, OWN_TITLE, PINNED_BODY, PINNED_TITLE
+
+# Так старое извлечение сохраняло тело: блок статьи вместе с шапкой и заголовком.
+PINNED_STORED = f"14 сентября 2026, 15:24 2 мин 474 Источник: ИНТИ {PINNED_TITLE} {PINNED_BODY}"
+OWN_STORED = f"14 сентября 2026, 16:01 2 мин 7956 Источник: ОДК {OWN_TITLE} {OWN_BODY}"
+
+
+def _article(raw_text: str, title: str = OWN_TITLE) -> dict:
+    return {"id": 1, "source_id": 36, "title": title, "url": "https://neftegaz.ru/news/1", "raw_text": raw_text}
+
+
+def test_foreign_body_is_replaced_by_own_block():
+    decision, new = body_repair.plan_repair(_article(PINNED_STORED), FEED_HTML)
+
+    assert (decision.action, decision.defect) == ("replace", "foreign")
+    assert "газотурбинный двигатель" in new and "Гидра" not in new
+
+
+def test_own_body_is_left_alone_without_downloading():
+    decision, new = body_repair.plan_repair(_article(OWN_STORED), None)
+
+    assert (decision.action, decision.reason) == ("skip", "stored body looks own")
+    assert new == ""
+
+
+def test_own_body_without_header_is_not_reprocessed():
+    # Своё тело, но без шапки (лид первым): по началу похоже на чужое — сверяем по тексту.
+    decision, _ = body_repair.plan_repair(_article(OWN_BODY), FEED_HTML)
+
+    assert (decision.action, decision.reason) == ("skip", "same article as stored")
+
+
+def test_garbled_title_is_reported_not_guessed():
+    garbled = "Ð¨ÐºÐ¾Ð»Ð° ÑÐ¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ñ Ð¡ÐºÐ¾Ð»ÐºÐ¾Ð²Ð¾"
+
+    decision, _ = body_repair.plan_repair(_article(garbled * 3, title=garbled), FEED_HTML)
+
+    assert (decision.action, decision.defect, decision.reason) == ("skip", "mojibake", "title is mojibake")
+
+
+def test_oversized_body_is_replaced_even_though_own_text_is_inside():
+    sheet = OWN_STORED + ' var config = {"a": 1};' * 3000
+
+    decision, new = body_repair.plan_repair(_article(sheet), FEED_HTML)
+
+    assert (decision.action, decision.defect) == ("replace", "oversized")
+    assert len(new) < 5000
+
+
+def test_repair_writes_only_replacements_and_reports_ids(monkeypatch):
+    written = []
+    monkeypatch.setattr(
+        body_repair.repository, "update_article_full_text",
+        lambda article_id, raw_text, truncated, status, method, **kw: written.append((article_id, status, method)),
+    )
+    articles = [
+        {**_article(PINNED_STORED), "id": 11},
+        {**_article(OWN_STORED), "id": 12},
+    ]
+    fetched = []
+
+    result = body_repair.repair_bodies(
+        articles, apply=True, fetch_fn=lambda url: fetched.append(url) or FEED_HTML, pause_seconds=0,
+    )
+
+    assert result["replaced_ids"] == [11]
+    assert written == [(11, "ok", "lxml")]
+    assert len(fetched) == 1  # своё тело не качаем вовсе
+
+
+def test_dry_run_does_not_write(monkeypatch):
+    monkeypatch.setattr(
+        body_repair.repository, "update_article_full_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("сухой прогон пишет в базу")),
+    )
+
+    result = body_repair.repair_bodies([_article(PINNED_STORED)], apply=False, fetch_fn=lambda url: FEED_HTML,
+                                       pause_seconds=0)
+
+    assert result["replaced"] == 1 and result["apply"] is False
