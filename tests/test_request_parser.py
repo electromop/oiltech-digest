@@ -581,3 +581,26 @@ def test_fallback_text_does_not_swallow_scripts():
     assert "__NEXT_DATA__" not in text and "color:red" not in text
     assert "ассистивных технологий" in text
     assert len(text) < 1000
+
+
+def test_relative_links_resolve_from_base_href_after_redirect():
+    """CNOOC: лента /zxzx/gsxw/ уходит на /zxzx/gsxw/gsxw/, ссылки там относительные
+    («./202609/t….html»). Парсер склеивал их от адреса из настройки — все 404.
+    Браузер парсера вписывает <base> с конечным адресом, разбор его учитывает."""
+    from oiltech_digest.ingestion.playwright_parser import with_base_href
+
+    rendered = with_base_href(
+        '<html><head><title>公司新闻</title></head><body>'
+        '<a href="./202609/t20260914_122684.html">我国承建的乌干达首个商业油田开发项目核心工程完工</a></body></html>',
+        "https://www.cnooc.com.cn/zxzx/gsxw/gsxw/")
+    candidates = request_parser.extract_candidate_links(
+        "https://www.cnooc.com.cn/zxzx/gsxw/", rendered.encode("utf-8"), limit=3)
+    assert candidates[0].url == "https://www.cnooc.com.cn/zxzx/gsxw/gsxw/202609/t20260914_122684.html"
+    assert candidates[0].published_at.date().isoformat() == "2026-09-14", "дата слитно в адресе"
+
+
+def test_existing_base_href_is_not_overwritten():
+    from oiltech_digest.ingestion.playwright_parser import with_base_href
+
+    html = '<html><head><base href="https://cdn.example.com/"></head><body></body></html>'
+    assert with_base_href(html, "https://example.com/news/") == html

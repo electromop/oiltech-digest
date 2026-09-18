@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import logging
+import re
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -70,6 +72,24 @@ def _playwright_proxy_for(url: str) -> dict[str, str] | None:
 _BLOCK_STATUSES = {403, 429, 503}
 
 
+def with_base_href(html_text: str, final_url: str) -> str:
+    """Вписать в отрисованную страницу `<base href>` с КОНЕЧНЫМ адресом.
+
+    Относительные ссылки браузер разрешает от адреса, на котором страница оказалась
+    после переадресации, а разбор листинга — от адреса из настройки. У CNOOC лента
+    `/zxzx/gsxw/` скриптом уходит на `/zxzx/gsxw/gsxw/`, ссылки на ней вида
+    `./202609/t….html` — и парсер собирал адреса без одного звена пути: все 404.
+    Если `<base>` на странице уже есть — не трогаем, он главнее.
+    """
+    if not final_url or re.search(r"<base\s", html_text[:20000], re.I):
+        return html_text
+    tag = f'<base href="{html_lib.escape(final_url, quote=True)}">'
+    match = re.search(r"<head[^>]*>", html_text, re.I)
+    if match:
+        return html_text[:match.end()] + tag + html_text[match.end():]
+    return tag + html_text
+
+
 def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcontentloaded",
                    settle_ms: int = 3500) -> bytes | None:
     """Загрузить страницу через headless Chromium, вернуть HTML как bytes.
@@ -113,7 +133,7 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
                     return None
                 if settle_ms:
                     page.wait_for_timeout(settle_ms)
-                html_content = page.content()
+                html_content = with_base_href(page.content(), page.url)
             finally:
                 browser.close()
         return html_content.encode("utf-8") if isinstance(html_content, str) else html_content

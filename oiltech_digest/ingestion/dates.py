@@ -49,6 +49,8 @@ _URL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"/(20\d{2})/(\d{1,2})/(\d{1,2})(?:/|$)"), "ymd"),
     (re.compile(r"(?<!\d)(20\d{2})\.(\d{2})\.(\d{2})(?!\d)"), "ymd"),
     (re.compile(r"(?<![\d])(\d{2})(\d{2})(20\d{2})(?![\d])"), "dmy"),
+    # Слитно год-месяц-день: CNOOC `t20260914_122684.html`.
+    (re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)"), "ymd"),
 ]
 
 

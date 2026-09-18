@@ -162,6 +162,11 @@ def extract_candidate_links(source: dict | str, listing_url: str | bytes, conten
     except (ValueError, TypeError):
         return []
 
+    # <base href> — адрес, от которого страница велит разрешать относительные ссылки.
+    # Его же браузер парсера вписывает после переадресации (with_base_href).
+    base_href = doc.xpath("string(//base/@href)").strip()
+    if base_href:
+        home_url = urljoin(home_url, base_href)
     explicit = _extract_candidates_with_selector(doc, home_url, source_dict)
     if explicit:
         return explicit[:limit]
