@@ -604,3 +604,22 @@ def test_existing_base_href_is_not_overwritten():
 
     html = '<html><head><base href="https://cdn.example.com/"></head><body></body></html>'
     assert with_base_href(html, "https://example.com/news/") == html
+
+
+def test_card_title_beats_section_title_when_page_has_no_headline_markup():
+    # CNOOC: ни og:title, ни <h1>, а <title> — название раздела, одинаковое у всех новостей.
+    page = """<html><head><title>中国海洋石油集团有限公司 公司新闻</title></head><body>
+      <div class="title">我国承建的乌干达首个商业油田开发项目核心工程完工</div>
+      <div class="content"><p>""" + "正文内容。" * 60 + """</p></div></body></html>"""
+
+    title, _, _ = request_parser.parse_article_page(page, "我国承建的乌干达首个商业油田开发项目核心工程完工")
+
+    assert title == "我国承建的乌干达首个商业油田开发项目核心工程完工"
+
+
+def test_short_card_caption_does_not_replace_page_title():
+    page = "<html><head><title>ADNOC awards drilling contract for Hail and Ghasha</title></head><body></body></html>"
+
+    title, _, _ = request_parser.parse_article_page(page, "Learn more")
+
+    assert title == "ADNOC awards drilling contract for Hail and Ghasha"

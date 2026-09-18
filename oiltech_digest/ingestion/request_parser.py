@@ -221,6 +221,11 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
         # Склейка ломала и дедуп: content_hash считается по заголовку, поэтому одна
         # публикация с лидом и без лида давала разные хэши.
         _text_with_separators(doc, "//h1[1]"),
+        # Заголовок карточки ленты — раньше <title> страницы. У CNOOC нет ни og:title, ни
+        # <h1>, а <title> — название раздела: 18.09 все 7 собранных новостей получили
+        # один заголовок «中国海洋石油集团有限公司 公司新闻». Короткая подпись карточки
+        # («Подробнее») заголовком не считается.
+        fallback_title if len(normalize.clean_html(fallback_title or "")) >= 12 else "",
         doc.xpath("string(//title)"),
         fallback_title,
     )
