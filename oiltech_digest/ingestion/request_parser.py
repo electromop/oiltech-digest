@@ -232,8 +232,25 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
 
     raw_text = extract_main_text(content)
     if len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
-        raw_text = normalize.clean_html(doc.text_content())
+        raw_text = _visible_text(doc)
     return title, published_at, raw_text
+
+
+# Запасной текст страницы длиннее этого — уже не статья, а вся страница целиком.
+_FALLBACK_TEXT_LIMIT = 20000
+
+
+def _visible_text(doc) -> str:
+    """Текст страницы без скриптов и стилей — запасной путь, когда статья не выделилась.
+
+    `text_content()` забирает и содержимое `<script>`: у ТеДо в «текст статьи» ложилось
+    132 тыс. знаков JSON, у Kuwait Oil — 444 тыс. На проде 18.09 — 42 статьи длиннее
+    50 тыс. знаков, 36 из них со скриптами, самая большая 768 тыс. Модель читает
+    первые 6000 знаков — то есть судила бы JavaScript вместо новости.
+    """
+    for node in doc.xpath("//script|//style|//noscript|//template|//svg"):
+        node.drop_tree()
+    return normalize.clean_html(" ".join(doc.itertext()))[:_FALLBACK_TEXT_LIMIT]
 
 
 def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> list[CandidateLink]:

@@ -568,3 +568,16 @@ def test_learn_more_card_takes_title_from_first_meaningful_fragment():
         "Mubadala Energy Publishes 2025 Sustainability Report",
         "Final Investment Decision for Caturus announced",
     ]
+
+
+def test_fallback_text_does_not_swallow_scripts():
+    """ТеДо: основной текст не выделился, и запасной путь брал text_content() —
+    вместе со <script>. В базе 36 статей длиннее 50 тыс. знаков со скриптами."""
+    body = ("<html><head><title>ТеДо: объём рынка</title>"
+            "<script>window.__NEXT_DATA__ = {\"props\": \"" + "x" * 100000 + "\"}</script>"
+            "<style>.a{color:red}</style></head><body><div>Рынок ассистивных технологий вырос."
+            "</div></body></html>")  # короче порога: основной текст не выделяется
+    _, _, text = request_parser.parse_article_page(body.encode("utf-8"))
+    assert "__NEXT_DATA__" not in text and "color:red" not in text
+    assert "ассистивных технологий" in text
+    assert len(text) < 1000
