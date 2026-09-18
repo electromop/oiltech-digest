@@ -169,6 +169,15 @@ const navGroups: NavGroup[] = [
     screens: ["tech-preview", "analytics-preview"],
   }];
 
+// Агентная ветвь с 18.09 живёт на своём поддомене со своей базой — MVP-1 на неё ссылается,
+// а не встраивает. 17.09 радар вынесли из меню без замены, и заказчик написал «модуль
+// исчез» (скриншот меню 17.09), а 18.09 дважды спросил, вернём ли вкладку.
+const AGENTS_URL = "https://agents.oiltech-digest.ru";
+const agentLinks: Array<{ label: string; screen: string; adminOnly: boolean }> = [
+  { label: "Радар сигналов", screen: "signal-radar", adminOnly: false },
+  { label: "Агент источников", screen: "source-agent", adminOnly: true },
+];
+
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
 const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents"];
@@ -523,6 +532,26 @@ export function App() {
             </section>
             );
           })}
+          <section className="sidebarGroup">
+            <div className="sidebarSection">Агенты</div>
+            <nav className="nav">
+              {agentLinks.filter((link) => isAdmin || !link.adminOnly).map((link) => (
+                <a
+                  key={link.screen}
+                  className="navButton navLink"
+                  href={`${AGENTS_URL}/?screen=${link.screen}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={sidebarCollapsed ? link.label : undefined}
+                >
+                  <span className="navButtonIcon">
+                    <ExternalIcon />
+                  </span>
+                  <span className="navButtonLabel">{link.label}</span>
+                </a>
+              ))}
+            </nav>
+          </section>
         </div>
 
         <div className="sidebarBottom">
@@ -575,9 +604,33 @@ export function App() {
             <span className="mobileNavLabel">{screen.label}</span>
           </button>
         ))}
+        {agentLinks.filter((link) => isAdmin || !link.adminOnly).map((link) => (
+          <a
+            key={link.screen}
+            className="mobileNavButton navLink"
+            href={`${AGENTS_URL}/?screen=${link.screen}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={link.label}
+          >
+            <span className="mobileNavIcon">
+              <ExternalIcon />
+            </span>
+            <span className="mobileNavLabel">{link.label}</span>
+          </a>
+        ))}
       </nav>
       {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
     </div>
+  );
+}
+
+function ExternalIcon() {
+  return (
+    <svg width={16} height={16} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6}>
+      <path d="M9 3h4v4M13 3 7.5 8.5M11.5 9.5v2.3A1.7 1.7 0 0 1 9.8 13.5H4.2a1.7 1.7 0 0 1-1.7-1.7V6.2a1.7 1.7 0 0 1 1.7-1.7h2.3"
+        strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 

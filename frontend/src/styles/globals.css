@@ -277,6 +277,12 @@ button {
   transform: translateX(2px);
 }
 
+/* Ссылки на поддомен агентов — <a>, а не <button>: без подчёркивания и синего цвета ссылки. */
+.navLink {
+  text-decoration: none;
+  color: inherit;
+}
+
 .navButton.active {
   background: var(--surface-strong);
   border-color: rgba(29, 78, 216, 0.18);
