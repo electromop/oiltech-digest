@@ -165,7 +165,10 @@ def _articles_from_candidates(source: dict[str, Any], candidates: list, payload:
         "stats": stats,
         "articles": articles,
         "last_seen_article_url": newest_seen_url,
-        "last_seen_published_at": newest_seen_published,
+        # Строкой, а не datetime: результат уходит ядру JSON-ом. Пока у кандидатов
+        # не было дат, здесь стоял None и дыра молчала; правка дат 18.09 её вскрыла —
+        # задачи падали «Object of type datetime is not JSON serializable».
+        "last_seen_published_at": _jsonable(newest_seen_published),
         "last_listing_hash": listing_hash_fn(candidates),
     }
 

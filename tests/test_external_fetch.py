@@ -163,3 +163,20 @@ def test_worker_heartbeats_for_request_and_playwright_not_only_rss(monkeypatch):
     source = {**source, "parse_strategy": "playwright"}
     external_fetch.process_payload({"source": source}, heartbeat=lambda: beats.append("playwright"))
     assert beats.count("playwright") == 3
+
+
+def test_worker_result_is_json_serializable_when_candidates_have_dates(monkeypatch):
+    """Регрессия 18.09: у кандидатов появились даты, и дата первого уходила в ответ
+    ядру объектом datetime — задачи падали «Object of type datetime is not JSON
+    serializable». Прежние тесты брали кандидатов без дат и этого не видели."""
+    import json
+
+    dated = CandidateLink("https://example.com/a", "Dated article with a real publication date", 5,
+                          datetime(2026, 9, 17, tzinfo=timezone.utc))
+    _stub_request_path(monkeypatch, [dated], [])
+    source = {"id": 7, "name": "S", "parse_strategy": "request", "url": "https://example.com"}
+
+    result = external_fetch.process_payload({"source": source})
+
+    json.dumps(result)  # ровно то, что делает воркер, отправляя результат ядру
+    assert result["last_seen_published_at"] == "2026-09-17T00:00:00+00:00"
