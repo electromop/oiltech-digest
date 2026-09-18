@@ -81,3 +81,14 @@ def test_dry_run_does_not_write(monkeypatch):
                                        pause_seconds=0)
 
     assert result["replaced"] == 1 and result["apply"] is False
+
+
+def test_new_text_must_carry_most_title_words_not_just_generic_ones():
+    # Общий страж (20% слов) пропускает чужую нефтегазовую новость по «росси»+«энерг».
+    title = "Россия и Украина договорились не наносить удары по энергообъектам"
+    page = f"""<html><body><article><h1>Другая новость</h1><p>{"Энергетики России обсуждают тарифы на тепло. " * 20}</p>
+    </article></body></html>""".encode()
+
+    decision, _ = body_repair.plan_repair(_article(PINNED_STORED, title=title), page)
+
+    assert (decision.action, decision.reason) == ("skip", "new text does not match title")

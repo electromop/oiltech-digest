@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 FOREIGN_SHARE = 0.5
 HEAD_CHARS = 800
 OVERSIZED_CHARS = 50_000
+# Доля слов заголовка во ВСЁМ новом теле — второй страж замены: общий страж
+# принадлежности (20%) пропускает «росси»+«энерг» у чужой новости. Замер 18.09 на
+# 71 замене Neftegaz: у новых тел 0,5–1,0 (60 из 71 — 0,9+), у старых чужих — 0–0,25.
+OWN_SHARE = 0.4
 _MOJIBAKE_RE = re.compile(
     "(?:[ÐÑÃ][" + re.escape("".join(chr(c) for c in range(0x80, 0xC0))) + "]|â€)"
 )
@@ -55,6 +59,13 @@ def title_share_in_head(title: str, text: str) -> float:
         return 1.0
     head_words = set(normalize.significant_words((text or "")[:HEAD_CHARS]))
     return len(title_words & head_words) / len(title_words)
+
+
+def title_share_in_text(title: str, text: str) -> float:
+    title_words = set(normalize.significant_words(title))
+    if not title_words:
+        return 1.0
+    return len(title_words & set(normalize.significant_words(text or ""))) / len(title_words)
 
 
 def is_mojibake(text: str) -> bool:
@@ -109,7 +120,7 @@ def plan_repair(article: dict[str, Any], content: bytes | str | None) -> tuple[R
         return decision("skip", defect, "new text too short", new)
     if len(new) > OVERSIZED_CHARS:
         return decision("skip", defect, "new text oversized", new)
-    if not normalize.title_matches_body(title, new):
+    if not normalize.title_matches_body(title, new) or title_share_in_text(title, new) < OWN_SHARE:
         return decision("skip", defect, "new text does not match title", new)
     # Только для «чужого»: у «простыни» своя статья лежит ВНУТРИ старого тела, и эта
     # проверка ошибочно сочла бы их одним и тем же.
