@@ -549,3 +549,22 @@ def test_html5_meta_charset_page_is_decoded_right():
             "</body></html>").encode("utf-8")
     candidates = request_parser.extract_candidate_links("https://skoltech.ru/news", body, limit=3)
     assert candidates[0].title == "Новые данные о газопроницаемости гидратов"
+
+
+def test_learn_more_card_takes_title_from_first_meaningful_fragment():
+    """Mubadala: у свежих новостей ссылка «Learn more», заголовок — обычный блок, а
+    вся карточка с анонсом длиннее 300 знаков. Раньше такие ссылки отбрасывались,
+    и под лимит шли только старые (2022–2023) с текстовыми ссылками."""
+    teaser = "Abu Dhabi, UAE – Mubadala Energy today published its report. " * 6
+    html = f"""<html><body><div class="grid">
+      <div class="card"><span>1 Sep</span><div class="h">Mubadala Energy Publishes 2025 Sustainability Report</div>
+        <p>{teaser}</p><div><a href="/news/mubadala-energy-publishes-2025-sustainability-report/">Learn more</a></div></div>
+      <div class="card"><span>15 May</span><div class="h">Final Investment Decision for Caturus announced</div>
+        <p>{teaser}</p><div><a href="/news/fid-caturus/">Learn more</a></div></div>
+    </div></body></html>""".encode()
+    source = {"article_link_selector": 'a[href*="/news/"]'}
+    candidates = request_parser.extract_candidate_links(source, "https://mubadalaenergy.com/all-news/", html, limit=5)
+    assert [c.title for c in candidates] == [
+        "Mubadala Energy Publishes 2025 Sustainability Report",
+        "Final Investment Decision for Caturus announced",
+    ]

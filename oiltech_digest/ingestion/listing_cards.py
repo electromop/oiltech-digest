@@ -121,7 +121,14 @@ def fallback_title(node, card) -> str:
                 return found
         if card is not None:
             text = usable(spaced_text(card))
-            return text if len(text) <= 300 else ""
+            if text and len(text) <= 300:
+                return text
+            # Карточка с анонсом длиннее 300 знаков, заголовок не в h1–h4 (Mubadala:
+            # «1 Sep | Mubadala Energy Publishes 2025 Sustainability Report… | анонс |
+            # Learn more»). Заголовок — первый содержательный фрагмент карточки.
+            for part in card.itertext():
+                if (found := usable(part)) and len(found) <= 300:
+                    return found
     except (AttributeError, ValueError, UnicodeDecodeError):
         return ""
     return ""
