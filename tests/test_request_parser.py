@@ -535,3 +535,17 @@ def test_page_without_declared_charset_is_not_turned_into_mojibake():
         title, _, text = request_parser.parse_article_page(raw)
         assert title == "Новые данные о гидратах"
         assert "газопроницаемость" in text
+
+
+def test_html5_meta_charset_page_is_decoded_right():
+    """Тот самый случай с прода: кодировка ОБЪЯВЛЕНА (<meta charset="utf-8">), но
+    libxml2 при разборе байтов её не учитывает. Прошлый тест (страница вовсе без
+    объявления) этого не ловил — и правка ушла на прод с кракозябрами у Сколтеха."""
+    # Как рендерит Nuxt (Сколтех): <title> с кириллицей стоит ДО <meta charset>.
+    # Именно это ломает libxml2 — позиция объявления сама по себе ни при чём.
+    body = ('<!doctype html><html><head><title>Новости | Сколтех</title>'
+            '<meta data-n-head="ssr" charset="utf-8"></head><body>'
+            '<a href="/news/novye-dannye-o-gidratah">Новые данные о газопроницаемости гидратов</a>'
+            "</body></html>").encode("utf-8")
+    candidates = request_parser.extract_candidate_links("https://skoltech.ru/news", body, limit=3)
+    assert candidates[0].title == "Новые данные о газопроницаемости гидратов"

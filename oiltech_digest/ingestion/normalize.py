@@ -329,34 +329,49 @@ def strip_emoji(text: str | None) -> str:
     return cleaned.strip(" \t  ")
 
 
-_META_CHARSET_RE = re.compile(rb"<meta[^>]+charset\s*=\s*[\"']?[a-zA-Z0-9_-]+", re.I)
+_META_CHARSET_RE = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([a-zA-Z0-9_\-]+)""", re.I)
+_XML_DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>")
+
+
+def decode_html(content: bytes | str) -> str:
+    """Байты страницы → текст. Всегда сами, а не силами lxml.
+
+    Загрузчик отдаёт сырые байты. lxml (libxml2 2.13) при разборе байтов НЕ учитывает
+    HTML5-форму `<meta charset="utf-8">` — проверено на проде 18.09 на Сколтехе и
+    Белоруснефти: кодировка объявлена на 481-м и 1387-м байте, а заголовок всё равно
+    «Ð\x9dÐ¾Ð²Ð¾…». Из уже декодированной строки те же страницы разбираются верно.
+    Итог на проде до правки: 58 статей с испорченными заголовком и текстом.
+
+    Объявлена кодировка — декодируем ею (несколько битых байтов не повод сменить
+    кодировку всей страницы — их заменяем). Не объявлена — строгий UTF-8, затем
+    cp1251 (старые российские сайты), затем Latin-1.
+    """
+    if isinstance(content, str):
+        return content
+    raw = bytes(content)
+    declared = _META_CHARSET_RE.search(raw[:16384])
+    if declared:
+        encoding = declared.group(1).decode("ascii", "ignore").lower()
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            return raw.decode(encoding, errors="replace")
+        except LookupError:
+            pass  # кодировка с опечаткой — определяем сами
+    for encoding in ("utf-8", "cp1251"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin-1")
 
 
 def parse_html(content: bytes | str):
-    """lxml-документ страницы с верной кодировкой.
-
-    Загрузчик отдаёт сырые байты, а у части сайтов кодировка объявлена только в
-    HTTP-заголовке, не в разметке. lxml такой документ читает как Latin-1, и
-    кириллица UTF-8 превращается в «Ð¡Ñ…». Замер 18.09: 58 статей с испорченными
-    заголовком и текстом (Сколково Energy, Белоруснефть, ТПУ, РАН, Сколтех), 14 из
-    них видны в ленте.
-
-    Кодировка в разметке объявлена — отдаём байты lxml как есть, он её учтёт. Не
-    объявлена — декодируем сами: строгий UTF-8, иначе cp1251 (старые российские
-    сайты), иначе Latin-1 — то, что сделал бы и сам lxml.
-    """
-    if isinstance(content, (bytes, bytearray)) and not _META_CHARSET_RE.search(bytes(content[:4096])):
-        raw = bytes(content)
-        for encoding in ("utf-8", "cp1251", "latin-1"):
-            try:
-                text = raw.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-            try:
-                return lxml_html.fromstring(text)
-            except ValueError:
-                # «Unicode strings with encoding declaration are not supported»: у
-                # страницы есть XML-декларация кодировки — её lxml учтёт из байтов.
-                break
-    return lxml_html.fromstring(content)
-
+    """lxml-документ страницы с верной кодировкой (см. decode_html)."""
+    text = decode_html(content)
+    try:
+        return lxml_html.fromstring(text)
+    except ValueError:
+        # «Unicode strings with encoding declaration are not supported» — XML-декларация
+        # в строке lxml не принимает; кодировку мы уже применили, декларация не нужна.
+        return lxml_html.fromstring(_XML_DECLARATION_RE.sub("", text, count=1))
