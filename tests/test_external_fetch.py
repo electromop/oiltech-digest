@@ -248,3 +248,32 @@ def test_worker_prefilter_uses_customer_tag_keywords_from_payload(monkeypatch):
 
     assert "гидромонитор" in seen["keep"].matched_keywords  # прежде — нет: тематики не доезжали
     assert seen["drop"].keep is False
+
+
+def test_external_playwright_reports_blocked_listing_instead_of_silent_zero(monkeypatch):
+    from oiltech_digest.ingestion import external_fetch, playwright_parser
+
+    def blocked(url, settle_ms=0, **kwargs):
+        playwright_parser._last_fetch.status = "blocked:403"
+        return None
+
+    monkeypatch.setattr(playwright_parser, "fetch_rendered", blocked)
+    source = {"id": 17, "name": "S&P Global", "parse_strategy": "playwright",
+              "listing_url": "https://www.spglobal.com/energy/en/news-research/latest-news"}
+
+    result = external_fetch._process_playwright(source, {"article_limit": 12, "known_urls": []})
+
+    # Прежде — «ok» с нулями, неотличимо от «нового нет».
+    assert result["stats"]["listing"] == "blocked:403"
+    assert result["stats"]["listing_candidates"] == 0
+
+
+def test_external_request_reports_failed_listing_fetch(monkeypatch):
+    from oiltech_digest.ingestion import external_fetch, http_client
+
+    monkeypatch.setattr(http_client, "fetch", lambda url, **kwargs: None)
+    source = {"id": 9, "name": "Hart Energy", "parse_strategy": "request", "listing_url": "https://www.hartenergy.com/news"}
+
+    result = external_fetch._process_request(source, {"article_limit": 12, "known_urls": []})
+
+    assert result["stats"]["listing"] == "fetch_failed"

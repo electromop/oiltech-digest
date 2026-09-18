@@ -79,8 +79,10 @@ def _process_request(source: dict[str, Any], payload: dict[str, Any], heartbeat=
     listing_url = source.get("listing_url") or source.get("url")
     content = fetch(listing_url) if listing_url else None
     candidates = extract_candidate_links(source, listing_url, content, limit=int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)) if content else []
-    return _articles_from_candidates(source, candidates, payload, fetch_article_candidate, _listing_hash,
-                                     heartbeat=heartbeat)
+    result = _articles_from_candidates(source, candidates, payload, fetch_article_candidate, _listing_hash,
+                                       heartbeat=heartbeat)
+    listing = "no_listing_url" if not listing_url else ("fetch_failed" if content is None else "ok")
+    return _with_listing_report(result, listing, len(candidates))
 
 
 def _process_rss(source: dict[str, Any], payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
@@ -132,8 +134,30 @@ def _process_playwright(source: dict[str, Any], payload: dict[str, Any], heartbe
     limit = int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT)
     # Та же пара попыток, что у ядра, — общей функцией, а не копией.
     candidates = render_listing_candidates(source, listing_url, limit=limit) if listing_url else []
-    return _articles_from_candidates(source, candidates, payload, rendered_article, _listing_hash,
-                                     heartbeat=heartbeat)
+    result = _articles_from_candidates(source, candidates, payload, rendered_article, _listing_hash,
+                                       heartbeat=heartbeat)
+    if not listing_url:
+        listing = "no_listing_url"
+    elif candidates:
+        listing = "ok"
+    else:
+        from oiltech_digest.ingestion.playwright_parser import last_fetch_status
+
+        listing = last_fetch_status() or "no_candidates"
+    return _with_listing_report(result, listing, len(candidates))
+
+
+def _with_listing_report(result: dict[str, Any], listing: str, candidates: int) -> dict[str, Any]:
+    """Положить в итог, что было с лентой: ok, blocked:403, fetch_failed, error:….
+
+    Без этого задача с закрытой лентой завершалась «ok» с нулями и не отличалась от
+    источника, у которого просто нет нового (S&P Global 18.09: 403 на ленте)."""
+    stats = dict(result.get("stats") or {})
+    if listing.startswith("ok") and candidates == 0:
+        listing = "no_candidates"
+    stats["listing"] = listing
+    stats["listing_candidates"] = candidates
+    return {**result, "stats": stats}
 
 
 def _articles_from_candidates(source: dict[str, Any], candidates: list, payload: dict[str, Any], article_fetcher,

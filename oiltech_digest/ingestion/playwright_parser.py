@@ -19,6 +19,7 @@ from __future__ import annotations
 import html as html_lib
 import logging
 import re
+import threading
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -71,6 +72,15 @@ def _playwright_proxy_for(url: str) -> dict[str, str] | None:
 
 _BLOCK_STATUSES = {403, 429, 503}
 
+# Чем закончилась последняя загрузка в этом потоке: ok:200, blocked:403, error:TimeoutError.
+# fetch_rendered возвращает None и на блок, и на сбой — а задача внешнего сбора до 18.09
+# завершалась «ok» с нулями, и стена защиты (S&P: 403) выглядела как «нового нет».
+_last_fetch = threading.local()
+
+
+def last_fetch_status() -> str | None:
+    return getattr(_last_fetch, "status", None)
+
 
 def with_base_href(html_text: str, final_url: str) -> str:
     """Вписать в отрисованную страницу `<base href>` с КОНЕЧНЫМ адресом.
@@ -100,10 +110,12 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
     паузой settle_ms (важно для JS-листингов и прохождения лёгких challenge).
     Возвращает None при блокировке (403/429/503) — чтобы не разбирать challenge-страницу.
     """
+    _last_fetch.status = None
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         logger.error("playwright не установлен: pip install playwright && playwright install chromium")
+        _last_fetch.status = "error:playwright_missing"
         return None
 
     try:
@@ -130,7 +142,9 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
                 response = page.goto(url, timeout=timeout_ms, wait_until=wait_until)
                 if response is not None and response.status in _BLOCK_STATUSES:
                     logger.warning("playwright %s — статус %s (WAF/блок), пропуск", url, response.status)
+                    _last_fetch.status = f"blocked:{response.status}"
                     return None
+                _last_fetch.status = f"ok:{response.status if response is not None else '-'}"
                 if settle_ms:
                     page.wait_for_timeout(settle_ms)
                 html_content = with_base_href(page.content(), page.url)
@@ -139,6 +153,7 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
         return html_content.encode("utf-8") if isinstance(html_content, str) else html_content
     except Exception as exc:  # noqa: BLE001
         logger.warning("playwright fetch failed for %s: %s", url, exc)
+        _last_fetch.status = f"error:{type(exc).__name__}"
         return None
 
 
