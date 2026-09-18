@@ -73,11 +73,17 @@ def is_mojibake(text: str) -> bool:
 
 
 def stored_body_defect(title: str, text: str) -> str | None:
-    """Что не так с сохранённым телом: foreign | mojibake | oversized | None."""
+    """Что не так с сохранённым телом: mojibake | oversized | truncated | foreign | None.
+
+    truncated — обрывок короче MIN_FULL_TEXT_CHARS. У Neftegaz.ru их 246 за 60 дней:
+    дозагрузка вытаскивала чужой блок, страж его отбивал, и оставалась строка лида
+    из RSS (51–120 знаков) — ИИ судил новость по одной фразе."""
     if is_mojibake(text):
         return "mojibake"
     if len(text or "") > OVERSIZED_CHARS:
         return "oversized"
+    if len(text or "") < config.MIN_FULL_TEXT_CHARS:
+        return "truncated"
     if title_share_in_head(title, text) < FOREIGN_SHARE:
         return "foreign"
     return None
@@ -116,7 +122,9 @@ def plan_repair(article: dict[str, Any], content: bytes | str | None) -> tuple[R
     if not content:
         return decision("skip", defect, "page not downloaded")
     new = extract_main_text(content, title=title)
-    if len(new) < config.MIN_FULL_TEXT_CHARS:
+    # «Не длиннее старого» — только для обрывка: своё тело бывает короче чужого
+    # (ОДК 3,6 тыс. знаков против «Гидры» 4,2 тыс.), а простыня длиннее по определению.
+    if len(new) < config.MIN_FULL_TEXT_CHARS or (defect == "truncated" and len(new) <= len(old)):
         return decision("skip", defect, "new text too short", new)
     if len(new) > OVERSIZED_CHARS:
         return decision("skip", defect, "new text oversized", new)
@@ -178,13 +186,39 @@ def repair_bodies(
     }
 
 
-def candidate_articles(*, source_id: int | None, days: int, ids: list[int] | None = None) -> list[dict[str, Any]]:
-    """Статьи для починки: по списку id или по источнику за окно дней."""
+def candidate_articles(
+    *,
+    source_id: int | None,
+    days: int,
+    ids: list[int] | None = None,
+    statuses: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Статьи для починки: по списку id, по источнику за окно дней или по статусу
+    дозагрузки у обрывков всех источников.
+
+    По статусу не берём Telegram (у поста нет HTTP-тела — короткий пост это формат, а
+    не обрыв) и источники зарубежного контура (с РФ они 403; их тела добирает
+    NL-воркер — enqueue-external-refetch)."""
     with repository.get_connection() as conn:
         if ids:
             rows = conn.execute(
                 "SELECT id, source_id, title, url, raw_text FROM articles WHERE id = ANY(%s) ORDER BY id",
                 (ids,),
+            ).fetchall()
+        elif statuses:
+            rows = conn.execute(
+                """
+                SELECT a.id, a.source_id, a.title, a.url, a.raw_text
+                FROM articles a JOIN sources s ON s.id = a.source_id
+                WHERE a.full_text_status = ANY(%s)
+                  AND a.collected_at > now() - (%s::text || ' days')::interval
+                  AND length(coalesce(a.raw_text, '')) < %s
+                  AND s.parse_strategy <> 'telegram'
+                  AND coalesce(s.network_region, 'auto') <> 'external'
+                  AND (%s::bigint IS NULL OR a.source_id = %s::bigint)
+                ORDER BY a.id
+                """,
+                (statuses, days, config.MIN_FULL_TEXT_CHARS, source_id, source_id),
             ).fetchall()
         else:
             rows = conn.execute(

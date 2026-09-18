@@ -815,9 +815,12 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     from oiltech_digest.ingestion import body_repair
 
     ids = [int(item) for item in args.ids.split(",") if item.strip()] if args.ids else None
-    if not ids and args.source_id is None:
-        raise SystemExit("repair-article-bodies: нужен --ids или --source-id")
-    articles = body_repair.candidate_articles(source_id=args.source_id, days=args.days, ids=ids)
+    statuses = [item.strip() for item in args.statuses.split(",") if item.strip()] if args.statuses else None
+    if not ids and args.source_id is None and not statuses:
+        raise SystemExit("repair-article-bodies: нужен --ids, --source-id или --statuses")
+    articles = body_repair.candidate_articles(
+        source_id=args.source_id, days=args.days, ids=ids, statuses=statuses,
+    )
     if args.limit:
         articles = articles[: args.limit]
     result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause)
@@ -1749,6 +1752,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="перекачать тела статей с дефектом (чужое тело, кракозябры, простыня) новым извлечением")
     p_repair_bodies.add_argument("--ids", default="", help="id статей через запятую")
     p_repair_bodies.add_argument("--source-id", type=int, default=None, help="все статьи источника за --days")
+    p_repair_bodies.add_argument("--statuses", default="",
+                                 help="обрывки всех источников с этим статусом дозагрузки, напр. too_short,mismatch")
     p_repair_bodies.add_argument("--days", type=int, default=60)
     p_repair_bodies.add_argument("--limit", type=int, default=0, help="не больше N статей (0 — все)")
     p_repair_bodies.add_argument("--pause", type=float, default=0.5, help="пауза между страницами, с")

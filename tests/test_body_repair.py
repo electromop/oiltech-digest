@@ -92,3 +92,21 @@ def test_new_text_must_carry_most_title_words_not_just_generic_ones():
     decision, _ = body_repair.plan_repair(_article(PINNED_STORED, title=title), page)
 
     assert (decision.action, decision.reason) == ("skip", "new text does not match title")
+
+
+def test_teaser_left_after_guard_rejected_foreign_block_gets_own_full_text():
+    # 246 статей Neftegaz: дозагрузка вытащила чужой блок, страж отбил, осталась строка лида.
+    teaser = "Первый опытный образец планируется изготовить в 2028 году."
+
+    decision, new = body_repair.plan_repair(_article(teaser), FEED_HTML)
+
+    assert (decision.action, decision.defect) == ("replace", "truncated")
+    assert "газотурбинный двигатель нового поколения" in new
+
+
+def test_truncated_is_not_replaced_by_text_that_is_not_longer():
+    page = f"<html><body><article><h1>{OWN_TITLE}</h1><p>Коротко.</p></article></body></html>".encode()
+
+    decision, _ = body_repair.plan_repair(_article("Тизер " + OWN_TITLE), page)
+
+    assert (decision.action, decision.reason) == ("skip", "new text too short")
