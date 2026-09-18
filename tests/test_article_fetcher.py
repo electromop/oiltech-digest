@@ -338,3 +338,18 @@ def test_json_ld_of_other_articles_only_is_not_trusted():
 
     assert "газотурбинный двигатель" in text
     assert "Гидра" not in text
+
+
+def test_title_with_a_typo_still_finds_its_block_when_it_clearly_leads():
+    # RSS: «прибило», страница: «прибыло» — совпадение 0,83 при пороге 0,85.
+    typo_title = "На Чукотку прибило третье судно с углем"  # как в RSS 14.09, дословно
+    page = f"""<html><body><div class="wrap-white">
+      {_feed_block("На Чукотку прибыло третье судно с углем", "Разгрузка идёт.",
+                   "Анадырь, 14 сен. Судно доставило уголь для котельных, разгрузка займёт неделю. " * 8)}
+      {_feed_block(PINNED_TITLE, "Решение готово к применению.", PINNED_BODY)}
+    </div></body></html>""".encode()
+
+    text = article_fetcher.extract_main_text(page, title=typo_title)
+
+    assert "Судно доставило уголь" in text
+    assert "Гидра" not in text

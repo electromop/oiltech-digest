@@ -279,6 +279,8 @@ def extract_main_text(content: bytes | str, title: str = "") -> str:
 # Слова заголовка должны почти целиком найтись в тексте <h1> страницы. Не «равен»:
 # у Neftegaz.ru внутри того же <h1> лежит лид, у других к заголовку прилипает рубрика.
 _ANCHOR_MIN_SHARE = 0.85
+_ANCHOR_CLEAR_LEADER = 0.6
+_ANCHOR_CLEAR_MARGIN = 0.3
 _ANCHOR_MIN_WORDS = 3
 _ANCHOR_MIN_BLOCK_CHARS = 200
 
@@ -303,14 +305,19 @@ def _own_article_block(doc, title: str):
         return None
     for tag in ("h1", "h2", "h3"):
         headings = doc.xpath(f"//{tag}")
-        anchor = None
-        for heading in headings:
-            share = _title_share_in(title_words, " ".join(heading.itertext()))
-            if share >= _ANCHOR_MIN_SHARE:
-                anchor = heading
-                break
-        if anchor is None:
+        if not headings:
             continue
+        shares = [_title_share_in(title_words, " ".join(heading.itertext())) for heading in headings]
+        best = max(shares)
+        best_index = shares.index(best)
+        runner_up = max((share for index, share in enumerate(shares) if index != best_index), default=0.0)
+        # Заголовок в ленте и на странице расходится на опечатку («На Чукотку прибило
+        # третье судно» против «прибыло» на странице — 0,83 при пороге 0,85): 40 статей
+        # Neftegaz из-за этого остались с чужим телом. Явный лидер с отрывом — тоже якорь.
+        if not (best >= _ANCHOR_MIN_SHARE
+                or (best >= _ANCHOR_CLEAR_LEADER and best - runner_up >= _ANCHOR_CLEAR_MARGIN)):
+            continue
+        anchor = headings[best_index]
         if len(headings) < 2:
             return None  # статья на странице одна — ограничивать нечего
         block = anchor
