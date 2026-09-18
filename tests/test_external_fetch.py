@@ -180,3 +180,71 @@ def test_worker_result_is_json_serializable_when_candidates_have_dates(monkeypat
 
     json.dumps(result)  # ровно то, что делает воркер, отправляя результат ядру
     assert result["last_seen_published_at"] == "2026-09-17T00:00:00+00:00"
+
+
+def test_worker_fill_keeps_teaser_when_page_body_belongs_to_another_article(monkeypatch):
+    from oiltech_digest.ingestion import external_fetch, http_client
+
+    page = b"""<html><body><article><h1>Italy keeps hydro concessions for domestic companies</h1>
+      <p>""" + b"Rome, 14 Sep. The government extends hydropower concessions for local utilities. " * 12 + b"""</p>
+    </article></body></html>"""
+    monkeypatch.setattr(http_client, "fetch", lambda url, **kwargs: page)
+    teaser = "Tatneft plans lithium extraction from produced water."
+    recs = [{"url": "https://example.com/a", "title": "Tatneft plans lithium extraction from produced water",
+             "raw_text": teaser}]
+
+    filled = external_fetch._fill_bodies_from_source({"id": 1}, recs)
+
+    # Прежде тело бралось, если оно просто длиннее анонса, — без проверки принадлежности.
+    assert filled[0]["raw_text"] == teaser
+
+
+def test_worker_refetch_takes_own_block_on_multi_article_page(monkeypatch):
+    from oiltech_digest.ingestion import external_fetch, http_client
+    from tests.test_article_fetcher import FEED_HTML, OWN_TITLE
+
+    monkeypatch.setattr(http_client, "fetch", lambda url, **kwargs: FEED_HTML)
+
+    result = external_fetch.process_refetch_text_payload(
+        {"articles": [{"id": 7, "url": "https://example.com/odk", "title": OWN_TITLE}], "min_chars": 100}
+    )
+
+    assert "газотурбинный двигатель" in result["results"][0]["text"]
+    assert "Гидра" not in result["results"][0]["text"]
+
+
+def test_worker_prefilter_uses_customer_tag_keywords_from_payload(monkeypatch):
+    from oiltech_digest.ingestion import external_fetch, relevance_filter
+
+    # Ядро: справочник тематик читается из базы и уезжает в payload.
+    monkeypatch.setattr(relevance_filter, "_TAG_KEYWORDS_CACHE", {"positive": (), "negative": (), "at": 0.0})
+    monkeypatch.setattr(
+        external_fetch.repository, "list_enabled_tags",
+        lambda: [{"keywords_json": ["гидромонитор"], "keywords_en_json": [], "negative_keywords_json": ["гороскоп"]}],
+        raising=False,
+    )
+    monkeypatch.setattr(external_fetch.repository, "get_source", lambda source_id: {"id": source_id, "url": "https://x"})
+    monkeypatch.setattr(external_fetch.repository, "recent_article_urls_for_site", lambda url: [])
+    payload = external_fetch.build_scrape_source_payload(5, {})
+    assert payload["prefilter_tag_keywords"] == {"positive": ["гидромонитор"], "negative": ["гороскоп"]}
+
+    # Воркер: базы нет, кеш пуст — ключи тематик берутся из payload.
+    monkeypatch.setattr(relevance_filter, "_TAG_KEYWORDS_CACHE", {"positive": (), "negative": (), "at": 0.0})
+
+    def no_database():
+        raise RuntimeError("у внешнего воркера нет базы")
+
+    monkeypatch.setattr(external_fetch.repository, "list_enabled_tags", no_database, raising=False)
+    seen = {}
+
+    def fake_process_source(payload, heartbeat=None):
+        seen["keep"] = relevance_filter.should_keep_article("Гидромонитор для вскрытия пласта")
+        seen["drop"] = relevance_filter.should_keep_article("Гороскоп на неделю")
+        return {"ok": True}
+
+    monkeypatch.setattr(external_fetch, "_process_source", fake_process_source)
+
+    external_fetch.process_payload(payload)
+
+    assert "гидромонитор" in seen["keep"].matched_keywords  # прежде — нет: тематики не доезжали
+    assert seen["drop"].keep is False

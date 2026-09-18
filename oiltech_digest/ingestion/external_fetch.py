@@ -8,6 +8,7 @@ from typing import Any
 from oiltech_digest import config
 from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
+from oiltech_digest.ingestion import relevance_filter
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
 
@@ -21,10 +22,24 @@ def build_scrape_source_payload(source_id: int, payload: dict[str, Any]) -> dict
         "max_age_days": payload.get("max_age_days"),
         "article_limit": int(payload.get("article_limit") or REQUEST_ARTICLE_LIMIT),
         "known_urls": repository.recent_article_urls_for_site(source.get("listing_url") or source.get("url")),
+        "prefilter_tag_keywords": _prefilter_tag_keywords(),
     }
 
 
+def _prefilter_tag_keywords() -> dict[str, list[str]]:
+    positive, negative = relevance_filter.tag_keywords()
+    return {"positive": list(positive), "negative": list(negative)}
+
+
 def process_payload(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
+    keywords = payload.get("prefilter_tag_keywords")
+    if keywords is None:  # ядро старее воркера — работаем как раньше
+        return _process_source(payload, heartbeat=heartbeat)
+    with relevance_filter.use_tag_keywords(keywords.get("positive") or [], keywords.get("negative") or []):
+        return _process_source(payload, heartbeat=heartbeat)
+
+
+def _process_source(payload: dict[str, Any], heartbeat=None) -> dict[str, Any]:
     source = payload["source"]
     strategy = source.get("parse_strategy")
     # heartbeat — всем стратегиям, а не только RSS. До 18.09 request и playwright шли
@@ -208,12 +223,15 @@ def _fill_bodies_from_source(source: dict[str, Any], recs: list[dict[str, Any]],
         if len(text) >= MIN_ARTICLE_TEXT_CHARS or not url:
             filled.append(rec)
             continue
+        title = str(rec.get("title") or "")
         try:
             content = fetch(url)
-            body = extract_main_text(content) if content else ""
+            body = extract_main_text(content, title=title) if content else ""
         except Exception:  # noqa: BLE001 - одна статья не валит прогон источника
             body = ""
-        if body and len(body) > len(text):
+        # Страж принадлежности (№24) здесь раньше не стоял вовсе: тело бралось, если
+        # оно просто длиннее анонса. Чужой текст хуже короткого своего — оставляем анонс.
+        if body and len(body) > len(text) and normalize.title_matches_body(title, body):
             rec = {**rec, "raw_text": body, "text_truncated": normalize.is_truncated(body)}
         filled.append(rec)
     return filled
@@ -267,7 +285,7 @@ def process_refetch_text_payload(payload: dict[str, Any], heartbeat=None) -> dic
         if url:
             try:
                 content = fetch(url)
-                body = extract_main_text(content) if content else ""
+                body = extract_main_text(content, title=str(item.get("title") or "")) if content else ""
             except Exception as exc:  # noqa: BLE001 - одна статья не валит пакет
                 body = ""
                 record["error"] = str(exc)[:200]

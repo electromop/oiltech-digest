@@ -235,7 +235,7 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
         )
     ) or dates.date_from_markup(doc)
 
-    raw_text = extract_main_text(content)
+    raw_text = extract_main_text(content, title=title)
     if len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
         raw_text = _visible_text(doc)
     return title, published_at, raw_text

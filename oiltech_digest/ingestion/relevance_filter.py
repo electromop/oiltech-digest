@@ -7,10 +7,12 @@ industrial or business-development signal in the RSS title/summary.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
 import re
 import time
+from typing import Iterable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,24 @@ _TAG_KEYWORDS_CACHE: dict[str, object] = {"positive": (), "negative": (), "at": 
 _TAG_KEYWORDS_TTL_SECONDS = 300
 _MIN_TAG_KEYWORD_LEN = 4
 
+# Ключи тематик, присланные ядром в задачу сбора. У внешнего воркера в NL базы нет:
+# чтение справочника падало в except, и с 17.09 (fffaee0) все внешние источники шли
+# через предфильтр БЕЗ тематик заказчика — тот же класс, что тематики гейта 17.09.
+# Модульная переменная, а не ContextVar: RSS разбирается в пуле потоков, куда
+# контекст не переходит; воркер берёт задачи по одной.
+_TAG_KEYWORDS_OVERRIDE: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+
+
+@contextmanager
+def use_tag_keywords(positive: Iterable[str], negative: Iterable[str]) -> Iterator[None]:
+    global _TAG_KEYWORDS_OVERRIDE
+    previous = _TAG_KEYWORDS_OVERRIDE
+    _TAG_KEYWORDS_OVERRIDE = (tuple(positive), tuple(negative))
+    try:
+        yield
+    finally:
+        _TAG_KEYWORDS_OVERRIDE = previous
+
 
 def tag_keywords() -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Ключевые и стоп-слова активных тематик заказчика.
@@ -109,6 +129,8 @@ def tag_keywords() -> tuple[tuple[str, ...], tuple[str, ...]]:
     может быть не нужна вовсе. Сбой чтения не должен ронять сбор — работаем на
     статическом словаре, как раньше.
     """
+    if _TAG_KEYWORDS_OVERRIDE is not None:
+        return _TAG_KEYWORDS_OVERRIDE
     now = time.monotonic()
     if now - float(_TAG_KEYWORDS_CACHE.get("at") or 0) < _TAG_KEYWORDS_TTL_SECONDS:
         return _TAG_KEYWORDS_CACHE["positive"], _TAG_KEYWORDS_CACHE["negative"]  # type: ignore[return-value]
