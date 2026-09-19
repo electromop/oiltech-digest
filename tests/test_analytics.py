@@ -81,16 +81,34 @@ def test_monthly_analytics_funnel_same_period_themes_and_sources(isolated_db):
     assert "ai_cost" not in data
 
 
-def test_analytics_cost_only_for_admin(monkeypatch):
+def test_analytics_is_admin_only(monkeypatch):
+    """Решение владельца 19.09: «показываем только админам» — гейт на API."""
     seen = []
     monkeypatch.setattr(api.analytics, "monthly_analytics",
                         lambda months, include_cost=False: seen.append(include_cost) or {"months": []})
     app = api.app
     try:
         app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "u@e.ru", "role": "user"}
-        assert TestClient(app).get("/api/analytics/monthly").status_code == 200
+        assert TestClient(app).get("/api/analytics/monthly").status_code == 403
         app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@e.ru", "role": "admin"}
         assert TestClient(app).get("/api/analytics/monthly?months=12").status_code == 200
     finally:
         app.dependency_overrides.clear()
-    assert seen == [False, True]
+    assert seen == [True]  # до данных не дошёл никто, кроме админа
+
+
+def test_cost_months_use_cbr_rate_of_their_own_last_day(isolated_db, monkeypatch):
+    asked = []
+    monkeypatch.setattr(analytics.fx, "usd_rub",
+                        lambda on, today=None: asked.append(on) or {"rate": 80.0 + on.month, "date": on.isoformat(), "source": "ЦБ РФ"})
+
+    data = analytics.monthly_analytics(2, include_cost=True)
+
+    now = datetime.now(MSK).date()
+    current, previous = data["ai_cost"][-1], data["ai_cost"][-2]
+    assert current["usd_rub_date"] == now.isoformat()  # текущий месяц — по курсу на сегодня
+    prev_last = datetime.strptime(previous["month"] + "-01", "%Y-%m-%d").date()
+    assert previous["usd_rub_date"].startswith(previous["month"]) and previous["usd_rub_date"] >= prev_last.isoformat()
+    assert previous["usd_rub"] == 80.0 + int(previous["month"][5:])
+    same = data["ai_cost_previous_same_period"]
+    assert same["usd_rub_date"] == f"{same['month']}-{same['days']:02d}"  # база «те же дни» — по курсу её последнего дня

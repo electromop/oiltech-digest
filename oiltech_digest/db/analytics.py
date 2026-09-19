@@ -13,14 +13,14 @@ repository.monthly_platform_stats: по дате публикации архив
 from __future__ import annotations
 
 import calendar
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from psycopg.rows import dict_row
 
-from oiltech_digest import config
+from oiltech_digest import config, fx
 from oiltech_digest.db import connection
 
 TZ = "Europe/Moscow"
@@ -216,14 +216,27 @@ def monthly_analytics(months: int = 6, *, include_cost: bool = False, top_source
         },
     }
     if include_cost:
+        # Курс ЦБ на последний день месяца, у текущего — на сегодня (fx.usd_rub).
+        today = now_local.date()
         cost_by_month = {row["month"]: row for row in cost_rows}
         result["ai_cost"] = [
-            {"month": key, "calls": 0, "articles": 0, "cost_usd": 0.0, **cost_by_month.get(key, {})}
+            {"month": key, "calls": 0, "articles": 0, "cost_usd": 0.0, **cost_by_month.get(key, {}),
+             **_rate_fields(fx.usd_rub(_rate_day(key, today), today=today))}
             for key in shown
         ]
         result["ai_cost_previous_same_period"] = {
             "month": previous, "days": day_cap, "calls": 0, "articles": 0, "cost_usd": 0.0,
             **(cost_prev[0] if cost_prev else {}),
+            **_rate_fields(fx.usd_rub(date(int(previous[:4]), int(previous[5:]), day_cap), today=today)),
         }
-        result["usd_rub"] = config.ANALYTICS_USD_RUB
     return result
+
+
+def _rate_day(month: str, today: date) -> date:
+    year, number = int(month[:4]), int(month[5:])
+    last = date(year, number, calendar.monthrange(year, number)[1])
+    return min(last, today)
+
+
+def _rate_fields(rate: dict[str, Any]) -> dict[str, Any]:
+    return {"usd_rub": rate["rate"], "usd_rub_date": rate["date"], "usd_rub_source": rate["source"]}

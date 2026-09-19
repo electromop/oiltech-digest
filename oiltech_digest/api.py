@@ -1450,15 +1450,14 @@ def monthly_stats(
 @app.get("/api/analytics/monthly")
 def analytics_monthly(
     months: int = Query(6, ge=1, le=24),
-    user: dict[str, Any] = Depends(require_user),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Месячная аналитика платформы: воронка, источники, темы, скорость, цели ГД.
 
-    Платформенные показатели одинаковы для всех и персональных данных не содержат.
-    Стоимость ИИ — только администратору: это коммерческая сторона (слайд 7), и гейт
-    стоит здесь, а не во фронте (аудит изоляции 24.07). Сам экран пока в админском
-    меню — решение владельца о «Статистике»."""
-    return _clean(analytics.monthly_analytics(months, include_cost=user.get("role") == "admin"))
+    Только администратору — решение владельца 19.09 («показываем только админам»):
+    в ответе стоимость ИИ, коммерческая сторона. Гейт на API, а не только во фронте
+    (аудит изоляции 24.07)."""
+    return _clean(analytics.monthly_analytics(months, include_cost=True))
 
 
 @app.get("/api/maintenance/status")

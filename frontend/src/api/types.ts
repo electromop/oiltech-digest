@@ -528,7 +528,16 @@ export type AnalyticsCounters = {
 
 export type AnalyticsMonth = AnalyticsCounters & { digest_exports: number; complete: boolean };
 
-export type AnalyticsCost = { month: string; calls: number; articles: number; cost_usd: number };
+export type AnalyticsCost = {
+  month: string;
+  calls: number;
+  articles: number;
+  cost_usd: number;
+  // Курс ЦБ РФ на последний день месяца (у текущего — на сегодня); «допущение» — ЦБ недоступен.
+  usd_rub: number;
+  usd_rub_date: string | null;
+  usd_rub_source: "ЦБ РФ" | "допущение" | string;
+};
 
 export type MonthlyAnalytics = {
   timezone: string;
@@ -544,7 +553,6 @@ export type MonthlyAnalytics = {
   // Только администратору: стоимость — коммерческая сторона.
   ai_cost?: AnalyticsCost[];
   ai_cost_previous_same_period?: AnalyticsCost & { days: number };
-  usd_rub?: number;
 };
 
 // --- Приём файлов: документы пользователя (экран «Материалы») ---

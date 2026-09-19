@@ -13,10 +13,15 @@ describe("обзор статистики", () => {
     expect(screen.getByText("Отобрано в дайджест")).toBeInTheDocument();
     // Статьи со старой таксономией не прячутся молча — экран их называет.
     expect(screen.getByText(/размечены прежними направлениями/)).toBeInTheDocument();
+    // Рубли — по курсу ЦБ своего месяца: $58,8 × 84,1975 ₽/$ на 19.09.
+    expect(screen.getAllByText(/^4\s951 ₽$/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/84,20 ₽\/\$ на 19\.09\.2026/)).toBeInTheDocument();
+    // Плитку «Источников дали релевантное» владелец убрал 19.09.
+    expect(screen.queryByText("Источников дали релевантное")).not.toBeInTheDocument();
   });
 
   it("стоимость — только если сервер её отдал (администратор)", () => {
-    const { ai_cost: _cost, ai_cost_previous_same_period: _prev, usd_rub: _rate, ...userView } = analyticsFixture;
+    const { ai_cost: _cost, ai_cost_previous_same_period: _prev, ...userView } = analyticsFixture;
     render(<AnalyticsOverview data={userView} months={userView.months} month="2026-08" />);
     expect(screen.queryByText("ИИ-обработка")).not.toBeInTheDocument();
     expect(screen.getAllByText(/с июлем 2026/).length).toBeGreaterThan(0);

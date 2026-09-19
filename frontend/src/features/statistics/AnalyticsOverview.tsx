@@ -1,7 +1,7 @@
 // Обзор экрана «Статистика»: что платформа дала за месяц — глазами заказчика.
 // Опора — презентация ГД (июль 2026): сквозной пайплайн (слайд 4), >120 источников
 // (слайд 5), раннее выявление (слайды 3, 10), бюджет ИИ ~10 000 ₽/мес (слайд 7).
-import type { AnalyticsMonth, MonthlyAnalytics } from "../../api/types";
+import type { AnalyticsCost, AnalyticsMonth, MonthlyAnalytics } from "../../api/types";
 import {
   comparisonBase, delta, formatDecimal, formatHours, formatInt, formatRub, formatShare,
   monthGenitive, monthLabel, monthShort, share,
@@ -29,10 +29,15 @@ export function AnalyticsOverview({ data, months, month }: Props) {
   const partial = !row.complete;
   const cost = data.ai_cost?.find((c) => c.month === row.month);
   const costBase = partial ? data.ai_cost_previous_same_period : data.ai_cost?.find((c) => c.month === base?.row.month);
-  const rate = data.usd_rub ?? 0;
-  const rub = cost ? cost.cost_usd * rate : null;
-  const rubPerArticle = cost && cost.articles ? (cost.cost_usd * rate) / cost.articles : null;
-  const rubPerArticleBase = costBase && costBase.articles ? (costBase.cost_usd * rate) / costBase.articles : null;
+  // Рубли — по курсу ЦБ своего месяца (приходит с сервера у каждой строки затрат).
+  const rubOf = (c?: AnalyticsCost) => (c ? c.cost_usd * c.usd_rub : null);
+  const rubPerArticleOf = (c?: AnalyticsCost) => (c && c.articles ? (c.cost_usd * c.usd_rub) / c.articles : null);
+  const costOf = (key: string) => data.ai_cost?.find((c) => c.month === key);
+  const rub = rubOf(cost);
+  const rubPerArticle = rubPerArticleOf(cost);
+  const rubPerArticleBase = rubPerArticleOf(costBase);
+  const assumed = data.ai_cost?.filter((c) => c.usd_rub_source !== "ЦБ РФ") ?? [];
+  const lastRate = data.ai_cost?.[data.ai_cost.length - 1];
   const budgetPerArticle = data.targets.ai_rub_month / data.targets.articles_month;
   const categories: Category[] = months.map((m) => ({ key: m.month, label: monthShort(m.month), partial: !m.complete }));
   const themes = data.themes.filter((t) => t.month === row.month);
@@ -64,9 +69,6 @@ export function AnalyticsOverview({ data, months, month }: Props) {
         <StatTile label="Сильные сигналы · балл ≥60" value={formatInt(row.strong)}
           sub={`из них ${formatInt(row.top)} с баллом ≥70`}
           change={delta(row.strong, base?.row.strong ?? null, true)} base={base?.label} spark={spark("strong")} />
-        <StatTile label="Источников дали релевантное" value={formatInt(row.sources_relevant)}
-          sub={`подключено ${formatInt(data.sources_enabled)} · в презентации — >${data.targets.sources}`}
-          change={delta(row.sources_relevant, base?.row.sources_relevant ?? null, true)} base={base?.label} spark={spark("sources_relevant")} />
         <StatTile label="Время до сигнала" value={formatHours(row.speed_p50_hours)}
           sub={`медиана от публикации до балла · 90% — до ${formatHours(row.speed_p90_hours)}`}
           change={delta(row.speed_p50_hours, base?.row.speed_p50_hours ?? null, false)} base={base?.label}
@@ -75,7 +77,7 @@ export function AnalyticsOverview({ data, months, month }: Props) {
           <StatTile label="ИИ-обработка" value={formatRub(rub)}
             sub={`${rubPerArticle == null ? "—" : `${formatDecimal(rubPerArticle, 2)} ₽`} за статью · бюджет ${formatDecimal(budgetPerArticle, 0)} ₽`}
             change={delta(rubPerArticle, rubPerArticleBase, false)} base={base ? `за статью ${base.label}` : undefined}
-            spark={complete.map((m) => (data.ai_cost?.find((c) => c.month === m.month)?.cost_usd ?? 0) * rate)} />
+            spark={complete.map((m) => rubOf(costOf(m.month)) ?? 0)} />
         )}
       </section>
 
@@ -178,8 +180,13 @@ export function AnalyticsOverview({ data, months, month }: Props) {
               axisFormat={(v) => formatInt(v)}
               reference={{ value: data.targets.ai_rub_month, label: `бюджет ${formatInt(data.targets.ai_rub_month)} ₽/мес` }}
               series={[{ key: "cost", label: "ИИ-обработка", color: "var(--viz-s1)",
-                values: months.map((m) => (data.ai_cost?.find((c) => c.month === m.month)?.cost_usd ?? 0) * rate) }]}
-              footnote={`По курсу ${formatInt(rate)} ₽/$ (допущение, задаётся в настройках). Май–июль занижены: до 23.07 не учитывался гейт по отклонённым статьям; июль — ещё и массовый перепрогон.`}
+                values: months.map((m) => rubOf(costOf(m.month)) ?? 0) }]}
+              footnote={<>
+                Затраты в долларах пересчитаны по курсу ЦБ РФ на последний день каждого месяца
+                {lastRate?.usd_rub_date ? `, текущий — ${formatDecimal(lastRate.usd_rub, 2)} ₽/$ на ${lastRate.usd_rub_date.split("-").reverse().join(".")}` : ""}.
+                {assumed.length > 0 && ` ЦБ не ответил для: ${assumed.map((c) => monthShort(c.month)).join(", ")} — там запасной курс ${formatDecimal(assumed[0].usd_rub, 0)} ₽/$ (допущение).`}
+                {" "}Май–июль занижены: до 23.07 не учитывался гейт по отклонённым статьям; июль — ещё и массовый перепрогон.
+              </>}
             />
           </div>
         )}

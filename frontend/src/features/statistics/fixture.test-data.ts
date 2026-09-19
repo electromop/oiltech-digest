@@ -432,31 +432,46 @@ export const analyticsFixture: MonthlyAnalytics = {
       "month": "2026-05",
       "calls": 769,
       "articles": 194,
-      "cost_usd": 0.11
+      "cost_usd": 0.11,
+      "usd_rub": 71.0224,
+      "usd_rub_date": "2026-05-30",
+      "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-06",
       "calls": 19181,
       "articles": 3265,
-      "cost_usd": 97.57
+      "cost_usd": 97.57,
+      "usd_rub": 77.7539,
+      "usd_rub_date": "2026-06-30",
+      "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-07",
       "calls": 51059,
       "articles": 17228,
-      "cost_usd": 328.69
+      "cost_usd": 328.69,
+      "usd_rub": 79.8573,
+      "usd_rub_date": "2026-07-31",
+      "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-08",
       "calls": 17408,
       "articles": 8982,
-      "cost_usd": 76.69
+      "cost_usd": 76.69,
+      "usd_rub": 85.6007,
+      "usd_rub_date": "2026-08-29",
+      "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-09",
       "calls": 15236,
       "articles": 5461,
-      "cost_usd": 58.8
+      "cost_usd": 58.8,
+      "usd_rub": 84.1975,
+      "usd_rub_date": "2026-09-19",
+      "usd_rub_source": "ЦБ РФ"
     }
   ],
   "ai_cost_previous_same_period": {
@@ -464,7 +479,9 @@ export const analyticsFixture: MonthlyAnalytics = {
     "days": 19,
     "calls": 11498,
     "articles": 6049,
-    "cost_usd": 54.02
-  },
-  "usd_rub": 90.0
+    "cost_usd": 54.02,
+    "usd_rub": 85.1645,
+    "usd_rub_date": "2026-08-19",
+    "usd_rub_source": "ЦБ РФ"
+  }
 };
