@@ -1,4 +1,6 @@
 // Снимок ответа /api/analytics/monthly с прода 19.09.2026 (урезан) — для тестов экрана.
+// Затраты на ИИ (ai_cost) — СИНТЕТИЧЕСКИЕ: репозиторий публичный, а реальные расходы —
+// коммерческая сторона (на экране их видит только админ). Курсы — настоящие курсы ЦБ.
 import type { MonthlyAnalytics } from "../../api/types";
 
 export const analyticsFixture: MonthlyAnalytics = {
@@ -430,45 +432,45 @@ export const analyticsFixture: MonthlyAnalytics = {
   "ai_cost": [
     {
       "month": "2026-05",
-      "calls": 769,
-      "articles": 194,
-      "cost_usd": 0.11,
+      "calls": 900,
+      "articles": 300,
+      "cost_usd": 1.0,
       "usd_rub": 71.0224,
       "usd_rub_date": "2026-05-30",
       "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-06",
-      "calls": 19181,
-      "articles": 3265,
-      "cost_usd": 97.57,
+      "calls": 9000,
+      "articles": 3000,
+      "cost_usd": 50.0,
       "usd_rub": 77.7539,
       "usd_rub_date": "2026-06-30",
       "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-07",
-      "calls": 51059,
-      "articles": 17228,
-      "cost_usd": 328.69,
+      "calls": 27000,
+      "articles": 9000,
+      "cost_usd": 100.0,
       "usd_rub": 79.8573,
       "usd_rub_date": "2026-07-31",
       "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-08",
-      "calls": 17408,
-      "articles": 8982,
-      "cost_usd": 76.69,
+      "calls": 18000,
+      "articles": 6000,
+      "cost_usd": 40.0,
       "usd_rub": 85.6007,
       "usd_rub_date": "2026-08-29",
       "usd_rub_source": "ЦБ РФ"
     },
     {
       "month": "2026-09",
-      "calls": 15236,
-      "articles": 5461,
-      "cost_usd": 58.8,
+      "calls": 12000,
+      "articles": 4000,
+      "cost_usd": 30.0,
       "usd_rub": 84.1975,
       "usd_rub_date": "2026-09-19",
       "usd_rub_source": "ЦБ РФ"
@@ -477,9 +479,9 @@ export const analyticsFixture: MonthlyAnalytics = {
   "ai_cost_previous_same_period": {
     "month": "2026-08",
     "days": 19,
-    "calls": 11498,
-    "articles": 6049,
-    "cost_usd": 54.02,
+    "calls": 10500,
+    "articles": 3500,
+    "cost_usd": 25.0,
     "usd_rub": 85.1645,
     "usd_rub_date": "2026-08-19",
     "usd_rub_source": "ЦБ РФ"

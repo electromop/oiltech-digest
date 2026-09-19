@@ -13,8 +13,8 @@ describe("обзор статистики", () => {
     expect(screen.getByText("Отобрано в дайджест")).toBeInTheDocument();
     // Статьи со старой таксономией не прячутся молча — экран их называет.
     expect(screen.getByText(/размечены прежними направлениями/)).toBeInTheDocument();
-    // Рубли — по курсу ЦБ своего месяца: $58,8 × 84,1975 ₽/$ на 19.09.
-    expect(screen.getAllByText(/^4\s951 ₽$/).length).toBeGreaterThan(0);
+    // Рубли — по курсу ЦБ своего месяца: $30 (синтетика) × 84,1975 ₽/$ на 19.09.
+    expect(screen.getAllByText(/^2\s526 ₽$/).length).toBeGreaterThan(0);
     expect(screen.getByText(/84,20 ₽\/\$ на 19\.09\.2026/)).toBeInTheDocument();
     // Плитку «Источников дали релевантное» владелец убрал 19.09.
     expect(screen.queryByText("Источников дали релевантное")).not.toBeInTheDocument();
