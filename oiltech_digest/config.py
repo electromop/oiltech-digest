@@ -190,6 +190,15 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5-nano": (0.05, 0.40),
 }
 
+# Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
+# (июль 2026): >120 источников (слайды 4–5); бюджет ИИ ≈10 000 ₽/мес при потоке
+# 5 000 статей/мес (слайд 7). Курс нужен только для пересчёта cost_usd в рубли на
+# экране и подписан там же — это допущение, а не данные.
+ANALYTICS_TARGET_SOURCES = int(os.environ.get("ANALYTICS_TARGET_SOURCES", "120"))
+ANALYTICS_TARGET_ARTICLES_MONTH = int(os.environ.get("ANALYTICS_TARGET_ARTICLES_MONTH", "5000"))
+ANALYTICS_TARGET_AI_RUB_MONTH = float(os.environ.get("ANALYTICS_TARGET_AI_RUB_MONTH", "10000"))
+ANALYTICS_USD_RUB = float(os.environ.get("ANALYTICS_USD_RUB", "90"))
+
 def price_for_model(model: str | None) -> tuple[float, float]:
     """USD/1М-токенов (input, output) для модели по префиксу имени.
     Откат на OPENAI_INPUT/OUTPUT_USD_PER_MTOK, если модель не в таблице."""

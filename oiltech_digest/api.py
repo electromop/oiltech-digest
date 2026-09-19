@@ -24,7 +24,7 @@ from oiltech_digest import auth, background_jobs, backlog, config
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.db import documents_repo, repository
+from oiltech_digest.db import analytics, documents_repo, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest import network_policy
@@ -1445,6 +1445,20 @@ def monthly_stats(
             "activity_scope": "all",
         }
     )
+
+
+@app.get("/api/analytics/monthly")
+def analytics_monthly(
+    months: int = Query(6, ge=1, le=24),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """Месячная аналитика платформы: воронка, источники, темы, скорость, цели ГД.
+
+    Платформенные показатели одинаковы для всех и персональных данных не содержат.
+    Стоимость ИИ — только администратору: это коммерческая сторона (слайд 7), и гейт
+    стоит здесь, а не во фронте (аудит изоляции 24.07). Сам экран пока в админском
+    меню — решение владельца о «Статистике»."""
+    return _clean(analytics.monthly_analytics(months, include_cost=user.get("role") == "admin"))
 
 
 @app.get("/api/maintenance/status")
