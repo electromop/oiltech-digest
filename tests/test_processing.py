@@ -761,3 +761,32 @@ def test_reprint_candidate_order_is_not_by_overlap():
         f"срез по overlap отдаёт модели только тривиальные пары: {orders}"
     )
     assert any(o.startswith("ORDER BY md5(") for o in orders)
+
+
+def test_find_reprints_waits_for_interval_since_last_applied_run(isolated_db, monkeypatch, capsys):
+    """Срок — от прошлого прогона с записью в базе: перезапуск планировщика его не
+    сбивает, а сухой прогон не считается."""
+    import argparse
+
+    from oiltech_digest import cli
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing import reprints
+
+    looked = []
+    monkeypatch.setattr(reprints, "find_candidates", lambda **kwargs: looked.append(kwargs) or [])
+    args = argparse.Namespace(min_overlap=0.35, max_overlap=1.0, days=7, limit=200, max_days_apart=5, show=0,
+                              candidates_only=False, offline=False, apply=True, local=False, min_interval_hours=12)
+
+    repository.create_background_job("reprint_review", {"pairs": [], "dry_run": True}, queue_name="external-ai")
+    cli.cmd_find_reprints(args)
+    assert len(looked) == 1  # сухой прогон не в счёт
+
+    job = repository.create_background_job("reprint_review", {"pairs": [], "dry_run": False}, queue_name="external-ai")
+    cli.cmd_find_reprints(args)
+    assert len(looked) == 1 and "пропуск" in capsys.readouterr().out
+
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE background_jobs SET created_at = now() - interval '13 hours' WHERE id = %s", (job["id"],))
+        conn.commit()
+    cli.cmd_find_reprints(args)
+    assert len(looked) == 2  # прошло больше 12 часов — снова ищем

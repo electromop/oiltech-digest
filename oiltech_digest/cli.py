@@ -751,6 +751,17 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         raise SystemExit("--max-overlap задаётся долей от 0 до 1 и не меньше --min-overlap")
     if args.days < 1 or args.limit < 1 or args.max_days_apart < 0:
         raise SystemExit("--days и --limit должны быть положительными, --max-days-apart неотрицательным")
+    # Для планировщика: срок — от прошлого прогона с записью в базе, а не от счётчика
+    # циклов, который обнуляется при каждом перезапуске (19.09: 16,5 ч без прогона).
+    min_interval = getattr(args, "min_interval_hours", 0) or 0
+    if args.apply and min_interval > 0 and repository.has_recent_background_job(
+        kind="reprint_review",
+        payload_subset={"dry_run": False},
+        lookback_hours=min_interval,
+        statuses=("queued", "running", "finalizing", "ok", "failed"),
+    ):
+        print(f"find-reprints: пропуск — прогон с записью был менее {min_interval:g} ч назад")
+        return
 
     candidates = reprints.find_candidates(
         days=args.days, min_overlap=args.min_overlap, max_overlap=args.max_overlap,
@@ -1735,6 +1746,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_reprints.add_argument("--candidates-only", action="store_true", help="только правило, без модели")
     p_reprints.add_argument("--offline", action="store_true", help="заглушка вместо модели")
     p_reprints.add_argument("--apply", action="store_true", help="ЗАПИСАТЬ пометки (по умолчанию сухой прогон)")
+    p_reprints.add_argument("--min-interval-hours", type=float, default=0,
+                            help="с --apply: пропустить, если прогон с записью был недавно (для планировщика)")
     p_reprints.add_argument("--local", action="store_true",
                             help="считать здесь, а не через внешний воркер (только для offline-проверок: "
                                  "с РФ-адреса OpenAI отвечает 403)")

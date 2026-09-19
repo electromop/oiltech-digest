@@ -55,7 +55,8 @@ EXTERNAL_REFETCH_LIMIT="${EXTERNAL_REFETCH_LIMIT:-100}"
 # Окно намеренно шире периода запуска: уже помеченные пары правило не выдаёт
 # повторно, поэтому перекрытие почти ничего не стоит, а пропуск дубля стоит того,
 # что заказчик снова видит четыре карточки одной новости.
-REPRINTS_EVERY_CYCLES="${REPRINTS_EVERY_CYCLES:-24}"
+# Раз в REPRINTS_INTERVAL_HOURS часов по времени прошлого прогона в базе (0 — выключено).
+REPRINTS_INTERVAL_HOURS="${REPRINTS_INTERVAL_HOURS:-12}"
 REPRINTS_DAYS="${REPRINTS_DAYS:-7}"
 REPRINTS_LIMIT="${REPRINTS_LIMIT:-200}"
 
@@ -130,13 +131,15 @@ while true; do
       --limit "$EXTERNAL_REFETCH_LIMIT"
   fi
 
-  # Не на нулевом цикле: иначе прогон повторялся бы при каждом перезапуске
-  # планировщика, а в день выката их бывает несколько.
-  if [ "$REPRINTS_EVERY_CYCLES" -gt 0 ] && [ "$cycle" -gt 0 ] \
-     && [ $((cycle % REPRINTS_EVERY_CYCLES)) -eq 0 ]; then
+  # Срок — от прошлого прогона с записью в базе, а не «каждый 24-й цикл»: счётчик
+  # обнулялся при каждом перезапуске, а цикл идёт ~41 мин, а не 30 — «дважды в сутки»
+  # на деле выходило раз в 16,5 ч и сдвигалось каждым выкатом (19.09). Повтор при
+  # перезапуске исключает та же проверка по базе.
+  if [ "$REPRINTS_INTERVAL_HOURS" != "0" ]; then
     if [ "$AI_OFFLINE" = "1" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
       run_step "find-reprints" python -m oiltech_digest.cli find-reprints \
-        --days "$REPRINTS_DAYS" --limit "$REPRINTS_LIMIT" --apply
+        --days "$REPRINTS_DAYS" --limit "$REPRINTS_LIMIT" --apply \
+        --min-interval-hours "$REPRINTS_INTERVAL_HOURS"
     else
       log "SKIP find-reprints: OPENAI_API_KEY is empty"
     fi
