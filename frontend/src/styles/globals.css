@@ -1270,6 +1270,19 @@ button {
   font-weight: 700;
 }
 
+.laneAlerts {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--sem-bad-border);
+  background: var(--sem-bad-bg);
+  color: var(--sem-bad-fg);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
 .externalQueueList {
   margin-top: 12px;
   display: grid;

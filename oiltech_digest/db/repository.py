@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, config
+from oiltech_digest import auth, config, lanes
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.db.connection import get_connection
 
@@ -2221,6 +2221,8 @@ def create_background_job(
     max_attempts: int = 3,
     agent_run_id: int | None = None,
 ) -> dict:
+    # Внешняя очередь принимает только то, что её воркер умеет исполнять (lanes.py).
+    lanes.check_enqueue(queue_name, kind)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -2518,50 +2520,54 @@ def background_job_status_counts(*, capability: str | None = None, kind_prefix: 
         return {str(row["status"]): int(row["count"]) for row in cur.fetchall()}
 
 
-def external_queue_status() -> dict:
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            SELECT
+_EXTERNAL_QUEUE_STATUS_COLUMNS = """
               COUNT(*) FILTER (WHERE status = 'queued') AS queued,
               COUNT(*) FILTER (WHERE status = 'running') AS running,
               COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
               COUNT(*) FILTER (WHERE status = 'failed') AS failed,
               COUNT(*) FILTER (WHERE status = 'ok') AS ok,
               MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
+              -- «Ждёт с» — от момента, когда задачу можно было взять: отложенная
+              -- на повтор (run_after в будущем) — не застой.
+              MIN(GREATEST(created_at, run_after)) FILTER (
+                WHERE status = 'queued' AND run_after <= now()
+              ) AS oldest_ready_at,
               MAX(last_heartbeat_at) FILTER (WHERE status = 'running') AS last_heartbeat_at,
+              MAX(GREATEST(started_at, last_heartbeat_at, finished_at)) AS last_activity_at,
               COUNT(*) FILTER (
                 WHERE status = 'running'
                   AND lease_expires_at IS NOT NULL
                   AND lease_expires_at < now()
               ) AS expired_leases
-            FROM background_jobs
-            WHERE execution_region = 'external'
-            """
+"""
+# Внешней считается и задача с чужим регионом в очереди external-*: такая ошибка
+# маршрута как раз и должна быть видна, а не выпадать из сводки.
+_EXTERNAL_JOBS_WHERE = "(execution_region = 'external' OR queue_name LIKE 'external%%')"
+
+
+def external_queue_status() -> dict:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"SELECT {_EXTERNAL_QUEUE_STATUS_COLUMNS} FROM background_jobs WHERE {_EXTERNAL_JOBS_WHERE}"
         )
         totals = cur.fetchone() or {}
         cur.execute(
-            """
-            SELECT queue_name,
-                   COUNT(*) FILTER (WHERE status = 'queued') AS queued,
-                   COUNT(*) FILTER (WHERE status = 'running') AS running,
-                   COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing,
-                   COUNT(*) FILTER (WHERE status = 'failed') AS failed,
-                   COUNT(*) FILTER (WHERE status = 'ok') AS ok,
-                   MIN(created_at) FILTER (WHERE status = 'queued') AS oldest_queued_at,
-                   MAX(last_heartbeat_at) FILTER (WHERE status = 'running') AS last_heartbeat_at
+            f"""
+            SELECT queue_name, {_EXTERNAL_QUEUE_STATUS_COLUMNS}
             FROM background_jobs
-            WHERE execution_region = 'external'
+            WHERE {_EXTERNAL_JOBS_WHERE}
             GROUP BY queue_name
             ORDER BY queue_name
             """
         )
         queues = cur.fetchall()
-    return {
+    status = {
         "totals": dict(totals),
         "queues": [dict(row) for row in queues],
     }
+    status["alerts"] = lanes.lane_alerts(status)
+    return status
 
 
 def mark_background_job_running(job_id: int) -> None:
@@ -4044,26 +4050,14 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
         return cur.fetchall()
 
 
-def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
-    """Статьи, которым не хватает любого AI-этапа канонического pipeline.
-
-    Используется process/process-full/background/external enqueue. Старый выбор только по
-    ``summary IS NULL`` не поднимал статьи после частичного сбоя на тегировании/скоринге.
-    """
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            SELECT a.*, c.summary, c.relevant, c.title_ru,
-                   at.id AS existing_tag_id, sc.id AS existing_score_id,
-                   s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
+_NEEDS_PIPELINE_FROM = """
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
-            WHERE c.relevant IS NULL
+            WHERE (
+                  c.relevant IS NULL
                OR (
                     c.relevant IS TRUE
                     AND (
@@ -4074,12 +4068,87 @@ def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
                     )
                )
                OR c.article_id IS NULL
+            )
+"""
+
+
+def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
+    """Статьи, которым не хватает любого AI-этапа канонического pipeline.
+
+    Используется process/process-full/background/external enqueue. Старый выбор только по
+    ``summary IS NULL`` не поднимал статьи после частичного сбоя на тегировании/скоринге.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT a.*, c.summary, c.relevant, c.title_ru,
+                   at.id AS existing_tag_id, sc.id AS existing_score_id,
+                   s.name AS source_name, s.priority AS source_priority,
+                   s.category AS source_category
+            {_NEEDS_PIPELINE_FROM}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
             (limit,),
         )
         return cur.fetchall()
+
+
+# Ключ advisory-lock: выбор статей для ИИ-пакета при выдаче идёт по одному.
+_PROCESS_RESERVE_LOCK = 7_290_921
+
+
+def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] | None = None) -> list[int]:
+    """Статьи ИИ-пакета при выдаче — за вычетом тех, что уже в работе у других задач.
+
+    Пакет без article_ids выбирает «статьи без обработки» в момент выдачи; две ИИ-полосы
+    (поток дня и пересчёты) взяли бы одни и те же и оплатили бы их дважды — поэтому второй
+    ИИ-воркер 18.09 и не ставили. Выбор и запись резерва — в одной транзакции под
+    advisory-lock: параллельная выдача ждёт, а не читает резерв до записи. Явный список
+    тоже очищается от занятых — их и так обрабатывает соседняя задача."""
+    with get_connection() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (_PROCESS_RESERVE_LOCK,))
+        busy_rows = conn.execute(
+            """
+            SELECT DISTINCT (jsonb_array_elements_text(COALESCE(
+                       payload_json->'reserved_article_ids', payload_json->'article_ids', '[]'::jsonb
+                   )))::bigint
+            FROM background_jobs
+            WHERE kind = 'process_articles'
+              AND status IN ('running', 'finalizing')
+              AND id <> %s
+            """,
+            (job_id,),
+        ).fetchall()
+        busy = [int(row[0]) for row in busy_rows]
+        if article_ids:
+            busy_set = set(busy)
+            chosen = [int(item) for item in article_ids if int(item) not in busy_set]
+        else:
+            chosen = [
+                int(row[0])
+                for row in conn.execute(
+                    f"""
+                    SELECT a.id
+                    {_NEEDS_PIPELINE_FROM}
+                      AND a.id <> ALL(%s::bigint[])
+                    ORDER BY a.published_at DESC NULLS LAST, a.id DESC
+                    LIMIT %s
+                    """,
+                    (busy, limit),
+                ).fetchall()
+            ]
+        conn.execute(
+            """
+            UPDATE background_jobs
+            SET payload_json = payload_json || jsonb_build_object('reserved_article_ids', %s::jsonb)
+            WHERE id = %s
+            """,
+            (Json(chosen), job_id),
+        )
+        conn.commit()
+    return chosen
 
 
 def get_articles_needing_relevance(limit: int = 20) -> list[dict]:

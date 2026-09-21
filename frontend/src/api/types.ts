@@ -225,6 +225,15 @@ export type ExternalQueueRow = {
   last_heartbeat_at: string | null;
 };
 
+// Тревоги сторожа полос (lanes.py): застой, очередь без живого воркера, истёкшие аренды.
+export type LaneAlert = {
+  queue: string | null;
+  kind: "stale" | "no_consumer" | "unknown_queue" | "expired_leases" | string;
+  count: number;
+  minutes?: number;
+  message: string;
+};
+
 export type ExternalQueueStatus = {
   totals: {
     queued: number;
@@ -236,6 +245,7 @@ export type ExternalQueueStatus = {
     expired_leases: number;
   };
   queues: ExternalQueueRow[];
+  alerts?: LaneAlert[];
 };
 
 export type MaintenanceCleanupResult = {

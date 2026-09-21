@@ -96,7 +96,7 @@ def test_enqueue_never_runs_external_queue_inline(monkeypatch, isolated_db):
     monkeypatch.setattr(background_jobs._executor, "submit", lambda *args, **kwargs: submitted.append(args))
     monkeypatch.setitem(background_jobs._HANDLERS, "test_queued", lambda payload, job_id: {"ok": True})
 
-    external = background_jobs.enqueue("test_queued", {}, queue_name="external-fetch", execution_region="external")
+    external = background_jobs.enqueue("scrape_source", {"source_id": 1}, queue_name="external-fetch", execution_region="external")
     local = background_jobs.enqueue("test_queued", {}, queue_name="default")
 
     assert repository.get_background_job(int(external["id"]))["status"] == "queued"

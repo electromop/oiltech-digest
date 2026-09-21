@@ -145,6 +145,10 @@ while true; do
     fi
   fi
 
+  # Сторож полос: застой внешней очереди или очередь без живого воркера — «FAIL
+  # check-lanes» и строки ТРЕВОГА в логе (цикл не прерывается).
+  run_step "check-lanes" python -m oiltech_digest.cli check-lanes
+
   run_step "stats" python -m oiltech_digest.cli stats
   cycle=$((cycle + 1))
   log "Cycle finished. Sleeping ${CYCLE_INTERVAL_SECONDS}s"

@@ -1162,10 +1162,12 @@ def test_external_worker_claim_requires_token(monkeypatch):
 def test_external_worker_claim_returns_leased_job(monkeypatch):
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
+    built_for = []
     monkeypatch.setattr(
         api.external_ai,
         "build_process_articles_payload",
-        lambda payload: {"kind": "process_articles", "articles": [{"id": 1}], "tags": [], "criteria": []},
+        lambda payload, job_id=None: built_for.append(job_id)
+        or {"kind": "process_articles", "articles": [{"id": 1}], "tags": [], "criteria": []},
     )
     captured = {}
 
@@ -1208,6 +1210,7 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
     assert response.json()["job"]["queue"] == "external-ai"
     assert response.json()["job"]["payload"]["articles"] == [{"id": 1}]
     assert response.json()["job"]["lease_token"]
+    assert built_for == [10]  # статьи резервируются за выданной задачей
 
 
 def test_external_worker_claim_hydrates_external_scrape_payload(monkeypatch):

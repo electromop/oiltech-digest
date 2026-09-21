@@ -146,7 +146,7 @@ def test_enqueue_can_skip_inline_execution(monkeypatch, isolated_db):
 
 def test_background_job_records_execution_metadata(isolated_db):
     job = repository.create_background_job(
-        "test_external",
+        "process_articles",
         {"value": 1},
         queue_name="external-ai",
         execution_region="external",
@@ -186,7 +186,7 @@ def test_claim_next_background_job_filters_by_queue(isolated_db):
 def test_claim_external_background_job_sets_lease_metadata(isolated_db):
     default = repository.create_background_job("test_default", {}, queue_name="default")
     external = repository.create_background_job(
-        "test_external",
+        "process_articles",
         {},
         queue_name="external-ai",
         execution_region="external",
@@ -211,7 +211,7 @@ def test_claim_external_background_job_sets_lease_metadata(isolated_db):
 
 def test_external_job_progress_complete_and_wrong_lease(isolated_db):
     job = repository.create_background_job(
-        "test_external",
+        "process_articles",
         {},
         queue_name="external-ai",
         execution_region="external",
@@ -241,7 +241,7 @@ def test_external_job_progress_complete_and_wrong_lease(isolated_db):
 
 def test_external_job_retryable_fail_requeues(isolated_db):
     job = repository.create_background_job(
-        "test_external",
+        "process_articles",
         {},
         queue_name="external-ai",
         execution_region="external",
@@ -272,7 +272,7 @@ def test_external_job_retryable_fail_requeues(isolated_db):
 
 def test_requeue_expired_external_leases(isolated_db):
     job = repository.create_background_job(
-        "test_external",
+        "process_articles",
         {},
         queue_name="external-ai",
         execution_region="external",
@@ -302,7 +302,7 @@ def test_requeue_expired_external_leases(isolated_db):
 
 def test_external_queue_status_summarizes_external_jobs(isolated_db):
     repository.create_background_job(
-        "test_external",
+        "process_articles",
         {},
         queue_name="external-ai",
         execution_region="external",

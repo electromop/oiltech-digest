@@ -69,6 +69,11 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 # очереди, чтобы обновление кода не остановило текущий single-server deployment.
 EXTERNAL_WORKERS_ENABLED = os.environ.get("EXTERNAL_WORKERS_ENABLED", "0").lower() in {"1", "true", "yes"}
 AI_EXECUTION_REGION = os.environ.get("AI_EXECUTION_REGION", "ru").strip().lower()
+# Пересчёты корпуса (перекачка тел, перепроверка релевантности, перевод заголовков) —
+# своей полосой external-ai-bulk, чтобы не стоять перед потоком дня (18.09: 28 пакетов
+# пересчёта задержали обычную обработку на 4,5 ч). Включать, только когда на NL поднят
+# воркер этой очереди, — иначе задачи будут ждать (сторож очередей это покажет).
+AI_BULK_LANE_ENABLED = os.environ.get("AI_BULK_LANE_ENABLED", "0").lower() in {"1", "true", "yes"}
 FETCH_EXTERNAL_ENABLED = os.environ.get("FETCH_EXTERNAL_ENABLED", "0").lower() in {"1", "true", "yes"}
 EXTERNAL_WORKER_TOKEN_HASH = os.environ.get("EXTERNAL_WORKER_TOKEN_HASH", "").strip()
 EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS = int(os.environ.get("EXTERNAL_WORKER_DEFAULT_LEASE_SECONDS", "600"))

@@ -26,11 +26,17 @@ RECHECK_BATCH_DEFAULT = 100
 TRANSLATE_BATCH_DEFAULT = 100
 
 
-def build_process_articles_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Expand a DB-backed process_articles job into a self-contained external payload."""
+def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
+    """Expand a DB-backed process_articles job into a self-contained external payload.
+
+    С job_id (выдача воркеру) статьи резервируются за задачей: соседняя ИИ-полоса не
+    возьмёт те же и не оплатит их второй раз (repository.reserve_process_articles)."""
     article_ids = [int(item) for item in payload.get("article_ids") or []]
     limit = int(payload.get("limit") or 5)
-    if article_ids:
+    if job_id is not None:
+        reserved = repository.reserve_process_articles(job_id, limit=limit, article_ids=article_ids or None)
+        articles = repository.get_articles_by_ids(reserved, include_summary=True)
+    elif article_ids:
         articles = repository.get_articles_by_ids(article_ids, include_summary=True)
     else:
         articles = repository.get_articles_needing_pipeline(limit)

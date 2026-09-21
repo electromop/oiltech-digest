@@ -580,7 +580,7 @@ def cmd_enqueue_recheck(args: argparse.Namespace) -> None:
     from oiltech_digest import network_policy
     from oiltech_digest.db import repository
 
-    decision = network_policy.route_ai_processing()
+    decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
     dry_run = bool(getattr(args, "dry_run", False))
     ids = repository.all_article_ids()
     if args.limit and len(ids) > args.limit:
@@ -690,7 +690,7 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     from oiltech_digest import network_policy
     from oiltech_digest.db import repository
 
-    decision = network_policy.route_ai_processing()
+    decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
     ids = repository.article_ids_needing_title_ru()
     if args.limit:
         ids = ids[: args.limit]
@@ -837,7 +837,7 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause)
     jobs = []
     if args.apply and args.reprocess and result["replaced_ids"]:
-        decision = network_policy.route_ai_processing()
+        decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
         replaced = result["replaced_ids"]
         for start in range(0, len(replaced), args.batch):
             chunk = replaced[start:start + args.batch]
@@ -1408,6 +1408,27 @@ def cmd_external_queues_status(args: argparse.Namespace) -> None:
             f"oldest_queued_at={row.get('oldest_queued_at') or '-'}, "
             f"last_heartbeat_at={row.get('last_heartbeat_at') or '-'}"
         )
+    for alert in status.get("alerts") or []:
+        print(f"  ТРЕВОГА: {alert['message']}")
+
+
+def cmd_check_lanes(args: argparse.Namespace) -> None:
+    """Сторож полос: застой очереди, очередь без живого воркера, истёкшие аренды.
+
+    Шаг планировщика каждый цикл. При тревоге — строки в лог и код 2: run_step пишет
+    «FAIL check-lanes», цикл продолжается. 20.09 208 задач без потребителя было видно
+    только по последствиям через 8,5 ч; здесь — через ~15 мин."""
+    from oiltech_digest.db import repository
+
+    logger = logging.getLogger(__name__)
+    alerts = repository.external_queue_status().get("alerts") or []
+    if not alerts:
+        print("check-lanes: ok")
+        return
+    for alert in alerts:
+        logger.warning("lane_alert kind=%s queue=%s count=%s", alert["kind"], alert.get("queue"), alert.get("count"))
+        print(f"check-lanes: ТРЕВОГА {alert['message']}")
+    raise SystemExit(2)
 
 
 def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
@@ -1918,6 +1939,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_external_status = sub.add_parser("external-queues-status", help="показать состояние external-* очередей")
     p_external_status.add_argument("--json", action="store_true")
     p_external_status.set_defaults(func=cmd_external_queues_status)
+
+    p_check_lanes = sub.add_parser(
+        "check-lanes", help="сторож внешних очередей: застой, нет воркера, истёкшие аренды (код 2 при тревоге)"
+    )
+    p_check_lanes.set_defaults(func=cmd_check_lanes)
 
     p_maintenance_cleanup = sub.add_parser(
         "maintenance-cleanup",

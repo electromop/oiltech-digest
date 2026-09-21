@@ -27,7 +27,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import network_policy
+from oiltech_digest import lanes, network_policy
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -1617,23 +1617,27 @@ def _get_scoped_background_job(job_id: int, user: dict[str, Any]) -> dict[str, A
     return repository.get_background_job(job_id, user_id=int(user["id"]))
 
 
+_EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
+    "process_articles": lambda payload, job_id: external_ai.build_process_articles_payload(payload, job_id=job_id),
+    "recheck_relevance": lambda payload, job_id: external_ai.build_recheck_payload(payload),
+    "translate_titles": lambda payload, job_id: external_ai.build_translate_payload(payload),
+    "process_document": lambda payload, job_id: documents_external.build_document_payload(payload),
+    "scrape_source": lambda payload, job_id: external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload),
+    "reprint_review": lambda payload, job_id: external_ai.build_reprint_review_payload(payload),
+    "refetch_text": lambda payload, job_id: external_fetch.build_refetch_text_payload(payload),
+}
+
+
 def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Payload для воркера — по таблице полос (lanes.py), а не по имени очереди.
+
+    Раньше ИИ-виды собирались только при queue_name == "external-ai": задача той же
+    природы в новой полосе (external-ai-bulk) ушла бы воркеру сырым payload без статей."""
     payload = dict(row.get("payload_json") or {})
-    if row.get("kind") == "process_articles" and row.get("queue_name") == "external-ai":
-        return _clean(external_ai.build_process_articles_payload(payload))
-    if row.get("kind") == "recheck_relevance" and row.get("queue_name") == "external-ai":
-        return _clean(external_ai.build_recheck_payload(payload))
-    if row.get("kind") == "translate_titles" and row.get("queue_name") == "external-ai":
-        return _clean(external_ai.build_translate_payload(payload))
-    if row.get("kind") == "process_document" and row.get("queue_name") == "external-ai":
-        return _clean(documents_external.build_document_payload(payload))
-    if row.get("kind") == "scrape_source" and str(row.get("queue_name") or "").startswith("external-"):
-        return _clean(external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload))
-    if row.get("kind") == "reprint_review" and row.get("queue_name") == "external-ai":
-        return _clean(external_ai.build_reprint_review_payload(payload))
-    if row.get("kind") == "refetch_text" and str(row.get("queue_name") or "").startswith("external-"):
-        return _clean(external_fetch.build_refetch_text_payload(payload))
-    return _clean(payload)
+    builder = _EXTERNAL_PAYLOAD_BUILDERS.get(str(row.get("kind") or ""))
+    if builder is None or not lanes.serves(row.get("queue_name"), row.get("kind")):
+        return _clean(payload)
+    return _clean(builder(payload, int(row["id"])))
 
 
 def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
