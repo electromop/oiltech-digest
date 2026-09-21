@@ -108,3 +108,42 @@ def test_every_long_running_service_disables_inline_execution():
 
     for name in ("app", "tasks", "worker", "playwright-worker", "scheduler"):
         assert services[name]["environment"]["BACKGROUND_JOB_INLINE"] == "0", name
+
+
+def test_worker_sends_result_with_dates_to_core(monkeypatch):
+    """Граница с ядром: дата в любом поле итога — строкой ISO, а не падение отправки уже
+    сделанной работы (18.09 — сбор MVP-1, 21.09 — радар агентов: один класс дважды)."""
+    import json as jsonlib
+    from decimal import Decimal
+
+    from oiltech_digest import external_worker
+
+    client = external_worker.ExternalWorkerClient(
+        core_api_url="https://core.example", token="t", worker_id="w", queues=["external-fetch"], capabilities=[]
+    )
+    sent = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    def post(url, json=None, timeout=None):
+        sent["body"] = jsonlib.dumps(json)  # как requests: без default
+        return Response()
+
+    monkeypatch.setattr(client.session, "post", post)
+
+    client.complete(
+        {"id": 1, "lease_token": "x"},
+        {"articles": [{"published_at": datetime(2026, 9, 1, tzinfo=timezone.utc), "score": Decimal("7.5")}]},
+    )
+
+    assert '"published_at": "2026-09-01T00:00:00+00:00"' in sent["body"]
+    assert '"score": 7.5' in sent["body"]
+
+
+def test_worker_still_refuses_unknown_objects_loudly():
+    from oiltech_digest import external_worker
+
+    with pytest.raises(TypeError):
+        external_worker.json_ready({"tags": {"a", "b"}})
