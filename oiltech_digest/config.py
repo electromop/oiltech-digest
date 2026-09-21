@@ -91,6 +91,15 @@ EXTERNAL_WORKER_CAPABILITIES = [
     if item.strip()
 ]
 EXTERNAL_WORKER_POLL_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_SECONDS", "3"))
+# Потоков выдачи в одном процессе воркера: полоса сбора запросом — I/O, ей хватает
+# потоков (http_client потокобезопасен: пауза на хост под замком, сессия на поток).
+# Браузер и ИИ — по одному.
+EXTERNAL_WORKER_CONCURRENCY = int(os.environ.get("EXTERNAL_WORKER_CONCURRENCY", "1"))
+# Аренду задачи продлевает фоновый поток раз в столько секунд — независимо от того,
+# зовёт ли код обработчика heartbeat (24.07, 17.09, 21.09 — трижды забывали).
+EXTERNAL_WORKER_HEARTBEAT_SECONDS = float(os.environ.get("EXTERNAL_WORKER_HEARTBEAT_SECONDS", "60"))
+# Потолок времени задачи, если для её вида нет своего (external_worker._JOB_MAX_SECONDS).
+EXTERNAL_JOB_MAX_SECONDS = int(os.environ.get("EXTERNAL_JOB_MAX_SECONDS", "3600"))
 
 # --- Прокси для парсинга (residential, напр. 2captcha) ---
 # PROXY_URL — полная строка подключения: "http://user:pass@host:port"

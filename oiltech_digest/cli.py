@@ -1359,6 +1359,7 @@ def cmd_external_worker(args: argparse.Namespace) -> None:
         capabilities=args.capability,
         poll_seconds=args.poll_seconds,
         once=args.once,
+        concurrency=args.concurrency,
     )
 
 
@@ -1930,6 +1931,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_external_worker.add_argument("--capability", action="append", default=None)
     p_external_worker.add_argument("--poll-seconds", type=float, default=None)
     p_external_worker.add_argument("--once", action="store_true")
+    p_external_worker.add_argument("--concurrency", type=int, default=None,
+                                   help="потоков выдачи в процессе (по умолчанию EXTERNAL_WORKER_CONCURRENCY)")
     p_external_worker.set_defaults(func=cmd_external_worker)
 
     p_jobs_requeue = sub.add_parser("jobs-requeue-stale", help="вернуть зависшие running-задачи обратно в queued")

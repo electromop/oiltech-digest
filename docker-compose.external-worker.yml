@@ -1,15 +1,20 @@
-# Зарубежный контур (NL): две полосы вместо одного воркера.
+# Зарубежный контур (NL): полосы по назначению, каждая — свой контейнер (lanes.py).
 #
-# До 18.09 один контейнер слушал все три очереди и брал задачи по одной, строго по
-# времени создания: 30 пакетов ИИ-пересчёта (по ~10 мин) держали за собой 42 задачи
-# сбора, и западные источники не собирались часами. Выдача задач идёт через
-# FOR UPDATE SKIP LOCKED, поэтому два воркера одну задачу не получат никогда.
+# До 18.09 один контейнер слушал все очереди и брал задачи по одной, строго по времени
+# создания: 30 пакетов ИИ-пересчёта держали за собой 42 задачи сбора. 18.09 ИИ и сбор
+# разошлись по двум контейнерам, но внутри полос осталась та же беда: 18.09 28 пакетов
+# пересчёта держали поток дня 4,5 ч, а браузерный сайт держит за собой RSS/HTTP.
+# Выдача задач идёт через FOR UPDATE SKIP LOCKED, поэтому одну задачу два воркера (и
+# два потока) не получат никогда; статьи ИИ-пакета резервируются за задачей при выдаче
+# (repository.reserve_process_articles) — две ИИ-полосы не оплатят одни статьи дважды.
 #
-# Второй ИИ-воркер сюда НЕ добавлять, пока нет резерва статей при выдаче: обычный пакет
-# process_articles выбирает «статьи без обработки» в момент выдачи, и два воркера,
-# взявшие задачи с разницей в секунду, оплатили бы одни и те же статьи дважды.
+# Аренду задачи каждый воркер продлевает фоном сам (external_worker.LeaseKeeper), а по
+# потолку времени задачи процесс выходит — restart: unless-stopped поднимает его заново.
+#
+# Память (1,9 ГБ): ИИ-воркеры ждут сеть, Chromium живёт только в полосе браузера.
+# Перед первым `up` проверить `free -m` и `docker stats --no-stream`.
 services:
-  # ИИ: пакеты статей, перепроверка релевантности, перевод, документы, судья перепечаток.
+  # ИИ — поток дня: пакеты планировщика, перепечатки, документы пользователей.
   external-worker:
     build: .
     container_name: oiltech_external_worker
@@ -23,7 +28,23 @@ services:
       EXTERNAL_WORKER_CAPABILITIES: openai
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
 
-  # Сбор: источники запросом и браузером, дозагрузка тел статей. ИИ не зовёт.
+  # ИИ — пересчёты корпуса (перекачка тел, перепроверка релевантности, перевод):
+  # долгие пачки не стоят перед потоком дня. На ядре включается AI_BULK_LANE_ENABLED=1
+  # только после того, как этот контейнер поднят.
+  external-worker-bulk:
+    build: .
+    container_name: oiltech_external_worker_bulk
+    restart: unless-stopped
+    env_file:
+      - .env.external-worker
+    environment:
+      PYTHONUNBUFFERED: "1"
+      EXTERNAL_WORKER_ID: nl-ai-bulk-1
+      EXTERNAL_WORKER_QUEUES: external-ai-bulk
+      EXTERNAL_WORKER_CAPABILITIES: openai
+    command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
+
+  # Сбор запросом: RSS, листинги, статьи, дозагрузка тел. I/O — три потока.
   external-worker-fetch:
     build: .
     container_name: oiltech_external_worker_fetch
@@ -33,6 +54,22 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       EXTERNAL_WORKER_ID: nl-fetch-1
-      EXTERNAL_WORKER_QUEUES: external-fetch,external-playwright
-      EXTERNAL_WORKER_CAPABILITIES: http_fetch,playwright
+      EXTERNAL_WORKER_QUEUES: external-fetch
+      EXTERNAL_WORKER_CAPABILITIES: http_fetch
+      EXTERNAL_WORKER_CONCURRENCY: "3"
+    command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
+
+  # Сбор браузером: один поток — Chromium тяжёлый, а зависший сайт больше не держит
+  # за собой RSS/HTTP-полосу.
+  external-worker-browser:
+    build: .
+    container_name: oiltech_external_worker_browser
+    restart: unless-stopped
+    env_file:
+      - .env.external-worker
+    environment:
+      PYTHONUNBUFFERED: "1"
+      EXTERNAL_WORKER_ID: nl-browser-1
+      EXTERNAL_WORKER_QUEUES: external-playwright
+      EXTERNAL_WORKER_CAPABILITIES: playwright
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
