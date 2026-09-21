@@ -98,8 +98,9 @@ EXTERNAL_WORKER_CONCURRENCY = int(os.environ.get("EXTERNAL_WORKER_CONCURRENCY", 
 # Аренду задачи продлевает фоновый поток раз в столько секунд — независимо от того,
 # зовёт ли код обработчика heartbeat (24.07, 17.09, 21.09 — трижды забывали).
 EXTERNAL_WORKER_HEARTBEAT_SECONDS = float(os.environ.get("EXTERNAL_WORKER_HEARTBEAT_SECONDS", "60"))
-# Потолок времени задачи, если для её вида нет своего (external_worker._JOB_MAX_SECONDS).
-EXTERNAL_JOB_MAX_SECONDS = int(os.environ.get("EXTERNAL_JOB_MAX_SECONDS", "3600"))
+# Сколько задача может не подавать признаков продвижения, если для её вида нет своего
+# предела (external_worker._JOB_STALL_SECONDS). Не общее время: большая пачка идёт долго.
+EXTERNAL_JOB_MAX_SECONDS = int(os.environ.get("EXTERNAL_JOB_MAX_SECONDS", "1200"))
 
 # --- Прокси для парсинга (residential, напр. 2captcha) ---
 # PROXY_URL — полная строка подключения: "http://user:pass@host:port"

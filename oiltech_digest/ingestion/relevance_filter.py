@@ -8,6 +8,7 @@ industrial or business-development signal in the RSS title/summary.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import threading
 from dataclasses import dataclass
 import logging
 import re
@@ -97,19 +98,32 @@ _MIN_TAG_KEYWORD_LEN = 4
 # чтение справочника падало в except, и с 17.09 (fffaee0) все внешние источники шли
 # через предфильтр БЕЗ тематик заказчика — тот же класс, что тематики гейта 17.09.
 # Модульная переменная, а не ContextVar: RSS разбирается в пуле потоков, куда
-# контекст не переходит; воркер берёт задачи по одной.
+# контекст не переходит.
 _TAG_KEYWORDS_OVERRIDE: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+# С 21.09 полоса сбора держит несколько потоков: задача, закончившая первой, возвращала
+# прежнее значение (None), пока соседняя ещё работала, — и та шла без ключей заказчика
+# (ревью 21.09). Прежнее значение возвращается, только когда закончилась последняя
+# задача; ключи во всех задачах одни и те же — их присылает ядро.
+_TAG_KEYWORDS_LOCK = threading.Lock()
+_TAG_KEYWORDS_ACTIVE = 0
+_TAG_KEYWORDS_OUTER: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
 
 @contextmanager
 def use_tag_keywords(positive: Iterable[str], negative: Iterable[str]) -> Iterator[None]:
-    global _TAG_KEYWORDS_OVERRIDE
-    previous = _TAG_KEYWORDS_OVERRIDE
-    _TAG_KEYWORDS_OVERRIDE = (tuple(positive), tuple(negative))
+    global _TAG_KEYWORDS_OVERRIDE, _TAG_KEYWORDS_ACTIVE, _TAG_KEYWORDS_OUTER
+    with _TAG_KEYWORDS_LOCK:
+        if _TAG_KEYWORDS_ACTIVE == 0:
+            _TAG_KEYWORDS_OUTER = _TAG_KEYWORDS_OVERRIDE
+        _TAG_KEYWORDS_ACTIVE += 1
+        _TAG_KEYWORDS_OVERRIDE = (tuple(positive), tuple(negative))
     try:
         yield
     finally:
-        _TAG_KEYWORDS_OVERRIDE = previous
+        with _TAG_KEYWORDS_LOCK:
+            _TAG_KEYWORDS_ACTIVE -= 1
+            if _TAG_KEYWORDS_ACTIVE == 0:
+                _TAG_KEYWORDS_OVERRIDE = _TAG_KEYWORDS_OUTER
 
 
 def tag_keywords() -> tuple[tuple[str, ...], tuple[str, ...]]:

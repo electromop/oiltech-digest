@@ -64,7 +64,7 @@ def run_loop(
 
 def _claim_loop(client: "ExternalWorkerClient", sleep_seconds: float, *, once: bool = False) -> None:
     failures = 0
-    while True:
+    while not _DRAINING.is_set():
         try:
             job = client.claim()
             failures = 0
@@ -81,6 +81,10 @@ def _claim_loop(client: "ExternalWorkerClient", sleep_seconds: float, *, once: b
             time.sleep(sleep_seconds)
             continue
         _handle_job(client, job)
+        if _DRAINING.is_set():
+            # Процесс уходит на перезапуск из-за зависшей соседки: новых задач не берём,
+            # чтобы не оборвать их выходом.
+            return
 
 
 class ExternalWorkerClient:
@@ -200,26 +204,42 @@ def _safe_heartbeat(client: "ExternalWorkerClient", job: dict[str, Any]) -> None
         logger.warning("external_heartbeat_failed job_id=%s", job.get("id"))
 
 
-# Потолок времени задачи по виду, с. Замер 18–21.09: ИИ-пакет — до 19 мин, сбор — до
-# 1,5 мин; потолок в 3–10 раз выше, он ловит зависание, а не медленный сайт.
-_JOB_MAX_SECONDS = {
-    "process_articles": 3600,
-    "recheck_relevance": 3600,
-    "translate_titles": 3600,
-    "process_document": 3600,
-    "reprint_review": 1800,
-    "scrape_source": 900,
-    "refetch_text": 900,
+# Сколько задача может не подавать признаков продвижения (heartbeat обработчика —
+# по статье, кандидату, куску документа), прежде чем её сочтут зависшей, с. Не общее
+# время: пачка в 500 статей с шагом ~20 с идёт часами и должна дойти (ревью 21.09 —
+# потолок на всё время трижды выбросил бы её оплаченную работу). Шаг ИИ — до нескольких
+# минут на длинном рассуждении модели, шаг сбора — до ~1,5 мин на браузерной странице.
+_JOB_STALL_SECONDS = {
+    "process_articles": 1200,
+    "recheck_relevance": 1200,
+    "translate_titles": 1200,
+    "process_document": 1800,
+    "reprint_review": 1200,
+    "scrape_source": 600,
+    "refetch_text": 600,
 }
+# Процесс перед перезапуском перестаёт брать задачи и ждёт соседние потоки полосы: выход
+# рвал бы их здоровые задачи (ждали бы истечения аренды и теряли попытку).
+_DRAIN_SECONDS = 300
+_DRAINING = threading.Event()
+_INFLIGHT = 0
+_INFLIGHT_LOCK = threading.Lock()
 
 
-def job_deadline_seconds(kind: str | None) -> int:
-    return _JOB_MAX_SECONDS.get(str(kind or ""), config.EXTERNAL_JOB_MAX_SECONDS)
+def _inflight(delta: int = 0) -> int:
+    global _INFLIGHT
+    with _INFLIGHT_LOCK:
+        _INFLIGHT += delta
+        return _INFLIGHT
+
+
+def job_stall_seconds(kind: str | None) -> int:
+    return _JOB_STALL_SECONDS.get(str(kind or ""), config.EXTERNAL_JOB_MAX_SECONDS)
 
 
 def _exit_for_restart() -> None:
     # Зависший поток обработчика не прервать изнутри: выходим, Docker перезапускает
-    # контейнер (restart: unless-stopped), задача возвращается в очередь по аренде.
+    # контейнер (restart: unless-stopped), задача уже возвращена в очередь.
     os._exit(70)
 
 
@@ -230,8 +250,9 @@ class LeaseKeeper:
     (петля переотдачи и двойная оплата), 17.09 (загрузчики), 21.09 (докачка радара).
     Здесь это не зависит от обработчика. 409 от ядра — аренда отозвана: помечаем, и
     ближайший heartbeat обработчика прерывает работу (LeaseLost), чтобы не платить за
-    выброшенный результат. По потолку времени задача возвращается в очередь, а процесс
-    перезапускается — зависание лечится само, а не держит полосу."""
+    выброшенный результат. Если обработчик перестал подавать признаки продвижения
+    (touch), задача возвращается в очередь, процесс перестаёт брать новые, ждёт
+    соседние потоки и перезапускается — зависание лечится само, а не держит полосу."""
 
     def __init__(
         self,
@@ -239,16 +260,19 @@ class LeaseKeeper:
         job: dict[str, Any],
         *,
         interval: float | None = None,
-        max_seconds: float | None = None,
+        stall_seconds: float | None = None,
+        drain_seconds: float = _DRAIN_SECONDS,
         on_deadline: Callable[[], None] = _exit_for_restart,
     ) -> None:
         self.client = client
         self.job = job
         self.interval = config.EXTERNAL_WORKER_HEARTBEAT_SECONDS if interval is None else interval
-        self.max_seconds = job_deadline_seconds(job.get("kind")) if max_seconds is None else max_seconds
+        self.stall_seconds = job_stall_seconds(job.get("kind")) if stall_seconds is None else stall_seconds
+        self.drain_seconds = drain_seconds
         self.on_deadline = on_deadline
         self.lost = threading.Event()
         self._stop = threading.Event()
+        self._last_progress = time.monotonic()
         self._thread = threading.Thread(target=self._run, name=f"lease-{job.get('id')}", daemon=True)
 
     def start(self) -> "LeaseKeeper":
@@ -258,20 +282,14 @@ class LeaseKeeper:
     def stop(self) -> None:
         self._stop.set()
 
+    def touch(self) -> None:
+        """Обработчик продвинулся (прошёл статью, кандидата, кусок документа)."""
+        self._last_progress = time.monotonic()
+
     def _run(self) -> None:
-        started = time.monotonic()
         while not self._stop.wait(self.interval):
-            if time.monotonic() - started > self.max_seconds:
-                logger.error(
-                    "external_job_deadline job_id=%s kind=%s limit=%ss — задача в очередь, процесс на перезапуск",
-                    self.job.get("id"), self.job.get("kind"), self.max_seconds,
-                )
-                try:
-                    self.client.fail(self.job, f"потолок времени {int(self.max_seconds)} с", retryable=True,
-                                     retry_after_seconds=60)
-                except Exception:  # noqa: BLE001 - задача вернётся по истечении аренды
-                    logger.warning("external_job_deadline_fail_report_failed job_id=%s", self.job.get("id"))
-                self.on_deadline()
+            if time.monotonic() - self._last_progress > self.stall_seconds:
+                self._restart_stalled()
                 return
             try:
                 self.client.heartbeat(self.job)
@@ -284,6 +302,22 @@ class LeaseKeeper:
             except Exception:  # noqa: BLE001 - временный сбой: следующая попытка через interval
                 logger.warning("external_heartbeat_failed job_id=%s", self.job.get("id"))
 
+    def _restart_stalled(self) -> None:
+        logger.error(
+            "external_job_stalled job_id=%s kind=%s — нет продвижения %ss: в очередь, процесс на перезапуск",
+            self.job.get("id"), self.job.get("kind"), int(self.stall_seconds),
+        )
+        try:
+            self.client.fail(self.job, f"нет продвижения {int(self.stall_seconds)} с", retryable=True,
+                             retry_after_seconds=60)
+        except Exception:  # noqa: BLE001 - задача вернётся по истечении аренды
+            logger.warning("external_job_stall_fail_report_failed job_id=%s", self.job.get("id"))
+        _DRAINING.set()
+        deadline = time.monotonic() + self.drain_seconds
+        while _inflight() > 1 and time.monotonic() < deadline:
+            time.sleep(1.0)
+        self.on_deadline()
+
 
 def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
     fork = getattr(client, "fork", None)
@@ -292,12 +326,15 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
     def beat() -> None:
         if keeper.lost.is_set():
             raise external_ai.LeaseLost(f"lease lost for job {job.get('id')}")
+        keeper.touch()
         _safe_heartbeat(client, job)
 
+    _inflight(+1)
     try:
         _run_job(client, job, beat)
     finally:
         keeper.stop()
+        _inflight(-1)
 
 
 def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[[], None]) -> None:
