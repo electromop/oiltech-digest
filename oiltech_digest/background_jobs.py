@@ -49,9 +49,19 @@ def enqueue(
         capability=capability,
         max_attempts=max_attempts,
     )
-    if config.BACKGROUND_JOB_INLINE:
+    if config.BACKGROUND_JOB_INLINE and runs_inline(queue_name):
         _executor.submit(run, int(job["id"]))
     return job
+
+
+def runs_inline(queue_name: str) -> bool:
+    """Можно ли исполнить задачу в этом же процессе.
+
+    Внешняя очередь — решение маршрута: задачу должен взять воркер за рубежом. У агентов
+    20.09 планировщик без BACKGROUND_JOB_INLINE=0 выполнил радар из external-ai прямо на
+    РФ-ядре → OpenAI 403, задача дня потеряна. Здесь маршрут не обходит ни один процесс,
+    какой бы флаг ни забыли в compose."""
+    return not str(queue_name or "").startswith("external")
 
 
 def run(job_id: int) -> None:

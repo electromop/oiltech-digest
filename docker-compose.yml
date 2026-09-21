@@ -164,6 +164,10 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-oiltech}:${POSTGRES_PASSWORD:-oiltech_local_dev}@db:5432/${POSTGRES_DB:-oiltech_digest}
       PYTHONUNBUFFERED: "1"
+      # Без этой строки enqueue() исполнял бы задачи прямо в планировщике — у агентов
+      # 20.09 так радар из external-ai ушёл в OpenAI с РФ-адреса. Код теперь и сам не
+      # исполняет внешние очереди на месте (background_jobs.runs_inline).
+      BACKGROUND_JOB_INLINE: "0"
       CYCLE_INTERVAL_SECONDS: ${CYCLE_INTERVAL_SECONDS:-21600}
       RUN_DISCOVER_ON_START: ${RUN_DISCOVER_ON_START:-1}
       DISCOVER_EVERY_CYCLES: ${DISCOVER_EVERY_CYCLES:-24}

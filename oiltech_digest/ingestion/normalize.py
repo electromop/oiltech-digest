@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from dateutil import parser as dateparser
+from lxml import etree
 from lxml import html as lxml_html
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -367,11 +368,19 @@ def decode_html(content: bytes | str) -> str:
 
 
 def parse_html(content: bytes | str):
-    """lxml-документ страницы с верной кодировкой (см. decode_html)."""
+    """lxml-документ страницы с верной кодировкой (см. decode_html).
+
+    Пустое тело при 200 (или одни пробелы/комментарий) lxml встречает ParserError
+    «Document is empty» — это НЕ ValueError, и все места разбора, ловящие ValueError,
+    пропускали его: одна пустая страница обрывала весь источник (у агентов 21.09 —
+    весь прогон радара). Здесь он становится ValueError — один шов на всех вызывающих."""
     text = decode_html(content)
     try:
-        return lxml_html.fromstring(text)
-    except ValueError:
-        # «Unicode strings with encoding declaration are not supported» — XML-декларация
-        # в строке lxml не принимает; кодировку мы уже применили, декларация не нужна.
-        return lxml_html.fromstring(_XML_DECLARATION_RE.sub("", text, count=1))
+        try:
+            return lxml_html.fromstring(text)
+        except ValueError:
+            # «Unicode strings with encoding declaration are not supported» — XML-декларация
+            # в строке lxml не принимает; кодировку мы уже применили, декларация не нужна.
+            return lxml_html.fromstring(_XML_DECLARATION_RE.sub("", text, count=1))
+    except etree.ParserError as exc:
+        raise ValueError(f"empty document: {exc}") from exc

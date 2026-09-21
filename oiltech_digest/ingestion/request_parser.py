@@ -113,7 +113,11 @@ def insert_candidates(
             skipped_old += 1
             continue
 
-        article = article_fetcher(candidate, source)
+        try:
+            article = article_fetcher(candidate, source)
+        except Exception as exc:  # noqa: BLE001 - одна статья не роняет весь источник
+            logger.warning("request_parser: статья %s пропущена: %s: %s", candidate.url, type(exc).__name__, exc)
+            continue
         if article is None:
             continue
         if cutoff is not None and article.get("published_at") and article["published_at"] < cutoff:

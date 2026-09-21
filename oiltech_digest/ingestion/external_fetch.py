@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Any
 
 from oiltech_digest import config
@@ -10,6 +11,8 @@ from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import relevance_filter
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
+
+logger = logging.getLogger(__name__)
 
 
 def build_scrape_source_payload(source_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -182,7 +185,13 @@ def _articles_from_candidates(source: dict[str, Any], candidates: list, payload:
         if cutoff is not None and candidate.published_at and candidate.published_at < cutoff:
             stats["skipped_old"] += 1
             continue
-        article = article_fetcher(candidate, source)
+        try:
+            article = article_fetcher(candidate, source)
+        except Exception as exc:  # noqa: BLE001 - одна статья не роняет весь источник
+            # Без этого любая ошибка страницы обрывала задачу целиком: уже скачанные
+            # статьи этого же листинга терялись, а повтор задачи качал их заново.
+            logger.warning("external_fetch: статья %s пропущена: %s: %s", candidate.url, type(exc).__name__, exc)
+            article = None
         if article is None:
             stats["failed_fetch"] += 1
             continue
