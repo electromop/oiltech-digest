@@ -1310,7 +1310,14 @@ def external_worker_claim(
     )
     if job is None:
         return {"job": None}
-    return {"job": {**_job_payload(job), "payload": _external_worker_payload(job), "lease_token": lease_token}}
+    try:
+        worker_payload = _external_worker_payload(job)
+    except repository.ArticlesBusy:
+        # Статьи явного списка держит соседняя задача: выдадим позже, когда она закончит,
+        # а не параллельно (иначе итог зависел бы от того, чей apply придёт последним).
+        repository.defer_claimed_background_job(int(job["id"]), seconds=120)
+        return {"job": None}
+    return {"job": {**_job_payload(job), "payload": worker_payload, "lease_token": lease_token}}
 
 
 @app.post("/api/external-worker/jobs/{job_id}/progress")

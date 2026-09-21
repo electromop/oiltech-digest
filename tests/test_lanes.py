@@ -120,18 +120,61 @@ def test_two_ai_lanes_never_get_the_same_articles(isolated_db):
     assert second == ids[3:]  # не 3 статьи, а те 2, что ещё свободны
 
 
-def test_explicit_ids_skip_articles_busy_in_other_job_until_it_ends(isolated_db):
+def test_recount_waits_for_job_holding_old_text_instead_of_dropping_article(isolated_db):
+    """Ревью 21.09: урезанный пересчёт оставлял статью посчитанной по обрывку, который
+    держал пакет дня. Теперь выдача откладывается, а список идёт целиком после соседки."""
     ids = _articles(4)
     live = _running_job({"limit": 2})
     repository.reserve_process_articles(live, limit=2)
     recount = _running_job({"article_ids": [ids[0], ids[3]]})
 
-    assert repository.reserve_process_articles(recount, limit=2, article_ids=[ids[0], ids[3]]) == [ids[3]]
+    with pytest.raises(repository.ArticlesBusy):
+        repository.reserve_process_articles(recount, limit=2, article_ids=[ids[0], ids[3]])
 
     with connection.get_connection() as conn:
         conn.execute("UPDATE background_jobs SET status = 'ok' WHERE id = %s", (live,))
         conn.commit()
     assert repository.reserve_process_articles(recount, limit=2, article_ids=[ids[0], ids[3]]) == [ids[0], ids[3]]
+
+
+def test_null_article_ids_in_running_job_do_not_break_claims(isolated_db):
+    """Ревью 21.09: "article_ids": null (так пишет /api/jobs/process) — jsonb null, а не SQL
+    NULL; пока такая задача выполнялась, любая выдача ИИ-пакета падала 500."""
+    ids = _articles(3)
+    _running_job({"article_ids": None, "limit": 5})  # выдана, резерв ещё не записан
+    job = _running_job({"limit": 2})
+
+    assert repository.reserve_process_articles(job, limit=2) == ids[:2]
+
+
+def test_busy_recount_goes_back_to_queue_without_spending_attempt(isolated_db, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    ids = _articles(2)
+    live = _running_job({"limit": 1})
+    repository.reserve_process_articles(live, limit=1)
+    recount = repository.create_background_job("process_articles", {"article_ids": [ids[0]], "limit": 1},
+                                               queue_name="external-ai-bulk", execution_region="external",
+                                               capability="openai")
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+
+    response = TestClient(api.app).post(
+        "/api/external-worker/claim",
+        headers={"Authorization": "Bearer secret"},
+        json={"worker_id": "nl-ai-bulk-1", "queues": ["external-ai-bulk"], "capabilities": ["openai"]},
+    )
+
+    assert response.status_code == 200 and response.json() == {"job": None}
+    stored = repository.get_background_job(int(recount["id"]))
+    assert stored["status"] == "queued" and stored["attempts"] == 0
+    assert stored["run_after"] > datetime.now(timezone.utc)
+
+
+def test_bulk_lane_refuses_relevance_recheck(isolated_db):
+    """Перепроверка удаляет статьи; резерв защищает только пакет×пакет — в полосу
+    пересчётов её не ставим, она идёт потоком дня (ревью 21.09, п.5)."""
+    with pytest.raises(ValueError, match="не обслуживает"):
+        repository.create_background_job("recheck_relevance", {"article_ids": [1]}, queue_name="external-ai-bulk")
 
 
 # --- Сторож ------------------------------------------------------------------------------

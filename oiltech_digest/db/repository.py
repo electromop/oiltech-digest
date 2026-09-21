@@ -4099,21 +4099,36 @@ def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
 _PROCESS_RESERVE_LOCK = 7_290_921
 
 
+class ArticlesBusy(RuntimeError):
+    """Статьи явного списка сейчас в работе у другой задачи — выдачу надо отложить."""
+
+
 def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] | None = None) -> list[int]:
     """Статьи ИИ-пакета при выдаче — за вычетом тех, что уже в работе у других задач.
 
     Пакет без article_ids выбирает «статьи без обработки» в момент выдачи; две ИИ-полосы
     (поток дня и пересчёты) взяли бы одни и те же и оплатили бы их дважды — поэтому второй
     ИИ-воркер 18.09 и не ставили. Выбор и запись резерва — в одной транзакции под
-    advisory-lock: параллельная выдача ждёт, а не читает резерв до записи. Явный список
-    тоже очищается от занятых — их и так обрабатывает соседняя задача."""
+    advisory-lock: параллельная выдача ждёт, а не читает резерв до записи.
+
+    Явный список не урезается: соседняя задача могла взять статью со СТАРЫМ текстом
+    (пересчёт ставят после перекачки тела), и выброшенная из пересчёта статья осталась бы
+    посчитанной по обрывку. Такой список — ArticlesBusy: выдачу откладывают, пока соседка
+    не закончит."""
     with get_connection() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (_PROCESS_RESERVE_LOCK,))
+        # Только настоящий массив: payload с "article_ids": null (так его пишет
+        # /api/jobs/process) — это jsonb null, а не SQL NULL, COALESCE его не пропускает,
+        # и выдача падала бы для всех ИИ-задач, пока такая задача выполняется.
         busy_rows = conn.execute(
             """
-            SELECT DISTINCT (jsonb_array_elements_text(COALESCE(
-                       payload_json->'reserved_article_ids', payload_json->'article_ids', '[]'::jsonb
-                   )))::bigint
+            SELECT DISTINCT (jsonb_array_elements_text(CASE
+                       WHEN jsonb_typeof(payload_json->'reserved_article_ids') = 'array'
+                           THEN payload_json->'reserved_article_ids'
+                       WHEN jsonb_typeof(payload_json->'article_ids') = 'array'
+                           THEN payload_json->'article_ids'
+                       ELSE '[]'::jsonb
+                   END))::bigint
             FROM background_jobs
             WHERE kind = 'process_articles'
               AND status IN ('running', 'finalizing')
@@ -4123,8 +4138,10 @@ def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] 
         ).fetchall()
         busy = [int(row[0]) for row in busy_rows]
         if article_ids:
-            busy_set = set(busy)
-            chosen = [int(item) for item in article_ids if int(item) not in busy_set]
+            overlap = sorted(set(int(item) for item in article_ids) & set(busy))
+            if overlap:
+                raise ArticlesBusy(f"статьи {overlap[:10]} сейчас в работе у другой задачи")
+            chosen = [int(item) for item in article_ids]
         else:
             chosen = [
                 int(row[0])
@@ -4149,6 +4166,26 @@ def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] 
         )
         conn.commit()
     return chosen
+
+
+def defer_claimed_background_job(job_id: int, *, seconds: int = 120) -> bool:
+    """Вернуть только что выданную задачу в очередь на потом, не тратя попытку."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'queued',
+                attempts = GREATEST(attempts - 1, 0),
+                run_after = now() + (%s::text || ' seconds')::interval,
+                claimed_by = NULL,
+                lease_token_hash = NULL,
+                lease_expires_at = NULL
+            WHERE id = %s AND status = 'running'
+            """,
+            (seconds, job_id),
+        )
+        conn.commit()
+        return cur.rowcount == 1
 
 
 def get_articles_needing_relevance(limit: int = 20) -> list[dict]:

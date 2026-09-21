@@ -30,8 +30,10 @@ _FETCH_KINDS = frozenset({"scrape_source", "refetch_text"})
 EXTERNAL_LANES: dict[str, frozenset[str]] = {
     # Поток дня: пакеты планировщика, перепечатки, документы пользователей.
     AI_LIVE: _AI_KINDS,
-    # Пересчёты корпуса — долгие пачки; не должны стоять перед потоком дня.
-    AI_BULK: frozenset({"process_articles", "recheck_relevance", "translate_titles"}),
+    # Пересчёты корпуса — долгие пачки; не должны стоять перед потоком дня. Перепроверки
+    # релевантности (удаляют статьи) здесь нет: резерв защищает только пару пакет×пакет, и
+    # удаление параллельно пакету дня уронило бы его apply на внешнем ключе.
+    AI_BULK: frozenset({"process_articles", "translate_titles"}),
     FETCH: _FETCH_KINDS,
     BROWSER: _FETCH_KINDS,
 }

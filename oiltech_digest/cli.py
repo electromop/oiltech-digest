@@ -580,7 +580,9 @@ def cmd_enqueue_recheck(args: argparse.Namespace) -> None:
     from oiltech_digest import network_policy
     from oiltech_digest.db import repository
 
-    decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
+    # Поток дня, а не полоса пересчётов: перепроверка удаляет статьи, а резерв при выдаче
+    # защищает только пакет×пакет (lanes.py).
+    decision = network_policy.route_ai_processing()
     dry_run = bool(getattr(args, "dry_run", False))
     ids = repository.all_article_ids()
     if args.limit and len(ids) > args.limit:
