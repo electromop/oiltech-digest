@@ -586,22 +586,10 @@ def list_articles(
     if date_to:
         clauses.append("COALESCE(a.published_at::date, a.collected_at::date) <= %s")
         params.append(date_to)
-    # Скрываем отклонённые гейтом релевантности статьи (relevant=false), как это уже
-    # делает дайджест. relevant IS NULL (ещё не проверенные) остаются видны.
-    clauses.append("c.relevant IS NOT FALSE")
-    # Скрываем помеченные на удаление (recheck --mark): исчезают из ленты, но физически
-    # ещё в БД (восстановимы recheck-unmark до recheck-purge).
-    clauses.append("NOT a.pending_deletion")
-    # Архивный источник уносит с собой свои статьи (требование заказчика 12.09).
-    # Именно этого не делало `enabled = FALSE`: сбор прекращался, а накопленный мусор
-    # продолжал висеть в ленте у ВСЕХ пользователей — лента джойнит sources без условия.
-    clauses.append("s.archived_at IS NULL")
-    # Перепечатка не показывается: в ленте остаётся одна главная копия группы.
-    # Без этого условия пометка была бы мёртвой записью — таблица заполняется, а
-    # заказчик по-прежнему видит четыре карточки одной новости, ровно как 08.09.
-    # Скрыта именно КОПИЯ: главная (primary_id) в таблице не значится и остаётся.
-    # Запись обратима — удаления нет, строку можно снять и статья вернётся.
-    clauses.append("NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)")
+    # Базовая видимость — одно условие с её счётчиками, архивом и сборщиком выпуска
+    # (отсев гейтом, помеченное на удаление, архивный источник, перепечатка): иначе цифры
+    # над лентой расходятся с ней самой (23.09: 2 205 против 1 934). См. feed_window.visible_sql.
+    clauses.append(feed_window.visible_sql())
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     order_by = {
         "date_desc": "a.published_at DESC NULLS LAST, COALESCE(sc.total_score, 0) DESC, a.id DESC",
