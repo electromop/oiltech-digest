@@ -304,6 +304,8 @@ def test_digest_content_endpoint_passes_filters(monkeypatch):
 
 def test_update_monthly_digest_endpoint(monkeypatch):
     _freeze_inside_month(monkeypatch, "2026-06")
+    # Статьи выпуска — из открытого месяца (проверка «не из архива», сессия B).
+    monkeypatch.setattr(api.repository, "article_period_months", lambda ids: {"2026-06"})
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}

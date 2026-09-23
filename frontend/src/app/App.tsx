@@ -211,6 +211,8 @@ export function App() {
   const screenEnabled = (screenId: ScreenId) => !ARCHIVED_SCREENS.has(screenId) || archivedModules.includes(screenId);
   const active = screens.find((screen) => screen.id === activeScreen) ?? screens[0];
   const isAdmin = (user?.role ?? "user") === "admin";
+  // Пункт меню виден: роль пускает и модуль не в архиве (или включён флагом).
+  const screenInMenu = (screenId: ScreenId) => (isAdmin || !ADMIN_SCREENS.has(screenId)) && screenEnabled(screenId);
 
   useEffect(() => {
     void loadSession();
@@ -525,7 +527,7 @@ export function App() {
 
         <div className="sidebarGroups">
           {navGroups.map((group) => {
-            const visibleScreens = group.screens.filter((sid) => (isAdmin || !ADMIN_SCREENS.has(sid)) && screenEnabled(sid));
+            const visibleScreens = group.screens.filter(screenInMenu);
             if (!visibleScreens.length) return null;
             return (
             <section className="sidebarGroup" key={group.label}>
@@ -611,7 +613,7 @@ export function App() {
 
       <main className="content">{currentScreen}</main>
       <nav className="mobileNav">
-        {screens.filter((screen) => (isAdmin || !ADMIN_SCREENS.has(screen.id)) && screenEnabled(screen.id)).map((screen) => (
+        {screens.filter((screen) => screenInMenu(screen.id)).map((screen) => (
           <button
             key={screen.id}
             type="button"

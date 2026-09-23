@@ -3390,6 +3390,18 @@ def dashboard_stats(user_id: int | None = None, window: FeedWindow | None = None
     }
 
 
+def article_period_months(article_ids: list[int]) -> set[str]:
+    """Месяцы периода («ГГГГ-ММ») у этих статей — тем же выражением, что у окна ленты."""
+    if not article_ids:
+        return set()
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT {period_month_sql('a')} FROM articles a WHERE a.id = ANY(%s)",
+            (list(article_ids),),
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
 def feed_archive_months(window: FeedWindow, user_id: int | None = None) -> list[dict]:
     """Прошлые месяцы для переключателя «Архив»: сколько в месяце статей и сколько из них
     этот пользователь выбрал «в дайджест» (по второму числу конструктор выпуска строит

@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { listArticles, updateArticle } from "../../api/articles";
 import { enqueueDigestExport, getDigestBranding, getDigestContent, getDigestEmailHtml, getMonthlyDigest, saveDigestBranding, updateMonthlyDigest } from "../../api/digest";
 import { downloadJobResult, getJob } from "../../api/jobs";
-import { getFeedWindow } from "../../api/stats";
 import type { Article, DigestBranding, DigestBrandingSocial, DigestContent, DigestDraftSaveResult, DigestHighlightCard, MonthlyDigestDraft } from "../../api/types";
-import { monthLabel } from "../articles/feedWindow";
+import { monthLabel, useFeedWindow } from "../articles/feedWindow";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -50,30 +49,20 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   // Окно месяца (ADR 0001, п. 6): открытые месяцы и прошлые выпуски с выбранными статьями.
   // Прошлый выпуск — только просмотр и выгрузка (решение владельца 23.09): статусы и
   // черновик не меняются, сервер такие правки отклоняет.
-  const [openMonths, setOpenMonths] = useState<string[]>([]);
-  const [archiveIssueMonths, setArchiveIssueMonths] = useState<string[]>([]);
+  const feedWindow = useFeedWindow();
+  const firstOpenMonth = feedWindow?.months?.[0] ?? "";
+  const archiveIssueMonths = useMemo(
+    () => (feedWindow?.archive ?? []).filter((item) => item.digest > 0).map((item) => item.month),
+    [feedWindow],
+  );
   const [archiveArticles, setArchiveArticles] = useState<Article[] | null>(null);
-  const isArchiveMonth = Boolean(month) && openMonths.length > 0 && month < openMonths[0];
+  const isArchiveMonth = Boolean(month) && Boolean(firstOpenMonth) && month < firstOpenMonth;
   // Лента (/api/articles) без месяца отдаёт только открытые месяцы — для прошлого выпуска
   // выбранные статьи приходят отдельным запросом с `month`.
   const sourceArticles = isArchiveMonth ? archiveArticles ?? NO_ARTICLES : articles;
 
   useEffect(() => {
     void reload();
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    getFeedWindow()
-      .then((payload) => {
-        if (cancelled) return;
-        setOpenMonths(payload.months ?? []);
-        setArchiveIssueMonths((payload.archive ?? []).filter((item) => item.digest > 0).map((item) => item.month));
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
@@ -609,7 +598,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
               <option value="">Все месяцы</option>
               {months.map((option) => (
                 <option key={option} value={option}>
-                  {openMonths.length && option < openMonths[0] ? `${option} · архив` : option}
+                  {firstOpenMonth && option < firstOpenMonth ? `${option} · архив` : option}
                 </option>
               ))}
             </select>
@@ -625,7 +614,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
         </div>
 
         {loading ? (
-          <div className="emptyState"><LoadingState label="Загружаем сигналы…" /></div>
+          <div className="emptyState"><LoadingState label="Загружаем бизнес-сигналы…" /></div>
         ) : digestCandidates.length ? (
             <div className="digestQueuePanel">
               <div className="digestQueueHeader">

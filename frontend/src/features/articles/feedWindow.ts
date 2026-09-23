@@ -1,7 +1,27 @@
-import type { FeedWindowInfo } from "../../api/types";
+import { useEffect, useState } from "react";
+import { getFeedWindow } from "../../api/stats";
+import type { FeedWindowInfo, FeedWindowPayload } from "../../api/types";
 
-// Подписи окна месяца (ADR 0001, п. 6). Само правило живёт на сервере (feed_window.py),
-// здесь только тексты для человека.
+// Окно месяца на фронте: подписи и загрузка списка месяцев. Само правило живёт на сервере
+// (oiltech_digest/feed_window.py; ADR 0001 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md).
+
+// Открытые и прошлые месяцы — один раз при открытии экрана. Сбой не мешает работе с текущим
+// периодом: остаётся null, и переключатель архива просто не появляется.
+export function useFeedWindow(): FeedWindowPayload | null {
+  const [payload, setPayload] = useState<FeedWindowPayload | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getFeedWindow()
+      .then((result) => {
+        if (!cancelled) setPayload(result);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return payload;
+}
 
 const MONTHS = [
   "январь", "февраль", "март", "апрель", "май", "июнь",

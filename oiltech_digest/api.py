@@ -1194,18 +1194,19 @@ def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Dep
     return {"ok": True, "branding": _clean(save_digest_branding(payload.model_dump()))}
 
 
-def _refuse_archived_issue(month: str) -> None:
-    """Выпуск прошлого месяца — архив: смотреть и выгружать можно, менять нельзя.
+def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
+    """Правка черновика выпуска: месяц «ГГГГ-ММ», не архивный, и без статей из архива.
 
-    Решение владельца 23.09: конструктор показывает прошлые месяцы только на просмотр и
-    выгрузку, а статусы и черновик выпуска не меняются — ни из интерфейса, ни запросом.
-    Строка, которая не является месяцем, архивным выпуском быть не может: её не трогаем.
+    Решение владельца 23.09: прошлый выпуск — только просмотр и выгрузка. Статью прошлого
+    месяца нельзя провести и в выпуск открытого месяца: PUT принимает готовый список
+    статей, и без этой проверки «из архива в дайджест» проходило бы запросом в обход ленты.
     """
     try:
         issue_month = feed_window.parse_month(month)
     except ValueError:
-        return
-    if not feed_window.current().is_open(feed_window.month_key(issue_month)):
+        raise HTTPException(status_code=422, detail="Месяц выпуска задаётся как ГГГГ-ММ")
+    window = feed_window.current()
+    if not window.is_open(feed_window.month_key(issue_month)):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -1213,11 +1214,20 @@ def _refuse_archived_issue(month: str) -> None:
                 "его можно смотреть и выгружать, но не менять."
             ),
         )
+    closed = sorted(m for m in repository.article_period_months(article_ids) if not window.is_open(m))
+    if closed:
+        labels = ", ".join(feed_window.month_label(feed_window.parse_month(m)) for m in closed)
+        raise HTTPException(
+            status_code=409,
+            detail=f"В выпуск нельзя добавить статьи из архива ({labels}): архив открыт только для просмотра.",
+        )
 
 
 @app.post("/api/monthly-digests")
 def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    _refuse_archived_issue(payload.month)
+    # Состав собирается на сервере из выбранного за этот месяц, поэтому архивных статей в
+    # нём не будет, если сам месяц открыт.
+    _guard_issue_edit(payload.month, [])
     return _clean(
         save_digest_draft(
             month=payload.month,
@@ -1241,7 +1251,7 @@ def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user))
 
 @app.put("/api/monthly-digests/{month}")
 def update_monthly_digest(month: str, payload: MonthlyDigestUpdateRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    _refuse_archived_issue(month)
+    _guard_issue_edit(month, [item.article_id for item in payload.items])
     saved = repository.save_monthly_digest(
         month=month,
         title=payload.title or f"Нефтесервисный дайджест · {month}",

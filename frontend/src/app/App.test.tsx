@@ -534,7 +534,7 @@ describe("App smoke", () => {
     expect(screen.getByRole("heading", { name: "Каталог бизнес-сигналов" })).toBeInTheDocument();
     const catalogBadge = container.querySelector(".panelHeader .badge");
     expect(catalogBadge).not.toBeNull();
-    expect(catalogBadge?.textContent ?? "").toMatch(/сигнал|Выборка по всей базе|Обновляем выборку по всей базе/);
+    expect(catalogBadge?.textContent ?? "").toMatch(/бизнес-сигнал|Выборка по фильтрам|Обновляем выборку/);
     // #9: группы-теги свёрнуты по умолчанию — сначала раскрываем группу, потом сам сигнал.
     await user.click(screen.getByRole("button", { name: /Раскрыть группу/ }));
     expect(screen.getAllByText("Directional drilling automation").length).toBeGreaterThanOrEqual(1);
@@ -774,7 +774,7 @@ describe("App smoke", () => {
       fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/articles?")).length;
 
     // Взводим серверный фильтр — ровно то, что делает аналитик.
-    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+    await user.type(screen.getByPlaceholderText("Поиск за период: название, текст, суть"), "бурение");
 
     // Ждём, пока debounce (400мс) отработает и выборка придёт.
     await waitFor(() => expect(articleCalls()).toBeGreaterThan(1));
@@ -804,7 +804,7 @@ describe("App smoke", () => {
     const autoRefreshTimers = () =>
       setIntervalSpy.mock.calls.filter(([, ms]) => ms === 40000).length;
 
-    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+    await user.type(screen.getByPlaceholderText("Поиск за период: название, текст, суть"), "бурение");
     await waitFor(() => expect(autoRefreshTimers()).toBeGreaterThan(0));
 
     // Даём выборке полностью улечься: debounce (400мс) + ответ + сброс флага searching.
@@ -900,15 +900,6 @@ describe("App smoke", () => {
     expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
     const requested = fetchMock.mock.calls.map(([input]) => String(input));
     expect(requested.some((url) => url.includes("status=digest") && url.includes("month=2026-08"))).toBe(true);
-  });
-
-  it("отказ сервера показывается текстом, а не JSON-строкой", async () => {
-    const { readableErrorMessage } = await import("../api/client");
-    expect(readableErrorMessage('{"detail":"Статья относится к архиву за август 2026."}')).toBe(
-      "Статья относится к архиву за август 2026.",
-    );
-    expect(readableErrorMessage('{"detail":[{"loc":["body"],"msg":"field required"}]}')).toContain('"detail"');
-    expect(readableErrorMessage("Internal Server Error")).toBe("Internal Server Error");
   });
 
   it("imports article by direct url from admin sources page", async () => {

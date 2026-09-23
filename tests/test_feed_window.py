@@ -65,7 +65,9 @@ def test_window_sql_uses_the_digest_period_expression():
     """Окно обязано делить статьи по месяцам тем же выражением, что сборщик выпуска."""
     window = feed_window.current(now=_msk(2026, 9, 23, 12, 0))
     expr = "to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM')"
-    assert window.sql("a") == f"{expr} >= '2026-09'"
+    assert window.sql("a") == f"{expr} BETWEEN '2026-09' AND '2026-09'"
+    rollover = feed_window.current(now=_msk(2026, 10, 3, 12, 0))
+    assert rollover.sql("a") == f"{expr} BETWEEN '2026-09' AND '2026-10'"
     assert feed_window.current("2026-08", now=_msk(2026, 9, 23)).sql("a") == f"{expr} = '2026-08'"
     assert window.is_open("2026-09") and window.is_open("2026-11")
     assert not window.is_open("2026-08")
@@ -164,9 +166,10 @@ def test_on_23_09_feed_shows_only_september(feed, monkeypatch):
     _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
     ids = feed["ids"]
     visible = _feed_ids(_as(feed["user"], "user"))
-    # «oct» — дата в будущем относительно замороженных часов: окно сверху не ограничено,
-    # чтобы статья с ошибкой в дате не пропадала из всех экранов (пометка «дата в будущем»).
-    assert visible == {ids["sep"], ids["sep_nopub"], ids["oct"]}
+    # «oct» относительно замороженных часов — в будущем. Сверху окно закрыто текущим
+    # месяцем: будущих дат сбор не пропускает (замер 23.09), и правило «только текущий
+    # месяц» — буквальное.
+    assert visible == {ids["sep"], ids["sep_nopub"]}
     assert ids["aug"] not in visible and ids["aug_late"] not in visible
 
 
@@ -255,12 +258,12 @@ def test_stats_count_only_the_window(feed, monkeypatch):
 
     stats = client.get("/api/stats").json()
     assert stats["window"] == {"months": ["2026-09"], "month": None, "read_only": False, "rollover_day": 5}
-    # В окне: sep, sep_nopub (отсеяна гейтом), oct (дата в будущем) → «Всего» 3, сигналов 2.
-    assert stats["all_articles"] == 3
-    assert stats["total_articles"] == 2
+    # В окне: sep и sep_nopub (отсеяна гейтом) → «Всего» 2, сигналов 1.
+    assert stats["all_articles"] == 2
+    assert stats["total_articles"] == 1
     assert stats["selected_for_digest"] == 1, "августовский выбор в дайджест не считается в сентябре"
     assert stats["status_counts"]["digest"] == 1
-    assert stats["status_counts"]["new"] == 1
+    assert stats["status_counts"]["new"] == 0
 
     august = client.get("/api/stats", params={"month": "2026-08"}).json()
     assert august["all_articles"] == 3
@@ -312,6 +315,50 @@ def test_archived_issue_can_be_viewed_but_its_draft_cannot_change(feed, monkeypa
     # Выпуск открытого месяца сохраняется как раньше.
     open_body = {"title": "Сентябрь", "status": "draft", "items": [{"article_id": feed["ids"]["sep"]}]}
     assert client.put("/api/monthly-digests/2026-09", json=open_body).status_code == 200
+
+
+def test_archived_article_cannot_enter_an_open_month_issue(feed, monkeypatch):
+    """PUT принимает готовый список статей: без проверки «из архива в дайджест» проходило бы
+    запросом в обход ленты — в выпуск сентября вписали бы августовскую статью."""
+    _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
+    client = _as(feed["user"], "user")
+    body = {"title": "Сентябрь", "status": "draft",
+            "items": [{"article_id": feed["ids"]["sep"]}, {"article_id": feed["ids"]["aug"]}]}
+    refused = client.put("/api/monthly-digests/2026-09", json=body)
+    assert refused.status_code == 409
+    assert "статьи из архива (август 2026)" in refused.json()["detail"]
+    with connection.get_connection() as conn:
+        assert conn.execute("SELECT count(*) FROM monthly_digests").fetchone()[0] == 0
+
+
+def test_issue_month_must_be_yyyy_mm(feed, monkeypatch):
+    _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
+    client = _as(feed["user"], "user")
+    assert client.put("/api/monthly-digests/2026-9", json={"title": "x", "items": []}).status_code == 422
+    assert client.post("/api/monthly-digests", json={"month": ""}).status_code == 422
+
+
+def test_publication_month_wins_over_collection_month_in_feed_and_issue(feed, monkeypatch):
+    """«aug_late»: опубликована 30.08, собрана 02.09. Лента и сборщик выпуска обязаны
+    отнести её к одному месяцу — августу (COALESCE берёт дату публикации)."""
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            (feed["user"], feed["ids"]["aug_late"]),
+        )
+        conn.commit()
+    _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
+    client = _as(feed["user"], "user")
+    aug_late = feed["ids"]["aug_late"]
+    assert aug_late in _feed_ids(client, month="2026-08")
+    assert aug_late not in _feed_ids(client, month="2026-09")
+
+    def issue(month: str) -> set[int]:
+        rows = repository.digest_candidates(month=month, limit=50, min_score=0, user_id=feed["user"])
+        return {row["id"] for row in rows}
+
+    assert aug_late in issue("2026-08")
+    assert aug_late not in issue("2026-09")
 
 
 def test_previous_issue_draft_is_still_saved_during_the_gap(feed, monkeypatch):

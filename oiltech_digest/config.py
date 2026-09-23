@@ -240,7 +240,8 @@ DIGEST_BRANDING_PATH = os.environ.get("DIGEST_BRANDING_PATH", "").strip()
 # почти всегда, и окно перестаёт быть окном.
 FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", "5"))))
 
-# --- Архивные модули (ADR 0001, п. 7; список утверждён владельцем 23.09) ---
+# --- Архивные модули (ADR 0001 п. 7 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md;
+#     список утверждён владельцем 23.09) ---
 # Убраны из меню, маршрутов и контейнеров, но не удалены из кода. По умолчанию все
 # выключены. Вернуть модуль — перечислить его ключ в ARCHIVED_MODULES через запятую и
 # перезапустить app:

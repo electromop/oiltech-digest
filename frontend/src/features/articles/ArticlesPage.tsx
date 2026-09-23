@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_ARTICLE_LIMIT, listArticles, type ArticleQuery, updateArticle } from "../../api/articles";
-import { getDashboardStats, getFeedWindow } from "../../api/stats";
+import { getDashboardStats } from "../../api/stats";
 import type { ArchiveMonth, Article, DashboardStats } from "../../api/types";
 import { FeedbackPanel } from "../feedback/FeedbackPanel";
-import { archiveNoticeText, monthLabel, windowPeriodText } from "./feedWindow";
+import { archiveNoticeText, monthLabel, useFeedWindow, windowPeriodText } from "./feedWindow";
+
+const NO_ARCHIVE_MONTHS: ArchiveMonth[] = [];
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -67,11 +69,12 @@ export function ArticlesPage(props: Props) {
   // Окно месяца (ADR 0001, п. 6): лента — открытые месяцы; прошлый месяц открывается
   // архивом только на просмотр. Пусто — текущий период.
   const [archiveMonth, setArchiveMonth] = useState("");
-  const [archiveMonths, setArchiveMonths] = useState<ArchiveMonth[]>([]);
+  const archiveMonths = useFeedWindow()?.archive ?? NO_ARCHIVE_MONTHS;
   // Счётчики архива держим здесь, а не в App: общий stats приложения — всегда текущий период.
   const [archiveStats, setArchiveStats] = useState<DashboardStats | null>(null);
 
-  // serverResults != null → активен серверный поиск по всей базе; иначе — дефолтный топ-2000.
+  // serverResults != null → активна серверная выборка за период (окно или месяц архива);
+  // иначе — дефолтный топ-2000 текущего периода.
   const articles = serverResults ?? initialArticles;
   const stats = archiveMonth ? archiveStats : initialStats;
   // Архив — только просмотр: статус и «в дайджест» не меняются (сервер ответит 409).
@@ -154,12 +157,23 @@ export function ArticlesPage(props: Props) {
     [hasServerQuery, search, tag, status, source, language, scoreMin, scoreMax, dateFrom, dateTo, sort, viewTab, archiveMonth],
   );
 
+  // Ключ текущей выборки. Обновление, ушедшее со старым ключом, свой ответ не применяет:
+  // иначе, если за время запроса человек вернулся из архива к текущему периоду, строки
+  // августа встали бы под шапку сентября — с активным выбором статуса.
+  const activeQueryKey = JSON.stringify(activeServerQuery);
+  const activeQueryKeyRef = useRef(activeQueryKey);
+  useEffect(() => {
+    activeQueryKeyRef.current = activeQueryKey;
+  }, [activeQueryKey]);
+
   async function refreshCatalog(options: { silent?: boolean; keepQuery?: boolean } = {}) {
     const query = options.keepQuery ? activeServerQuery : null;
+    const requestedKey = JSON.stringify(query);
     const [articlesPayload, statsPayload] = await Promise.all([
       listArticles(query ?? DEFAULT_SIGNAL_ARTICLE_QUERY),
       getDashboardStats(archiveMonth || undefined),
     ]);
+    if (options.keepQuery && requestedKey !== activeQueryKeyRef.current) return;
     if (query) {
       setServerResults(articlesPayload);
     } else {
@@ -179,20 +193,6 @@ export function ArticlesPage(props: Props) {
   useEffect(() => {
     setRenderLimit(200);
   }, [dateFrom, dateTo, language, scoreMax, scoreMin, search, sort, source, status, tag, viewTab, archiveMonth]);
-
-  // Прошлые месяцы для переключателя «Архив» — один раз при открытии экрана. Сбой не
-  // мешает работе с текущим периодом: переключатель просто не появится.
-  useEffect(() => {
-    let cancelled = false;
-    getFeedWindow()
-      .then((payload) => {
-        if (!cancelled) setArchiveMonths(payload.archive ?? []);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Счётчики над лентой — за тот же месяц, что и сама выдача.
   useEffect(() => {
@@ -476,12 +476,12 @@ export function ArticlesPage(props: Props) {
           <div className="settingsActions">
             <span className="badge">
               {searching
-                ? "Обновляем выборку по всей базе…"
+                ? "Обновляем выборку…"
                 : serverResults !== null
-                  ? `Выборка по всей базе: ${filteredArticles.length}`
+                  ? `Выборка по фильтрам: ${filteredArticles.length}`
                   : remaining > 0
-                    ? `${filteredArticles.length} из ${workingTotal} сигналов · показаны ${visibleArticles.length}`
-                    : `${filteredArticles.length} из ${workingTotal} сигналов`}
+                    ? `${filteredArticles.length} из ${workingTotal} бизнес-сигналов · показаны ${visibleArticles.length}`
+                    : `${filteredArticles.length} из ${workingTotal} бизнес-сигналов`}
             </span>
             {filterHint ? <span className="badge filterHintBadge">{filterHint}</span> : null}
             {grouped.length ? (
@@ -503,7 +503,7 @@ export function ArticlesPage(props: Props) {
         <div className="articlesFiltersRow">
           <label className="field">
             <span>Поиск</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по всей базе: название, текст, суть" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск за период: название, текст, суть" />
           </label>
           <div className="field sourceComboReact">
             <span>Тег</span>
@@ -688,7 +688,7 @@ export function ArticlesPage(props: Props) {
                     <span className="miniPill muted">{group}</span>
                   </span>
                   <span className="articleGroupHeadMeta">
-                    <span className="metaText">{groupArticles.length} сигналов · средняя</span>
+                    <span className="metaText">{groupArticles.length} бизнес-сигналов · средняя</span>
                     <span className={`miniPill ${scoreClass(groupAvg)}`}>{groupAvg}</span>
                   </span>
                 </button>
