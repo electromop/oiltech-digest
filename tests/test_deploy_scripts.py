@@ -29,7 +29,10 @@ exit 0
 """
 GIT = r"""#!/bin/sh
 echo "git $*" >> "$FAKE_LOG"
-[ "$1" != rev-parse ] || echo abc1234
+case "$1" in
+  rev-parse) echo abc1234 ;;
+  diff) exit "${FAKE_SCHEMA_CHANGED:-0}" ;;
+esac
 exit 0
 """
 SLEEP = "#!/bin/sh\nexit 0\n"
@@ -76,13 +79,35 @@ def test_core_deploy_runs_steps_in_safe_order(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     order = [
         "git fetch", "git reset --hard --quiet origin/main", "docker compose build app scheduler",
-        "cli init-db", "cli live-ai-leases", "docker compose up -d --no-deps app scheduler", "cli check-lanes",
+        "cli live-ai-leases", "docker compose up -d --no-deps app scheduler", "cli check-lanes",
     ]
     positions = [_index(calls, step) for step in order]
     assert positions == sorted(positions), calls
-    # Сервисы названы явно, bootstrap с сидами не запускается.
+    # Сервисы названы явно; ни сидов, ни схемы, раз schema.sql не менялся (ревью 23.09).
     assert not any(" up " in call and "--no-deps" not in call for call in calls)
-    assert not any("seed" in call for call in calls)
+    assert not any("seed" in call or "init-db" in call for call in calls)
+
+
+def test_core_deploy_refuses_to_guess_when_schema_changed(tmp_path):
+    """init-db на живой базе — одна транзакция с бэкфиллами и эксклюзивными замками на
+    articles и background_jobs. Молча его не гоняем и молча не пропускаем."""
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
+
+    result, calls = _run(tmp_path, repo, "deploy-core.sh", "app", FAKE_SCHEMA_CHANGED="1")
+
+    assert result.returncode != 0
+    assert "--schema" in result.stdout and "--no-schema" in result.stdout
+    assert not any("compose build" in call for call in calls)  # отказ до сборки
+
+
+def test_core_deploy_runs_schema_only_when_asked_and_after_the_guard(tmp_path):
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
+
+    result, calls = _run(tmp_path, repo, "deploy-core.sh", "--schema", "app", FAKE_SCHEMA_CHANGED="1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    guard, schema, up = (_index(calls, step) for step in ("cli live-ai-leases", "cli init-db", "up -d --no-deps app"))
+    assert guard < schema < up
 
 
 def test_core_deploy_refuses_while_ai_job_is_running(tmp_path):

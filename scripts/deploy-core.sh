@@ -1,20 +1,25 @@
 #!/bin/sh
 # Выкат ядра на РФ-сервере: только названные сервисы, без сидов и не посреди ИИ-задачи.
 #
-#   scripts/deploy-core.sh [--force] [--no-schema] [--ref origin/main] СЕРВИС...
+#   scripts/deploy-core.sh [--force] [--schema | --no-schema] [--ref origin/main] СЕРВИС...
 #   СЕРВИС: app scheduler worker playwright-worker tasks
 #
 # Шаги:
 #   1. git fetch + reset --hard на REF — сервер только следует за origin и ничего не
 #      сливает; дальше работает уже версия этого скрипта из выкатываемого кода;
-#   2. сборка названных сервисов — старые контейнеры в это время работают;
-#   3. схема: init-db — идемпотентные CREATE/ALTER без сидов (bootstrap с сидами на
-#      живой базе не запускаем); --no-schema, если схема не менялась;
+#   2. изменился ли schema.sql между выкаченным и выкатываемым кодом — если да, нужен
+#      явный выбор: --schema или --no-schema (без него — отказ, до сборки);
+#   3. сборка названных сервисов — старые контейнеры в это время работают;
 #   4. страж: ИИ-задачи в работе (live-ai-leases) — отказ без --force. Итог, пришедший
 #      в минуту перезапуска ядра, теряется вместе с оплаченной работой (24.07);
-#   5. up -d --no-deps только названных — голый `up` 21.09 поднял у агентов лишний
+#   5. --schema: init-db без сидов. Это не только CREATE/ALTER: schema.sql идёт одной
+#      транзакцией с бэкфиллами (UPDATE articles по всей таблице), а ADD COLUMN IF NOT
+#      EXISTS берёт эксклюзивный замок даже на существующую колонку — на время прогона
+#      стоят лента (articles) и выдача задач NL (background_jobs). Поэтому только явно и
+#      после стража; --no-schema — если новые таблицы и колонки созданы вручную заранее;
+#   6. up -d --no-deps только названных — голый `up` 21.09 поднял у агентов лишний
 #      планировщик (8,5 ч дублей);
-#   6. ожидание health и check-lanes: версии воркеров NL и тревоги сторожа.
+#   7. ожидание health и check-lanes: версии воркеров NL и тревоги сторожа.
 #
 # Порядок РФ↔NL: сначала ядро (оно понимает и старых воркеров, и новых), потом NL —
 # scripts/deploy-nl.sh у владельца.
@@ -81,19 +86,25 @@ wait_healthy() {
 
 main() {
   FORCE=0
-  SCHEMA=1
+  SCHEMA=ask
   REF=origin/main
-  UPDATED=0
+  DEPLOYED=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) FORCE=1 ;;
-      --no-schema) SCHEMA=0 ;;
+      --schema) SCHEMA=schema ;;
+      --no-schema) SCHEMA=no-schema ;;
       --ref)
         [ $# -ge 2 ] || usage
         REF="$2"
         shift
         ;;
-      --updated) UPDATED=1 ;;
+      --updated)
+        # Внутренний: скрипт перезапущен новой версией; дальше — коммит, что был выкачен.
+        [ $# -ge 2 ] || usage
+        DEPLOYED="$2"
+        shift
+        ;;
       -h | --help) usage ;;
       --*) die "неизвестный флаг $1" ;;
       *) break ;;
@@ -113,30 +124,29 @@ main() {
   [ -f .env ] || die "нет .env — скрипт для РФ-ядра"
   [ ! -f .env.external-worker ] || die "здесь .env.external-worker — это NL, для него scripts/deploy-nl.sh"
 
-  if [ "$UPDATED" -eq 0 ]; then
+  if [ -z "$DEPLOYED" ]; then
+    DEPLOYED="$(git rev-parse HEAD)"
     log "код: $(git rev-parse --short HEAD) → $REF"
     git fetch --quiet origin
     git reset --hard --quiet "$REF"
     flags=""
     [ "$FORCE" -eq 0 ] || flags="$flags --force"
-    [ "$SCHEMA" -eq 1 ] || flags="$flags --no-schema"
+    [ "$SCHEMA" = ask ] || flags="$flags --$SCHEMA"
     # shellcheck disable=SC2086 # flags — список флагов, разбивка по словам нужна
-    exec sh "$SELF" --updated $flags --ref "$REF" "$@"
+    exec sh "$SELF" --updated "$DEPLOYED" $flags --ref "$REF" "$@"
   fi
 
   GIT_SHA="$(git rev-parse --short HEAD)"
   export GIT_SHA
   FIRST="$1"
   log "выкатываю $GIT_SHA: $*"
+  if [ "$SCHEMA" = ask ] && ! git diff --quiet "$DEPLOYED" HEAD -- oiltech_digest/db/schema.sql; then
+    die "schema.sql изменился с выкаченного кода — нужен выбор: --schema (init-db целиком: articles и background_jobs под эксклюзивным замком на время прогона, лента и выдача задач NL ждут) или --no-schema (новые таблицы и колонки уже созданы вручную)"
+  fi
   free -m 2>/dev/null | sed 's/^/  /' || true
 
   log "сборка: $*"
   docker compose build "$@"
-
-  if [ "$SCHEMA" -eq 1 ]; then
-    log "схема: init-db (без сидов)"
-    run_cli schema init-db >/dev/null
-  fi
 
   if run_cli guard live-ai-leases; then
     :
@@ -149,6 +159,11 @@ main() {
     else
       die "ИИ-задачи в работе (выше) — дождитесь конца или --force"
     fi
+  fi
+
+  if [ "$SCHEMA" = schema ]; then
+    log "схема: init-db (без сидов; на время прогона лента и выдача задач NL ждут замка)"
+    run_cli schema init-db >/dev/null
   fi
 
   log "перезапуск: $*"
