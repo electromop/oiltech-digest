@@ -150,7 +150,8 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
           <div className="externalQueueList" aria-label="Воркеры NL">
             <div className="metaLabel">Воркеры NL — у ядра контракт {status.external_queues.contract ?? "—"}</div>
             {status.external_queues.consumers.map((consumer) => {
-              const mismatch = consumer.contract !== status.external_queues.contract;
+              // Правило одно — на ядре (lanes.consumer_mismatch): давно пропавший воркер не красим.
+              const mismatch = Boolean(consumer.mismatch);
               return (
                 <div
                   key={consumer.consumer}

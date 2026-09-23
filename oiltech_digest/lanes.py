@@ -82,6 +82,16 @@ def _minutes_since(value: Any, now: datetime) -> float | None:
     return (now - value).total_seconds() / 60
 
 
+def consumer_mismatch(consumer: dict[str, Any], expected: int | None, *, now: datetime) -> bool:
+    """Живой (claim за CONSUMER_ACTIVE_HOURS) воркер с другим номером контракта, чем у ядра.
+
+    Одно правило на всех: сторож, экран обслуживания и самопроверка NL при выкате."""
+    seen = _minutes_since(consumer.get("last_seen_at"), now)
+    if expected is None or seen is None or seen > CONSUMER_ACTIVE_HOURS * 60:
+        return False
+    return consumer.get("contract") != expected
+
+
 def lane_alerts(status: dict[str, Any], *, now: datetime | None = None) -> list[dict[str, Any]]:
     """Тревоги по итогу external_queue_status: застой, нет потребителя, неизвестная очередь,
     расхождение контракта у живого воркера."""
@@ -89,12 +99,9 @@ def lane_alerts(status: dict[str, Any], *, now: datetime | None = None) -> list[
     alerts: list[dict[str, Any]] = []
     expected = status.get("contract")
     for consumer in status.get("consumers") or []:
-        seen = _minutes_since(consumer.get("last_seen_at"), now)
-        if expected is None or seen is None or seen > CONSUMER_ACTIVE_HOURS * 60:
+        if not consumer_mismatch(consumer, expected, now=now):
             continue
         number = consumer.get("contract")
-        if number == expected:
-            continue
         name = consumer.get("consumer")
         told = "не сообщил номер (сборка до контракта)" if number is None else f"контракт {number}"
         # Порядок выката — ядро, потом NL; воркер новее ядра значит, что ядро не выкачено.

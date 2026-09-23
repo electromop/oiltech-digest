@@ -1,3 +1,5 @@
+import pytest
+
 from oiltech_digest.processing import external_ai
 
 
@@ -74,7 +76,7 @@ def test_external_ai_process_payload_heartbeats_per_article():
     }
     beats = []
     # Колбэк, который один раз бросает — обработка не должна падать (heartbeat защищён).
-    def heartbeat():
+    def heartbeat(done=None):
         beats.append(1)
         if len(beats) == 2:
             raise RuntimeError("transient heartbeat failure")
@@ -83,6 +85,25 @@ def test_external_ai_process_payload_heartbeats_per_article():
 
     assert len(beats) == 3              # по разу на каждую из 3 статей
     assert result["stats"]["processed"] == 3   # сбой heartbeat не прервал батч
+
+
+def test_heartbeat_that_cannot_take_the_result_fails_loudly():
+    """23.09: циклы ИИ передают heartbeat итог на границе шага (его отдаст воркер, если шаг
+    зависнет на остановке). Колбэк старой сигнатуры проглоченным TypeError тихо отключил бы
+    и остановку, и отзыв аренды — класс 24.07. Поэтому это громкая ошибка."""
+    payload = {
+        "offline": True,
+        "articles": [{"id": 1, "title": "Drilling", "url": "https://example.com/a", "raw_text": "drilling"}],
+        "tags": [{"id": 10, "name": "Бурение"}],
+        "criteria": [{"id": 20, "name": "Значимость", "weight": 100}],
+    }
+
+    with pytest.raises(TypeError):
+        external_ai.process_payload(payload, heartbeat=lambda: None)
+    with pytest.raises(TypeError):
+        external_ai.process_recheck_payload({"articles": payload["articles"], "tags": []}, heartbeat=lambda: None)
+    with pytest.raises(TypeError):
+        external_ai.process_translate_payload({"articles": payload["articles"]}, heartbeat=lambda: None)
 
 
 def test_external_ai_apply_process_result_calls_repository(monkeypatch):
@@ -187,7 +208,7 @@ def test_lease_loss_aborts_batch_instead_of_burning_money():
     80 минут). Теперь LeaseLost обязан прервать батч на ПЕРВОЙ же статье."""
     calls = {"heartbeats": 0}
 
-    def failing_heartbeat():
+    def failing_heartbeat(done=None):
         calls["heartbeats"] += 1
         raise external_ai.LeaseLost("lease lost for job 1181")
 
@@ -214,7 +235,7 @@ def test_transient_heartbeat_failure_does_not_abort_batch():
     связи будет терять уже оплаченную работу. Прерываемся только на потере lease."""
     calls = {"heartbeats": 0}
 
-    def flaky_heartbeat():
+    def flaky_heartbeat(done=None):
         calls["heartbeats"] += 1
         raise ConnectionError("сеть моргнула")
 

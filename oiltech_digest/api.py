@@ -1337,7 +1337,7 @@ def external_worker_claim(
 @app.get("/api/external-worker/consumers")
 def external_worker_consumers(_: None = Depends(require_external_worker)) -> dict[str, Any]:
     """Сборки и контракты контейнеров NL — для скрипта выката на NL, где базы нет."""
-    return _clean({"contract": contract.CONTRACT, "consumers": repository.list_external_consumers()})
+    return _clean(repository.external_consumers_status())
 
 
 @app.post("/api/external-worker/jobs/{job_id}/progress")
@@ -1473,10 +1473,9 @@ def external_worker_release(
     if remaining is None:
         ok = repository.finish_external_background_job(job_id, lease_token_hash=lease_token_hash, result=applied)
     else:
-        done = len((partial or {}).get("articles") or (partial or {}).get("verdicts") or [])
         ok = repository.requeue_released_external_job(
             job_id, lease_token_hash=lease_token_hash, payload=remaining,
-            note=f"Возвращена воркером ({reason}); сделано до остановки: {done}",
+            note=f"Возвращена воркером ({reason}); сделано до остановки: {contract.done_count(partial)}",
         )
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")

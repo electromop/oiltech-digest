@@ -259,6 +259,7 @@ export type ExternalConsumer = {
   contract: number | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
+  mismatch?: boolean;
 };
 
 export type MaintenanceCleanupResult = {

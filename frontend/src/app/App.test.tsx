@@ -146,6 +146,7 @@ const maintenanceStatus = {
         contract: 1,
         first_seen_at: "2026-09-23T06:00:00Z",
         last_seen_at: "2026-09-23T06:05:00Z",
+        mismatch: false,
       },
       {
         consumer: "nl-browser-1",
@@ -154,6 +155,17 @@ const maintenanceStatus = {
         contract: null,
         first_seen_at: "2026-09-23T06:00:00Z",
         last_seen_at: "2026-09-23T06:05:00Z",
+        mismatch: true,
+      },
+      {
+        // Давно пропавший воркер со старым контрактом: ядро его не отмечает — экран не красит.
+        consumer: "external-worker-1",
+        queues: ["external-ai"],
+        build: null,
+        contract: null,
+        first_seen_at: "2026-09-01T06:00:00Z",
+        last_seen_at: "2026-09-01T06:05:00Z",
+        mismatch: false,
       },
     ],
   },
@@ -616,6 +628,7 @@ describe("App smoke", () => {
     expect(screen.getByTestId("consumer-nl-ai-1")).toHaveTextContent("сборка abc1234");
     expect(screen.getByTestId("consumer-nl-ai-1")).not.toHaveClass("contractMismatch");
     expect(screen.getByTestId("consumer-nl-browser-1")).toHaveClass("contractMismatch");
+    expect(screen.getByTestId("consumer-external-worker-1")).not.toHaveClass("contractMismatch");
     expect(screen.queryByRole("button", { name: "Обслуживание сервиса" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Запустить замер" }));

@@ -11,10 +11,15 @@ import pytest
 import requests
 import yaml
 
-from oiltech_digest import external_worker, lanes
+from oiltech_digest import external_worker, lanes, worker_shutdown
 from oiltech_digest.processing import external_ai
 
 JOB = {"id": 7, "kind": "process_articles", "lease_token": "t", "payload": {}}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_shutdown(monkeypatch):
+    monkeypatch.setattr(worker_shutdown, "SHUTDOWN", worker_shutdown.Shutdown())
 
 
 def _http_409() -> requests.HTTPError:
@@ -131,14 +136,18 @@ def test_long_batch_with_steady_progress_is_not_killed(monkeypatch):
 def test_restart_waits_for_sibling_threads_to_finish(monkeypatch):
     """os._exit посреди соседних задач рвал их здоровую работу (ревью 21.09)."""
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
-    monkeypatch.setattr(external_worker, "_INFLIGHT", 2)  # зависшая + соседняя
+    shutdown = worker_shutdown.Shutdown()
+    monkeypatch.setattr(worker_shutdown, "SHUTDOWN", shutdown)
+    sibling = {"id": 8, "kind": "scrape_source"}
+    shutdown.track(_Client(), dict(JOB))  # зависшая
+    shutdown.track(_Client(), sibling)  # и соседняя
     restarted_at = []
     keeper = external_worker.LeaseKeeper(_Client(), dict(JOB), interval=0.01, stall_seconds=0.02,
                                          drain_seconds=5, on_deadline=lambda: restarted_at.append(time.monotonic()))
     sibling_done = time.monotonic() + 0.3
     keeper.start()
     time.sleep(0.3)
-    external_worker._inflight(-1)  # соседка закончила
+    shutdown.untrack(sibling)  # соседка закончила
 
     assert _wait_until(lambda: restarted_at)
     assert restarted_at[0] >= sibling_done - 0.05

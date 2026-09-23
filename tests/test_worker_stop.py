@@ -18,7 +18,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api, external_worker
+from oiltech_digest import api, external_worker, worker_shutdown
 from oiltech_digest.db import connection, repository
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import OfflineAIClient
@@ -29,10 +29,12 @@ NOW = datetime(2026, 9, 23, 9, 0, tzinfo=timezone.utc)
 
 @pytest.fixture(autouse=True)
 def _fresh_stop_state(monkeypatch):
-    monkeypatch.setattr(external_worker, "_STOPPING", threading.Event())
+    monkeypatch.setattr(worker_shutdown, "SHUTDOWN", worker_shutdown.Shutdown())
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
-    monkeypatch.setattr(external_worker, "_STOP_AT", None)
-    monkeypatch.setattr(external_worker, "_JOBS", {})
+
+
+def _stop(reason: str = "test") -> None:
+    worker_shutdown.SHUTDOWN.request(reason)
 
 
 # --- Воркер: остановка без базы ------------------------------------------------------------
@@ -104,7 +106,7 @@ def _stepping_handler(steps: list, *, step_seconds=0.02, total=200):
 
 
 def test_stop_request_ends_claiming_without_new_jobs(monkeypatch):
-    client = _Client(on_claim=lambda: external_worker.request_stop("test"))
+    client = _Client(on_claim=lambda: _stop())
 
     external_worker._claim_loop(client, 0.0)
 
@@ -114,7 +116,7 @@ def test_stop_request_ends_claiming_without_new_jobs(monkeypatch):
 def test_job_handed_out_at_the_moment_of_stop_goes_back_untouched(monkeypatch):
     started = []
     monkeypatch.setattr(external_ai, "process_payload", lambda payload, heartbeat=None: started.append(1) or {})
-    client = _Client([_job(11)], on_claim=lambda: external_worker.request_stop("test"))
+    client = _Client([_job(11)], on_claim=lambda: _stop())
 
     external_worker._claim_loop(client, 0.0)
 
@@ -131,7 +133,7 @@ def test_job_finishing_within_grace_completes_normally(monkeypatch):
 
     worker.start()
     time.sleep(0.05)
-    external_worker.request_stop("test")
+    _stop()
     worker.join(5)
 
     assert len(steps) == 10
@@ -147,7 +149,7 @@ def test_after_grace_batch_stops_at_next_step_and_hands_back_done_part(monkeypat
 
     worker.start()
     time.sleep(0.1)
-    external_worker.request_stop("test")
+    _stop()
     worker.join(5)
 
     assert 0 < len(steps) < 200
@@ -169,7 +171,7 @@ def test_handler_that_ignores_stop_still_returns_job_without_result(monkeypatch)
 
     monkeypatch.setattr(external_worker.external_fetch, "process_payload", fetch_handler)
     client = _Client()
-    external_worker.request_stop("test")
+    _stop()
 
     external_worker._handle_job(client, _job(kind="scrape_source"))
 
@@ -188,15 +190,80 @@ def test_supervisor_returns_job_whose_step_never_ends(monkeypatch):
     worker.start()
     time.sleep(0.05)
 
-    external_worker.request_stop("test")
+    _stop()
     started = time.monotonic()
-    external_worker._supervise([worker])
+    worker_shutdown.supervise([worker], external_worker._release)
     elapsed = time.monotonic() - started
     unblock.set()
     worker.join(2)
 
     assert ("release", 21, None) in client.calls
     assert elapsed < 2.0
+
+
+def test_supervisor_hands_back_what_was_done_before_the_hung_step(monkeypatch):
+    """Ревью 23.09: шаг ИИ-пакета — целая статья, до пяти вызовов модели. Завис он дольше
+    срока — раньше главный поток возвращал задачу пустой, и 19 из 50 оплаченных статей
+    оплачивались второй раз. Теперь уходит снимок сделанного на последней границе шага."""
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_STEP_SECONDS", 0.1)
+    unblock = threading.Event()
+    in_step = threading.Event()
+
+    def handler(payload, heartbeat=None):
+        result = {"external_ai": True, "articles": []}
+        for index in range(3):
+            heartbeat(result)
+            result["articles"].append({"article_id": index})
+        heartbeat(result)  # граница четвёртой статьи, дальше — вызов модели, который висит
+        in_step.set()
+        unblock.wait(5)
+        result["articles"].append({"article_id": 3})
+        return result
+
+    monkeypatch.setattr(external_ai, "process_payload", handler)
+    client = _Client()
+    worker = threading.Thread(target=external_worker._handle_job, args=(client, _job(31)), daemon=True)
+    worker.start()
+    assert in_step.wait(2)
+
+    _stop()
+    worker_shutdown.supervise([worker], external_worker._release)
+    unblock.set()
+    worker.join(2)
+
+    releases = [call for call in client.calls if call[0] == "release"]
+    assert len(releases) == 1 and releases[0][1] == 31
+    handed = releases[0][2]
+    assert handed["partial"] is True
+    assert [item["article_id"] for item in handed["articles"]] == [0, 1, 2]
+    assert client.kinds() == ["release"]  # поток обработчика, дойдя до конца, второй раз не отчитался
+
+
+def test_ready_result_is_not_handed_back_empty_while_progress_is_sent(monkeypatch):
+    """Ревью 23.09: progress(90) шёл, пока задача числилась «в работе», — главный поток мог
+    вернуть её пустой, и готовый полный итог выбрасывался."""
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_STEP_SECONDS", 0.05)
+    progressing = threading.Event()
+
+    class SlowProgress(_Client):
+        def progress(self, job, progress):
+            if progress == 90:
+                progressing.set()
+                time.sleep(0.3)  # дольше срока остановки
+
+    monkeypatch.setattr(external_ai, "process_payload", lambda payload, heartbeat=None: {"articles": [{"article_id": 1}]})
+    client = SlowProgress()
+    worker = threading.Thread(target=external_worker._handle_job, args=(client, _job(41)), daemon=True)
+    worker.start()
+    assert progressing.wait(2)
+
+    _stop()
+    worker_shutdown.supervise([worker], external_worker._release)
+    worker.join(2)
+
+    assert client.kinds() == ["complete"]
 
 
 def test_sigterm_reaches_worker_loop_and_restores_previous_handler(monkeypatch):
@@ -224,10 +291,10 @@ def test_sigterm_reaches_worker_loop_and_restores_previous_handler(monkeypatch):
                                  queues=["external-ai"], capabilities=["openai"], poll_seconds=0.01)
         elapsed = time.monotonic() - started
         timer.join()
-        assert external_worker._STOPPING.is_set()
+        assert worker_shutdown.SHUTDOWN.requested.is_set()
         assert fired == []  # сигнал принял воркер, а не прежний обработчик
         assert elapsed < 3.0
-        assert signal.getsignal(signal.SIGTERM) is not external_worker._on_stop_signal
+        assert signal.getsignal(signal.SIGTERM) is not worker_shutdown.on_signal
     finally:
         signal.signal(signal.SIGTERM, previous)
 
@@ -239,7 +306,7 @@ def test_compose_gives_workers_time_to_hand_jobs_back():
     services = yaml.safe_load(compose.read_text())["services"]
     need = (external_worker.config.EXTERNAL_WORKER_STOP_GRACE_SECONDS
             + external_worker.config.EXTERNAL_WORKER_STOP_STEP_SECONDS
-            + external_worker._REPORT_SECONDS + 5)
+            + worker_shutdown.REPORT_SECONDS + 5)
 
     for name, service in services.items():
         grace = str(service.get("stop_grace_period") or "10s")
@@ -318,7 +385,7 @@ def _stop_before(article_number: int):
     """heartbeat, который останавливает пакет перед статьёй с этим номером (с 1)."""
     beats = {"count": 0}
 
-    def heartbeat():
+    def heartbeat(done=None):
         beats["count"] += 1
         if beats["count"] >= article_number:
             raise external_ai.StopRequested("остановка воркера")

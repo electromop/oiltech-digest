@@ -135,7 +135,6 @@ def run_exclusive(
     key: int = SCHEDULER_LOCK_KEY,
     poll_seconds: float = 30.0,
     check_seconds: float = 30.0,
-    dsn: str | None = None,
 ) -> int:
     """Выполнить команду, держа замок `key` всё время её жизни. Возвращает код выхода."""
     if not command:
@@ -145,7 +144,7 @@ def run_exclusive(
     try:
         conn = _acquire(
             key, stop, poll_seconds,
-            lambda: psycopg.connect(dsn or config.DATABASE_URL, autocommit=True, application_name=lock_name(key)),
+            lambda: psycopg.connect(config.DATABASE_URL, autocommit=True, application_name=lock_name(key)),
         )
         if conn is None:
             _log("scheduler-lock: остановка до получения замка")

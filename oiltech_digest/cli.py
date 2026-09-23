@@ -1478,19 +1478,12 @@ def _consumer_lines(consumers: list[dict]) -> list[str]:
 
 
 def _fetch_consumer_versions() -> dict:
-    import requests
+    from oiltech_digest import config, external_worker
 
-    from oiltech_digest import config
-
-    if not config.CORE_API_URL or not config.EXTERNAL_WORKER_TOKEN:
-        raise SystemExit("worker-versions: нужны CORE_API_URL и EXTERNAL_WORKER_TOKEN — запускать в контейнере NL")
-    response = requests.get(
-        f"{config.CORE_API_URL}/api/external-worker/consumers",
-        headers={"Authorization": f"Bearer {config.EXTERNAL_WORKER_TOKEN}"},
-        timeout=30,
-    )
-    response.raise_for_status()
-    return response.json()
+    return external_worker.ExternalWorkerClient(
+        core_api_url=config.CORE_API_URL, token=config.EXTERNAL_WORKER_TOKEN, worker_id=config.EXTERNAL_WORKER_ID,
+        queues=config.EXTERNAL_WORKER_QUEUES, capabilities=config.EXTERNAL_WORKER_CAPABILITIES,
+    ).consumers()
 
 
 def cmd_worker_versions(args: argparse.Namespace) -> None:
@@ -1517,7 +1510,7 @@ def cmd_worker_versions(args: argparse.Namespace) -> None:
     else:
         if args.expect_build and row.get("build") != args.expect_build:
             problems.append(f"{me}: сборка {row.get('build') or '—'}, ждём {args.expect_build}")
-        if row.get("contract") != expected:
+        if row.get("mismatch"):  # правило одно — lanes.consumer_mismatch на ядре
             problems.append(f"{me}: контракт {row.get('contract')}, у ядра {expected}")
     for problem in problems:
         print(f"worker-versions: НЕ ГОТОВО — {problem}")
@@ -1528,14 +1521,12 @@ def cmd_worker_versions(args: argparse.Namespace) -> None:
 
 def cmd_scheduler_lock(args: argparse.Namespace) -> None:
     """Запустить команду под замком планировщика: второй экземпляр ждёт, а не дублирует."""
-    import os
-
     from oiltech_digest import singleton
 
     command = list(args.command or [])
     if command[:1] == ["--"]:
         command = command[1:]
-    key = args.key if args.key is not None else int(os.environ.get("SCHEDULER_LOCK_KEY") or singleton.SCHEDULER_LOCK_KEY)
+    key = singleton.SCHEDULER_LOCK_KEY if args.key is None else args.key
     raise SystemExit(singleton.run_exclusive(
         command, key=key, poll_seconds=args.poll_seconds, check_seconds=args.check_seconds,
     ))
@@ -2075,7 +2066,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="выполнить команду под advisory lock планировщика; второй экземпляр пишет в лог и ждёт",
     )
     p_scheduler_lock.add_argument("--key", type=int, default=None,
-                                  help="ключ замка (по умолчанию SCHEDULER_LOCK_KEY или ключ планировщика)")
+                                  help="ключ замка (по умолчанию — ключ планировщика; другой — только в тестах)")
     p_scheduler_lock.add_argument("--poll-seconds", type=float, default=30.0, help="как часто пробовать взять замок")
     p_scheduler_lock.add_argument("--check-seconds", type=float, default=30.0,
                                   help="как часто проверять, что соединение с замком живо")

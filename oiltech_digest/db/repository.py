@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import re
@@ -2563,19 +2563,26 @@ def external_queue_status() -> dict:
             """
         )
         queues = cur.fetchall()
-    try:
-        consumers = list_external_consumers()
-    except pg_errors.UndefinedTable:
-        # Код выкачен без init-db: версий пока нет, но сторож очередей работать обязан.
-        consumers = []
     status = {
         "totals": dict(totals),
         "queues": [dict(row) for row in queues],
-        "contract": contract.CONTRACT,
-        "consumers": consumers,
+        **external_consumers_status(),
     }
     status["alerts"] = lanes.lane_alerts(status)
     return status
+
+
+def external_consumers_status() -> dict:
+    """Контракт ядра и воркеры NL с флагом расхождения — для сторожа, экрана и выката NL."""
+    try:
+        consumers = list_external_consumers()
+    except pg_errors.UndefinedTable:
+        # Схема ещё без таблицы версий: версий нет, но сторож очередей работать обязан.
+        consumers = []
+    now = datetime.now(timezone.utc)
+    for consumer in consumers:
+        consumer["mismatch"] = lanes.consumer_mismatch(consumer, contract.CONTRACT, now=now)
+    return {"contract": contract.CONTRACT, "consumers": consumers}
 
 
 def live_ai_leases() -> list[dict]:

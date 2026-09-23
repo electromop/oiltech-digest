@@ -6,6 +6,7 @@ import hashlib
 import logging
 from typing import Any, Callable
 
+from oiltech_digest import contract
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.pipeline import (
@@ -32,7 +33,7 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
     С job_id (выдача воркеру) статьи резервируются за задачей: соседняя ИИ-полоса не
     возьмёт те же и не оплатит их второй раз (repository.reserve_process_articles)."""
     article_ids = [int(item) for item in payload.get("article_ids") or []]
-    limit = int(payload.get("limit") or 5)
+    limit = int(payload.get("limit") or contract.PROCESS_LIMIT_DEFAULT)
     if job_id is not None:
         reserved = repository.reserve_process_articles(job_id, limit=limit, article_ids=article_ids or None)
         articles = repository.get_articles_by_ids(reserved, include_summary=True)
@@ -73,13 +74,15 @@ class StopRequested(LeaseLost):
     """
 
 
-def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
+def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Run the AI pipeline without direct database access.
 
     ``heartbeat`` (если передан) вызывается перед обработкой КАЖДОЙ статьи — это
     продлевает lease задачи у core. Без него длинный батч на медленной модели
     (gpt-5.5) истекает по lease (600с) ещё до завершения, и задача бесконечно
     переотдаётся/ретраится, не закоммитив ничего. Колбэк не должен ронять обработку.
+    Ему передаётся итог на этот момент: если следующая статья зависнет на остановке
+    воркера, сделанное уйдёт ядру и не оплатится второй раз (worker_shutdown).
     """
     client = make_client(bool(payload.get("offline", False)))
     tags = payload.get("tags") or []
@@ -99,7 +102,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | Non
     for article in payload.get("articles") or []:
         if heartbeat is not None:
             try:
-                heartbeat()
+                heartbeat(result)
             except StopRequested:
                 # Воркер останавливается: сделанное уходит ядру, остальное вернётся в очередь.
                 result["partial"] = True
@@ -107,6 +110,10 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | Non
             except LeaseLost:
                 # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
                 # работать дальше = платить за результат, который core не примет.
+                raise
+            except TypeError:
+                # Колбэк не принял итог — ошибка кода, а не сети. Проглоченная, она тихо
+                # отключила бы и остановку, и отзыв аренды (класс 24.07).
                 raise
             except Exception:  # noqa: BLE001 - heartbeat не должен ломать обработку батча
                 pass
@@ -198,7 +205,7 @@ def build_recheck_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
+def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Только гейт релевантности по сырому тексту (без summary/tag/score). Без доступа к БД."""
     client = make_client(bool(payload.get("offline", False)))
     tags = payload.get("tags") or []
@@ -211,13 +218,15 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], Non
     for article in payload.get("articles") or []:
         if heartbeat is not None:
             try:
-                heartbeat()
+                heartbeat(result)
             except StopRequested:
                 result["partial"] = True
                 break
             except LeaseLost:
                 # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
                 # работать дальше = платить за результат, который core не примет.
+                raise
+            except TypeError:  # колбэк не принял итог — ошибка кода, не сети (см. process_payload)
                 raise
             except Exception:  # noqa: BLE001
                 pass
@@ -306,7 +315,7 @@ def build_translate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
+def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     client = make_client(bool(payload.get("offline", False)))
     result: dict[str, Any] = {
         "translate_titles": True,
@@ -317,13 +326,15 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[[], N
     for article in payload.get("articles") or []:
         if heartbeat is not None:
             try:
-                heartbeat()
+                heartbeat(result)
             except StopRequested:
                 result["partial"] = True
                 break
             except LeaseLost:
                 # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
                 # работать дальше = платить за результат, который core не примет.
+                raise
+            except TypeError:  # колбэк не принял итог — ошибка кода, не сети (см. process_payload)
                 raise
             except Exception:  # noqa: BLE001
                 pass
@@ -515,19 +526,24 @@ def _compact_article_for_reprint(article: dict[str, Any]) -> dict[str, Any]:
 
 
 def process_reprint_review_payload(payload: dict[str, Any],
-                                   heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
+                                   heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Сторона воркера: рассудить пары. В базу не ходит."""
     from oiltech_digest.processing.reprints import judge_pair
 
     client = make_client()
-    verdicts: list[dict[str, Any]] = []
-    partial = False
+    result: dict[str, Any] = {
+        "reprint_review": True,
+        "kind": "reprint_review",
+        "dry_run": bool(payload.get("dry_run")),
+        "verdicts": [],
+    }
+    verdicts: list[dict[str, Any]] = result["verdicts"]
     for pair in payload.get("pairs") or []:
         if heartbeat:
             try:
-                heartbeat()
+                heartbeat(result)
             except StopRequested:
-                partial = True
+                result["partial"] = True
                 break
         left, right = pair["a"], pair["b"]
         try:
@@ -544,18 +560,12 @@ def process_reprint_review_payload(payload: dict[str, Any],
         except Exception as exc:  # noqa: BLE001 - одна пара не валит батч
             verdicts.append({"a_id": left["id"], "b_id": right["id"],
                              "error": str(exc)[:300]})
-    return {
-        "reprint_review": True,
-        "kind": "reprint_review",
-        "dry_run": bool(payload.get("dry_run")),
-        **({"partial": True} if partial else {}),
-        "verdicts": verdicts,
-        "stats": {
-            "checked": len(verdicts),
-            "reprints": sum(1 for v in verdicts if v.get("same_event")),
-            "errors": sum(1 for v in verdicts if v.get("error")),
-        },
+    result["stats"] = {
+        "checked": len(verdicts),
+        "reprints": sum(1 for v in verdicts if v.get("same_event")),
+        "errors": sum(1 for v in verdicts if v.get("error")),
     }
+    return result
 
 
 def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:

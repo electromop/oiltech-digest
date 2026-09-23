@@ -147,10 +147,11 @@ def test_nl_can_read_consumer_versions_with_worker_token(isolated_db, monkeypatc
     ("abc1234", contract.CONTRACT - 1, 1),
 ])
 def test_worker_versions_self_check(monkeypatch, capsys, build, number, code):
-    monkeypatch.setattr(cli, "_fetch_consumer_versions", lambda: {"contract": contract.CONTRACT, "consumers": [
-        {"consumer": "nl-ai-1", "queues": ["external-ai"], "build": build, "contract": number,
-         "last_seen_at": datetime.now(timezone.utc).isoformat()},
-    ]})
+    now = datetime.now(timezone.utc)
+    row = {"consumer": "nl-ai-1", "queues": ["external-ai"], "build": build, "contract": number,
+           "last_seen_at": now.isoformat()}
+    row["mismatch"] = lanes.consumer_mismatch(row, contract.CONTRACT, now=now)  # как считает ядро
+    monkeypatch.setattr(cli, "_fetch_consumer_versions", lambda: {"contract": contract.CONTRACT, "consumers": [row]})
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_ID", "nl-ai-1")
 
     args = type("Args", (), {"self_check": True, "expect_build": "abc1234"})()
@@ -161,6 +162,27 @@ def test_worker_versions_self_check(monkeypatch, capsys, build, number, code):
     else:
         cli.cmd_worker_versions(args)
     assert "nl-ai-1" in capsys.readouterr().out
+
+
+def test_screen_and_nl_get_the_same_mismatch_flag_as_the_watchdog(isolated_db):
+    """Ревью 23.09: экран красил расхождение без окна «живой за 6 ч» — переименованный
+    контейнер горел бы вечно. Флаг считает ядро одним правилом с тревогами сторожа."""
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO external_worker_consumers (consumer, queues, build, contract, last_seen_at) VALUES "
+            "('nl-ai-1', '{external-ai}', NULL, NULL, now()), "
+            "('external-worker-1', '{external-ai}', NULL, NULL, now() - interval '7 hours'), "
+            "('nl-fetch-1', '{external-fetch}', 'abc1234', %s, now())",
+            (contract.CONTRACT,),
+        )
+        conn.commit()
+
+    flags = {row["consumer"]: row["mismatch"] for row in repository.external_consumers_status()["consumers"]}
+    alarmed = {alert["consumer"] for alert in repository.external_queue_status()["alerts"]
+               if alert["kind"] == "contract_mismatch"}
+
+    assert flags == {"nl-ai-1": True, "external-worker-1": False, "nl-fetch-1": False}
+    assert alarmed == {name for name, flag in flags.items() if flag}
 
 
 def test_nl_images_carry_git_build():
