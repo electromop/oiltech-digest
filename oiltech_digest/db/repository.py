@@ -2578,6 +2578,23 @@ def external_queue_status() -> dict:
     return status
 
 
+def live_ai_leases() -> list[dict]:
+    """ИИ-задачи, которые выкат ядра сейчас оборвал бы: в работе с живой арендой или в записи итога."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT id, kind, queue_name, claimed_by, status, lease_expires_at
+            FROM background_jobs
+            WHERE queue_name = ANY(%s)
+              AND (status = 'finalizing' OR (status = 'running' AND lease_expires_at > now()))
+            ORDER BY id
+            """,
+            (sorted(lanes.AI_LANES),),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
 def record_external_consumer(worker_id: str, *, queues: list[str], build: str | None, contract_number: int | None) -> None:
     """Запомнить, какую сборку и контракт сообщил контейнер NL при выдаче задачи.
 

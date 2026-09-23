@@ -1439,6 +1439,23 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
     raise SystemExit(2)
 
 
+def cmd_live_ai_leases(args: argparse.Namespace) -> None:
+    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть, — scripts/deploy-core.sh
+    тогда отказывается перезапускать ядро без --force."""
+    from oiltech_digest.db import repository
+
+    rows = repository.live_ai_leases()
+    if not rows:
+        print("live-ai-leases: ИИ-задач в работе нет")
+        return
+    for row in rows:
+        print(
+            f"live-ai-leases: задача {row['id']} {row['kind']} [{row['queue_name']}] "
+            f"у {row.get('claimed_by') or '—'}, {row['status']}, аренда до {row.get('lease_expires_at') or '—'}"
+        )
+    raise SystemExit(3)
+
+
 def _ago(value) -> str:
     if value is None:
         return "никогда"
@@ -2039,6 +2056,11 @@ def build_parser() -> argparse.ArgumentParser:
         "check-lanes", help="сторож внешних очередей: застой, нет воркера, истёкшие аренды (код 2 при тревоге)"
     )
     p_check_lanes.set_defaults(func=cmd_check_lanes)
+
+    p_live_ai = sub.add_parser(
+        "live-ai-leases", help="ИИ-задачи в работе (код 3, если есть) — страж scripts/deploy-core.sh"
+    )
+    p_live_ai.set_defaults(func=cmd_live_ai_leases)
 
     p_worker_versions = sub.add_parser(
         "worker-versions", help="сборки и контракты контейнеров NL глазами ядра (запускать на NL)"

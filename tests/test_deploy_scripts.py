@@ -1,0 +1,187 @@
+"""Скрипты выката (сессия C, п. 5): порядок шагов и отказы — настоящим sh.
+
+docker, git и sleep подменены заглушками в PATH: каждая пишет, чем её позвали, и отвечает
+так, как ответил бы сервер. Так проверяется весь ход выката, а не только синтаксис.
+Каждый тест падает на коде до правки (скриптов не было)."""
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from oiltech_digest import lanes
+
+ROOT = Path(__file__).resolve().parents[1]
+
+DOCKER = r"""#!/bin/sh
+echo "docker $*" >> "$FAKE_LOG"
+case "$*" in
+  *"live-ai-leases"*) [ "${FAKE_LIVE:-0}" = 0 ] || echo "live-ai-leases: задача 4711 process_articles [external-ai]"; exit "${FAKE_LIVE:-0}" ;;
+  *"worker-versions --self"*) exit "${FAKE_CHECKIN:-0}" ;;
+  *"worker-versions --help"*) exit "${FAKE_OLD:-0}" ;;
+  "compose ps -q "*) echo "cid-$4" ;;
+  "inspect -f "*) echo "running healthy" ;;
+  "ps --format "*) [ -z "${FAKE_PS:-}" ] || echo "$FAKE_PS" ;;
+esac
+exit 0
+"""
+GIT = r"""#!/bin/sh
+echo "git $*" >> "$FAKE_LOG"
+[ "$1" != rev-parse ] || echo abc1234
+exit 0
+"""
+SLEEP = "#!/bin/sh\nexit 0\n"
+
+
+def _repo(tmp_path: Path, script: str, *, env_files: tuple[str, ...]) -> Path:
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copy(ROOT / "scripts" / script, repo / "scripts" / script)
+    for name in env_files:
+        (repo / name).write_text("")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for name, body in (("docker", DOCKER), ("git", GIT), ("sleep", SLEEP)):
+        (stubs / name).write_text(body)
+        (stubs / name).chmod(0o755)
+    return repo
+
+
+def _run(tmp_path: Path, repo: Path, script: str, *args: str, **env: str):
+    log = tmp_path / "calls.log"
+    result = subprocess.run(
+        ["sh", str(repo / "scripts" / script), *args],
+        cwd=str(tmp_path),  # не из каталога репозитория: скрипт обязан сам найти корень
+        env={**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(log), **env},
+        capture_output=True, text=True, timeout=60,
+    )
+    calls = log.read_text().splitlines() if log.exists() else []
+    return result, calls
+
+
+def _index(calls: list[str], needle: str) -> int:
+    return next(index for index, call in enumerate(calls) if needle in call)
+
+
+# --- Ядро ----------------------------------------------------------------------------------
+
+
+def test_core_deploy_runs_steps_in_safe_order(tmp_path):
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
+
+    result, calls = _run(tmp_path, repo, "deploy-core.sh", "app", "scheduler")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    order = [
+        "git fetch", "git reset --hard --quiet origin/main", "docker compose build app scheduler",
+        "cli init-db", "cli live-ai-leases", "docker compose up -d --no-deps app scheduler", "cli check-lanes",
+    ]
+    positions = [_index(calls, step) for step in order]
+    assert positions == sorted(positions), calls
+    # Сервисы названы явно, bootstrap с сидами не запускается.
+    assert not any(" up " in call and "--no-deps" not in call for call in calls)
+    assert not any("seed" in call for call in calls)
+
+
+def test_core_deploy_refuses_while_ai_job_is_running(tmp_path):
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
+
+    result, calls = _run(tmp_path, repo, "deploy-core.sh", "app", FAKE_LIVE="3")
+
+    assert result.returncode != 0
+    assert "ИИ-задачи в работе" in result.stdout
+    assert not any("compose up" in call for call in calls)
+
+
+def test_core_deploy_force_goes_on_and_keeps_flags_after_update(tmp_path):
+    """Флаги переживают перезапуск скрипта новой версией после git reset."""
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
+
+    result, calls = _run(tmp_path, repo, "deploy-core.sh", "--force", "--no-schema", "app", FAKE_LIVE="3")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any("compose up -d --no-deps app" in call for call in calls)
+    assert not any("init-db" in call for call in calls)
+
+
+@pytest.mark.parametrize(("args", "env_files", "reason"), [
+    (("db",), (".env",), "не выкатывается"),
+    (("bootstrap",), (".env",), "не выкатывается"),
+    (("app",), (), "нет .env"),
+    (("app",), (".env", ".env.external-worker"), "это NL"),
+])
+def test_core_deploy_refuses_wrong_target(tmp_path, args, env_files, reason):
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=env_files)
+
+    result, calls = _run(tmp_path, repo, "deploy-core.sh", *args)
+
+    assert result.returncode != 0
+    assert reason in result.stdout
+    assert calls == []  # ни git, ни docker не тронуты
+
+
+def test_core_guard_covers_every_ai_lane():
+    """Выкат не рвёт ИИ ни в одной полосе; новая полоса защищена по умолчанию."""
+    assert lanes.AI_LANES == set(lanes.EXTERNAL_LANES) - {lanes.FETCH, lanes.BROWSER}
+    assert {lanes.AI_LIVE, lanes.AI_BULK} <= lanes.AI_LANES
+
+
+# --- NL ------------------------------------------------------------------------------------
+
+
+NL_SERVICES = ["external-worker", "external-worker-bulk", "external-worker-fetch", "external-worker-browser"]
+
+
+def test_nl_deploy_restarts_workers_one_by_one_after_checkin(tmp_path):
+    repo = _repo(tmp_path, "deploy-nl.sh", env_files=(".env.external-worker",))
+
+    result, calls = _run(tmp_path, repo, "deploy-nl.sh")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    build = _index(calls, "compose -f docker-compose.external-worker.yml build " + " ".join(NL_SERVICES))
+    previous = build
+    for service in NL_SERVICES:
+        up = _index(calls, f"up -d --no-deps {service}")
+        checkin = _index(calls, f"exec -T {service} python -m oiltech_digest.cli worker-versions --self --expect-build abc1234")
+        assert previous < up < checkin  # следующий — только после отметки предыдущего
+        previous = checkin
+    assert "worker-versions" in calls[-1] and "--self" not in calls[-1]
+
+
+def test_nl_deploy_does_not_wait_two_minutes_for_old_worker_that_ignores_sigterm(tmp_path):
+    """Старый воркер (python под PID 1 без обработчика) SIGTERM игнорирует: 120 с ожидания
+    ничего не дали бы — тот же SIGKILL. Новый получает весь срок, чтобы вернуть задачи."""
+    repo = _repo(tmp_path, "deploy-nl.sh", env_files=(".env.external-worker",))
+
+    _, old_calls = _run(tmp_path, repo, "deploy-nl.sh", "external-worker", FAKE_OLD="1")
+    (tmp_path / "calls.log").unlink()
+    _, new_calls = _run(tmp_path, repo, "deploy-nl.sh", "external-worker", FAKE_OLD="0")
+
+    assert any("up -d --no-deps --timeout 10 external-worker" in call for call in old_calls)
+    assert any(call.endswith("up -d --no-deps external-worker") for call in new_calls)
+
+
+def test_nl_deploy_stops_at_first_worker_that_does_not_check_in(tmp_path):
+    repo = _repo(tmp_path, "deploy-nl.sh", env_files=(".env.external-worker",))
+
+    result, calls = _run(tmp_path, repo, "deploy-nl.sh", FAKE_CHECKIN="1", DEPLOY_NL_CHECKIN_TIMEOUT="10")
+
+    assert result.returncode != 0
+    assert "external-worker не отметился" in result.stdout
+    assert not any("up -d --no-deps external-worker-bulk" in call for call in calls)
+
+
+@pytest.mark.parametrize(("env_files", "ps", "reason"), [
+    ((), "", "это не NL"),
+    ((".env.external-worker",), "oiltech_app", "это РФ-ядро"),
+])
+def test_nl_deploy_refuses_on_wrong_host(tmp_path, env_files, ps, reason):
+    repo = _repo(tmp_path, "deploy-nl.sh", env_files=env_files)
+
+    result, calls = _run(tmp_path, repo, "deploy-nl.sh", FAKE_PS=ps)
+
+    assert result.returncode != 0
+    assert reason in result.stdout
+    assert not any(call.startswith(("git ", "docker compose")) for call in calls)
