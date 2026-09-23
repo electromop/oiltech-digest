@@ -48,8 +48,17 @@ _ARTICLE_BATCHES = frozenset({"process_articles", "recheck_relevance", "translat
 PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review"}
 
 
-def accepts_partial(kind: str | None, result: dict[str, Any] | None) -> bool:
-    return str(kind or "") in PARTIAL_KINDS and bool(result) and bool((result or {}).get("partial"))
+def accepts_partial(kind: str | None, result: dict[str, Any] | None,
+                    payload: dict[str, Any] | None = None) -> bool:
+    """Пробный прогон (dry_run) частичного итога не принимает: его результат — отчёт целиком
+    (recheck-dry-show, вердикты судьи), по частям он не складывается, и сделанная часть
+    пропала бы из отчёта (ревью 23.09). Такую задачу остановка возвращает целиком."""
+    return (
+        str(kind or "") in PARTIAL_KINDS
+        and bool(result)
+        and bool((result or {}).get("partial"))
+        and not (payload or {}).get("dry_run")
+    )
 
 
 def without_reservation(payload: dict[str, Any]) -> dict[str, Any]:
@@ -76,7 +85,7 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
     - пары судьи перепечаток — без рассуженных.
     """
     rest = without_reservation(payload)
-    if not accepts_partial(kind, result):
+    if not accepts_partial(kind, result, payload):
         return rest
     kind = str(kind)
     if kind in _ARTICLE_BATCHES:

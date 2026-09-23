@@ -455,7 +455,11 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[.
         _release(client, job, "остановка воркера: возвращаю сделанное", result=result)
         return
     try:
+        # Отметка прогресса — для экрана; её сбой не повод выбрасывать оплаченный итог.
         client.progress(job, 90)
+    except Exception:  # noqa: BLE001 - complete ниже скажет, жива ли аренда
+        logger.warning("external_progress_failed job_id=%s — отправляю итог всё равно", job.get("id"))
+    try:
         client.complete(job, result)
         logger.info("external_job_finished job_id=%s kind=%s", job["id"], kind)
     except Exception as exc:  # noqa: BLE001 - итог не принят: задача возвращается ядру как сбой

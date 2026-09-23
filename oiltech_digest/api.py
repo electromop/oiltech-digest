@@ -1545,7 +1545,7 @@ def external_worker_release(
     if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
         raise HTTPException(status_code=409, detail="Job lease is not active")
     original = dict(job.get("payload_json") or {})
-    partial = payload.result if contract.accepts_partial(job.get("kind"), payload.result) else None
+    partial = payload.result if contract.accepts_partial(job.get("kind"), payload.result, original) else None
     reason = (payload.reason or "остановка воркера").strip()[:300]
     try:
         applied = _apply_external_result(job, partial, job_id) if partial else None

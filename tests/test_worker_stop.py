@@ -266,6 +266,22 @@ def test_ready_result_is_not_handed_back_empty_while_progress_is_sent(monkeypatc
     assert client.kinds() == ["complete"]
 
 
+def test_failed_progress_mark_does_not_throw_away_a_paid_result(monkeypatch):
+    """Повторное ревью 23.09: сбой отметки progress(90) превращал готовый итог в fail."""
+
+    class FlakyProgress(_Client):
+        def progress(self, job, progress):
+            if progress == 90:
+                raise ConnectionError("ядро моргнуло")
+
+    monkeypatch.setattr(external_ai, "process_payload", lambda payload, heartbeat=None: {"articles": [{"article_id": 1}]})
+    client = FlakyProgress()
+
+    external_worker._handle_job(client, _job(51))
+
+    assert client.kinds() == ["complete"]
+
+
 def test_sigterm_reaches_worker_loop_and_restores_previous_handler(monkeypatch):
     """Настоящий сигнал, а не вызов функции: так останавливает контейнер Docker."""
 
@@ -467,6 +483,26 @@ def test_partial_release_of_limit_batch_takes_only_unprocessed_articles(isolated
     again = _claim(core)
     assert [article["id"] for article in again["payload"]["articles"]] == ids[1:3]
     assert "title: Статья 0" not in calls
+
+
+def test_dry_run_job_goes_back_whole_so_its_report_stays_complete(isolated_db, monkeypatch):
+    """Повторное ревью 23.09: итог пробной перепроверки — отчёт (recheck-dry-show). По частям
+    он не складывается: принятая сделанная часть пропала бы из итогового отчёта."""
+    ids = _seed(3)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
+    created = repository.create_background_job("recheck_relevance", {"article_ids": ids, "dry_run": True},
+                                               queue_name="external-ai", execution_region="external",
+                                               capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+    partial = external_ai.process_recheck_payload(job["payload"], heartbeat=_stop_before(3))
+    assert partial.get("partial") is True
+
+    assert _release(core, job, partial).status_code == 200
+
+    stored = repository.get_background_job(int(created["id"]))
+    assert stored["status"] == "queued" and stored["attempts"] == 0
+    assert stored["payload_json"]["article_ids"] == ids  # целиком: отчёт соберётся полным
 
 
 def test_release_with_all_work_done_finishes_job(isolated_db, monkeypatch):
