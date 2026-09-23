@@ -5,19 +5,29 @@ import type { FeedWindowInfo, FeedWindowPayload } from "../../api/types";
 // Окно месяца на фронте: подписи и загрузка списка месяцев. Само правило живёт на сервере
 // (oiltech_digest/feed_window.py; ADR 0001 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md).
 
-// Открытые и прошлые месяцы — один раз при открытии экрана. Сбой не мешает работе с текущим
-// периодом: остаётся null, и переключатель архива просто не появляется.
+// Открытые и прошлые месяцы — при открытии экрана и при возврате на вкладку: вкладку,
+// оставленную на ночь, 5-е число застало бы со старым окном, и конструктор выпуска показал бы
+// кнопку сохранения у уже закрытого месяца (сервер всё равно ответит 409). Сбой не мешает
+// работе с текущим периодом: остаётся прежнее значение, без него переключатель не появится.
 export function useFeedWindow(): FeedWindowPayload | null {
   const [payload, setPayload] = useState<FeedWindowPayload | null>(null);
   useEffect(() => {
     let cancelled = false;
-    getFeedWindow()
-      .then((result) => {
-        if (!cancelled) setPayload(result);
-      })
-      .catch(() => undefined);
+    function load() {
+      getFeedWindow()
+        .then((result) => {
+          if (!cancelled) setPayload(result);
+        })
+        .catch(() => undefined);
+    }
+    function onVisible() {
+      if (!document.hidden) load();
+    }
+    load();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
   return payload;
