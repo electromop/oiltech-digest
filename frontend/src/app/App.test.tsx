@@ -566,13 +566,13 @@ describe("App smoke", () => {
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
-    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
     const requestedUrls = fetchMock.mock.calls.map(([input]) => String(input));
     expect(requestedUrls).toContain("/api/articles?limit=2000&min_score=50&max_score=100&sort=score_desc");
-    expect(screen.getByRole("heading", { name: "Каталог сигналов" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Каталог бизнес-сигналов" })).toBeInTheDocument();
     const catalogBadge = container.querySelector(".panelHeader .badge");
     expect(catalogBadge).not.toBeNull();
-    expect(catalogBadge?.textContent ?? "").toMatch(/сигнал|Выборка по всей базе|Обновляем выборку по всей базе/);
+    expect(catalogBadge?.textContent ?? "").toMatch(/бизнес-сигнал|Выборка по фильтрам|Обновляем выборку/);
     // #9: группы-теги свёрнуты по умолчанию — сначала раскрываем группу, потом сам сигнал.
     await user.click(screen.getByRole("button", { name: /Раскрыть группу/ }));
     expect(screen.getAllByText("Directional drilling automation").length).toBeGreaterThanOrEqual(1);
@@ -585,7 +585,7 @@ describe("App smoke", () => {
 
     const mobileNav = document.querySelector(".mobileNav");
     expect(mobileNav).not.toBeNull();
-    expect(within(mobileNav as HTMLElement).getByRole("button", { name: "Сигналы" })).toBeInTheDocument();
+    expect(within(mobileNav as HTMLElement).getByRole("button", { name: "Бизнес-сигналы" })).toBeInTheDocument();
     expect(within(mobileNav as HTMLElement).queryByRole("button", { name: "Фоновые задачи" })).not.toBeInTheDocument();
   });
 
@@ -638,14 +638,45 @@ describe("App smoke", () => {
     expect(screen.getAllByText("warn").length).toBeGreaterThanOrEqual(1);
   });
 
-  // Прототипы показывают ВЫМЫШЛЕННЫЕ данные внутри рабочей админки, поэтому доступны ТОЛЬКО
-  // администратору. Ниже закреплены обе половины контракта: админ видит их в меню и открывает,
-  // а обычный пользователь не видит группу и не пробивается по прямой ссылке.
+  // Прототипы — архивные модули с 23.09 (утверждено владельцем): без флага ARCHIVED_MODULES
+  // их нет ни в меню, ни по прямой ссылке — ссылка ведёт в ленту.
+  it("без флага прототипов нет в меню, а прямая ссылка ведёт в ленту", async () => {
+    window.history.replaceState(null, "", "/?screen=analytics-preview");
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    expect(window.location.search).not.toContain("analytics-preview");
+    expect(screen.queryByText("Прототип · демонстрационные данные")).not.toBeInTheDocument();
+    expect(screen.queryByText("Прототипы")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "Технологии" })).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: "Аналитика для БРБ" })).toHaveLength(0);
+  });
+
+  // Включённые флагом прототипы показывают ВЫМЫШЛЕННЫЕ данные внутри рабочей админки, поэтому
+  // доступны ТОЛЬКО администратору. Ниже закреплены обе половины контракта: админ видит их в
+  // меню и открывает, а обычный пользователь не видит группу и не пробивается по прямой ссылке.
   it.each([
     ["tech-preview", "Технологии"],
     ["analytics-preview", "Аналитика для БРБ"],
-  ])("админ открывает прототип %s из меню, с плашкой демо-данных", async (screenId, heading) => {
+  ])("с флагом админ открывает прототип %s из меню, с плашкой демо-данных", async (screenId, heading) => {
     window.history.replaceState(null, "", `/?screen=${screenId}`);
+    const adminImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          user: { id: 1, email: "user@example.com", role: "admin" },
+          archived_modules: ["analytics-preview", "tech-preview"],
+        }));
+      }
+      return adminImpl!(input, init);
+    });
 
     const user = userEvent.setup();
     render(<App />);
@@ -672,8 +703,8 @@ describe("App smoke", () => {
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
-    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
-    const radar = screen.getAllByRole("link", { name: "Радар сигналов" });
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    const radar = screen.getAllByRole("link", { name: "Технологический радар" });
     expect(radar[0]).toHaveAttribute("href", "https://agents.oiltech-digest.ru/?screen=signal-radar");
     expect(screen.getAllByRole("link", { name: "Агент источников" })[0]).toHaveAttribute(
       "href", "https://agents.oiltech-digest.ru/?screen=source-agent",
@@ -697,19 +728,24 @@ describe("App smoke", () => {
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
-    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
     expect(screen.queryAllByRole("link", { name: "Агент источников" })).toHaveLength(0);
-    expect(screen.getAllByRole("link", { name: "Радар сигналов" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("link", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("обычный пользователь не видит группу «Прототипы» и не открывает их по прямой ссылке", async () => {
     window.history.replaceState(null, "", "/?screen=tech-preview");
 
-    // Тот же мок, но роль — обычный пользователь.
+    // Тот же мок, но роль — обычный пользователь; прототипы включены флагом — гард роли
+    // обязан сработать и тогда.
     const adminImpl = fetchMock.getMockImplementation();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
-        return Promise.resolve(jsonResponse({ ok: true, user: { id: 2, email: "user@example.com", role: "user" } }));
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          user: { id: 2, email: "user@example.com", role: "user" },
+          archived_modules: ["analytics-preview", "tech-preview"],
+        }));
       }
       return adminImpl!(input, init);
     });
@@ -741,7 +777,7 @@ describe("App smoke", () => {
     await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
-    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
 
     const tileValue = (label: string) => {
       const cards = Array.from(container.querySelectorAll(".statCardReact"));
@@ -751,7 +787,7 @@ describe("App smoke", () => {
 
     await waitFor(() => expect(tileValue("Шум")).toBe("999"));
     // Первая плитка «Всего» показывает весь объём базы (all_articles=15), а не сигналы (3).
-    expect(tileValue("Всего сигналов")).toBe("15");
+    expect(tileValue("Всего бизнес-сигналов")).toBe("15");
     expect(tileValue("Дубликаты")).toBe("7");
     // Плашка «Новые» заменена на «Почищено» (cleaned_articles): «Новые» показывала
     // пер-юзерный статус и ни с чем не сходилась, а «Почищено» даёт арифметику
@@ -776,13 +812,13 @@ describe("App smoke", () => {
     await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
-    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
 
     const articleCalls = () =>
       fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/articles?")).length;
 
     // Взводим серверный фильтр — ровно то, что делает аналитик.
-    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+    await user.type(screen.getByPlaceholderText("Поиск за период: название, текст, суть"), "бурение");
 
     // Ждём, пока debounce (400мс) отработает и выборка придёт.
     await waitFor(() => expect(articleCalls()).toBeGreaterThan(1));
@@ -807,12 +843,12 @@ describe("App smoke", () => {
     await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
-    expect(await screen.findByRole("heading", { name: "Сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
 
     const autoRefreshTimers = () =>
       setIntervalSpy.mock.calls.filter(([, ms]) => ms === 40000).length;
 
-    await user.type(screen.getByPlaceholderText("Поиск по всей базе: название, текст, суть"), "бурение");
+    await user.type(screen.getByPlaceholderText("Поиск за период: название, текст, суть"), "бурение");
     await waitFor(() => expect(autoRefreshTimers()).toBeGreaterThan(0));
 
     // Даём выборке полностью улечься: debounce (400мс) + ответ + сброс флага searching.
@@ -826,6 +862,88 @@ describe("App smoke", () => {
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     expect(autoRefreshTimers()).toBe(settled);
+  });
+
+  // Окно месяца (ADR 0001, п. 6): прошлый месяц — архив, только просмотр.
+  function withArchiveMocks() {
+    const augustArticle = { ...article, id: 801, title: "August drilling story", date: "2026-08-20", published_at: "2026-08-20", collected: "2026-08-20" };
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/feed-window") {
+        return Promise.resolve(jsonResponse({
+          months: ["2026-09"], month: null, read_only: false, rollover_day: 5,
+          archive: [{ month: "2026-08", articles: 12, digest: 1 }],
+        }));
+      }
+      if (url === "/api/stats?month=2026-08") {
+        return Promise.resolve(jsonResponse({
+          total_articles: 12, all_articles: 20, with_summary: 12, processed_articles: 12,
+          selected_for_digest: 1, avg_score: 70, sources: 3, cleaned_articles: 0,
+          status_counts: { new: 11, digest: 1, archive: 0, noise: 0, duplicate: 0 },
+          window: { months: ["2026-09"], month: "2026-08", read_only: true, rollover_day: 5 },
+        }));
+      }
+      if (url.startsWith("/api/articles?") && url.includes("month=2026-08")) {
+        return Promise.resolve(jsonResponse([augustArticle]));
+      }
+      return baseImpl!(input, init);
+    });
+  }
+
+  async function logIn(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+  }
+
+  it("архив прошлого месяца открывается из ленты только на просмотр", async () => {
+    withArchiveMocks();
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await logIn(user);
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+
+    // В текущем периоде у карточки есть выпадающий статус.
+    await user.click(screen.getByRole("button", { name: /Раскрыть группу/ }));
+    expect(container.querySelectorAll(".articleCardTop select").length).toBeGreaterThan(0);
+
+    await user.selectOptions(await screen.findByDisplayValue("Текущий период"), "2026-08");
+
+    expect(await screen.findByText(/Архив за август 2026 — только просмотр/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Архив бизнес-сигналов · август 2026" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("August drilling story").length).toBeGreaterThanOrEqual(1));
+    // Статус виден плашкой, но не меняется: выпадающих списков у карточек нет.
+    expect(container.querySelectorAll(".articleCardTop select")).toHaveLength(0);
+    const requested = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(requested.some((url) => url.startsWith("/api/articles?") && url.includes("month=2026-08"))).toBe(true);
+    expect(requested).toContain("/api/stats?month=2026-08");
+
+    await user.click(screen.getByRole("button", { name: "К текущему периоду" }));
+    expect(screen.queryByText(/Архив за август 2026/)).not.toBeInTheDocument();
+  });
+
+  it("прошлый выпуск в конструкторе дайджеста — только просмотр и выгрузка", async () => {
+    withArchiveMocks();
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
+    const monthSelect = await screen.findByDisplayValue("Все месяцы");
+    // Прошлый выпуск есть в списке месяцев, с пометкой архива.
+    expect(within(monthSelect).getByRole("option", { name: "2026-08 · архив" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Сохранить draft" })).toBeInTheDocument();
+
+    await user.selectOptions(monthSelect, "2026-08");
+
+    expect(await screen.findByText(/Выпуск за август 2026 в архиве/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Сохранить draft" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Из дайджеста" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
+    const requested = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(requested.some((url) => url.includes("status=digest") && url.includes("month=2026-08"))).toBe(true);
   });
 
   it("imports article by direct url from admin sources page", async () => {

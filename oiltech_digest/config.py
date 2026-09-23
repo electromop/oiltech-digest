@@ -250,6 +250,33 @@ def price_for_model(model: str | None) -> tuple[float, float]:
 # пересборка образа возвращала git-версию поверх правок.
 DIGEST_BRANDING_PATH = os.environ.get("DIGEST_BRANDING_PATH", "").strip()
 
+# --- Окно месяца ленты (ADR 0001, п. 6; oiltech_digest/feed_window.py) ---
+# Пока день месяца по МСК меньше этого числа, лента показывает ещё и прошлый месяц:
+# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09 — 5.
+# Держим в пределах 1..28: 1 — прошлый месяц не виден никогда, больше 28 — виден
+# почти всегда, и окно перестаёт быть окном.
+FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", "5"))))
+
+# --- Архивные модули (ADR 0001 п. 7 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md;
+#     список утверждён владельцем 23.09) ---
+# Убраны из меню, маршрутов и контейнеров, но не удалены из кода. По умолчанию все
+# выключены. Вернуть модуль — перечислить его ключ в ARCHIVED_MODULES через запятую и
+# перезапустить app:
+#   analytics-preview — макет «Аналитика для БРБ»;
+#   tech-preview      — макет «Технологии»;
+#   backlog           — трекер задач: /tasks и /api/backlog* (сервис tasks — профиль
+#                       compose `archive`, флаг у него уже прописан).
+# У справки /help (сервис docs) кода в приложении нет: она возвращается профилем compose
+# `archive` и блоком /help* в Caddyfile. Незнакомые ключи игнорируются.
+ARCHIVED_MODULE_KEYS = ("analytics-preview", "tech-preview", "backlog")
+
+
+def parse_archived_modules(raw: str) -> frozenset[str]:
+    return frozenset(key for key in (item.strip() for item in raw.split(",")) if key in ARCHIVED_MODULE_KEYS)
+
+
+ARCHIVED_MODULES = parse_archived_modules(os.environ.get("ARCHIVED_MODULES", ""))
+
 # --- Auth ---
 AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")
 AUTH_SESSION_DAYS = int(os.environ.get("AUTH_SESSION_DAYS", "30"))

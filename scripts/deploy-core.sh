@@ -2,7 +2,7 @@
 # Выкат ядра на РФ-сервере: только названные сервисы, без сидов и не посреди ИИ-задачи.
 #
 #   scripts/deploy-core.sh [--force] [--schema | --no-schema] [--ref origin/main] СЕРВИС...
-#   СЕРВИС: app scheduler worker playwright-worker tasks
+#   СЕРВИС: app scheduler worker playwright-worker
 #
 # Шаги:
 #   1. git fetch + reset --hard на REF — сервер только следует за origin и ничего не
@@ -25,7 +25,7 @@
 # scripts/deploy-nl.sh у владельца.
 set -eu
 
-SERVICES_ALLOWED="app scheduler worker playwright-worker tasks"
+SERVICES_ALLOWED="app scheduler worker playwright-worker"
 HEALTH_TIMEOUT=180
 
 log() {

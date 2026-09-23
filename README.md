@@ -61,8 +61,8 @@ OPENAI_API_KEY=sk-...        # без ключа сбор работает, AI-�
 ```
 
 Запуск всего стека (БД, админка, авто-сбор по расписанию). Конвейер (`scheduler`,
-`worker`, `playwright-worker`, `tasks`) стоит за профилем `pipeline` — без него
-поднимаются только БД, админка и Caddy:
+`worker`, `playwright-worker`) стоит за профилем `pipeline` — без него поднимаются
+только БД, админка и Caddy (архивные `tasks` и `docs` — профиль `archive`):
 
 ```bash
 docker compose --profile pipeline up -d --build

@@ -172,7 +172,9 @@ def test_scheduler_script_takes_the_lock_before_any_step():
 def test_bare_compose_up_cannot_start_pipeline_services():
     """Голый `up -d` 21.09 поднял всё. Конвейер — только по профилю или по имени сервиса."""
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
-    for name in ("tasks", "worker", "playwright-worker", "scheduler"):
+    for name in ("worker", "playwright-worker", "scheduler"):
         assert "pipeline" in (services[name].get("profiles") or []), name
+    # tasks — архивный модуль (сессия B): его голый `up` тоже не поднимает, но другим профилем.
+    assert services["tasks"].get("profiles"), "tasks"
     for name in ("db", "app", "caddy"):
         assert not services[name].get("profiles"), name
