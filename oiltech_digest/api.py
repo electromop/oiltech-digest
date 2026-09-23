@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, background_jobs, backlog, config
+from oiltech_digest import auth, background_jobs, backlog, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
@@ -328,6 +328,22 @@ class UserUpdate(BaseModel):
     password: str | None = None
 
 
+def require_backlog_module() -> None:
+    """Трекер задач — архивный модуль (решение владельца 23.09): без флага его нет.
+
+    404, а не 403: для посетителя модуль не существует, как и пункт меню. Вернуть —
+    ARCHIVED_MODULES=backlog (у сервиса tasks в профиле compose `archive` он прописан).
+    """
+    if "backlog" not in config.ARCHIVED_MODULES:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _session_payload(user: dict[str, Any]) -> dict[str, Any]:
+    """Ответ входа и проверки сессии. `archived_modules` — архивные модули, включённые
+    флагом: фронт показывает их экраны только из этого списка."""
+    return {"ok": True, "user": _clean(user), "archived_modules": sorted(config.ARCHIVED_MODULES)}
+
+
 @app.get("/", response_model=None)
 def index():
     if os.environ.get("TASKS_APP_MODE") == "1":
@@ -337,8 +353,8 @@ def index():
     return FileResponse(WEB_DIR / "app.html")
 
 
-@app.get("/tasks")
-@app.get("/tasks/")
+@app.get("/tasks", dependencies=[Depends(require_backlog_module)])
+@app.get("/tasks/", dependencies=[Depends(require_backlog_module)])
 def tasks_app() -> FileResponse:
     if (FRONTEND_DIST_DIR / "index.html").exists():
         return FileResponse(FRONTEND_DIST_DIR / "index.html")
@@ -374,7 +390,7 @@ def _set_session_cookie(response: Response, session_token: str) -> None:
 
 @app.get("/api/auth/me")
 def auth_me(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    return {"ok": True, "user": _clean(user)}
+    return _session_payload(user)
 
 
 @app.post("/api/auth/register")
@@ -395,7 +411,7 @@ def auth_register(payload: AuthPayload, response: Response) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc))
     session_token = repository.create_user_session(int(user["id"]))
     _set_session_cookie(response, session_token)
-    return {"ok": True, "user": _clean(user)}
+    return _session_payload(user)
 
 
 @app.post("/api/auth/login")
@@ -405,7 +421,7 @@ def auth_login(payload: AuthPayload, response: Response) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
     session_token = repository.create_user_session(int(user["id"]))
     _set_session_cookie(response, session_token)
-    return {"ok": True, "user": _clean(user)}
+    return _session_payload(user)
 
 
 @app.post("/api/auth/logout")
@@ -501,9 +517,12 @@ def list_articles(
     sort: str = Query("score_desc", pattern="^(date_desc|score_desc|score_asc)$"),
     changed_only: bool = False,
     limit: int = Query(1000, ge=1, le=5000),
+    month: str | None = Query(None, pattern=feed_window.MONTH_PATTERN),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    clauses = []
+    # Окно месяца (ADR 0001, п. 6): без `month` — открытые месяцы, с `month` — один
+    # месяц, прошлый открывается архивом только на просмотр. Для всех ролей одинаково.
+    clauses = [feed_window.current(month).sql("a")]
     params: list[Any] = []
     if search:
         # Ищем по тому, ЧТО ЧЕЛОВЕК ВИДИТ, и по тегу. Раньше было два расхождения:
@@ -625,17 +644,36 @@ def list_articles(
 
 
 @app.get("/api/stats")
-def dashboard_stats(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Authoritative dashboard counters, computed over the full database."""
-    return _clean(repository.dashboard_stats(int(user["id"])))
+def dashboard_stats(
+    month: str | None = Query(None, pattern=feed_window.MONTH_PATTERN),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """Счётчики ленты — по тому же окну месяца, что и сама лента.
+
+    Иначе плитки считали бы всю базу (31 тыс.), а лента показывала бы сентябрь
+    (2 тыс.), и цифры над лентой перестали бы с ней сходиться. `window` сообщает
+    фронту открытые месяцы и признак архива «только просмотр».
+    """
+    window = feed_window.current(month)
+    payload = repository.dashboard_stats(int(user["id"]), window=window)
+    payload["window"] = window.describe()
+    return _clean(payload)
 
 
-@app.get("/api/backlog")
+@app.get("/api/feed-window")
+def feed_window_months(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Открытые месяцы ленты и прошлые месяцы для переключателя «Архив» (с числом статей)."""
+    window = feed_window.current()
+    archive = repository.feed_archive_months(window, user_id=int(user["id"]))
+    return _clean({**window.describe(), "archive": archive})
+
+
+@app.get("/api/backlog", dependencies=[Depends(require_backlog_module)])
 def backlog_endpoint(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     return backlog.read_backlog()
 
 
-@app.post("/api/backlog/tasks")
+@app.post("/api/backlog/tasks", dependencies=[Depends(require_backlog_module)])
 def create_backlog_task_endpoint(payload: BacklogTaskCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     try:
         return backlog.create_plan_task(payload.title, priority=payload.priority, status=payload.status, details=payload.details, due_date=payload.due_date)
@@ -643,7 +681,7 @@ def create_backlog_task_endpoint(payload: BacklogTaskCreate, user: dict[str, Any
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.patch("/api/backlog/tasks/{task_id}")
+@app.patch("/api/backlog/tasks/{task_id}", dependencies=[Depends(require_backlog_module)])
 def update_backlog_task_endpoint(
     task_id: str,
     payload: BacklogTaskPatch,
@@ -665,7 +703,7 @@ def update_backlog_task_endpoint(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.post("/api/backlog/tasks/{task_id}/comments")
+@app.post("/api/backlog/tasks/{task_id}/comments", dependencies=[Depends(require_backlog_module)])
 def create_backlog_task_comment_endpoint(
     task_id: str,
     payload: BacklogTaskCommentCreate,
@@ -690,9 +728,25 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
         # `review`, который ничего не делал). `archive` теперь скрывает статью из ленты.
         target_status = "digest" if patch.selected_for_digest else "archive"
     with get_connection() as conn:
-        exists = conn.execute("SELECT 1 FROM articles WHERE id = %s", (article_id,)).fetchone()
-        if not exists:
+        row = conn.execute(
+            f"SELECT {feed_window.period_month_sql('a')} FROM articles a WHERE a.id = %s",
+            (article_id,),
+        ).fetchone()
+        if not row:
             raise HTTPException(status_code=404, detail="Article not found")
+    # Архив — только просмотр (решение владельца 23.09): статус и «в дайджест» у статьи
+    # прошлого месяца не меняются ни из интерфейса, ни прямым запросом. Ради этого и
+    # сделан зазор до FEED_ROLLOVER_DAY: выпуск собирается, пока прошлый месяц виден.
+    window = feed_window.current()
+    if not window.is_open(row[0]):
+        closed = feed_window.month_label(feed_window.parse_month(row[0]))
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Статья относится к архиву за {closed}. Архив открыт только для просмотра: "
+                "статус и отметку «в дайджест» у статей прошлых месяцев менять нельзя."
+            ),
+        )
     previous = repository.get_user_article_status(int(user["id"]), article_id)
     repository.set_user_article_status(
         int(user["id"]), article_id, status=target_status, analyst_comment=patch.analyst_comment
@@ -1140,8 +1194,30 @@ def update_digest_branding(payload: DigestBrandingIn, user: dict[str, Any] = Dep
     return {"ok": True, "branding": _clean(save_digest_branding(payload.model_dump()))}
 
 
+def _refuse_archived_issue(month: str) -> None:
+    """Выпуск прошлого месяца — архив: смотреть и выгружать можно, менять нельзя.
+
+    Решение владельца 23.09: конструктор показывает прошлые месяцы только на просмотр и
+    выгрузку, а статусы и черновик выпуска не меняются — ни из интерфейса, ни запросом.
+    Строка, которая не является месяцем, архивным выпуском быть не может: её не трогаем.
+    """
+    try:
+        issue_month = feed_window.parse_month(month)
+    except ValueError:
+        return
+    if not feed_window.current().is_open(feed_window.month_key(issue_month)):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Выпуск за {feed_window.month_label(issue_month)} в архиве: "
+                "его можно смотреть и выгружать, но не менять."
+            ),
+        )
+
+
 @app.post("/api/monthly-digests")
 def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    _refuse_archived_issue(payload.month)
     return _clean(
         save_digest_draft(
             month=payload.month,
@@ -1165,6 +1241,7 @@ def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user))
 
 @app.put("/api/monthly-digests/{month}")
 def update_monthly_digest(month: str, payload: MonthlyDigestUpdateRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    _refuse_archived_issue(month)
     saved = repository.save_monthly_digest(
         month=month,
         title=payload.title or f"Нефтесервисный дайджест · {month}",

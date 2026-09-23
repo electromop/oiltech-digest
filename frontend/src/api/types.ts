@@ -148,6 +148,29 @@ export type DashboardStats = {
   sources: number;
   // Счётчики по статусам — по ВСЕЙ базе (а не по загруженной странице), пер-юзерно.
   status_counts?: Record<Article["status"], number>;
+  // Окно месяца, по которому посчитаны счётчики (и отдана лента).
+  window?: FeedWindowInfo;
+};
+
+// Окно месяца ленты (ADR 0001, п. 6): открытые месяцы «ГГГГ-ММ»; month — запрошенный
+// месяц; read_only — это архив прошлого месяца, только просмотр.
+export type FeedWindowInfo = {
+  months: string[];
+  month: string | null;
+  read_only: boolean;
+  rollover_day: number;
+};
+
+// Прошлый месяц для переключателя «Архив»: статей в месяце и сколько из них выбрано
+// «в дайджест» текущим пользователем (по нему конструктор выпуска строит архив выпусков).
+export type ArchiveMonth = {
+  month: string;
+  articles: number;
+  digest: number;
+};
+
+export type FeedWindowPayload = FeedWindowInfo & {
+  archive: ArchiveMonth[];
 };
 
 export type BacklogTaskStatus = "new" | "in_progress" | "done" | "paused" | "rejected";
@@ -476,6 +499,9 @@ export type ManualArticleImportResult = {
 export type AuthResponse = {
   ok: boolean;
   user: User;
+  // Архивные модули, включённые флагом ARCHIVED_MODULES на сервере (по умолчанию пусто):
+  // только их экраны показываются в меню и открываются по ссылке.
+  archived_modules?: string[];
 };
 
 // --- Месячная статистика платформы (раздел «Статистика», admin-only) ---

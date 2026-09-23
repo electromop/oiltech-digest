@@ -68,9 +68,14 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Архивный модуль «Трекер задач» (утверждён владельцем 23.09): в профиле `archive`,
+  # поэтому голый `compose up` его не поднимает. Вернуть:
+  # `docker compose --profile archive up -d --no-deps tasks` — флаг модуля у сервиса уже есть.
   tasks:
     build: .
     container_name: oiltech_tasks
+    profiles:
+      - archive
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -81,6 +86,7 @@ services:
       PYTHONUNBUFFERED: "1"
       BACKGROUND_JOB_INLINE: "0"
       TASKS_APP_MODE: "1"
+      ARCHIVED_MODULES: backlog
       DIGEST_BRANDING_PATH: /app/branding/digest_branding.json
     dns:
       - 1.1.1.1
@@ -196,8 +202,13 @@ services:
       - documents:/data/documents
     restart: unless-stopped
 
+  # Архивный модуль «Справка /help» (утверждён владельцем 23.09): 0 открытий страниц с
+  # 13.09 по логу mkdocs, ссылок из интерфейса нет. Вернуть: этот сервис с профилем
+  # `archive` и блок /help* в Caddyfile (там он оставлен комментарием).
   docs:
     image: squidfunk/mkdocs-material:9
+    profiles:
+      - archive
     container_name: oiltech_docs
     restart: unless-stopped
     ports:
@@ -239,7 +250,6 @@ services:
     restart: unless-stopped
     depends_on:
       - app
-      - docs
     ports:
       - "80:80"
       - "443:443"

@@ -1,6 +1,17 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api
+from oiltech_digest import api, feed_window
+
+
+def _freeze_inside_month(monkeypatch, month: str) -> None:
+    """Часы — середина месяца `month`: выпуск этого месяца открыт для правки.
+
+    С 23.09 черновик выпуска прошлого месяца не сохраняется (архив — только просмотр).
+    Тесты ниже проверяют само сохранение и писались, когда их месяц был текущим."""
+    year, number = (int(part) for part in month.split("-"))
+    monkeypatch.setattr(feed_window, "_now", lambda: datetime(year, number, 15, 12, 0, tzinfo=feed_window.MSK))
 
 
 class FakeCursor:
@@ -213,6 +224,7 @@ def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
 
 
 def test_create_monthly_digest_endpoint(monkeypatch):
+    _freeze_inside_month(monkeypatch, "2026-05")
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
@@ -291,6 +303,7 @@ def test_digest_content_endpoint_passes_filters(monkeypatch):
 
 
 def test_update_monthly_digest_endpoint(monkeypatch):
+    _freeze_inside_month(monkeypatch, "2026-06")
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
@@ -368,6 +381,7 @@ def test_get_monthly_digest_endpoint_scopes_to_user(monkeypatch):
 
 
 def test_update_monthly_digest_endpoint_allows_empty_issue(monkeypatch):
+    _freeze_inside_month(monkeypatch, "2026-07")
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
