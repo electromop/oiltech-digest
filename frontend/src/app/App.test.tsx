@@ -902,6 +902,32 @@ describe("App smoke", () => {
     expect(requested.some((url) => url.includes("status=digest") && url.includes("month=2026-08"))).toBe(true);
   });
 
+  it("конструктор перечитывает выбранное, когда окно сменилось в открытой вкладке", async () => {
+    let months = ["2026-09"];
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/feed-window") {
+        return Promise.resolve(jsonResponse({ months, month: null, read_only: false, rollover_day: 5, archive: [] }));
+      }
+      return baseImpl!(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
+    await screen.findByDisplayValue("Все месяцы");
+    const digestListCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === "/api/articles?limit=5000&status=digest").length;
+    await waitFor(() => expect(digestListCalls()).toBe(1));
+
+    // Наступило 5-е, человек вернулся на вкладку: окно другое — список выбранного перечитан.
+    months = ["2026-10"];
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(digestListCalls()).toBe(2));
+  });
+
   it("imports article by direct url from admin sources page", async () => {
     window.history.replaceState(null, "", "/?screen=sources");
 

@@ -335,6 +335,34 @@ def test_issue_skips_article_pending_deletion(feed):
     assert aug not in issue()
 
 
+def test_saved_issue_export_follows_the_same_visibility(feed):
+    """Решение владельца 23.09 «одно правило везде»: выгрузка сохранённого выпуска = то, что
+    видно в конструкторе. До этого черновик выгружался мимо правил ленты — статья, которую
+    перепроверка потом пометила на удаление, оставалась в PDF (на проде: август — 1 из 7,
+    июль — 2 из 5). То же с перепечаткой."""
+    from oiltech_digest.processing import digest as digest_module
+
+    ids = feed["ids"]
+    repository.save_monthly_digest(
+        month="2026-08", title="Август", status="draft", user_id=feed["user"],
+        items=[{"article_id": ids["aug"]}, {"article_id": ids["aug_late"]}, {"article_id": ids["aug_nopub"]}],
+    )
+
+    def exported() -> list[int]:
+        content = digest_module.build_digest_content(month="2026-08", limit=50, min_score=0, user_id=feed["user"])
+        return [item["article_id"] for item in content["news"]]
+
+    assert exported() == [ids["aug"], ids["aug_late"], ids["aug_nopub"]]
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (ids["aug"],))
+        conn.execute(
+            "INSERT INTO article_reprints (article_id, primary_id) VALUES (%s, %s)",
+            (ids["aug_nopub"], ids["aug_late"]),
+        )
+        conn.commit()
+    assert exported() == [ids["aug_late"]]
+
+
 def test_feed_window_endpoint_lists_archive_months_with_counts(feed, monkeypatch):
     with connection.get_connection() as conn:
         conn.execute(
