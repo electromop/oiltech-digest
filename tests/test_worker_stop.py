@@ -289,12 +289,24 @@ def _core(monkeypatch) -> TestClient:
 
 
 def _claim(core: TestClient) -> dict:
-    response = core.post("/api/external-worker/claim", headers=AUTH,
-                         json={"worker_id": "nl-ai-1", "queues": ["external-ai"], "capabilities": ["openai"]})
-    assert response.status_code == 200
-    job = response.json()["job"]
-    assert job is not None
-    return job
+    # Повтор до 2 с: часы ВМ colima спешат и раз в минуту подводятся назад (~200 мс), и
+    # только что поставленная задача на этот миг «из будущего» (run_after > now() базы).
+    # Поймано 23.09: 2 прогона из 25, оба ровно через 60 с друг от друга. Продукт это не
+    # задевает — на проде часы подтягиваются плавно, худшее — задача готова на миг позже.
+    deadline = time.monotonic() + 2.0
+    while True:
+        response = core.post("/api/external-worker/claim", headers=AUTH,
+                             json={"worker_id": "nl-ai-1", "queues": ["external-ai"], "capabilities": ["openai"]})
+        assert response.status_code == 200
+        job = response.json()["job"]
+        if job is not None:
+            return job
+        if time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+    with connection.get_connection() as conn:
+        state = conn.execute("SELECT id, status, run_after, now(), run_after <= now() FROM background_jobs").fetchall()
+    raise AssertionError(f"ядро не выдало задачу; задачи (id, статус, run_after, now, готова): {state}")
 
 
 def _release(core: TestClient, job: dict, result=None):
@@ -330,9 +342,9 @@ def test_release_puts_job_back_at_once_without_spending_attempt(isolated_db, mon
     assert stored["attempts"] == 0  # остановку устроили мы, попытка задачи не списана
     assert stored["lease_token_hash"] is None and stored["claimed_by"] is None
     with connection.get_connection() as conn:  # часы базы, а не Mac: выдача сверяет run_after с now() базы
-        ready = conn.execute("SELECT run_after <= now() FROM background_jobs WHERE id = %s",
+        ready = conn.execute("SELECT run_after <= now() + interval '1 second' FROM background_jobs WHERE id = %s",
                              (int(created["id"]),)).fetchone()[0]
-    assert ready  # в очереди сразу, а не через 600 с
+    assert ready  # в очереди сразу, а не через 600 с (секунда — на подводку часов ВМ, см. _claim)
     assert "reserved_article_ids" not in stored["payload_json"]  # статьи не держатся за ушедшим
 
 
