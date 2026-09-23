@@ -96,6 +96,10 @@ EXTERNAL_WORKER_CAPABILITIES = [
     if item.strip()
 ]
 EXTERNAL_WORKER_POLL_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_SECONDS", "3"))
+# Пустая очередь — пауза растёт от EXTERNAL_WORKER_POLL_SECONDS вдвое до этого потолка и
+# сбрасывается на первой задаче. 21.09 при постоянных 3 с шесть потоков NL слали ядру
+# 582 claim за 5 мин простоя; с потолком 30 с — около 60, новая задача ждёт не дольше 30 с.
+EXTERNAL_WORKER_POLL_MAX_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_MAX_SECONDS", "30"))
 # Потоков выдачи в одном процессе воркера: полоса сбора запросом — I/O, ей хватает
 # потоков (http_client потокобезопасен: пауза на хост под замком, сессия на поток).
 # Браузер и ИИ — по одному.

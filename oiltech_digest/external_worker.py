@@ -70,6 +70,7 @@ def run_loop(
 
 def _claim_loop(client: "ExternalWorkerClient", sleep_seconds: float, *, once: bool = False) -> None:
     failures = 0
+    idle = sleep_seconds
     while not _halted():
         try:
             job = client.claim()
@@ -84,8 +85,12 @@ def _claim_loop(client: "ExternalWorkerClient", sleep_seconds: float, *, once: b
         if job is None:
             if once:
                 return
-            _pause(sleep_seconds)
+            _pause(idle)
+            # Пусто — следующий вопрос реже: 3 → 6 → … → 30 с, на первой задаче снова 3.
+            # 21.09 постоянные 3 с на шести потоках NL давали 582 claim за 5 мин простоя.
+            idle = min(idle * 2, max(sleep_seconds, config.EXTERNAL_WORKER_POLL_MAX_SECONDS))
             continue
+        idle = sleep_seconds
         if _STOPPING.is_set():
             # Задачу выдали в тот момент, когда пришёл сигнал: не начинаем, а сразу отдаём.
             _release(client, job, "остановка воркера: задача выдана в момент остановки")
