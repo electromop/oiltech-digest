@@ -335,6 +335,23 @@ def test_issue_skips_article_pending_deletion(feed):
     assert aug not in issue()
 
 
+def test_issue_with_article_without_publication_date_does_not_crash(feed):
+    """С 12.09 (3b2a880) сборщик выпуска сортировал общий список через
+    `datetime.min.replace(tzinfo=timezone.utc)`, а `timezone` в repository.py не был
+    импортирован: статья без даты публикации в выборе «в дайджест» роняла превью и выгрузку
+    NameError'ом. Режим «Все месяцы» — первый, что открывает конструктор; найдено сверкой
+    на проде 23.09 (в сентябре 815 статей без даты публикации)."""
+    ids = feed["ids"]
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest'), (%s, %s, 'digest')",
+            (feed["user"], ids["aug_nopub"], feed["user"], ids["aug"]),
+        )
+        conn.commit()
+    rows = repository.digest_candidates(month=None, limit=50, min_score=0, user_id=feed["user"])
+    assert {row["id"] for row in rows} == {ids["aug_nopub"], ids["aug"]}
+
+
 def test_saved_issue_export_follows_the_same_visibility(feed):
     """Решение владельца 23.09 «одно правило везде»: выгрузка сохранённого выпуска = то, что
     видно в конструкторе. До этого черновик выгружался мимо правил ленты — статья, которую
