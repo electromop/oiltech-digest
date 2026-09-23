@@ -63,6 +63,16 @@ class LeaseLost(RuntimeError):
     """
 
 
+class StopRequested(LeaseLost):
+    """Воркер останавливается (SIGTERM при выкате NL) и возвращает задачу ядру сам.
+
+    Подкласс LeaseLost намеренно: каждый цикл обработчика уже выпускает LeaseLost наружу,
+    а прочие сбои heartbeat глотает. Цикл, который про остановку не знает, так всё равно
+    прервётся, а не продолжит работу, которую никто не примет. Циклы ИИ-пакетов ловят его
+    раньше LeaseLost и отдают сделанное с пометкой partial — оплаченное не пропадает.
+    """
+
+
 def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | None = None) -> dict[str, Any]:
     """Run the AI pipeline without direct database access.
 
@@ -90,6 +100,10 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[[], None] | Non
         if heartbeat is not None:
             try:
                 heartbeat()
+            except StopRequested:
+                # Воркер останавливается: сделанное уходит ядру, остальное вернётся в очередь.
+                result["partial"] = True
+                break
             except LeaseLost:
                 # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
                 # работать дальше = платить за результат, который core не примет.
@@ -198,6 +212,9 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[[], Non
         if heartbeat is not None:
             try:
                 heartbeat()
+            except StopRequested:
+                result["partial"] = True
+                break
             except LeaseLost:
                 # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
                 # работать дальше = платить за результат, который core не примет.
@@ -301,6 +318,9 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[[], N
         if heartbeat is not None:
             try:
                 heartbeat()
+            except StopRequested:
+                result["partial"] = True
+                break
             except LeaseLost:
                 # Единственный сбой heartbeat, который ОБЯЗАН прервать батч:
                 # работать дальше = платить за результат, который core не примет.
@@ -501,9 +521,14 @@ def process_reprint_review_payload(payload: dict[str, Any],
 
     client = make_client()
     verdicts: list[dict[str, Any]] = []
+    partial = False
     for pair in payload.get("pairs") or []:
         if heartbeat:
-            heartbeat()
+            try:
+                heartbeat()
+            except StopRequested:
+                partial = True
+                break
         left, right = pair["a"], pair["b"]
         try:
             response = judge_pair(left, right, client)
@@ -523,6 +548,7 @@ def process_reprint_review_payload(payload: dict[str, Any],
         "reprint_review": True,
         "kind": "reprint_review",
         "dry_run": bool(payload.get("dry_run")),
+        **({"partial": True} if partial else {}),
         "verdicts": verdicts,
         "stats": {
             "checked": len(verdicts),

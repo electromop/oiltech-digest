@@ -2752,6 +2752,38 @@ def release_external_background_job_finalize(job_id: int, *, lease_token_hash: s
         return bool(cur.rowcount)
 
 
+def requeue_released_external_job(job_id: int, *, lease_token_hash: str, payload: dict, note: str) -> bool:
+    """Воркер вернул задачу сам (мягкая остановка на выкате NL): сразу в очередь.
+
+    Попытка не списывается — остановку устроили мы, а не задача; иначе три выката подряд
+    похоронили бы здоровую задачу. payload — то, что осталось сделать (contract.
+    remaining_after_partial): сделанная часть уже записана и вычтена, резерв статей снят.
+    Ждёт задачу в 'finalizing' — ядро застолбило её на время записи частичного итога."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'queued',
+                progress = 0,
+                attempts = GREATEST(attempts - 1, 0),
+                run_after = now(),
+                started_at = NULL,
+                claimed_by = NULL,
+                lease_token_hash = NULL,
+                lease_expires_at = NULL,
+                payload_json = %s,
+                error_message = %s
+            WHERE id = %s
+              AND execution_region = 'external'
+              AND status = 'finalizing'
+              AND lease_token_hash = %s
+            """,
+            (Json(_jsonable(payload)), note, job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
 def finish_external_background_job(job_id: int, *, lease_token_hash: str, result: dict | None = None) -> bool:
     with get_connection() as conn:
         cur = conn.execute(

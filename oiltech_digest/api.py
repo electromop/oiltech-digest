@@ -27,7 +27,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import lanes, network_policy
+from oiltech_digest import contract, lanes, network_policy
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -255,6 +255,11 @@ class ExternalWorkerFailRequest(ExternalWorkerLeaseRequest):
     error: str
     retryable: bool = True
     retry_after_seconds: int | None = None
+
+
+class ExternalWorkerReleaseRequest(ExternalWorkerLeaseRequest):
+    reason: str = ""
+    result: dict[str, Any] | None = None
 
 
 class DigestSocialIn(BaseModel):
@@ -1373,32 +1378,7 @@ def external_worker_complete(
     if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
         raise HTTPException(status_code=409, detail="Job lease is not active")
     try:
-        if job.get("kind") == "process_articles" and result.get("external_ai"):
-            result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id)}
-        if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
-            # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи —
-            # это колонки таблицы (schema.sql:304). Ключа "payload" в строке НЕТ, и чтение его
-            # молча давало {} → mark/dry_run/force всегда False → recheck удалял статьи ФИЗИЧЕСКИ
-            # вопреки запрошенному мягкому режиму (баг T3, так уже потеряли ~2000 статей).
-            job_payload = job.get("payload_json") or {}
-            force = bool(job_payload.get("force", False))
-            dry_run = bool(job_payload.get("dry_run", False))
-            mark = bool(job_payload.get("mark", False))
-            result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark, job_id=job_id)}
-        if job.get("kind") == "translate_titles" and result.get("translate_titles"):
-            result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
-        if job.get("kind") == "process_document" and result.get("process_document"):
-            applied = documents_external.apply_document_result(result, job_id=job_id)
-            # Конверт ЗАМЕНЯЕТСЯ вычищенным, а не дополняется: result_json уходит клиенту
-            # через /api/jobs, и админ читает задачи любого пользователя. Карточка и факты
-            # уже применены в таблицы документов, где проверяется владелец.
-            result = {**documents_external.scrub_result(result), "applied": applied}
-        if job.get("kind") == "scrape_source" and result.get("external_fetch"):
-            result = {**result, "applied": external_fetch.apply_scrape_result(result)}
-        if job.get("kind") == "reprint_review" and result.get("reprint_review"):
-            result = {**result, "applied": external_ai.apply_reprint_review_result(result, job_id=job_id)}
-        if job.get("kind") == "refetch_text" and result.get("kind") == "refetch_text":
-            result = {**result, "applied": external_fetch.apply_refetch_text_result(result)}
+        result = _apply_external_result(job, result, job_id)
     except Exception:
         # apply упал — снять 'finalizing', чтобы задача не залипла (вернётся в очередь по лизу/stale)
         repository.release_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash)
@@ -1411,6 +1391,81 @@ def external_worker_complete(
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
     return {"ok": True}
+
+
+def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Записать итог внешней задачи в базу ядра — полный (complete) или частичный (release)."""
+    if job.get("kind") == "process_articles" and result.get("external_ai"):
+        result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id)}
+    if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
+        # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи —
+        # это колонки таблицы (schema.sql:304). Ключа "payload" в строке НЕТ, и чтение его
+        # молча давало {} → mark/dry_run/force всегда False → recheck удалял статьи ФИЗИЧЕСКИ
+        # вопреки запрошенному мягкому режиму (баг T3, так уже потеряли ~2000 статей).
+        job_payload = job.get("payload_json") or {}
+        force = bool(job_payload.get("force", False))
+        dry_run = bool(job_payload.get("dry_run", False))
+        mark = bool(job_payload.get("mark", False))
+        result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark, job_id=job_id)}
+    if job.get("kind") == "translate_titles" and result.get("translate_titles"):
+        result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
+    if job.get("kind") == "process_document" and result.get("process_document"):
+        applied = documents_external.apply_document_result(result, job_id=job_id)
+        # Конверт ЗАМЕНЯЕТСЯ вычищенным, а не дополняется: result_json уходит клиенту
+        # через /api/jobs, и админ читает задачи любого пользователя. Карточка и факты
+        # уже применены в таблицы документов, где проверяется владелец.
+        result = {**documents_external.scrub_result(result), "applied": applied}
+    if job.get("kind") == "scrape_source" and result.get("external_fetch"):
+        result = {**result, "applied": external_fetch.apply_scrape_result(result)}
+    if job.get("kind") == "reprint_review" and result.get("reprint_review"):
+        result = {**result, "applied": external_ai.apply_reprint_review_result(result, job_id=job_id)}
+    if job.get("kind") == "refetch_text" and result.get("kind") == "refetch_text":
+        result = {**result, "applied": external_fetch.apply_refetch_text_result(result)}
+    return result
+
+
+@app.post("/api/external-worker/jobs/{job_id}/release")
+def external_worker_release(
+    job_id: int,
+    payload: ExternalWorkerReleaseRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    """Воркер останавливается (выкат NL) и возвращает задачу сам, не дожидаясь конца аренды.
+
+    Сделанная часть пакета записывается, как при complete, и вычитается из задачи — при
+    следующей выдаче модель не зовётся за уже оплаченное (contract.remaining_after_partial).
+    Задача сразу в очереди, попытка не списывается."""
+    job = repository.get_background_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    lease_token_hash = _sha256_hex(payload.lease_token)
+    # Застолбить, как complete: пока пишется частичный итог, реапер аренд её не переотдаст.
+    if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    original = dict(job.get("payload_json") or {})
+    partial = payload.result if contract.accepts_partial(job.get("kind"), payload.result) else None
+    reason = (payload.reason or "остановка воркера").strip()[:300]
+    try:
+        applied = _apply_external_result(job, partial, job_id) if partial else None
+    except Exception:
+        # Итог не лёг — вернуть задачу сразу и целиком: воркер уходит, ждать аренду незачем.
+        repository.requeue_released_external_job(
+            job_id, lease_token_hash=lease_token_hash, payload=contract.without_reservation(original),
+            note=f"Возвращена воркером ({reason}); частичный итог не записан",
+        )
+        raise
+    remaining = contract.remaining_after_partial(job.get("kind"), original, partial)
+    if remaining is None:
+        ok = repository.finish_external_background_job(job_id, lease_token_hash=lease_token_hash, result=applied)
+    else:
+        done = len((partial or {}).get("articles") or (partial or {}).get("verdicts") or [])
+        ok = repository.requeue_released_external_job(
+            job_id, lease_token_hash=lease_token_hash, payload=remaining,
+            note=f"Возвращена воркером ({reason}); сделано до остановки: {done}",
+        )
+    if not ok:
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    return {"ok": True, "requeued": remaining is not None}
 
 
 @app.post("/api/external-worker/jobs/{job_id}/fail")

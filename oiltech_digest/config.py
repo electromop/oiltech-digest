@@ -101,6 +101,14 @@ EXTERNAL_WORKER_HEARTBEAT_SECONDS = float(os.environ.get("EXTERNAL_WORKER_HEARTB
 # Сколько задача может не подавать признаков продвижения, если для её вида нет своего
 # предела (external_worker._JOB_STALL_SECONDS). Не общее время: большая пачка идёт долго.
 EXTERNAL_JOB_MAX_SECONDS = int(os.environ.get("EXTERNAL_JOB_MAX_SECONDS", "1200"))
+# Мягкая остановка воркера (SIGTERM при выкате NL): столько секунд задачам в работе на то,
+# чтобы закончить. Дальше обработчик останавливается на ближайшем шаге (статья, страница,
+# кусок документа) и возвращает задачу ядру с тем, что успел.
+EXTERNAL_WORKER_STOP_GRACE_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_GRACE_SECONDS", "30"))
+# Сколько ещё ждать, пока шаг дойдёт до границы: не дошёл (висит в вызове модели) —
+# задачу возвращает сам процесс, без частичного итога. stop_grace_period контейнеров в
+# docker-compose.external-worker.yml обязан покрывать оба срока с запасом на запросы к ядру.
+EXTERNAL_WORKER_STOP_STEP_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_STEP_SECONDS", "60"))
 
 # --- Прокси для парсинга (residential, напр. 2captcha) ---
 # PROXY_URL — полная строка подключения: "http://user:pass@host:port"

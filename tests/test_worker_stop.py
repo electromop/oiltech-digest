@@ -1,0 +1,421 @@
+"""Мягкая остановка воркера (сессия C, п. 1): SIGTERM при выкате NL.
+
+До правки обработчика SIGTERM не было: пересборка NL обрывала задачи в работе, они
+висели до конца аренды (600 с), а оплаченная часть ИИ-пакета выбрасывалась и
+оплачивалась заново. Теперь задачам даётся срок закончить, остальные возвращаются
+ядру сразу (release) — с тем, что успели сделать.
+
+Каждый тест падает на коде до правки."""
+
+import os
+import signal
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+import yaml
+from fastapi.testclient import TestClient
+
+from oiltech_digest import api, external_worker
+from oiltech_digest.db import connection, repository
+from oiltech_digest.processing import external_ai
+from oiltech_digest.processing.openai_client import OfflineAIClient
+
+AUTH = {"Authorization": "Bearer secret"}
+NOW = datetime(2026, 9, 23, 9, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_stop_state(monkeypatch):
+    monkeypatch.setattr(external_worker, "_STOPPING", threading.Event())
+    monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
+    monkeypatch.setattr(external_worker, "_STOP_AT", None)
+    monkeypatch.setattr(external_worker, "_JOBS", {})
+
+
+# --- Воркер: остановка без базы ------------------------------------------------------------
+
+
+class _Client:
+    """Воркер глазами ядра: что он прислал и в каком порядке."""
+
+    def __init__(self, jobs=None, *, on_claim=None):
+        self.worker_id = "nl-test"
+        self.jobs = list(jobs or [])
+        self.on_claim = on_claim
+        self.claims = 0
+        self.calls: list[tuple] = []
+        self.lock = threading.Lock()
+
+    def fork(self):
+        return self
+
+    def claim(self):
+        self.claims += 1
+        if self.on_claim:
+            self.on_claim()
+        return self.jobs.pop(0) if self.jobs else None
+
+    def heartbeat(self, job):
+        pass
+
+    def progress(self, job, progress):
+        pass
+
+    def complete(self, job, result):
+        with self.lock:
+            self.calls.append(("complete", job["id"], result))
+
+    def fail(self, job, error, *, retryable=True, retry_after_seconds=300):
+        with self.lock:
+            self.calls.append(("fail", job["id"], error))
+
+    def release(self, job, *, reason, result=None):
+        with self.lock:
+            self.calls.append(("release", job["id"], result))
+
+    def kinds(self):
+        return [call[0] for call in self.calls]
+
+
+def _job(job_id=7, kind="process_articles"):
+    return {"id": job_id, "kind": kind, "lease_token": "t", "payload": {}}
+
+
+def _stepping_handler(steps: list, *, step_seconds=0.02, total=200):
+    """Обработчик по договору циклов ИИ: heartbeat перед каждой статьёй, на остановке —
+    сделанное с пометкой partial."""
+
+    def handler(payload, heartbeat=None):
+        done = []
+        for index in range(total):
+            try:
+                heartbeat()
+            except external_ai.StopRequested:
+                return {"partial": True, "articles": done}
+            done.append({"article_id": index})
+            steps.append(index)
+            time.sleep(step_seconds)
+        return {"articles": done}
+
+    return handler
+
+
+def test_stop_request_ends_claiming_without_new_jobs(monkeypatch):
+    client = _Client(on_claim=lambda: external_worker.request_stop("test"))
+
+    external_worker._claim_loop(client, 0.0)
+
+    assert client.claims == 1  # после остановки выдачу больше не просим
+
+
+def test_job_handed_out_at_the_moment_of_stop_goes_back_untouched(monkeypatch):
+    started = []
+    monkeypatch.setattr(external_ai, "process_payload", lambda payload, heartbeat=None: started.append(1) or {})
+    client = _Client([_job(11)], on_claim=lambda: external_worker.request_stop("test"))
+
+    external_worker._claim_loop(client, 0.0)
+
+    assert started == []
+    assert client.kinds() == ["release"] and client.calls[0][2] is None
+
+
+def test_job_finishing_within_grace_completes_normally(monkeypatch):
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 5.0)
+    steps: list = []
+    monkeypatch.setattr(external_ai, "process_payload", _stepping_handler(steps, total=10))
+    client = _Client()
+    worker = threading.Thread(target=external_worker._handle_job, args=(client, _job()))
+
+    worker.start()
+    time.sleep(0.05)
+    external_worker.request_stop("test")
+    worker.join(5)
+
+    assert len(steps) == 10
+    assert client.kinds() == ["complete"]
+
+
+def test_after_grace_batch_stops_at_next_step_and_hands_back_done_part(monkeypatch):
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.05)
+    steps: list = []
+    monkeypatch.setattr(external_ai, "process_payload", _stepping_handler(steps))
+    client = _Client()
+    worker = threading.Thread(target=external_worker._handle_job, args=(client, _job()))
+
+    worker.start()
+    time.sleep(0.1)
+    external_worker.request_stop("test")
+    worker.join(5)
+
+    assert 0 < len(steps) < 200
+    assert client.kinds() == ["release"]
+    released = client.calls[0][2]
+    assert released["partial"] is True
+    assert [item["article_id"] for item in released["articles"]] == steps  # всё сделанное — ядру
+
+
+def test_handler_that_ignores_stop_still_returns_job_without_result(monkeypatch):
+    """Сбор и документ частичный итог не отдают: остановка обрывает их, задача — в очередь целиком."""
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.0)
+
+    def fetch_handler(payload, heartbeat=None):
+        for _ in range(100):
+            heartbeat()  # как в сборе: без try — остановка уходит наружу
+            time.sleep(0.01)
+        return {"articles": []}
+
+    monkeypatch.setattr(external_worker.external_fetch, "process_payload", fetch_handler)
+    client = _Client()
+    external_worker.request_stop("test")
+
+    external_worker._handle_job(client, _job(kind="scrape_source"))
+
+    assert client.kinds() == ["release"] and client.calls[0][2] is None
+
+
+def test_supervisor_returns_job_whose_step_never_ends(monkeypatch):
+    """Шаг висит в вызове модели и до границы не доходит — процесс возвращает задачу сам,
+    иначе она ждала бы конца аренды, а Docker убил бы процесс по stop_grace_period."""
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_STOP_STEP_SECONDS", 0.1)
+    unblock = threading.Event()
+    monkeypatch.setattr(external_ai, "process_payload", lambda payload, heartbeat=None: unblock.wait(5) or {})
+    client = _Client()
+    worker = threading.Thread(target=external_worker._handle_job, args=(client, _job(21)), daemon=True)
+    worker.start()
+    time.sleep(0.05)
+
+    external_worker.request_stop("test")
+    started = time.monotonic()
+    external_worker._supervise([worker])
+    elapsed = time.monotonic() - started
+    unblock.set()
+    worker.join(2)
+
+    assert ("release", 21, None) in client.calls
+    assert elapsed < 2.0
+
+
+def test_sigterm_reaches_worker_loop_and_restores_previous_handler(monkeypatch):
+    """Настоящий сигнал, а не вызов функции: так останавливает контейнер Docker."""
+
+    class Fake(_Client):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.worker_id = kwargs["worker_id"]
+
+        def claim(self):
+            self.claims += 1
+            if self.claims > 500:  # страховка: без обработчика цикл не кончился бы никогда
+                raise KeyboardInterrupt
+            return None
+
+    monkeypatch.setattr(external_worker, "ExternalWorkerClient", Fake)
+    fired = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: fired.append(signum))
+    try:
+        timer = threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGTERM))
+        timer.start()
+        started = time.monotonic()
+        external_worker.run_loop(core_api_url="https://core.example", token="t", worker_id="nl-ai-1",
+                                 queues=["external-ai"], capabilities=["openai"], poll_seconds=0.01)
+        elapsed = time.monotonic() - started
+        timer.join()
+        assert external_worker._STOPPING.is_set()
+        assert fired == []  # сигнал принял воркер, а не прежний обработчик
+        assert elapsed < 3.0
+        assert signal.getsignal(signal.SIGTERM) is not external_worker._on_stop_signal
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_compose_gives_workers_time_to_hand_jobs_back():
+    """stop_grace_period — под срок остановки: иначе Docker убьёт процесс до release,
+    и задача снова будет ждать конца аренды."""
+    compose = Path(__file__).resolve().parents[1] / "docker-compose.external-worker.yml"
+    services = yaml.safe_load(compose.read_text())["services"]
+    need = (external_worker.config.EXTERNAL_WORKER_STOP_GRACE_SECONDS
+            + external_worker.config.EXTERNAL_WORKER_STOP_STEP_SECONDS
+            + external_worker._REPORT_SECONDS + 5)
+
+    for name, service in services.items():
+        grace = str(service.get("stop_grace_period") or "10s")
+        assert grace.endswith("s"), name
+        assert float(grace[:-1]) >= need, f"{name}: stop_grace_period {grace} < {need} с"
+
+
+# --- Ядро: приём возвращённой задачи -------------------------------------------------------
+
+
+class _CountingAI(OfflineAIClient):
+    """Офлайн-модель со счётчиком: по заголовку видно, за какую статью платили бы."""
+
+    def __init__(self, calls: list):
+        self.calls = calls
+
+    def complete_json(self, instructions, user_input, schema, **kwargs):
+        if schema["name"] == "article_relevance":
+            self.calls.append(next(line for line in user_input.splitlines() if "Статья" in line))
+        return super().complete_json(instructions, user_input, schema, **kwargs)
+
+
+def _seed(count: int) -> list[int]:
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Stop Source', 'News', 'https://stop.example', TRUE, 'request') RETURNING id"
+        ).fetchone()[0]
+        conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Бурение', TRUE, 1)")
+        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Значимость', 100, TRUE, 1)")
+        conn.commit()
+    for index in range(count):
+        repository.insert_article({
+            "source_id": source_id, "title": f"Статья {index}", "url": f"https://stop.example/{index}",
+            "published_at": NOW - timedelta(hours=index), "raw_text": f"Статья {index}: бурение и контракт. " * 12,
+            "text_truncated": False, "language": "ru", "content_hash": f"stop-{index}",
+        })
+    with connection.get_connection() as conn:
+        ids = [int(row[0]) for row in conn.execute("SELECT id FROM articles ORDER BY published_at DESC").fetchall()]
+    assert len(ids) == count  # иначе проверка прошла бы вхолостую на одной статье
+    return ids
+
+
+def _core(monkeypatch) -> TestClient:
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    return TestClient(api.app)
+
+
+def _claim(core: TestClient) -> dict:
+    response = core.post("/api/external-worker/claim", headers=AUTH,
+                         json={"worker_id": "nl-ai-1", "queues": ["external-ai"], "capabilities": ["openai"]})
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job is not None
+    return job
+
+
+def _release(core: TestClient, job: dict, result=None):
+    return core.post(f"/api/external-worker/jobs/{job['id']}/release", headers=AUTH,
+                     json={"lease_token": job["lease_token"], "reason": "выкат NL", "result": result})
+
+
+def _stop_before(article_number: int):
+    """heartbeat, который останавливает пакет перед статьёй с этим номером (с 1)."""
+    beats = {"count": 0}
+
+    def heartbeat():
+        beats["count"] += 1
+        if beats["count"] >= article_number:
+            raise external_ai.StopRequested("остановка воркера")
+
+    return heartbeat
+
+
+def test_release_puts_job_back_at_once_without_spending_attempt(isolated_db, monkeypatch):
+    _seed(3)
+    created = repository.create_background_job("process_articles", {"limit": 3}, queue_name="external-ai",
+                                               execution_region="external", capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+    assert repository.get_background_job(job["id"])["payload_json"].get("reserved_article_ids")
+
+    response = _release(core, job)
+
+    assert response.status_code == 200
+    stored = repository.get_background_job(int(created["id"]))
+    assert stored["status"] == "queued"
+    assert stored["attempts"] == 0  # остановку устроили мы, попытка задачи не списана
+    assert stored["lease_token_hash"] is None and stored["claimed_by"] is None
+    with connection.get_connection() as conn:  # часы базы, а не Mac: выдача сверяет run_after с now() базы
+        ready = conn.execute("SELECT run_after <= now() FROM background_jobs WHERE id = %s",
+                             (int(created["id"]),)).fetchone()[0]
+    assert ready  # в очереди сразу, а не через 600 с
+    assert "reserved_article_ids" not in stored["payload_json"]  # статьи не держатся за ушедшим
+
+
+def test_partial_release_writes_done_articles_and_next_claim_skips_them(isolated_db, monkeypatch):
+    """Главная проверка пункта: оплаченная часть пакета не оплачивается второй раз."""
+    ids = _seed(3)
+    calls: list = []
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI(calls))
+    created = repository.create_background_job("process_articles", {"article_ids": ids, "limit": 3},
+                                               queue_name="external-ai", execution_region="external",
+                                               capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+
+    partial = external_ai.process_payload(job["payload"], heartbeat=_stop_before(3))
+    assert partial.get("partial") is True
+    assert [item["article_id"] for item in partial["articles"]] == ids[:2]
+    assert _release(core, job, partial).status_code == 200
+
+    stored = repository.get_background_job(int(created["id"]))
+    assert stored["status"] == "queued" and stored["attempts"] == 0
+    assert stored["payload_json"]["article_ids"] == ids[2:]
+    with connection.get_connection() as conn:
+        written = {int(row[0]) for row in conn.execute(
+            "SELECT article_id FROM article_cards WHERE relevant IS TRUE AND summary IS NOT NULL").fetchall()}
+        runs = conn.execute("SELECT COUNT(*) FROM ai_processing_runs WHERE job_id = %s AND stage = 'relevance'",
+                            (int(created["id"]),)).fetchone()[0]
+    assert written == set(ids[:2])
+    assert runs == 2  # расход сделанной части учтён
+
+    calls.clear()
+    again = _claim(core)
+    assert [article["id"] for article in again["payload"]["articles"]] == ids[2:]
+    external_ai.process_payload(again["payload"])
+    assert calls == ["title: Статья 2"]  # модель зовётся только за оставшуюся статью
+
+
+def test_partial_release_of_limit_batch_takes_only_unprocessed_articles(isolated_db, monkeypatch):
+    ids = _seed(5)
+    calls: list = []
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI(calls))
+    created = repository.create_background_job("process_articles", {"limit": 3}, queue_name="external-ai",
+                                               execution_region="external", capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+    assert [article["id"] for article in job["payload"]["articles"]] == ids[:3]
+
+    partial = external_ai.process_payload(job["payload"], heartbeat=_stop_before(2))
+    assert _release(core, job, partial).status_code == 200
+    assert repository.get_background_job(int(created["id"]))["payload_json"]["limit"] == 2  # всего 3, как заказано
+
+    calls.clear()
+    again = _claim(core)
+    assert [article["id"] for article in again["payload"]["articles"]] == ids[1:3]
+    assert "title: Статья 0" not in calls
+
+
+def test_release_with_all_work_done_finishes_job(isolated_db, monkeypatch):
+    ids = _seed(2)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
+    created = repository.create_background_job("process_articles", {"article_ids": ids}, queue_name="external-ai",
+                                               execution_region="external", capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+    done = external_ai.process_payload(job["payload"])
+    done["partial"] = True  # остановка пришла после последней статьи
+
+    assert _release(core, job, done).status_code == 200
+
+    stored = repository.get_background_job(int(created["id"]))
+    assert stored["status"] == "ok"
+    assert stored["result_json"]["applied"]["articles"] == 2
+
+
+def test_release_needs_the_live_lease(isolated_db, monkeypatch):
+    _seed(1)
+    repository.create_background_job("process_articles", {"limit": 1}, queue_name="external-ai",
+                                     execution_region="external", capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+
+    forged = core.post(f"/api/external-worker/jobs/{job['id']}/release", headers=AUTH,
+                       json={"lease_token": "чужой", "reason": "x"})
+
+    assert forged.status_code == 409
+    assert repository.get_background_job(job["id"])["status"] == "running"

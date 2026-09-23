@@ -7,6 +7,7 @@ from decimal import Decimal
 import json
 import logging
 import os
+import signal
 import threading
 import time
 from typing import Any, Callable
@@ -41,30 +42,35 @@ def run_loop(
     base_id = worker_id or config.EXTERNAL_WORKER_ID
     sleep_seconds = config.EXTERNAL_WORKER_POLL_SECONDS if poll_seconds is None else poll_seconds
     slots = max(1, int(config.EXTERNAL_WORKER_CONCURRENCY if concurrency is None else concurrency))
-    if slots == 1 or once:
-        _claim_loop(ExternalWorkerClient(worker_id=base_id, **settings), sleep_seconds, once=once)
+    if once:
+        _claim_loop(ExternalWorkerClient(worker_id=base_id, **settings), sleep_seconds, once=True)
         return
     # Потоки полосы: у каждого свой клиент (своя сессия requests) и своё имя в claimed_by —
     # по нему видно, какой поток держит задачу. Выдача под SKIP LOCKED: одну задачу
-    # два потока не получат.
+    # два потока не получат. Главный поток задач не берёт: он ждёт сигнала остановки и
+    # возвращает ядру то, что не успело закончиться (_supervise).
+    names = [base_id] if slots == 1 else [f"{base_id}#{slot}" for slot in range(1, slots + 1)]
     threads = [
         threading.Thread(
             target=_claim_loop,
-            args=(ExternalWorkerClient(worker_id=f"{base_id}#{slot}", **settings), sleep_seconds),
-            name=f"{base_id}#{slot}",
+            args=(ExternalWorkerClient(worker_id=name, **settings), sleep_seconds),
+            name=name,
             daemon=True,
         )
-        for slot in range(1, slots + 1)
+        for name in names
     ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    previous = _install_stop_signals()
+    try:
+        for thread in threads:
+            thread.start()
+        _supervise(threads)
+    finally:
+        _restore_signals(previous)
 
 
 def _claim_loop(client: "ExternalWorkerClient", sleep_seconds: float, *, once: bool = False) -> None:
     failures = 0
-    while not _DRAINING.is_set():
+    while not _halted():
         try:
             job = client.claim()
             failures = 0
@@ -73,17 +79,21 @@ def _claim_loop(client: "ExternalWorkerClient", sleep_seconds: float, *, once: b
                 raise
             failures += 1
             logger.warning("external_claim_failed worker=%s attempt=%s", client.worker_id, failures)
-            time.sleep(min(sleep_seconds * (2 ** min(failures, 5)), 60.0))
+            _pause(min(sleep_seconds * (2 ** min(failures, 5)), 60.0))
             continue
         if job is None:
             if once:
                 return
-            time.sleep(sleep_seconds)
+            _pause(sleep_seconds)
             continue
+        if _STOPPING.is_set():
+            # Задачу выдали в тот момент, когда пришёл сигнал: не начинаем, а сразу отдаём.
+            _release(client, job, "остановка воркера: задача выдана в момент остановки")
+            return
         _handle_job(client, job)
-        if _DRAINING.is_set():
-            # Процесс уходит на перезапуск из-за зависшей соседки: новых задач не берём,
-            # чтобы не оборвать их выходом.
+        if _halted():
+            # Процесс уходит (остановка или перезапуск из-за зависшей соседки): новых
+            # задач не берём, чтобы не оборвать их выходом.
             return
 
 
@@ -171,6 +181,22 @@ class ExternalWorkerClient:
         )
         response.raise_for_status()
 
+    def release(self, job: dict[str, Any], *, reason: str, result: dict[str, Any] | None = None) -> None:
+        """Вернуть задачу ядру на остановке: сразу в очередь, попытка не списывается.
+
+        result — сделанная часть пакета (partial): ядро запишет её и вычтет из задачи,
+        чтобы при следующей выдаче модель не звалась за уже оплаченное."""
+        response = self.session.post(
+            f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/release",
+            json={
+                "lease_token": job["lease_token"],
+                "reason": reason[:500],
+                "result": json_ready(result) if result else None,
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
@@ -241,6 +267,153 @@ def _exit_for_restart() -> None:
     # Зависший поток обработчика не прервать изнутри: выходим, Docker перезапускает
     # контейнер (restart: unless-stopped), задача уже возвращена в очередь.
     os._exit(70)
+
+
+# --- Мягкая остановка (SIGTERM при выкате NL) --------------------------------------------
+#
+# До 23.09 обработчика SIGTERM не было, а stop_grace_period — 10 с по умолчанию: каждая
+# пересборка NL обрывала задачи в работе, они ждали конца аренды (600 с), а оплаченная часть
+# ИИ-пакета оплачивалась заново. Теперь по сигналу процесс перестаёт брать задачи, текущим
+# даёт EXTERNAL_WORKER_STOP_GRACE_SECONDS на то, чтобы закончить, затем обработчик
+# останавливается на ближайшем шаге и отдаёт ядру сделанное (release). Шаг, который так и
+# не дошёл до границы за EXTERNAL_WORKER_STOP_STEP_SECONDS, главный поток возвращает сам.
+_STOPPING = threading.Event()
+_STOP_AT: float | None = None
+# Сколько главный поток ждёт отчёта, который уже в пути (complete/release/fail).
+_REPORT_SECONDS = 15.0
+
+
+def request_stop(reason: str = "") -> None:
+    """Остановить воркер мягко. Вызывается из обработчика сигнала — только флаг и время."""
+    global _STOP_AT
+    if _STOPPING.is_set():
+        return
+    _STOP_AT = time.monotonic()
+    _STOPPING.set()
+
+
+def _on_stop_signal(signum: int, frame: Any) -> None:
+    request_stop(f"signal {signum}")
+
+
+def _install_stop_signals() -> dict[int, Any]:
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    return {signum: signal.signal(signum, _on_stop_signal) for signum in (signal.SIGTERM, signal.SIGINT)}
+
+
+def _restore_signals(previous: dict[int, Any]) -> None:
+    for signum, handler in previous.items():
+        if handler is not None:
+            signal.signal(signum, handler)
+
+
+def _halted() -> bool:
+    return _DRAINING.is_set() or _STOPPING.is_set()
+
+
+def _pause(seconds: float) -> None:
+    """Пауза, которую прерывает остановка: простаивающий воркер уходит сразу, а не через 30 с."""
+    _STOPPING.wait(seconds)
+
+
+def _stop_due() -> bool:
+    """Срок на завершение вышел — обработчик останавливается на ближайшем шаге."""
+    return _STOPPING.is_set() and time.monotonic() >= (_STOP_AT or 0.0) + config.EXTERNAL_WORKER_STOP_GRACE_SECONDS
+
+
+class _InFlight:
+    """Задача в работе у процесса. Отчитаться о ней должен ровно один: поток обработчика
+    (complete/release/fail) или главный поток на остановке — иначе release главного потока
+    мог бы опередить уже готовый complete и выбросить оплаченный итог."""
+
+    __slots__ = ("client", "job", "state")
+
+    def __init__(self, client: "ExternalWorkerClient", job: dict[str, Any]) -> None:
+        self.client = client
+        self.job = job
+        self.state = "working"  # working → reporting (обработчик) | returned (главный поток)
+
+
+_JOBS: dict[int, _InFlight] = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _track(client: "ExternalWorkerClient", job: dict[str, Any]) -> None:
+    with _JOBS_LOCK:
+        _JOBS[int(job["id"])] = _InFlight(client, job)
+
+
+def _untrack(job: dict[str, Any]) -> None:
+    with _JOBS_LOCK:
+        _JOBS.pop(int(job["id"]), None)
+
+
+def _begin_report(job: dict[str, Any]) -> bool:
+    """Поток обработчика отчитывается сам — если задачу ещё не вернул главный поток."""
+    with _JOBS_LOCK:
+        entry = _JOBS.get(int(job["id"]))
+        if entry is None:
+            return True
+        if entry.state == "returned":
+            return False
+        entry.state = "reporting"
+        return True
+
+
+def _take_unfinished() -> list[_InFlight]:
+    with _JOBS_LOCK:
+        taken = [entry for entry in _JOBS.values() if entry.state == "working"]
+        for entry in taken:
+            entry.state = "returned"
+        return taken
+
+
+def _reporting() -> bool:
+    with _JOBS_LOCK:
+        return any(entry.state == "reporting" for entry in _JOBS.values())
+
+
+def _report(job: dict[str, Any], send: Callable[[], None]) -> bool:
+    if not _begin_report(job):
+        logger.warning("external_job_report_skipped job_id=%s — задачу уже вернули ядру на остановке", job.get("id"))
+        return False
+    send()
+    return True
+
+
+def _release(client: "ExternalWorkerClient", job: dict[str, Any], reason: str,
+             *, result: dict[str, Any] | None = None) -> None:
+    try:
+        client.release(job, reason=reason, result=result)
+        logger.warning("external_job_released job_id=%s kind=%s partial=%s — %s",
+                       job.get("id"), job.get("kind"), bool(result), reason)
+    except Exception:  # noqa: BLE001 - ядро недоступно или аренду уже сняли: вернётся по аренде
+        logger.exception("external_job_release_failed job_id=%s — вернётся по истечении аренды", job.get("id"))
+
+
+def _supervise(threads: list[threading.Thread]) -> None:
+    """Главный поток: ждёт сигнала, а по нему возвращает ядру то, что не успело закончиться."""
+    while any(thread.is_alive() for thread in threads):
+        if _STOPPING.wait(1.0):
+            break
+    if not _STOPPING.is_set():
+        return
+    grace = config.EXTERNAL_WORKER_STOP_GRACE_SECONDS
+    with _JOBS_LOCK:
+        busy = sorted(_JOBS)
+    logger.warning("external_worker_stopping — новых задач не беру; в работе %s, на завершение %s с",
+                   busy or "нет", int(grace))
+    deadline = (_STOP_AT if _STOP_AT is not None else time.monotonic()) + grace + config.EXTERNAL_WORKER_STOP_STEP_SECONDS
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    for entry in _take_unfinished():
+        fork = getattr(entry.client, "fork", None)
+        _release(fork() if callable(fork) else entry.client, entry.job, "остановка воркера: шаг не завершился в срок")
+    report_deadline = time.monotonic() + _REPORT_SECONDS
+    while _reporting() and time.monotonic() < report_deadline:
+        time.sleep(0.1)
+    logger.warning("external_worker_stopped")
 
 
 class LeaseKeeper:
@@ -326,81 +499,55 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
     def beat() -> None:
         if keeper.lost.is_set():
             raise external_ai.LeaseLost(f"lease lost for job {job.get('id')}")
+        if _stop_due():
+            raise external_ai.StopRequested(f"worker stopping, job {job.get('id')}")
         keeper.touch()
         _safe_heartbeat(client, job)
 
     _inflight(+1)
+    _track(client, job)
     try:
         _run_job(client, job, beat)
     finally:
         keeper.stop()
+        _untrack(job)
         _inflight(-1)
 
 
+# Вид задачи → обработчик на воркере. Модуль и имя, а не сама функция: тесты подменяют
+# атрибут модуля, и таблица обязана видеть подмену.
+_HANDLERS: dict[str, tuple[Any, str]] = {
+    "process_articles": (external_ai, "process_payload"),
+    "recheck_relevance": (external_ai, "process_recheck_payload"),
+    "translate_titles": (external_ai, "process_translate_payload"),
+    "process_document": (documents_external, "process_document_payload"),
+    "scrape_source": (external_fetch, "process_payload"),
+    "reprint_review": (external_ai, "process_reprint_review_payload"),
+    "refetch_text": (external_fetch, "process_refetch_text_payload"),
+}
+
+
 def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[[], None]) -> None:
-    logger.info("external_job_started job_id=%s kind=%s queue=%s", job["id"], job.get("kind"), job.get("queue"))
+    kind = str(job.get("kind") or "")
+    logger.info("external_job_started job_id=%s kind=%s queue=%s", job["id"], kind, job.get("queue"))
     try:
-        if job.get("kind") == "process_articles":
-            client.progress(job, 20)
-            # Heartbeat по каждой статье продлевает lease — большой батч на медленной
-            # модели (gpt-5.5) больше не истекает по lease и не уходит в ретрай-петлю.
-            result = external_ai.process_payload(
-                job.get("payload") or {},
-                heartbeat=beat,
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
-        elif job.get("kind") == "recheck_relevance":
-            client.progress(job, 20)
-            result = external_ai.process_recheck_payload(
-                job.get("payload") or {},
-                heartbeat=beat,
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
-        elif job.get("kind") == "translate_titles":
-            client.progress(job, 20)
-            result = external_ai.process_translate_payload(
-                job.get("payload") or {},
-                heartbeat=beat,
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
-        elif job.get("kind") == "process_document":
-            client.progress(job, 20)
-            result = documents_external.process_document_payload(
-                job.get("payload") or {},
-                heartbeat=beat,
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
-        elif job.get("kind") == "scrape_source":
-            client.progress(job, 20)
-            result = external_fetch.process_payload(
-                job.get("payload") or {},
-                heartbeat=beat,
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
-        elif job.get("kind") == "reprint_review":
-            client.progress(job, 20)
-            result = external_ai.process_reprint_review_payload(
-                job.get("payload") or {},
-                heartbeat=beat,
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
-        elif job.get("kind") == "refetch_text":
-            client.progress(job, 20)
-            result = external_fetch.process_refetch_text_payload(
-                job.get("payload") or {},
-                heartbeat=beat,
-            )
-            client.progress(job, 90)
-            client.complete(job, result)
-        else:
+        target = _HANDLERS.get(kind)
+        if target is None:
             raise ValueError(f"Unsupported external job kind: {job.get('kind')}")
-        logger.info("external_job_finished job_id=%s kind=%s", job["id"], job.get("kind"))
+        module, name = target
+        client.progress(job, 20)
+        # Heartbeat по каждому шагу (статья, страница, кусок документа) продлевает lease —
+        # большой батч на медленной модели не истекает по аренде и не уходит в ретрай-петлю.
+        result = getattr(module, name)(job.get("payload") or {}, heartbeat=beat)
+        if isinstance(result, dict) and result.get("partial"):
+            _report(job, lambda: _release(client, job, "остановка воркера: возвращаю сделанное", result=result))
+            return
+        client.progress(job, 90)
+        if _report(job, lambda: client.complete(job, result)):
+            logger.info("external_job_finished job_id=%s kind=%s", job["id"], kind)
+    except external_ai.StopRequested:
+        # Вид без частичного итога (сбор, документ): задача уходит в очередь целиком.
+        _report(job, lambda: _release(client, job, "остановка воркера до конца задачи"))
     except external_ai.LeaseLost:
         # Ни complete, ни fail слать нельзя — оба вернут 409. Просто выходим: задача уже
         # в очереди у core и будет выдана заново (возможно, этому же воркеру).
@@ -409,6 +556,6 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[[
     except Exception as exc:  # noqa: BLE001 - external failures must be returned to core
         logger.exception("external_job_failed job_id=%s kind=%s", job.get("id"), job.get("kind"))
         try:
-            client.fail(job, str(exc), retryable=True)
+            _report(job, lambda: client.fail(job, str(exc), retryable=True))
         except Exception:
             logger.exception("external_job_fail_report_failed job_id=%s", job.get("id"))
