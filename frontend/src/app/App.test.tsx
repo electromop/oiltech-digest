@@ -743,7 +743,7 @@ describe("App smoke", () => {
 
     await waitFor(() => expect(tileValue("Шум")).toBe("999"));
     // Первая плитка «Всего» показывает весь объём базы (all_articles=15), а не сигналы (3).
-    expect(tileValue("Всего бизнес-сигналов")).toBe("15");
+    expect(tileValue("Всего собрано")).toBe("15");
     expect(tileValue("Дубликаты")).toBe("7");
     // Плашка «Новые» заменена на «Почищено» (cleaned_articles): «Новые» показывала
     // пер-юзерный статус и ни с чем не сходилась, а «Почищено» даёт арифметику
@@ -900,6 +900,32 @@ describe("App smoke", () => {
     expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
     const requested = fetchMock.mock.calls.map(([input]) => String(input));
     expect(requested.some((url) => url.includes("status=digest") && url.includes("month=2026-08"))).toBe(true);
+  });
+
+  it("конструктор перечитывает выбранное, когда окно сменилось в открытой вкладке", async () => {
+    let months = ["2026-09"];
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/feed-window") {
+        return Promise.resolve(jsonResponse({ months, month: null, read_only: false, rollover_day: 5, archive: [] }));
+      }
+      return baseImpl!(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
+    await screen.findByDisplayValue("Все месяцы");
+    const digestListCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === "/api/articles?limit=5000&status=digest").length;
+    await waitFor(() => expect(digestListCalls()).toBe(1));
+
+    // Наступило 5-е, человек вернулся на вкладку: окно другое — список выбранного перечитан.
+    months = ["2026-10"];
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(digestListCalls()).toBe(2));
   });
 
   it("imports article by direct url from admin sources page", async () => {

@@ -270,6 +270,99 @@ def test_stats_count_only_the_window(feed, monkeypatch):
     assert august["selected_for_digest"] == 1
 
 
+def test_counters_and_archive_count_equal_what_the_feed_shows(feed, monkeypatch):
+    """23.09 на проде: над лентой из 1 934 статей висело 2 205 «сигналов» — счётчики
+    считали перепечатки (144) и статьи архивных источников (131), но не видели свежих
+    статей без карточки (4). Теперь у ленты, счётчиков и архива одна выборка."""
+    ids = feed["ids"]
+    with connection.get_connection() as conn:
+        source_id = _source_id(conn)
+        for month, day in (("sep", 9), ("aug", 8)):
+            base = _utc(2026, day, 12, 12)
+            # Перепечатка: копия скрыта, главная остаётся.
+            copy_id = _article(conn, source_id, f"{month}-copy", published=base, collected=base)
+            conn.execute(
+                "INSERT INTO article_reprints (article_id, primary_id) VALUES (%s, %s)",
+                (copy_id, ids[month]),
+            )
+            # Помеченная на удаление перепроверкой.
+            pending_id = _article(conn, source_id, f"{month}-pending", published=base, collected=base)
+            conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (pending_id,))
+            # Свежая статья без карточки: ИИ её ещё не видел, а лента уже показывает.
+            conn.execute(
+                "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
+                "VALUES (%s, %s, %s, %s, %s, 'Текст.', 'ru')",
+                (source_id, f"Без карточки {month}", f"https://neftegaz.example/{month}-nocard", base, base),
+            )
+        archived_source = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy, archived_at) "
+            "VALUES ('Архивный', 'Media', 'https://archived.example', FALSE, 'request', now()) RETURNING id"
+        ).fetchone()[0]
+        _article(conn, archived_source, "sep-archived", published=_utc(2026, 9, 14, 12), collected=_utc(2026, 9, 14, 12))
+        conn.commit()
+    _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
+    client = _as(feed["user"], "user")
+
+    in_feed = _feed_ids(client)
+    assert client.get("/api/stats").json()["total_articles"] == len(in_feed) == 3  # sep, sep_nopub, без карточки
+
+    in_august = _feed_ids(client, month="2026-08")
+    august_stats = client.get("/api/stats", params={"month": "2026-08"}).json()
+    picker = client.get("/api/feed-window").json()["archive"]
+    assert august_stats["total_articles"] == len(in_august) == 4  # aug, aug_nopub, aug_late, без карточки
+    assert picker == [{"month": "2026-08", "articles": len(in_august), "digest": 0}]
+
+
+def test_issue_skips_article_pending_deletion(feed):
+    """Лента прячет помеченное на удаление, а сборщик выпуска до 23.09 его брал (на проде —
+    одна такая статья среди 22 выбранных «в дайджест»)."""
+    aug = feed["ids"]["aug"]
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            (feed["user"], aug),
+        )
+        conn.commit()
+
+    def issue() -> set[int]:
+        rows = repository.digest_candidates(month="2026-08", limit=50, min_score=0, user_id=feed["user"])
+        return {row["id"] for row in rows}
+
+    assert aug in issue()
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (aug,))
+        conn.commit()
+    assert aug not in issue()
+
+
+def test_saved_issue_export_follows_the_same_visibility(feed):
+    """Решение владельца 23.09 «одно правило везде»: выгрузка сохранённого выпуска = то, что
+    видно в конструкторе. До этого черновик выгружался мимо правил ленты — статья, которую
+    перепроверка потом пометила на удаление, оставалась в PDF (на проде: август — 1 из 7,
+    июль — 2 из 5). То же с перепечаткой."""
+    from oiltech_digest.processing import digest as digest_module
+
+    ids = feed["ids"]
+    repository.save_monthly_digest(
+        month="2026-08", title="Август", status="draft", user_id=feed["user"],
+        items=[{"article_id": ids["aug"]}, {"article_id": ids["aug_late"]}, {"article_id": ids["aug_nopub"]}],
+    )
+
+    def exported() -> list[int]:
+        content = digest_module.build_digest_content(month="2026-08", limit=50, min_score=0, user_id=feed["user"])
+        return [item["article_id"] for item in content["news"]]
+
+    assert exported() == [ids["aug"], ids["aug_late"], ids["aug_nopub"]]
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (ids["aug"],))
+        conn.execute(
+            "INSERT INTO article_reprints (article_id, primary_id) VALUES (%s, %s)",
+            (ids["aug_nopub"], ids["aug_late"]),
+        )
+        conn.commit()
+    assert exported() == [ids["aug_late"]]
+
+
 def test_feed_window_endpoint_lists_archive_months_with_counts(feed, monkeypatch):
     with connection.get_connection() as conn:
         conn.execute(

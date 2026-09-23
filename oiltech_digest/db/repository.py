@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 import re
 from typing import Literal, NamedTuple, get_args
@@ -15,7 +15,7 @@ from psycopg.types.json import Json
 from oiltech_digest import auth, config, lanes
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.feed_window import FeedWindow, period_month_sql
+from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
 
 # Единый источник правды для набора пер-юзерных рабочих статусов статьи (#12).
 # ДОЛЖЕН совпадать с union Article["status"] во фронте (frontend/src/api/types.ts).
@@ -3285,104 +3285,81 @@ def count_articles() -> int:
 
 
 def dashboard_stats(user_id: int | None = None, window: FeedWindow | None = None) -> dict:
-    """Aggregate counters for the admin dashboard cards.
+    """Счётчики над лентой — по той же выборке, что и сама лента.
 
-    Computed over the FULL database (not the loaded page), so the numbers stay
-    correct regardless of how many articles the UI fetches. ``avg_score`` is the
-    mean over scored articles only — unscored articles do not drag it to zero.
-    ``selected_for_digest`` — ПЕР-ЮЗЕРНО (выбор в дайджест личный, #12).
-    ``window`` — окно месяца ленты (feed_window): счётчики над лентой считаются по
-    тем же месяцам, что и она сама. Без окна — вся база (замеры, benchmarks).
+    Считаются по базе, а не по загруженной странице, поэтому не зависят от того, сколько
+    строк забрал фронт. Выборка — базовая видимость ленты (feed_window.visible_sql) в окне
+    месяца, так что ``total_articles`` («сигналы», его читает «N из M» над лентой) равно
+    выборке ленты до личных скрытий: помеченное человеком «шум/дубликат/архив» лента по
+    умолчанию прячет, а здесь оно входит в M и в плитки статусов (вкладка «Со статусом»
+    его показывает). До 23.09 здесь было своё условие: оно считало
+    перепечатки и статьи архивных источников, но не видело свежих статей без карточки, —
+    и над лентой из 1 934 статей висело 2 205 «сигналов».
+    ``avg_score`` — среднее только по оценённым. ``selected_for_digest`` и статусы —
+    ПЕР-ЮЗЕРНЫЕ (#12). ``window`` — окно месяца; без окна — вся база (замеры, benchmarks).
     """
-    # Условие окна одинаково для всех подзапросов: у каждого статья под алиасом `a`.
     win = window.sql("a") if window is not None else "TRUE"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        # Один проход по выборке ленты с разбивкой по статусу этого человека: из него же
+        # складываются «сигналы», «обработано», «в дайджест» и плитки статусов. Раньше это
+        # были шесть подзапросов, и у каждого своя видимость.
         cur.execute(
             f"""
-            SELECT
-              -- «Сигналы» = то, что реально дошло до ленты: прошло гейт релевантности
-              -- и не убрано перепроверкой. Раньше здесь был COUNT(*) по ВСЕМ статьям,
-              -- и плитка показывала 14785 при 6.6к настоящих сигналов — отрезанное
-              -- попадало в базу счёта и делало все цифры бессмысленными.
-              (SELECT COUNT(*) FROM articles a
-                 JOIN article_cards c ON c.article_id = a.id
-                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion
-                  AND {win}) AS total_articles,
-              (SELECT COUNT(*) FROM articles a
-                 JOIN article_cards c ON c.article_id = a.id
-                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion
-                  AND COALESCE(c.summary, '') <> ''
-                  AND {win}) AS with_summary,
-              -- Обработано — тоже ТОЛЬКО по сигналам, иначе «обработано» может
-              -- превысить «всего сигналов» (считалось по всей базе, включая отсев).
-              (SELECT COUNT(*)
-                 FROM articles a
-                 JOIN article_cards c ON c.article_id = a.id
-                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion
-                  AND COALESCE(c.summary, '') <> ''
-                  AND c.relevant IS NOT NULL
-                  AND (
-                    EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = c.article_id)
-                    OR EXISTS (SELECT 1 FROM article_scores sc WHERE sc.article_id = c.article_id)
-                  )
-                  AND {win}) AS processed_articles,
-              (SELECT COUNT(*) FROM articles a WHERE a.pending_deletion AND {win}) AS cleaned_articles,
-              (SELECT COUNT(*) FROM user_article_states uas
-                 JOIN articles a ON a.id = uas.article_id
-                WHERE uas.user_id = %(user_id)s AND uas.status = 'digest'
-                  AND {win}) AS selected_for_digest,
-              (SELECT ROUND(AVG(sc.total_score)) FROM article_scores sc
-                 JOIN articles a ON a.id = sc.article_id
-                WHERE {win}) AS avg_score,
-              (SELECT COUNT(*) FROM sources) AS sources,
-              -- «Всего» на дашборде показывает ВЕСЬ объём собранного (решение владельца
-              -- 25.07): все статьи в базе, включая отсев по релевантности и вычищенные
-              -- перепроверкой. total_articles выше остаётся «сигналами» (его читает
-              -- workingTotal и арифметика соседних плиток) — это ОТДЕЛЬНОЕ поле только
-              -- под первую плитку. С 23.09 — в пределах окна месяца, как и вся лента.
-              (SELECT COUNT(*) FROM articles a WHERE {win}) AS all_articles
-            """,
-            {"user_id": user_id},
-        )
-        row = cur.fetchone()
-
-        # Пер-статусные счётчики для плиток — по ВСЕЙ базе, а не по загруженной странице.
-        # Раньше фронт считал их по массиву загруженных статей (топ-2000, к тому же
-        # суженный текущим фильтром), поэтому «Новые/На проверке/Шум/Дубликаты» занижали
-        # и «плавали» при фильтрации, расходясь с соседними плитками «Всего»/«Обработано».
-        # Видимость та же, что у ленты (list_articles): отклонённые гейтом релевантности и
-        # помеченные на удаление не показываем — иначе цифра не сойдётся с тем, что видно.
-        # Один GROUP BY вместо пяти отдельных COUNT-подзапросов.
-        cur.execute(
-            f"""
-            SELECT COALESCE(uas.status, 'new') AS status, COUNT(*) AS cnt
+            SELECT COALESCE(uas.status, 'new') AS status,
+                   COUNT(*) AS cnt,
+                   COUNT(*) FILTER (WHERE COALESCE(c.summary, '') <> '') AS with_summary,
+                   -- Обработано: есть суть, проверена релевантность и есть тег или оценка.
+                   COUNT(*) FILTER (
+                     WHERE COALESCE(c.summary, '') <> ''
+                       AND c.relevant IS NOT NULL
+                       AND (sc.article_id IS NOT NULL
+                            OR EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = a.id))
+                   ) AS processed,
+                   SUM(sc.total_score) AS score_sum,
+                   COUNT(sc.total_score) AS scored
               FROM articles a
+              JOIN sources s ON s.id = a.source_id
               LEFT JOIN article_cards c ON c.article_id = a.id
+              LEFT JOIN article_scores sc ON sc.article_id = a.id
               LEFT JOIN user_article_states uas
                      ON uas.article_id = a.id AND uas.user_id = %(user_id)s
-             WHERE c.relevant IS NOT FALSE
-               AND NOT a.pending_deletion
+             WHERE {visible_sql()}
                AND {win}
              GROUP BY 1
             """,
             {"user_id": user_id},
         )
-        status_counts = {str(r["status"]): int(r["cnt"] or 0) for r in cur.fetchall()}
+        by_status = cur.fetchall()
+        cur.execute(
+            f"""
+            SELECT
+              -- «Всего собрано» (первая плитка) — ВЕСЬ объём за окно (решение владельца 25.07):
+              -- и отсев гейтом, и вычищенное перепроверкой. Намеренно шире выборки ленты.
+              (SELECT COUNT(*) FROM articles a WHERE {win}) AS all_articles,
+              (SELECT COUNT(*) FROM articles a WHERE a.pending_deletion AND {win}) AS cleaned_articles,
+              (SELECT COUNT(*) FROM sources) AS sources
+            """
+        )
+        totals = cur.fetchone()
 
+    status_counts = {str(r["status"]): int(r["cnt"] or 0) for r in by_status}
+    scored = sum(int(r["scored"] or 0) for r in by_status)
+    score_sum = sum(Decimal(str(r["score_sum"] or 0)) for r in by_status)
+    # Как SQL ROUND у прежнего AVG: половина — вверх, а не банковское округление Python.
+    avg_score = int((score_sum / scored).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if scored else 0
     return {
-        "total_articles": int(row["total_articles"] or 0),
-        # Весь объём базы — только под плитку «Всего» на дашборде. Отдельно от
-        # total_articles («сигналы»), чтобы не задеть workingTotal и «Обработано».
-        "all_articles": int(row["all_articles"] or 0),
-        "with_summary": int(row["with_summary"] or 0),
-        "processed_articles": int(row["processed_articles"] or 0),
+        "total_articles": sum(status_counts.values()),
+        # Весь объём за окно — только под первую плитку, отдельно от «сигналов».
+        "all_articles": int(totals["all_articles"] or 0),
+        "with_summary": sum(int(r["with_summary"] or 0) for r in by_status),
+        "processed_articles": sum(int(r["processed"] or 0) for r in by_status),
         # Терялось: SQL считал cleaned_articles, а возврат собирается вручную и поле
         # в него не попадало → на фронте плитка «Почищено» всегда показывала 0.
-        "cleaned_articles": int(row["cleaned_articles"] or 0),
-        "selected_for_digest": int(row["selected_for_digest"] or 0),
-        "avg_score": int(row["avg_score"] or 0),
-        "sources": int(row["sources"] or 0),
+        "cleaned_articles": int(totals["cleaned_articles"] or 0),
+        "selected_for_digest": status_counts.get("digest", 0),
+        "avg_score": avg_score,
+        "sources": int(totals["sources"] or 0),
         "status_counts": {
             status: status_counts.get(status, 0)
             for status in ARTICLE_STATUS_VALUES
@@ -3407,10 +3384,10 @@ def feed_archive_months(window: FeedWindow, user_id: int | None = None) -> list[
     этот пользователь выбрал «в дайджест» (по второму числу конструктор выпуска строит
     список прошлых выпусков — только просмотр и выгрузка).
 
-    Месяц — тот же, что у ленты и сборщика выпуска (feed_window.period_month_sql).
-    Видимость — базовая видимость ленты (api.list_articles): прошло гейт релевантности,
-    не помечено на удаление, источник не в архиве, не перепечатка. Пер-юзерные скрытия и
-    порог балла не учитываются: число показывает объём месяца, а не текущий фильтр.
+    Месяц — тот же, что у ленты и сборщика выпуска (feed_window.period_month_sql), выборка —
+    та же, что у ленты и её счётчиков (feed_window.visible_sql): число у месяца равно
+    «сигналам» над лентой этого месяца. Пер-юзерные скрытия и порог балла не учитываются —
+    число показывает объём месяца, а не текущий фильтр.
     """
     month_expr = period_month_sql("a")
     with get_connection() as conn:
@@ -3424,10 +3401,7 @@ def feed_archive_months(window: FeedWindow, user_id: int | None = None) -> list[
               JOIN sources s ON s.id = a.source_id
               LEFT JOIN article_cards c ON c.article_id = a.id
               LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s
-             WHERE c.relevant IS NOT FALSE
-               AND NOT a.pending_deletion
-               AND s.archived_at IS NULL
-               AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
+             WHERE {visible_sql()}
                AND {month_expr} < %s
              GROUP BY 1
              ORDER BY 1 DESC
@@ -5100,7 +5074,9 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
     search_clause = ""
     tag_clause = ""
     if month:
-        month_clause = "AND to_char(COALESCE(a.published_at, a.collected_at), 'YYYY-MM') = %(month)s"
+        # Месяц — тем же выражением, что у окна ленты: что видно в ленте за месяц, то и
+        # попадает в выпуск этого месяца (feed_window.period_month_sql).
+        month_clause = f"AND {period_month_sql('a')} = %(month)s"
         params["month"] = month
     if max_score is not None:
         max_score_clause = "AND COALESCE(sc.total_score, 0) <= %(max_score)s"
@@ -5141,12 +5117,12 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             WHERE uas.status = 'digest'
-              AND s.archived_at IS NULL          -- архивный источник не попадает и в выпуск
-              -- Перепечатка в выпуск не идёт: в дайджесте нужна одна копия новости,
-              -- и это ровно то, что заказчик делает руками («одну заберу в дайджест,
-              -- вторую отмечу как дубликат», 22.08).
-              AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
-              AND c.relevant IS NOT FALSE
+              -- Видимость — та же, что у ленты (feed_window.visible_sql): архивный источник,
+              -- перепечатка (в выпуске нужна одна копия новости — заказчик 22.08: «одну
+              -- заберу в дайджест, вторую отмечу как дубликат»), отсев гейтом и помеченное на
+              -- удаление в выпуск не идут. Последнего до 23.09 здесь не было: статья,
+              -- помеченная на удаление, пряталась из ленты, но оставалась в выпуске.
+              AND {visible_sql()}
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
               AND COALESCE(sc.total_score, 0) >= %(min_score)s
               {max_score_clause}
@@ -5363,7 +5339,11 @@ def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
             WHERE a.id = ANY(%s)
-              AND c.relevant IS NOT FALSE
+              -- Видимость — та же, что у ленты и конструктора (feed_window.visible_sql):
+              -- выгрузка = то, что видно. Решение владельца 23.09 «одно правило везде»:
+              -- статья, которую перепроверка потом пометила на удаление, выпадает и из
+              -- сохранённого выпуска (на тот день — 1 из 7 в августе, 2 из 5 в июле).
+              AND {visible_sql()}
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
             ORDER BY {order_case}
             """,
