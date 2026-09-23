@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+import importlib
 import json
 import logging
 import os
@@ -15,8 +16,10 @@ from typing import Any, Callable
 import requests
 
 from oiltech_digest import config, contract
-from oiltech_digest.ingestion import external_fetch
-from oiltech_digest.documents import external as documents_external
+# Основные обработчики грузятся при старте, а не лениво по таблице _HANDLERS: сломанный
+# импорт должен уронить запуск контейнера, а не первую задачу своего вида.
+from oiltech_digest.ingestion import external_fetch  # noqa: F401
+from oiltech_digest.documents import external as documents_external  # noqa: F401
 from oiltech_digest.processing import external_ai
 
 logger = logging.getLogger(__name__)
@@ -524,31 +527,37 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
         _inflight(-1)
 
 
-# Вид задачи → обработчик на воркере. Модуль и имя, а не сама функция: тесты подменяют
-# атрибут модуля, и таблица обязана видеть подмену.
-_HANDLERS: dict[str, tuple[Any, str]] = {
-    "process_articles": (external_ai, "process_payload"),
-    "recheck_relevance": (external_ai, "process_recheck_payload"),
-    "translate_titles": (external_ai, "process_translate_payload"),
-    "process_document": (documents_external, "process_document_payload"),
-    "scrape_source": (external_fetch, "process_payload"),
-    "reprint_review": (external_ai, "process_reprint_review_payload"),
-    "refetch_text": (external_fetch, "process_refetch_text_payload"),
+# Вид задачи → обработчик на воркере: модуль по имени и функция. По имени, а не объектом:
+# тесты подменяют атрибут модуля, и таблица обязана видеть подмену, а обработчик с тяжёлым
+# импортом (радар агентов — при слиянии контуров) грузится только к первой своей задаче.
+_HANDLERS: dict[str, tuple[str, str]] = {
+    "process_articles": ("oiltech_digest.processing.external_ai", "process_payload"),
+    "recheck_relevance": ("oiltech_digest.processing.external_ai", "process_recheck_payload"),
+    "translate_titles": ("oiltech_digest.processing.external_ai", "process_translate_payload"),
+    "process_document": ("oiltech_digest.documents.external", "process_document_payload"),
+    "scrape_source": ("oiltech_digest.ingestion.external_fetch", "process_payload"),
+    "reprint_review": ("oiltech_digest.processing.external_ai", "process_reprint_review_payload"),
+    "refetch_text": ("oiltech_digest.ingestion.external_fetch", "process_refetch_text_payload"),
 }
+
+
+def _handler(kind: str) -> Callable[..., dict[str, Any]]:
+    target = _HANDLERS.get(kind)
+    if target is None:
+        raise ValueError(f"Unsupported external job kind: {kind}")
+    module_name, name = target
+    return getattr(importlib.import_module(module_name), name)
 
 
 def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[[], None]) -> None:
     kind = str(job.get("kind") or "")
     logger.info("external_job_started job_id=%s kind=%s queue=%s", job["id"], kind, job.get("queue"))
     try:
-        target = _HANDLERS.get(kind)
-        if target is None:
-            raise ValueError(f"Unsupported external job kind: {job.get('kind')}")
-        module, name = target
+        handler = _handler(kind)
         client.progress(job, 20)
         # Heartbeat по каждому шагу (статья, страница, кусок документа) продлевает lease —
         # большой батч на медленной модели не истекает по аренде и не уходит в ретрай-петлю.
-        result = getattr(module, name)(job.get("payload") or {}, heartbeat=beat)
+        result = handler(job.get("payload") or {}, heartbeat=beat)
         if isinstance(result, dict) and result.get("partial"):
             _report(job, lambda: _release(client, job, "остановка воркера: возвращаю сделанное", result=result))
             return

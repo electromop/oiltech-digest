@@ -284,6 +284,16 @@ def test_idle_nl_asks_core_about_sixty_times_in_five_minutes(monkeypatch):
     assert 6 * per_thread <= 60  # было 6 × 100 = 600 (замер 21.09 — 582)
 
 
+def test_every_job_kind_resolves_to_a_worker_handler():
+    """Таблица обработчиков грузит модули лениво — опечатка в пути всплыла бы только на NL,
+    на первой задаче вида. Здесь каждая строка разрешается в функцию, и каждый вид любой
+    полосы есть в таблице."""
+    for kind in external_worker._HANDLERS:
+        assert callable(external_worker._handler(kind)), kind
+    served = set().union(*lanes.EXTERNAL_LANES.values())
+    assert served <= set(external_worker._HANDLERS)
+
+
 def test_every_lane_has_its_own_nl_worker():
     """Раскладка NL: у каждой внешней очереди есть воркер, полосы не делят контейнер
     (иначе пересчёт снова встанет перед потоком дня, а браузер — перед RSS)."""
