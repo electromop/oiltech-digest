@@ -15,6 +15,7 @@ from psycopg.types.json import Json
 from oiltech_digest import auth, config, lanes
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.db.connection import get_connection
+from oiltech_digest.feed_window import FeedWindow, period_month_sql
 
 # Единый источник правды для набора пер-юзерных рабочих статусов статьи (#12).
 # ДОЛЖЕН совпадать с union Article["status"] во фронте (frontend/src/api/types.ts).
@@ -3283,18 +3284,22 @@ def count_articles() -> int:
         return conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
 
 
-def dashboard_stats(user_id: int | None = None) -> dict:
+def dashboard_stats(user_id: int | None = None, window: FeedWindow | None = None) -> dict:
     """Aggregate counters for the admin dashboard cards.
 
     Computed over the FULL database (not the loaded page), so the numbers stay
     correct regardless of how many articles the UI fetches. ``avg_score`` is the
     mean over scored articles only — unscored articles do not drag it to zero.
     ``selected_for_digest`` — ПЕР-ЮЗЕРНО (выбор в дайджест личный, #12).
+    ``window`` — окно месяца ленты (feed_window): счётчики над лентой считаются по
+    тем же месяцам, что и она сама. Без окна — вся база (замеры, benchmarks).
     """
+    # Условие окна одинаково для всех подзапросов: у каждого статья под алиасом `a`.
+    win = window.sql("a") if window is not None else "TRUE"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT
               -- «Сигналы» = то, что реально дошло до ленты: прошло гейт релевантности
               -- и не убрано перепроверкой. Раньше здесь был COUNT(*) по ВСЕМ статьям,
@@ -3302,11 +3307,13 @@ def dashboard_stats(user_id: int | None = None) -> dict:
               -- попадало в базу счёта и делало все цифры бессмысленными.
               (SELECT COUNT(*) FROM articles a
                  JOIN article_cards c ON c.article_id = a.id
-                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion) AS total_articles,
+                WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion
+                  AND {win}) AS total_articles,
               (SELECT COUNT(*) FROM articles a
                  JOIN article_cards c ON c.article_id = a.id
                 WHERE c.relevant IS NOT FALSE AND NOT a.pending_deletion
-                  AND COALESCE(c.summary, '') <> '') AS with_summary,
+                  AND COALESCE(c.summary, '') <> ''
+                  AND {win}) AS with_summary,
               -- Обработано — тоже ТОЛЬКО по сигналам, иначе «обработано» может
               -- превысить «всего сигналов» (считалось по всей базе, включая отсев).
               (SELECT COUNT(*)
@@ -3318,18 +3325,23 @@ def dashboard_stats(user_id: int | None = None) -> dict:
                   AND (
                     EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = c.article_id)
                     OR EXISTS (SELECT 1 FROM article_scores sc WHERE sc.article_id = c.article_id)
-                  )) AS processed_articles,
-              (SELECT COUNT(*) FROM articles WHERE pending_deletion) AS cleaned_articles,
-              (SELECT COUNT(*) FROM user_article_states
-                 WHERE user_id = %(user_id)s AND status = 'digest') AS selected_for_digest,
-              (SELECT ROUND(AVG(total_score)) FROM article_scores) AS avg_score,
+                  )
+                  AND {win}) AS processed_articles,
+              (SELECT COUNT(*) FROM articles a WHERE a.pending_deletion AND {win}) AS cleaned_articles,
+              (SELECT COUNT(*) FROM user_article_states uas
+                 JOIN articles a ON a.id = uas.article_id
+                WHERE uas.user_id = %(user_id)s AND uas.status = 'digest'
+                  AND {win}) AS selected_for_digest,
+              (SELECT ROUND(AVG(sc.total_score)) FROM article_scores sc
+                 JOIN articles a ON a.id = sc.article_id
+                WHERE {win}) AS avg_score,
               (SELECT COUNT(*) FROM sources) AS sources,
               -- «Всего» на дашборде показывает ВЕСЬ объём собранного (решение владельца
               -- 25.07): все статьи в базе, включая отсев по релевантности и вычищенные
               -- перепроверкой. total_articles выше остаётся «сигналами» (его читает
               -- workingTotal и арифметика соседних плиток) — это ОТДЕЛЬНОЕ поле только
-              -- под первую плитку.
-              (SELECT COUNT(*) FROM articles) AS all_articles
+              -- под первую плитку. С 23.09 — в пределах окна месяца, как и вся лента.
+              (SELECT COUNT(*) FROM articles a WHERE {win}) AS all_articles
             """,
             {"user_id": user_id},
         )
@@ -3343,7 +3355,7 @@ def dashboard_stats(user_id: int | None = None) -> dict:
         # помеченные на удаление не показываем — иначе цифра не сойдётся с тем, что видно.
         # Один GROUP BY вместо пяти отдельных COUNT-подзапросов.
         cur.execute(
-            """
+            f"""
             SELECT COALESCE(uas.status, 'new') AS status, COUNT(*) AS cnt
               FROM articles a
               LEFT JOIN article_cards c ON c.article_id = a.id
@@ -3351,6 +3363,7 @@ def dashboard_stats(user_id: int | None = None) -> dict:
                      ON uas.article_id = a.id AND uas.user_id = %(user_id)s
              WHERE c.relevant IS NOT FALSE
                AND NOT a.pending_deletion
+               AND {win}
              GROUP BY 1
             """,
             {"user_id": user_id},
@@ -3375,6 +3388,56 @@ def dashboard_stats(user_id: int | None = None) -> dict:
             for status in ARTICLE_STATUS_VALUES
         },
     }
+
+
+def article_period_months(article_ids: list[int]) -> set[str]:
+    """Месяцы периода («ГГГГ-ММ») у этих статей — тем же выражением, что у окна ленты."""
+    if not article_ids:
+        return set()
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT {period_month_sql('a')} FROM articles a WHERE a.id = ANY(%s)",
+            (list(article_ids),),
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+def feed_archive_months(window: FeedWindow, user_id: int | None = None) -> list[dict]:
+    """Прошлые месяцы для переключателя «Архив»: сколько в месяце статей и сколько из них
+    этот пользователь выбрал «в дайджест» (по второму числу конструктор выпуска строит
+    список прошлых выпусков — только просмотр и выгрузка).
+
+    Месяц — тот же, что у ленты и сборщика выпуска (feed_window.period_month_sql).
+    Видимость — базовая видимость ленты (api.list_articles): прошло гейт релевантности,
+    не помечено на удаление, источник не в архиве, не перепечатка. Пер-юзерные скрытия и
+    порог балла не учитываются: число показывает объём месяца, а не текущий фильтр.
+    """
+    month_expr = period_month_sql("a")
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT {month_expr} AS month,
+                   COUNT(*) AS articles,
+                   COUNT(*) FILTER (WHERE uas.status = 'digest') AS digest
+              FROM articles a
+              JOIN sources s ON s.id = a.source_id
+              LEFT JOIN article_cards c ON c.article_id = a.id
+              LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s
+             WHERE c.relevant IS NOT FALSE
+               AND NOT a.pending_deletion
+               AND s.archived_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
+               AND {month_expr} < %s
+             GROUP BY 1
+             ORDER BY 1 DESC
+            """,
+            (user_id, window.open_months[0]),
+        )
+        return [
+            {"month": row["month"], "articles": int(row["articles"]), "digest": int(row["digest"])}
+            for row in cur.fetchall()
+        ]
 
 
 def monthly_platform_stats(months: int = 6) -> list[dict]:
