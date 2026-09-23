@@ -11,12 +11,26 @@
 # Аренду задачи каждый воркер продлевает фоном сам (external_worker.LeaseKeeper), а по
 # потолку времени задачи процесс выходит — restart: unless-stopped поднимает его заново.
 #
+# Остановка (выкат): по SIGTERM воркер перестаёт брать задачи, даёт текущим 30 с
+# закончиться, затем возвращает ядру сделанное и остальное (release) — задача в очереди
+# сразу, а не через 600 с аренды. stop_grace_period покрывает оба срока из config.py
+# (EXTERNAL_WORKER_STOP_GRACE_SECONDS + EXTERNAL_WORKER_STOP_STEP_SECONDS) с запасом на
+# запросы к ядру; меньше — Docker убьёт процесс до возврата задачи.
+#
 # Память (1,9 ГБ): ИИ-воркеры ждут сеть, Chromium живёт только в полосе браузера.
 # Перед первым `up` проверить `free -m` и `docker stats --no-stream`.
+#
+# Сборка — с SHA коммита (scripts/deploy-nl.sh передаёт GIT_SHA): воркер сообщает её ядру
+# вместе с номером контракта, и check-lanes на ядре показывает, пересобран ли каждый контейнер.
+x-worker-build: &worker-build
+  context: .
+  args:
+    GIT_SHA: ${GIT_SHA:-unknown}
+
 services:
   # ИИ — поток дня: пакеты планировщика, перепечатки, документы пользователей.
   external-worker:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker
     restart: unless-stopped
     env_file:
@@ -27,12 +41,13 @@ services:
       EXTERNAL_WORKER_QUEUES: external-ai
       EXTERNAL_WORKER_CAPABILITIES: openai
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
+    stop_grace_period: 120s
 
   # ИИ — пересчёты корпуса (перекачка тел, перепроверка релевантности, перевод):
   # долгие пачки не стоят перед потоком дня. На ядре включается AI_BULK_LANE_ENABLED=1
   # только после того, как этот контейнер поднят.
   external-worker-bulk:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker_bulk
     restart: unless-stopped
     env_file:
@@ -43,10 +58,11 @@ services:
       EXTERNAL_WORKER_QUEUES: external-ai-bulk
       EXTERNAL_WORKER_CAPABILITIES: openai
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
+    stop_grace_period: 120s
 
   # Сбор запросом: RSS, листинги, статьи, дозагрузка тел. I/O — три потока.
   external-worker-fetch:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker_fetch
     restart: unless-stopped
     env_file:
@@ -58,11 +74,12 @@ services:
       EXTERNAL_WORKER_CAPABILITIES: http_fetch
       EXTERNAL_WORKER_CONCURRENCY: "3"
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
+    stop_grace_period: 120s
 
   # Сбор браузером: один поток — Chromium тяжёлый, а зависший сайт больше не держит
   # за собой RSS/HTTP-полосу.
   external-worker-browser:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker_browser
     restart: unless-stopped
     env_file:
@@ -73,3 +90,4 @@ services:
       EXTERNAL_WORKER_QUEUES: external-playwright
       EXTERNAL_WORKER_CAPABILITIES: playwright
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
+    stop_grace_period: 120s

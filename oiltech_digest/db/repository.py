@@ -9,10 +9,11 @@ import re
 from typing import Literal, NamedTuple, get_args
 from urllib.parse import urlsplit
 
+from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, config, lanes
+from oiltech_digest import auth, config, contract, lanes
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
@@ -2566,9 +2567,78 @@ def external_queue_status() -> dict:
     status = {
         "totals": dict(totals),
         "queues": [dict(row) for row in queues],
+        **external_consumers_status(),
     }
     status["alerts"] = lanes.lane_alerts(status)
     return status
+
+
+def external_consumers_status() -> dict:
+    """Контракт ядра и воркеры NL с флагом расхождения — для сторожа, экрана и выката NL."""
+    try:
+        consumers = list_external_consumers()
+    except pg_errors.UndefinedTable:
+        # Схема ещё без таблицы версий: версий нет, но сторож очередей работать обязан.
+        consumers = []
+    now = datetime.now(timezone.utc)
+    for consumer in consumers:
+        consumer["mismatch"] = lanes.consumer_mismatch(consumer, contract.CONTRACT, now=now)
+    return {"contract": contract.CONTRACT, "consumers": consumers}
+
+
+def live_ai_leases() -> list[dict]:
+    """ИИ-задачи, которые выкат ядра сейчас оборвал бы: в работе с живой арендой или в записи итога."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT id, kind, queue_name, claimed_by, status, lease_expires_at
+            FROM background_jobs
+            WHERE queue_name = ANY(%s)
+              AND (status = 'finalizing' OR (status = 'running' AND lease_expires_at > now()))
+            ORDER BY id
+            """,
+            (sorted(lanes.AI_LANES),),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def record_external_consumer(worker_id: str, *, queues: list[str], build: str | None, contract_number: int | None) -> None:
+    """Запомнить, какую сборку и контракт сообщил контейнер NL при выдаче задачи.
+
+    Пустые очереди claim идут раз в 3–30 с на поток: строку переписываем не чаще раза в
+    30 с, если ничего не поменялось, — иначе таблица из четырёх строк пухла бы от версий."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO external_worker_consumers (consumer, queues, build, contract)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (consumer) DO UPDATE
+            SET queues = EXCLUDED.queues,
+                build = EXCLUDED.build,
+                contract = EXCLUDED.contract,
+                last_seen_at = now()
+            WHERE external_worker_consumers.last_seen_at < now() - interval '30 seconds'
+               OR (external_worker_consumers.queues, external_worker_consumers.build,
+                   external_worker_consumers.contract)
+                  IS DISTINCT FROM (EXCLUDED.queues, EXCLUDED.build, EXCLUDED.contract)
+            """,
+            (contract.consumer_of(worker_id), sorted(queues or []), build, contract_number),
+        )
+        conn.commit()
+
+
+def list_external_consumers() -> list[dict]:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT consumer, queues, build, contract, first_seen_at, last_seen_at
+            FROM external_worker_consumers
+            ORDER BY consumer
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def mark_background_job_running(job_id: int) -> None:
@@ -2748,6 +2818,38 @@ def release_external_background_job_finalize(job_id: int, *, lease_token_hash: s
               AND lease_token_hash = %s
             """,
             (job_id, lease_token_hash),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+
+def requeue_released_external_job(job_id: int, *, lease_token_hash: str, payload: dict, note: str) -> bool:
+    """Воркер вернул задачу сам (мягкая остановка на выкате NL): сразу в очередь.
+
+    Попытка не списывается — остановку устроили мы, а не задача; иначе три выката подряд
+    похоронили бы здоровую задачу. payload — то, что осталось сделать (contract.
+    remaining_after_partial): сделанная часть уже записана и вычтена, резерв статей снят.
+    Ждёт задачу в 'finalizing' — ядро застолбило её на время записи частичного итога."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'queued',
+                progress = 0,
+                attempts = GREATEST(attempts - 1, 0),
+                run_after = now(),
+                started_at = NULL,
+                claimed_by = NULL,
+                lease_token_hash = NULL,
+                lease_expires_at = NULL,
+                payload_json = %s,
+                error_message = %s
+            WHERE id = %s
+              AND execution_region = 'external'
+              AND status = 'finalizing'
+              AND lease_token_hash = %s
+            """,
+            (Json(_jsonable(payload)), note, job_id, lease_token_hash),
         )
         conn.commit()
         return bool(cur.rowcount)

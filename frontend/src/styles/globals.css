@@ -1306,6 +1306,12 @@ button {
   font-weight: 700;
 }
 
+/* Воркер NL с другим номером контракта, чем у ядра: пересобран не тот или не весь NL. */
+.externalQueueRow.contractMismatch {
+  border-color: var(--sem-bad-border);
+  background: var(--sem-bad-bg);
+}
+
 .compactEmptyState {
   min-height: 92px;
   margin-top: 12px;

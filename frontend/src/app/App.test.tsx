@@ -129,6 +129,44 @@ const maintenanceStatus = {
         count: 208,
         message: "Очередь external-fetch: 208 задач ждут, а воркер не появлялся ни разу — нет живого потребителя",
       },
+      {
+        queue: "external-playwright",
+        kind: "contract_mismatch",
+        consumer: "nl-browser-1",
+        count: 1,
+        message: "Воркер nl-browser-1: не сообщил номер (сборка до контракта), у ядра контракт 1 — NL надо пересобрать",
+      },
+    ],
+    contract: 1,
+    consumers: [
+      {
+        consumer: "nl-ai-1",
+        queues: ["external-ai"],
+        build: "abc1234",
+        contract: 1,
+        first_seen_at: "2026-09-23T06:00:00Z",
+        last_seen_at: "2026-09-23T06:05:00Z",
+        mismatch: false,
+      },
+      {
+        consumer: "nl-browser-1",
+        queues: ["external-playwright"],
+        build: null,
+        contract: null,
+        first_seen_at: "2026-09-23T06:00:00Z",
+        last_seen_at: "2026-09-23T06:05:00Z",
+        mismatch: true,
+      },
+      {
+        // Давно пропавший воркер со старым контрактом: ядро его не отмечает — экран не красит.
+        consumer: "external-worker-1",
+        queues: ["external-ai"],
+        build: null,
+        contract: null,
+        first_seen_at: "2026-09-01T06:00:00Z",
+        last_seen_at: "2026-09-01T06:05:00Z",
+        mismatch: false,
+      },
     ],
   },
 };
@@ -584,7 +622,13 @@ describe("App smoke", () => {
     expect(screen.getByText("Внешний контур")).toBeInTheDocument();
     // Сторож полос: тревога видна на экране, а не только в логе планировщика.
     expect(screen.getByRole("alert")).toHaveTextContent("208 задач ждут");
-    expect(screen.getByText("external-ai")).toBeInTheDocument();
+    expect(screen.getByText("external-ai", { selector: "strong" })).toBeInTheDocument();
+    // Контракт версий: сборка каждого воркера NL видна, старый — подсвечен и в тревогах.
+    expect(screen.getByRole("alert")).toHaveTextContent("nl-browser-1: не сообщил номер");
+    expect(screen.getByTestId("consumer-nl-ai-1")).toHaveTextContent("сборка abc1234");
+    expect(screen.getByTestId("consumer-nl-ai-1")).not.toHaveClass("contractMismatch");
+    expect(screen.getByTestId("consumer-nl-browser-1")).toHaveClass("contractMismatch");
+    expect(screen.getByTestId("consumer-external-worker-1")).not.toHaveClass("contractMismatch");
     expect(screen.queryByRole("button", { name: "Обслуживание сервиса" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Запустить замер" }));

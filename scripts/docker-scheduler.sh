@@ -1,6 +1,14 @@
 #!/bin/sh
 set -u
 
+# Ровно один планировщик (ADR 0001, п. 4): весь процесс — и циклы, и паузы — идёт под
+# advisory lock в Postgres. 21.09 второй планировщик, поднятый лишним `compose up`, 8,5 ч
+# дублировал сбор и ИИ. Второй экземпляр пишет в лог, у кого замок, и ждёт, не делая ни
+# одного шага. Обёртка заодно передаёт SIGTERM шагам: shell под PID 1 его игнорировал.
+if [ "${SCHEDULER_LOCK_HELD:-0}" != "1" ]; then
+  exec python -m oiltech_digest.cli scheduler-lock -- "$0" "$@"
+fi
+
 log() {
   printf '%s %s\n' "$(date -Iseconds)" "$*"
 }

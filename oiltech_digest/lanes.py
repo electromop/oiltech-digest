@@ -38,12 +38,22 @@ EXTERNAL_LANES: dict[str, frozenset[str]] = {
     BROWSER: _FETCH_KINDS,
 }
 
+# Полосы, чью задачу нельзя рвать выкатом ядра: ИИ оплачен, а итог, пришедший в минуту
+# перезапуска, теряется (24.07 — петля и двойная оплата). Все внешние, кроме сбора: новая
+# полоса (радар, агенты) защищена по умолчанию, пока её явно не отнесли к дешёвым.
+AI_LANES: frozenset[str] = frozenset(EXTERNAL_LANES) - {FETCH, BROWSER}
+
 # Сколько задача может ждать в очереди, пока это норма (минуты). Пачка сбора — раз в
 # ~41 мин и разбирается за ~6; поток дня ИИ ждёт секунды; пересчёт — часами по замыслу.
 STALE_AFTER_MINUTES: dict[str, int] = {AI_LIVE: 30, AI_BULK: 360, FETCH: 45, BROWSER: 45}
 # Задачи есть, но ни одна не стартовала столько минут и ничего не выполняется —
 # у очереди нет живого потребителя.
 IDLE_AFTER_MINUTES = 15
+# Потребитель (контейнер NL) считается живым, если просил задачу за столько часов: пустая
+# очередь — claim раз в ≤30 с, долгая пачка пересчёта — часами без claim. Пропавший дольше —
+# в списке остаётся, но о контракте не звенит: его очередь сторож и так видит как «нет
+# живого потребителя», а переименованный контейнер не должен звенеть вечно.
+CONSUMER_ACTIVE_HOURS = 6
 
 
 def is_external(queue_name: str | None) -> bool:
@@ -72,10 +82,38 @@ def _minutes_since(value: Any, now: datetime) -> float | None:
     return (now - value).total_seconds() / 60
 
 
+def consumer_mismatch(consumer: dict[str, Any], expected: int | None, *, now: datetime) -> bool:
+    """Живой (claim за CONSUMER_ACTIVE_HOURS) воркер с другим номером контракта, чем у ядра.
+
+    Одно правило на всех: сторож, экран обслуживания и самопроверка NL при выкате."""
+    seen = _minutes_since(consumer.get("last_seen_at"), now)
+    if expected is None or seen is None or seen > CONSUMER_ACTIVE_HOURS * 60:
+        return False
+    return consumer.get("contract") != expected
+
+
 def lane_alerts(status: dict[str, Any], *, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Тревоги по итогу external_queue_status: застой, нет потребителя, неизвестная очередь."""
+    """Тревоги по итогу external_queue_status: застой, нет потребителя, неизвестная очередь,
+    расхождение контракта у живого воркера."""
     now = now or datetime.now(timezone.utc)
     alerts: list[dict[str, Any]] = []
+    expected = status.get("contract")
+    for consumer in status.get("consumers") or []:
+        if not consumer_mismatch(consumer, expected, now=now):
+            continue
+        number = consumer.get("contract")
+        name = consumer.get("consumer")
+        told = "не сообщил номер (сборка до контракта)" if number is None else f"контракт {number}"
+        # Порядок выката — ядро, потом NL; воркер новее ядра значит, что ядро не выкачено.
+        advice = "ядро отстаёт — выкатить ядро" if number is not None and number > expected else "NL надо пересобрать"
+        alerts.append({
+            "queue": ", ".join(consumer.get("queues") or []) or None,
+            "kind": "contract_mismatch",
+            "consumer": name,
+            "count": 1,
+            "message": f"Воркер {name}: {told}, у ядра контракт {expected} (сборка воркера "
+                       f"{consumer.get('build') or '—'}) — {advice}",
+        })
     expired = int((status.get("totals") or {}).get("expired_leases") or 0)
     if expired:
         alerts.append({"queue": None, "kind": "expired_leases", "count": expired,

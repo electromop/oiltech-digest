@@ -251,9 +251,10 @@ export type ExternalQueueRow = {
 // Тревоги сторожа полос (lanes.py): застой, очередь без живого воркера, истёкшие аренды.
 export type LaneAlert = {
   queue: string | null;
-  kind: "stale" | "no_consumer" | "unknown_queue" | "expired_leases" | string;
+  kind: "stale" | "no_consumer" | "unknown_queue" | "expired_leases" | "contract_mismatch" | string;
   count: number;
   minutes?: number;
+  consumer?: string;
   message: string;
 };
 
@@ -269,6 +270,19 @@ export type ExternalQueueStatus = {
   };
   queues: ExternalQueueRow[];
   alerts?: LaneAlert[];
+  // Контракт версий РФ↔NL (contract.py): номер ядра и что сообщил каждый контейнер NL.
+  contract?: number;
+  consumers?: ExternalConsumer[];
+};
+
+export type ExternalConsumer = {
+  consumer: string;
+  queues: string[];
+  build: string | null;
+  contract: number | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  mismatch?: boolean;
 };
 
 export type MaintenanceCleanupResult = {

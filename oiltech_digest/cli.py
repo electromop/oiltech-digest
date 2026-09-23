@@ -1424,7 +1424,12 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
     logger = logging.getLogger(__name__)
-    alerts = repository.external_queue_status().get("alerts") or []
+    status = repository.external_queue_status()
+    # Версии потребителей — каждый цикл в лог: «пересобран ли NL» видно без раскопок.
+    print(f"check-lanes: контракт ядра {status.get('contract')}")
+    for line in _consumer_lines(status.get("consumers") or []):
+        print(f"check-lanes: {line}")
+    alerts = status.get("alerts") or []
     if not alerts:
         print("check-lanes: ok")
         return
@@ -1432,6 +1437,99 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
         logger.warning("lane_alert kind=%s queue=%s count=%s", alert["kind"], alert.get("queue"), alert.get("count"))
         print(f"check-lanes: ТРЕВОГА {alert['message']}")
     raise SystemExit(2)
+
+
+def cmd_live_ai_leases(args: argparse.Namespace) -> None:
+    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть, — scripts/deploy-core.sh
+    тогда отказывается перезапускать ядро без --force."""
+    from oiltech_digest.db import repository
+
+    rows = repository.live_ai_leases()
+    if not rows:
+        print("live-ai-leases: ИИ-задач в работе нет")
+        return
+    for row in rows:
+        print(
+            f"live-ai-leases: задача {row['id']} {row['kind']} [{row['queue_name']}] "
+            f"у {row.get('claimed_by') or '—'}, {row['status']}, аренда до {row.get('lease_expires_at') or '—'}"
+        )
+    raise SystemExit(3)
+
+
+def _ago(value) -> str:
+    if value is None:
+        return "никогда"
+    moment = datetime.fromisoformat(value) if isinstance(value, str) else value
+    seconds = max(0, int((datetime.now(timezone.utc) - moment).total_seconds()))
+    if seconds < 120:
+        return f"{seconds} с назад"
+    if seconds < 7200:
+        return f"{seconds // 60} мин назад"
+    return f"{seconds // 3600} ч назад"
+
+
+def _consumer_lines(consumers: list[dict]) -> list[str]:
+    return [
+        f"{row.get('consumer')} [{', '.join(row.get('queues') or []) or '—'}] "
+        f"сборка {row.get('build') or '—'}, контракт {'—' if row.get('contract') is None else row.get('contract')}, "
+        f"запрос {_ago(row.get('last_seen_at'))}"
+        for row in consumers
+    ]
+
+
+def _fetch_consumer_versions() -> dict:
+    from oiltech_digest import config, external_worker
+
+    return external_worker.ExternalWorkerClient(
+        core_api_url=config.CORE_API_URL, token=config.EXTERNAL_WORKER_TOKEN, worker_id=config.EXTERNAL_WORKER_ID,
+        queues=config.EXTERNAL_WORKER_QUEUES, capabilities=config.EXTERNAL_WORKER_CAPABILITIES,
+    ).consumers()
+
+
+def cmd_worker_versions(args: argparse.Namespace) -> None:
+    """Версии контейнеров NL глазами ядра — на NL, где базы нет.
+
+    --self: этот контейнер обязан уже отметиться в ядре нужной сборкой и контрактом ядра
+    (код 1, если нет). Так скрипт выката NL убеждается, что перезапущенный воркер жив и
+    новый, прежде чем трогать следующий."""
+    from oiltech_digest import config, contract
+
+    data = _fetch_consumer_versions()
+    expected = data.get("contract")
+    consumers = data.get("consumers") or []
+    print(f"worker-versions: контракт ядра {expected}")
+    for line in _consumer_lines(consumers):
+        print(f"worker-versions: {line}")
+    if not args.self_check:
+        return
+    me = contract.consumer_of(config.EXTERNAL_WORKER_ID)
+    row = next((item for item in consumers if item.get("consumer") == me), None)
+    problems = []
+    if row is None:
+        problems.append(f"{me} ещё не обращался к ядру")
+    else:
+        if args.expect_build and row.get("build") != args.expect_build:
+            problems.append(f"{me}: сборка {row.get('build') or '—'}, ждём {args.expect_build}")
+        if row.get("mismatch"):  # правило одно — lanes.consumer_mismatch на ядре
+            problems.append(f"{me}: контракт {row.get('contract')}, у ядра {expected}")
+    for problem in problems:
+        print(f"worker-versions: НЕ ГОТОВО — {problem}")
+    if problems:
+        raise SystemExit(1)
+    print(f"worker-versions: {me} — новая сборка на месте")
+
+
+def cmd_scheduler_lock(args: argparse.Namespace) -> None:
+    """Запустить команду под замком планировщика: второй экземпляр ждёт, а не дублирует."""
+    from oiltech_digest import singleton
+
+    command = list(args.command or [])
+    if command[:1] == ["--"]:
+        command = command[1:]
+    key = singleton.SCHEDULER_LOCK_KEY if args.key is None else args.key
+    raise SystemExit(singleton.run_exclusive(
+        command, key=key, poll_seconds=args.poll_seconds, check_seconds=args.check_seconds,
+    ))
 
 
 def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
@@ -1949,6 +2047,31 @@ def build_parser() -> argparse.ArgumentParser:
         "check-lanes", help="сторож внешних очередей: застой, нет воркера, истёкшие аренды (код 2 при тревоге)"
     )
     p_check_lanes.set_defaults(func=cmd_check_lanes)
+
+    p_live_ai = sub.add_parser(
+        "live-ai-leases", help="ИИ-задачи в работе (код 3, если есть) — страж scripts/deploy-core.sh"
+    )
+    p_live_ai.set_defaults(func=cmd_live_ai_leases)
+
+    p_worker_versions = sub.add_parser(
+        "worker-versions", help="сборки и контракты контейнеров NL глазами ядра (запускать на NL)"
+    )
+    p_worker_versions.add_argument("--self", dest="self_check", action="store_true",
+                                   help="проверить свой контейнер (EXTERNAL_WORKER_ID); код 1, если не готов")
+    p_worker_versions.add_argument("--expect-build", default=None, help="ожидаемая сборка (git SHA)")
+    p_worker_versions.set_defaults(func=cmd_worker_versions)
+
+    p_scheduler_lock = sub.add_parser(
+        "scheduler-lock",
+        help="выполнить команду под advisory lock планировщика; второй экземпляр пишет в лог и ждёт",
+    )
+    p_scheduler_lock.add_argument("--key", type=int, default=None,
+                                  help="ключ замка (по умолчанию — ключ планировщика; другой — только в тестах)")
+    p_scheduler_lock.add_argument("--poll-seconds", type=float, default=30.0, help="как часто пробовать взять замок")
+    p_scheduler_lock.add_argument("--check-seconds", type=float, default=30.0,
+                                  help="как часто проверять, что соединение с замком живо")
+    p_scheduler_lock.add_argument("command", nargs=argparse.REMAINDER, help="-- команда и её аргументы")
+    p_scheduler_lock.set_defaults(func=cmd_scheduler_lock)
 
     p_maintenance_cleanup = sub.add_parser(
         "maintenance-cleanup",

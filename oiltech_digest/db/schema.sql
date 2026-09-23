@@ -867,6 +867,17 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_background_jobs_external_ready ON background_jobs(execution_region, queue_name, status, run_after, created_at);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_lease_expires ON background_jobs(status, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_user_created ON background_jobs(user_id, created_at DESC);
+-- Потребители внешних очередей — контейнеры NL (23.09, контракт версий, contract.py):
+-- какую сборку и номер контракта каждый сообщил при последнем claim. 18.09 и 21.09
+-- «пересобран ли NL» выясняли по косвенным полям; теперь расхождение — тревога сторожа.
+CREATE TABLE IF NOT EXISTS external_worker_consumers (
+  consumer       TEXT PRIMARY KEY,           -- EXTERNAL_WORKER_ID без #потока
+  queues         TEXT[] NOT NULL DEFAULT '{}',
+  build          TEXT,                       -- git SHA образа; NULL — сборка до контракта
+  contract       INTEGER,                    -- NULL — воркер номер не прислал
+  first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- Идемпотентность биллинга AI (баг H1/T2): один (job_id, article_id, stage) — одна строка.
 -- Повторное применение результата задачи (ретрай/переотдача воркера) НЕ двоит ai_processing_runs
 -- → нет двойного счёта OpenAI. NULL job_id (локальный путь) и NULL article_id (дайджест) не
