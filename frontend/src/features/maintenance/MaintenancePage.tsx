@@ -141,8 +141,30 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
         {status?.external_queues.alerts?.length ? (
           <div className="laneAlerts" role="alert">
             {status.external_queues.alerts.map((alert) => (
-              <span key={`${alert.kind}-${alert.queue ?? "all"}`}>{alert.message}</span>
+              <span key={`${alert.kind}-${alert.consumer ?? alert.queue ?? "all"}`}>{alert.message}</span>
             ))}
+          </div>
+        ) : null}
+        {/* Контракт версий: 18.09 и 21.09 «пересобран ли NL» выясняли по косвенным полям. */}
+        {status?.external_queues.consumers?.length ? (
+          <div className="externalQueueList" aria-label="Воркеры NL">
+            <div className="metaLabel">Воркеры NL — у ядра контракт {status.external_queues.contract ?? "—"}</div>
+            {status.external_queues.consumers.map((consumer) => {
+              const mismatch = consumer.contract !== status.external_queues.contract;
+              return (
+                <div
+                  key={consumer.consumer}
+                  className={mismatch ? "externalQueueRow contractMismatch" : "externalQueueRow"}
+                  data-testid={`consumer-${consumer.consumer}`}
+                >
+                  <strong>{consumer.consumer}</strong>
+                  <span>{consumer.queues.join(", ") || "—"}</span>
+                  <span>сборка {consumer.build ?? "—"}</span>
+                  <span>контракт {consumer.contract ?? "—"}</span>
+                  <span>запрос {formatDate(consumer.last_seen_at)}</span>
+                </div>
+              );
+            })}
           </div>
         ) : null}
         {status?.external_queues.queues.length ? (

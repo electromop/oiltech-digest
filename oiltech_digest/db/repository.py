@@ -9,10 +9,11 @@ import re
 from typing import Literal, NamedTuple, get_args
 from urllib.parse import urlsplit
 
+from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, config, lanes
+from oiltech_digest import auth, config, contract, lanes
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.db.connection import get_connection
 
@@ -2562,12 +2563,57 @@ def external_queue_status() -> dict:
             """
         )
         queues = cur.fetchall()
+    try:
+        consumers = list_external_consumers()
+    except pg_errors.UndefinedTable:
+        # Код выкачен без init-db: версий пока нет, но сторож очередей работать обязан.
+        consumers = []
     status = {
         "totals": dict(totals),
         "queues": [dict(row) for row in queues],
+        "contract": contract.CONTRACT,
+        "consumers": consumers,
     }
     status["alerts"] = lanes.lane_alerts(status)
     return status
+
+
+def record_external_consumer(worker_id: str, *, queues: list[str], build: str | None, contract_number: int | None) -> None:
+    """Запомнить, какую сборку и контракт сообщил контейнер NL при выдаче задачи.
+
+    Пустые очереди claim идут раз в 3–30 с на поток: строку переписываем не чаще раза в
+    30 с, если ничего не поменялось, — иначе таблица из четырёх строк пухла бы от версий."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO external_worker_consumers (consumer, queues, build, contract)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (consumer) DO UPDATE
+            SET queues = EXCLUDED.queues,
+                build = EXCLUDED.build,
+                contract = EXCLUDED.contract,
+                last_seen_at = now()
+            WHERE external_worker_consumers.last_seen_at < now() - interval '30 seconds'
+               OR (external_worker_consumers.queues, external_worker_consumers.build,
+                   external_worker_consumers.contract)
+                  IS DISTINCT FROM (EXCLUDED.queues, EXCLUDED.build, EXCLUDED.contract)
+            """,
+            (contract.consumer_of(worker_id), sorted(queues or []), build, contract_number),
+        )
+        conn.commit()
+
+
+def list_external_consumers() -> list[dict]:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT consumer, queues, build, contract, first_seen_at, last_seen_at
+            FROM external_worker_consumers
+            ORDER BY consumer
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def mark_background_job_running(job_id: int) -> None:

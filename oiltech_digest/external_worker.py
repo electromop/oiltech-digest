@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 import requests
 
-from oiltech_digest import config
+from oiltech_digest import config, contract
 from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
@@ -116,7 +116,12 @@ class ExternalWorkerClient:
         self.queues = queues
         self.capabilities = capabilities
         self.session = requests.Session()
-        self.session.headers.update({"Authorization": f"Bearer {token}"})
+        self.session.headers.update({
+            "Authorization": f"Bearer {token}",
+            # Кто пришёл: ядро помнит сборку и контракт каждого контейнера NL (contract.py).
+            contract.HEADER_BUILD: config.OILTECH_BUILD,
+            contract.HEADER_CONTRACT: str(contract.CONTRACT),
+        })
 
     def claim(self) -> dict[str, Any] | None:
         response = self.session.post(

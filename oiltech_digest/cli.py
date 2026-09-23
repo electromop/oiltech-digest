@@ -1424,7 +1424,12 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
     logger = logging.getLogger(__name__)
-    alerts = repository.external_queue_status().get("alerts") or []
+    status = repository.external_queue_status()
+    # Версии потребителей — каждый цикл в лог: «пересобран ли NL» видно без раскопок.
+    print(f"check-lanes: контракт ядра {status.get('contract')}")
+    for line in _consumer_lines(status.get("consumers") or []):
+        print(f"check-lanes: {line}")
+    alerts = status.get("alerts") or []
     if not alerts:
         print("check-lanes: ok")
         return
@@ -1432,6 +1437,76 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
         logger.warning("lane_alert kind=%s queue=%s count=%s", alert["kind"], alert.get("queue"), alert.get("count"))
         print(f"check-lanes: ТРЕВОГА {alert['message']}")
     raise SystemExit(2)
+
+
+def _ago(value) -> str:
+    if value is None:
+        return "никогда"
+    moment = datetime.fromisoformat(value) if isinstance(value, str) else value
+    seconds = max(0, int((datetime.now(timezone.utc) - moment).total_seconds()))
+    if seconds < 120:
+        return f"{seconds} с назад"
+    if seconds < 7200:
+        return f"{seconds // 60} мин назад"
+    return f"{seconds // 3600} ч назад"
+
+
+def _consumer_lines(consumers: list[dict]) -> list[str]:
+    return [
+        f"{row.get('consumer')} [{', '.join(row.get('queues') or []) or '—'}] "
+        f"сборка {row.get('build') or '—'}, контракт {'—' if row.get('contract') is None else row.get('contract')}, "
+        f"запрос {_ago(row.get('last_seen_at'))}"
+        for row in consumers
+    ]
+
+
+def _fetch_consumer_versions() -> dict:
+    import requests
+
+    from oiltech_digest import config
+
+    if not config.CORE_API_URL or not config.EXTERNAL_WORKER_TOKEN:
+        raise SystemExit("worker-versions: нужны CORE_API_URL и EXTERNAL_WORKER_TOKEN — запускать в контейнере NL")
+    response = requests.get(
+        f"{config.CORE_API_URL}/api/external-worker/consumers",
+        headers={"Authorization": f"Bearer {config.EXTERNAL_WORKER_TOKEN}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def cmd_worker_versions(args: argparse.Namespace) -> None:
+    """Версии контейнеров NL глазами ядра — на NL, где базы нет.
+
+    --self: этот контейнер обязан уже отметиться в ядре нужной сборкой и контрактом ядра
+    (код 1, если нет). Так скрипт выката NL убеждается, что перезапущенный воркер жив и
+    новый, прежде чем трогать следующий."""
+    from oiltech_digest import config, contract
+
+    data = _fetch_consumer_versions()
+    expected = data.get("contract")
+    consumers = data.get("consumers") or []
+    print(f"worker-versions: контракт ядра {expected}")
+    for line in _consumer_lines(consumers):
+        print(f"worker-versions: {line}")
+    if not args.self_check:
+        return
+    me = contract.consumer_of(config.EXTERNAL_WORKER_ID)
+    row = next((item for item in consumers if item.get("consumer") == me), None)
+    problems = []
+    if row is None:
+        problems.append(f"{me} ещё не обращался к ядру")
+    else:
+        if args.expect_build and row.get("build") != args.expect_build:
+            problems.append(f"{me}: сборка {row.get('build') or '—'}, ждём {args.expect_build}")
+        if row.get("contract") != expected:
+            problems.append(f"{me}: контракт {row.get('contract')}, у ядра {expected}")
+    for problem in problems:
+        print(f"worker-versions: НЕ ГОТОВО — {problem}")
+    if problems:
+        raise SystemExit(1)
+    print(f"worker-versions: {me} — новая сборка на месте")
 
 
 def cmd_scheduler_lock(args: argparse.Namespace) -> None:
@@ -1964,6 +2039,14 @@ def build_parser() -> argparse.ArgumentParser:
         "check-lanes", help="сторож внешних очередей: застой, нет воркера, истёкшие аренды (код 2 при тревоге)"
     )
     p_check_lanes.set_defaults(func=cmd_check_lanes)
+
+    p_worker_versions = sub.add_parser(
+        "worker-versions", help="сборки и контракты контейнеров NL глазами ядра (запускать на NL)"
+    )
+    p_worker_versions.add_argument("--self", dest="self_check", action="store_true",
+                                   help="проверить свой контейнер (EXTERNAL_WORKER_ID); код 1, если не готов")
+    p_worker_versions.add_argument("--expect-build", default=None, help="ожидаемая сборка (git SHA)")
+    p_worker_versions.set_defaults(func=cmd_worker_versions)
 
     p_scheduler_lock = sub.add_parser(
         "scheduler-lock",

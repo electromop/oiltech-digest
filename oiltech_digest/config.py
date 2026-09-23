@@ -64,6 +64,11 @@ BACKGROUND_JOB_RETRY_BASE_SECONDS = int(os.environ.get("BACKGROUND_JOB_RETRY_BAS
 EXPORT_JOB_RETENTION_DAYS = int(os.environ.get("EXPORT_JOB_RETENTION_DAYS", "30"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
+# Сборка кода: git SHA, вшитый при сборке образа (Dockerfile, ARG GIT_SHA). Воркер NL
+# сообщает её ядру вместе с номером контракта (contract.py) — «пересобран ли NL» видно
+# в check-lanes, а не по косвенным полям.
+OILTECH_BUILD = os.environ.get("OILTECH_BUILD", "").strip() or "unknown"
+
 # --- Геораспределенное исполнение ---
 # По умолчанию внешний контур выключен: routing helper сохраняет старые локальные
 # очереди, чтобы обновление кода не остановило текущий single-server deployment.

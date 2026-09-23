@@ -44,6 +44,11 @@ STALE_AFTER_MINUTES: dict[str, int] = {AI_LIVE: 30, AI_BULK: 360, FETCH: 45, BRO
 # Задачи есть, но ни одна не стартовала столько минут и ничего не выполняется —
 # у очереди нет живого потребителя.
 IDLE_AFTER_MINUTES = 15
+# Потребитель (контейнер NL) считается живым, если просил задачу за столько часов: пустая
+# очередь — claim раз в ≤30 с, долгая пачка пересчёта — часами без claim. Пропавший дольше —
+# в списке остаётся, но о контракте не звенит: его очередь сторож и так видит как «нет
+# живого потребителя», а переименованный контейнер не должен звенеть вечно.
+CONSUMER_ACTIVE_HOURS = 6
 
 
 def is_external(queue_name: str | None) -> bool:
@@ -73,9 +78,30 @@ def _minutes_since(value: Any, now: datetime) -> float | None:
 
 
 def lane_alerts(status: dict[str, Any], *, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Тревоги по итогу external_queue_status: застой, нет потребителя, неизвестная очередь."""
+    """Тревоги по итогу external_queue_status: застой, нет потребителя, неизвестная очередь,
+    расхождение контракта у живого воркера."""
     now = now or datetime.now(timezone.utc)
     alerts: list[dict[str, Any]] = []
+    expected = status.get("contract")
+    for consumer in status.get("consumers") or []:
+        seen = _minutes_since(consumer.get("last_seen_at"), now)
+        if expected is None or seen is None or seen > CONSUMER_ACTIVE_HOURS * 60:
+            continue
+        number = consumer.get("contract")
+        if number == expected:
+            continue
+        name = consumer.get("consumer")
+        told = "не сообщил номер (сборка до контракта)" if number is None else f"контракт {number}"
+        # Порядок выката — ядро, потом NL; воркер новее ядра значит, что ядро не выкачено.
+        advice = "ядро отстаёт — выкатить ядро" if number is not None and number > expected else "NL надо пересобрать"
+        alerts.append({
+            "queue": ", ".join(consumer.get("queues") or []) or None,
+            "kind": "contract_mismatch",
+            "consumer": name,
+            "count": 1,
+            "message": f"Воркер {name}: {told}, у ядра контракт {expected} (сборка воркера "
+                       f"{consumer.get('build') or '—'}) — {advice}",
+        })
     expired = int((status.get("totals") or {}).get("expired_leases") or 0)
     if expired:
         alerts.append({"queue": None, "kind": "expired_leases", "count": expired,

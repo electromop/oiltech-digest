@@ -19,10 +19,18 @@
 #
 # Память (1,9 ГБ): ИИ-воркеры ждут сеть, Chromium живёт только в полосе браузера.
 # Перед первым `up` проверить `free -m` и `docker stats --no-stream`.
+#
+# Сборка — с SHA коммита (scripts/deploy-nl.sh передаёт GIT_SHA): воркер сообщает её ядру
+# вместе с номером контракта, и check-lanes на ядре показывает, пересобран ли каждый контейнер.
+x-worker-build: &worker-build
+  context: .
+  args:
+    GIT_SHA: ${GIT_SHA:-unknown}
+
 services:
   # ИИ — поток дня: пакеты планировщика, перепечатки, документы пользователей.
   external-worker:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker
     restart: unless-stopped
     env_file:
@@ -39,7 +47,7 @@ services:
   # долгие пачки не стоят перед потоком дня. На ядре включается AI_BULK_LANE_ENABLED=1
   # только после того, как этот контейнер поднят.
   external-worker-bulk:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker_bulk
     restart: unless-stopped
     env_file:
@@ -54,7 +62,7 @@ services:
 
   # Сбор запросом: RSS, листинги, статьи, дозагрузка тел. I/O — три потока.
   external-worker-fetch:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker_fetch
     restart: unless-stopped
     env_file:
@@ -71,7 +79,7 @@ services:
   # Сбор браузером: один поток — Chromium тяжёлый, а зависший сайт больше не держит
   # за собой RSS/HTTP-полосу.
   external-worker-browser:
-    build: .
+    build: *worker-build
     container_name: oiltech_external_worker_browser
     restart: unless-stopped
     env_file:

@@ -1302,8 +1302,17 @@ def _lease_seconds(value: int | None) -> int:
 @app.post("/api/external-worker/claim")
 def external_worker_claim(
     payload: ExternalWorkerClaimRequest,
+    x_worker_build: str | None = Header(default=None),
+    x_worker_contract: str | None = Header(default=None),
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
+    try:
+        repository.record_external_consumer(
+            payload.worker_id, queues=payload.queues, build=(x_worker_build or "").strip()[:64] or None,
+            contract_number=contract.parse_contract(x_worker_contract),
+        )
+    except Exception:  # noqa: BLE001 - учёт версий не должен останавливать выдачу задач
+        logger.warning("external_consumer_record_failed worker=%s", payload.worker_id, exc_info=True)
     repository.requeue_expired_external_leases()
     lease_token = secrets.token_urlsafe(32)
     job = repository.claim_external_background_job(
@@ -1323,6 +1332,12 @@ def external_worker_claim(
         repository.defer_claimed_background_job(int(job["id"]), seconds=120)
         return {"job": None}
     return {"job": {**_job_payload(job), "payload": worker_payload, "lease_token": lease_token}}
+
+
+@app.get("/api/external-worker/consumers")
+def external_worker_consumers(_: None = Depends(require_external_worker)) -> dict[str, Any]:
+    """Сборки и контракты контейнеров NL — для скрипта выката на NL, где базы нет."""
+    return _clean({"contract": contract.CONTRACT, "consumers": repository.list_external_consumers()})
 
 
 @app.post("/api/external-worker/jobs/{job_id}/progress")
