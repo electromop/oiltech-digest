@@ -7,8 +7,11 @@
 # Шаги:
 #   1. git fetch + reset --hard на REF — сервер только следует за origin и ничего не
 #      сливает; дальше работает уже версия этого скрипта из выкатываемого кода;
-#   2. изменился ли schema.sql между выкаченным и выкатываемым кодом — если да, нужен
-#      явный выбор: --schema или --no-schema (без него — отказ, до сборки);
+#   2. изменился ли schema.sql с последнего успешного выката (коммит в refs/deploy/core,
+#      пишется в конце выката) — если да, нужен явный выбор: --schema или --no-schema
+#      (без него — отказ, до сборки). Не HEAD до reset: повтор той же команды после отказа
+#      или ручной reset перед скриптом видели бы «без изменений» (повторное ревью 23.09).
+#      Первый выкат скриптом (ссылки ещё нет) — выбор тоже обязателен;
 #   3. сборка названных сервисов — старые контейнеры в это время работают;
 #   4. страж: ИИ-задачи в работе (live-ai-leases) — отказ без --force. Итог, пришедший
 #      в минуту перезапуска ядра, теряется вместе с оплаченной работой (24.07);
@@ -27,6 +30,9 @@ set -eu
 
 SERVICES_ALLOWED="app scheduler worker playwright-worker"
 HEALTH_TIMEOUT=180
+# Что выкачено последним успешным прогоном: ссылка в .git, её не трогают ни reset --hard,
+# ни git status.
+DEPLOY_REF=refs/deploy/core
 
 log() {
   printf '%s deploy-core: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"
@@ -88,7 +94,7 @@ main() {
   FORCE=0
   SCHEMA=ask
   REF=origin/main
-  DEPLOYED=""
+  UPDATED=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) FORCE=1 ;;
@@ -99,12 +105,7 @@ main() {
         REF="$2"
         shift
         ;;
-      --updated)
-        # Внутренний: скрипт перезапущен новой версией; дальше — коммит, что был выкачен.
-        [ $# -ge 2 ] || usage
-        DEPLOYED="$2"
-        shift
-        ;;
+      --updated) UPDATED=1 ;;  # внутренний: скрипт перезапущен версией из нового кода
       -h | --help) usage ;;
       --*) die "неизвестный флаг $1" ;;
       *) break ;;
@@ -124,8 +125,7 @@ main() {
   [ -f .env ] || die "нет .env — скрипт для РФ-ядра"
   [ ! -f .env.external-worker ] || die "здесь .env.external-worker — это NL, для него scripts/deploy-nl.sh"
 
-  if [ -z "$DEPLOYED" ]; then
-    DEPLOYED="$(git rev-parse HEAD)"
+  if [ "$UPDATED" -eq 0 ]; then
     log "код: $(git rev-parse --short HEAD) → $REF"
     git fetch --quiet origin
     git reset --hard --quiet "$REF"
@@ -133,15 +133,19 @@ main() {
     [ "$FORCE" -eq 0 ] || flags="$flags --force"
     [ "$SCHEMA" = ask ] || flags="$flags --$SCHEMA"
     # shellcheck disable=SC2086 # flags — список флагов, разбивка по словам нужна
-    exec sh "$SELF" --updated "$DEPLOYED" $flags --ref "$REF" "$@"
+    exec sh "$SELF" --updated $flags --ref "$REF" "$@"
   fi
 
   GIT_SHA="$(git rev-parse --short HEAD)"
   export GIT_SHA
   FIRST="$1"
   log "выкатываю $GIT_SHA: $*"
-  if [ "$SCHEMA" = ask ] && ! git diff --quiet "$DEPLOYED" HEAD -- oiltech_digest/db/schema.sql; then
-    die "schema.sql изменился с выкаченного кода — нужен выбор: --schema (init-db целиком: articles и background_jobs под эксклюзивным замком на время прогона, лента и выдача задач NL ждут) или --no-schema (новые таблицы и колонки уже созданы вручную)"
+  choose="нужен выбор: --schema (init-db целиком: articles и background_jobs под эксклюзивным замком на время прогона, лента и выдача задач NL ждут) или --no-schema (новые таблицы и колонки уже созданы вручную)"
+  base="$(git rev-parse -q --verify "${DEPLOY_REF}^{commit}" 2>/dev/null || true)"
+  if [ "$SCHEMA" = ask ]; then
+    [ -n "$base" ] || die "первый выкат этим скриптом — неизвестно, какая схема уже на базе; $choose"
+    git diff --quiet "$base" HEAD -- oiltech_digest/db/schema.sql \
+      || die "schema.sql изменился с последнего выката ($(git rev-parse --short "$base")); $choose"
   fi
   free -m 2>/dev/null | sed 's/^/  /' || true
 
@@ -174,7 +178,9 @@ main() {
 
   log "сторож полос:"
   run_cli lanes check-lanes || log "у сторожа тревоги (выше); расхождение контракта ожидаемо, пока NL не пересобран"
-  log "готово: $GIT_SHA"
+  # Только после успешного выката: следующий запуск сравнит схему с этим коммитом.
+  git update-ref "$DEPLOY_REF" HEAD
+  log "готово: $GIT_SHA (записано в $DEPLOY_REF)"
 }
 
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"

@@ -29,9 +29,10 @@ exit 0
 """
 GIT = r"""#!/bin/sh
 echo "git $*" >> "$FAKE_LOG"
-case "$1" in
-  rev-parse) echo abc1234 ;;
-  diff) exit "${FAKE_SCHEMA_CHANGED:-0}" ;;
+case "$1 $2" in
+  "rev-parse -q") [ -n "${FAKE_BASE:-}" ] || exit 1; echo "$FAKE_BASE" ;;
+  "rev-parse "*) echo abc1234 ;;
+  "diff "*) exit "${FAKE_SCHEMA_CHANGED:-0}" ;;
 esac
 exit 0
 """
@@ -57,7 +58,8 @@ def _run(tmp_path: Path, repo: Path, script: str, *args: str, **env: str):
     result = subprocess.run(
         ["sh", str(repo / "scripts" / script), *args],
         cwd=str(tmp_path),  # не из каталога репозитория: скрипт обязан сам найти корень
-        env={**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(log), **env},
+        env={**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(log),
+             "FAKE_BASE": "base123", **env},
         capture_output=True, text=True, timeout=60,
     )
     calls = log.read_text().splitlines() if log.exists() else []
@@ -80,6 +82,7 @@ def test_core_deploy_runs_steps_in_safe_order(tmp_path):
     order = [
         "git fetch", "git reset --hard --quiet origin/main", "docker compose build app scheduler",
         "cli live-ai-leases", "docker compose up -d --no-deps app scheduler", "cli check-lanes",
+        "git update-ref refs/deploy/core HEAD",  # база для следующего выката — только в конце
     ]
     positions = [_index(calls, step) for step in order]
     assert positions == sorted(positions), calls
@@ -98,6 +101,29 @@ def test_core_deploy_refuses_to_guess_when_schema_changed(tmp_path):
     assert result.returncode != 0
     assert "--schema" in result.stdout and "--no-schema" in result.stdout
     assert not any("compose build" in call for call in calls)  # отказ до сборки
+
+
+def test_core_deploy_first_run_needs_explicit_schema_choice(tmp_path):
+    """Первый выкат скриптом: что уже на базе, неизвестно — угадывать нельзя."""
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
+
+    refused, calls = _run(tmp_path, repo, "deploy-core.sh", "app", FAKE_BASE="")
+    assert refused.returncode != 0 and "первый выкат" in refused.stdout
+    assert not any("compose build" in call for call in calls)
+
+    (tmp_path / "calls.log").unlink()
+    done, calls = _run(tmp_path, repo, "deploy-core.sh", "--no-schema", "app", FAKE_BASE="")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert calls[-1] == "git update-ref refs/deploy/core HEAD"
+
+
+def test_core_deploy_does_not_record_a_failed_rollout(tmp_path):
+    repo = _repo(tmp_path, "deploy-core.sh", env_files=(".env",))
+
+    result, calls = _run(tmp_path, repo, "deploy-core.sh", "app", FAKE_LIVE="3")
+
+    assert result.returncode != 0
+    assert not any("update-ref" in call for call in calls)
 
 
 def test_core_deploy_runs_schema_only_when_asked_and_after_the_guard(tmp_path):
@@ -145,6 +171,59 @@ def test_core_deploy_refuses_wrong_target(tmp_path, args, env_files, reason):
     assert result.returncode != 0
     assert reason in result.stdout
     assert calls == []  # ни git, ни docker не тронуты
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.email=deploy-test@example.com", "-c", "user.name=deploy-test", *args],
+        cwd=str(cwd), check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_core_deploy_schema_check_survives_retry_and_manual_reset(tmp_path):
+    """Повторное ревью 23.09: база сравнения схемы была HEAD до reset — второй запуск той же
+    командой после отказа (и ручной reset перед скриптом, как в инструкции первого выката)
+    видел «без изменений» и выкатывал новый код на старую схему. Здесь настоящий git:
+    bare-origin, серверный клон, смена schema.sql между выкатами."""
+    origin, work, server = tmp_path / "origin.git", tmp_path / "work", tmp_path / "server"
+    _git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    _git(tmp_path, "clone", str(origin), str(work))
+    (work / "scripts").mkdir()
+    shutil.copy(ROOT / "scripts" / "deploy-core.sh", work / "scripts" / "deploy-core.sh")
+    schema = work / "oiltech_digest" / "db" / "schema.sql"
+    schema.parent.mkdir(parents=True)
+    schema.write_text("-- v1\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-m", "v1")
+    _git(work, "push", "origin", "HEAD:main")
+    _git(tmp_path, "clone", str(origin), str(server))
+    (server / ".env").write_text("")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for name, body in (("docker", DOCKER), ("sleep", SLEEP)):  # git — настоящий
+        (stubs / name).write_text(body)
+        (stubs / name).chmod(0o755)
+
+    def deploy(*flags: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", str(server / "scripts" / "deploy-core.sh"), *flags, "app"], cwd=str(tmp_path),
+            env={**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}", "FAKE_LOG": str(tmp_path / "calls.log")},
+            capture_output=True, text=True, timeout=60,
+        )
+
+    first_rollout = deploy("--no-schema")  # первый выкат скриптом: выбор явный
+    assert first_rollout.returncode == 0, first_rollout.stdout + first_rollout.stderr
+    schema.write_text("-- v2: новая таблица\n")
+    _git(work, "commit", "-am", "v2")
+    _git(work, "push", "origin", "HEAD:main")
+
+    refused, retried = deploy(), deploy()  # отказ — и та же команда ещё раз
+    assert refused.returncode != 0 and retried.returncode != 0
+    assert "schema.sql изменился" in retried.stdout
+    _git(server, "reset", "--hard", "origin/main")  # ручной reset перед скриптом
+    assert deploy().returncode != 0
+    assert deploy("--no-schema").returncode == 0  # таблицы созданы вручную — выбор явный
+    assert deploy().returncode == 0  # теперь схема та же, что у последнего выката
 
 
 def test_core_guard_covers_every_ai_lane():
