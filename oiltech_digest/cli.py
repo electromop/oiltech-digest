@@ -1434,6 +1434,21 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
     raise SystemExit(2)
 
 
+def cmd_scheduler_lock(args: argparse.Namespace) -> None:
+    """Запустить команду под замком планировщика: второй экземпляр ждёт, а не дублирует."""
+    import os
+
+    from oiltech_digest import singleton
+
+    command = list(args.command or [])
+    if command[:1] == ["--"]:
+        command = command[1:]
+    key = args.key if args.key is not None else int(os.environ.get("SCHEDULER_LOCK_KEY") or singleton.SCHEDULER_LOCK_KEY)
+    raise SystemExit(singleton.run_exclusive(
+        command, key=key, poll_seconds=args.poll_seconds, check_seconds=args.check_seconds,
+    ))
+
+
 def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
     from oiltech_digest import config
     from oiltech_digest.db import repository
@@ -1949,6 +1964,18 @@ def build_parser() -> argparse.ArgumentParser:
         "check-lanes", help="сторож внешних очередей: застой, нет воркера, истёкшие аренды (код 2 при тревоге)"
     )
     p_check_lanes.set_defaults(func=cmd_check_lanes)
+
+    p_scheduler_lock = sub.add_parser(
+        "scheduler-lock",
+        help="выполнить команду под advisory lock планировщика; второй экземпляр пишет в лог и ждёт",
+    )
+    p_scheduler_lock.add_argument("--key", type=int, default=None,
+                                  help="ключ замка (по умолчанию SCHEDULER_LOCK_KEY или ключ планировщика)")
+    p_scheduler_lock.add_argument("--poll-seconds", type=float, default=30.0, help="как часто пробовать взять замок")
+    p_scheduler_lock.add_argument("--check-seconds", type=float, default=30.0,
+                                  help="как часто проверять, что соединение с замком живо")
+    p_scheduler_lock.add_argument("command", nargs=argparse.REMAINDER, help="-- команда и её аргументы")
+    p_scheduler_lock.set_defaults(func=cmd_scheduler_lock)
 
     p_maintenance_cleanup = sub.add_parser(
         "maintenance-cleanup",

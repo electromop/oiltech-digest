@@ -68,8 +68,14 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Конвейер статей (tasks, worker, playwright-worker, scheduler) — под профилем pipeline:
+  # 21.09 голый `up -d --build` у агентов поднял лишний планировщик, и за 8,5 ч он
+  # задублировал сбор и ИИ ($4,48). Голый `up -d` их не поднимает; выкат — только
+  # scripts/deploy-core.sh с явным списком сервисов (названный сервис профиль включает
+  # сам). Второй планировщик и так не начнёт шагов — он ждёт замок (singleton.py).
   tasks:
     build: .
+    profiles: ["pipeline"]
     container_name: oiltech_tasks
     depends_on:
       bootstrap:
@@ -101,6 +107,7 @@ services:
 
   worker:
     build: .
+    profiles: ["pipeline"]
     container_name: oiltech_worker
     depends_on:
       bootstrap:
@@ -128,6 +135,7 @@ services:
 
   playwright-worker:
     build: .
+    profiles: ["pipeline"]
     container_name: oiltech_playwright_worker
     depends_on:
       bootstrap:
@@ -155,6 +163,7 @@ services:
 
   scheduler:
     build: .
+    profiles: ["pipeline"]
     container_name: oiltech_scheduler
     depends_on:
       bootstrap:
