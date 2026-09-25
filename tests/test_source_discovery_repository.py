@@ -496,6 +496,17 @@ def test_source_discovery_daily_usage_counts_today_rows(isolated_db):
     assert usage["candidate_evaluations"] == 1
 
 
+def test_daily_usage_does_not_count_loop_presses_stopped_by_budget(isolated_db):
+    # Дефект 4: «9/6» — нажатия, остановленные лимитом до первой итерации, считались циклами.
+    repository.create_agent_run("source_discovery_loop", trigger="test")
+    stopped_run = repository.create_agent_run("source_discovery_loop", trigger="test")
+    repository.record_agent_action(None, "source_discovery_loop_budget_stop", run_id=stopped_run)
+
+    usage = repository.source_discovery_daily_usage()
+
+    assert usage["loop_runs"] == 1
+
+
 def test_query_memory_report_reads_query_facts(isolated_db):
     repository.upsert_agent_memory(
         memory_key="query:test",
