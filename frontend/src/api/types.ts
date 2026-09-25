@@ -34,8 +34,12 @@ export type Source = {
 
 export type SourceHealth = {
   id: number;
-  verdict: "ok" | "stale" | "no_articles" | "disabled";
+  // archived — источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
+  // disabled, иначе плитки экрана (с архивом) расходились со списком (без архива).
+  verdict: "ok" | "stale" | "no_articles" | "disabled" | "archived";
   articles: number | null;
+  // Материалы за 30 дней по дате сбора. Необязательное: старый сервер его не отдаёт.
+  articles_30d?: number | null;
   last_article_at: string | null;
 };
 

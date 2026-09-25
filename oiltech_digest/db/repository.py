@@ -3637,16 +3637,26 @@ def sources_by_strategy() -> list[dict]:
         return cur.fetchall()
 
 
+SOURCE_HEALTH_VERDICTS = ("no_articles", "stale", "ok", "disabled", "archived")
+
+
 def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | None = None) -> list[dict]:
-    """Per-source article coverage verdict for operations diagnostics."""
+    """Per-source article coverage verdict for operations diagnostics.
+
+    Архивный источник — отдельный вердикт 'archived', а не 'disabled': архив выключает
+    сбор (enabled = FALSE), и раньше он попадал в «Выкл». Экран источников считал
+    плитки по этому отчёту вместе с архивом, а список и счётчик в шапке — без него:
+    19.09 заказчик видел на одном экране «133 источника» и «173» в каталоге.
+    """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
             WITH src AS (
               SELECT s.id, s.name, s.enabled, s.parse_strategy, s.source_type,
-                     s.url, s.rss_url, s.listing_url,
+                     s.url, s.rss_url, s.listing_url, s.archived_at,
                      COUNT(a.id) AS articles,
+                     COUNT(a.id) FILTER (WHERE a.collected_at >= now() - interval '30 days') AS articles_30d,
                      MAX(a.collected_at) AS last_article_at
               FROM sources s
               LEFT JOIN articles a ON a.source_id = s.id
@@ -3655,6 +3665,7 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
             verdicts AS (
               SELECT *,
                      CASE
+                       WHEN archived_at IS NOT NULL THEN 'archived'
                        WHEN NOT enabled THEN 'disabled'
                        WHEN articles = 0 THEN 'no_articles'
                        WHEN last_article_at < now() - (%s::text || ' days')::interval THEN 'stale'
@@ -3666,18 +3677,19 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
             FROM verdicts
             WHERE (%s::text IS NULL OR verdict = %s)
             ORDER BY
-              CASE
-                WHEN NOT enabled THEN 4
-                WHEN articles = 0 THEN 1
-                WHEN last_article_at < now() - (%s::text || ' days')::interval THEN 2
-                ELSE 3
+              CASE verdict
+                WHEN 'no_articles' THEN 1
+                WHEN 'stale' THEN 2
+                WHEN 'ok' THEN 3
+                WHEN 'disabled' THEN 4
+                ELSE 5
               END,
               articles ASC,
               last_article_at NULLS FIRST,
               name
             LIMIT %s
             """,
-            (stale_days, verdict, verdict, stale_days, limit),
+            (stale_days, verdict, verdict, limit),
         )
         return cur.fetchall()
 

@@ -787,7 +787,7 @@ def list_sources(
 def source_health(
     stale_days: int = Query(3, ge=1, le=30),
     limit: int = Query(500, ge=1, le=1000),
-    verdict: str | None = Query(None, pattern="^(ok|stale|no_articles|disabled)$"),
+    verdict: str | None = Query(None, pattern="^(ok|stale|no_articles|disabled|archived)$"),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
     return [_clean(row) for row in repository.source_health_report(stale_days=stale_days, limit=limit, verdict=verdict)]

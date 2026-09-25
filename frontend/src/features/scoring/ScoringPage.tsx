@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { deleteScoringCriterion, listScoringCriteria, saveScoringCriteria } from "../../api/scoring";
 import type { ScoringCriterion } from "../../api/types";
+import styles from "./Scoring.module.css";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -120,7 +121,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
 
       <section className="panel">
         {busy ? <InlineLoader label="Сохраняем скоринг…" /> : null}
-        <div className="panelHeader">
+        <div className={`panelHeader ${styles.header}`}>
           <h2>Критерии оценки</h2>
           <div className="settingsActions">
             <button type="button" className="ghostButton" onClick={normalizeWeights}>
@@ -160,14 +161,16 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
                       onChange={(event) => updateCriterion(index, "description", event.target.value)}
                     />
                   </label>
-                  <label className="field">
+                  {/* RU и EN — друг под другом во всю ширину (документ заказчика 19.09):
+                      рядом по 240 px длинный список ключей читался только прокруткой. */}
+                  <label className="field fieldWide">
                     <span>Ключевые слова RU / любые</span>
                     <textarea
                       value={(criterion.keywords_json || []).join(", ")}
                       onChange={(event) => updateCriterion(index, "keywords_json", splitKeywords(event.target.value))}
                     />
                   </label>
-                  <label className="field">
+                  <label className="field fieldWide">
                     <span>EN-нормализация</span>
                     <textarea
                       value={(criterion.keywords_en_json || []).join(", ")}
@@ -175,16 +178,18 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
                     />
                   </label>
                 </div>
-                <div className="settingsActions">
+                <div className={styles.cardFoot}>
                   <button type="button" className="ghostButton dangerButton" onClick={() => void removeCriterion(index)}>
                     Удалить
                   </button>
                 </div>
               </div>
             ))}
-            <button type="button" className="ghostButton" onClick={addCriterion}>
-              Добавить параметр
-            </button>
+            <div>
+              <button type="button" className="addRowButton" onClick={addCriterion}>
+                + Добавить параметр
+              </button>
+            </div>
           </div>
         )}
       </section>

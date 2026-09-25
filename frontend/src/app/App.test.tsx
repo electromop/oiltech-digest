@@ -983,6 +983,8 @@ describe("App smoke", () => {
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
     expect(await screen.findByRole("heading", { name: "Источники" })).toBeInTheDocument();
+    // Формы добавления свёрнуты над таблицей (документ заказчика 19.09): сначала раскрыть.
+    await user.click(screen.getByText("Добавить источник или статью по ссылке"));
     expect(screen.getByRole("heading", { name: "Добавить статью по ссылке" })).toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("https://site.com/news/article"), "https://example.com/news/imported");
@@ -992,6 +994,152 @@ describe("App smoke", () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/articles/import")).toBe(true);
     });
+  });
+
+  it("источники: плитки сходятся с таблицей, архив — своя плитка", async () => {
+    // 19.09 на одном экране было «133 источника» вверху и «173» в каталоге: плитки
+    // считались по отчёту здоровья вместе с архивом, список — без него.
+    const template = {
+      enabled: true,
+      url: "https://example.com",
+      rss_url: null,
+      parse_strategy: "rss",
+      source_type: "News",
+      update_frequency: "ежедневно",
+      listing_url: null,
+      listing_strategy: null,
+      listing_selector: null,
+      article_link_selector: null,
+      article_date_selector: null,
+      network_region: "auto",
+      network_profile: "direct",
+      last_ru_probe_status: null,
+      last_external_probe_status: null,
+      external_required_reason: null,
+      external_cooldown_until: null,
+      last_seen_article_url: null,
+      last_seen_published_at: null,
+      archived_at: null,
+    };
+    const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sources?limit=500") {
+        return Promise.resolve(
+          jsonResponse([
+            { ...template, id: 7, name: "World Oil", url: "https://worldoil.com" },
+            { ...template, id: 8, name: "Quiet Source", parse_strategy: "request" },
+            { ...template, id: 9, name: "Old Archive", enabled: false, archived_at: daysAgo(13) },
+          ]),
+        );
+      }
+      if (url === "/api/source-health?limit=500") {
+        return Promise.resolve(
+          jsonResponse([
+            { id: 7, verdict: "ok", articles: 25, articles_30d: 12, last_article_at: daysAgo(0.2) },
+            { id: 8, verdict: "stale", articles: 4, articles_30d: 1, last_article_at: daysAgo(10.5) },
+            { id: 9, verdict: "archived", articles: 30, articles_30d: 0, last_article_at: daysAgo(20.5) },
+          ]),
+        );
+      }
+      return baseImpl!(input, init);
+    });
+    window.history.replaceState(null, "", "/?screen=sources");
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+
+    expect(await screen.findByRole("heading", { name: "Источники" })).toBeInTheDocument();
+    const tiles = await screen.findByLabelText("Состояние источников");
+    await within(tiles).findByRole("button", { name: /^2\s*Всего источников$/ });
+    expect(within(tiles).getByRole("button", { name: /^1\s*Требуют внимания$/ })).toBeInTheDocument();
+    expect(within(tiles).getByRole("button", { name: /^1\s*Работают штатно$/ })).toBeInTheDocument();
+    expect(within(tiles).getByRole("button", { name: /^1\s*В архиве$/ })).toBeInTheDocument();
+    // Старого счётчика «N источников» в шапке больше нет — ему нечем расходиться.
+    expect(screen.queryByText(/^\d+ источников$/)).not.toBeInTheDocument();
+
+    const table = screen.getByRole("table");
+    const bodyRows = () => within(table).getAllByRole("row").slice(1);
+    expect(bodyRows()).toHaveLength(2);
+    expect(within(table).getByText("World Oil")).toBeInTheDocument();
+    expect(within(table).getByText("Требует внимания")).toBeInTheDocument();
+    expect(within(table).getByText("Нет новых материалов 10 дн.")).toBeInTheDocument();
+    expect(within(table).queryByText("Old Archive")).not.toBeInTheDocument();
+
+    await user.click(within(tiles).getByRole("button", { name: /В архиве$/ }));
+    expect(within(screen.getByRole("table")).getByText("Old Archive")).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).queryByText("World Oil")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Настроить: Old Archive" }));
+    expect(screen.getByRole("button", { name: "Вернуть из архива" })).toBeInTheDocument();
+  });
+
+  it("теги: направления свёрнуты, ключевые слова — чипсами с крестиком", async () => {
+    const tagsFixture = [
+      {
+        id: 1,
+        parent_name: null,
+        name: "Бурение",
+        name_en: "Drilling",
+        description: "Бурение и заканчивание",
+        keywords_json: ["бурение", "долото"],
+        keywords_en_json: ["drilling"],
+        negative_keywords_json: ["футбол"],
+        enabled: true,
+        sort_order: 10,
+      },
+      {
+        id: 2,
+        parent_name: "Бурение",
+        name: "Наклонно-направленное",
+        name_en: "",
+        description: "",
+        keywords_json: ["ННБ"],
+        keywords_en_json: [],
+        enabled: true,
+        sort_order: 20,
+      },
+    ];
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/tags" && (init?.method ?? "GET") === "GET") {
+        return Promise.resolve(jsonResponse(tagsFixture));
+      }
+      if (url === "/api/tags" && init?.method === "PUT") {
+        return Promise.resolve(jsonResponse({ ok: true, saved: 2 }));
+      }
+      return baseImpl!(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+    // «Теги» по ссылке ?screen= не открываются (URL_ADDRESSABLE) — идём через меню.
+    await user.click((await screen.findAllByRole("button", { name: "Теги" }))[0]);
+
+    const toggle = await screen.findByRole("button", { name: /Бурение/ });
+    // По умолчанию свёрнуто: полей направления не видно, в шапке — сводка.
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Направление")).not.toBeInTheDocument();
+    expect(toggle).toHaveTextContent("1 подтег · 3 ключевых слова");
+
+    await user.click(toggle);
+    expect(screen.getByText("Направление")).toBeInTheDocument();
+    expect(screen.queryByText("Родительский тег")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ Добавить подтег" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Удалить «долото»" }));
+    await user.type(screen.getByLabelText(/Ключевые слова RU — по ним ищем/), "турбобур{Enter}");
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input, init]) => String(input) === "/api/tags" && init?.method === "PUT")).toBe(true);
+    });
+    const put = fetchMock.mock.calls.find(([input, init]) => String(input) === "/api/tags" && init?.method === "PUT")!;
+    const saved = JSON.parse(String((put[1] as RequestInit).body)) as Array<{ name: string; keywords_json: string[] }>;
+    expect(saved.find((tag) => tag.name === "Бурение")?.keywords_json).toEqual(["бурение", "турбобур"]);
+    expect(saved.find((tag) => tag.name === "Наклонно-направленное")?.keywords_json).toEqual(["ННБ"]);
   });
 
   async function openDocumentsScreen() {

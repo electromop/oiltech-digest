@@ -489,6 +489,23 @@ button {
   opacity: 0.55;
 }
 
+/* «+ Добавить …» в конце списка (подтег, направление, параметр скоринга): полноценная
+   кнопка добавления, а не «отстранённая» ссылка — просьба заказчика 19.09. */
+.addRowButton {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px dashed rgba(37, 99, 235, 0.45);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.addRowButton:hover {
+  background: rgba(29, 78, 216, 0.18);
+}
+
 .fullWidth {
   width: 100%;
   margin-top: 10px;
@@ -595,7 +612,7 @@ button {
 .sourceFiltersGrid {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 150px 150px 170px 190px 120px;
+  grid-template-columns: minmax(220px, 1fr) 180px 230px 120px;
   gap: 8px;
   align-items: end;
 }
@@ -2461,38 +2478,6 @@ button {
   background: var(--sem-warn-bg);
 }
 
-.tagRowRoot,
-.tagRowChild {
-  display: grid;
-  grid-template-columns: 64px minmax(160px, 0.8fr) minmax(240px, 1.6fr) auto;
-  gap: 12px;
-  align-items: end;
-}
-
-/* Родительский тег — выделенная «шапка» группы с бренд-акцентом (видно иерархию). */
-.tagRowRoot {
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--brand-soft);
-  border: 1px solid rgba(37, 99, 235, 0.16);
-}
-
-/* Дети — с визуальной направляющей (рельсой) и отступом: явная вложенность. */
-.tagChildrenList {
-  margin: 12px 0 0 18px;
-  padding-left: 16px;
-  display: grid;
-  gap: 10px;
-  border-left: 2px dashed rgba(37, 99, 235, 0.22);
-}
-
-.tagRowChild {
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(248, 250, 252, 0.92);
-  border: 1px solid var(--line);
-}
-
 /* Пользователи (админ): форма добавления + строки списка — выровнены по сетке,
    единый стиль с тегами/скорингом (никакого переиспользования тег-сетки). */
 .userAddGrid {
@@ -3050,8 +3035,6 @@ button {
   .digestBrandingWorkspace,
   .digestSocialRow,
   .digestLayout,
-  .tagRowRoot,
-  .tagRowChild,
   .userAddGrid,
   .userRow,
   .articleDetailGrid {
@@ -5589,15 +5572,4 @@ button {
   font-size: 0.82rem;
   color: var(--text-muted);
   padding: 6px 0;
-}
-
-/* Списки ключевых слов на экране «Теги»: по одному в строке.
-   В однострочном поле при 33–52 ключах на тематику не видно ничего —
-   просьба заказчика от 13.09. */
-.keywordList {
-  min-height: 84px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  resize: vertical;
 }

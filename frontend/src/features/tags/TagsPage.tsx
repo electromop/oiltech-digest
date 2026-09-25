@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { deleteTag, listTags, saveTags } from "../../api/tags";
 import type { Tag } from "../../api/types";
+import { KeywordChips } from "./KeywordChips";
+import styles from "./Tags.module.css";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -14,10 +16,27 @@ type Props = {
   showToast: ToastWriter;
 };
 
+function pluralRu(count: number, one: string, few: string, many: string) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${count} ${one}`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${count} ${few}`;
+  return `${count} ${many}`;
+}
+
+// Ключ группы не может быть именем: имя правят в этой же форме. У новой (без id) —
+// позиция в списке, она не меняется, пока группу не сохранили.
+function groupKey(tag: Tag, index: number) {
+  return tag.id ? `id-${tag.id}` : `new-${index}`;
+}
+
 export function TagsPage({ onUnauthorized, showToast }: Props) {
   const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // По умолчанию направления свёрнуты (документ заказчика 19.09): 13 развёрнутых
+  // тематик по 30–50 ключей — это несколько экранов прокрутки.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     void reload();
@@ -45,11 +64,22 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
   }
 
   const parents = useMemo(() => tags.filter((tag) => !tag.parent_name), [tags]);
+  const parentKeys = parents.map((parent) => groupKey(parent, tags.indexOf(parent)));
+  const allOpen = parentKeys.length > 0 && parentKeys.every((key) => openGroups.has(key));
+
+  function toggleGroup(key: string) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   function updateTag(index: number, field: keyof Tag, value: string | boolean | string[]) {
     setTags((prev) => {
       const target = prev[index];
-      // Переименование РОДИТЕЛЯ обязано протянуться в его подтеги. Связь хранится
+      // Переименование НАПРАВЛЕНИЯ обязано протянуться в его подтеги. Связь хранится
       // именем, и без этого каскада сохранение делало все подтеги корневыми — молча,
       // без ошибки. Бэкенд теперь такое отклоняет, но чинить надо здесь, в источнике.
       const renamingParent =
@@ -65,25 +95,15 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
     });
   }
 
-  /** Список через запятую ⇄ массив. Пустые куски отбрасываем, иначе в промпт уедет мусор. */
-  function splitKeywords(raw: string): string[] {
-    // Принимаем и перевод строки, и запятую: заказчик просил 13.09 вводить ключи
-    // строчками друг под другом, но вставка списка через запятую должна работать
-    // по-прежнему — иначе сломается его привычный способ переноса из таблицы.
-    return raw.split(/[\n,]/).map((word) => word.trim()).filter(Boolean);
-  }
-
-  function joinKeywords(values: string[] | null | undefined): string {
-    return (values || []).join("\n");
-  }
-
   function addParentTag() {
+    // Новое направление сразу раскрыто: его только что добавили, чтобы заполнить.
+    setOpenGroups((open) => new Set(open).add(`new-${tags.length}`));
     setTags((prev) => [
       ...prev,
       {
         id: null,
         parent_name: null,
-        name: "Новый тег",
+        name: "Новое направление",
         name_en: "",
         description: "",
         keywords_json: [],
@@ -147,14 +167,25 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
         <div>
           <h1>Теги</h1>
         </div>
-        <div className="statusPill">{tags.length} тегов</div>
+        <div className="statusPill">
+          {pluralRu(parents.length, "направление", "направления", "направлений")} ·{" "}
+          {pluralRu(tags.length - parents.length, "подтег", "подтега", "подтегов")}
+        </div>
       </header>
 
       <section className="panel">
         {busy ? <InlineLoader label="Сохраняем теги…" /> : null}
-        <div className="panelHeader">
-          <h2>Иерархия тегов</h2>
+        <div className={`panelHeader ${styles.header}`}>
+          <h2>Направления и подтеги</h2>
           <div className="settingsActions">
+            <button
+              type="button"
+              className="ghostButton"
+              disabled={!parentKeys.length}
+              onClick={() => setOpenGroups(allOpen ? new Set() : new Set(parentKeys))}
+            >
+              {allOpen ? "Свернуть все" : "Развернуть все"}
+            </button>
             <button type="button" className="primaryButton" onClick={() => void handleSave()}>
               Сохранить
             </button>
@@ -164,125 +195,152 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
         {loading ? (
           <div className="emptyState"><LoadingState label="Загружаем теги…" /></div>
         ) : (
-          <div className="settingsStack">
+          <div className={styles.list}>
             {parents.map((parent) => {
               const parentIndex = tags.indexOf(parent);
+              const key = groupKey(parent, parentIndex);
+              const open = openGroups.has(key);
               const children = tags.filter((tag) => tag.parent_name === parent.name);
+              const keywordCount = (parent.keywords_json || []).length + (parent.keywords_en_json || []).length;
+              const bodyId = `tag-group-${key}`;
               return (
-                <div className="tagGroupCard" key={parent.id ?? `parent-${parentIndex}`}>
-                  <div className="tagRowRoot">
-                    <label className="toggleLabel">
-                      <input
-                        type="checkbox"
-                        checked={parent.enabled}
-                        onChange={(event) => updateTag(parentIndex, "enabled", event.target.checked)}
-                      />
-                      <span>вкл</span>
-                    </label>
-                    <label className="field">
-                      <span>Родительский тег</span>
-                      <input value={parent.name} onChange={(event) => updateTag(parentIndex, "name", event.target.value)} />
-                    </label>
-                    <label className="field fieldWide">
-                      <span>Описание для AI</span>
-                      <input value={parent.description || ""} onChange={(event) => updateTag(parentIndex, "description", event.target.value)} />
-                    </label>
-                    <label className="field fieldWide">
-                      <span>Ключевые слова RU — по одному в строке (по ним ищем и тегируем)</span>
-                      <textarea
-                        className="keywordList"
-                        rows={8}
-                        value={joinKeywords(parent.keywords_json)}
-                        onChange={(event) => updateTag(parentIndex, "keywords_json", splitKeywords(event.target.value))}
-                        placeholder={"ГРП\nгидроразрыв\nпроппант"}
-                      />
-                    </label>
-                    <label className="field fieldWide">
-                      <span>Keywords EN — по одному в строке</span>
-                      <textarea
-                        className="keywordList"
-                        rows={6}
-                        value={joinKeywords(parent.keywords_en_json)}
-                        onChange={(event) => updateTag(parentIndex, "keywords_en_json", splitKeywords(event.target.value))}
-                        placeholder={"hydraulic fracturing\nproppant"}
-                      />
-                    </label>
-                    <label className="field fieldWide">
-                      <span>Стоп-слова — по одному в строке (довод против статьи)</span>
-                      <textarea
-                        className="keywordList"
-                        rows={4}
-                        value={joinKeywords(parent.negative_keywords_json)}
-                        onChange={(event) =>
-                          updateTag(parentIndex, "negative_keywords_json", splitKeywords(event.target.value))
-                        }
-                        placeholder={"футбол\nбанкротство\nвакансия"}
-                      />
-                    </label>
-                    <div className="settingsActions">
-                      <button type="button" className="ghostButton" onClick={() => addSubtag(parent.name)}>
-                        + Подтег
-                      </button>
-                      {parent.name === SYSTEM_TAG_UNCLASSIFIED ? (
-                        <span className="muted">
-                          Служебный тег: сюда попадают статьи, не подошедшие ни к одной тематике. Удалить нельзя.
-                        </span>
-                      ) : (
-                        <button type="button" className="ghostButton dangerButton" onClick={() => void removeTag(parentIndex)}>
-                          Удалить
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                <div className={styles.group} data-open={open} key={key}>
+                  <button
+                    type="button"
+                    className={styles.groupHead}
+                    aria-expanded={open}
+                    aria-controls={bodyId}
+                    onClick={() => toggleGroup(key)}
+                  >
+                    <span className={styles.chevron} aria-hidden="true">▸</span>
+                    <span className={styles.groupName}>{parent.name || "Без названия"}</span>
+                    {!parent.enabled ? <span className="miniPill muted">выкл</span> : null}
+                    <span className={styles.groupMeta}>
+                      {pluralRu(children.length, "подтег", "подтега", "подтегов")} ·{" "}
+                      {pluralRu(keywordCount, "ключевое слово", "ключевых слова", "ключевых слов")}
+                    </span>
+                  </button>
 
-                  <div className="tagChildrenList">
-                    {children.map((child) => {
-                      const childIndex = tags.indexOf(child);
-                      return (
-                        <div className="tagRowChild" key={child.id ?? `child-${childIndex}`}>
-                          <label className="toggleLabel">
-                            <input
-                              type="checkbox"
-                              checked={child.enabled}
-                              onChange={(event) => updateTag(childIndex, "enabled", event.target.checked)}
-                            />
-                            <span>вкл</span>
-                          </label>
-                          <label className="field">
-                            <span>Подтег</span>
-                            <input value={child.name} onChange={(event) => updateTag(childIndex, "name", event.target.value)} />
-                          </label>
-                          <label className="field fieldWide">
-                            <span>Описание для AI</span>
-                            <input value={child.description || ""} onChange={(event) => updateTag(childIndex, "description", event.target.value)} />
-                          </label>
-                          <label className="field fieldWide">
-                            <span>Ключевые слова RU</span>
-                            <input
-                              value={(child.keywords_json || []).join(", ")}
-                              onChange={(event) => updateTag(childIndex, "keywords_json", splitKeywords(event.target.value))}
-                            />
-                          </label>
-                          <label className="field fieldWide">
-                            <span>Keywords EN</span>
-                            <input
-                              value={(child.keywords_en_json || []).join(", ")}
-                              onChange={(event) => updateTag(childIndex, "keywords_en_json", splitKeywords(event.target.value))}
-                            />
-                          </label>
-                          <button type="button" className="ghostButton dangerButton" onClick={() => void removeTag(childIndex)}>
-                            Удалить
-                          </button>
+                  {open ? (
+                    <div className={styles.groupBody} id={bodyId}>
+                      <div className={styles.row}>
+                        <label className="toggleLabel">
+                          <input
+                            type="checkbox"
+                            checked={parent.enabled}
+                            onChange={(event) => updateTag(parentIndex, "enabled", event.target.checked)}
+                          />
+                          <span>вкл</span>
+                        </label>
+                        <label className="field">
+                          <span>Направление</span>
+                          <input value={parent.name} onChange={(event) => updateTag(parentIndex, "name", event.target.value)} />
+                        </label>
+                        <label className="field">
+                          <span>Описание для AI</span>
+                          <input
+                            value={parent.description || ""}
+                            onChange={(event) => updateTag(parentIndex, "description", event.target.value)}
+                          />
+                        </label>
+                      </div>
+                      <KeywordChips
+                        label="Ключевые слова RU — по ним ищем и тегируем"
+                        values={parent.keywords_json}
+                        onChange={(values) => updateTag(parentIndex, "keywords_json", values)}
+                        placeholder="ГРП, гидроразрыв, проппант"
+                      />
+                      <KeywordChips
+                        label="Ключевые слова EN"
+                        values={parent.keywords_en_json}
+                        onChange={(values) => updateTag(parentIndex, "keywords_en_json", values)}
+                        placeholder="hydraulic fracturing, proppant"
+                      />
+                      <KeywordChips
+                        label="Стоп-слова — довод против статьи"
+                        tone="stop"
+                        values={parent.negative_keywords_json}
+                        onChange={(values) => updateTag(parentIndex, "negative_keywords_json", values)}
+                        placeholder="футбол, банкротство, вакансия"
+                      />
+
+                      {children.length ? (
+                        <div className={styles.children}>
+                          {children.map((child) => {
+                            const childIndex = tags.indexOf(child);
+                            return (
+                              <div className={styles.child} key={child.id ?? `child-${childIndex}`}>
+                                <div className={styles.row}>
+                                  <label className="toggleLabel">
+                                    <input
+                                      type="checkbox"
+                                      checked={child.enabled}
+                                      onChange={(event) => updateTag(childIndex, "enabled", event.target.checked)}
+                                    />
+                                    <span>вкл</span>
+                                  </label>
+                                  <label className="field">
+                                    <span>Подтег</span>
+                                    <input value={child.name} onChange={(event) => updateTag(childIndex, "name", event.target.value)} />
+                                  </label>
+                                  <label className="field">
+                                    <span>Описание для AI</span>
+                                    <input
+                                      value={child.description || ""}
+                                      onChange={(event) => updateTag(childIndex, "description", event.target.value)}
+                                    />
+                                  </label>
+                                </div>
+                                <KeywordChips
+                                  label="Ключевые слова RU"
+                                  values={child.keywords_json}
+                                  onChange={(values) => updateTag(childIndex, "keywords_json", values)}
+                                />
+                                <KeywordChips
+                                  label="Ключевые слова EN"
+                                  values={child.keywords_en_json}
+                                  onChange={(values) => updateTag(childIndex, "keywords_en_json", values)}
+                                />
+                                <div className={styles.childFoot}>
+                                  <span />
+                                  <button
+                                    type="button"
+                                    className="ghostButton dangerButton"
+                                    onClick={() => void removeTag(childIndex)}
+                                  >
+                                    Удалить подтег
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
-                  </div>
+                      ) : null}
+
+                      <div className={styles.groupFoot}>
+                        <button type="button" className="addRowButton" onClick={() => addSubtag(parent.name)}>
+                          + Добавить подтег
+                        </button>
+                        {parent.name === SYSTEM_TAG_UNCLASSIFIED ? (
+                          <span className="muted">
+                            Служебный тег: сюда попадают статьи, не подошедшие ни к одной тематике. Удалить нельзя.
+                          </span>
+                        ) : (
+                          <button type="button" className="ghostButton dangerButton" onClick={() => void removeTag(parentIndex)}>
+                            Удалить направление
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
-            <button type="button" className="ghostButton" onClick={addParentTag}>
-              Добавить родительский тег
-            </button>
+            <div>
+              <button type="button" className="addRowButton" onClick={addParentTag}>
+                + Добавить направление
+              </button>
+            </div>
           </div>
         )}
       </section>
