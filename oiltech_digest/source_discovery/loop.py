@@ -328,7 +328,7 @@ def _evaluate_discovered_candidates(discovery: dict[str, Any], config: AgentLoop
                 )
                 results.append({
                     "ok": True,
-                    "queued": "external-ai",
+                    "queued": job["queue_name"],
                     "candidate_id": int(candidate_id),
                     "job_id": int(job["id"]),
                 })

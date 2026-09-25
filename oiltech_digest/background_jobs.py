@@ -421,7 +421,9 @@ def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dic
                     topic_result["evaluations"].append({
                         "candidate_id": int(candidate_id),
                         "job_id": int(evaluation_job["id"]),
-                        "queued": "external-ai",
+                        # Фактическая очередь задачи: create_background_job может переложить её
+                        # в другую полосу (lanes.route), и метка "external-ai" врала бы.
+                        "queued": evaluation_job["queue_name"],
                     })
                     total_evaluation_jobs += 1
                     continue

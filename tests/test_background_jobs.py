@@ -256,7 +256,9 @@ def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch
     monkeypatch.setattr(
         background_jobs.repository,
         "create_background_job",
-        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs}) or {"id": 99},
+        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs})
+        # Репозиторий может переложить задачу в другую полосу (lanes.route) — метка берётся из строки задачи.
+        or {"id": 99, "queue_name": "external-agents"},
     )
 
     result = background_jobs._run_discover_source_candidates(
@@ -272,6 +274,7 @@ def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch
 
     assert result["evaluated"] == 0
     assert result["evaluation_jobs"] == 1
+    assert result["results"][0]["evaluations"][0]["queued"] == "external-agents"
     assert jobs[0]["agent_run_id"] is None
     assert jobs == [
         {
