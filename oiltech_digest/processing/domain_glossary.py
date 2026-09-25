@@ -18,6 +18,10 @@ class GlossaryTerm:
     forbidden_ru: tuple[str, ...] = ()
     note: str = ""
     forbidden_patterns: tuple[str, ...] = ()
+    # Только для аудита: находка — повод поправить, но без автозамены. Для калек, где
+    # замена ломала бы грамматику («более granularными» — падеж, «спудил» — глагол):
+    # их чинят phrase_repairs с точным окончанием, а это — сеть для непойманных форм.
+    warn_patterns: tuple[str, ...] = ()
 
 
 GLOSSARY_PATH = Path(os.environ.get("DOMAIN_GLOSSARY_PATH") or Path(__file__).with_name("domain_glossary.json"))
@@ -37,6 +41,7 @@ def _load_glossary_terms(data: dict[str, Any]) -> tuple[GlossaryTerm, ...]:
             forbidden_ru=_tuple(item.get("forbidden_ru")),
             note=str(item.get("note") or "").strip(),
             forbidden_patterns=_tuple(item.get("forbidden_patterns")),
+            warn_patterns=_tuple(item.get("warn_patterns")),
         )
         for item in data.get("terms", [])
     )
@@ -77,8 +82,9 @@ def glossary_prompt_block(article: dict, *, limit: int = 12) -> str:
 def enforce_glossary_text(text: str, article: dict) -> str:
     """Apply safe deterministic replacements for known bad Russian terms."""
     result = text or ""
-    result = _repair_bad_phrases(result, article)
-    for term in relevant_glossary_terms(article):
+    terms = _terms_for(result, article)
+    result = _repair_bad_phrases(result, terms)
+    for term in terms:
         for forbidden in term.forbidden_ru:
             result = _replace_case_insensitive(result, forbidden, term.preferred_ru)
         for pattern in _forbidden_patterns(term):
@@ -91,7 +97,7 @@ def enforce_glossary_text(text: str, article: dict) -> str:
 def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
     warnings = []
     lower = (text or "").lower()
-    for term in relevant_glossary_terms(article):
+    for term in _terms_for(text, article):
         for forbidden in term.forbidden_ru:
             if forbidden.lower() in lower:
                 warnings.append({
@@ -99,14 +105,60 @@ def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
                     "preferred_ru": term.preferred_ru,
                     "source_terms": ", ".join(term.source_terms[:5]),
                 })
-        for pattern in _forbidden_patterns(term):
+        for pattern in (*_forbidden_patterns(term), *term.warn_patterns):
             if re.search(pattern, text or "", flags=re.I):
                 warnings.append({
                     "forbidden_ru": pattern,
                     "preferred_ru": term.preferred_ru,
                     "source_terms": ", ".join(term.source_terms[:5]),
                 })
+    for word in mixed_script_words(text):
+        # Ключи — те же, что у словарных находок: аудит печатает их одной строкой.
+        warnings.append({
+            "kind": "mixed_script",
+            "forbidden_ru": word,
+            "preferred_ru": "слово целиком одним алфавитом",
+            "source_terms": "смешение латиницы и кириллицы",
+        })
     return warnings
+
+
+def _terms_for(text: str, article: dict) -> list[GlossaryTerm]:
+    """Термины статьи плюс термины, чья калька есть в самом тексте.
+
+    Калька из warn_patterns однозначна по построению («спудрил», «granularными»): её
+    появление в русском тексте само говорит, какой это термин, даже если английского
+    слова в контексте нет. Так и было у радара 22.09: в доказательстве сигнала — обзор
+    Westwood без «spudded», а в его сути — «спудрил».
+    """
+    terms = relevant_glossary_terms(article)
+    for term in GLOSSARY:
+        if term in terms or not term.warn_patterns:
+            continue
+        if any(re.search(pattern, text or "", flags=re.I) for pattern in term.warn_patterns):
+            terms.append(term)
+    return terms
+
+
+_LETTER_RUN = re.compile(r"[A-Za-zА-Яа-яЁё]+")
+_LATIN = re.compile(r"[A-Za-z]")
+_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+
+def mixed_script_words(text: str) -> list[str]:
+    """Слова, где латиница и кириллица смешаны без дефиса: «granularными», «Тупinамba».
+
+    Такое слово — всегда брак перевода (латинский корень с русским окончанием, ошибка
+    транслитерации, латинская «c» внутри русского слова), и словарь его не поймает:
+    термина под каждое английское слово в нём нет. «LNG-проект» и «CO2» не задевает:
+    дефис и цифра делят слово на части.
+    """
+    found: list[str] = []
+    for match in _LETTER_RUN.finditer(text or ""):
+        word = match.group(0)
+        if _LATIN.search(word) and _CYRILLIC.search(word) and word not in found:
+            found.append(word)
+    return found
 
 
 def validate_glossary() -> list[str]:
@@ -138,6 +190,11 @@ def validate_glossary() -> list[str]:
                 re.compile(pattern)
             except re.error as exc:
                 errors.append(f"{prefix}: плохая forbidden_pattern '{pattern}': {exc}")
+        for pattern in term.warn_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                errors.append(f"{prefix}: плохая warn_pattern '{pattern}': {exc}")
     for index, (pattern, _replacement) in enumerate(PHRASE_REPAIRS, start=1):
         try:
             re.compile(pattern)
@@ -239,8 +296,8 @@ def _forbidden_patterns(term: GlossaryTerm) -> tuple[str, ...]:
     return term.forbidden_patterns if isinstance(term.forbidden_patterns, tuple) else ()
 
 
-def _repair_bad_phrases(text: str, article: dict) -> str:
-    if not relevant_glossary_terms(article):
+def _repair_bad_phrases(text: str, terms: list[GlossaryTerm]) -> str:
+    if not terms:
         return text
     result = text
     for pattern, replacement in PHRASE_REPAIRS:

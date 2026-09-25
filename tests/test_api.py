@@ -455,6 +455,28 @@ def test_source_health_endpoint(monkeypatch):
     ]
 
 
+def test_source_health_endpoint_accepts_archived_verdict(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    seen: dict = {}
+
+    def fake_report(stale_days=3, limit=500, verdict=None):
+        seen["verdict"] = verdict
+        return []
+
+    monkeypatch.setattr(api.repository, "source_health_report", fake_report)
+    try:
+        client = TestClient(app)
+        archived = client.get("/api/source-health?verdict=archived")
+        unknown = client.get("/api/source-health?verdict=broken")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert archived.status_code == 200
+    assert seen["verdict"] == "archived"
+    assert unknown.status_code == 422
+
+
 def test_digest_branding_endpoints(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}

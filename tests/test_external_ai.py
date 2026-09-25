@@ -114,6 +114,7 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
     monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: calls.append(("tagging", args)))
     monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args: calls.append(("scoring", args)))
     monkeypatch.setattr(external_ai.repository, "insert_ai_run", lambda rec: calls.append(("run", rec["stage"])))
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
 
     stats = external_ai.apply_process_result(
         {
@@ -141,6 +142,78 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
     assert [item[0] for item in calls[:4]] == ["summary", "run", "relevance", "run"]
     assert ("run", "scoring") in calls
 
+
+
+SPUD_ARTICLE = {
+    "id": 1,
+    "title": "Global Land Drilling Rigs Tracker",
+    "raw_text": "In Egypt, NDC 9 spudded the vertical well T-200. The tracker adds more granular field data.",
+    "language": "en",
+}
+
+
+def _stub_writes(monkeypatch, articles):
+    written = {}
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: articles(ids))
+    monkeypatch.setattr(
+        external_ai.repository, "upsert_article_card", lambda article_id, summary, model: written.update(summary=summary)
+    )
+    monkeypatch.setattr(
+        external_ai.repository, "set_article_title_ru", lambda article_id, title_ru: written.update(title_ru=title_ru)
+    )
+    monkeypatch.setattr(external_ai, "_insert_run", lambda *args, **kwargs: None)
+    return written
+
+
+def test_core_applies_glossary_to_worker_result(monkeypatch):
+    """Замечание заказчика 22.09: «спудрил вертикальную скважину», «более granularными».
+
+    Словарь на воркере — его версия кода, NL пересобирает владелец; без прохода на ядре
+    правка словаря не дошла бы до новых карточек до пересборки NL.
+    """
+    written = _stub_writes(monkeypatch, lambda ids: [SPUD_ARTICLE])
+
+    external_ai.apply_process_result(
+        {
+            "articles": [
+                {
+                    "article_id": 1,
+                    "summary": {
+                        "summary": "В Египте NDC 9 спудрил вертикальную скважину T-200; трекер даёт более granularные данные.",
+                        "model": "gpt",
+                    },
+                    "translation": {"title_ru": "NDC 9 спудрил скважину T-200", "model": "gpt"},
+                }
+            ]
+        }
+    )
+
+    assert written["summary"] == "В Египте NDC 9 забурил вертикальную скважину T-200; трекер даёт более детальные данные."
+    assert written["title_ru"] == "NDC 9 забурил скважину T-200"
+
+
+def test_core_applies_glossary_to_translation_result(monkeypatch):
+    written = _stub_writes(monkeypatch, lambda ids: [SPUD_ARTICLE])
+
+    external_ai.apply_translate_result(
+        {"articles": [{"article_id": 1, "translation": {"title_ru": "NDC 9 спудрил скважину T-200", "model": "gpt"}}]}
+    )
+
+    assert written["title_ru"] == "NDC 9 забурил скважину T-200"
+
+
+def test_core_writes_paid_result_as_is_when_glossary_context_fails(monkeypatch):
+    def broken(ids):
+        raise RuntimeError("база недоступна")
+
+    written = _stub_writes(monkeypatch, broken)
+
+    stats = external_ai.apply_process_result(
+        {"articles": [{"article_id": 1, "summary": {"summary": "NDC 9 спудрил скважину.", "model": "gpt"}}]}
+    )
+
+    assert stats["summary"] == 1
+    assert written["summary"] == "NDC 9 спудрил скважину."
 
 
 def _recheck_result(relevant: bool) -> dict:

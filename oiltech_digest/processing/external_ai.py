@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from oiltech_digest import contract
 from oiltech_digest.db import repository
+from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.pipeline import (
     _negative_keyword_block,
@@ -356,14 +357,48 @@ def process_translate_payload(payload: dict[str, Any], heartbeat: Callable[..., 
     return result
 
 
+def _glossary_contexts(result: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    """Статьи итога одним запросом — контекст словаря: какие термины в статье есть."""
+    ids = [
+        int(item["article_id"])
+        for item in result.get("articles") or []
+        if item.get("summary") or (item.get("translation") or {}).get("title_ru")
+    ]
+    if not ids:
+        return {}
+    try:
+        return {int(row["id"]): row for row in repository.get_articles_by_ids(ids)}
+    except Exception:  # noqa: BLE001 - словарь не стоит записи оплаченного итога
+        logger.warning("словарь на ядре: статьи итога не прочитаны, пишу итог как есть", exc_info=True)
+        return {}
+
+
+def _core_glossary(text: str, article: dict[str, Any] | None) -> str:
+    """Словарь на ядре — при записи итога внешнего воркера.
+
+    Воркер уже прогнал текст через словарь, но своей версией кода: NL пересобирает
+    владелец, и между выкатами ядро и воркер расходятся — правка словаря 25.09 («спудил»,
+    «granularными») без пересборки NL не дошла бы до новых карточек. Повтор безопасен:
+    замены идемпотентны. Сбой — пишем как пришло: оплаченный итог дороже терминологии.
+    """
+    if not text or not article:
+        return text
+    try:
+        return enforce_glossary_text(text, article)
+    except Exception:  # noqa: BLE001
+        logger.warning("словарь на ядре: сбой на статье %s, пишу как есть", article.get("id"), exc_info=True)
+        return text
+
+
 def apply_translate_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
     stats = {"articles": 0, "translation": 0, "errors": 0}
+    contexts = _glossary_contexts(result)
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
         stats["articles"] += 1
         translation = item.get("translation")
         if translation and translation.get("title_ru"):
-            repository.set_article_title_ru(article_id, translation["title_ru"])
+            repository.set_article_title_ru(article_id, _core_glossary(translation["title_ru"], contexts.get(article_id)))
             if translation.get("provider") != "offline" or translation.get("model"):
                 _insert_run(article_id, "translation", translation, job_id=job_id)
             stats["translation"] += 1
@@ -378,18 +413,21 @@ def apply_process_result(result: dict[str, Any], *, job_id: int | None = None) -
     job_id — id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
     (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт."""
     stats = {"articles": 0, "summary": 0, "relevance": 0, "translation": 0, "tagging": 0, "scoring": 0, "errors": 0}
+    contexts = _glossary_contexts(result)
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
         stats["articles"] += 1
         if item.get("summary"):
             summary = item["summary"]
-            repository.upsert_article_card(article_id, summary["summary"], summary.get("model"))
+            repository.upsert_article_card(
+                article_id, _core_glossary(summary["summary"], contexts.get(article_id)), summary.get("model")
+            )
             _insert_run(article_id, "summary", summary, job_id=job_id)
             stats["summary"] += 1
         if item.get("translation"):
             translation = item["translation"]
             if translation.get("title_ru"):
-                repository.set_article_title_ru(article_id, translation["title_ru"])
+                repository.set_article_title_ru(article_id, _core_glossary(translation["title_ru"], contexts.get(article_id)))
             if translation.get("provider") != "offline" or translation.get("model"):
                 _insert_run(article_id, "translation", translation, job_id=job_id)
             stats["translation"] += 1

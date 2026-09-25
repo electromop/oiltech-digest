@@ -311,6 +311,83 @@ def test_glossary_golden_cases_pass():
         assert not forbidden, f"{case['name']}: {fixed}; forbidden={forbidden}"
 
 
+def test_glossary_repairs_customer_spud_and_granular_remarks():
+    """Замечания заказчика 22.09 по карточке радара: «спудрил вертикальную скважину», «granular».
+
+    Радар прогоняет свой текст через enforce_glossary_text этого модуля, наши карточки —
+    тоже; аудит до правки словаря таких мест не видел вовсе (0 из 1000 статей).
+    """
+    article = {
+        "title": "Global Land Drilling Rigs Tracker",
+        "raw_text": (
+            "Silver City Drilling spudded the horizontal appraisal well Venus-2H. "
+            "NDC 9 spudded the vertical well T-200. The tracker adds more granular field data."
+        ),
+        "language": "en",
+    }
+    radar = (
+        "в Австралии Silver City Drilling спудрил горизонтальную оценочную скважину Venus-2H; "
+        "в Египте NDC 9 спудрил вертикальную скважину T-200. "
+        "Отчёт дополняет обзор более granularными полевыми данными."
+    )
+
+    assert len(terminology_warnings(radar, article)) >= 2
+    fixed = enforce_glossary_text(radar, article)
+
+    assert "Silver City Drilling забурил горизонтальную оценочную скважину Venus-2H" in fixed
+    assert "NDC 9 забурил вертикальную скважину T-200" in fixed
+    assert "более детальными полевыми данными" in fixed
+    assert terminology_warnings(fixed, article) == []
+
+
+def test_glossary_repairs_calque_without_english_term_in_context():
+    """Ревью F: у доказательства радара может не быть «spudded» — только обзор Westwood.
+
+    Калька из warn_patterns в самом тексте сама включает свой термин, иначе «спудрил»
+    пережил бы и словарь радара, и аудит (relevant = []).
+    """
+    article = {"title": "Отчёт Westwood", "raw_text": "Westwood's onshore team provides a global update on rigs."}
+
+    text = "NDC 9 спудрил вертикальную скважину T-200, данные более granularные"
+
+    assert terminology_warnings(text, article)
+    assert enforce_glossary_text(text, article) == "NDC 9 забурил вертикальную скважину T-200, данные более детальные"
+
+
+def test_glossary_repairs_spud_in_without_breaking_the_hyphen():
+    article = {"title": "Well spud", "raw_text": "The spud-in of the well took place on Monday."}
+
+    fixed = enforce_glossary_text("Дата спуд-ина — понедельник.", article)
+
+    assert fixed == "Дата забуривания — понедельник."
+
+
+def test_glossary_keeps_russian_idiom_pod_spudom():
+    article = {"title": "Well spudded", "raw_text": "The well was spudded in April.", "language": "en"}
+
+    text = "Оператор держал под спудом данные о новой скважине."
+
+    assert enforce_glossary_text(text, article) == text
+    assert terminology_warnings(text, article) == []
+
+
+def test_glossary_prompt_tells_model_how_to_render_spud():
+    block = glossary_prompt_block({"title": "Operator spuds a well", "raw_text": "The well was spudded in April."})
+
+    assert "preferred_ru: забуривание" in block
+    assert "спудинг" in block
+
+
+def test_terminology_warnings_flag_mixed_script_words():
+    """Латиница вперемешку с кириллицей в одном слове — брак без всякого словаря."""
+    article = {"title": "Brazil exploration", "raw_text": "The Tupinamba exploration well", "language": "en"}
+
+    words = [item["forbidden_ru"] for item in terminology_warnings("бурение по Тупinамba и нефтесервиc", article)]
+
+    assert words == ["Тупinамba", "нефтесервиc"]
+    assert terminology_warnings("СПГ-проект, LNG-проект, CO2 и Türkiye", article) == []
+
+
 def test_domain_glossary_definition_is_valid():
     assert validate_glossary() == []
 

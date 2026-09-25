@@ -34,8 +34,12 @@ export type Source = {
 
 export type SourceHealth = {
   id: number;
-  verdict: "ok" | "stale" | "no_articles" | "disabled";
+  // archived — источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
+  // disabled, иначе плитки экрана (с архивом) расходились со списком (без архива).
+  verdict: "ok" | "stale" | "no_articles" | "disabled" | "archived";
   articles: number | null;
+  // Материалы за 30 дней по дате сбора. Необязательное: старый сервер его не отдаёт.
+  articles_30d?: number | null;
   last_article_at: string | null;
 };
 
@@ -468,6 +472,9 @@ export type Tag = {
   negative_keywords_json?: string[];
   enabled: boolean;
   sort_order: number;
+  // Только на клиенте: стабильный ключ ещё не сохранённого тега (у него нет id, а
+  // позиция в списке сдвигается при удалении). Перед сохранением вырезается.
+  client_key?: string;
 };
 
 export type CreateSourcePayload = {

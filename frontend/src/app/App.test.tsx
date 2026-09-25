@@ -983,6 +983,8 @@ describe("App smoke", () => {
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
     expect(await screen.findByRole("heading", { name: "Источники" })).toBeInTheDocument();
+    // Формы добавления свёрнуты над таблицей (документ заказчика 19.09): сначала раскрыть.
+    await user.click(screen.getByText("Добавить источник или статью по ссылке"));
     expect(screen.getByRole("heading", { name: "Добавить статью по ссылке" })).toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("https://site.com/news/article"), "https://example.com/news/imported");
