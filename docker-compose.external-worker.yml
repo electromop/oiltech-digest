@@ -81,6 +81,9 @@ services:
   external-worker-browser:
     build: *worker-build
     container_name: oiltech_external_worker_browser
+    # init (tini) под PID 1 подбирает хелперы Chromium, осиротевшие после рендера: python
+    # под PID 1 их не подбирает, и зомби съедают pids.max (на ядре 25.09 — 2259 из 2315).
+    init: true
     restart: unless-stopped
     env_file:
       - .env.external-worker

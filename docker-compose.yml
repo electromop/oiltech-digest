@@ -41,6 +41,7 @@ services:
   app:
     build: .
     container_name: oiltech_app
+    init: true  # подбирает зомби Chromium — см. scheduler
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -114,6 +115,7 @@ services:
     build: .
     profiles: ["pipeline"]
     container_name: oiltech_worker
+    init: true  # подбирает зомби Chromium — см. scheduler
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -142,6 +144,7 @@ services:
     build: .
     profiles: ["pipeline"]
     container_name: oiltech_playwright_worker
+    init: true  # подбирает зомби Chromium — см. scheduler
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -170,6 +173,11 @@ services:
     build: .
     profiles: ["pipeline"]
     container_name: oiltech_scheduler
+    # init (tini) под PID 1 подбирает осиротевшие процессы. Chromium при каждом рендере
+    # оставляет 2 хелпера, а python под PID 1 их не подбирает: 25.09 было 2259 зомби при
+    # pids.max 2315 (DefaultTasksMax systemd), и рендеры падали с «Target crashed». На
+    # исчерпанном лимите Playwright и падает, и виснет навсегда. То же — везде, где есть Chromium.
+    init: true
     depends_on:
       bootstrap:
         condition: service_completed_successfully
