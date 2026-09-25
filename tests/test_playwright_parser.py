@@ -225,11 +225,11 @@ def test_render_without_a_browser_pid_is_not_guarded():
     deadline.cancel()
 
 
-def test_browser_pid_comes_from_cdp_and_failure_is_not_fatal():
+def _browser_answering(info):
     class Session:
         def send(self, method):
             assert method == "SystemInfo.getProcessInfo"
-            return {"processInfo": [{"type": "GPU", "id": 2}, {"type": "browser", "id": 1234}]}
+            return info
 
         def detach(self):
             pass
@@ -238,12 +238,28 @@ def test_browser_pid_comes_from_cdp_and_failure_is_not_fatal():
         def new_browser_cdp_session(self):
             return Session()
 
+    return Browser()
+
+
+def test_browser_pid_comes_from_cdp_and_failure_is_not_fatal():
+    good = {"processInfo": [{"type": "GPU", "id": 2}, {"type": "browser", "id": 1234}]}
+    assert playwright_parser._browser_pid(_browser_answering(good)) == 1234
+
     class NoCdp:
         def new_browser_cdp_session(self):
             raise RuntimeError("CDP недоступен")
 
-    assert playwright_parser._browser_pid(Browser()) == 1234
     assert playwright_parser._browser_pid(NoCdp()) is None
+    # Кривой ответ — тоже None, а не исключение до try/finally с browser.close().
+    for info in ({}, {"processInfo": [{"type": "browser"}]}, {"processInfo": [{"type": "browser", "id": "x"}]}):
+        assert playwright_parser._browser_pid(_browser_answering(info)) is None
+
+
+def test_browser_pid_zero_or_one_is_never_used():
+    """killpg(0) снял бы группу самого шага — скрипт и сторожа, killpg(1) бьёт в init."""
+    for pid in (0, 1):
+        info = {"processInfo": [{"type": "browser", "id": pid}]}
+        assert playwright_parser._browser_pid(_browser_answering(info)) is None
 
 
 # Настоящий Chromium: срок рендера — это снятый браузер, подделка вызова его не проверит.
@@ -278,6 +294,7 @@ base = f"http://127.0.0.1:{server.server_address[1]}"
 
 pp.RENDER_DEADLINE_SLACK_SECONDS = 2
 pids = []
+# getattr — чтобы на коде до правки тест падал по делу (рендер не вернулся), а не на AttributeError.
 real_browser_pid = getattr(pp, "_browser_pid", None)
 if real_browser_pid is not None:
     def spy(browser):

@@ -12,8 +12,9 @@ SIGTERM до шага уже не доходит, а на маке, где ид�
 сроку получает только шаг: его драйвер Playwright выходит сам, когда закрывается труба от
 убитого родителя, и снимает свой Chromium.
 
-Только стандартная библиотека: процесс живёт всё время шага, тянуть в него конфиг и
-драйвер базы незачем.
+Не подкоманда cli, как scheduler-lock: cli.main настраивает логи через config, который читает
+окружение при импорте, — сломанная переменная уронила бы сторожа, то есть каждый шаг, а не
+один. Поэтому только стандартная библиотека (и памяти на всё время шага меньше: 9 МБ против 12).
 
 Запуск: python -m oiltech_digest.step_timeout СЕКУНДЫ СЕКУНДЫ_ДО_KILL -- команда …
 СЕКУНДЫ = 0 — без потолка: процесс становится самой командой.
@@ -67,7 +68,7 @@ def run(command: list[str], seconds: float, kill_after: float) -> int:
     return EXIT_TIMEOUT
 
 
-def _seconds(value: str) -> float:
+def _parse_seconds(value: str) -> float:
     number = float(value)
     if not math.isfinite(number) or number < 0:
         raise ValueError(value)
@@ -76,7 +77,7 @@ def _seconds(value: str) -> float:
 
 def main(argv: list[str]) -> int:
     try:
-        seconds, kill_after = _seconds(argv[0]), _seconds(argv[1])
+        seconds, kill_after = _parse_seconds(argv[0]), _parse_seconds(argv[1])
         if argv[2] != "--" or len(argv) < 4:
             raise ValueError(argv[2])
     except (IndexError, ValueError):

@@ -111,19 +111,20 @@ RENDER_DEADLINE_SLACK_SECONDS = 30.0
 
 
 def _browser_pid(browser: Any) -> int | None:
-    """PID процесса браузера: в API Playwright его нет, а CDP отдаёт."""
+    """PID процесса браузера: в API Playwright его нет, а CDP отдаёт. Сбой — None, не исключение."""
     try:
         session = browser.new_browser_cdp_session()
         info = session.send("SystemInfo.getProcessInfo")
         session.detach()
+        pids = [int(p["id"]) for p in info.get("processInfo") or [] if p.get("type") == "browser"]
     except Exception as exc:  # noqa: BLE001 - без PID рендер идёт, только без сторожа
         logger.warning("playwright: PID браузера не получен (%s) — срок рендера не сторожится", exc)
         return None
-    for process in info.get("processInfo") or []:
-        if process.get("type") == "browser":
-            return int(process["id"])
-    logger.warning("playwright: CDP не назвал процесс браузера — срок рендера не сторожится")
-    return None
+    # 0 и 1 — не браузер: killpg(0) снял бы группу самого шага (скрипт, сторож), 1 — init.
+    if len(pids) != 1 or pids[0] <= 1:
+        logger.warning("playwright: CDP назвал процесс браузера неясно (%s) — срок рендера не сторожится", pids)
+        return None
+    return pids[0]
 
 
 def _kill_browser(pid: int) -> None:

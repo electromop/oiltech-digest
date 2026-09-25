@@ -46,6 +46,20 @@ CYCLE_INTERVAL_SECONDS="${CYCLE_INTERVAL_SECONDS:-21600}"
 # до 130 с — час даёт запас впятеро. 0 — без потолка.
 STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-3600}"
 STEP_KILL_AFTER_SECONDS="${STEP_KILL_AFTER_SECONDS:-30}"
+# Целые секунды. Сторож с кривым сроком шаг не запускает — опечатка (1h, -5) остановила бы
+# каждый шаг, как 24.09. Поэтому кривое значение — строкой в лог и значение по умолчанию.
+case "$STEP_TIMEOUT_SECONDS" in
+  '' | *[!0-9]*)
+    log "STEP_TIMEOUT_SECONDS=«${STEP_TIMEOUT_SECONDS}» — не целое число секунд, беру 3600"
+    STEP_TIMEOUT_SECONDS=3600
+    ;;
+esac
+case "$STEP_KILL_AFTER_SECONDS" in
+  '' | *[!0-9]*)
+    log "STEP_KILL_AFTER_SECONDS=«${STEP_KILL_AFTER_SECONDS}» — не целое число секунд, беру 30"
+    STEP_KILL_AFTER_SECONDS=30
+    ;;
+esac
 RUN_DISCOVER_ON_START="${RUN_DISCOVER_ON_START:-1}"
 DISCOVER_EVERY_CYCLES="${DISCOVER_EVERY_CYCLES:-4}"
 RUN_MAINTENANCE_ON_START="${RUN_MAINTENANCE_ON_START:-1}"
