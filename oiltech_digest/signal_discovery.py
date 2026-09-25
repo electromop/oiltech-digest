@@ -622,6 +622,11 @@ def run_discovery(
     known_urls = set(snapshot.get("known_urls") or [])
     topics_out = []
     with use_discovery_snapshot(snapshot):
+        tag_topic_names = [
+            _topic_name(topic, config)
+            for topic in snapshot.get("topics") or []
+            if topic.get("tag_id") is not None and _topic_name(topic, config)
+        ]
         for topic in snapshot.get("topics") or []:
             beat()
             topic_name = _topic_name(topic, config)
@@ -649,7 +654,9 @@ def run_discovery(
                 if topic.get("tag_id") is not None:
                     # Тема радара = тематика заказчика: фильтр «Тема» на экране — это его 13 тегов,
                     # а не свободный текст модели (было 34 разных «темы» на 38 сигналов).
-                    signal["theme"] = topic_name
+                    # Какая из 13 — по содержанию карточки, а не по запросу, которым её нашли.
+                    signal["theme"], theme_choice = _content_theme(signal, cluster, topic_name, tag_topic_names)
+                    raw_output = {**raw_output, "theme_choice": theme_choice}
                 signal["signal_key"] = _signal_key(signal, cluster)
                 signal["evidence_count"] = len({str(item.get("source_url") or "") for item in cluster if item.get("source_url")})
                 signal["evidence"] = cluster
@@ -1877,6 +1884,51 @@ def _query_dedupe_key(value: str) -> str:
 
 def _contains_cyrillic(text: str) -> bool:
     return bool(re.search(r"[а-яё]", text or "", re.IGNORECASE))
+
+
+# Сколько ключей другой тематики должно найтись в карточке, чтобы тема ушла от запроса.
+# Одно совпадение — не повод: «бурение» мелькает в обзоре про дроны мимоходом.
+THEME_SWITCH_MIN_HITS = 2
+
+
+def _content_theme(
+    signal: dict[str, Any],
+    cluster: list[dict[str, Any]],
+    search_topic: str,
+    topic_names: list[str],
+) -> tuple[str, dict[str, Any]]:
+    """Тема карточки из 13 тематик заказчика — по содержанию, а не по запросу.
+
+    Раньше тема была темой поиска: статья про ИИ и дроны, найденная запросом по
+    бурению, получала «бурение» (замечание заказчика 22.09). Теперь считаем ключи
+    каждой тематики (с подтегами) в заголовке, сути и тезисе карточки и в заголовках
+    её статей. Тема поиска остаётся, если её никто не обгоняет хотя бы на
+    THEME_SWITCH_MIN_HITS совпадений; при равенстве — тоже она.
+    """
+    text = _norm_match_text(" ".join(
+        [str(signal.get(field) or "") for field in ("title", "title_ru", "summary", "thesis")]
+        + [str(item.get("title") or "") for item in cluster]
+    ))
+    hits: dict[str, int] = {}
+    for name in _dedupe([search_topic, *topic_names]):
+        context = _topic_tag_context(name)
+        keywords = _dedupe([*context["keywords_ru"], *context["keywords_en"]])
+        hits[name] = sum(1 for keyword in keywords if _contains_negative_keyword(text, keyword))
+    best = max(hits, key=lambda name: (hits[name], name == search_topic))
+    if best != search_topic and hits[best] >= THEME_SWITCH_MIN_HITS and hits[best] > hits.get(search_topic, 0):
+        chosen, reason = best, "content"
+    elif hits.get(search_topic, 0):
+        chosen, reason = search_topic, "search_topic_confirmed"
+    else:
+        # Ключей не нашлось ни у одной тематики: оставляем тему поиска, но помечаем —
+        # по таким карточкам видно, где словарь тематик не покрывает находки радара.
+        chosen, reason = search_topic, "no_keywords"
+    return chosen, {
+        "search_topic": search_topic,
+        "theme": chosen,
+        "reason": reason,
+        "hits": {name: count for name, count in hits.items() if count},
+    }
 
 
 def _topic_tag_context(topic_name: str) -> dict[str, Any]:
