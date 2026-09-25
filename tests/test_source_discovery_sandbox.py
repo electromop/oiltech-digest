@@ -348,3 +348,94 @@ def test_evaluate_source_candidate_rejects_zero_relevant_after_sandbox(monkeypat
     assert updates[0]["recommended_action"] == "reject"
     assert updates[0]["status"] == "rejected"
     assert result["source_health"]["recommended_action"] == "reject"
+
+
+def test_online_relevance_is_decided_by_model_not_keywords(monkeypatch):
+    # С ИИ ключи тематик не подменяют гейт: статья без ключей, которую модель сочла
+    # релевантной, проходит, а модель и причина — из ответа модели.
+    from oiltech_digest.processing.openai_client import AIResponse
+
+    saved = []
+    gate_calls = []
+    article = {
+        "id": 103,
+        "candidate_id": 42,
+        "title": "Operator digitizes well construction workflow",
+        "url": "https://example.com/news/workflow",
+        "raw_text": "The operator moved well construction planning to a digital platform.",
+        "language": "en",
+        "source_name": "Example",
+        "source_category": "роботизация бурения",
+    }
+    tags = [{"id": 7, "name": "Бурение", "parent_id": None, "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}]
+
+    monkeypatch.setattr(sandbox.repository, "list_enabled_tags", lambda: tags)
+    monkeypatch.setattr(sandbox.repository, "list_enabled_scoring_criteria", lambda: [{"id": 9, "name": "Значимость", "weight": 100}])
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=True: [article],
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_article_result",
+        lambda article_id, payload: saved.append(payload),
+    )
+    monkeypatch.setattr(sandbox.pipeline, "make_client", lambda offline: sandbox.pipeline.OfflineAIClient())
+    monkeypatch.setattr(
+        sandbox.pipeline,
+        "relevance_article",
+        lambda article, client, *args, **kwargs: gate_calls.append(article["id"])
+        or AIResponse({"relevant": True, "reason": "цифровизация строительства скважин"}, "gpt-test", 10, 2),
+    )
+
+    stats = sandbox.process_candidate_articles(42, limit=5, offline=False)
+
+    assert gate_calls == [103]
+    assert stats["relevant"] == 1
+    assert saved[0]["relevance_model"] == "gpt-test"
+    assert saved[0]["relevance_reason"] == "цифровизация строительства скважин"
+
+
+def test_offline_candidate_without_topic_keywords_is_not_recommended_to_add(monkeypatch):
+    # Сквозной смысл дефекта 3: пять статей без ключей тематик без ИИ больше не дают «add».
+    from oiltech_digest.source_discovery.agent import recommend_source_action
+
+    rejected = []
+    articles = [
+        {
+            "id": 200 + index,
+            "candidate_id": 42,
+            "title": f"Company news #{index}",
+            "url": f"https://example.com/news/{index}",
+            "raw_text": "The board met shareholders and approved the annual report.",
+            "language": "en",
+            "source_category": "роботизация бурения",
+        }
+        for index in range(5)
+    ]
+    tags = [{"id": 7, "name": "Бурение", "parent_id": None, "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}]
+
+    monkeypatch.setattr(sandbox.repository, "list_enabled_tags", lambda: tags)
+    monkeypatch.setattr(sandbox.repository, "list_enabled_scoring_criteria", lambda: [{"id": 9, "name": "Значимость", "weight": 100}])
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=True: articles,
+    )
+    monkeypatch.setattr(sandbox, "_save_rejected", lambda article, reason, model: rejected.append(article["id"]))
+
+    stats = sandbox.process_candidate_articles(42, limit=5, offline=True)
+    recommendation = recommend_source_action(
+        {
+            "tested_articles": 5,
+            "processed_articles": stats["processed"],
+            "relevant_articles": stats["relevant"],
+            "noise_count": stats["rejected"],
+        },
+        offline=True,
+    )
+
+    assert stats == {"processed": 5, "relevant": 0, "rejected": 5, "errors": 0}
+    assert len(rejected) == 5
+    assert recommendation["recommended_action"] == "reject"
