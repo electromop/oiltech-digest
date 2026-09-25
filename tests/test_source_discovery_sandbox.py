@@ -75,6 +75,46 @@ def test_process_candidate_articles_saves_ai_result(monkeypatch):
     assert saved[0]["relevant"] is True
     assert saved[0]["processing_status"] == "ok"
     assert saved[0]["total_score"] == 33.33
+    assert saved[0]["relevance_model"] == "offline-keywords"
+    assert saved[0]["relevance_reason"] == "без ИИ: ключевые слова тематики «Бурение» (1)"
+
+
+def test_offline_relevance_rejects_article_without_topic_keywords(monkeypatch):
+    # Дефект 3: без ИИ заглушка отвечала «релевантно» на всё, и вердикт кандидата завышался.
+    # Тема кандидата («роботизация бурения») совпадает с ключом тега, но в расчёт не идёт.
+    saved = []
+    rejected = []
+    article = {
+        "id": 102,
+        "candidate_id": 42,
+        "title": "Company announces quarterly dividend",
+        "url": "https://example.com/news/dividend",
+        "raw_text": "The board approved a dividend payment to shareholders.",
+        "language": "en",
+        "source_name": "Example",
+        "source_category": "роботизация бурения",
+    }
+    tags = [{"id": 7, "name": "Бурение", "parent_id": None, "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}]
+
+    monkeypatch.setattr(sandbox.repository, "list_enabled_tags", lambda: tags)
+    monkeypatch.setattr(sandbox.repository, "list_enabled_scoring_criteria", lambda: [{"id": 9, "name": "Значимость", "weight": 100}])
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=True: [article],
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_article_result",
+        lambda article_id, payload: saved.append(payload),
+    )
+    monkeypatch.setattr(sandbox, "_save_rejected", lambda article, reason, model: rejected.append((article["id"], reason, model)))
+
+    stats = sandbox.process_candidate_articles(42, limit=5, offline=True)
+
+    assert stats == {"processed": 1, "relevant": 0, "rejected": 1, "errors": 0}
+    assert saved == []
+    assert rejected == [(102, "без ИИ: в тексте нет ключевых слов тематик заказчика", "offline-keywords")]
 
 
 def test_evaluate_source_candidate_uses_ai_recommendation_with_evidence(monkeypatch):
