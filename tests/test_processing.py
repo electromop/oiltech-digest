@@ -340,6 +340,28 @@ def test_glossary_repairs_customer_spud_and_granular_remarks():
     assert terminology_warnings(fixed, article) == []
 
 
+def test_glossary_repairs_calque_without_english_term_in_context():
+    """Ревью F: у доказательства радара может не быть «spudded» — только обзор Westwood.
+
+    Калька из warn_patterns в самом тексте сама включает свой термин, иначе «спудрил»
+    пережил бы и словарь радара, и аудит (relevant = []).
+    """
+    article = {"title": "Отчёт Westwood", "raw_text": "Westwood's onshore team provides a global update on rigs."}
+
+    text = "NDC 9 спудрил вертикальную скважину T-200, данные более granularные"
+
+    assert terminology_warnings(text, article)
+    assert enforce_glossary_text(text, article) == "NDC 9 забурил вертикальную скважину T-200, данные более детальные"
+
+
+def test_glossary_repairs_spud_in_without_breaking_the_hyphen():
+    article = {"title": "Well spud", "raw_text": "The spud-in of the well took place on Monday."}
+
+    fixed = enforce_glossary_text("Дата спуд-ина — понедельник.", article)
+
+    assert fixed == "Дата забуривания — понедельник."
+
+
 def test_glossary_keeps_russian_idiom_pod_spudom():
     article = {"title": "Well spudded", "raw_text": "The well was spudded in April.", "language": "en"}
 

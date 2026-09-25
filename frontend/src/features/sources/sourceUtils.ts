@@ -50,36 +50,51 @@ export function countSourceStates(sources: Source[], healthById: Map<number, Sou
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function daysSince(value: string, now: Date) {
-  return Math.max(0, Math.floor((now.getTime() - new Date(value).getTime()) / DAY_MS));
+/** Сколько календарных дней назад — как и сама дата, по местному календарю, а не
+ *  полными сутками: иначе вчерашние 13:00 в 11:00 давали «24.09 · сегодня». */
+function calendarDaysAgo(value: string, now: Date) {
+  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return Math.max(0, Math.round((startOfDay(now) - startOfDay(new Date(value))) / DAY_MS));
 }
 
 /** «Последняя загрузка» — когда от источника пришёл последний материал. */
 export function lastLoadLabel(value: string | null | undefined, now: Date = new Date()) {
   if (!value || Number.isNaN(new Date(value).getTime())) return null;
   const date = new Date(value).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
-  const days = daysSince(value, now);
+  const days = calendarDaysAgo(value, now);
   const ago = days === 0 ? "сегодня" : days === 1 ? "вчера" : `${days} дн. назад`;
   return { date, ago };
 }
 
-/** Колонка «Проблема»: коротко, что не так. Результат диагностики важнее вердикта. */
+/** Колонка «Проблема» — короткая подпись к разбору getSourceTriage (одна цепочка
+ *  проверок на экран): результат диагностики важнее вердикта. */
 export function sourceProblem(
   source: Source,
   health?: SourceHealth,
   diagnostic?: SourceDiagnostics,
   now: Date = new Date(),
 ): string {
-  const state = sourceState(source, health);
-  if (state === "archived") return "—";
-  if (state === "disabled") return "Сбор выключен";
-  const fromDiagnostic = diagnosticTriage(source, diagnostic?.verdict);
-  if (fromDiagnostic) return fromDiagnostic.title;
-  if (state === "no_articles") return "Ни одного материала";
-  if (state === "stale" && health?.last_article_at) {
-    return `Нет новых материалов ${daysSince(health.last_article_at, now)} дн.`;
+  const triage = getSourceTriage(source, health, diagnostic);
+  switch (triage.key) {
+    case "ok":
+    case "archived":
+      return "—";
+    case "disabled":
+      return "Сбор выключен";
+    case "no_articles":
+      return "Ни одного материала";
+    case "stale":
+      return health?.last_article_at
+        ? `Нет новых материалов ${calendarDaysAgo(health.last_article_at, now)} дн.`
+        : triage.title;
+    default:
+      return triage.title;
   }
-  return "—";
+}
+
+/** Подпись состояния строчными — для пилюли разбора в раскрытой строке. */
+function stateLabelLower(state: SourceState) {
+  return sourceStateLabel(state).toLowerCase();
 }
 
 // Вид источника — ЧЕМ его читаем. Берём parse_strategy, а не source_type: в
@@ -272,7 +287,7 @@ export function getSourceTriage(
     return {
       tone: "muted",
       key: "archived",
-      label: "в архиве",
+      label: stateLabelLower("archived"),
       title: "Источник в архиве: не опрашивается, его статьи скрыты из ленты.",
       action: "Верните источник из архива, если он снова нужен, и включите сбор.",
     };
@@ -281,7 +296,7 @@ export function getSourceTriage(
     return {
       tone: "muted",
       key: "disabled",
-      label: "отключён",
+      label: stateLabelLower("disabled"),
       title: "Источник выключен и не участвует в сборе.",
       action: "Включите источник, если его нужно вернуть в мониторинг.",
     };
@@ -294,7 +309,7 @@ export function getSourceTriage(
     return {
       tone: "bad",
       key: "no_articles",
-      label: "без материалов",
+      label: stateLabelLower("no_articles"),
       title: "В базе еще нет ни одной статьи из этого источника.",
       action: defaultActionForStrategy(source.parse_strategy),
     };
@@ -303,7 +318,7 @@ export function getSourceTriage(
     return {
       tone: "warn",
       key: "stale",
-      label: "требует внимания",
+      label: stateLabelLower("stale"),
       title: "Источник давно не приносил новых материалов.",
       action: "Запустите диагностику и проверьте свежий listing/RSS перед форс-парсингом.",
     };
@@ -312,16 +327,16 @@ export function getSourceTriage(
   return {
     tone: "ok",
     key: "ok",
-    label: "работает штатно",
+    label: stateLabelLower("ok"),
     title: "Источник выглядит рабочим по текущим данным.",
     action: "Ничего не требуется, только периодический контроль обновлений.",
   };
 }
 
+// Только виды проблем из диагностики: состояние (без материалов, требуют внимания,
+// штатно, отключены) выбирается плитками над таблицей — второй его список здесь был лишним.
 export const TRIAGE_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "Все проблемы" },
-  { value: "no_articles", label: "Без материалов" },
-  { value: "stale", label: "Требуют внимания" },
   { value: "access", label: "Нет доступа" },
   { value: "extraction", label: "Не извлекаются ссылки" },
   { value: "content", label: "Не вставляется содержимое" },
@@ -329,8 +344,6 @@ export const TRIAGE_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "telegram", label: "Проблема Telegram" },
   { value: "config", label: "Нужна настройка" },
   { value: "infra", label: "Проблема infra" },
-  { value: "ok", label: "Работают штатно" },
-  { value: "disabled", label: "Отключены" },
 ];
 
 export function diagnosticText(diagnostic: SourceDiagnostics) {

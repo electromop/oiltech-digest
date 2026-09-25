@@ -1,11 +1,12 @@
 import { useState } from "react";
+import type { CreateSourcePayload, ManualArticleImportPayload } from "../../api/types";
 import styles from "./Sources.module.css";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
 type Props = {
-  onCreateSource: (payload: { name: string; url: string; update_frequency: string | null }) => Promise<boolean>;
-  onImportArticle: (payload: { url: string; source_id?: number; process: boolean }) => Promise<boolean>;
+  onCreateSource: (payload: CreateSourcePayload) => Promise<boolean>;
+  onImportArticle: (payload: ManualArticleImportPayload) => Promise<boolean>;
   showToast: ToastWriter;
 };
 
@@ -28,6 +29,8 @@ export function SourceAddPanel({ onCreateSource, onImportArticle, showToast }: P
       name: newSourceName.trim(),
       url: newSourceUrl.trim(),
       update_frequency: newSourceFrequency || null,
+      category: "manual",
+      priority: 1,
     });
     if (created) {
       setNewSourceName("");

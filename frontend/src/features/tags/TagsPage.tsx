@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { deleteTag, listTags, saveTags } from "../../api/tags";
 import type { Tag } from "../../api/types";
 import { KeywordChips } from "./KeywordChips";
@@ -24,10 +24,11 @@ function pluralRu(count: number, one: string, few: string, many: string) {
   return `${count} ${many}`;
 }
 
-// Ключ группы не может быть именем: имя правят в этой же форме. У новой (без id) —
-// позиция в списке, она не меняется, пока группу не сохранили.
+// Ключ группы не может быть именем: имя правят в этой же форме, и не может быть
+// позицией: удаление тега выше сдвигает её (ревью F — раскрывалось соседнее).
+// У несохранённой группы — клиентский ключ, выданный при создании.
 function groupKey(tag: Tag, index: number) {
-  return tag.id ? `id-${tag.id}` : `new-${index}`;
+  return tag.id ? `id-${tag.id}` : tag.client_key ?? `new-${index}`;
 }
 
 export function TagsPage({ onUnauthorized, showToast }: Props) {
@@ -37,6 +38,12 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
   // По умолчанию направления свёрнуты (документ заказчика 19.09): 13 развёрнутых
   // тематик по 30–50 ключей — это несколько экранов прокрутки.
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
+  const clientKeySeq = useRef(0);
+
+  function newClientKey() {
+    clientKeySeq.current += 1;
+    return `new-${clientKeySeq.current}`;
+  }
 
   useEffect(() => {
     void reload();
@@ -97,11 +104,13 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
 
   function addParentTag() {
     // Новое направление сразу раскрыто: его только что добавили, чтобы заполнить.
-    setOpenGroups((open) => new Set(open).add(`new-${tags.length}`));
+    const clientKey = newClientKey();
+    setOpenGroups((open) => new Set(open).add(clientKey));
     setTags((prev) => [
       ...prev,
       {
         id: null,
+        client_key: clientKey,
         parent_name: null,
         name: "Новое направление",
         name_en: "",
@@ -116,10 +125,12 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
   }
 
   function addSubtag(parentName: string) {
+    const clientKey = newClientKey();
     setTags((prev) => [
       ...prev,
       {
         id: null,
+        client_key: clientKey,
         parent_name: parentName,
         name: "Новый подтег",
         name_en: "",
@@ -151,7 +162,9 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
   async function handleSave() {
     try {
       setBusy(true);
-      await saveTags(tags.map((tag, index) => ({ ...tag, sort_order: tag.sort_order || (index + 1) * 10 })));
+      await saveTags(
+        tags.map(({ client_key: _clientKey, ...tag }, index) => ({ ...tag, sort_order: tag.sort_order || (index + 1) * 10 })),
+      );
       showToast("Теги сохранены");
       await reload();
     } catch (error) {
@@ -175,7 +188,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
 
       <section className="panel">
         {busy ? <InlineLoader label="Сохраняем теги…" /> : null}
-        <div className={`panelHeader ${styles.header}`}>
+        <div className="panelHeader settingsHeader">
           <h2>Направления и подтеги</h2>
           <div className="settingsActions">
             <button
@@ -269,7 +282,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                           {children.map((child) => {
                             const childIndex = tags.indexOf(child);
                             return (
-                              <div className={styles.child} key={child.id ?? `child-${childIndex}`}>
+                              <div className={styles.child} key={child.id ?? child.client_key ?? `child-${childIndex}`}>
                                 <div className={styles.row}>
                                   <label className="toggleLabel">
                                     <input
@@ -318,7 +331,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                       ) : null}
 
                       <div className={styles.groupFoot}>
-                        <button type="button" className="addRowButton" onClick={() => addSubtag(parent.name)}>
+                        <button type="button" className="ghostButton" onClick={() => addSubtag(parent.name)}>
                           + Добавить подтег
                         </button>
                         {parent.name === SYSTEM_TAG_UNCLASSIFIED ? (
@@ -337,7 +350,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
               );
             })}
             <div>
-              <button type="button" className="addRowButton" onClick={addParentTag}>
+              <button type="button" className="ghostButton" onClick={addParentTag}>
                 + Добавить направление
               </button>
             </div>

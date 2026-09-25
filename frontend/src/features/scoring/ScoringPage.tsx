@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { deleteScoringCriterion, listScoringCriteria, saveScoringCriteria } from "../../api/scoring";
 import type { ScoringCriterion } from "../../api/types";
-import styles from "./Scoring.module.css";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -121,7 +120,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
 
       <section className="panel">
         {busy ? <InlineLoader label="Сохраняем скоринг…" /> : null}
-        <div className={`panelHeader ${styles.header}`}>
+        <div className="panelHeader settingsHeader">
           <h2>Критерии оценки</h2>
           <div className="settingsActions">
             <button type="button" className="ghostButton" onClick={normalizeWeights}>
@@ -178,7 +177,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
                     />
                   </label>
                 </div>
-                <div className={styles.cardFoot}>
+                <div className="settingsCardFoot">
                   <button type="button" className="ghostButton dangerButton" onClick={() => void removeCriterion(index)}>
                     Удалить
                   </button>
@@ -186,7 +185,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
               </div>
             ))}
             <div>
-              <button type="button" className="addRowButton" onClick={addCriterion}>
+              <button type="button" className="ghostButton" onClick={addCriterion}>
                 + Добавить параметр
               </button>
             </div>

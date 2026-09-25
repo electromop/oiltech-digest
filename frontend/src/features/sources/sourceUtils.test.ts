@@ -144,6 +144,12 @@ describe("source states on the sources screen", () => {
     expect(lastLoadLabel(null, now)).toBeNull();
   });
 
+  it("counts days ago by calendar, like the date itself", () => {
+    // Ревью F: вчера днём, смотрим сегодня утром — 18 ч, но это «вчера», а не «сегодня».
+    const morning = new Date("2026-09-25T06:00:00Z");
+    expect(lastLoadLabel("2026-09-24T12:00:00Z", morning)).toEqual({ date: "24.09.2026", ago: "вчера" });
+  });
+
   it("explains an archived source instead of calling it switched off", () => {
     const triage = getSourceTriage({ ...baseSource, enabled: false, archived_at: "2026-09-12T10:00:00Z" });
 

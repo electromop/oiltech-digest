@@ -82,8 +82,9 @@ def glossary_prompt_block(article: dict, *, limit: int = 12) -> str:
 def enforce_glossary_text(text: str, article: dict) -> str:
     """Apply safe deterministic replacements for known bad Russian terms."""
     result = text or ""
-    result = _repair_bad_phrases(result, article)
-    for term in relevant_glossary_terms(article):
+    terms = _terms_for(result, article)
+    result = _repair_bad_phrases(result, terms)
+    for term in terms:
         for forbidden in term.forbidden_ru:
             result = _replace_case_insensitive(result, forbidden, term.preferred_ru)
         for pattern in _forbidden_patterns(term):
@@ -96,7 +97,7 @@ def enforce_glossary_text(text: str, article: dict) -> str:
 def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
     warnings = []
     lower = (text or "").lower()
-    for term in relevant_glossary_terms(article):
+    for term in _terms_for(text, article):
         for forbidden in term.forbidden_ru:
             if forbidden.lower() in lower:
                 warnings.append({
@@ -112,12 +113,31 @@ def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
                     "source_terms": ", ".join(term.source_terms[:5]),
                 })
     for word in mixed_script_words(text):
+        # Ключи — те же, что у словарных находок: аудит печатает их одной строкой.
         warnings.append({
+            "kind": "mixed_script",
             "forbidden_ru": word,
             "preferred_ru": "слово целиком одним алфавитом",
             "source_terms": "смешение латиницы и кириллицы",
         })
     return warnings
+
+
+def _terms_for(text: str, article: dict) -> list[GlossaryTerm]:
+    """Термины статьи плюс термины, чья калька есть в самом тексте.
+
+    Калька из warn_patterns однозначна по построению («спудрил», «granularными»): её
+    появление в русском тексте само говорит, какой это термин, даже если английского
+    слова в контексте нет. Так и было у радара 22.09: в доказательстве сигнала — обзор
+    Westwood без «spudded», а в его сути — «спудрил».
+    """
+    terms = relevant_glossary_terms(article)
+    for term in GLOSSARY:
+        if term in terms or not term.warn_patterns:
+            continue
+        if any(re.search(pattern, text or "", flags=re.I) for pattern in term.warn_patterns):
+            terms.append(term)
+    return terms
 
 
 _LETTER_RUN = re.compile(r"[A-Za-zА-Яа-яЁё]+")
@@ -276,8 +296,8 @@ def _forbidden_patterns(term: GlossaryTerm) -> tuple[str, ...]:
     return term.forbidden_patterns if isinstance(term.forbidden_patterns, tuple) else ()
 
 
-def _repair_bad_phrases(text: str, article: dict) -> str:
-    if not relevant_glossary_terms(article):
+def _repair_bad_phrases(text: str, terms: list[GlossaryTerm]) -> str:
+    if not terms:
         return text
     result = text
     for pattern, replacement in PHRASE_REPAIRS:

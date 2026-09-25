@@ -1089,6 +1089,10 @@ def cmd_source_health(args: argparse.Namespace) -> None:
 
     from oiltech_digest.db import repository
 
+    # Вердикты проверяются здесь, а не choices= парсера: сборка парсера не импортирует
+    # репозиторий (NL-воркер зовёт cli без базы), а список живёт в одном месте.
+    if args.verdict and args.verdict not in repository.SOURCE_HEALTH_VERDICTS:
+        raise SystemExit(f"--verdict: одно из {', '.join(repository.SOURCE_HEALTH_VERDICTS)}")
     rows = repository.source_health_report(stale_days=args.stale_days, limit=args.limit, verdict=args.verdict)
     counts = Counter(row["verdict"] for row in rows)
     print(
@@ -1965,7 +1969,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_source_health = sub.add_parser("source-health", help="вердикты покрытия источников: ok/stale/no_articles/disabled/archived")
     p_source_health.add_argument("--stale-days", type=int, default=3)
     p_source_health.add_argument("--limit", type=int, default=300)
-    p_source_health.add_argument("--verdict", choices=["ok", "stale", "no_articles", "disabled", "archived"], default=None)
+    p_source_health.add_argument("--verdict", default=None, help="ok / stale / no_articles / disabled / archived")
     p_source_health.set_defaults(func=cmd_source_health)
 
     p_candidates = sub.add_parser("article-candidates", help="найти статьи-кандидаты по ключевым словам")

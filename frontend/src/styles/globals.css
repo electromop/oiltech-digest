@@ -489,23 +489,6 @@ button {
   opacity: 0.55;
 }
 
-/* «+ Добавить …» в конце списка (подтег, направление, параметр скоринга): полноценная
-   кнопка добавления, а не «отстранённая» ссылка — просьба заказчика 19.09. */
-.addRowButton {
-  min-height: 34px;
-  padding: 0 14px;
-  border-radius: 9px;
-  border: 1px dashed rgba(37, 99, 235, 0.45);
-  background: var(--brand-soft);
-  color: var(--brand);
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.addRowButton:hover {
-  background: rgba(29, 78, 216, 0.18);
-}
-
 .fullWidth {
   width: 100%;
   margin-top: 10px;
@@ -2467,6 +2450,21 @@ button {
   flex-wrap: wrap;
 }
 
+/* Шапка панели настроек с кнопками («Сохранить», «Нормализовать»): отступ от первой
+   карточки — кнопки прилипали к ней (документ заказчика 19.09, «Теги» и «Скоринг»). */
+.settingsHeader {
+  margin-bottom: 14px;
+}
+
+/* «Удалить» внизу карточки — справа и за линией, а не вплотную под полем. */
+.settingsCardFoot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
 .dangerButton {
   color: var(--sem-bad-fg);
   border-color: rgba(239, 68, 68, 0.26);
@@ -2496,13 +2494,6 @@ button {
   grid-template-columns: minmax(0, 1.6fr) minmax(150px, 0.5fr) auto;
   gap: 12px 16px;
   align-items: end;
-}
-
-.sourceCardGrid {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 12px;
 }
 
 .sourceCardReact {
@@ -2826,20 +2817,6 @@ button {
 .miniPill.muted {
   color: var(--sem-muted-fg);
   background: var(--sem-muted-bg);
-}
-
-/* Вид источника (ЧЕМ читаем: RSS / страница / браузер / Telegram).
-   НАМЕРЕННО нейтральный, без семантики .ok/.warn/.bad: у вида источника нет
-   качества, и покрасить «telegram» в красный значило бы сказать, что он сломан.
-   Семантические токены выше означают «работает / застой / сломан» — их не трогаем. */
-.typePill {
-  border-radius: 999px;
-  padding: 5px 8px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  background: transparent;
-  border: 1px solid var(--sem-muted-bg);
 }
 
 /* draft/info = намеренный «info»-токен (требует действия), не случайный цвет. */
@@ -5446,25 +5423,6 @@ button {
   .documentUploadGrid {
     grid-template-columns: 1fr;
   }
-}
-
-/* Архив источников — отдельный свёрнутый раздел внизу каталога. */
-.sourceArchiveSection {
-  margin-top: 24px;
-  border-top: 1px solid var(--sem-muted-bg);
-  padding-top: 16px;
-}
-
-.sourceArchiveSection > summary {
-  cursor: pointer;
-  font-weight: 800;
-  color: var(--text-muted);
-  padding: 8px 0;
-}
-
-.sourceArchiveSection > .sourceCardGrid {
-  margin-top: 12px;
-  opacity: 0.75;
 }
 
 /* ---------------------------------------------------------------------------

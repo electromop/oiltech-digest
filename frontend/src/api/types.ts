@@ -472,6 +472,9 @@ export type Tag = {
   negative_keywords_json?: string[];
   enabled: boolean;
   sort_order: number;
+  // Только на клиенте: стабильный ключ ещё не сохранённого тега (у него нет id, а
+  // позиция в списке сдвигается при удалении). Перед сохранением вырезается.
+  client_key?: string;
 };
 
 export type CreateSourcePayload = {

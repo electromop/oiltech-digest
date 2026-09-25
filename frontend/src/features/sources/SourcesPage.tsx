@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   archiveSource,
   createSource,
@@ -10,7 +10,14 @@ import {
   unarchiveSource,
   updateSource,
 } from "../../api/sources";
-import type { Source, SourceDiagnostics, SourceHealth, SourcePatch } from "../../api/types";
+import type {
+  CreateSourcePayload,
+  ManualArticleImportPayload,
+  Source,
+  SourceDiagnostics,
+  SourceHealth,
+  SourcePatch,
+} from "../../api/types";
 import styles from "./Sources.module.css";
 import { SourceAddPanel } from "./SourceAddPanel";
 import { SourceDetails } from "./SourceDetails";
@@ -142,18 +149,21 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
 
   const narrowed = Boolean(search.trim() || strategy || triageKey);
 
+  // Ссылка на архивный источник открывает архив, иначе строки просто не будет. Ровно
+  // один раз, после первой загрузки: дальше плитки и «Сбросить» — выбор пользователя,
+  // и возвращать его в архив нельзя (ревью F: из архива было не выйти).
+  const focusRevealed = useRef(false);
+  useEffect(() => {
+    if (!focusedSourceId || loading || focusRevealed.current) return;
+    focusRevealed.current = true;
+    const source = sources.find((item) => item.id === focusedSourceId);
+    if (source && sourceState(source, healthById.get(source.id)) === "archived") setStateFilter("archived");
+  }, [focusedSourceId, healthById, loading, sources]);
+
   useEffect(() => {
     if (!focusedSourceId || loading) return;
-    const source = sources.find((item) => item.id === focusedSourceId);
-    // Ссылка на архивный источник открывает архив, иначе строки просто не будет.
-    if (source && sourceState(source, healthById.get(source.id)) === "archived" && stateFilter !== "archived") {
-      setStateFilter("archived");
-      return;
-    }
-    const node = document.getElementById(`source-${focusedSourceId}`);
-    if (!node) return;
-    node.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [focusedSourceId, healthById, loading, sources, stateFilter, visibleSources.length]);
+    document.getElementById(`source-${focusedSourceId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusedSourceId, loading, visibleSources.length]);
 
   useEffect(() => {
     if (!focusedSourceId || !suggestedFrequency || loading) return;
@@ -194,10 +204,10 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     }));
   }
 
-  async function handleCreateSource(payload: { name: string; url: string; update_frequency: string | null }) {
+  async function handleCreateSource(payload: CreateSourcePayload) {
     try {
       setBusy(true);
-      await createSource({ ...payload, category: "manual", priority: 1 });
+      await createSource(payload);
       showToast("Источник добавлен — система ищет RSS-ленту");
       await reload();
       return true;
@@ -295,7 +305,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
     }
   }
 
-  async function handleManualArticleImport(payload: { url: string; source_id?: number; process: boolean }) {
+  async function handleManualArticleImport(payload: ManualArticleImportPayload) {
     try {
       setBusy(true);
       const result = await importArticleByUrl(payload);
