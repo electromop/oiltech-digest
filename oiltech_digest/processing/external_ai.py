@@ -251,7 +251,9 @@ def process_source_candidate_payload(payload: dict[str, Any], heartbeat: Callabl
                 result["articles"].append(item)
                 continue
 
-            relevance_resp = relevance_article(article, client)
+            # Тематики — из payload: у воркера NL базы нет, и без tags гейт судил бы
+            # кандидата без тематик заказчика (_tags_scope падает в except).
+            relevance_resp = relevance_article(article, client, tags=tags)
             relevant = bool(relevance_resp.data.get("relevant"))
             item["relevance"] = _response_payload(
                 relevance_resp,
