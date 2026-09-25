@@ -1684,3 +1684,32 @@ def test_insert_article_keeps_articles_that_differ_only_by_query(isolated_db):
     assert add(f"{base}?rid=740741", "Третий релиз. ") is True, "другой релиз — не дубль"
     # Трекинговый хвост к тому же релизу по-прежнему дубль.
     assert add(f"{base}?rid=740957&utm_source=tg", "Второй релиз, другое тело. ") is False
+
+
+def test_insert_article_logs_same_body_rejection(isolated_db, caplog):
+    """Отказ по «тому же телу» раньше был немым и в сводке сбора сливался с дублями:
+    25.09 у Eni каждая новая статья отбивалась так (с каждой страницы извлекался текст
+    виджета чат-бота), и в логе не было ни строки."""
+    import logging
+
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Eni', 'Company', 'https://eni.example', TRUE, 'request') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    widget = "If you want to change topic, clear the chat and make a new query. " * 20
+    first = "https://eni.example/media/press-release/2026/09/bwt-alpine.html"
+    second = "https://eni.example/media/press-release/2026/09/pr-eni-awarded-licence-indonesia.html"
+    for url in (first, second):
+        added = repository.insert_article({
+            "source_id": source_id, "title": url[-20:], "url": url, "published_at": None,
+            "raw_text": widget, "text_truncated": False, "language": "en",
+            "content_hash": f"h-{url}", "image_url": None,
+        })
+        assert added is (url == first)
+    rejected = [r for r in caplog.records if r.levelno == logging.WARNING and second in r.getMessage()]
+    assert rejected and first in rejected[0].getMessage(), "отказ по телу должен быть виден в логе"
