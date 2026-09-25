@@ -13,15 +13,24 @@ log() {
   printf '%s %s\n' "$(date -Iseconds)" "$*"
 }
 
+# Шаг идёт под сроком (oiltech_digest/step_timeout.py): дольше STEP_TIMEOUT_SECONDS —
+# SIGTERM, через STEP_KILL_AFTER_SECONDS — SIGKILL, код 124, и цикл идёт дальше. 24.09
+# parse не вернулся 20 ч 45 мин — стоял весь цикл. Код шага берётся до всякого `if`:
+# `code="$?"` после `if …; fi` давал 0 (так по POSIX выходит `if` без ветки) — лог писал
+# «exit=0», а run_required_step не останавливал скрипт никогда.
 run_step() {
   name="$1"
   shift
   log "START ${name}"
-  if "$@"; then
+  python -m oiltech_digest.step_timeout "$STEP_TIMEOUT_SECONDS" "$STEP_KILL_AFTER_SECONDS" -- "$@"
+  code="$?"
+  if [ "$code" -eq 0 ]; then
     log "OK ${name}"
     return 0
   fi
-  code="$?"
+  if [ "$code" -eq 124 ]; then
+    log "TIMEOUT ${name}: дольше ${STEP_TIMEOUT_SECONDS} с — шаг снят"
+  fi
   log "FAIL ${name} exit=${code}"
   return "$code"
 }
@@ -33,6 +42,24 @@ run_required_step() {
 }
 
 CYCLE_INTERVAL_SECONDS="${CYCLE_INTERVAL_SECONDS:-21600}"
+# Потолок шага. Норма на проде (сентябрь): parse 620–744 с, discover-rss ~400 с, прочие
+# до 130 с — час даёт запас впятеро. 0 — без потолка.
+STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-3600}"
+STEP_KILL_AFTER_SECONDS="${STEP_KILL_AFTER_SECONDS:-30}"
+# Целые секунды. Сторож с кривым сроком шаг не запускает — опечатка (1h, -5) остановила бы
+# каждый шаг, как 24.09. Поэтому кривое значение — строкой в лог и значение по умолчанию.
+case "$STEP_TIMEOUT_SECONDS" in
+  '' | *[!0-9]*)
+    log "STEP_TIMEOUT_SECONDS=«${STEP_TIMEOUT_SECONDS}» — не целое число секунд, беру 3600"
+    STEP_TIMEOUT_SECONDS=3600
+    ;;
+esac
+case "$STEP_KILL_AFTER_SECONDS" in
+  '' | *[!0-9]*)
+    log "STEP_KILL_AFTER_SECONDS=«${STEP_KILL_AFTER_SECONDS}» — не целое число секунд, беру 30"
+    STEP_KILL_AFTER_SECONDS=30
+    ;;
+esac
 RUN_DISCOVER_ON_START="${RUN_DISCOVER_ON_START:-1}"
 DISCOVER_EVERY_CYCLES="${DISCOVER_EVERY_CYCLES:-4}"
 RUN_MAINTENANCE_ON_START="${RUN_MAINTENANCE_ON_START:-1}"

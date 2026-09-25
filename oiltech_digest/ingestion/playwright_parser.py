@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import html as html_lib
 import logging
+import os
 import re
+import signal
 import threading
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -100,6 +102,84 @@ def with_base_href(html_text: str, final_url: str) -> str:
     return tag + html_text
 
 
+# Срок рендера сверх его собственных сроков: goto ограничен timeout_ms, пауза — settle_ms,
+# а page.content() и browser.close() у Playwright не ограничены ничем. 24.09 content() у
+# листинга JPT не вернулся 20 ч 45 мин и держал весь шаг parse; 25.09 его отпустило
+# убийство chrome («Target page, context or browser has been closed»). Запас — на new_page,
+# content() и close(): в норме это секунды.
+RENDER_DEADLINE_SLACK_SECONDS = 30.0
+
+
+def _browser_pid(browser: Any) -> int | None:
+    """PID процесса браузера: в API Playwright его нет, а CDP отдаёт. Сбой — None, не исключение."""
+    try:
+        session = browser.new_browser_cdp_session()
+        info = session.send("SystemInfo.getProcessInfo")
+        session.detach()
+        pids = [int(p["id"]) for p in info.get("processInfo") or [] if p.get("type") == "browser"]
+    except Exception as exc:  # noqa: BLE001 - без PID рендер идёт, только без сторожа
+        logger.warning("playwright: PID браузера не получен (%s) — срок рендера не сторожится", exc)
+        return None
+    # 0 и 1 — не браузер: killpg(0) снял бы группу самого шага (скрипт, сторож), 1 — init.
+    if len(pids) != 1 or pids[0] <= 1:
+        logger.warning("playwright: CDP назвал процесс браузера неясно (%s) — срок рендера не сторожится", pids)
+        return None
+    return pids[0]
+
+
+def _kill_browser(pid: int) -> None:
+    """SIGKILL браузеру вместе с хелперами: Playwright запускает Chromium лидером своей группы."""
+    try:
+        os.killpg(pid, signal.SIGKILL)
+        return
+    except ProcessLookupError:
+        pass  # не лидер группы — тогда хотя бы сам процесс
+    except PermissionError as exc:
+        logger.warning("playwright: группу браузера %s не снять: %s", pid, exc)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+class _RenderDeadline:
+    """Сторож срока одного рендера: по истечении снимает браузер.
+
+    Вызов Playwright, который ждёт мёртвый браузер, отпускает с ошибкой «closed» — так
+    25.09 и сняли зависший parse руками. Бьёт только в свой браузер: рендеры идут и
+    параллельно (API — пул потоков), и «все chrome процесса» задели бы чужие. После
+    cancel() сторож не убьёт уже ничего: снятие и отмена идут под одним замком.
+    """
+
+    def __init__(self, pid: int | None, seconds: float, url: str) -> None:
+        self.fired = False
+        self._pid = pid
+        self._seconds = seconds
+        self._url = url
+        self._lock = threading.Lock()
+        self._done = False
+        self._timer: threading.Timer | None = None
+        if pid is not None:
+            self._timer = threading.Timer(seconds, self._expire)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _expire(self) -> None:
+        with self._lock:
+            if self._done:
+                return
+            self.fired = True
+            logger.warning("playwright %s — рендер не уложился в %.0f с: браузер снят (pid %s)",
+                           self._url, self._seconds, self._pid)
+            _kill_browser(self._pid)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._done = True
+        if self._timer is not None:
+            self._timer.cancel()
+
+
 def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcontentloaded",
                    settle_ms: int = 3500) -> bytes | None:
     """Загрузить страницу через headless Chromium, вернуть HTML как bytes.
@@ -109,6 +189,7 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
     timeout (наблюдалось на bcg.com). После загрузки даём JS дорендериться фиксированной
     паузой settle_ms (важно для JS-листингов и прохождения лёгких challenge).
     Возвращает None при блокировке (403/429/503) — чтобы не разбирать challenge-страницу.
+    Весь рендер от запуска браузера до его закрытия идёт под сроком (_RenderDeadline).
     """
     _last_fetch.status = None
     try:
@@ -118,6 +199,8 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
         _last_fetch.status = "error:playwright_missing"
         return None
 
+    deadline_seconds = (timeout_ms + settle_ms) / 1000 + RENDER_DEADLINE_SLACK_SECONDS
+    deadline: _RenderDeadline | None = None
     try:
         with sync_playwright() as pw:
             # --no-sandbox: Chromium под root в Docker; --disable-dev-shm-usage: малый /dev/shm
@@ -131,6 +214,7 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
                 launch_kwargs["proxy"] = proxy
                 logger.info("playwright %s — через прокси %s", url, proxy.get("server"))
             browser = pw.chromium.launch(**launch_kwargs)
+            deadline = _RenderDeadline(_browser_pid(browser), deadline_seconds, url)
             try:
                 page = browser.new_page(
                     user_agent=(
@@ -149,9 +233,17 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
                     page.wait_for_timeout(settle_ms)
                 html_content = with_base_href(page.content(), page.url)
             finally:
-                browser.close()
+                # close() тоже под сроком: у зависшего браузера висит и он.
+                try:
+                    browser.close()
+                finally:
+                    deadline.cancel()
         return html_content.encode("utf-8") if isinstance(html_content, str) else html_content
     except Exception as exc:  # noqa: BLE001
+        if deadline is not None and deadline.fired:
+            logger.warning("playwright fetch failed for %s: срок рендера истёк — %s", url, exc)
+            _last_fetch.status = "error:render_timeout"
+            return None
         logger.warning("playwright fetch failed for %s: %s", url, exc)
         _last_fetch.status = f"error:{type(exc).__name__}"
         return None

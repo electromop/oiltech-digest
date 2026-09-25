@@ -1,4 +1,16 @@
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
 from oiltech_digest.ingestion import playwright_parser
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 LISTING_HTML = b"""
@@ -151,3 +163,193 @@ def test_blocked_article_is_not_retried(monkeypatch):
 
     assert playwright_parser.rendered_article(CandidateLink("https://e.com/a", "t" * 30, 5), {"id": 1}) is None
     assert len(calls) == 1, "блок (403/429/503) ожиданием не лечится"
+
+
+# --- Срок одного рендера (инцидент 24.09) -------------------------------------------------
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # macOS так отвечает про зомби, которого ещё не подобрали
+        return True
+    return True
+
+
+def _group_gone(pgid: int, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_render_deadline_kills_the_whole_browser_process_group():
+    """Chromium идёт лидером своей группы вместе с хелперами — снимается вся группа."""
+    helper = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"
+    browser = subprocess.Popen([sys.executable, "-c", helper], start_new_session=True)
+    try:
+        deadline = playwright_parser._RenderDeadline(browser.pid, 0.3, "https://example.com/slow")
+        browser.wait(timeout=10)
+        assert deadline.fired
+        assert browser.returncode == -signal.SIGKILL
+        assert _group_gone(browser.pid), "хелпер из группы браузера пережил срок"
+    finally:
+        try:
+            os.killpg(browser.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_render_deadline_cancelled_in_time_kills_nothing():
+    browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        deadline = playwright_parser._RenderDeadline(browser.pid, 0.3, "https://example.com/fast")
+        deadline.cancel()
+        time.sleep(0.8)
+        assert browser.poll() is None
+        assert not deadline.fired
+    finally:
+        browser.kill()
+        browser.wait()
+
+
+def test_render_without_a_browser_pid_is_not_guarded():
+    deadline = playwright_parser._RenderDeadline(None, 0.01, "https://example.com")
+    time.sleep(0.1)
+    assert not deadline.fired
+    deadline.cancel()
+
+
+def _browser_answering(info):
+    class Session:
+        def send(self, method):
+            assert method == "SystemInfo.getProcessInfo"
+            return info
+
+        def detach(self):
+            pass
+
+    class Browser:
+        def new_browser_cdp_session(self):
+            return Session()
+
+    return Browser()
+
+
+def test_browser_pid_comes_from_cdp_and_failure_is_not_fatal():
+    good = {"processInfo": [{"type": "GPU", "id": 2}, {"type": "browser", "id": 1234}]}
+    assert playwright_parser._browser_pid(_browser_answering(good)) == 1234
+
+    class NoCdp:
+        def new_browser_cdp_session(self):
+            raise RuntimeError("CDP недоступен")
+
+    assert playwright_parser._browser_pid(NoCdp()) is None
+    # Кривой ответ — тоже None, а не исключение до try/finally с browser.close().
+    for info in ({}, {"processInfo": [{"type": "browser"}]}, {"processInfo": [{"type": "browser", "id": "x"}]}):
+        assert playwright_parser._browser_pid(_browser_answering(info)) is None
+
+
+def test_browser_pid_zero_or_one_is_never_used():
+    """killpg(0) снял бы группу самого шага — скрипт и сторожа, killpg(1) бьёт в init."""
+    for pid in (0, 1):
+        info = {"processInfo": [{"type": "browser", "id": pid}]}
+        assert playwright_parser._browser_pid(_browser_answering(info)) is None
+
+
+# Настоящий Chromium: срок рендера — это снятый браузер, подделка вызова его не проверит.
+RENDER_CHILD = r"""
+import json, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from oiltech_digest.ingestion import playwright_parser as pp
+
+PAGES = {
+    "/ok": b"<!doctype html><html><head><title>ok</title></head><body><p>ready</p></body></html>",
+    # Главный поток страницы занят навсегда: page.content() не вернётся, как у JPT 24.09.
+    "/wedge": b"<!doctype html><html><head><title>w</title></head><body><p>w</p>"
+              b"<script>setTimeout(function () { for (;;) {} }, 200);</script></body></html>",
+}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = PAGES.get(self.path)
+        self.send_response(200 if body else 404)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(body or b"")
+
+    def log_message(self, *args):
+        pass
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+base = f"http://127.0.0.1:{server.server_address[1]}"
+
+pp.RENDER_DEADLINE_SLACK_SECONDS = 2
+pids = []
+# getattr — чтобы на коде до правки тест падал по делу (рендер не вернулся), а не на AttributeError.
+real_browser_pid = getattr(pp, "_browser_pid", None)
+if real_browser_pid is not None:
+    def spy(browser):
+        pids.append(real_browser_pid(browser))
+        return pids[-1]
+    pp._browser_pid = spy
+
+for page, settle_ms in (("ok", 0), ("wedge", 1000)):
+    started = time.monotonic()
+    html = pp.fetch_rendered(f"{base}/{page}", timeout_ms=5000, settle_ms=settle_ms)
+    print(json.dumps({"page": page, "html": (html or b"").decode(), "status": pp.last_fetch_status(),
+                      "seconds": time.monotonic() - started, "pids": list(pids)}), flush=True)
+"""
+
+
+@pytest.fixture(scope="module")
+def chromium():
+    """Есть ли Chromium — проверка мимо кода продукта, чтобы его поломка не выглядела пропуском."""
+    probe = ("from playwright.sync_api import sync_playwright\n"
+             "with sync_playwright() as pw:\n"
+             "    pw.chromium.launch(headless=True, args=['--no-sandbox']).close()\n")
+    try:
+        result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        pytest.skip("Chromium не запустился за 60 с")
+    if result.returncode != 0:
+        pytest.skip(f"Chromium недоступен: {result.stderr.strip()[-200:]}")
+
+
+def test_render_that_never_returns_is_cut_by_the_deadline(chromium):
+    """24.09 page.content() у листинга JPT не вернулся 20 ч 45 мин и держал весь шаг parse.
+    Теперь рендер идёт под сроком: по истечении браузер снимается, и вызов отпускает."""
+    child = subprocess.Popen(
+        [sys.executable, "-c", RENDER_CHILD],
+        cwd=str(ROOT),
+        env={**os.environ, "PROXY_URL": "", "PROXY_HOST_OVERRIDES": ""},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
+    try:
+        out, err = child.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        # Драйвер Playwright — в группе ребёнка; Chromium выходит сам, когда закрывается его труба.
+        os.killpg(child.pid, signal.SIGKILL)
+        child.communicate()
+        pytest.fail("рендер не вернулся за 60 с: срока у него нет")
+    rows = {row["page"]: row for row in (json.loads(line) for line in out.splitlines() if line.startswith("{"))}
+    assert set(rows) == {"ok", "wedge"}, err[-2000:]
+
+    assert rows["ok"]["status"] == "ok:200"
+    assert "ready" in rows["ok"]["html"]
+
+    wedge = rows["wedge"]
+    assert wedge["status"] == "error:render_timeout", err[-2000:]
+    assert wedge["html"] == ""
+    assert wedge["seconds"] < 20  # срок 5 + 1 + 2 = 8 с от запуска браузера
+    assert len(wedge["pids"]) == 2 and all(wedge["pids"])
+    assert not any(_alive(pid) for pid in wedge["pids"]), "браузер пережил рендер"
