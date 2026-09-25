@@ -153,6 +153,45 @@ def test_discover_sources_dry_run_does_not_write(monkeypatch):
     assert calls == []
 
 
+def test_core_ai_offline_only_when_ai_is_external(monkeypatch):
+    monkeypatch.setattr(agent.app_config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(agent.app_config, "AI_EXECUTION_REGION", "external")
+    assert agent.core_ai_offline(False) is True
+    assert agent.core_ai_offline(True) is True
+
+    monkeypatch.setattr(agent.app_config, "AI_EXECUTION_REGION", "ru")
+    assert agent.core_ai_offline(False) is False
+
+    monkeypatch.setattr(agent.app_config, "EXTERNAL_WORKERS_ENABLED", False)
+    monkeypatch.setattr(agent.app_config, "AI_EXECUTION_REGION", "external")
+    assert agent.core_ai_offline(False) is False
+
+
+def test_discover_sources_on_core_goes_without_ai_when_ai_is_external(monkeypatch):
+    # Дефект 1: снятый флажок «Без ИИ» на РФ-ядре звал OpenAI и получал 403.
+    offline_seen = []
+    monkeypatch.setattr(agent.app_config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(agent.app_config, "AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr(agent, "get_topic_gaps", lambda limit=10: [])
+    monkeypatch.setattr(
+        agent,
+        "generate_search_queries",
+        lambda topic, offline=False, limit=6, strategy="balanced": offline_seen.append(offline) or ["q"],
+    )
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+    monkeypatch.setattr(agent.repository, "source_inventory_index", lambda: {"by_url": {}, "by_domain": {}})
+
+    result = agent.discover_sources(agent.DiscoveryConfig(
+        topic="роботизация бурения",
+        seed_urls=("https://www.slb.com/newsroom",),
+        offline=False,
+        dry_run=True,
+    ))
+
+    assert offline_seen == [True]
+    assert result["ai_forced_offline"] is True
+
+
 def test_search_web_none_provider_is_explicit_noop(monkeypatch):
     monkeypatch.setattr(agent.app_config, "SOURCE_DISCOVERY_SEARCH_PROVIDER", "none")
 

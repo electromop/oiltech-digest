@@ -16,6 +16,7 @@ from oiltech_digest.ingestion.relevance_filter import should_keep_article
 from oiltech_digest.ingestion.source_diagnostics import probe_url
 from oiltech_digest.processing import pipeline
 from oiltech_digest.source_discovery.agent import (
+    core_ai_offline,
     recommend_source_action,
     _name_from_domain,
     _status_for_recommendation,
@@ -40,6 +41,10 @@ def evaluate_source_candidate(
     candidate = repository.get_source_candidate(candidate_id)
     if candidate is None:
         raise ValueError(f"source candidate id={candidate_id} not found")
+    # Песочница исполняется на ядре: при вынесенном ИИ OpenAI отсюда отвечает 403.
+    # Оценка с ИИ идёт задачей source_candidate_evaluate на NL, а не сюда.
+    ai_forced_offline = core_ai_offline(offline) and not offline
+    offline = core_ai_offline(offline)
 
     task_id = repository.create_agent_task(
         "evaluate_source_candidate",
@@ -115,6 +120,7 @@ def evaluate_source_candidate(
         "source_health": source_health,
         "recommended_action": final_recommendation["recommended_action"],
         "next_status": next_status,
+        "ai_forced_offline": ai_forced_offline,
         "review_comment": review_comment,
         "quality_memory": quality_memory,
         "learning": learning,

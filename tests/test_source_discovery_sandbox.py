@@ -439,3 +439,46 @@ def test_offline_candidate_without_topic_keywords_is_not_recommended_to_add(monk
     assert stats == {"processed": 5, "relevant": 0, "rejected": 5, "errors": 0}
     assert len(rejected) == 5
     assert recommendation["recommended_action"] == "reject"
+
+
+def test_evaluation_on_core_goes_without_ai_when_ai_is_external(monkeypatch):
+    # Дефект 1: песочница на РФ-ядре с ИИ получала 403 от OpenAI. При вынесенном ИИ
+    # все её ИИ-шаги идут по правилам, и итог это говорит.
+    offline_seen = {}
+    monkeypatch.setattr(sandbox.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(sandbox.config, "AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr(
+        sandbox.repository,
+        "get_source_candidate",
+        lambda candidate_id: {"id": candidate_id, "url": "https://example.com/news", "topic": "бурение"},
+    )
+    monkeypatch.setattr(sandbox.repository, "create_agent_task", lambda *args, **kwargs: 77)
+    monkeypatch.setattr(
+        sandbox,
+        "process_candidate_articles",
+        lambda candidate_id, limit=5, offline=True: offline_seen.setdefault("process", offline)
+        and {"processed": 0, "relevant": 0, "rejected": 0, "errors": 0},
+    )
+    monkeypatch.setattr(sandbox.repository, "source_candidate_article_metrics", lambda candidate_id: {"tested_articles": 0, "relevant_articles": 0, "avg_score": None, "duplicate_count": 0, "noise_count": 0})
+    monkeypatch.setattr(sandbox.repository, "list_source_candidate_articles", lambda candidate_id, limit=5, only_unprocessed=False: [])
+    monkeypatch.setattr(
+        sandbox,
+        "recommend_source_action",
+        lambda metrics, offline=True, evidence=None: offline_seen.setdefault("recommend", offline)
+        and {"recommended_action": "human_review", "reason": "мало данных"},
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_quality",
+        lambda candidate, metrics, evidence, offline=True: offline_seen.setdefault("quality", offline)
+        and {"source": "rules", "quality_label": "сомнительный"},
+    )
+    monkeypatch.setattr(sandbox, "apply_candidate_learning", lambda candidate_id, **kwargs: None)
+    monkeypatch.setattr(sandbox.repository, "upsert_agent_memory", lambda **kwargs: 1)
+    monkeypatch.setattr(sandbox.repository, "update_source_candidate_assessment", lambda candidate_id, **kwargs: None)
+    monkeypatch.setattr(sandbox.repository, "record_agent_action", lambda *args, **kwargs: None)
+
+    result = sandbox.evaluate_source_candidate(42, offline=False, collect=False)
+
+    assert offline_seen == {"process": True, "recommend": True, "quality": True}
+    assert result["ai_forced_offline"] is True
