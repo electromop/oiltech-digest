@@ -407,11 +407,22 @@ def apply_translate_result(result: dict[str, Any], *, job_id: int | None = None)
     return stats
 
 
-def apply_process_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
+PROCESS_STAGES = ("summary", "translation", "relevance", "tagging", "scoring")
+
+
+def apply_process_result(
+    result: dict[str, Any], *, job_id: int | None = None, only: list[str] | None = None
+) -> dict[str, Any]:
     """Apply an external AI result to the core database.
 
     job_id — id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
-    (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт."""
+    (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт.
+
+    only — какие стадии записать (перегенерация сути: `enqueue-resummarize`). Воркер
+    гоняет весь конвейер, он пометки не знает, — и так задачу исполняет любая сборка NL.
+    Остальное не пишется: гейт, передумав, убрал бы статью из ленты, а теги и балл
+    сдвинулись бы у отобранного в выпуск. Расход по всем стадиям учитывается — он оплачен."""
+    write = set(only or PROCESS_STAGES)
     stats = {"articles": 0, "summary": 0, "relevance": 0, "translation": 0, "tagging": 0, "scoring": 0, "errors": 0}
     contexts = _glossary_contexts(result)
     for item in result.get("articles") or []:
@@ -419,51 +430,56 @@ def apply_process_result(result: dict[str, Any], *, job_id: int | None = None) -
         stats["articles"] += 1
         if item.get("summary"):
             summary = item["summary"]
-            repository.upsert_article_card(
-                article_id, _core_glossary(summary["summary"], contexts.get(article_id)), summary.get("model")
-            )
+            if "summary" in write:
+                repository.upsert_article_card(
+                    article_id, _core_glossary(summary["summary"], contexts.get(article_id)), summary.get("model")
+                )
+                stats["summary"] += 1
             _insert_run(article_id, "summary", summary, job_id=job_id)
-            stats["summary"] += 1
         if item.get("translation"):
             translation = item["translation"]
-            if translation.get("title_ru"):
-                repository.set_article_title_ru(article_id, _core_glossary(translation["title_ru"], contexts.get(article_id)))
+            if "translation" in write:
+                if translation.get("title_ru"):
+                    repository.set_article_title_ru(article_id, _core_glossary(translation["title_ru"], contexts.get(article_id)))
+                stats["translation"] += 1
             if translation.get("provider") != "offline" or translation.get("model"):
                 _insert_run(article_id, "translation", translation, job_id=job_id)
-            stats["translation"] += 1
         if item.get("relevance"):
             relevance = item["relevance"]
-            repository.set_article_relevance(
-                article_id,
-                bool(relevance.get("relevant")),
-                relevance.get("reason"),
-                relevance.get("model"),
-            )
+            if "relevance" in write:
+                repository.set_article_relevance(
+                    article_id,
+                    bool(relevance.get("relevant")),
+                    relevance.get("reason"),
+                    relevance.get("model"),
+                )
+                stats["relevance"] += 1
             _insert_run(article_id, "relevance", relevance, job_id=job_id)
-            stats["relevance"] += 1
         if item.get("tagging"):
             tagging = item["tagging"]
-            repository.upsert_article_tag(
-                article_id,
-                int(tagging["tag_id"]),
-                float(tagging.get("confidence") or 0),
-                tagging.get("rationale"),
-                tagging.get("model"),
-            )
+            if "tagging" in write:
+                repository.upsert_article_tag(
+                    article_id,
+                    int(tagging["tag_id"]),
+                    float(tagging.get("confidence") or 0),
+                    tagging.get("rationale"),
+                    tagging.get("model"),
+                )
+                stats["tagging"] += 1
             _insert_run(article_id, "tagging", tagging, job_id=job_id)
-            stats["tagging"] += 1
         if item.get("scoring"):
             scoring = item["scoring"]
-            repository.replace_article_score(
-                article_id,
-                float(scoring["total_score"]),
-                str(scoring["score_label"]),
-                str(scoring.get("explanation") or ""),
-                scoring.get("items") or [],
-                scoring.get("model"),
-            )
+            if "scoring" in write:
+                repository.replace_article_score(
+                    article_id,
+                    float(scoring["total_score"]),
+                    str(scoring["score_label"]),
+                    str(scoring.get("explanation") or ""),
+                    scoring.get("items") or [],
+                    scoring.get("model"),
+                )
+                stats["scoring"] += 1
             _insert_run(article_id, "scoring", scoring, job_id=job_id)
-            stats["scoring"] += 1
         if item.get("errors"):
             stats["errors"] += len(item["errors"])
     return stats

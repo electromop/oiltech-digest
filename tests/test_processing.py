@@ -3,6 +3,8 @@ from oiltech_digest.processing.domain_glossary import (
     enforce_glossary_text,
     glossary_golden_cases,
     glossary_prompt_block,
+    mixed_script_words,
+    normalize_scripts,
     run_terminology_eval,
     terminology_warnings,
     validate_glossary,
@@ -277,10 +279,15 @@ def test_glossary_enforces_inflected_bad_terms():
     assert "ворковер" not in summary
 
 
-def test_glossary_catches_reservoir_and_stimulation_calques():
+def test_glossary_catches_stimulation_and_only_flags_reservoir():
+    """«Резервуар» без автозамены (решение владельца 25.09): в русском тексте это почти
+    всегда ёмкость, а замена не держала падеж («с качественным пласт»). Модели — подсказка,
+    аудиту — находка, если в исходнике reservoir и нет ёмкостей."""
+
     class BadTranslatorClient:
         def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
             assert "preferred_ru: пласт" in user_input
+            assert "резервуар — только ёмкость" in user_input
             assert "preferred_ru: интенсификация притока" in user_input
             return AIResponse(
                 data={"summary": "Оператор провёл стимуляцию скважины для резервуара."},
@@ -294,10 +301,79 @@ def test_glossary_catches_reservoir_and_stimulation_calques():
 
     response = pipeline.summarize_article(article, BadTranslatorClient())
 
-    assert "провёл интенсификацию притока" in response.data["summary"]
-    assert "для пласта" in response.data["summary"]
-    assert "стимуляция скважины" not in response.data["summary"]
-    assert "резервуар" not in response.data["summary"]
+    assert response.data["summary"] == "Оператор провёл интенсификацию притока для резервуара."
+    assert [w["forbidden_ru"] for w in terminology_warnings(response.data["summary"], article)] == [r"\bрезервуар\w*"]
+
+
+def test_glossary_keeps_storage_tanks_as_reservoirs():
+    lng = {"title": "Argent LNG selects CB&I", "raw_text": "Three full containment LNG storage tanks; gas from the reservoir."}
+    refinery = {"title": "Пожар на нефтебазе", "raw_text": "Горят резервуары с топливом.", "language": "ru"}
+
+    text = "CB&I станет подрядчиком EPC для трёх резервуаров полного ограждения."
+
+    assert enforce_glossary_text(text, lng) == text
+    assert terminology_warnings(text, lng) == []
+    assert terminology_warnings("Горят резервуары с топливом.", refinery) == []
+
+
+def test_normalize_scripts_fixes_twins_and_glue_but_keeps_brands():
+    fixed = {
+        "Карачаганакa": "Карачаганака",
+        "вхoдит в 1-гo": "входит в 1-го",
+        "Cарыарка": "Сарыарка",
+        "подписала МoU, ОPEX и СCS": "подписала MoU, OPEX и CCS",
+        "MГП": "МГП",
+        "присутствиеHoneywell вPermian": "присутствие Honeywell в Permian",
+        "СШАChina": "США China",
+        "в Казаниhttps://example.ru": "в Казани https://example.ru",
+    }
+    for bad, good in fixed.items():
+        assert normalize_scripts(bad) == good, bad
+    # Бренды, единицы и настоящий полуперевод не трогаем. «Орinoco»: кириллическая «р» здесь —
+    # звук «r», замена по виду дала бы «Opinoco».
+    for kept in ("КазМунайГаз", "кВт", "ExxonMobil", "LNG-проект", "CO2", "Türkiye", "Орinoco", "электроэнergyю"):
+        assert normalize_scripts(kept) == kept, kept
+    assert mixed_script_words(normalize_scripts("Орinoco и электроэнergyю")) == ["Орinoco", "электроэнergyю"]
+
+
+def test_summary_is_asked_again_when_a_word_mixes_scripts():
+    class HalfTranslatingClient:
+        def __init__(self):
+            self.prompts = []
+
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            self.prompts.append(user_input)
+            text = "Цены на электроэнergyю выросли." if len(self.prompts) == 1 else "Цены на электроэнергию выросли."
+            return AIResponse(data={"summary": text}, model="gpt-5-mini", input_tokens=100, output_tokens=10)
+
+    client = HalfTranslatingClient()
+    response = pipeline.summarize_article({"title": "Power prices", "raw_text": "Power prices rose."}, client)
+
+    assert response.data["summary"] == "Цены на электроэнергию выросли."
+    assert len(client.prompts) == 2
+    assert "«электроэнergyю»" in client.prompts[1]
+    # Расход обоих вызовов — в одном итоге, иначе ai_processing_runs недосчитает.
+    assert (response.input_tokens, response.output_tokens) == (200, 20)
+
+
+def test_summary_is_not_asked_again_when_clean_or_retry_is_no_better():
+    class Client:
+        def __init__(self, answers):
+            self.answers = list(answers)
+            self.calls = 0
+
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            self.calls += 1
+            return AIResponse(data={"summary": self.answers.pop(0)}, model="fake", input_tokens=5, output_tokens=5)
+
+    clean = Client(["Добыча выросла; вхoдит в топ."])
+    assert pipeline.summarize_article({"title": "t", "raw_text": "x"}, clean).data["summary"] == "Добыча выросла; входит в топ."
+    assert clean.calls == 1  # двойник словарь чинит сам — переспрашивать незачем
+
+    stubborn = Client(["Пермian растёт.", "Пермian и наshore растут."])
+    response = pipeline.summarize_article({"title": "t", "raw_text": "x"}, stubborn)
+    assert response.data["summary"] == "Пермian растёт."  # повтор хуже — берём первый
+    assert stubborn.calls == 2
 
 
 def test_glossary_golden_cases_pass():

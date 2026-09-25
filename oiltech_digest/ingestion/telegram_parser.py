@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{3,64}$")
 _POST_RE = re.compile(r"^([A-Za-z0-9_]{3,64})/(\d+)$")
+# Граница строк поста: `<br>` и концы блоков. Переносы в исходнике HTML — не граница.
+_LINE_BREAK = "\u2028"
+_BLOCK_TAGS = ("p", "div", "blockquote", "li")
+# Первая строка короче — рубрика («#ЦифраДня», «⚡️ Энергофакт»), а не заголовок.
+MIN_TITLE_CHARS = 25
 
 
 @dataclass(frozen=True)
@@ -176,7 +181,8 @@ def _post_from_node(node) -> TelegramPost | None:
     url = f"https://t.me/{channel}/{post_id}"
 
     text_nodes = node.xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' tgme_widget_message_text ')]")
-    text = normalize.clean_html(text_nodes[0].text_content()) if text_nodes else ""
+    lines = _message_lines(text_nodes[0]) if text_nodes else []
+    text = " ".join(lines)
     if not text:
         return None
 
@@ -186,17 +192,32 @@ def _post_from_node(node) -> TelegramPost | None:
             node.xpath("string(.//a[contains(@class, 'tgme_widget_message_date')][1]/@href)"),
         )
     )
-    title = _title_from_text(text)
+    title = title_from_text("\n".join(lines))
     return TelegramPost(url=url, title=title, text=text, published_at=published_at)
 
 
-def _title_from_text(text: str) -> str:
-    compact = re.sub(r"\s+", " ", text).strip()
-    if not compact:
+def _message_lines(node) -> list[str]:
+    """Строки поста. `text_content()` теряет `<br>` и склеивает строки: до 25.09 так
+    вышло «в Иллинойсе<br>ExxonMobil…» → «ИллинойсеExxonMobil», и заголовок захватывал
+    начало второй строки (862 из 3423 заголовков Telegram)."""
+    for element in node.iter():
+        if element.tag == "br" or element.tag in _BLOCK_TAGS:
+            element.tail = _LINE_BREAK + (element.tail or "")
+    parts = (normalize.clean_html(part) for part in node.text_content().split(_LINE_BREAK))
+    return [part for part in parts if part]
+
+
+def title_from_text(text: str) -> str:
+    """Заголовок поста: первая строка (строки — через перевод строки), в ней — первое
+    предложение. Короткая первая строка — рубрика: тогда первое предложение всего текста."""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").split("\n")]
+    lines = [line for line in lines if line]
+    if not lines:
         return "Telegram post"
-    sentence = re.split(r"(?<=[.!?])\s+", compact, maxsplit=1)[0]
-    if len(sentence) < 25:
-        sentence = compact
+    head = lines[0] if len(lines[0]) >= MIN_TITLE_CHARS else " ".join(lines)
+    sentence = re.split(r"(?<=[.!?])\s+", head, maxsplit=1)[0]
+    if len(sentence) < MIN_TITLE_CHARS:
+        sentence = head
     return sentence[:140].strip()
 
 

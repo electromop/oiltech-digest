@@ -714,6 +714,76 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
+    """Перегенерировать суть и перевод заголовка у статей со словами из двух алфавитов.
+
+    Двойники и склейку чинит repair-terminology без ИИ; здесь — полуперевод
+    («управляego», «наshore»), который лечится только новым ответом модели. Суть — задачей
+    process_articles с пометкой only: ядро запишет только суть и перевод (гейт, теги и
+    балл остаются прежними); заголовок без проблем в сути — задачей translate_titles.
+    По умолчанию — только выборка, без постановки.
+    """
+    from oiltech_digest import network_policy
+    from oiltech_digest.db import repository
+    from oiltech_digest.processing.domain_glossary import mixed_script_words, normalize_scripts
+
+    def broken(value: str | None) -> bool:
+        return bool(mixed_script_words(normalize_scripts(value or "")))
+
+    articles = repository.list_article_texts_for_terminology_audit(limit=args.scan)
+    if args.article_id:
+        wanted = set(args.article_id)
+        articles = [article for article in articles if int(article["id"]) in wanted]
+    summary_ids = [int(a["id"]) for a in articles if broken(a.get("summary"))]
+    title_ids = [int(a["id"]) for a in articles if broken(a.get("title_ru")) and int(a["id"]) not in summary_ids]
+    if args.limit:
+        summary_ids, title_ids = summary_ids[: args.limit], title_ids[: args.limit]
+    print(f"enqueue-resummarize: суть — {len(summary_ids)} статей, только заголовок — {len(title_ids)}")
+    if args.dry_run:
+        print(f"  [dry-run] суть: {summary_ids[:50]}")
+        print(f"  [dry-run] заголовок: {title_ids[:50]}")
+        return
+    decision = network_policy.route_ai_bulk()
+    if decision.execution_region != "external":
+        # Локальный конвейер пишет все стадии сам, пометки only он не знает.
+        raise SystemExit("enqueue-resummarize: нужен внешний контур ИИ — локальный конвейер перезапишет гейт, теги и балл")
+    batch = max(1, args.batch_size)
+    jobs = []
+    for chunk in (summary_ids[i : i + batch] for i in range(0, len(summary_ids), batch)):
+        jobs.append(repository.create_background_job(
+            "process_articles",
+            {"article_ids": chunk, "limit": len(chunk), "offline": False, "only": ["summary", "translation"]},
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
+        )["id"])
+    for chunk in (title_ids[i : i + batch] for i in range(0, len(title_ids), batch)):
+        jobs.append(repository.create_background_job(
+            "translate_titles",
+            {"article_ids": chunk},
+            queue_name=decision.queue_name,
+            execution_region=decision.execution_region,
+            capability=decision.capability,
+        )["id"])
+    print(f"  задач: {len(jobs)} ({jobs}), queue={decision.queue_name}")
+
+
+def cmd_repair_telegram_titles(args: argparse.Namespace) -> None:
+    """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк) — без сети."""
+    from oiltech_digest.ingestion import telegram_titles
+
+    report = telegram_titles.repair(apply=not args.dry_run)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, default=str))
+        return
+    suffix = " [dry-run]" if args.dry_run else ""
+    print(f"repair-telegram-titles{suffix}: статей Telegram={report['scanned']}, заголовков к правке={report['changed']}")
+    for change in report["changes"][: args.show]:
+        print(f"  article={change['article_id']}")
+        print(f"    before: {change['before'][:160]}")
+        print(f"    after:  {change['after']}")
+
+
 def cmd_reprints(args: argparse.Namespace) -> None:
     """Показать помеченные перепечатки или снять пометку.
 
@@ -1775,6 +1845,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval_terms.add_argument("--markdown-path", default="docs/translation_terminology_work_report.md")
     p_eval_terms.add_argument("--json", action="store_true")
     p_eval_terms.set_defaults(func=cmd_eval_terminology)
+
+    p_resummarize = sub.add_parser("enqueue-resummarize", help="перегенерировать суть у статей со словами из двух алфавитов (по умолчанию выборка)")
+    p_resummarize.add_argument("--scan", type=int, default=50000, help="сколько последних статей с карточкой просмотреть")
+    p_resummarize.add_argument("--article-id", type=int, action="append", default=None)
+    p_resummarize.add_argument("--limit", type=int, default=0)
+    p_resummarize.add_argument("--batch-size", type=int, default=20)
+    p_resummarize.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_resummarize.set_defaults(func=cmd_enqueue_resummarize)
+
+    p_tg_titles = sub.add_parser("repair-telegram-titles", help="починить склеенные заголовки Telegram по сохранённым данным (по умолчанию dry-run)")
+    p_tg_titles.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_tg_titles.add_argument("--show", type=int, default=30)
+    p_tg_titles.add_argument("--json", action="store_true")
+    p_tg_titles.set_defaults(func=cmd_repair_telegram_titles)
 
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)

@@ -1486,7 +1486,10 @@ def external_worker_complete(
 def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: int) -> dict[str, Any]:
     """Записать итог внешней задачи в базу ядра — полный (complete) или частичный (release)."""
     if job.get("kind") == "process_articles" and result.get("external_ai"):
-        result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id)}
+        # Какие стадии писать — в payload_json задачи (перегенерация сути: только суть и
+        # перевод). Ключа "payload" в строке нет — см. recheck ниже.
+        only = (job.get("payload_json") or {}).get("only")
+        result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id, only=only)}
     if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
         # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи —
         # это колонки таблицы (schema.sql:304). Ключа "payload" в строке НЕТ, и чтение его

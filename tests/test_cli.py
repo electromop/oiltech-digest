@@ -65,6 +65,66 @@ def test_enqueue_external_scrape_enqueues_only_external_sources(monkeypatch, cap
     assert "задач=2" in capsys.readouterr().out
 
 
+_RESUMMARIZE_ARTICLES = [
+    {"id": 1, "summary": "Цены на электроэнergyю выросли.", "title_ru": "Цены выросли"},  # полуперевод в сути
+    {"id": 2, "summary": "Компания вхoдит в топ.", "title_ru": "Компания растёт"},  # двойник — чинит словарь
+    {"id": 3, "summary": "Всё чисто.", "title_ru": "Добыча в Пермian растёт"},  # полуперевод в заголовке
+    {"id": 4, "summary": "Всё чисто.", "title_ru": "Всё чисто"},
+]
+
+
+def _resummarize_args(**overrides):
+    values = {"scan": 1000, "article_id": None, "limit": 0, "batch_size": 20, "dry_run": True}
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def test_enqueue_resummarize_by_default_only_selects(monkeypatch, capsys):
+    monkeypatch.setattr("oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+                        lambda limit=200, article_id=None: _RESUMMARIZE_ARTICLES)
+    created = []
+    monkeypatch.setattr("oiltech_digest.db.repository.create_background_job", lambda *a, **k: created.append(a))
+
+    cli.cmd_enqueue_resummarize(_resummarize_args())
+
+    assert created == []
+    out = capsys.readouterr().out
+    assert "суть — 1 статей, только заголовок — 1" in out
+    assert "[1]" in out and "[3]" in out
+
+
+def test_enqueue_resummarize_marks_jobs_to_write_only_summary_and_translation(monkeypatch):
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr("oiltech_digest.config.AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr("oiltech_digest.config.AI_BULK_LANE_ENABLED", True)
+    monkeypatch.setattr("oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+                        lambda limit=200, article_id=None: _RESUMMARIZE_ARTICLES)
+    jobs = []
+    monkeypatch.setattr("oiltech_digest.db.repository.create_background_job",
+                        lambda kind, payload, **k: jobs.append((kind, payload, k["queue_name"])) or {"id": len(jobs)})
+
+    cli.cmd_enqueue_resummarize(_resummarize_args(dry_run=False))
+
+    assert jobs == [
+        ("process_articles", {"article_ids": [1], "limit": 1, "offline": False, "only": ["summary", "translation"]},
+         "external-ai-bulk"),
+        ("translate_titles", {"article_ids": [3]}, "external-ai-bulk"),
+    ]
+
+
+def test_enqueue_resummarize_refuses_local_pipeline(monkeypatch):
+    """Локальный конвейер пометки only не знает и перезаписал бы гейт, теги и балл."""
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", False)
+    monkeypatch.setattr("oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
+                        lambda limit=200, article_id=None: _RESUMMARIZE_ARTICLES)
+    created = []
+    monkeypatch.setattr("oiltech_digest.db.repository.create_background_job", lambda *a, **k: created.append(a))
+
+    with pytest.raises(SystemExit, match="внешний контур"):
+        cli.cmd_enqueue_resummarize(_resummarize_args(dry_run=False))
+    assert created == []
+
+
 def test_source_dump_listing_prints_anchors_with_container(monkeypatch, capsys):
     html = (
         b"<html><body>"

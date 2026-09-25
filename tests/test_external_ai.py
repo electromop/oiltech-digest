@@ -216,6 +216,49 @@ def test_core_writes_paid_result_as_is_when_glossary_context_fails(monkeypatch):
     assert written["summary"] == "NDC 9 спудрил скважину."
 
 
+def test_apply_only_writes_summary_and_translation_but_bills_every_stage(monkeypatch):
+    """Перегенерация сути (enqueue-resummarize): воркер гоняет весь конвейер — пометки он не
+    знает, — а ядро пишет только суть и перевод. Гейт, передумав, не уберёт статью из ленты,
+    балл не сдвинется у отобранного в выпуск; оплаченные вызовы учтены все."""
+    writes, runs = [], []
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
+    monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: writes.append("summary"))
+    monkeypatch.setattr(external_ai.repository, "set_article_title_ru", lambda *args: writes.append("translation"))
+    monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *args: writes.append("relevance"))
+    monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: writes.append("tagging"))
+    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args: writes.append("scoring"))
+    monkeypatch.setattr(external_ai, "_insert_run", lambda article_id, stage, payload, **kwargs: runs.append(stage))
+    item = {
+        "article_id": 1,
+        "relevance": {"relevant": False, "reason": "передумал", "model": "gpt-5.5"},
+        "summary": {"summary": "Новая суть", "model": "gpt-5-mini"},
+        "translation": {"title_ru": "Новый заголовок", "model": "gpt-5-mini"},
+        "tagging": {"tag_id": 10, "confidence": 0.5, "model": "gpt-5-mini"},
+        "scoring": {"total_score": 10, "score_label": "Низкая", "items": [], "model": "gpt-5-mini"},
+    }
+
+    stats = external_ai.apply_process_result({"articles": [item]}, only=["summary", "translation"])
+
+    assert writes == ["summary", "translation"]
+    assert sorted(runs) == ["relevance", "scoring", "summary", "tagging", "translation"]
+    assert (stats["summary"], stats["translation"], stats["relevance"], stats["scoring"]) == (1, 1, 0, 0)
+
+
+def test_core_passes_only_from_job_payload_to_apply(monkeypatch):
+    from oiltech_digest import api
+
+    seen = {}
+    monkeypatch.setattr(api.external_ai, "apply_process_result",
+                        lambda result, *, job_id=None, only=None: seen.update(only=only, job_id=job_id) or {})
+    job = {"kind": "process_articles", "payload_json": {"article_ids": [1], "only": ["summary", "translation"]}}
+
+    api._apply_external_result(job, {"external_ai": True, "articles": []}, 42)
+
+    assert seen == {"only": ["summary", "translation"], "job_id": 42}
+    api._apply_external_result({"kind": "process_articles", "payload_json": {}}, {"external_ai": True, "articles": []}, 43)
+    assert seen["only"] is None
+
+
 def _recheck_result(relevant: bool) -> dict:
     return {
         "articles": [

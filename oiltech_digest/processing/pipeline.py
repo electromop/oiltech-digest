@@ -13,7 +13,7 @@ import logging
 from oiltech_digest import config
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
-from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
+from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block, mixed_script_words
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, OfflineAIClient, OpenAIResponsesClient
 from oiltech_digest.processing.prompts import (
     RELEVANCE_INSTRUCTIONS,
@@ -331,17 +331,52 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
 
 def summarize_article(article: dict, client) -> AIResponse:
-    response = client.complete_json(
-        SUMMARY_INSTRUCTIONS,
-        _article_prompt(article),
-        SUMMARY_SCHEMA,
-        max_output_tokens=1200,
+    prompt = _article_prompt(article)
+    return _complete_one_script(
+        lambda extra: client.complete_json(
+            SUMMARY_INSTRUCTIONS,
+            prompt + extra,
+            SUMMARY_SCHEMA,
+            max_output_tokens=1200,
+        ),
+        "summary",
+        article,
     )
+
+
+def _complete_one_script(call, field: str, article: dict) -> AIResponse:
+    """Вызов модели и словарь; слово из двух алфавитов — одна повторная попытка.
+
+    Двойники и склейку словарь чинит сам (normalize_scripts), а полуперевод
+    («управляego», «наshore», «электроэнergyю» — 56 статей на 25.09) — нет: такой
+    ответ переспрашиваем, назвав слова. Берём вариант, где смешанных слов меньше;
+    токены обоих вызовов — в один итог, чтобы расход в ai_processing_runs сошёлся.
+    """
+    response = call("")
+    text = enforce_glossary_text(str(response.data.get(field) or ""), article)
+    mixed = mixed_script_words(text)
+    data, input_tokens, output_tokens = response.data, response.input_tokens, response.output_tokens
+    if mixed:
+        retry = call(_mixed_script_note(mixed))
+        input_tokens += retry.input_tokens
+        output_tokens += retry.output_tokens
+        retry_text = enforce_glossary_text(str(retry.data.get(field) or ""), article)
+        if retry_text and len(mixed_script_words(retry_text)) < len(mixed):
+            data, text = retry.data, retry_text
     return AIResponse(
-        data={**response.data, "summary": enforce_glossary_text(str(response.data.get("summary") or ""), article)},
+        data={**data, field: text},
         model=response.model,
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+def _mixed_script_note(words: list[str]) -> str:
+    listed = ", ".join(f"«{word}»" for word in words[:5])
+    return (
+        "\n\nВ прошлом ответе были слова, где латиница смешана с кириллицей: "
+        f"{listed}. Ответь заново: каждое слово — целиком по-русски, имена собственные "
+        "и аббревиатуры — целиком латиницей."
     )
 
 
@@ -375,19 +410,18 @@ def relevance_article(article: dict, client, tags: list[dict] | None = None) -> 
 def translate_article(article: dict, client) -> AIResponse:
     """AI-перевод заголовка на русский. Отдельная стадия (раньше был частью summary).
     Модель/effort — собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
-    response = client.complete_json(
-        TRANSLATE_INSTRUCTIONS,
-        _title_prompt(article),
-        TRANSLATE_SCHEMA,
-        max_output_tokens=300,
-        model=config.OPENAI_TRANSLATE_MODEL,
-        reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
-    )
-    return AIResponse(
-        data={**response.data, "title_ru": enforce_glossary_text(str(response.data.get("title_ru") or ""), article)},
-        model=response.model,
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
+    prompt = _title_prompt(article)
+    return _complete_one_script(
+        lambda extra: client.complete_json(
+            TRANSLATE_INSTRUCTIONS,
+            prompt + extra,
+            TRANSLATE_SCHEMA,
+            max_output_tokens=300,
+            model=config.OPENAI_TRANSLATE_MODEL,
+            reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
+        ),
+        "title_ru",
+        article,
     )
 
 

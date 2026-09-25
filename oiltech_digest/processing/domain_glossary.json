@@ -172,9 +172,10 @@
     {
       "source_terms": ["reservoir", "reservoir management"],
       "preferred_ru": "пласт",
-      "forbidden_ru": ["резервуар"],
-      "forbidden_patterns": ["\\bрезервуар(?:а|у|ом|е|ы|ов|ам|ами|ах)?\\b"],
-      "note": "Reservoir в добыче — пласт, не резервуар."
+      "full_ru": "пласт, коллектор",
+      "note": "reservoir в геологии и добыче — пласт или коллектор; резервуар — только ёмкость (storage tank, LNG tank, full containment). Автозамены нет: в русском тексте «резервуар» почти всегда ёмкость, а замена не держит падеж («с качественным пласт»).",
+      "source_warn_patterns": ["\\bрезервуар\\w*"],
+      "warn_unless_source": ["tank", "tanks", "storage", "containment", "terminal", "tankage"]
     },
     {
       "source_terms": ["digital twin", "digital twins"],
@@ -207,10 +208,6 @@
     ["\\bповысил[а]?\\s+ROP\\b", "повысила механическую скорость проходки"],
     ["\\bпров[её]л(?:а|и)?\\s+стимуляци(?:ю|и)\\s+скважин(?:ы|е|ой)?\\b", "провел интенсификацию притока"],
     ["\\bстимуляци(?:я|и|ю|ей)\\s+скважин(?:ы|е|ой)?\\b", "интенсификация притока"],
-    ["\\bдля\\s+резервуар(?:а|ов)?\\b", "для пласта"],
-    ["\\bв\\s+резервуар(?:е|ах)?\\b", "в пласте"],
-    ["\\bиз\\s+резервуар(?:а|ов)?\\b", "из пласта"],
-    ["\\bрезервуар(?:а|у|ом|е|ы|ов|ам|ами|ах)?\\b", "пласт"],
     ["\\bна\\s+оффшор(?:е|е)?\\b", "на шельфе"],
     ["\\bоффшорн(?:ый|ая|ое|ые)\\s+проект\\b", "шельфовый проект"],
     ["\\bоффшорн(?:ая)\\s+добыч[а-я]*\\b", "шельфовая добыча"],
@@ -260,13 +257,6 @@
       "bad": "Завершение скважины ускорило ввод.",
       "must_have": ["Заканчивание скважины"],
       "must_not": ["завершение скважины"]
-    },
-    {
-      "name": "Пласт / reservoir",
-      "article": {"title": "Reservoir output improved", "raw_text": "Reservoir output improved after optimization.", "language": "en"},
-      "bad": "Добыча из резервуара выросла.",
-      "must_have": ["пласта"],
-      "must_not": ["резервуар"]
     },
     {
       "name": "Интенсификация / stimulation",
@@ -344,6 +334,34 @@
       "bad": "Трекер дополняет международный обзор более granularными полевыми данными.",
       "must_have": ["более детальными полевыми данными"],
       "must_not": ["granular"]
+    },
+    {
+      "name": "резервуар / LNG tank (карточка 6618899)",
+      "article": {"title": "Argent LNG selects CB&I", "raw_text": "CB&I will build three full containment LNG storage tanks; the reservoir of gas supply is the Haynesville.", "language": "en"},
+      "bad": "CB&I станет подрядчиком EPC для трёх резервуаров полного ограждения.",
+      "must_have": ["для трёх резервуаров полного ограждения"],
+      "must_not": ["пласт"]
+    },
+    {
+      "name": "двойники: латиница в русском слове",
+      "article": {"title": "Trio Petroleum enters partnership", "raw_text": "Trio Petroleum enters a partnership.", "language": "en"},
+      "bad": "Trio Petroleum вхoдит в партнёрство, итоги 1-гo полугодия — рост сбытa.",
+      "must_have": ["входит", "1-го", "сбыта"],
+      "must_not": ["вхoдит", "сбытa"]
+    },
+    {
+      "name": "двойники: кириллица в латинском слове",
+      "article": {"title": "Argent LNG signs MoU with Albania", "raw_text": "Argent LNG signed an MoU; OPEX and CCS were discussed.", "language": "en"},
+      "bad": "Argent LNG подписала МoU; обсуждали ОPEX и СCS.",
+      "must_have": ["MoU", "OPEX", "CCS"],
+      "must_not": ["МoU", "ОPEX", "СCS"]
+    },
+    {
+      "name": "склейка слов разных алфавитов",
+      "article": {"title": "Honeywell expands presence", "raw_text": "Honeywell expands its presence in the Permian.", "language": "en"},
+      "bad": "Компания расширяет присутствиеHoneywell вPermian.",
+      "must_have": ["присутствие Honeywell", "в Permian"],
+      "must_not": ["присутствиеHoneywell", "вPermian"]
     }
   ]
 }

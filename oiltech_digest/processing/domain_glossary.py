@@ -22,6 +22,12 @@ class GlossaryTerm:
     # замена ломала бы грамматику («более granularными» — падеж, «спудил» — глагол):
     # их чинят phrase_repairs с точным окончанием, а это — сеть для непойманных форм.
     warn_patterns: tuple[str, ...] = ()
+    # Аудит для многозначного слова: только если английский термин есть в статье и нет
+    # ни одного слова из warn_unless_source. «Резервуар» в русском тексте почти всегда
+    # ёмкость (замер 25.09: у 226 из 247 карточек в исходнике нет reservoir), калька
+    # reservoir → «резервуар» — только в геологии, где статья не говорит о ёмкостях.
+    source_warn_patterns: tuple[str, ...] = ()
+    warn_unless_source: tuple[str, ...] = ()
 
 
 GLOSSARY_PATH = Path(os.environ.get("DOMAIN_GLOSSARY_PATH") or Path(__file__).with_name("domain_glossary.json"))
@@ -42,6 +48,8 @@ def _load_glossary_terms(data: dict[str, Any]) -> tuple[GlossaryTerm, ...]:
             note=str(item.get("note") or "").strip(),
             forbidden_patterns=_tuple(item.get("forbidden_patterns")),
             warn_patterns=_tuple(item.get("warn_patterns")),
+            source_warn_patterns=_tuple(item.get("source_warn_patterns")),
+            warn_unless_source=_tuple(item.get("warn_unless_source")),
         )
         for item in data.get("terms", [])
     )
@@ -81,7 +89,7 @@ def glossary_prompt_block(article: dict, *, limit: int = 12) -> str:
 
 def enforce_glossary_text(text: str, article: dict) -> str:
     """Apply safe deterministic replacements for known bad Russian terms."""
-    result = text or ""
+    result = normalize_scripts(text or "")
     terms = _terms_for(result, article)
     result = _repair_bad_phrases(result, terms)
     for term in terms:
@@ -106,6 +114,17 @@ def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
                     "source_terms": ", ".join(term.source_terms[:5]),
                 })
         for pattern in (*_forbidden_patterns(term), *term.warn_patterns):
+            if re.search(pattern, text or "", flags=re.I):
+                warnings.append({
+                    "forbidden_ru": pattern,
+                    "preferred_ru": term.preferred_ru,
+                    "source_terms": ", ".join(term.source_terms[:5]),
+                })
+    article_text = _article_text(article)
+    for term in relevant_glossary_terms(article):
+        if any(_contains_term(article_text, word) for word in term.warn_unless_source):
+            continue
+        for pattern in term.source_warn_patterns:
             if re.search(pattern, text or "", flags=re.I):
                 warnings.append({
                     "forbidden_ru": pattern,
@@ -143,6 +162,54 @@ def _terms_for(text: str, article: dict) -> list[GlossaryTerm]:
 _LETTER_RUN = re.compile(r"[A-Za-zА-Яа-яЁё]+")
 _LATIN = re.compile(r"[A-Za-z]")
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+# Буквы-двойники, у которых совпадают и вид, и звук. Модель путает алфавит по звуку, а
+# не по виду: в «Орinoco» кириллическая «р» — это «r», а не «p». Поэтому p, y, B, H, k в
+# пары не входят — такое слово остаётся смешанным и уходит на перегенерацию.
+_TWINS_LAT = "aoecxAOECXKMT"
+_TWINS_CYR = "аоесхАОЕСХКМТ"
+_LAT_TO_CYR = str.maketrans(_TWINS_LAT, _TWINS_CYR)
+_CYR_TO_LAT = str.maketrans(_TWINS_CYR, _TWINS_LAT)
+# Стык алфавитов внутри слова — склейка двух слов: «присутствиеHoneywell», «вPermian»,
+# «СШАChina», «FTШвейцар», «Казаниhttps://…». Внутри одного алфавита так не режем:
+# «КазМунайГаз», «МосБиржа», «кВт» — настоящие слова (замер 25.09).
+_SCRIPT_GLUE = re.compile(
+    r"(?<=[а-яё])(?=[A-Z])|(?<=[a-z])(?=[А-ЯЁ])|(?<=[А-ЯЁ])(?=[A-Z][a-z])"
+    r"|(?<=[A-Z])(?=[А-ЯЁ][а-яё])|(?<=[А-Яа-яЁё])(?=https?://)"
+)
+
+
+def normalize_scripts(text: str) -> str:
+    """Слово — одним алфавитом, склеенные слова разных алфавитов — через пробел.
+
+    Слово переводится в тот алфавит, куда можно заменить ВСЕ чужие буквы двойниками:
+    «вхoдит» → «входит», «1-гo» → «1-го», «МoU» → «MoU», «ОPEX» → «OPEX». Можно в обе
+    стороны — решает большинство букв, поровну — не трогаем. Полуперевод («управляego»,
+    «наshore») так не лечится и остаётся смешанным — его ловит mixed_script_words.
+    """
+    if not text:
+        return text or ""
+
+    def one_script(match: re.Match) -> str:
+        word = match.group(0)
+        latin = [ch for ch in word if _LATIN.match(ch)]
+        cyrillic = [ch for ch in word if _CYRILLIC.match(ch)]
+        if not latin or not cyrillic:
+            return word
+        to_cyrillic = all(ch in _TWINS_LAT for ch in latin)
+        to_latin = all(ch in _TWINS_CYR for ch in cyrillic)
+        if to_cyrillic and to_latin:
+            if len(latin) == len(cyrillic):
+                return word
+            to_cyrillic = len(cyrillic) > len(latin)
+            to_latin = not to_cyrillic
+        if to_cyrillic:
+            return word.translate(_LAT_TO_CYR)
+        if to_latin:
+            return word.translate(_CYR_TO_LAT)
+        return word
+
+    return _SCRIPT_GLUE.sub(" ", _LETTER_RUN.sub(one_script, text))
 
 
 def mixed_script_words(text: str) -> list[str]:
@@ -190,7 +257,7 @@ def validate_glossary() -> list[str]:
                 re.compile(pattern)
             except re.error as exc:
                 errors.append(f"{prefix}: плохая forbidden_pattern '{pattern}': {exc}")
-        for pattern in term.warn_patterns:
+        for pattern in (*term.warn_patterns, *term.source_warn_patterns):
             try:
                 re.compile(pattern)
             except re.error as exc:
