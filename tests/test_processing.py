@@ -336,6 +336,66 @@ def test_normalize_scripts_fixes_twins_and_glue_but_keeps_brands():
     assert mixed_script_words(normalize_scripts("Орinoco и электроэнergyю")) == ["Орinoco", "электроэнergyю"]
 
 
+def test_normalize_scripts_splits_glue_before_fixing_twins():
+    """Ревью 25.09: двойники раньше склейки делали «сExxonMobil» → «cExxonMobil» — стык пропадал,
+    а с ним находка аудита и отбор на перегенерацию."""
+    for glued, split in {
+        "совместно сExxonMobil": "совместно с ExxonMobil",
+        "а также аBP": "а также а BP",
+        "торги наMOEX": "торги на MOEX",
+        "проект оCCS": "проект о CCS",
+        "кредит МТСBank": "кредит МТС Bank",
+        "вхoдитHoneywell": "входит Honeywell",
+    }.items():
+        assert normalize_scripts(glued) == split, glued
+
+
+def test_latin_twins_in_russian_words_are_fixed_by_look():
+    # Латиница в русском слове — буква, взятая по виду: 9 из 12 таких замен на проде дали
+    # известное слово («выводy», «Министp»). Обратно (кириллица в латинском) — только вид+звук.
+    for bad, good in {"Pоснефть": "Роснефть", "yправление": "управление", "Hовак": "Новак",
+                      "выводy": "выводу", "Министp": "Министр", "ПAO": "ПАО", "Cпрос": "Спрос"}.items():
+        assert normalize_scripts(bad) == good, bad
+
+
+def test_allowed_mixed_script_brands_are_left_alone():
+    for brand in ("PROНЕФТЬ", "PROНефть", "Farш"):
+        assert normalize_scripts(f"журнал {brand} пишет") == f"журнал {brand} пишет"
+        assert mixed_script_words(brand) == []
+
+
+def test_phrase_repairs_keep_case_and_capital():
+    """Ревью 25.09: замены ставили именительный падеж и строчную букву."""
+    context = {"title": "Offshore completion", "raw_text": "offshore well completion flowback stimulation LNG capacity"}
+    for bad, good in {
+        "После завершения скважины началась добыча.": "После заканчивания скважины началась добыча.",
+        "Оффшорная платформа работает в оффшоре.": "Шельфовая платформа работает в шельфе.",
+        "Компания провела стимуляцию скважины.": "Компания провела интенсификацию притока.",
+        "Итоги. Провел испытания.": "Итоги. Провёл испытания.",
+        "Измерили объём флоубэка.": "Измерили объём жидкости обратного притока.",
+        "Компания работает с мощностями LNG.": "Компания работает с мощностями СПГ.",
+    }.items():
+        assert enforce_glossary_text(bad, context) == good, bad
+
+
+def test_rop_is_flagged_not_replaced():
+    context = {"title": "ROP record", "raw_text": "The rate of penetration (ROP) doubled."}
+
+    text = "Рост ROP составил 20%."
+
+    assert enforce_glossary_text(text, context) == text  # именительный «механическая скорость» сломал бы падеж
+    assert [w["forbidden_ru"] for w in terminology_warnings(text, context)] == [r"\bROP\b"]
+
+
+def test_reservoir_warning_survives_ccs_storage_and_plural():
+    """Ревью 25.09: слово «storage» есть в любой статье про CCS и глушило находку."""
+    ccs = {"title": "CCS", "raw_text": "Carbon capture and storage: CO2 is injected into depleted reservoirs."}
+
+    warnings = terminology_warnings("CO2 закачают в истощённый резервуар.", ccs)
+
+    assert [w["forbidden_ru"] for w in warnings] == [r"\bрезервуар\w*"]
+
+
 def test_summary_is_asked_again_when_a_word_mixes_scripts():
     class HalfTranslatingClient:
         def __init__(self):
@@ -354,6 +414,24 @@ def test_summary_is_asked_again_when_a_word_mixes_scripts():
     assert "«электроэнergyю»" in client.prompts[1]
     # Расход обоих вызовов — в одном итоге, иначе ai_processing_runs недосчитает.
     assert (response.input_tokens, response.output_tokens) == (200, 20)
+
+
+def test_failed_retry_keeps_the_paid_first_answer():
+    """Ревью 25.09: сбой повтора (429, таймаут) ронял и первый, уже оплаченный ответ."""
+
+    class Client:
+        calls = 0
+
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            Client.calls += 1
+            if Client.calls == 2:
+                raise RuntimeError("429 Too Many Requests")
+            return AIResponse(data={"summary": "Цены на электроэнergyю выросли."}, model="fake", input_tokens=7, output_tokens=3)
+
+    response = pipeline.summarize_article({"title": "t", "raw_text": "x"}, Client())
+
+    assert response.data["summary"] == "Цены на электроэнergyю выросли."
+    assert (response.input_tokens, response.output_tokens) == (7, 3)
 
 
 def test_summary_is_not_asked_again_when_clean_or_retry_is_no_better():

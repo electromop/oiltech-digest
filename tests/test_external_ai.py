@@ -244,6 +244,36 @@ def test_apply_only_writes_summary_and_translation_but_bills_every_stage(monkeyp
     assert (stats["summary"], stats["translation"], stats["relevance"], stats["scoring"]) == (1, 1, 0, 0)
 
 
+def test_apply_rejects_malformed_only_before_any_write(monkeypatch):
+    """payload_json — граница: строка «summary» дала бы множество букв, пустой список — все стадии."""
+    import pytest
+
+    writes = []
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
+    monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: writes.append(args))
+    result = {"articles": [{"article_id": 1, "summary": {"summary": "Суть", "model": "gpt"}}]}
+
+    for bad in ("summary", [], ["summary", "gate"], [1]):
+        with pytest.raises(ValueError, match="only"):
+            external_ai.apply_process_result(result, only=bad)
+    assert writes == []
+
+
+def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
+    """Старая суть попадала в промпт (_article_prompt кладёт summary) — модель повторяла брак."""
+    article = {"id": 7, "title": "Power prices", "summary": "Цены на электроэнergyю выросли.", "raw_text": "x"}
+    monkeypatch.setattr(external_ai.repository, "reserve_process_articles", lambda job_id, **kwargs: [7])
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [dict(article)])
+    monkeypatch.setattr(external_ai.repository, "list_enabled_tags", lambda: [])
+    monkeypatch.setattr(external_ai.repository, "list_enabled_scoring_criteria", lambda: [])
+
+    regular = external_ai.build_process_articles_payload({"article_ids": [7]}, job_id=1)
+    regen = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["summary", "translation"]}, job_id=2)
+
+    assert regular["articles"][0]["summary"] == article["summary"]
+    assert regen["articles"][0]["summary"] is None
+
+
 def test_core_passes_only_from_job_payload_to_apply(monkeypatch):
     from oiltech_digest import api
 

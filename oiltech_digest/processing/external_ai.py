@@ -42,6 +42,10 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         articles = repository.get_articles_by_ids(article_ids, include_summary=True)
     else:
         articles = repository.get_articles_needing_pipeline(limit)
+    if payload.get("only"):
+        # Перегенерация сути: старая суть с браком («электроэнergyю») ушла бы в промпт
+        # (_article_prompt кладёт summary), и модель повторила бы её слово в слово.
+        articles = [{**article, "summary": None} for article in articles]
     return {
         "kind": "process_articles",
         "offline": bool(payload.get("offline", False)),
@@ -410,8 +414,60 @@ def apply_translate_result(result: dict[str, Any], *, job_id: int | None = None)
 PROCESS_STAGES = ("summary", "translation", "relevance", "tagging", "scoring")
 
 
+def _write_summary(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
+    repository.upsert_article_card(article_id, _core_glossary(payload["summary"], context), payload.get("model"))
+
+
+def _write_translation(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
+    if payload.get("title_ru"):
+        repository.set_article_title_ru(article_id, _core_glossary(payload["title_ru"], context))
+
+
+def _write_relevance(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
+    repository.set_article_relevance(article_id, bool(payload.get("relevant")), payload.get("reason"), payload.get("model"))
+
+
+def _write_tagging(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
+    repository.upsert_article_tag(
+        article_id, int(payload["tag_id"]), float(payload.get("confidence") or 0), payload.get("rationale"), payload.get("model")
+    )
+
+
+def _write_scoring(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
+    repository.replace_article_score(
+        article_id,
+        float(payload["total_score"]),
+        str(payload["score_label"]),
+        str(payload.get("explanation") or ""),
+        payload.get("items") or [],
+        payload.get("model"),
+    )
+
+
+_STAGE_WRITERS = {
+    "summary": _write_summary,
+    "translation": _write_translation,
+    "relevance": _write_relevance,
+    "tagging": _write_tagging,
+    "scoring": _write_scoring,
+}
+
+
+def stages_to_write(only: Any) -> frozenset[str]:
+    """Какие стадии пишет ядро. None — все; иначе непустой список известных стадий.
+
+    Пометку ставит enqueue-resummarize, но читается она из payload_json задачи — граница:
+    строка «summary» дала бы множество букв (ничего не записать), пустой список — все
+    стадии. Ошибка здесь — ошибка кода, падаем до любой записи."""
+    if only is None:
+        return frozenset(PROCESS_STAGES)
+    if not isinstance(only, (list, tuple)) or not only or not all(stage in PROCESS_STAGES for stage in only):
+        raise ValueError(f"only: непустой список стадий из {PROCESS_STAGES}, получено {only!r}")
+    return frozenset(only)
+
+
 def apply_process_result(
-    result: dict[str, Any], *, job_id: int | None = None, only: list[str] | None = None
+    result: dict[str, Any], *, job_id: int | None = None, only: Any = None
 ) -> dict[str, Any]:
     """Apply an external AI result to the core database.
 
@@ -422,64 +478,22 @@ def apply_process_result(
     гоняет весь конвейер, он пометки не знает, — и так задачу исполняет любая сборка NL.
     Остальное не пишется: гейт, передумав, убрал бы статью из ленты, а теги и балл
     сдвинулись бы у отобранного в выпуск. Расход по всем стадиям учитывается — он оплачен."""
-    write = set(only or PROCESS_STAGES)
+    write = stages_to_write(only)
     stats = {"articles": 0, "summary": 0, "relevance": 0, "translation": 0, "tagging": 0, "scoring": 0, "errors": 0}
     contexts = _glossary_contexts(result)
     for item in result.get("articles") or []:
         article_id = int(item["article_id"])
         stats["articles"] += 1
-        if item.get("summary"):
-            summary = item["summary"]
-            if "summary" in write:
-                repository.upsert_article_card(
-                    article_id, _core_glossary(summary["summary"], contexts.get(article_id)), summary.get("model")
-                )
-                stats["summary"] += 1
-            _insert_run(article_id, "summary", summary, job_id=job_id)
-        if item.get("translation"):
-            translation = item["translation"]
-            if "translation" in write:
-                if translation.get("title_ru"):
-                    repository.set_article_title_ru(article_id, _core_glossary(translation["title_ru"], contexts.get(article_id)))
-                stats["translation"] += 1
-            if translation.get("provider") != "offline" or translation.get("model"):
-                _insert_run(article_id, "translation", translation, job_id=job_id)
-        if item.get("relevance"):
-            relevance = item["relevance"]
-            if "relevance" in write:
-                repository.set_article_relevance(
-                    article_id,
-                    bool(relevance.get("relevant")),
-                    relevance.get("reason"),
-                    relevance.get("model"),
-                )
-                stats["relevance"] += 1
-            _insert_run(article_id, "relevance", relevance, job_id=job_id)
-        if item.get("tagging"):
-            tagging = item["tagging"]
-            if "tagging" in write:
-                repository.upsert_article_tag(
-                    article_id,
-                    int(tagging["tag_id"]),
-                    float(tagging.get("confidence") or 0),
-                    tagging.get("rationale"),
-                    tagging.get("model"),
-                )
-                stats["tagging"] += 1
-            _insert_run(article_id, "tagging", tagging, job_id=job_id)
-        if item.get("scoring"):
-            scoring = item["scoring"]
-            if "scoring" in write:
-                repository.replace_article_score(
-                    article_id,
-                    float(scoring["total_score"]),
-                    str(scoring["score_label"]),
-                    str(scoring.get("explanation") or ""),
-                    scoring.get("items") or [],
-                    scoring.get("model"),
-                )
-                stats["scoring"] += 1
-            _insert_run(article_id, "scoring", scoring, job_id=job_id)
+        for stage in PROCESS_STAGES:
+            payload = item.get(stage)
+            if not payload:
+                continue
+            if stage in write:
+                _STAGE_WRITERS[stage](article_id, payload, contexts.get(article_id))
+                stats[stage] += 1
+            # Перевод русского заголовка — копия без модели: такой вызов не оплачен.
+            if stage != "translation" or payload.get("provider") != "offline" or payload.get("model"):
+                _insert_run(article_id, stage, payload, job_id=job_id)
         if item.get("errors"):
             stats["errors"] += len(item["errors"])
     return stats

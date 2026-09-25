@@ -357,12 +357,16 @@ def _complete_one_script(call, field: str, article: dict) -> AIResponse:
     mixed = mixed_script_words(text)
     data, input_tokens, output_tokens = response.data, response.input_tokens, response.output_tokens
     if mixed:
-        retry = call(_mixed_script_note(mixed))
-        input_tokens += retry.input_tokens
-        output_tokens += retry.output_tokens
-        retry_text = enforce_glossary_text(str(retry.data.get(field) or ""), article)
-        if retry_text and len(mixed_script_words(retry_text)) < len(mixed):
-            data, text = retry.data, retry_text
+        try:
+            retry = call(_mixed_script_note(mixed))
+        except Exception:  # noqa: BLE001 - сбой повтора не должен губить оплаченный первый ответ
+            logger.warning("повтор при смешанном алфавите не удался, оставляю первый ответ", exc_info=True)
+        else:
+            input_tokens += retry.input_tokens
+            output_tokens += retry.output_tokens
+            retry_text = enforce_glossary_text(str(retry.data.get(field) or ""), article)
+            if retry_text and len(mixed_script_words(retry_text)) < len(mixed):
+                data, text = retry.data, retry_text
     return AIResponse(
         data={**data, field: text},
         model=response.model,

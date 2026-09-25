@@ -285,6 +285,23 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
     from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
+    if getattr(args, "scripts_only", False):
+        # Только алфавит буквы и пробел на стыке — безопасно по всему корпусу. Полный
+        # словарь по старым карточкам без ревью не гоняем: его замены ломали падеж.
+        from oiltech_digest.processing import mixed_script
+
+        report = mixed_script.repair_cards(apply=not args.dry_run, article_ids=[args.article_id] if args.article_id else None)
+        if args.json:
+            print(json.dumps({**report, "changes": report["changes"][: args.show]}, ensure_ascii=False, default=str))
+            return
+        suffix = " [dry-run]" if args.dry_run else ""
+        print(f"terminology-repair --scripts-only{suffix}: полей к исправлению={report['changed_fields']}")
+        for item in report["changes"][: args.show]:
+            print(f"  article={item['article_id']} field={item['field']}")
+            print(f"    before: {str(item['before'])[:180]}")
+            print(f"    after:  {str(item['after'])[:180]}")
+        return
+
     scanned = changed = 0
     changes = []
     for article in repository.list_article_texts_for_terminology_audit(limit=args.limit, article_id=args.article_id):
@@ -717,62 +734,44 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
 def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
     """Перегенерировать суть и перевод заголовка у статей со словами из двух алфавитов.
 
-    Двойники и склейку чинит repair-terminology без ИИ; здесь — полуперевод
-    («управляego», «наshore»), который лечится только новым ответом модели. Суть — задачей
-    process_articles с пометкой only: ядро запишет только суть и перевод (гейт, теги и
-    балл остаются прежними); заголовок без проблем в сути — задачей translate_titles.
-    По умолчанию — только выборка, без постановки.
+    Двойники и склейку чинит `repair-terminology --scripts-only` без ИИ; здесь — полуперевод
+    («управляego», «наshore»), который лечит только новый ответ модели. Ядро запишет только
+    суть и перевод (гейт, теги и балл остаются). По умолчанию — только выборка.
     """
-    from oiltech_digest import network_policy
-    from oiltech_digest.db import repository
-    from oiltech_digest.processing.domain_glossary import mixed_script_words, normalize_scripts
+    from oiltech_digest.processing import mixed_script
 
-    def broken(value: str | None) -> bool:
-        return bool(mixed_script_words(normalize_scripts(value or "")))
-
-    articles = repository.list_article_texts_for_terminology_audit(limit=args.scan)
-    if args.article_id:
-        wanted = set(args.article_id)
-        articles = [article for article in articles if int(article["id"]) in wanted]
-    summary_ids = [int(a["id"]) for a in articles if broken(a.get("summary"))]
-    title_ids = [int(a["id"]) for a in articles if broken(a.get("title_ru")) and int(a["id"]) not in summary_ids]
+    selection = mixed_script.resummarize_selection(args.article_id)
+    summary_ids, title_ids = selection["summary"], selection["title"]
     if args.limit:
         summary_ids, title_ids = summary_ids[: args.limit], title_ids[: args.limit]
-    print(f"enqueue-resummarize: суть — {len(summary_ids)} статей, только заголовок — {len(title_ids)}")
+    print(
+        f"enqueue-resummarize: суть — {len(summary_ids)} статей, только заголовок — {len(title_ids)}; "
+        f"брак в самом исходном заголовке (переводом не лечится) — {len(selection['source_title'])}"
+    )
     if args.dry_run:
         print(f"  [dry-run] суть: {summary_ids[:50]}")
         print(f"  [dry-run] заголовок: {title_ids[:50]}")
         return
-    decision = network_policy.route_ai_bulk()
-    if decision.execution_region != "external":
-        # Локальный конвейер пишет все стадии сам, пометки only он не знает.
-        raise SystemExit("enqueue-resummarize: нужен внешний контур ИИ — локальный конвейер перезапишет гейт, теги и балл")
-    batch = max(1, args.batch_size)
-    jobs = []
-    for chunk in (summary_ids[i : i + batch] for i in range(0, len(summary_ids), batch)):
-        jobs.append(repository.create_background_job(
-            "process_articles",
-            {"article_ids": chunk, "limit": len(chunk), "offline": False, "only": ["summary", "translation"]},
-            queue_name=decision.queue_name,
-            execution_region=decision.execution_region,
-            capability=decision.capability,
-        )["id"])
-    for chunk in (title_ids[i : i + batch] for i in range(0, len(title_ids), batch)):
-        jobs.append(repository.create_background_job(
-            "translate_titles",
-            {"article_ids": chunk},
-            queue_name=decision.queue_name,
-            execution_region=decision.execution_region,
-            capability=decision.capability,
-        )["id"])
-    print(f"  задач: {len(jobs)} ({jobs}), queue={decision.queue_name}")
+    try:
+        jobs = mixed_script.enqueue_resummarize(summary_ids, title_ids, batch_size=args.batch_size)
+    except RuntimeError as exc:
+        raise SystemExit(f"enqueue-resummarize: {exc}") from exc
+    print(f"  задач: {len(jobs)} ({jobs})")
+
+
+def _utc_datetime(value: str) -> datetime:
+    """ISO-время из командной строки; без пояса — UTC (пояс сессии базы тут ни при чём)."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def cmd_repair_telegram_titles(args: argparse.Namespace) -> None:
     """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк) — без сети."""
     from oiltech_digest.ingestion import telegram_titles
 
-    report = telegram_titles.repair(apply=not args.dry_run)
+    if not args.dry_run and not args.before:
+        raise SystemExit("repair-telegram-titles: для записи укажите --before — время выката исправленного парсера")
+    report = telegram_titles.repair(apply=not args.dry_run, collected_before=args.before)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, default=str))
         return
@@ -1831,6 +1830,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_terms.add_argument("--article-id", type=int, default=None)
     p_repair_terms.add_argument("--show", type=int, default=30)
     p_repair_terms.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_repair_terms.add_argument("--scripts-only", action="store_true",
+                                help="только двойники и склейка алфавитов (без замен словаря) — для всего корпуса")
     p_repair_terms.add_argument("--json", action="store_true")
     p_repair_terms.set_defaults(func=cmd_repair_terminology)
 
@@ -1847,7 +1848,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval_terms.set_defaults(func=cmd_eval_terminology)
 
     p_resummarize = sub.add_parser("enqueue-resummarize", help="перегенерировать суть у статей со словами из двух алфавитов (по умолчанию выборка)")
-    p_resummarize.add_argument("--scan", type=int, default=50000, help="сколько последних статей с карточкой просмотреть")
     p_resummarize.add_argument("--article-id", type=int, action="append", default=None)
     p_resummarize.add_argument("--limit", type=int, default=0)
     p_resummarize.add_argument("--batch-size", type=int, default=20)
@@ -1856,6 +1856,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_tg_titles = sub.add_parser("repair-telegram-titles", help="починить склеенные заголовки Telegram по сохранённым данным (по умолчанию dry-run)")
     p_tg_titles.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_tg_titles.add_argument("--before", type=_utc_datetime, default=None,
+                             help="только статьи, собранные до этого момента (ISO, UTC) — время выката нового парсера")
     p_tg_titles.add_argument("--show", type=int, default=30)
     p_tg_titles.add_argument("--json", action="store_true")
     p_tg_titles.set_defaults(func=cmd_repair_telegram_titles)

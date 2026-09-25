@@ -23,13 +23,15 @@ from typing import Any
 # импорт функции писал бы в настоящую базу (так было с source_overrides).
 from oiltech_digest.db import connection
 from oiltech_digest.ingestion.telegram_parser import title_from_text
+from oiltech_digest.processing.domain_glossary import normalize_scripts
 
 # Слово «известно», если встречается в стольких статьях: склейка — только в своей.
 KNOWN_WORD_ARTICLES = 3
 # Правая часть — частое слово (начало строки): «утроиласьТатнефть», «шуткойГубернатор».
 COMMON_WORD_ARTICLES = 20
-# Левая часть при частом правом слове — не обрывок бренда («Рус|Гидро», «Мега|Фон»).
-MIN_LEFT_CHARS = 4
+# Короткая левая часть с заглавной — обрывок бренда («Мега|Фон», «Каз|Мунай», «Рус|Гидро»),
+# а не конец строки: так не режем, даже если слово «известно».
+BRAND_PREFIX_CHARS = 5
 
 _LETTERS = re.compile(r"[A-Za-zА-Яа-яЁё]+")
 _HTTP_GLUE = re.compile(r"[А-Яа-яЁё](?=https?://)")
@@ -59,18 +61,12 @@ def split_glued_lines(title: str, frequency: Mapping[str, int]) -> list[str]:
         if frequency.get(run.lower(), 0) >= KNOWN_WORD_ARTICLES:
             continue
         bounds = [j for j in range(1, len(run)) if run[j - 1].islower() and run[j].isupper()]
-        candidates = list(enumerate(bounds))
         if match.start() > 0 and title[match.start() - 1] == "#":
             # Хэштег рубрики слитный с заглавными («#ЦифраДняСтенки»): стык строки — последний.
-            candidates = candidates[-1:]
-        for index, bound in candidates:
-            left = run[:bound]
-            right = run[bound:bounds[index + 1]] if index + 1 < len(bounds) else run[bound:]
-            known_left = frequency.get(left.lower(), 0) >= KNOWN_WORD_ARTICLES
-            common_right = len(left) >= MIN_LEFT_CHARS and frequency.get(right.lower(), 0) >= COMMON_WORD_ARTICLES
-            if known_left or common_right:
-                cuts.append(match.start() + bound)
-                break
+            bounds = bounds[-1:]
+        cut = _line_break_in(run, bounds, frequency)
+        if cut is not None:
+            cuts.append(match.start() + cut)
     cuts.extend(match.end() for match in _HTTP_GLUE.finditer(title))
     segments: list[str] = []
     start = 0
@@ -81,6 +77,25 @@ def split_glued_lines(title: str, frequency: Mapping[str, int]) -> list[str]:
     return [segment.strip() for segment in segments if segment.strip()]
 
 
+def _line_break_in(run: str, bounds: list[int], frequency: Mapping[str, int]) -> int | None:
+    """Стык строки внутри «слова»: первый, где слева известное слово; иначе последний,
+    где справа частое. «КазМунайГазПрезидент» — после «КазМунайГаз» (известно целиком), а
+    не после «КазМунай» (справа частое «Газ»): бренд идёт первым, начало строки — последним."""
+    def splittable(bound: int) -> bool:
+        left = run[:bound]
+        return not (left[:1].isupper() and len(left) <= BRAND_PREFIX_CHARS)
+
+    for bound in bounds:
+        if splittable(bound) and frequency.get(run[:bound].lower(), 0) >= KNOWN_WORD_ARTICLES:
+            return bound
+    for index in range(len(bounds) - 1, -1, -1):
+        bound = bounds[index]
+        right = run[bound:bounds[index + 1]] if index + 1 < len(bounds) else run[bound:]
+        if splittable(bound) and frequency.get(right.lower(), 0) >= COMMON_WORD_ARTICLES:
+            return bound
+    return None
+
+
 def repaired_title(title: str, frequency: Mapping[str, int]) -> str:
     """Заголовок по правилу исправленного парсера — будто стыки строк были на месте."""
     segments = split_glued_lines(title, frequency)
@@ -89,37 +104,41 @@ def repaired_title(title: str, frequency: Mapping[str, int]) -> str:
     return title_from_text("\n".join(segments))
 
 
-def repair(*, apply: bool = False, frequency: Mapping[str, int] | None = None) -> dict[str, Any]:
+def repair(
+    *, apply: bool = False, collected_before: Any = None, frequency: Mapping[str, int] | None = None
+) -> dict[str, Any]:
     """Найти и (с apply) записать новые заголовки статей Telegram.
 
-    `title_ru` русского поста — копия заголовка (перевод не нужен) и меняется вместе с
-    ним; если перевод уже другой — не трогаем. Обе записи — только если значение не
-    изменилось с чтения.
+    collected_before — только статьи, собранные старым парсером: заголовки нового —
+    правильные первые строки, эвристику к ним не применяем (там бренды вроде «МегаФон»
+    она могла бы разрезать). `title_ru` русского поста — копия заголовка и меняется
+    вместе с ним, в том числе если её уже поправил `repair-terminology --scripts-only`;
+    свой перевод не трогаем. Записи — только если значение не изменилось с чтения.
     """
+    query = (
+        "SELECT a.id, a.title, c.title_ru FROM articles a "
+        "JOIN sources s ON s.id = a.source_id "
+        "LEFT JOIN article_cards c ON c.article_id = a.id "
+        "WHERE s.parse_strategy = 'telegram'"
+    )
+    params: list[Any] = []
+    if collected_before is not None:
+        query += " AND a.collected_at < %s"
+        params.append(collected_before)
     with connection.get_connection() as conn:
         if frequency is None:
             frequency = document_frequency(conn)
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT a.id, a.title, c.title_ru
-            FROM articles a
-            JOIN sources s ON s.id = a.source_id
-            LEFT JOIN article_cards c ON c.article_id = a.id
-            WHERE s.parse_strategy = 'telegram'
-            ORDER BY a.id
-            """
-        )
-        rows = cur.fetchall()
+        rows = conn.execute(query + " ORDER BY a.id", params).fetchall()
         changes = []
         for article_id, title, title_ru in rows:
             new_title = repaired_title(title or "", frequency)
             if new_title and new_title != title:
+                copied = title_ru is not None and normalize_scripts(title_ru) == normalize_scripts((title or "")[:200])
                 changes.append({
                     "article_id": int(article_id),
                     "before": title,
                     "after": new_title,
-                    "title_ru": title_ru is not None and title_ru == (title or "")[:200],
+                    "title_ru_before": title_ru if copied else None,
                 })
         if apply:
             for change in changes:
@@ -127,11 +146,11 @@ def repair(*, apply: bool = False, frequency: Mapping[str, int] | None = None) -
                     "UPDATE articles SET title = %s WHERE id = %s AND title = %s",
                     (change["after"][:500], change["article_id"], change["before"]),
                 )
-                if change["title_ru"]:
+                if change["title_ru_before"] is not None:
                     conn.execute(
                         "UPDATE article_cards SET title_ru = %s, updated_at = now() "
                         "WHERE article_id = %s AND title_ru = %s",
-                        (change["after"][:200], change["article_id"], change["before"][:200]),
+                        (normalize_scripts(change["after"][:200]), change["article_id"], change["title_ru_before"]),
                     )
             conn.commit()
     return {"scanned": len(rows), "changed": len(changes), "applied": apply, "changes": changes}

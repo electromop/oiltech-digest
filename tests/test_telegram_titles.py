@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from oiltech_digest.db import connection
 from oiltech_digest.ingestion import telegram_titles
 
@@ -8,6 +10,7 @@ FREQUENCY = {
     "директоров": 40, "президент": 300, "иллинойсе": 3, "exxonmobil": 50, "exxon": 4, "mobil": 4,
     "казмунайгаз": 120, "каз": 1, "мунай": 1, "газ": 900, "квт": 60, "к": 5000,
     "татнефть": 90, "утроилась": 1, "рус": 2, "гидро": 30, "фото": 40, "дня": 400, "откуда": 50,
+    "мега": 12, "фон": 25, "оператор": 80, "компании": 900, "казмунай": 0,
 }
 
 
@@ -56,6 +59,38 @@ def test_link_glued_to_a_word_ends_the_title():
     )
 
 
+def test_brand_before_the_line_break_is_kept_whole():
+    """Ревью 25.09: брался первый стык — «КазМунайГазПрезидент» резался после «КазМунай»."""
+    title = "Добыча на месторождениях выросла, сообщил КазМунайГазПрезидент компании"
+
+    assert telegram_titles.repaired_title(title, FREQUENCY) == "Добыча на месторождениях выросла, сообщил КазМунайГаз"
+
+
+def test_short_capitalized_prefix_is_a_brand_not_a_line_end():
+    # «Мега» известна корпусу, но «Мега|Фон» — бренд, а не конец строки.
+    title = "Оператор МегаФон запустил связь на нефтяном месторождении"
+
+    assert telegram_titles.repaired_title(title, FREQUENCY) == title
+
+
+def test_document_frequency_counts_articles_not_occurrences(isolated_db):
+    with connection.get_connection() as conn:
+        source = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('S', 'News', 'https://example.com', TRUE, 'rss') RETURNING id"
+        ).fetchone()[0]
+        for index, text in enumerate(("Нефть, нефть и ещё раз нефть", "Нефть подорожала")):
+            conn.execute(
+                "INSERT INTO articles (source_id, title, url, raw_text, language, content_hash) VALUES (%s, %s, %s, %s, 'ru', %s)",
+                (source, f"Заголовок {index}", f"https://example.com/{index}", text, f"h{index}"),
+            )
+        conn.commit()
+        frequency = telegram_titles.document_frequency(conn)
+
+    assert frequency["нефть"] == 2
+    assert frequency["заголовок"] == 2
+
+
 def test_repair_updates_title_and_copied_title_ru_only(isolated_db):
     glued = "Газпрому разрешили не соблюдать требования по числу независимых директоровПрезидент РФ В."
     fixed = "Газпрому разрешили не соблюдать требования по числу независимых директоров"
@@ -88,6 +123,15 @@ def test_repair_updates_title_and_copied_title_ru_only(isolated_db):
     assert (dry["scanned"], dry["changed"]) == (2, 2)
     with connection.get_connection() as conn:
         assert conn.execute("SELECT title FROM articles WHERE id = %s", (ids[0],)).fetchone()[0] == glued
+        # title_ru отличается от заголовка только двойником (так бывает между заголовком и
+        # карточкой после repair-terminology --scripts-only) — это всё ещё копия заголовка.
+        conn.execute("UPDATE article_cards SET title_ru = %s WHERE article_id = %s", (glued.replace("о", "o", 1), ids[0]))
+        conn.commit()
+
+    earlier = telegram_titles.repair(
+        apply=False, frequency=FREQUENCY, collected_before=datetime.now(timezone.utc) - timedelta(days=1)
+    )
+    assert earlier["scanned"] == 0  # собранное новым парсером эвристикой не трогаем
 
     telegram_titles.repair(apply=True, frequency=FREQUENCY)
 

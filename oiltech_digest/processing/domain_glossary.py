@@ -56,6 +56,9 @@ def _load_glossary_terms(data: dict[str, Any]) -> tuple[GlossaryTerm, ...]:
 
 
 GLOSSARY: tuple[GlossaryTerm, ...] = _load_glossary_terms(_GLOSSARY_DATA)
+# Настоящие слова из двух алфавитов (бренды: «Farш», «Dostaевский»): их не чинит
+# normalize_scripts и не ловит mixed_script_words, иначе модель переспрашивали бы зря.
+MIXED_SCRIPT_ALLOW: frozenset[str] = frozenset(_tuple(_GLOSSARY_DATA.get("mixed_script_allow")))
 PHRASE_REPAIRS: tuple[tuple[str, str], ...] = tuple(
     (str(item[0]), str(item[1]))
     for item in _GLOSSARY_DATA.get("phrase_repairs", [])
@@ -96,41 +99,32 @@ def enforce_glossary_text(text: str, article: dict) -> str:
         for forbidden in term.forbidden_ru:
             result = _replace_case_insensitive(result, forbidden, term.preferred_ru)
         for pattern in _forbidden_patterns(term):
-            result = re.sub(pattern, term.preferred_ru, result, flags=re.I)
+            result = _sub_keep_capital(pattern, term.preferred_ru, result)
     result = _polish_repaired_phrases(result)
     result = _capitalize_sentence_starts(result)
     return result
 
 
 def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
+    def warning(found: str, term: GlossaryTerm) -> dict[str, str]:
+        return {"forbidden_ru": found, "preferred_ru": term.preferred_ru, "source_terms": ", ".join(term.source_terms[:5])}
+
     warnings = []
     lower = (text or "").lower()
     for term in _terms_for(text, article):
-        for forbidden in term.forbidden_ru:
-            if forbidden.lower() in lower:
-                warnings.append({
-                    "forbidden_ru": forbidden,
-                    "preferred_ru": term.preferred_ru,
-                    "source_terms": ", ".join(term.source_terms[:5]),
-                })
-        for pattern in (*_forbidden_patterns(term), *term.warn_patterns):
-            if re.search(pattern, text or "", flags=re.I):
-                warnings.append({
-                    "forbidden_ru": pattern,
-                    "preferred_ru": term.preferred_ru,
-                    "source_terms": ", ".join(term.source_terms[:5]),
-                })
+        warnings.extend(warning(forbidden, term) for forbidden in term.forbidden_ru if forbidden.lower() in lower)
+        warnings.extend(
+            warning(pattern, term)
+            for pattern in (*_forbidden_patterns(term), *term.warn_patterns)
+            if re.search(pattern, text or "", flags=re.I)
+        )
     article_text = _article_text(article)
     for term in relevant_glossary_terms(article):
         if any(_contains_term(article_text, word) for word in term.warn_unless_source):
             continue
-        for pattern in term.source_warn_patterns:
-            if re.search(pattern, text or "", flags=re.I):
-                warnings.append({
-                    "forbidden_ru": pattern,
-                    "preferred_ru": term.preferred_ru,
-                    "source_terms": ", ".join(term.source_terms[:5]),
-                })
+        warnings.extend(
+            warning(pattern, term) for pattern in term.source_warn_patterns if re.search(pattern, text or "", flags=re.I)
+        )
     for word in mixed_script_words(text):
         # Ключи — те же, что у словарных находок: аудит печатает их одной строкой.
         warnings.append({
@@ -163,35 +157,43 @@ _LETTER_RUN = re.compile(r"[A-Za-zА-Яа-яЁё]+")
 _LATIN = re.compile(r"[A-Za-z]")
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 
-# Буквы-двойники, у которых совпадают и вид, и звук. Модель путает алфавит по звуку, а
-# не по виду: в «Орinoco» кириллическая «р» — это «r», а не «p». Поэтому p, y, B, H, k в
-# пары не входят — такое слово остаётся смешанным и уходит на перегенерацию.
-_TWINS_LAT = "aoecxAOECXKMT"
-_TWINS_CYR = "аоесхАОЕСХКМТ"
-_LAT_TO_CYR = str.maketrans(_TWINS_LAT, _TWINS_CYR)
-_CYR_TO_LAT = str.maketrans(_TWINS_CYR, _TWINS_LAT)
+# Буквы-двойники. Латиница внутри русского слова — буква, взятая по виду (исходники
+# пишут «Cпрос», «ПAO»; замер 25.09: 9 из 12 замен p/y по виду дали известное слово —
+# «выводy» → «выводу», «Министp» → «Министр»). Кириллица внутри латинского слова бывает
+# и ошибкой по звуку: в «Орinoco» «р» — это «r», замена по виду дала бы «Opinoco». Поэтому
+# обратно — только буквы, у которых совпадают и вид, и звук.
+_LAT_TO_CYR = str.maketrans("aoecxpyAOECXPHBKMTk", "аоесхруАОЕСХРНВКМТк")
+_CYR_TO_LAT = str.maketrans("аоесхАОЕСХКМТ", "aoecxAOECXKMT")
+_TWINS_LAT = frozenset("aoecxpyAOECXPHBKMTk")
+_TWINS_CYR = frozenset("аоесхАОЕСХКМТ")
 # Стык алфавитов внутри слова — склейка двух слов: «присутствиеHoneywell», «вPermian»,
-# «СШАChina», «FTШвейцар», «Казаниhttps://…». Внутри одного алфавита так не режем:
-# «КазМунайГаз», «МосБиржа», «кВт» — настоящие слова (замер 25.09).
+# «СШАChina», «FTШвейцар». Внутри одного алфавита так не режем: «КазМунайГаз»,
+# «МосБиржа», «кВт» — настоящие слова (замер 25.09).
 _SCRIPT_GLUE = re.compile(
-    r"(?<=[а-яё])(?=[A-Z])|(?<=[a-z])(?=[А-ЯЁ])|(?<=[А-ЯЁ])(?=[A-Z][a-z])"
-    r"|(?<=[A-Z])(?=[А-ЯЁ][а-яё])|(?<=[А-Яа-яЁё])(?=https?://)"
+    r"(?<=[а-яё])(?=[A-Z])|(?<=[a-z])(?=[А-ЯЁ])|(?<=[А-ЯЁ])(?=[A-Z][a-z])|(?<=[A-Z])(?=[А-ЯЁ][а-яё])"
 )
+_LINK_GLUE = re.compile(r"(?<=[А-Яа-яЁё])(?=https?://)")
 
 
 def normalize_scripts(text: str) -> str:
     """Слово — одним алфавитом, склеенные слова разных алфавитов — через пробел.
 
-    Слово переводится в тот алфавит, куда можно заменить ВСЕ чужие буквы двойниками:
-    «вхoдит» → «входит», «1-гo» → «1-го», «МoU» → «MoU», «ОPEX» → «OPEX». Можно в обе
-    стороны — решает большинство букв, поровну — не трогаем. Полуперевод («управляego»,
-    «наshore») так не лечится и остаётся смешанным — его ловит mixed_script_words.
+    Сначала склейка, потом двойники: иначе «сExxonMobil» стало бы «cExxonMobil» — стык
+    пропал бы, а с ним и находка аудита. Слово переводится в тот алфавит, куда можно
+    заменить ВСЕ чужие буквы двойниками: «вхoдит» → «входит», «1-гo» → «1-го», «МoU» →
+    «MoU». Можно в обе стороны — решает большинство, поровну — не трогаем. Полуперевод
+    («управляego», «наshore») так не лечится — его ловит mixed_script_words.
     """
     if not text:
         return text or ""
 
-    def one_script(match: re.Match) -> str:
-        word = match.group(0)
+    def fix_run(match: re.Match) -> str:
+        run = match.group(0)
+        if run in MIXED_SCRIPT_ALLOW:
+            return run
+        return " ".join(one_script(word) for word in _SCRIPT_GLUE.split(run))
+
+    def one_script(word: str) -> str:
         latin = [ch for ch in word if _LATIN.match(ch)]
         cyrillic = [ch for ch in word if _CYRILLIC.match(ch)]
         if not latin or not cyrillic:
@@ -209,7 +211,7 @@ def normalize_scripts(text: str) -> str:
             return word.translate(_CYR_TO_LAT)
         return word
 
-    return _SCRIPT_GLUE.sub(" ", _LETTER_RUN.sub(one_script, text))
+    return _LETTER_RUN.sub(fix_run, _LINK_GLUE.sub(" ", text))
 
 
 def mixed_script_words(text: str) -> list[str]:
@@ -223,7 +225,9 @@ def mixed_script_words(text: str) -> list[str]:
     found: list[str] = []
     for match in _LETTER_RUN.finditer(text or ""):
         word = match.group(0)
-        if _LATIN.search(word) and _CYRILLIC.search(word) and word not in found:
+        if word in MIXED_SCRIPT_ALLOW or word in found:
+            continue
+        if _LATIN.search(word) and _CYRILLIC.search(word):
             found.append(word)
     return found
 
@@ -368,20 +372,27 @@ def _repair_bad_phrases(text: str, terms: list[GlossaryTerm]) -> str:
         return text
     result = text
     for pattern, replacement in PHRASE_REPAIRS:
-        result = re.sub(pattern, replacement, result, flags=re.I)
+        result = _sub_keep_capital(pattern, replacement, result)
     return result
 
 
 def _polish_repaired_phrases(text: str) -> str:
-    replacements = (
-        (r"\bпровел\b", "провёл"),
-        (r"\bпровела интенсификацию\b", "провела интенсификацию"),
-        (r"\bизучил[аи]?\s+жидкость обратного притока\b", "изучила жидкость обратного притока"),
-    )
-    result = text
-    for pattern, replacement in replacements:
-        result = re.sub(pattern, replacement, result, flags=re.I)
-    return result
+    # «изучил[аи]? … → изучила» отсюда убрано (ревью 25.09): замена меняла число и род
+    # глагола («изучили» → «изучила»), а смысла не чинила.
+    return _sub_keep_capital(r"\bпровел\b", "провёл", text)
+
+
+def _sub_keep_capital(pattern: str, replacement: str, text: str) -> str:
+    """re.sub без учёта регистра, но с заглавной, если найденное с неё начиналось:
+    «Провел» → «Провёл», а не «провёл»; «Оффшорная» → «Шельфовая»."""
+
+    def expand(match: re.Match) -> str:
+        result = match.expand(replacement)
+        if match.group(0)[:1].isupper() and result[:1].islower():
+            return result[:1].upper() + result[1:]
+        return result
+
+    return re.sub(pattern, expand, text, flags=re.I)
 
 
 def _capitalize_sentence_starts(text: str) -> str:
@@ -402,4 +413,4 @@ def _contains_term(text: str, term: str) -> bool:
 
 
 def _replace_case_insensitive(text: str, old: str, new: str) -> str:
-    return re.sub(rf"(?<![А-Яа-яA-Za-z0-9]){re.escape(old)}(?![А-Яа-яA-Za-z0-9])", new, text, flags=re.I)
+    return _sub_keep_capital(rf"(?<![А-Яа-яA-Za-z0-9]){re.escape(old)}(?![А-Яа-яA-Za-z0-9])", new.replace("\\", "\\\\"), text)

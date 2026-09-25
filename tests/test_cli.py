@@ -65,23 +65,15 @@ def test_enqueue_external_scrape_enqueues_only_external_sources(monkeypatch, cap
     assert "задач=2" in capsys.readouterr().out
 
 
-_RESUMMARIZE_ARTICLES = [
-    {"id": 1, "summary": "Цены на электроэнergyю выросли.", "title_ru": "Цены выросли"},  # полуперевод в сути
-    {"id": 2, "summary": "Компания вхoдит в топ.", "title_ru": "Компания растёт"},  # двойник — чинит словарь
-    {"id": 3, "summary": "Всё чисто.", "title_ru": "Добыча в Пермian растёт"},  # полуперевод в заголовке
-    {"id": 4, "summary": "Всё чисто.", "title_ru": "Всё чисто"},
-]
-
-
 def _resummarize_args(**overrides):
-    values = {"scan": 1000, "article_id": None, "limit": 0, "batch_size": 20, "dry_run": True}
+    values = {"article_id": None, "limit": 0, "batch_size": 20, "dry_run": True}
     values.update(overrides)
     return argparse.Namespace(**values)
 
 
 def test_enqueue_resummarize_by_default_only_selects(monkeypatch, capsys):
-    monkeypatch.setattr("oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
-                        lambda limit=200, article_id=None: _RESUMMARIZE_ARTICLES)
+    monkeypatch.setattr("oiltech_digest.processing.mixed_script.resummarize_selection",
+                        lambda ids=None: {"summary": [1], "title": [3], "source_title": [5, 6]})
     created = []
     monkeypatch.setattr("oiltech_digest.db.repository.create_background_job", lambda *a, **k: created.append(a))
 
@@ -89,16 +81,15 @@ def test_enqueue_resummarize_by_default_only_selects(monkeypatch, capsys):
 
     assert created == []
     out = capsys.readouterr().out
-    assert "суть — 1 статей, только заголовок — 1" in out
-    assert "[1]" in out and "[3]" in out
+    assert "суть — 1 статей, только заголовок — 1; брак в самом исходном заголовке (переводом не лечится) — 2" in out
 
 
 def test_enqueue_resummarize_marks_jobs_to_write_only_summary_and_translation(monkeypatch):
     monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr("oiltech_digest.config.AI_EXECUTION_REGION", "external")
     monkeypatch.setattr("oiltech_digest.config.AI_BULK_LANE_ENABLED", True)
-    monkeypatch.setattr("oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
-                        lambda limit=200, article_id=None: _RESUMMARIZE_ARTICLES)
+    monkeypatch.setattr("oiltech_digest.processing.mixed_script.resummarize_selection",
+                        lambda ids=None: {"summary": [1], "title": [3], "source_title": [5]})
     jobs = []
     monkeypatch.setattr("oiltech_digest.db.repository.create_background_job",
                         lambda kind, payload, **k: jobs.append((kind, payload, k["queue_name"])) or {"id": len(jobs)})
@@ -113,16 +104,26 @@ def test_enqueue_resummarize_marks_jobs_to_write_only_summary_and_translation(mo
 
 
 def test_enqueue_resummarize_refuses_local_pipeline(monkeypatch):
-    """Локальный конвейер пометки only не знает и перезаписал бы гейт, теги и балл."""
+    """Локальный конвейер пометки only не знает и готовые стадии пропускает — задача прошла бы впустую."""
     monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", False)
-    monkeypatch.setattr("oiltech_digest.db.repository.list_article_texts_for_terminology_audit",
-                        lambda limit=200, article_id=None: _RESUMMARIZE_ARTICLES)
+    monkeypatch.setattr("oiltech_digest.processing.mixed_script.resummarize_selection",
+                        lambda ids=None: {"summary": [1], "title": [], "source_title": []})
     created = []
     monkeypatch.setattr("oiltech_digest.db.repository.create_background_job", lambda *a, **k: created.append(a))
 
     with pytest.raises(SystemExit, match="внешний контур"):
         cli.cmd_enqueue_resummarize(_resummarize_args(dry_run=False))
     assert created == []
+
+
+def test_repair_telegram_titles_needs_before_to_write(monkeypatch):
+    called = []
+    monkeypatch.setattr("oiltech_digest.ingestion.telegram_titles.repair", lambda **kwargs: called.append(kwargs))
+
+    with pytest.raises(SystemExit, match="--before"):
+        cli.cmd_repair_telegram_titles(argparse.Namespace(dry_run=False, before=None, json=False, show=0))
+    assert called == []
+    assert cli._utc_datetime("2026-09-25T12:00:00").tzinfo is not None
 
 
 def test_source_dump_listing_prints_anchors_with_container(monkeypatch, capsys):
