@@ -18,6 +18,10 @@ class GlossaryTerm:
     forbidden_ru: tuple[str, ...] = ()
     note: str = ""
     forbidden_patterns: tuple[str, ...] = ()
+    # Только для аудита: находка — повод поправить, но без автозамены. Для калек, где
+    # замена ломала бы грамматику («более granularными» — падеж, «спудил» — глагол):
+    # их чинят phrase_repairs с точным окончанием, а это — сеть для непойманных форм.
+    warn_patterns: tuple[str, ...] = ()
 
 
 GLOSSARY_PATH = Path(os.environ.get("DOMAIN_GLOSSARY_PATH") or Path(__file__).with_name("domain_glossary.json"))
@@ -37,6 +41,7 @@ def _load_glossary_terms(data: dict[str, Any]) -> tuple[GlossaryTerm, ...]:
             forbidden_ru=_tuple(item.get("forbidden_ru")),
             note=str(item.get("note") or "").strip(),
             forbidden_patterns=_tuple(item.get("forbidden_patterns")),
+            warn_patterns=_tuple(item.get("warn_patterns")),
         )
         for item in data.get("terms", [])
     )
@@ -99,14 +104,41 @@ def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
                     "preferred_ru": term.preferred_ru,
                     "source_terms": ", ".join(term.source_terms[:5]),
                 })
-        for pattern in _forbidden_patterns(term):
+        for pattern in (*_forbidden_patterns(term), *term.warn_patterns):
             if re.search(pattern, text or "", flags=re.I):
                 warnings.append({
                     "forbidden_ru": pattern,
                     "preferred_ru": term.preferred_ru,
                     "source_terms": ", ".join(term.source_terms[:5]),
                 })
+    for word in mixed_script_words(text):
+        warnings.append({
+            "forbidden_ru": word,
+            "preferred_ru": "слово целиком одним алфавитом",
+            "source_terms": "смешение латиницы и кириллицы",
+        })
     return warnings
+
+
+_LETTER_RUN = re.compile(r"[A-Za-zА-Яа-яЁё]+")
+_LATIN = re.compile(r"[A-Za-z]")
+_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+
+def mixed_script_words(text: str) -> list[str]:
+    """Слова, где латиница и кириллица смешаны без дефиса: «granularными», «Тупinамba».
+
+    Такое слово — всегда брак перевода (латинский корень с русским окончанием, ошибка
+    транслитерации, латинская «c» внутри русского слова), и словарь его не поймает:
+    термина под каждое английское слово в нём нет. «LNG-проект» и «CO2» не задевает:
+    дефис и цифра делят слово на части.
+    """
+    found: list[str] = []
+    for match in _LETTER_RUN.finditer(text or ""):
+        word = match.group(0)
+        if _LATIN.search(word) and _CYRILLIC.search(word) and word not in found:
+            found.append(word)
+    return found
 
 
 def validate_glossary() -> list[str]:
@@ -138,6 +170,11 @@ def validate_glossary() -> list[str]:
                 re.compile(pattern)
             except re.error as exc:
                 errors.append(f"{prefix}: плохая forbidden_pattern '{pattern}': {exc}")
+        for pattern in term.warn_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                errors.append(f"{prefix}: плохая warn_pattern '{pattern}': {exc}")
     for index, (pattern, _replacement) in enumerate(PHRASE_REPAIRS, start=1):
         try:
             re.compile(pattern)

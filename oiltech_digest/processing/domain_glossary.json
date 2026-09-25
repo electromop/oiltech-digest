@@ -23,6 +23,14 @@
       "note": "Workover в нефтегазовом контексте — КРС."
     },
     {
+      "source_terms": ["spud", "spudded", "spudding", "spuds", "spud-in", "spud in"],
+      "preferred_ru": "забуривание",
+      "full_ru": "забуривание (начало бурения) скважины",
+      "forbidden_ru": ["спудинг"],
+      "warn_patterns": ["(?<!под\\s)\\bспуд\\w*", "\\bspud\\w*"],
+      "note": "spud a well — забурить скважину, spud date — дата забуривания; не «спуд», «спудил», «спудинг» и не латиницей (замечание заказчика 22.09)."
+    },
+    {
       "source_terms": ["enhanced oil recovery", "eor", "improved oil recovery", "ior"],
       "preferred_ru": "МУН",
       "full_ru": "методы увеличения нефтеотдачи",
@@ -179,6 +187,13 @@
     {
       "source_terms": ["condition monitoring"],
       "preferred_ru": "мониторинг состояния оборудования"
+    },
+    {
+      "source_terms": ["granular", "granularity"],
+      "preferred_ru": "детальный",
+      "full_ru": "детальный, детализированный; granular activated carbon — гранулированный активированный уголь",
+      "warn_patterns": ["\\bgranular\\w*"],
+      "note": "granular data/controls/analytics — детальные данные/настройки/аналитика; не оставлять латиницей и не склонять латинский корень (замечание заказчика 22.09)."
     }
   ],
   "phrase_repairs": [
@@ -205,7 +220,22 @@
     ["\\bэлектрическ(?:ий|ая|ое|ие)\\s+фрак(?:инг|инга|инговый|инговая|инговое|инговые)?\\b", "электрический флот ГРП"],
     ["\\bфлоубэк(?:а|ом|е)?\\s+анализ\\b", "анализ жидкости обратного притока"],
     ["\\bворковер(?:ов|а)?\\s+программ[а-я]*\\b", "программа КРС"],
-    ["\\bзавершени(?:е|я|ю|ем|и)\\s+скважин(?:ы|е|ой)?\\b", "заканчивание скважины"]
+    ["\\bзавершени(?:е|я|ю|ем|и)\\s+скважин(?:ы|е|ой)?\\b", "заканчивание скважины"],
+    ["\\bспудинг\\s+(\\S+\\s+)?начался\\b", "забуривание \\1началось"],
+    ["\\bспудирован(а|о|ы)?\\b", "забурен\\1"],
+    ["\\bспудирова(л|ла|ли|ло|ть)\\b", "забури\\1"],
+    ["\\bспуд(?:р)?(ил|ила|или|ило|ит|ят|ить|ив)\\b", "забур\\1"],
+    ["\\bспудинга\\b", "забуривания"],
+    ["\\bспудингу\\b", "забуриванию"],
+    ["\\bспудингом\\b", "забуриванием"],
+    ["\\bспудинге\\b", "забуривании"],
+    ["\\bспудинг\\b", "забуривание"],
+    ["(?<!под\\s)\\bспуда\\b", "забуривания"],
+    ["(?<!под\\s)\\bспуду\\b", "забуриванию"],
+    ["(?<!под\\s)\\bспудом\\b", "забуриванием"],
+    ["(?<!под\\s)\\bспуде\\b", "забуривании"],
+    ["(?<!под\\s)\\bспуд\\b", "забуривание"],
+    ["\\bgranular(?:н)?(ый|ая|ое|ые|ого|ой|ому|ым|ом|ых|ыми|ую)\\b", "детальн\\1"]
   ],
   "golden_cases": [
     {
@@ -284,6 +314,34 @@
       "bad": "Оптимизация bottomhole assembly повысила ROP.",
       "must_have": ["КНБК", "механическую скорость проходки"],
       "must_not": ["bottomhole assembly", "ROP"]
+    },
+    {
+      "name": "забуривание / spud (радар 22.09)",
+      "article": {"title": "Global Land Drilling Rigs Tracker", "raw_text": "In Egypt, NDC 9 spudded the vertical well T-200 targeting Abu Roash F.", "language": "en"},
+      "bad": "В Египте NDC 9 спудрил вертикальную скважину T-200.",
+      "must_have": ["забурил вертикальную скважину"],
+      "must_not": ["спуд"]
+    },
+    {
+      "name": "забуривание / spudding (карточка 28.08)",
+      "article": {"title": "Texas oil company launches a 92-well drilling program", "raw_text": "EON highlighted that the spudding, or the official start of the drilling process, of the first well began on August 24.", "language": "en"},
+      "bad": "Первые три скважины уже бурятся, спудинг первой начался 24 августа.",
+      "must_have": ["забуривание первой началось"],
+      "must_not": ["спудинг"]
+    },
+    {
+      "name": "забуривание / spud (карточка 08.09)",
+      "article": {"title": "Santos starts appraisal drilling", "raw_text": "Santos prepared the pad and key road intersection upgrades ahead of the spud.", "language": "en"},
+      "bad": "Santos подготовила площадку и обновила дорожное пересечение перед спудом.",
+      "must_have": ["перед забуриванием"],
+      "must_not": ["спудом"]
+    },
+    {
+      "name": "детальный / granular (радар 22.09)",
+      "article": {"title": "Global Land Drilling Rigs Tracker", "raw_text": "The tracker complements the international review with more granular field data.", "language": "en"},
+      "bad": "Трекер дополняет международный обзор более granularными полевыми данными.",
+      "must_have": ["более детальными полевыми данными"],
+      "must_not": ["granular"]
     }
   ]
 }
