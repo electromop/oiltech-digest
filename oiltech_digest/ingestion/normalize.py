@@ -101,8 +101,40 @@ def _normalize_url(url: str) -> str:
         return (url or "").strip().lower()
 
 
+# Параметры query, которые говорят, ОТКУДА пришёл читатель, а не КАКАЯ это статья.
+# Список — по замеру всех адресов прода 25.09, а не «из общих соображений»: `from` у РБК
+# (1935 адресов, 18 значений на одни и те же статьи), `ysclid` (Яндекс), подписи `gaa_*`;
+# остальное — общеизвестная метка рекламных систем. Всё прочее в query — номер статьи:
+# `id`, `ID`, `rid`, `news-item`, `id_4`, `ELEMENT_ID`, `itemid`…
+# Список продублирован в бэкфилле `url_key` в schema.sql — правка здесь без правки там
+# даёт красный тест (тест строит адреса из этого самого списка).
+# У `request_parser._TRACKING_PARAMS` другая задача — чистит адрес, по которому качаем
+# страницу, — и там список уже; ключу тождества это не мешает, пока там нет имён, которых
+# нет здесь.
+_TRACKING_QUERY_PARAMS = frozenset({
+    "from", "ysclid", "yclid", "ymclid", "fbclid", "gclid", "igshid", "_openstat",
+    "mc_cid", "mc_eid",
+})
+_TRACKING_QUERY_PREFIXES = ("utm_", "gaa_")
+
+
+def _identity_query(query: str) -> str:
+    """Значимая часть query: без трекинговых параметров, в порядке по алфавиту.
+
+    Пары берутся как есть, без раскодирования, — тем же правилом считает бэкфилл в
+    schema.sql, и ключи из Python и из SQL обязаны совпадать до символа.
+    """
+    pairs = []
+    for pair in query.split("&"):
+        name = pair.split("=", 1)[0]
+        if not pair or name in _TRACKING_QUERY_PARAMS or name.startswith(_TRACKING_QUERY_PREFIXES):
+            continue
+        pairs.append(pair)
+    return "&".join(sorted(pairs))
+
+
 def url_key(url: str) -> str:
-    """Ключ тождества статьи по адресу: host+path, без схемы, www, query и слэша.
+    """Ключ тождества статьи по адресу: host+path+значимый query, без схемы, www и слэша.
 
     Замер прода 13.09: за 90 дней 940 лишних статей — это ОДИН И ТОТ ЖЕ адрес в разных
     написаниях. Три причины поимённо: query-хвосты (`?from=main_lines_11` против
@@ -111,13 +143,27 @@ def url_key(url: str) -> str:
     занимала отдельную карточку в ленте — ровно то, на что жаловался заказчик
     («все 4 новости об одном»).
 
+    Query 13.09 срезался ЦЕЛИКОМ — и это склеило все статьи сайтов, где номер статьи
+    живёт в query: 25.09 у Минэнерго отбивались 25 пунктов ленты из 25, у EIA 17 из 18,
+    у РГУ Губкина 257 из 260, свежие релизы Лукойла и Новатэка — как «дубль» статьи
+    месячной давности; схема 13.09 заодно спрятала уже собранные. Теперь срезаются только
+    трекинговые параметры (`_TRACKING_QUERY_PARAMS`), остальные остаются в ключе.
+
     ОТДЕЛЬНАЯ функция, а не вызов `_normalize_url`, по двум причинам: здесь дополнительно
     снимается `www.` (тот же материал приходит и с ним, и без), и по этому ключу строится
     уникальность в БД — менять `_normalize_url` нельзя, на нём висят уже посчитанные
     `content_hash` всего корпуса.
     """
     base = _normalize_url(url)
-    return base[4:] if base.startswith("www.") else base
+    base = base[4:] if base.startswith("www.") else base
+    try:
+        parts = urlsplit((url or "").strip().lower())
+    except ValueError:
+        return base
+    if not parts.netloc:
+        return base  # не адрес — _normalize_url уже вернул строку целиком
+    identity = _identity_query(parts.query)
+    return f"{base}?{identity}" if identity else base
 
 
 def compute_content_hash(title: str, url: str) -> str:

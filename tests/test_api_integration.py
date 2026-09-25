@@ -1652,3 +1652,35 @@ def test_manual_import_holder_source_is_not_polled(isolated_db):
     source = manual_import.find_or_create_source("https://new-domain.example/news/1", None)
     assert source["enabled"] is False
     assert source["name"] == "Manual import: new-domain.example"
+
+
+def test_insert_article_keeps_articles_that_differ_only_by_query(isolated_db):
+    """25.09: ключ адреса без query склеивал ВСЕ статьи сайтов, где номер статьи — в query.
+
+    Проба на ядре: свежие релизы Лукойла `Pressrelease?rid=740957` (22.09) и `?rid=740741`
+    (18.09) скачивались, проходили предфильтр и отбивались как «дубль» релиза `?rid=739353`
+    от 26.08. Так же — вся лента Минэнерго, EIA, РГУ Губкина, релизы Новатэка.
+    """
+    from oiltech_digest.db import repository
+
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Лукойл', 'Company', 'https://lukoil.ru', TRUE, 'request') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    def add(url: str, body: str) -> bool:
+        return repository.insert_article({
+            "source_id": source_id, "title": f"Релиз {url[-6:]}", "url": url,
+            "published_at": None, "raw_text": body * 20,
+            "text_truncated": False, "language": "ru",
+            "content_hash": f"h-{url}", "image_url": None,
+        })
+
+    base = "https://lukoil.ru/PressCenter/Pressreleases/Pressrelease"
+    assert add(f"{base}?rid=739353", "Первый релиз. ") is True
+    assert add(f"{base}?rid=740957", "Второй релиз. ") is True, "другой релиз — не дубль"
+    assert add(f"{base}?rid=740741", "Третий релиз. ") is True, "другой релиз — не дубль"
+    # Трекинговый хвост к тому же релизу по-прежнему дубль.
+    assert add(f"{base}?rid=740957&utm_source=tg", "Второй релиз, другое тело. ") is False

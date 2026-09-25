@@ -785,12 +785,25 @@ CREATE INDEX IF NOT EXISTS idx_articles_pending_deletion ON articles(pending_del
 --   /topics/x против /topics/x/        (Wood Mackenzie)— хвостовой слэш
 -- Каждая копия проходила полный ИИ-конвейер заново и занимала отдельную карточку —
 -- ровно то, на что жаловался заказчик 08.09 («все 4 новости об одном»).
--- Ключ = host+path без схемы, www, query и слэша (normalize.url_key).
+-- Ключ = host+path без схемы, www и слэша + значимый query (normalize.url_key).
+-- 25.09: query сначала срезался целиком и склеил все статьи сайтов, где номер статьи
+-- живёт в query (Минэнерго ?news-item=, EIA ?id=, Лукойл ?rid=, Новатэк ?id_4=).
+-- Теперь срезаются только трекинговые параметры — тот же список, что в Python.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS url_key TEXT;
 
--- Бэкфилл: считаем тем же правилом, что и Python-функция.
+-- Бэкфилл: считаем тем же правилом, что и Python-функция (тест сверяет до символа).
 UPDATE articles
-SET url_key = rtrim(regexp_replace(regexp_replace(lower(url), '^https?://(www\.)?', ''), '[?#].*$', ''), '/')
+SET url_key = rtrim(regexp_replace(regexp_replace(lower(regexp_replace(url, '^\s+|\s+$', '', 'g')), '^https?://(www\.)?', ''), '[?#].*$', ''), '/')
+    || COALESCE('?' || (
+         SELECT string_agg(p, '&' ORDER BY p COLLATE "C")
+         FROM regexp_split_to_table(
+                substring(split_part(lower(regexp_replace(url, '^\s+|\s+$', '', 'g')), '#', 1) from '\?(.*)$'), '&') AS p
+         WHERE p <> ''
+           AND split_part(p, '=', 1) NOT IN ('from', 'ysclid', 'yclid', 'ymclid', 'fbclid', 'gclid',
+                                             'igshid', '_openstat', 'mc_cid', 'mc_eid')
+           AND split_part(p, '=', 1) NOT LIKE 'utm\_%'
+           AND split_part(p, '=', 1) NOT LIKE 'gaa\_%'
+       ), '')
 WHERE url_key IS NULL;
 
 -- Схлопывание УЖЕ накопленных дублей: оставляем самую полную копию (длиннее тело,
