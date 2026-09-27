@@ -126,13 +126,11 @@ class Shutdown:
         """Сторож аренды забирает зависшую задачу, чтобы отчитаться за неё (external_worker).
 
         (True, снимок сделанного или None) — отчитывается сторож, поток обработчика, проснувшись,
-        уже промолчит; задачи нет в реестре — тоже сторож, снимка нет. (False, None) — отчёт уже
-        у обработчика (итог в пути) или задачу вернул главный поток на остановке."""
+        уже промолчит. (False, None) — отчёт уже у обработчика (итог в пути), задачу вернул главный
+        поток на остановке или её нет в реестре: обработчик уже отчитался и вышел."""
         with self._lock:
             entry = self._jobs.get(int(job["id"]))
-            if entry is None:
-                return True, None
-            if entry.state != "working":
+            if entry is None or entry.state != "working":
                 return False, None
             entry.state = "returned"
             return True, entry.done

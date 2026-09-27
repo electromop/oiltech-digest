@@ -363,9 +363,10 @@ class LeaseKeeper:
         # сделанное на последней границе шага (worker_shutdown), как у остановки по SIGTERM.
         mine, done = worker_shutdown.SHUTDOWN.take(self.job)
         if not mine:
-            # Итог уже в пути (complete) или задачу вернул главный поток: зависания нет, а fail
-            # отсюда мог бы обогнать оплаченный итог.
-            logger.warning("external_job_stall_skipped job_id=%s — отчёт уже у обработчика", self.job.get("id"))
+            # Итог уже в пути (complete), обработчик уже вышел или задачу вернул главный поток:
+            # зависания нет, а fail отсюда мог бы обогнать оплаченный итог.
+            logger.warning("external_job_stall_skipped job_id=%s — о задаче отчитываются без сторожа",
+                           self.job.get("id"))
             return
         if str(self.job.get("kind") or "") not in contract.PARTIAL_KINDS:
             done = None  # сбор и документ частичного итога не отдают — уходят целиком, как раньше

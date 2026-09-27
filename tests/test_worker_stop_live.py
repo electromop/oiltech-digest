@@ -195,8 +195,10 @@ def test_stalled_step_hands_back_done_part_and_nothing_done_is_paid_twice(live):
                    "FROM background_jobs WHERE id = %s", (job,))[0]
 
     first_calls = live["tmp"] / "stalled.calls"
+    # Срок зависания — 3 с при шаге ~0,4 с: запас, чтобы под нагрузкой сторож не сработал раньше
+    # зависшей статьи.
     first = _worker(live, "nl-live-1", first_calls, slow=0.1, LIVE_HANG_ON="title: Живая статья 2",
-                    LIVE_STALL_SECONDS="1.5", EXTERNAL_WORKER_HEARTBEAT_SECONDS="0.2")
+                    LIVE_STALL_SECONDS="3", EXTERNAL_WORKER_HEARTBEAT_SECONDS="0.2")
     first.wait(timeout=60)
 
     status, attempts, claimed_by, lease_cleared, payload, error = state()

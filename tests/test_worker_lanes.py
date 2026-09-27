@@ -106,6 +106,7 @@ def test_hung_job_goes_back_to_queue_and_process_restarts(monkeypatch):
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
     restarted = threading.Event()
     client = _Client()
+    worker_shutdown.SHUTDOWN.track(client, dict(JOB))  # задача в работе у процесса, как в _handle_job
 
     keeper = external_worker.LeaseKeeper(client, dict(JOB), interval=0.01, stall_seconds=0.05,
                                          drain_seconds=0.1, on_deadline=restarted.set)
@@ -160,7 +161,9 @@ def _stalling(monkeypatch, kind: str, handler) -> tuple[_Client, list]:
     handler(unblock) → (модуль, имя, обработчик): шаг висит, пока тест не отпустит unblock."""
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
     monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_HEARTBEAT_SECONDS", 0.01)
-    monkeypatch.setitem(external_worker._JOB_STALL_SECONDS, kind, 0.2)
+    # Запас на медленный старт потока под нагрузкой: сработай сторож до первой границы шага —
+    # снимка ещё не было бы, и тест упал бы не по делу.
+    monkeypatch.setitem(external_worker._JOB_STALL_SECONDS, kind, 0.5)
     restarted: list = []
     monkeypatch.setattr(external_worker.os, "_exit", restarted.append)
     unblock = threading.Event()
@@ -218,16 +221,21 @@ def test_stalled_fetch_goes_back_whole_as_before(monkeypatch):
     assert client.fail_results == [None] and client.completed == []
 
 
-def test_stall_noticed_while_handler_reports_leaves_the_report_to_it(monkeypatch):
-    """Итог уже в пути (complete): fail сторожа мог бы обогнать его, и оплаченный полный итог
-    ушёл бы в повтор. Сторож не отчитывается и процесс не перезапускает — зависания нет."""
+@pytest.mark.parametrize("handler", ["reporting", "gone"])
+def test_stall_noticed_while_handler_reports_leaves_the_report_to_it(monkeypatch, handler):
+    """Итог уже в пути (complete) или обработчик уже отчитался и вышел: fail сторожа мог бы
+    обогнать оплаченный полный итог, и тот ушёл бы в повтор. Сторож не отчитывается и процесс
+    не перезапускает — зависания нет."""
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
     restarted: list = []
     monkeypatch.setattr(external_worker.os, "_exit", restarted.append)
     client = _Client()
     job = dict(JOB)
     worker_shutdown.SHUTDOWN.track(client, job)
-    assert worker_shutdown.SHUTDOWN.begin_report(job)  # поток обработчика забрал отчёт себе
+    if handler == "reporting":
+        assert worker_shutdown.SHUTDOWN.begin_report(job)  # поток обработчика забрал отчёт себе
+    else:
+        worker_shutdown.SHUTDOWN.untrack(job)  # обработчик отчитался и вышел из _handle_job
 
     keeper = external_worker.LeaseKeeper(client, job, interval=0.01, stall_seconds=0.05, drain_seconds=0.1).start()
     time.sleep(0.3)
