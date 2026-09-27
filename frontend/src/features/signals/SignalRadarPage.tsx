@@ -62,23 +62,33 @@ function formatRunMoment(value: string | null): string {
   return `${day} в ${time}`;
 }
 
+// Причина по-русски; прочее — короткий текст сервера. Код HTTP — впереди, как у 402:
+// внутри скобок плашки вторых скобок нет.
 function describeSearchError(health: SignalSearchHealth): string {
-  if (health.http_status === 402 && health.provider === "brave") {
-    return "HTTP 402 — исчерпан месячный лимит поиска Brave";
-  }
+  const code = health.http_status;
+  if (health.cause === "not_configured") return "поиск не настроен — нет ключа";
+  if (code === 402 && health.provider === "brave") return "HTTP 402 — исчерпан месячный лимит поиска Brave";
+  if (code === 429) return "HTTP 429 — превышен лимит запросов к поиску";
+  if (code != null && code >= 500 && code <= 599) return `HTTP ${code} — сервис поиска недоступен`;
+  if (health.cause === "network") return "поиск не ответил вовремя";
   return (health.first_error || "").trim();
 }
+
+// Поиск не вызывался (нет ключа, провайдер не подключён или неизвестен) — он «не выполнен»,
+// а не «не ответил».
+const SEARCH_NOT_RUN = new Set(["not_configured", "unsupported_provider"]);
 
 // Плашка только для админа: 23–27.09 поиск не отвечал ни в одной теме, задача была «ok»,
 // и пять дней этого никто не видел. После прогона без сбоев плашки нет.
 function searchHealthNotice(health: SignalSearchHealth | null): string {
   if (!health || !health.topics || !health.failed) return "";
   const when = formatRunMoment(health.run_at);
+  const verb = SEARCH_NOT_RUN.has(health.cause ?? "") ? "не выполнен" : "не ответил";
   const topicsWord = health.topics % 10 === 1 && health.topics % 100 !== 11 ? "темы" : "тем";
   const cause = describeSearchError(health);
   const noSignals = health.signals === 0 ? " Новых сигналов нет." : "";
   return (
-    `Прогон${when ? ` ${when}` : ""}: поиск не ответил в ${health.failed} из ${health.topics} ${topicsWord}` +
+    `Прогон${when ? ` ${when}` : ""}: поиск ${verb} в ${health.failed} из ${health.topics} ${topicsWord}` +
     `${cause ? ` (${cause})` : ""}.${noSignals}`
   );
 }

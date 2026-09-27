@@ -197,7 +197,8 @@ def test_core_applies_external_result_and_records_generation_run(monkeypatch):
     assert len(examples) == 2  # но в обучающие примеры идут оба
     assert finished == [(77, {"status": "ok", "result": {
         "topics": 1, "signals": 1, "returned_signals": 1,
-        "search_health": {"topics": 1, "failed": 0, "first_error": None, "http_status": None, "provider": None},
+        "search_health": {"topics": 1, "failed": 0, "first_error": None, "http_status": None, "provider": None,
+                          "cause": None},
     }})]
     assert summary["signals"] == 1
     assert summary["topics"][0] == {

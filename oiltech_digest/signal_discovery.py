@@ -1081,6 +1081,14 @@ def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, A
 # Поиск ответил: выдача есть или честно пуста. Остальные статусы (error, missing_api_key,
 # not_configured, unsupported_provider) — тема осталась без поиска.
 _SEARCH_ANSWERED = frozenset({"ok", "empty"})
+# Поиск не вызывался: нет ключа или провайдер не подключён (agent.search_web).
+_SEARCH_NOT_CONFIGURED = frozenset({"missing_api_key", "not_configured"})
+# Таймаут и обрыв соединения — так их пишет requests (ReadTimeout, ConnectTimeout, ConnectionError).
+_SEARCH_NETWORK_ERROR_RE = re.compile(
+    r"timed out|timeout|max retries exceeded|connection (?:refused|reset|aborted|broken)|remote ?disconnected"
+    r"|failed to resolve",
+    re.I,
+)
 # «запрос: HTTP 402 {тело}» — так ошибки складывают agent._search_brave и _search_serpapi.
 _SEARCH_HTTP_ERROR_RE = re.compile(r"(?:^|: )HTTP (\d{3})\b ?(.*)", re.S)
 _SEARCH_ERROR_FIELDS = ("detail", "message", "code")
@@ -1157,7 +1165,8 @@ def _search_failed(web_search: dict[str, Any] | None) -> bool:
 
 def _search_health(topic_results: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Здоровье поиска прогона: в скольких темах искали, во скольких поиск не ответил,
-    первая ошибка (её код HTTP и провайдер — для текста админу). Без веб-поиска — None."""
+    первая ошибка, её код HTTP, провайдер и причина — по ним экран пишет админу по-русски.
+    Без веб-поиска — None."""
     searched = [row for row in topic_results if row.get("web_search")]
     if not searched:
         return None
@@ -1171,7 +1180,26 @@ def _search_health(topic_results: list[dict[str, Any]]) -> dict[str, Any] | None
         "first_error": first_error,
         "http_status": int(code.group(1)) if code else None,
         "provider": (first.get("web_search") or {}).get("provider"),
+        "cause": _search_failure_cause(first.get("web_search") or {}, http=code is not None) if failed else None,
     }
+
+
+def _search_failure_cause(web_search: dict[str, Any], *, http: bool) -> str:
+    """not_configured — поиск не вызывался (нет ключа, провайдер не подключён);
+    unsupported_provider — в настройке неизвестный провайдер; http — ответ с кодом ошибки;
+    network — таймаут или обрыв соединения; other — прочее.
+
+    Сеть узнаём по сырой строке ошибки: в first_error она обрезана до 160 знаков, и слова
+    «Connection refused» / «Failed to resolve» у requests стоят дальше."""
+    status = str(web_search.get("status") or "")
+    if status in _SEARCH_NOT_CONFIGURED:
+        return "not_configured"
+    if status == "unsupported_provider":
+        return "unsupported_provider"
+    if http:
+        return "http"
+    errors = [str(item) for item in web_search.get("errors") or [] if str(item).strip()]
+    return "network" if errors and _SEARCH_NETWORK_ERROR_RE.search(errors[0]) else "other"
 
 
 def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> None:

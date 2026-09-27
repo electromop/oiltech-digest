@@ -130,7 +130,12 @@ def _daily_on_site(monkeypatch, *, force: bool = False) -> dict:
 def _daily_through_worker(monkeypatch, *, force: bool = False) -> dict:
     """Ежедневный прогон через NL: выдача со снимком → прогон без базы → complete."""
     _route(monkeypatch, external=True)
-    background_jobs.enqueue_daily_signal_discovery(force=force)
+    job_id = int(background_jobs.enqueue_daily_signal_discovery(force=force)["job"]["id"])
+    # Часы базы в ВМ colima спешат и откатываются рывками (28.09: до 1,1 с назад за 20 с):
+    # задача с run_after = now() на миг «из будущего», и выдача её не видит — тест плавал.
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE background_jobs SET run_after = now() - interval '1 minute' WHERE id = %s", (job_id,))
+        conn.commit()
     client = TestClient(api.app)
     claimed = client.post(
         "/api/external-worker/claim",
@@ -182,7 +187,7 @@ def test_brave_402_gives_the_same_topic_summary_and_run_on_both_paths(radar, mon
     assert run["status"] == "failed"
     assert run["result"]["search_health"] == {
         "topics": 3, "failed": 3, "first_error": "HTTP 402 Usage limit exceeded",
-        "http_status": 402, "provider": "brave",
+        "http_status": 402, "provider": "brave", "cause": "http",
     }
     assert run["result"]["signals"] == 0
     assert run["error_message"] == "Поиск не ответил во всех темах прогона (3 из 3): HTTP 402 Usage limit exceeded"
@@ -214,12 +219,95 @@ def test_partial_search_failure_keeps_run_ok_with_health(radar, monkeypatch):
     assert run["error_message"] is None
     assert run["result"]["search_health"] == {
         "topics": 3, "failed": 2, "first_error": "HTTP 402 Usage limit exceeded",
-        "http_status": 402, "provider": "brave",
+        "http_status": 402, "provider": "brave", "cause": "http",
     }
     # Тема, где поиск ответил пусто, — не сбой.
     assert [row["web_error"] for row in job["result_json"]["applied"]["topics"]] == [
         "HTTP 402 Usage limit exceeded", "HTTP 402 Usage limit exceeded", None,
     ]
+
+
+# Настоящие тексты исключений requests 2.32 / urllib3 2.7 (сняты 28.09 локально: сервер без
+# ответа, закрытый порт, имя .invalid) — такими их кладёт в errors agent._search_brave.
+READ_TIMEOUT = "HTTPConnectionPool(host='127.0.0.1', port=51630): Read timed out. (read timeout=0.5)"
+REFUSED = (
+    "HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded with url: /res/v1/web/search?q=x "
+    "(Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=9): Failed to establish a new "
+    "connection: [Errno 61] Connection refused\"))"
+)
+NO_DNS = (
+    "HTTPConnectionPool(host='api.search.brave.invalid', port=80): Max retries exceeded with url: "
+    "/res/v1/web/search?q=x (Caused by NameResolutionError(\"HTTPConnection(host='api.search.brave.invalid', "
+    "port=80): Failed to resolve 'api.search.brave.invalid' ([Errno 8] nodename nor servname provided, or not known)\"))"
+)
+
+
+@pytest.mark.parametrize(
+    ("web_search", "cause"),
+    [
+        ({"status": "error", "provider": "brave", "errors": [f"q: HTTP 402 {BRAVE_402}"]}, "http"),
+        ({"status": "missing_api_key", "provider": "brave", "reason": "BRAVE_SEARCH_API_KEY is empty"}, "not_configured"),
+        ({"status": "not_configured", "provider": "none", "reason": "search provider is not connected yet"},
+         "not_configured"),
+        ({"status": "unsupported_provider", "provider": "brvae", "reason": "unsupported SOURCE_DISCOVERY_SEARCH_PROVIDER=brvae"},
+         "unsupported_provider"),
+        # Таймаут и обрыв соединения: слова причины — за 160 знаками first_error, смотрим сырую строку.
+        ({"status": "error", "provider": "brave", "errors": [f"q: {READ_TIMEOUT}"]}, "network"),
+        ({"status": "error", "provider": "brave", "errors": [f"q: {REFUSED}"]}, "network"),
+        ({"status": "error", "provider": "brave", "errors": [f"q: {NO_DNS}"]}, "network"),
+        # 504 с «Timeout» в теле — это ответ сервиса, а не сеть.
+        ({"status": "error", "provider": "brave", "errors": ["q: HTTP 504 Gateway Timeout"]}, "http"),
+        ({"status": "error", "provider": "brave", "errors": ["q: Expecting value: line 1 column 1 (char 0)"]}, "other"),
+    ],
+)
+def test_run_health_names_the_cause_of_the_first_failure(web_search, cause):
+    rows = [
+        {"topic": "Бурение", "web_search": {"status": "ok", "provider": "brave"}, "web_error": None},
+        {"topic": "Экология", "web_search": web_search, "web_error": signal_discovery._search_error_summary(web_search)},
+    ]
+
+    health = signal_discovery._search_health(rows)
+
+    assert (health["failed"], health["cause"]) == (1, cause)
+
+
+def test_run_health_has_no_cause_when_search_answered():
+    rows = [{"topic": "Бурение", "web_search": {"status": "empty", "provider": "brave"}, "web_error": None}]
+
+    assert signal_discovery._search_health(rows)["cause"] is None
+
+
+@pytest.mark.parametrize(
+    ("setup", "expected"),
+    [
+        ("no_key", {"cause": "not_configured", "http_status": None, "first_error": "BRAVE_SEARCH_API_KEY is empty"}),
+        ("timeout", {"cause": "network", "http_status": None, "first_error": READ_TIMEOUT}),
+        ("rate_limit", {"cause": "http", "http_status": 429, "first_error": "HTTP 429 Request rate limit exceeded for plan"}),
+        ("unavailable", {"cause": "http", "http_status": 503, "first_error": "HTTP 503 Service Unavailable"}),
+    ],
+)
+def test_real_brave_failures_reach_the_run_health(radar, monkeypatch, setup, expected):
+    import requests
+
+    if setup == "no_key":
+        monkeypatch.setattr(config, "BRAVE_SEARCH_API_KEY", "")
+    elif setup == "timeout":
+        def timeout(query):
+            raise requests.exceptions.ReadTimeout(READ_TIMEOUT)
+
+        _brave_answers(monkeypatch, timeout)
+    elif setup == "rate_limit":
+        body = {"type": "ErrorResponse", "error": {"status": 429, "code": "RATE_LIMITED",
+                                                   "detail": "Request rate limit exceeded for plan."}}
+        _brave_answers(monkeypatch, lambda query: (429, json.dumps(body)))
+    else:
+        _brave_answers(monkeypatch, lambda query: (503, "Service Unavailable"))
+
+    job = _daily_through_worker(monkeypatch)
+
+    health = _generation_run(int(job["id"]))["result"]["search_health"]
+    assert {key: health[key] for key in expected} == expected
+    assert (health["topics"], health["failed"]) == (3, 3)
 
 
 def _get(path: str, user: dict):
@@ -241,9 +329,9 @@ def test_search_health_goes_to_admin_only(radar, monkeypatch):
     health = admin.json()["search_health"]
     assert health["run_at"] == job["started_at"].isoformat()
     assert {key: health[key] for key in ("status", "signals", "topics", "failed", "first_error", "http_status",
-                                         "provider", "job_id")} == {
-        "status": "failed", "signals": 0, "topics": 3, "failed": 3,
-        "first_error": "HTTP 402 Usage limit exceeded", "http_status": 402, "provider": "brave", "job_id": job["id"],
+                                         "provider", "cause", "job_id")} == {
+        "status": "failed", "signals": 0, "topics": 3, "failed": 3, "first_error": "HTTP 402 Usage limit exceeded",
+        "http_status": 402, "provider": "brave", "cause": "http", "job_id": job["id"],
     }
 
     read: list = []
