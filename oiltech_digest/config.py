@@ -64,6 +64,11 @@ BACKGROUND_JOB_RETRY_BASE_SECONDS = int(os.environ.get("BACKGROUND_JOB_RETRY_BAS
 EXPORT_JOB_RETENTION_DAYS = int(os.environ.get("EXPORT_JOB_RETENTION_DAYS", "30"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
+# Сборка кода: git SHA, вшитый при сборке образа (Dockerfile, ARG GIT_SHA). Воркер NL
+# сообщает её ядру вместе с номером контракта (contract.py) — «пересобран ли NL» видно
+# в check-lanes, а не по косвенным полям.
+OILTECH_BUILD = os.environ.get("OILTECH_BUILD", "").strip() or "unknown"
+
 # --- Геораспределенное исполнение ---
 # По умолчанию внешний контур выключен: routing helper сохраняет старые локальные
 # очереди, чтобы обновление кода не остановило текущий single-server deployment.
@@ -91,6 +96,10 @@ EXTERNAL_WORKER_CAPABILITIES = [
     if item.strip()
 ]
 EXTERNAL_WORKER_POLL_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_SECONDS", "3"))
+# Пустая очередь — пауза растёт от EXTERNAL_WORKER_POLL_SECONDS вдвое до этого потолка и
+# сбрасывается на первой задаче. 21.09 при постоянных 3 с шесть потоков NL слали ядру
+# 582 claim за 5 мин простоя; с потолком 30 с — около 60, новая задача ждёт не дольше 30 с.
+EXTERNAL_WORKER_POLL_MAX_SECONDS = float(os.environ.get("EXTERNAL_WORKER_POLL_MAX_SECONDS", "30"))
 # Потоков выдачи в одном процессе воркера: полоса сбора запросом — I/O, ей хватает
 # потоков (http_client потокобезопасен: пауза на хост под замком, сессия на поток).
 # Браузер и ИИ — по одному.
@@ -101,6 +110,14 @@ EXTERNAL_WORKER_HEARTBEAT_SECONDS = float(os.environ.get("EXTERNAL_WORKER_HEARTB
 # Сколько задача может не подавать признаков продвижения, если для её вида нет своего
 # предела (external_worker._JOB_STALL_SECONDS). Не общее время: большая пачка идёт долго.
 EXTERNAL_JOB_MAX_SECONDS = int(os.environ.get("EXTERNAL_JOB_MAX_SECONDS", "1200"))
+# Мягкая остановка воркера (SIGTERM при выкате NL): столько секунд задачам в работе на то,
+# чтобы закончить. Дальше обработчик останавливается на ближайшем шаге (статья, страница,
+# кусок документа) и возвращает задачу ядру с тем, что успел.
+EXTERNAL_WORKER_STOP_GRACE_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_GRACE_SECONDS", "30"))
+# Сколько ещё ждать, пока шаг дойдёт до границы: не дошёл (висит в вызове модели) —
+# задачу возвращает сам процесс, без частичного итога. stop_grace_period контейнеров в
+# docker-compose.external-worker.yml обязан покрывать оба срока с запасом на запросы к ядру.
+EXTERNAL_WORKER_STOP_STEP_SECONDS = float(os.environ.get("EXTERNAL_WORKER_STOP_STEP_SECONDS", "60"))
 
 # --- Прокси для парсинга (residential, напр. 2captcha) ---
 # PROXY_URL — полная строка подключения: "http://user:pass@host:port"
@@ -279,6 +296,33 @@ def price_for_model(model: str | None) -> tuple[float, float]:
 # нетронутую. Пользователь видел изменения в превью и не видел в выгрузке. Плюс любая
 # пересборка образа возвращала git-версию поверх правок.
 DIGEST_BRANDING_PATH = os.environ.get("DIGEST_BRANDING_PATH", "").strip()
+
+# --- Окно месяца ленты (ADR 0001, п. 6; oiltech_digest/feed_window.py) ---
+# Пока день месяца по МСК меньше этого числа, лента показывает ещё и прошлый месяц:
+# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09 — 5.
+# Держим в пределах 1..28: 1 — прошлый месяц не виден никогда, больше 28 — виден
+# почти всегда, и окно перестаёт быть окном.
+FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", "5"))))
+
+# --- Архивные модули (ADR 0001 п. 7 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md;
+#     список утверждён владельцем 23.09) ---
+# Убраны из меню, маршрутов и контейнеров, но не удалены из кода. По умолчанию все
+# выключены. Вернуть модуль — перечислить его ключ в ARCHIVED_MODULES через запятую и
+# перезапустить app:
+#   analytics-preview — макет «Аналитика для БРБ»;
+#   tech-preview      — макет «Технологии»;
+#   backlog           — трекер задач: /tasks и /api/backlog* (сервис tasks — профиль
+#                       compose `archive`, флаг у него уже прописан).
+# У справки /help (сервис docs) кода в приложении нет: она возвращается профилем compose
+# `archive` и блоком /help* в Caddyfile. Незнакомые ключи игнорируются.
+ARCHIVED_MODULE_KEYS = ("analytics-preview", "tech-preview", "backlog")
+
+
+def parse_archived_modules(raw: str) -> frozenset[str]:
+    return frozenset(key for key in (item.strip() for item in raw.split(",")) if key in ARCHIVED_MODULE_KEYS)
+
+
+ARCHIVED_MODULES = parse_archived_modules(os.environ.get("ARCHIVED_MODULES", ""))
 
 # --- Auth ---
 AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "oiltech_session")

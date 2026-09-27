@@ -3,6 +3,8 @@ from oiltech_digest.processing.domain_glossary import (
     enforce_glossary_text,
     glossary_golden_cases,
     glossary_prompt_block,
+    mixed_script_words,
+    normalize_scripts,
     run_terminology_eval,
     terminology_warnings,
     validate_glossary,
@@ -277,10 +279,15 @@ def test_glossary_enforces_inflected_bad_terms():
     assert "ворковер" not in summary
 
 
-def test_glossary_catches_reservoir_and_stimulation_calques():
+def test_glossary_catches_stimulation_and_only_flags_reservoir():
+    """«Резервуар» без автозамены (решение владельца 25.09): в русском тексте это почти
+    всегда ёмкость, а замена не держала падеж («с качественным пласт»). Модели — подсказка,
+    аудиту — находка, если в исходнике reservoir и нет ёмкостей."""
+
     class BadTranslatorClient:
         def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
             assert "preferred_ru: пласт" in user_input
+            assert "резервуар — только ёмкость" in user_input
             assert "preferred_ru: интенсификация притока" in user_input
             return AIResponse(
                 data={"summary": "Оператор провёл стимуляцию скважины для резервуара."},
@@ -294,10 +301,247 @@ def test_glossary_catches_reservoir_and_stimulation_calques():
 
     response = pipeline.summarize_article(article, BadTranslatorClient())
 
-    assert "провёл интенсификацию притока" in response.data["summary"]
-    assert "для пласта" in response.data["summary"]
-    assert "стимуляция скважины" not in response.data["summary"]
-    assert "резервуар" not in response.data["summary"]
+    assert response.data["summary"] == "Оператор провёл интенсификацию притока для резервуара."
+    assert [w["forbidden_ru"] for w in terminology_warnings(response.data["summary"], article)] == [r"\bрезервуар\w*"]
+
+
+def test_glossary_keeps_storage_tanks_as_reservoirs():
+    lng = {"title": "Argent LNG selects CB&I", "raw_text": "Three full containment LNG storage tanks; gas from the reservoir."}
+    refinery = {"title": "Пожар на нефтебазе", "raw_text": "Горят резервуары с топливом.", "language": "ru"}
+
+    text = "CB&I станет подрядчиком EPC для трёх резервуаров полного ограждения."
+
+    assert enforce_glossary_text(text, lng) == text
+    assert terminology_warnings(text, lng) == []
+    assert terminology_warnings("Горят резервуары с топливом.", refinery) == []
+
+
+def test_normalize_scripts_fixes_twins_and_glue_but_keeps_brands():
+    fixed = {
+        "Карачаганакa": "Карачаганака",
+        "вхoдит в 1-гo": "входит в 1-го",
+        "Cарыарка": "Сарыарка",
+        "подписала МoU, ОPEX и СCS": "подписала MoU, OPEX и CCS",
+        "MГП": "МГП",
+        "присутствиеHoneywell вPermian": "присутствие Honeywell в Permian",
+        "СШАChina": "США China",
+        "в Казаниhttps://example.ru": "в Казани https://example.ru",
+    }
+    for bad, good in fixed.items():
+        assert normalize_scripts(bad) == good, bad
+    # Бренды, единицы и настоящий полуперевод не трогаем. «Орinoco»: кириллическая «р» здесь —
+    # звук «r», замена по виду дала бы «Opinoco».
+    for kept in ("КазМунайГаз", "кВт", "ExxonMobil", "LNG-проект", "CO2", "Türkiye", "Орinoco", "электроэнergyю"):
+        assert normalize_scripts(kept) == kept, kept
+    assert mixed_script_words(normalize_scripts("Орinoco и электроэнergyю")) == ["Орinoco", "электроэнergyю"]
+
+
+def test_normalize_scripts_splits_glue_before_fixing_twins():
+    """Ревью 25.09: двойники раньше склейки делали «сExxonMobil» → «cExxonMobil» — стык пропадал,
+    а с ним находка аудита и отбор на перегенерацию."""
+    for glued, split in {
+        "совместно сExxonMobil": "совместно с ExxonMobil",
+        "а также аBP": "а также а BP",
+        "торги наMOEX": "торги на MOEX",
+        "проект оCCS": "проект о CCS",
+        "кредит МТСBank": "кредит МТС Bank",
+        "вхoдитHoneywell": "входит Honeywell",
+    }.items():
+        assert normalize_scripts(glued) == split, glued
+
+
+def test_latin_twins_in_russian_words_are_fixed_by_look():
+    # Латиница в русском слове — буква, взятая по виду: 9 из 12 таких замен на проде дали
+    # известное слово («выводy», «Министp»). Обратно (кириллица в латинском) — только вид+звук.
+    for bad, good in {"Pоснефть": "Роснефть", "yправление": "управление", "Hовак": "Новак",
+                      "выводy": "выводу", "Министp": "Министр", "ПAO": "ПАО", "Cпрос": "Спрос"}.items():
+        assert normalize_scripts(bad) == good, bad
+
+
+def test_allowed_mixed_script_brands_are_left_alone():
+    # В другом падеже тоже: бренд узнаётся по началу до стыка алфавитов.
+    for brand in ("PROНЕФТЬ", "PROНефть", "Farш", "PROНЕФТИ", "Dostaевского"):
+        assert normalize_scripts(f"журнал {brand} пишет") == f"журнал {brand} пишет"
+        assert mixed_script_words(brand) == []
+    # Бренд узнаётся по слову без окончания, а не по первым буквам: «Dостаевский» ≠ «Dоставка».
+    assert mixed_script_words("Dосрочно и Dоставка") == ["Dосрочно", "Dоставка"]
+
+
+def test_single_twin_inside_a_word_is_fixed_not_cut():
+    """Ревью 27.09: склейка раньше двойников резала слово по одиночной чужой букве —
+    «КазMунайГаз» → «Каз МунайГаз», и детектор слово больше не видел."""
+    for bad, good in {
+        "КазMунайГаз": "КазМунайГаз",
+        "ExxonМobil": "ExxonMobil",
+        "ИнтерPАО": "ИнтерРАО",
+        "мощность 5 MВт": "мощность 5 МВт",
+        "4,9 kВт": "4,9 кВт",
+        "4,9 кBт": "4,9 кВт",
+    }.items():
+        assert normalize_scripts(bad) == good, bad
+
+
+def test_single_latin_letter_word_is_cut_from_a_long_russian_word():
+    """Проверка правок 27.09: одна латинская буква перед русским словом — слово («B2B»,
+    «Plan B»), если справа длинное слово; перед коротким — двойник в единице («MПа»)."""
+    for glued, split in {
+        "B2BПлатформа": "B2B Платформа",
+        "E&PКомпании": "E&P Компании",
+        "Plan BКомпания": "Plan B Компания",
+        "планBКомпания": "план B Компания",
+        "5GПрезидент": "5G Президент",
+        "давление 20 MПа": "давление 20 МПа",
+        "выработка 5 MВтч": "выработка 5 МВтч",
+    }.items():
+        assert normalize_scripts(glued) == split, glued
+
+
+def test_latin_abbreviation_with_russian_ending_is_not_turned_cyrillic():
+    """Ревью 27.09: P, H, B по виду делали из аббревиатуры кириллицу — «BOPы» → «ВОРы».
+    Такое слово остаётся смешанным и уходит на повтор, а не молча портится. Слово капсом —
+    двойники, по большинству: «СЕКТOP» не уходит в латиницу, «HOBATЭК» чинится."""
+    for kept in ("BOPы", "EPCконтракт", "OPECстраны"):
+        assert normalize_scripts(kept) == kept, kept
+        assert mixed_script_words(kept) == [kept]
+    assert normalize_scripts("ПAO и ОPEX") == "ПАО и OPEX"
+    for bad, good in {"СЕКТOP": "СЕКТОР", "МАСТEP": "МАСТЕР", "ТОМСКHEФТЬ": "ТОМСКНЕФТЬ",
+                      "HOBATЭК": "НОВАТЭК", "POCHEФТЬ": "РОСНЕФТЬ"}.items():
+        assert normalize_scripts(bad) == good, bad
+
+
+def test_replacements_see_every_article_term_not_only_the_prompt_dozen():
+    """Проверка правок 27.09: словарь брал 12 первых терминов статьи (длина подсказки модели),
+    а offshore в нём 16-й — в длинной статье замены «оффшор» не срабатывали."""
+    article = {
+        "title": "Offshore program",
+        "raw_text": "completion, workover, spudded, ESP, drilling mud, MPD, MWD, LWD, coiled tubing, "
+                    "subsea tieback, flowback, produced water, offshore",
+    }
+
+    assert enforce_glossary_text("Оффшорная установка работает на оффшоре.", article) == "Шельфовая установка работает на шельфе."
+
+
+def test_completion_repair_needs_the_term_and_keeps_adjectives():
+    """Ревью 27.09: «скважин[а-я]*» ловил прилагательное, а находка аудита включала замену
+    в любой статье — «завершение скважины» в русской заметке не калька."""
+    completion = {"title": "Well completion", "raw_text": "After well completion the field started."}
+    lng = {"title": "LNG plant", "raw_text": "LNG capacity grows."}
+
+    assert enforce_glossary_text("После завершения скважинных испытаний завершения скважин ждут.", completion) == (
+        "После завершения скважинных испытаний заканчивания скважин ждут."
+    )
+    assert enforce_glossary_text("После завершения скважины началась добыча.", lng) == "После завершения скважины началась добыча."
+
+
+def test_offshore_repairs_only_in_offshore_articles_and_never_for_tax_havens():
+    """Ревью 27.09: замены «оффшор» были общими — «зарегистрирован в оффшоре на Кипре» в
+    статье про СПГ становилось «в шельфе». Существительное многозначно — только аудит."""
+    lng = {"title": "LNG plant", "raw_text": "LNG capacity grows."}
+    offshore = {"title": "Offshore drilling", "raw_text": "Offshore drilling expands."}
+    tax = "Компания зарегистрирована в оффшоре на Кипре, танкеры принадлежат оффшорным компаниям."
+
+    assert enforce_glossary_text(tax, lng) == tax
+    assert enforce_glossary_text(tax, offshore) == tax
+    assert [w["forbidden_ru"] for w in terminology_warnings(tax, offshore)] == [r"\bоффшор\w*"]
+    assert enforce_glossary_text("Оффшорная платформа работает на оффшоре.", offshore) == "Шельфовая платформа работает на шельфе."
+
+
+def test_preposition_before_the_repaired_vowel_word():
+    stimulation = {"title": "Well stimulation", "raw_text": "Well stimulation improved output."}
+
+    assert enforce_glossary_text("Отчёт о стимуляции скважин. О стимуляции скважины сообщили.", stimulation) == (
+        "Отчёт об интенсификации притока. Об интенсификации притока сообщили."
+    )
+
+
+def test_phrase_repairs_keep_case_and_capital():
+    """Ревью 25.09: замены ставили именительный падеж и строчную букву."""
+    context = {"title": "Offshore completion", "raw_text": "offshore well completion flowback stimulation LNG capacity"}
+    for bad, good in {
+        "После завершения скважины началась добыча.": "После заканчивания скважины началась добыча.",
+        "Оффшорная платформа работает на оффшоре.": "Шельфовая платформа работает на шельфе.",
+        "Компания провела стимуляцию скважины.": "Компания провела интенсификацию притока.",
+        "Итоги. Провел испытания.": "Итоги. Провёл испытания.",
+        "Измерили объём флоубэка.": "Измерили объём жидкости обратного притока.",
+        "Компания работает с мощностями LNG.": "Компания работает с мощностями СПГ.",
+    }.items():
+        assert enforce_glossary_text(bad, context) == good, bad
+
+
+def test_rop_is_flagged_not_replaced():
+    context = {"title": "ROP record", "raw_text": "The rate of penetration (ROP) doubled."}
+
+    text = "Рост ROP составил 20%."
+
+    assert enforce_glossary_text(text, context) == text  # именительный «механическая скорость» сломал бы падеж
+    assert [w["forbidden_ru"] for w in terminology_warnings(text, context)] == [r"\bROP\b"]
+
+
+def test_reservoir_warning_survives_ccs_storage_and_plural():
+    """Ревью 25.09: слово «storage» есть в любой статье про CCS и глушило находку."""
+    ccs = {"title": "CCS", "raw_text": "Carbon capture and storage: CO2 is injected into depleted reservoirs."}
+
+    warnings = terminology_warnings("CO2 закачают в истощённый резервуар.", ccs)
+
+    assert [w["forbidden_ru"] for w in warnings] == [r"\bрезервуар\w*"]
+
+
+def test_summary_is_asked_again_when_a_word_mixes_scripts():
+    class HalfTranslatingClient:
+        def __init__(self):
+            self.prompts = []
+
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            self.prompts.append(user_input)
+            text = "Цены на электроэнergyю выросли." if len(self.prompts) == 1 else "Цены на электроэнергию выросли."
+            return AIResponse(data={"summary": text}, model="gpt-5-mini", input_tokens=100, output_tokens=10)
+
+    client = HalfTranslatingClient()
+    response = pipeline.summarize_article({"title": "Power prices", "raw_text": "Power prices rose."}, client)
+
+    assert response.data["summary"] == "Цены на электроэнергию выросли."
+    assert len(client.prompts) == 2
+    assert "«электроэнergyю»" in client.prompts[1]
+    # Расход обоих вызовов — в одном итоге, иначе ai_processing_runs недосчитает.
+    assert (response.input_tokens, response.output_tokens) == (200, 20)
+
+
+def test_failed_retry_keeps_the_paid_first_answer():
+    """Ревью 25.09: сбой повтора (429, таймаут) ронял и первый, уже оплаченный ответ."""
+
+    class Client:
+        calls = 0
+
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            Client.calls += 1
+            if Client.calls == 2:
+                raise RuntimeError("429 Too Many Requests")
+            return AIResponse(data={"summary": "Цены на электроэнergyю выросли."}, model="fake", input_tokens=7, output_tokens=3)
+
+    response = pipeline.summarize_article({"title": "t", "raw_text": "x"}, Client())
+
+    assert response.data["summary"] == "Цены на электроэнergyю выросли."
+    assert (response.input_tokens, response.output_tokens) == (7, 3)
+
+
+def test_summary_is_not_asked_again_when_clean_or_retry_is_no_better():
+    class Client:
+        def __init__(self, answers):
+            self.answers = list(answers)
+            self.calls = 0
+
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+            self.calls += 1
+            return AIResponse(data={"summary": self.answers.pop(0)}, model="fake", input_tokens=5, output_tokens=5)
+
+    clean = Client(["Добыча выросла; вхoдит в топ."])
+    assert pipeline.summarize_article({"title": "t", "raw_text": "x"}, clean).data["summary"] == "Добыча выросла; входит в топ."
+    assert clean.calls == 1  # двойник словарь чинит сам — переспрашивать незачем
+
+    stubborn = Client(["Пермian растёт.", "Пермian и наshore растут."])
+    response = pipeline.summarize_article({"title": "t", "raw_text": "x"}, stubborn)
+    assert response.data["summary"] == "Пермian растёт."  # повтор хуже — берём первый
+    assert stubborn.calls == 2
 
 
 def test_glossary_golden_cases_pass():
@@ -309,6 +553,83 @@ def test_glossary_golden_cases_pass():
 
         assert not missing, f"{case['name']}: {fixed}; missing={missing}"
         assert not forbidden, f"{case['name']}: {fixed}; forbidden={forbidden}"
+
+
+def test_glossary_repairs_customer_spud_and_granular_remarks():
+    """Замечания заказчика 22.09 по карточке радара: «спудрил вертикальную скважину», «granular».
+
+    Радар прогоняет свой текст через enforce_glossary_text этого модуля, наши карточки —
+    тоже; аудит до правки словаря таких мест не видел вовсе (0 из 1000 статей).
+    """
+    article = {
+        "title": "Global Land Drilling Rigs Tracker",
+        "raw_text": (
+            "Silver City Drilling spudded the horizontal appraisal well Venus-2H. "
+            "NDC 9 spudded the vertical well T-200. The tracker adds more granular field data."
+        ),
+        "language": "en",
+    }
+    radar = (
+        "в Австралии Silver City Drilling спудрил горизонтальную оценочную скважину Venus-2H; "
+        "в Египте NDC 9 спудрил вертикальную скважину T-200. "
+        "Отчёт дополняет обзор более granularными полевыми данными."
+    )
+
+    assert len(terminology_warnings(radar, article)) >= 2
+    fixed = enforce_glossary_text(radar, article)
+
+    assert "Silver City Drilling забурил горизонтальную оценочную скважину Venus-2H" in fixed
+    assert "NDC 9 забурил вертикальную скважину T-200" in fixed
+    assert "более детальными полевыми данными" in fixed
+    assert terminology_warnings(fixed, article) == []
+
+
+def test_glossary_repairs_calque_without_english_term_in_context():
+    """Ревью F: у доказательства радара может не быть «spudded» — только обзор Westwood.
+
+    Калька из warn_patterns в самом тексте сама включает свой термин, иначе «спудрил»
+    пережил бы и словарь радара, и аудит (relevant = []).
+    """
+    article = {"title": "Отчёт Westwood", "raw_text": "Westwood's onshore team provides a global update on rigs."}
+
+    text = "NDC 9 спудрил вертикальную скважину T-200, данные более granularные"
+
+    assert terminology_warnings(text, article)
+    assert enforce_glossary_text(text, article) == "NDC 9 забурил вертикальную скважину T-200, данные более детальные"
+
+
+def test_glossary_repairs_spud_in_without_breaking_the_hyphen():
+    article = {"title": "Well spud", "raw_text": "The spud-in of the well took place on Monday."}
+
+    fixed = enforce_glossary_text("Дата спуд-ина — понедельник.", article)
+
+    assert fixed == "Дата забуривания — понедельник."
+
+
+def test_glossary_keeps_russian_idiom_pod_spudom():
+    article = {"title": "Well spudded", "raw_text": "The well was spudded in April.", "language": "en"}
+
+    text = "Оператор держал под спудом данные о новой скважине."
+
+    assert enforce_glossary_text(text, article) == text
+    assert terminology_warnings(text, article) == []
+
+
+def test_glossary_prompt_tells_model_how_to_render_spud():
+    block = glossary_prompt_block({"title": "Operator spuds a well", "raw_text": "The well was spudded in April."})
+
+    assert "preferred_ru: забуривание" in block
+    assert "спудинг" in block
+
+
+def test_terminology_warnings_flag_mixed_script_words():
+    """Латиница вперемешку с кириллицей в одном слове — брак без всякого словаря."""
+    article = {"title": "Brazil exploration", "raw_text": "The Tupinamba exploration well", "language": "en"}
+
+    words = [item["forbidden_ru"] for item in terminology_warnings("бурение по Тупinамba и нефтесервиc", article)]
+
+    assert words == ["Тупinамba", "нефтесервиc"]
+    assert terminology_warnings("СПГ-проект, LNG-проект, CO2 и Türkiye", article) == []
 
 
 def test_domain_glossary_definition_is_valid():

@@ -8,9 +8,12 @@
 	# JSON каталога сигналов (тысячи строк) ужимается в ~5–10 раз.
 	encode zstd gzip
 
-	handle /help* {
-		reverse_proxy docs:8000
-	}
+	# Справка /help (сервис docs) — архивный модуль с 23.09: сервис в профиле compose
+	# `archive`. Блок снят, иначе без контейнера /help отвечал бы 502. Вернуть — поднять
+	# docs профилем `archive` и раскомментировать:
+	# handle /help* {
+	# 	reverse_proxy docs:8000
+	# }
 
 	reverse_proxy app:8000
 }

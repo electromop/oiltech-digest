@@ -285,6 +285,24 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
     from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
+    if getattr(args, "scripts_only", False):
+        # Только алфавит буквы и пробел на стыке — безопасно по всему корпусу. Полный
+        # словарь по старым карточкам без ревью не гоняем: его замены ломали падеж.
+        from oiltech_digest.processing import mixed_script
+
+        report = mixed_script.repair_cards(apply=not args.dry_run, article_ids=[args.article_id] if args.article_id else None)
+        if args.json:
+            # Полный список: по нему откатывают (ревью 27.09), --show — только для экрана.
+            print(json.dumps(report, ensure_ascii=False, default=str))
+            return
+        suffix = " [dry-run]" if args.dry_run else ""
+        print(f"terminology-repair --scripts-only{suffix}: полей к исправлению={report['changed_fields']}")
+        for item in report["changes"][: args.show]:
+            print(f"  article={item['article_id']} field={item['field']}")
+            print(f"    before: {str(item['before'])[:180]}")
+            print(f"    after:  {str(item['after'])[:180]}")
+        return
+
     scanned = changed = 0
     changes = []
     for article in repository.list_article_texts_for_terminology_audit(limit=args.limit, article_id=args.article_id):
@@ -312,7 +330,7 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
                     title_ru=updates.get("title_ru"),
                 )
     if args.json:
-        print(json.dumps({"dry_run": args.dry_run, "scanned": scanned, "changed_fields": changed, "changes": changes[: args.show]}, ensure_ascii=False, default=str))
+        print(json.dumps({"dry_run": args.dry_run, "scanned": scanned, "changed_fields": changed, "changes": changes}, ensure_ascii=False, default=str))
         return
     suffix = " [dry-run]" if args.dry_run else ""
     print(f"terminology-repair{suffix}: статей проверено={scanned}, полей к исправлению={changed}")
@@ -714,6 +732,58 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
+    """Перегенерировать суть и перевод заголовка у статей со словами из двух алфавитов.
+
+    Двойники и склейку чинит `repair-terminology --scripts-only` без ИИ; здесь — полуперевод
+    («управляego», «наshore»), который лечит только новый ответ модели. Ядро запишет только
+    суть и перевод (гейт, теги и балл остаются). По умолчанию — только выборка.
+    """
+    from oiltech_digest.processing import mixed_script
+
+    selection = mixed_script.resummarize_selection(args.article_id)
+    summary_ids, title_ids = selection["summary"], selection["title"]
+    if args.limit:
+        summary_ids, title_ids = summary_ids[: args.limit], title_ids[: args.limit]
+    print(
+        f"enqueue-resummarize: суть — {len(summary_ids)} статей, только заголовок — {len(title_ids)}; "
+        f"брак в самом исходном заголовке (переводом не лечится) — {len(selection['source_title'])}"
+    )
+    if args.dry_run:
+        print(f"  [dry-run] суть: {summary_ids[:50]}")
+        print(f"  [dry-run] заголовок: {title_ids[:50]}")
+        return
+    try:
+        jobs = mixed_script.enqueue_resummarize(summary_ids, title_ids, batch_size=args.batch_size)
+    except RuntimeError as exc:
+        raise SystemExit(f"enqueue-resummarize: {exc}") from exc
+    print(f"  задач: {len(jobs)} ({jobs})")
+
+
+def _utc_datetime(value: str) -> datetime:
+    """ISO-время из командной строки; без пояса — UTC (пояс сессии базы тут ни при чём)."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def cmd_repair_telegram_titles(args: argparse.Namespace) -> None:
+    """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк) — без сети."""
+    from oiltech_digest.ingestion import telegram_titles
+
+    if not args.dry_run and not args.before:
+        raise SystemExit("repair-telegram-titles: для записи укажите --before — время выката исправленного парсера")
+    report = telegram_titles.repair(apply=not args.dry_run, collected_before=args.before)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, default=str))
+        return
+    suffix = " [dry-run]" if args.dry_run else ""
+    print(f"repair-telegram-titles{suffix}: статей Telegram={report['scanned']}, заголовков к правке={report['changed']}")
+    for change in report["changes"][: args.show]:
+        print(f"  article={change['article_id']}")
+        print(f"    before: {change['before'][:160]}")
+        print(f"    after:  {change['after']}")
+
+
 def cmd_reprints(args: argparse.Namespace) -> None:
     """Показать помеченные перепечатки или снять пометку.
 
@@ -861,6 +931,26 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     )
     for key, count in result["stats"].items():
         print(f"  {key}: {count}")
+
+
+def cmd_repair_url_keys(args: argparse.Namespace) -> None:
+    """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер — в query
+    (Минэнерго, EIA, Новатэк, Лукойл, РГУ Губкина); схема тогда же спрятала «копии».
+    По умолчанию сухой прогон: сколько ключей пересчитается и сколько статей вернётся."""
+    from oiltech_digest.ingestion import url_key_repair
+
+    result = url_key_repair.repair_url_keys(apply=args.apply)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(f"repair-url-keys: ключей пересчитать={result['key_updates']} вернуть в ленту={result['unhidden']} "
+          f"остаются скрытыми={sum(result['kept_hidden'].values())} {result['kept_hidden']} "
+          + ("[записано]" if result["apply"] else "[сухой прогон, без записи]"))
+    for source, counts in result["by_source"].items():
+        print(f"  {source}: {counts}")
+    for item in result["key_conflicts"]:
+        print(f"  ДУБЛЬ В ЛЕНТЕ: статья {item['id']} ({item['url']}) — её новый ключ уже у статьи "
+              f"{item['holder_id']}; ключ не менялся, решить вручную")
 
 
 def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
@@ -1121,11 +1211,15 @@ def cmd_source_health(args: argparse.Namespace) -> None:
 
     from oiltech_digest.db import repository
 
+    # Вердикты проверяются здесь, а не choices= парсера: сборка парсера не импортирует
+    # репозиторий (NL-воркер зовёт cli без базы), а список живёт в одном месте.
+    if args.verdict and args.verdict not in repository.SOURCE_HEALTH_VERDICTS:
+        raise SystemExit(f"--verdict: одно из {', '.join(repository.SOURCE_HEALTH_VERDICTS)}")
     rows = repository.source_health_report(stale_days=args.stale_days, limit=args.limit, verdict=args.verdict)
     counts = Counter(row["verdict"] for row in rows)
     print(
         "source-health: "
-        + ", ".join(f"{name}={counts.get(name, 0)}" for name in ("no_articles", "stale", "ok", "disabled"))
+        + ", ".join(f"{name}={counts.get(name, 0)}" for name in repository.SOURCE_HEALTH_VERDICTS)
     )
     for row in rows:
         last = row.get("last_article_at")
@@ -1456,7 +1550,12 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
     logger = logging.getLogger(__name__)
-    alerts = repository.external_queue_status().get("alerts") or []
+    status = repository.external_queue_status()
+    # Версии потребителей — каждый цикл в лог: «пересобран ли NL» видно без раскопок.
+    print(f"check-lanes: контракт ядра {status.get('contract')}")
+    for line in _consumer_lines(status.get("consumers") or []):
+        print(f"check-lanes: {line}")
+    alerts = status.get("alerts") or []
     if not alerts:
         print("check-lanes: ok")
         return
@@ -1464,6 +1563,99 @@ def cmd_check_lanes(args: argparse.Namespace) -> None:
         logger.warning("lane_alert kind=%s queue=%s count=%s", alert["kind"], alert.get("queue"), alert.get("count"))
         print(f"check-lanes: ТРЕВОГА {alert['message']}")
     raise SystemExit(2)
+
+
+def cmd_live_ai_leases(args: argparse.Namespace) -> None:
+    """Страж выката ядра: ИИ-задачи в работе. Код 3, если есть, — scripts/deploy-core.sh
+    тогда отказывается перезапускать ядро без --force."""
+    from oiltech_digest.db import repository
+
+    rows = repository.live_ai_leases()
+    if not rows:
+        print("live-ai-leases: ИИ-задач в работе нет")
+        return
+    for row in rows:
+        print(
+            f"live-ai-leases: задача {row['id']} {row['kind']} [{row['queue_name']}] "
+            f"у {row.get('claimed_by') or '—'}, {row['status']}, аренда до {row.get('lease_expires_at') or '—'}"
+        )
+    raise SystemExit(3)
+
+
+def _ago(value) -> str:
+    if value is None:
+        return "никогда"
+    moment = datetime.fromisoformat(value) if isinstance(value, str) else value
+    seconds = max(0, int((datetime.now(timezone.utc) - moment).total_seconds()))
+    if seconds < 120:
+        return f"{seconds} с назад"
+    if seconds < 7200:
+        return f"{seconds // 60} мин назад"
+    return f"{seconds // 3600} ч назад"
+
+
+def _consumer_lines(consumers: list[dict]) -> list[str]:
+    return [
+        f"{row.get('consumer')} [{', '.join(row.get('queues') or []) or '—'}] "
+        f"сборка {row.get('build') or '—'}, контракт {'—' if row.get('contract') is None else row.get('contract')}, "
+        f"запрос {_ago(row.get('last_seen_at'))}"
+        for row in consumers
+    ]
+
+
+def _fetch_consumer_versions() -> dict:
+    from oiltech_digest import config, external_worker
+
+    return external_worker.ExternalWorkerClient(
+        core_api_url=config.CORE_API_URL, token=config.EXTERNAL_WORKER_TOKEN, worker_id=config.EXTERNAL_WORKER_ID,
+        queues=config.EXTERNAL_WORKER_QUEUES, capabilities=config.EXTERNAL_WORKER_CAPABILITIES,
+    ).consumers()
+
+
+def cmd_worker_versions(args: argparse.Namespace) -> None:
+    """Версии контейнеров NL глазами ядра — на NL, где базы нет.
+
+    --self: этот контейнер обязан уже отметиться в ядре нужной сборкой и контрактом ядра
+    (код 1, если нет). Так скрипт выката NL убеждается, что перезапущенный воркер жив и
+    новый, прежде чем трогать следующий."""
+    from oiltech_digest import config, contract
+
+    data = _fetch_consumer_versions()
+    expected = data.get("contract")
+    consumers = data.get("consumers") or []
+    print(f"worker-versions: контракт ядра {expected}")
+    for line in _consumer_lines(consumers):
+        print(f"worker-versions: {line}")
+    if not args.self_check:
+        return
+    me = contract.consumer_of(config.EXTERNAL_WORKER_ID)
+    row = next((item for item in consumers if item.get("consumer") == me), None)
+    problems = []
+    if row is None:
+        problems.append(f"{me} ещё не обращался к ядру")
+    else:
+        if args.expect_build and row.get("build") != args.expect_build:
+            problems.append(f"{me}: сборка {row.get('build') or '—'}, ждём {args.expect_build}")
+        if row.get("mismatch"):  # правило одно — lanes.consumer_mismatch на ядре
+            problems.append(f"{me}: контракт {row.get('contract')}, у ядра {expected}")
+    for problem in problems:
+        print(f"worker-versions: НЕ ГОТОВО — {problem}")
+    if problems:
+        raise SystemExit(1)
+    print(f"worker-versions: {me} — новая сборка на месте")
+
+
+def cmd_scheduler_lock(args: argparse.Namespace) -> None:
+    """Запустить команду под замком планировщика: второй экземпляр ждёт, а не дублирует."""
+    from oiltech_digest import singleton
+
+    command = list(args.command or [])
+    if command[:1] == ["--"]:
+        command = command[1:]
+    key = singleton.SCHEDULER_LOCK_KEY if args.key is None else args.key
+    raise SystemExit(singleton.run_exclusive(
+        command, key=key, poll_seconds=args.poll_seconds, check_seconds=args.check_seconds,
+    ))
 
 
 def cmd_maintenance_cleanup(args: argparse.Namespace) -> None:
@@ -2277,6 +2469,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_terms.add_argument("--article-id", type=int, default=None)
     p_repair_terms.add_argument("--show", type=int, default=30)
     p_repair_terms.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_repair_terms.add_argument("--scripts-only", action="store_true",
+                                help="только двойники и склейка алфавитов (без замен словаря) — для всего корпуса")
     p_repair_terms.add_argument("--json", action="store_true")
     p_repair_terms.set_defaults(func=cmd_repair_terminology)
 
@@ -2291,6 +2485,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval_terms.add_argument("--markdown-path", default="docs/translation_terminology_work_report.md")
     p_eval_terms.add_argument("--json", action="store_true")
     p_eval_terms.set_defaults(func=cmd_eval_terminology)
+
+    p_resummarize = sub.add_parser("enqueue-resummarize", help="перегенерировать суть у статей со словами из двух алфавитов (по умолчанию выборка)")
+    p_resummarize.add_argument("--article-id", type=int, action="append", default=None)
+    p_resummarize.add_argument("--limit", type=int, default=0)
+    p_resummarize.add_argument("--batch-size", type=int, default=20)
+    p_resummarize.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_resummarize.set_defaults(func=cmd_enqueue_resummarize)
+
+    p_tg_titles = sub.add_parser("repair-telegram-titles", help="починить склеенные заголовки Telegram по сохранённым данным (по умолчанию dry-run)")
+    p_tg_titles.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_tg_titles.add_argument("--before", type=_utc_datetime, default=None,
+                             help="только статьи, собранные до этого момента (ISO, UTC) — время выката нового парсера")
+    p_tg_titles.add_argument("--show", type=int, default=30)
+    p_tg_titles.add_argument("--json", action="store_true")
+    p_tg_titles.set_defaults(func=cmd_repair_telegram_titles)
 
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)
@@ -2471,6 +2680,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_bodies.add_argument("--batch", type=int, default=25, help="статей в задаче перерасчёта")
     p_repair_bodies.add_argument("--json", action="store_true")
     p_repair_bodies.set_defaults(func=cmd_repair_article_bodies)
+
+    p_repair_keys = sub.add_parser(
+        "repair-url-keys",
+        help="пересчитать ключ адреса (номер статьи из query) и вернуть в ленту спрятанное склейкой 13.09")
+    p_repair_keys.add_argument("--apply", action="store_true", help="записать (без флага — сухой прогон)")
+    p_repair_keys.add_argument("--json", action="store_true")
+    p_repair_keys.set_defaults(func=cmd_repair_url_keys)
 
     p_set_region = sub.add_parser("set-source-region", help="проставить network_region (auto|ru|external) источникам по id")
     p_set_region.add_argument("--ids", required=True, help="список id через запятую, напр. 16,84,64")
@@ -2800,10 +3016,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_agent_loop_args(p_enqueue_agent_loop)
     p_enqueue_agent_loop.set_defaults(func=cmd_enqueue_agent_loop)
 
-    p_source_health = sub.add_parser("source-health", help="вердикты покрытия источников: ok/stale/no_articles/disabled")
+    p_source_health = sub.add_parser("source-health", help="вердикты покрытия источников: ok/stale/no_articles/disabled/archived")
     p_source_health.add_argument("--stale-days", type=int, default=3)
     p_source_health.add_argument("--limit", type=int, default=300)
-    p_source_health.add_argument("--verdict", choices=["ok", "stale", "no_articles", "disabled"], default=None)
+    p_source_health.add_argument("--verdict", default=None, help="ok / stale / no_articles / disabled / archived")
     p_source_health.set_defaults(func=cmd_source_health)
 
     p_candidates = sub.add_parser("article-candidates", help="найти статьи-кандидаты по ключевым словам")
@@ -2885,6 +3101,31 @@ def build_parser() -> argparse.ArgumentParser:
         "check-lanes", help="сторож внешних очередей: застой, нет воркера, истёкшие аренды (код 2 при тревоге)"
     )
     p_check_lanes.set_defaults(func=cmd_check_lanes)
+
+    p_live_ai = sub.add_parser(
+        "live-ai-leases", help="ИИ-задачи в работе (код 3, если есть) — страж scripts/deploy-core.sh"
+    )
+    p_live_ai.set_defaults(func=cmd_live_ai_leases)
+
+    p_worker_versions = sub.add_parser(
+        "worker-versions", help="сборки и контракты контейнеров NL глазами ядра (запускать на NL)"
+    )
+    p_worker_versions.add_argument("--self", dest="self_check", action="store_true",
+                                   help="проверить свой контейнер (EXTERNAL_WORKER_ID); код 1, если не готов")
+    p_worker_versions.add_argument("--expect-build", default=None, help="ожидаемая сборка (git SHA)")
+    p_worker_versions.set_defaults(func=cmd_worker_versions)
+
+    p_scheduler_lock = sub.add_parser(
+        "scheduler-lock",
+        help="выполнить команду под advisory lock планировщика; второй экземпляр пишет в лог и ждёт",
+    )
+    p_scheduler_lock.add_argument("--key", type=int, default=None,
+                                  help="ключ замка (по умолчанию — ключ планировщика; другой — только в тестах)")
+    p_scheduler_lock.add_argument("--poll-seconds", type=float, default=30.0, help="как часто пробовать взять замок")
+    p_scheduler_lock.add_argument("--check-seconds", type=float, default=30.0,
+                                  help="как часто проверять, что соединение с замком живо")
+    p_scheduler_lock.add_argument("command", nargs=argparse.REMAINDER, help="-- команда и её аргументы")
+    p_scheduler_lock.set_defaults(func=cmd_scheduler_lock)
 
     p_maintenance_cleanup = sub.add_parser(
         "maintenance-cleanup",

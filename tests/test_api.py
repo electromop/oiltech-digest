@@ -1,6 +1,17 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api
+from oiltech_digest import api, feed_window
+
+
+def _freeze_inside_month(monkeypatch, month: str) -> None:
+    """Часы — середина месяца `month`: выпуск этого месяца открыт для правки.
+
+    С 23.09 черновик выпуска прошлого месяца не сохраняется (архив — только просмотр).
+    Тесты ниже проверяют само сохранение и писались, когда их месяц был текущим."""
+    year, number = (int(part) for part in month.split("-"))
+    monkeypatch.setattr(feed_window, "_now", lambda: datetime(year, number, 15, 12, 0, tzinfo=feed_window.MSK))
 
 
 class FakeCursor:
@@ -1098,6 +1109,7 @@ def test_source_diagnose_endpoint_can_enqueue_background_job(monkeypatch):
 
 
 def test_create_monthly_digest_endpoint(monkeypatch):
+    _freeze_inside_month(monkeypatch, "2026-05")
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
@@ -1176,6 +1188,9 @@ def test_digest_content_endpoint_passes_filters(monkeypatch):
 
 
 def test_update_monthly_digest_endpoint(monkeypatch):
+    _freeze_inside_month(monkeypatch, "2026-06")
+    # Статьи выпуска — из открытого месяца (проверка «не из архива», сессия B).
+    monkeypatch.setattr(api.repository, "article_period_months", lambda ids: {"2026-06"})
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
@@ -1253,6 +1268,7 @@ def test_get_monthly_digest_endpoint_scopes_to_user(monkeypatch):
 
 
 def test_update_monthly_digest_endpoint_allows_empty_issue(monkeypatch):
+    _freeze_inside_month(monkeypatch, "2026-07")
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
@@ -1322,6 +1338,28 @@ def test_source_health_endpoint(monkeypatch):
     assert response.json() == [
         {"id": 7, "name": "Example", "verdict": "stale", "articles": 0, "stale_days": 5, "limit": 10}
     ]
+
+
+def test_source_health_endpoint_accepts_archived_verdict(monkeypatch):
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
+    seen: dict = {}
+
+    def fake_report(stale_days=3, limit=500, verdict=None):
+        seen["verdict"] = verdict
+        return []
+
+    monkeypatch.setattr(api.repository, "source_health_report", fake_report)
+    try:
+        client = TestClient(app)
+        archived = client.get("/api/source-health?verdict=archived")
+        unknown = client.get("/api/source-health?verdict=broken")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert archived.status_code == 200
+    assert seen["verdict"] == "archived"
+    assert unknown.status_code == 422
 
 
 def test_digest_branding_endpoints(monkeypatch):
@@ -2096,6 +2134,31 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
     assert response.json()["job"]["payload"]["articles"] == [{"id": 1}]
     assert response.json()["job"]["lease_token"]
     assert built_for == [10]  # статьи резервируются за выданной задачей
+
+
+def test_external_worker_claim_fails_job_with_malformed_only_instead_of_handing_it_out(monkeypatch):
+    """Ревью 27.09: битую пометку only ловила только запись — после оплаты ответа модели."""
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
+    failed = []
+    monkeypatch.setattr(api.repository, "fail_background_job", lambda job_id, message, **kwargs: failed.append((job_id, message)))
+    monkeypatch.setattr(
+        api.repository,
+        "claim_external_background_job",
+        lambda **kwargs: {"id": 12, "kind": "process_articles", "queue_name": "external-ai-bulk",
+                          "execution_region": "external", "payload_json": {"article_ids": [7], "only": "summary"}},
+    )
+
+    response = TestClient(api.app).post(
+        "/api/external-worker/claim",
+        headers={"Authorization": "Bearer secret"},
+        json={"worker_id": "eu-1", "queues": ["external-ai-bulk"], "capabilities": ["openai"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"job": None}
+    assert [job_id for job_id, _ in failed] == [12]
+    assert "only" in failed[0][1]
 
 
 def test_external_worker_claim_hydrates_external_scrape_payload(monkeypatch):

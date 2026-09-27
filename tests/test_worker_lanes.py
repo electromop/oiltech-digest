@@ -11,10 +11,15 @@ import pytest
 import requests
 import yaml
 
-from oiltech_digest import external_worker, lanes
+from oiltech_digest import external_worker, lanes, worker_shutdown
 from oiltech_digest.processing import external_ai
 
 JOB = {"id": 7, "kind": "process_articles", "lease_token": "t", "payload": {}}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_shutdown(monkeypatch):
+    monkeypatch.setattr(worker_shutdown, "SHUTDOWN", worker_shutdown.Shutdown())
 
 
 def _http_409() -> requests.HTTPError:
@@ -131,14 +136,18 @@ def test_long_batch_with_steady_progress_is_not_killed(monkeypatch):
 def test_restart_waits_for_sibling_threads_to_finish(monkeypatch):
     """os._exit посреди соседних задач рвал их здоровую работу (ревью 21.09)."""
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
-    monkeypatch.setattr(external_worker, "_INFLIGHT", 2)  # зависшая + соседняя
+    shutdown = worker_shutdown.Shutdown()
+    monkeypatch.setattr(worker_shutdown, "SHUTDOWN", shutdown)
+    sibling = {"id": 8, "kind": "scrape_source"}
+    shutdown.track(_Client(), dict(JOB))  # зависшая
+    shutdown.track(_Client(), sibling)  # и соседняя
     restarted_at = []
     keeper = external_worker.LeaseKeeper(_Client(), dict(JOB), interval=0.01, stall_seconds=0.02,
                                          drain_seconds=5, on_deadline=lambda: restarted_at.append(time.monotonic()))
     sibling_done = time.monotonic() + 0.3
     keeper.start()
     time.sleep(0.3)
-    external_worker._inflight(-1)  # соседка закончила
+    shutdown.untrack(sibling)  # соседка закончила
 
     assert _wait_until(lambda: restarted_at)
     assert restarted_at[0] >= sibling_done - 0.05
@@ -223,6 +232,75 @@ def test_claim_loop_survives_core_outage(monkeypatch):
         external_worker._claim_loop(Client(), 0.0)
 
     assert handled == [1]
+
+
+class _Idle(BaseException):
+    """Конец сценария опроса."""
+
+
+def _polling_client(answers: list):
+    class Client:
+        worker_id = "nl-ai-1"
+        claims = 0
+
+        def claim(self):
+            Client.claims += 1
+            answer = answers.pop(0)
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+
+    return Client()
+
+
+def test_idle_pause_grows_to_30_seconds_and_resets_on_first_job(monkeypatch):
+    """21.09: 582 claim за 5 мин простоя — пауза стояла 3 с всегда (сессия C, п. 4)."""
+    pauses: list[float] = []
+    monkeypatch.setattr(external_worker, "_pause", pauses.append)
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_POLL_MAX_SECONDS", 30.0)
+    monkeypatch.setattr(external_worker, "_handle_job", lambda client, job: None)
+    answers = [None] * 6 + [{"id": 1, "kind": "scrape_source"}] + [None] * 2 + [_Idle()]
+
+    with pytest.raises(_Idle):
+        external_worker._claim_loop(_polling_client(answers), 3.0)
+
+    assert pauses == [3.0, 6.0, 12.0, 24.0, 30.0, 30.0, 3.0, 6.0]
+
+
+def test_idle_nl_asks_core_about_sixty_times_in_five_minutes(monkeypatch):
+    """Модель простоя по часам: шесть потоков NL (ИИ, пересчёт, три потока сбора, браузер)."""
+    clock = {"now": 0.0}
+    claims_at: list[float] = []
+
+    def pause(seconds):
+        clock["now"] += seconds
+        if clock["now"] > 600:
+            raise _Idle
+
+    class Client:
+        worker_id = "nl-fetch-1#1"
+
+        def claim(self):
+            claims_at.append(clock["now"])
+            return None
+
+    monkeypatch.setattr(external_worker, "_pause", pause)
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_POLL_MAX_SECONDS", 30.0)
+    with pytest.raises(_Idle):
+        external_worker._claim_loop(Client(), 3.0)
+
+    per_thread = sum(1 for moment in claims_at if 300 <= moment < 600)  # вторые 5 минут простоя
+    assert 6 * per_thread <= 60  # было 6 × 100 = 600 (замер 21.09 — 582)
+
+
+def test_every_job_kind_resolves_to_a_worker_handler():
+    """Таблица обработчиков грузит модули лениво — опечатка в пути всплыла бы только на NL,
+    на первой задаче вида. Здесь каждая строка разрешается в функцию, и каждый вид любой
+    полосы есть в таблице."""
+    for kind in external_worker._HANDLERS:
+        assert callable(external_worker._handler(kind)), kind
+    served = set().union(*lanes.EXTERNAL_LANES.values())
+    assert served <= set(external_worker._HANDLERS)
 
 
 def test_every_lane_has_its_own_nl_worker():

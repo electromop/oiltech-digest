@@ -34,8 +34,12 @@ export type Source = {
 
 export type SourceHealth = {
   id: number;
-  verdict: "ok" | "stale" | "no_articles" | "disabled";
+  // archived — источник в архиве: сбор выключен и статьи скрыты из ленты. Отдельно от
+  // disabled, иначе плитки экрана (с архивом) расходились со списком (без архива).
+  verdict: "ok" | "stale" | "no_articles" | "disabled" | "archived";
   articles: number | null;
+  // Материалы за 30 дней по дате сбора. Необязательное: старый сервер его не отдаёт.
+  articles_30d?: number | null;
   last_article_at: string | null;
 };
 
@@ -655,6 +659,29 @@ export type DashboardStats = {
   sources: number;
   // Счётчики по статусам — по ВСЕЙ базе (а не по загруженной странице), пер-юзерно.
   status_counts?: Record<Article["status"], number>;
+  // Окно месяца, по которому посчитаны счётчики (и отдана лента).
+  window?: FeedWindowInfo;
+};
+
+// Окно месяца ленты (ADR 0001, п. 6): открытые месяцы «ГГГГ-ММ»; month — запрошенный
+// месяц; read_only — это архив прошлого месяца, только просмотр.
+export type FeedWindowInfo = {
+  months: string[];
+  month: string | null;
+  read_only: boolean;
+  rollover_day: number;
+};
+
+// Прошлый месяц для переключателя «Архив»: статей в месяце и сколько из них выбрано
+// «в дайджест» текущим пользователем (по нему конструктор выпуска строит архив выпусков).
+export type ArchiveMonth = {
+  month: string;
+  articles: number;
+  digest: number;
+};
+
+export type FeedWindowPayload = FeedWindowInfo & {
+  archive: ArchiveMonth[];
 };
 
 export type BacklogTaskStatus = "new" | "in_progress" | "done" | "paused" | "rejected";
@@ -735,9 +762,10 @@ export type ExternalQueueRow = {
 // Тревоги сторожа полос (lanes.py): застой, очередь без живого воркера, истёкшие аренды.
 export type LaneAlert = {
   queue: string | null;
-  kind: "stale" | "no_consumer" | "unknown_queue" | "expired_leases" | string;
+  kind: "stale" | "no_consumer" | "unknown_queue" | "expired_leases" | "contract_mismatch" | string;
   count: number;
   minutes?: number;
+  consumer?: string;
   message: string;
 };
 
@@ -753,6 +781,19 @@ export type ExternalQueueStatus = {
   };
   queues: ExternalQueueRow[];
   alerts?: LaneAlert[];
+  // Контракт версий РФ↔NL (contract.py): номер ядра и что сообщил каждый контейнер NL.
+  contract?: number;
+  consumers?: ExternalConsumer[];
+};
+
+export type ExternalConsumer = {
+  consumer: string;
+  queues: string[];
+  build: string | null;
+  contract: number | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  mismatch?: boolean;
 };
 
 export type MaintenanceCleanupResult = {
@@ -938,6 +979,9 @@ export type Tag = {
   negative_keywords_json?: string[];
   enabled: boolean;
   sort_order: number;
+  // Только на клиенте: стабильный ключ ещё не сохранённого тега (у него нет id, а
+  // позиция в списке сдвигается при удалении). Перед сохранением вырезается.
+  client_key?: string;
 };
 
 export type CreateSourcePayload = {
@@ -983,6 +1027,9 @@ export type ManualArticleImportResult = {
 export type AuthResponse = {
   ok: boolean;
   user: User;
+  // Архивные модули, включённые флагом ARCHIVED_MODULES на сервере (по умолчанию пусто):
+  // только их экраны показываются в меню и открываются по ссылке.
+  archived_modules?: string[];
 };
 
 // --- Месячная статистика платформы (раздел «Статистика», admin-only) ---
