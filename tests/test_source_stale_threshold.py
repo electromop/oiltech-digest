@@ -130,6 +130,32 @@ def test_cli_source_health_and_source_retry_use_the_same_rule(silent_sources, mo
     assert [names[source_id] for source_id in retried] == ["Silent 8 days"]
 
 
+def test_cli_prints_the_moscow_date_the_rule_counts_from(isolated_db, monkeypatch, capsys):
+    """last= в source-health — дата по Москве, как в правиле.
+
+    Сессия БД на проде в UTC, и загрузка с 00:00 до 03:00 МСК печаталась днём раньше:
+    22.09 в 01:30 МСК выходила как 21.09, 28.09 оператор насчитывал 7 дней и ждал stale,
+    а правило давало 6 — ok (повторное ревью PR #71).
+    """
+    connect = repository.get_connection
+
+    def connect_in_utc():
+        conn = connect()
+        conn.execute("SET TIME ZONE 'UTC'")  # как на проде
+        return conn
+
+    monkeypatch.setattr(repository, "get_connection", connect_in_utc)
+    with connection.get_connection() as conn:
+        _add_source(conn, "Loaded 22.09 01:30 MSK", datetime(2026, 9, 21, 22, 30, tzinfo=timezone.utc))
+        conn.commit()
+    monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 9, 28, 17, 0, tzinfo=timezone.utc))  # 20:00 МСК
+
+    cli.main(["source-health"])
+    row = capsys.readouterr().out.splitlines()[1]
+    assert row.split()[1] == "ok"
+    assert "last=2026-09-22" in row
+
+
 def test_threshold_lives_in_config_and_an_explicit_one_still_wins(silent_sources, monkeypatch, capsys):
     """Одно место правды: сменили config.SOURCE_STALE_DAYS — сменились отчёт, API и CLI.
 

@@ -1177,7 +1177,7 @@ def cmd_sources(args: argparse.Namespace) -> None:
 def cmd_source_health(args: argparse.Namespace) -> None:
     from collections import Counter
 
-    from oiltech_digest import config
+    from oiltech_digest import config, feed_window
     from oiltech_digest.db import repository
 
     # Вердикты проверяются здесь, а не choices= парсера: сборка парсера не импортирует
@@ -1194,7 +1194,9 @@ def cmd_source_health(args: argparse.Namespace) -> None:
     )
     for row in rows:
         last = row.get("last_article_at")
-        last_s = last.date().isoformat() if hasattr(last, "date") else "—"
+        # Дата по Москве, как в правиле stale: в поясе сессии БД (на проде UTC) загрузка
+        # с 00:00 до 03:00 МСК печаталась днём раньше, и дни не сходились с вердиктом.
+        last_s = last.astimezone(feed_window.MSK).date().isoformat() if hasattr(last, "astimezone") else "—"
         print(
             f"{row['id']:>4} {row['verdict']:<11} {row.get('parse_strategy') or '-':<8} "
             f"{int(row['articles'] or 0):>5} last={last_s} · {row['name']}"

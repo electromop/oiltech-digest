@@ -103,6 +103,56 @@ describe("экран «Источники»", () => {
     expect(screen.getByRole("button", { name: "Вернуть из архива" })).toBeInTheDocument();
   });
 
+  it("«дн. назад» считаются от момента загрузки, а не от перерисовки", async () => {
+    // Повторное ревью PR #71: состояние сервер считает при загрузке экрана, а раскрытие строки,
+    // поиск или опрос задач после полуночи МСК пересчитывали дни по новым суткам — «7 дн. назад»
+    // у «Работает штатно». Дни идут от загрузки, до «Обновить».
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-09-28T20:59:00Z")); // 28.09 23:59 МСК
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "/api/sources?limit=500") {
+            return Promise.resolve(
+              json([
+                { ...template, id: 7, name: "World Oil" },
+                { ...template, id: 8, name: "Quiet Source" },
+              ]),
+            );
+          }
+          if (url === "/api/source-health?limit=500") {
+            return Promise.resolve(
+              json([
+                // 22.09 00:00 МСК — 6 дней, штатно; 21.09 23:59 МСК — 7 дней, требует внимания.
+                { id: 7, verdict: "ok", articles: 5, articles_30d: 2, last_article_at: "2026-09-21T21:00:00Z" },
+                { id: 8, verdict: "stale", articles: 4, articles_30d: 1, last_article_at: "2026-09-21T20:59:00Z" },
+              ]),
+            );
+          }
+          if (url.startsWith("/api/feedback/reasons")) return Promise.resolve(json([]));
+          if (url.startsWith("/api/feedback")) return Promise.resolve(json({ ok: true, entry: null }));
+          return Promise.resolve(json({ ok: true }));
+        }),
+      );
+      const user = renderPage();
+
+      const table = await screen.findByRole("table");
+      expect(within(table).getByText("6 дн. назад")).toBeInTheDocument();
+      expect(within(table).getByText("Нет новых материалов 7 дн.")).toBeInTheDocument();
+
+      vi.setSystemTime(new Date("2026-09-28T21:01:00Z")); // 29.09 00:01 МСК, экран не обновляли
+      await user.click(screen.getByRole("button", { name: "Настроить: World Oil" }));
+
+      const after = screen.getByRole("table");
+      expect(within(after).getByText("6 дн. назад")).toBeInTheDocument();
+      expect(within(after).getByText("Нет новых материалов 7 дн.")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ссылка на архивный источник открывает архив один раз, дальше выбор за пользователем", async () => {
     // Ревью F: эффект фокуса возвращал архив после любого клика по плиткам.
     window.history.replaceState(null, "", "/?screen=sources&source_id=9");
