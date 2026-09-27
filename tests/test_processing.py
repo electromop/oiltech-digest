@@ -359,9 +359,66 @@ def test_latin_twins_in_russian_words_are_fixed_by_look():
 
 
 def test_allowed_mixed_script_brands_are_left_alone():
-    for brand in ("PROНЕФТЬ", "PROНефть", "Farш"):
+    # В другом падеже тоже: бренд узнаётся по началу до стыка алфавитов.
+    for brand in ("PROНЕФТЬ", "PROНефть", "Farш", "PROНЕФТИ", "Dostaевского"):
         assert normalize_scripts(f"журнал {brand} пишет") == f"журнал {brand} пишет"
         assert mixed_script_words(brand) == []
+
+
+def test_single_twin_inside_a_word_is_fixed_not_cut():
+    """Ревью 27.09: склейка раньше двойников резала слово по одиночной чужой букве —
+    «КазMунайГаз» → «Каз МунайГаз», и детектор слово больше не видел."""
+    for bad, good in {
+        "КазMунайГаз": "КазМунайГаз",
+        "ExxonМobil": "ExxonMobil",
+        "ИнтерPАО": "ИнтерРАО",
+        "мощность 5 MВт": "мощность 5 МВт",
+        "4,9 kВт": "4,9 кВт",
+        "4,9 кBт": "4,9 кВт",
+    }.items():
+        assert normalize_scripts(bad) == good, bad
+
+
+def test_latin_abbreviation_with_russian_ending_is_not_turned_cyrillic():
+    """Ревью 27.09: P, H, B по виду делали из аббревиатуры кириллицу — «BOPы» → «ВОРы».
+    Такое слово остаётся смешанным и уходит на повтор, а не молча портится."""
+    for kept in ("BOPы", "EPCконтракт", "OPECстраны"):
+        assert normalize_scripts(kept) == kept, kept
+        assert mixed_script_words(kept) == [kept]
+    assert normalize_scripts("ПAO и ОPEX") == "ПАО и OPEX"
+
+
+def test_completion_repair_needs_the_term_and_keeps_adjectives():
+    """Ревью 27.09: «скважин[а-я]*» ловил прилагательное, а находка аудита включала замену
+    в любой статье — «завершение скважины» в русской заметке не калька."""
+    completion = {"title": "Well completion", "raw_text": "After well completion the field started."}
+    lng = {"title": "LNG plant", "raw_text": "LNG capacity grows."}
+
+    assert enforce_glossary_text("После завершения скважинных испытаний завершения скважин ждут.", completion) == (
+        "После завершения скважинных испытаний заканчивания скважин ждут."
+    )
+    assert enforce_glossary_text("После завершения скважины началась добыча.", lng) == "После завершения скважины началась добыча."
+
+
+def test_offshore_repairs_only_in_offshore_articles_and_never_for_tax_havens():
+    """Ревью 27.09: замены «оффшор» были общими — «зарегистрирован в оффшоре на Кипре» в
+    статье про СПГ становилось «в шельфе». Существительное многозначно — только аудит."""
+    lng = {"title": "LNG plant", "raw_text": "LNG capacity grows."}
+    offshore = {"title": "Offshore drilling", "raw_text": "Offshore drilling expands."}
+    tax = "Компания зарегистрирована в оффшоре на Кипре, танкеры принадлежат оффшорным компаниям."
+
+    assert enforce_glossary_text(tax, lng) == tax
+    assert enforce_glossary_text(tax, offshore) == tax
+    assert [w["forbidden_ru"] for w in terminology_warnings(tax, offshore)] == [r"\bоффшор\w*"]
+    assert enforce_glossary_text("Оффшорная платформа работает на оффшоре.", offshore) == "Шельфовая платформа работает на шельфе."
+
+
+def test_preposition_before_the_repaired_vowel_word():
+    stimulation = {"title": "Well stimulation", "raw_text": "Well stimulation improved output."}
+
+    assert enforce_glossary_text("Отчёт о стимуляции скважин. О стимуляции скважины сообщили.", stimulation) == (
+        "Отчёт об интенсификации притока. Об интенсификации притока сообщили."
+    )
 
 
 def test_phrase_repairs_keep_case_and_capital():
@@ -369,7 +426,7 @@ def test_phrase_repairs_keep_case_and_capital():
     context = {"title": "Offshore completion", "raw_text": "offshore well completion flowback stimulation LNG capacity"}
     for bad, good in {
         "После завершения скважины началась добыча.": "После заканчивания скважины началась добыча.",
-        "Оффшорная платформа работает в оффшоре.": "Шельфовая платформа работает в шельфе.",
+        "Оффшорная платформа работает на оффшоре.": "Шельфовая платформа работает на шельфе.",
         "Компания провела стимуляцию скважины.": "Компания провела интенсификацию притока.",
         "Итоги. Провел испытания.": "Итоги. Провёл испытания.",
         "Измерили объём флоубэка.": "Измерили объём жидкости обратного притока.",

@@ -32,7 +32,9 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
     """Expand a DB-backed process_articles job into a self-contained external payload.
 
     С job_id (выдача воркеру) статьи резервируются за задачей: соседняя ИИ-полоса не
-    возьмёт те же и не оплатит их второй раз (repository.reserve_process_articles)."""
+    возьмёт те же и не оплатит их второй раз (repository.reserve_process_articles).
+    Пометка only проверяется здесь, до выдачи: при записи ответ модели уже оплачен."""
+    stages_to_write(payload.get("only"))
     article_ids = [int(item) for item in payload.get("article_ids") or []]
     limit = int(payload.get("limit") or contract.PROCESS_LIMIT_DEFAULT)
     if job_id is not None:
@@ -453,16 +455,20 @@ _STAGE_WRITERS = {
 }
 
 
+class InvalidJobPayload(ValueError):
+    """Payload задачи не исполнить ни с какой попытки — выдача воркеру её проваливает."""
+
+
 def stages_to_write(only: Any) -> frozenset[str]:
     """Какие стадии пишет ядро. None — все; иначе непустой список известных стадий.
 
     Пометку ставит enqueue-resummarize, но читается она из payload_json задачи — граница:
     строка «summary» дала бы множество букв (ничего не записать), пустой список — все
-    стадии. Ошибка здесь — ошибка кода, падаем до любой записи."""
+    стадии. Ошибка здесь — ошибка кода: падаем при выдаче и ещё раз до любой записи."""
     if only is None:
         return frozenset(PROCESS_STAGES)
     if not isinstance(only, (list, tuple)) or not only or not all(stage in PROCESS_STAGES for stage in only):
-        raise ValueError(f"only: непустой список стадий из {PROCESS_STAGES}, получено {only!r}")
+        raise InvalidJobPayload(f"only: непустой список стадий из {PROCESS_STAGES}, получено {only!r}")
     return frozenset(only)
 
 

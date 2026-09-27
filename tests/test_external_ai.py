@@ -274,6 +274,18 @@ def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
     assert regen["articles"][0]["summary"] is None
 
 
+def test_malformed_only_is_rejected_before_articles_are_reserved(monkeypatch):
+    """Ревью 27.09: пометка проверялась только при записи — когда ответ модели уже оплачен."""
+    import pytest
+
+    reserved = []
+    monkeypatch.setattr(external_ai.repository, "reserve_process_articles", lambda job_id, **kwargs: reserved.append(job_id) or [7])
+
+    with pytest.raises(external_ai.InvalidJobPayload, match="only"):
+        external_ai.build_process_articles_payload({"article_ids": [7], "only": "summary"}, job_id=3)
+    assert reserved == []
+
+
 def test_core_passes_only_from_job_payload_to_apply(monkeypatch):
     from oiltech_digest import api
 

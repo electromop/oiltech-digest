@@ -66,6 +66,33 @@ def test_brand_before_the_line_break_is_kept_whole():
     assert telegram_titles.repaired_title(title, FREQUENCY) == "Добыча на месторождениях выросла, сообщил КазМунайГаз"
 
 
+def test_longest_known_brand_before_the_line_break_is_kept():
+    """Ревью 27.09: «Газпром» известно, но строка кончается на «ГазпромБанк»."""
+    frequency = {**FREQUENCY, "газпром": 800, "газпромбанк": 60, "банк": 700}
+    title = "Кредитное соглашение подписано с ГазпромБанкПрезидент банка сообщил"
+
+    assert telegram_titles.repaired_title(title, frequency) == "Кредитное соглашение подписано с ГазпромБанк"
+
+
+def test_missing_space_after_a_short_word_is_not_a_line_break():
+    """Ревью 27.09: «добычу вЯНАО» резалось после «в» — строка не кончается предлогом."""
+    frequency = {**FREQUENCY, "в": 9000, "на": 9000, "для": 3000, "e": 50, "янао": 200, "ямале": 100}
+    for title in (
+        "Компания нарастила добычу вЯНАО на 12% за первое полугодие",
+        "Новые проекты по добыче газа запущены наЯмале в этом году",
+        "Началась сертификация аэротакси дляЯНАО и для eVTOL в этом году",
+    ):
+        assert telegram_titles.repaired_title(title, frequency) == title
+    # А короткой единицей строка кончается (прогон на проде 27.09).
+    units = {**frequency, "т": 900, "км": 700}
+    assert telegram_titles.repaired_title("Установлен кормовой блок массой 215 тМасса установки выросла", units) == (
+        "Установлен кормовой блок массой 215 т"
+    )
+    assert telegram_titles.repaired_title("ТНПА испытали для работы на глубине до 3 кмВ Санкт-Петербурге прошли", units) == (
+        "ТНПА испытали для работы на глубине до 3 км"
+    )
+
+
 def test_short_capitalized_prefix_is_a_brand_not_a_line_end():
     # «Мега» известна корпусу, но «Мега|Фон» — бренд, а не конец строки.
     title = "Оператор МегаФон запустил связь на нефтяном месторождении"

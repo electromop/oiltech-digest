@@ -292,7 +292,8 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
 
         report = mixed_script.repair_cards(apply=not args.dry_run, article_ids=[args.article_id] if args.article_id else None)
         if args.json:
-            print(json.dumps({**report, "changes": report["changes"][: args.show]}, ensure_ascii=False, default=str))
+            # Полный список: по нему откатывают (ревью 27.09), --show — только для экрана.
+            print(json.dumps(report, ensure_ascii=False, default=str))
             return
         suffix = " [dry-run]" if args.dry_run else ""
         print(f"terminology-repair --scripts-only{suffix}: полей к исправлению={report['changed_fields']}")
@@ -329,7 +330,7 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
                     title_ru=updates.get("title_ru"),
                 )
     if args.json:
-        print(json.dumps({"dry_run": args.dry_run, "scanned": scanned, "changed_fields": changed, "changes": changes[: args.show]}, ensure_ascii=False, default=str))
+        print(json.dumps({"dry_run": args.dry_run, "scanned": scanned, "changed_fields": changed, "changes": changes}, ensure_ascii=False, default=str))
         return
     suffix = " [dry-run]" if args.dry_run else ""
     print(f"terminology-repair{suffix}: статей проверено={scanned}, полей к исправлению={changed}")

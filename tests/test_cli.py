@@ -1,4 +1,5 @@
 import argparse
+import json
 
 import pytest
 
@@ -114,6 +115,17 @@ def test_enqueue_resummarize_refuses_local_pipeline(monkeypatch):
     with pytest.raises(SystemExit, match="внешний контур"):
         cli.cmd_enqueue_resummarize(_resummarize_args(dry_run=False))
     assert created == []
+
+
+def test_scripts_only_json_keeps_every_change_for_rollback(monkeypatch, capsys):
+    """Ревью 27.09: --json обрезал список до --show (30 из 185) — откатить было не по чему."""
+    changes = [{"article_id": index, "field": "summary", "before": "вхoдит", "after": "входит"} for index in range(5)]
+    monkeypatch.setattr("oiltech_digest.processing.mixed_script.repair_cards",
+                        lambda **kwargs: {"changed_fields": 5, "applied": False, "changes": changes})
+
+    cli.cmd_repair_terminology(argparse.Namespace(scripts_only=True, dry_run=True, article_id=None, json=True, show=2))
+
+    assert json.loads(capsys.readouterr().out)["changes"] == changes
 
 
 def test_repair_telegram_titles_needs_before_to_write(monkeypatch):

@@ -1251,6 +1251,31 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
     assert built_for == [10]  # статьи резервируются за выданной задачей
 
 
+def test_external_worker_claim_fails_job_with_malformed_only_instead_of_handing_it_out(monkeypatch):
+    """Ревью 27.09: битую пометку only ловила только запись — после оплаты ответа модели."""
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+    monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
+    failed = []
+    monkeypatch.setattr(api.repository, "fail_background_job", lambda job_id, message, **kwargs: failed.append((job_id, message)))
+    monkeypatch.setattr(
+        api.repository,
+        "claim_external_background_job",
+        lambda **kwargs: {"id": 12, "kind": "process_articles", "queue_name": "external-ai-bulk",
+                          "execution_region": "external", "payload_json": {"article_ids": [7], "only": "summary"}},
+    )
+
+    response = TestClient(api.app).post(
+        "/api/external-worker/claim",
+        headers={"Authorization": "Bearer secret"},
+        json={"worker_id": "eu-1", "queues": ["external-ai-bulk"], "capabilities": ["openai"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"job": None}
+    assert [job_id for job_id, _ in failed] == [12]
+    assert "only" in failed[0][1]
+
+
 def test_external_worker_claim_hydrates_external_scrape_payload(monkeypatch):
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)

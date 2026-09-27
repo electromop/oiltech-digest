@@ -28,6 +28,9 @@ class GlossaryTerm:
     # reservoir → «резервуар» — только в геологии, где статья не говорит о ёмкостях.
     source_warn_patterns: tuple[str, ...] = ()
     warn_unless_source: tuple[str, ...] = ()
+    # Замены, которые верны только в статье об этом термине: «оффшорные счета» в новости
+    # про санкции — не шельф, «завершение скважины» в русской заметке — не калька (ревью 27.09).
+    phrase_repairs: tuple[tuple[str, str], ...] = ()
 
 
 GLOSSARY_PATH = Path(os.environ.get("DOMAIN_GLOSSARY_PATH") or Path(__file__).with_name("domain_glossary.json"))
@@ -36,6 +39,10 @@ _GLOSSARY_DATA = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
 
 def _tuple(value: Any) -> tuple[str, ...]:
     return tuple(str(item) for item in (value or []) if str(item).strip())
+
+
+def _pairs(value: Any) -> tuple[tuple[str, str], ...]:
+    return tuple((str(item[0]), str(item[1])) for item in (value or []) if isinstance(item, list | tuple) and len(item) == 2)
 
 
 def _load_glossary_terms(data: dict[str, Any]) -> tuple[GlossaryTerm, ...]:
@@ -50,6 +57,7 @@ def _load_glossary_terms(data: dict[str, Any]) -> tuple[GlossaryTerm, ...]:
             warn_patterns=_tuple(item.get("warn_patterns")),
             source_warn_patterns=_tuple(item.get("source_warn_patterns")),
             warn_unless_source=_tuple(item.get("warn_unless_source")),
+            phrase_repairs=_pairs(item.get("phrase_repairs")),
         )
         for item in data.get("terms", [])
     )
@@ -59,11 +67,9 @@ GLOSSARY: tuple[GlossaryTerm, ...] = _load_glossary_terms(_GLOSSARY_DATA)
 # Настоящие слова из двух алфавитов (бренды: «Farш», «Dostaевский»): их не чинит
 # normalize_scripts и не ловит mixed_script_words, иначе модель переспрашивали бы зря.
 MIXED_SCRIPT_ALLOW: frozenset[str] = frozenset(_tuple(_GLOSSARY_DATA.get("mixed_script_allow")))
-PHRASE_REPAIRS: tuple[tuple[str, str], ...] = tuple(
-    (str(item[0]), str(item[1]))
-    for item in _GLOSSARY_DATA.get("phrase_repairs", [])
-    if isinstance(item, list | tuple) and len(item) == 2
-)
+# Однозначные кальки — чинятся в любой статье с термином словаря. Многозначные — в
+# phrase_repairs своего термина.
+PHRASE_REPAIRS: tuple[tuple[str, str], ...] = _pairs(_GLOSSARY_DATA.get("phrase_repairs"))
 
 
 def relevant_glossary_terms(article: dict, *, limit: int = 12) -> list[GlossaryTerm]:
@@ -166,39 +172,87 @@ _LAT_TO_CYR = str.maketrans("aoecxpyAOECXPHBKMTk", "аоесхруАОЕСХРН
 _CYR_TO_LAT = str.maketrans("аоесхАОЕСХКМТ", "aoecxAOECXKMT")
 _TWINS_LAT = frozenset("aoecxpyAOECXPHBKMTk")
 _TWINS_CYR = frozenset("аоесхАОЕСХКМТ")
+# Заглавные латинские буквы подряд в русском слове — аббревиатура, а не двойники, если
+# среди них двойник только по виду (P, H, B) или за ними русское окончание: «BOPы»,
+# «EPCконтракт», «OPECстраны» по виду стали бы «ВОРы», «ЕРСконтракт» (ревью 27.09).
+# «ПAO», «ТEKСТ» — двойники.
+_LATIN_CAPS = re.compile(r"[A-Z]{2,}")
+_LOOK_ONLY_CAPS = frozenset("PHB")
 # Стык алфавитов внутри слова — склейка двух слов: «присутствиеHoneywell», «вPermian»,
 # «СШАChina», «FTШвейцар». Внутри одного алфавита так не режем: «КазМунайГаз»,
-# «МосБиржа», «кВт» — настоящие слова (замер 25.09).
+# «МосБиржа», «кВт» — настоящие слова (замер 25.09). Латиница слева — от двух букв:
+# одна латинская буква перед русской — двойник («MВт», «kВт»), а не слово; кириллица —
+# и одной буквой, это предлог («сExxonMobil»).
 _SCRIPT_GLUE = re.compile(
-    r"(?<=[а-яё])(?=[A-Z])|(?<=[a-z])(?=[А-ЯЁ])|(?<=[А-ЯЁ])(?=[A-Z][a-z])|(?<=[A-Z])(?=[А-ЯЁ][а-яё])"
+    r"(?<=[а-яё])(?=[A-Z])|(?<=[A-Za-z][a-z])(?=[А-ЯЁ])"
+    r"|(?<=[А-ЯЁ])(?=[A-Z][a-z])|(?<=[A-Za-z][A-Z])(?=[А-ЯЁ][а-яё])"
 )
 _LINK_GLUE = re.compile(r"(?<=[А-Яа-яЁё])(?=https?://)")
+
+
+def _allow_stem(word: str) -> str:
+    """Начало слова до стыка алфавитов и ещё две буквы: по нему бренд узнаётся и в
+    другом падеже («PROНЕФТИ», «Dostaевского»), а не только в форме из списка."""
+    for index in range(1, len(word)):
+        if bool(_LATIN.match(word[index - 1])) != bool(_LATIN.match(word[index])):
+            return word[: index + 2]
+    return word
+
+
+_ALLOW_STEMS: tuple[str, ...] = tuple(sorted({_allow_stem(word) for word in MIXED_SCRIPT_ALLOW}))
+
+
+def _allowed_mixed(word: str) -> bool:
+    return word.startswith(_ALLOW_STEMS)
+
+
+def _single_twins(word: str) -> str:
+    """Буква-двойник, у которой с обеих сторон буквы другого алфавита, — опечатка, а не
+    стык двух слов: «КазMунайГаз», «ExxonМobil», «ИнтерPАО», «кBт». Её чиним до склейки,
+    иначе стык алфавитов разрезал бы слово: «Каз МунайГаз» (ревью 27.09)."""
+    chars = list(word)
+    for index in range(1, len(word) - 1):
+        char, before, after = word[index], word[index - 1], word[index + 1]
+        if char in _TWINS_LAT and _CYRILLIC.match(before) and _CYRILLIC.match(after):
+            chars[index] = char.translate(_LAT_TO_CYR)
+        elif char in _TWINS_CYR and _LATIN.match(before) and _LATIN.match(after):
+            chars[index] = char.translate(_CYR_TO_LAT)
+    return "".join(chars)
+
+
+def _latin_abbreviation(word: str) -> bool:
+    for match in _LATIN_CAPS.finditer(word):
+        if _LOOK_ONLY_CAPS & set(match.group(0)) or re.match(r"[а-яё]", word[match.end() : match.end() + 1]):
+            return True
+    return False
 
 
 def normalize_scripts(text: str) -> str:
     """Слово — одним алфавитом, склеенные слова разных алфавитов — через пробел.
 
-    Сначала склейка, потом двойники: иначе «сExxonMobil» стало бы «cExxonMobil» — стык
-    пропал бы, а с ним и находка аудита. Слово переводится в тот алфавит, куда можно
-    заменить ВСЕ чужие буквы двойниками: «вхoдит» → «входит», «1-гo» → «1-го», «МoU» →
-    «MoU». Можно в обе стороны — решает большинство, поровну — не трогаем. Полуперевод
-    («управляego», «наshore») так не лечится — его ловит mixed_script_words.
+    Порядок: одиночный двойник внутри слова («КазMунайГаз»), затем склейка, затем
+    двойники по частям. Склейка раньше двойников на краю слова: иначе «сExxonMobil» стало
+    бы «cExxonMobil» — стык пропал бы, а с ним и находка аудита. Слово переводится в тот
+    алфавит, куда можно заменить ВСЕ чужие буквы двойниками: «вхoдит» → «входит», «1-гo»
+    → «1-го», «МoU» → «MoU». Можно в обе стороны — решает большинство, поровну — не
+    трогаем. Полуперевод («управляego», «наshore») и аббревиатура с русским окончанием
+    («BOPы») так не лечатся — их ловит mixed_script_words.
     """
     if not text:
         return text or ""
 
     def fix_run(match: re.Match) -> str:
         run = match.group(0)
-        if run in MIXED_SCRIPT_ALLOW:
+        if _allowed_mixed(run):
             return run
-        return " ".join(one_script(word) for word in _SCRIPT_GLUE.split(run))
+        return " ".join(one_script(word) for word in _SCRIPT_GLUE.split(_single_twins(run)))
 
     def one_script(word: str) -> str:
         latin = [ch for ch in word if _LATIN.match(ch)]
         cyrillic = [ch for ch in word if _CYRILLIC.match(ch)]
         if not latin or not cyrillic:
             return word
-        to_cyrillic = all(ch in _TWINS_LAT for ch in latin)
+        to_cyrillic = all(ch in _TWINS_LAT for ch in latin) and not _latin_abbreviation(word)
         to_latin = all(ch in _TWINS_CYR for ch in cyrillic)
         if to_cyrillic and to_latin:
             if len(latin) == len(cyrillic):
@@ -225,7 +279,7 @@ def mixed_script_words(text: str) -> list[str]:
     found: list[str] = []
     for match in _LETTER_RUN.finditer(text or ""):
         word = match.group(0)
-        if word in MIXED_SCRIPT_ALLOW or word in found:
+        if _allowed_mixed(word) or word in found:
             continue
         if _LATIN.search(word) and _CYRILLIC.search(word):
             found.append(word)
@@ -266,6 +320,11 @@ def validate_glossary() -> list[str]:
                 re.compile(pattern)
             except re.error as exc:
                 errors.append(f"{prefix}: плохая warn_pattern '{pattern}': {exc}")
+        for pattern, _replacement in term.phrase_repairs:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                errors.append(f"{prefix}: плохая phrase_repair '{pattern}': {exc}")
     for index, (pattern, _replacement) in enumerate(PHRASE_REPAIRS, start=1):
         try:
             re.compile(pattern)
@@ -371,7 +430,7 @@ def _repair_bad_phrases(text: str, terms: list[GlossaryTerm]) -> str:
     if not terms:
         return text
     result = text
-    for pattern, replacement in PHRASE_REPAIRS:
+    for pattern, replacement in (*(pair for term in terms for pair in term.phrase_repairs), *PHRASE_REPAIRS):
         result = _sub_keep_capital(pattern, replacement, result)
     return result
 
@@ -379,7 +438,9 @@ def _repair_bad_phrases(text: str, terms: list[GlossaryTerm]) -> str:
 def _polish_repaired_phrases(text: str) -> str:
     # «изучил[аи]? … → изучила» отсюда убрано (ревью 25.09): замена меняла число и род
     # глагола («изучили» → «изучила»), а смысла не чинила.
-    return _sub_keep_capital(r"\bпровел\b", "провёл", text)
+    result = _sub_keep_capital(r"\bпровел\b", "провёл", text)
+    # «о стимуляции» → «о интенсификации»: перед гласной предлог — «об».
+    return _sub_keep_capital(r"\b(о)\s+(?=интенсификаци)", r"\1б ", result)
 
 
 def _sub_keep_capital(pattern: str, replacement: str, text: str) -> str:

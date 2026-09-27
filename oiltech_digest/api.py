@@ -1406,6 +1406,10 @@ def external_worker_claim(
         # а не параллельно (иначе итог зависел бы от того, чей apply придёт последним).
         repository.defer_claimed_background_job(int(job["id"]), seconds=120)
         return {"job": None}
+    except external_ai.InvalidJobPayload as exc:
+        # Не выдаём: воркер оплатил бы ответ модели, а запись отказала бы (ревью 27.09).
+        repository.fail_background_job(int(job["id"]), f"payload: {exc}")
+        return {"job": None}
     return {"job": {**_job_payload(job), "payload": worker_payload, "lease_token": lease_token}}
 
 
