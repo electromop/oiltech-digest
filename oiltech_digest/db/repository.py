@@ -3651,14 +3651,20 @@ def sources_by_strategy() -> list[dict]:
 SOURCE_HEALTH_VERDICTS = ("no_articles", "stale", "ok", "disabled", "archived")
 
 
-def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | None = None) -> list[dict]:
+def source_health_report(stale_days: int | None = None, limit: int = 300, verdict: str | None = None) -> list[dict]:
     """Per-source article coverage verdict for operations diagnostics.
+
+    stale («Требует внимания») — последний материал собран раньше, чем stale_days × 24 ч
+    назад: окно скользящее от now(), не календарные дни. Без явного порога —
+    config.SOURCE_STALE_DAYS, одно правило для экрана, API, CLI и замеров.
 
     Архивный источник — отдельный вердикт 'archived', а не 'disabled': архив выключает
     сбор (enabled = FALSE), и раньше он попадал в «Выкл». Экран источников считал
     плитки по этому отчёту вместе с архивом, а список и счётчик в шапке — без него:
     19.09 заказчик видел на одном экране «133 источника» и «173» в каталоге.
     """
+    if stale_days is None:
+        stale_days = config.SOURCE_STALE_DAYS
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
