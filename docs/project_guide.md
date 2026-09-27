@@ -233,6 +233,7 @@ docker compose --profile pipeline up -d --build
 - `source-enable`
 - `source-add-rss`
 - `source-diagnose`
+- `source-probe` — путь сбора источника с вердиктом рубежей вставки по каждому кандидату, только чтение
 
 ### Дайджест
 

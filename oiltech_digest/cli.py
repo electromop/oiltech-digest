@@ -1243,6 +1243,27 @@ def cmd_source_diagnose(args: argparse.Namespace) -> None:
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 
+def cmd_source_probe(args: argparse.Namespace) -> None:
+    """Проба источника путём сбора: вердикт рубежей вставки по каждому кандидату.
+
+    Отвечает на «почему источник молчит» там, где source-diagnose останавливается на
+    «скачалось и прошло предфильтр»: ключ адреса занят той же или другой статьёй, то же
+    тело, адрес уже в базе. Рубежи — те же функции, что у вставки. Ничего не пишет: все
+    соединения процесса — только для чтения, запись отклонит сама база."""
+    from oiltech_digest.db import connection, repository
+    from oiltech_digest.ingestion import source_probe
+
+    with connection.read_only_process():
+        source = repository.get_source(args.source_id)
+        if source is None:
+            raise SystemExit(f"Источник не найден: {args.source_id}")
+        report = source_probe.probe_source(source)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        return
+    print(source_probe.format_report(report, rows_per_verdict=args.rows))
+
+
 def _audit_row(source: dict, diag: dict) -> dict:
     """Нормализовать вывод diagnose_source в одну компактную строку аудита."""
     probe = (diag.get("listing_probe") or diag.get("rss_probe")
@@ -2118,6 +2139,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_source_diag.add_argument("source_id", type=int)
     p_source_diag.add_argument("--limit", type=int, default=5, help="сколько кандидатов/постов проверить")
     p_source_diag.set_defaults(func=cmd_source_diagnose)
+
+    p_source_probe = sub.add_parser(
+        "source-probe",
+        help="проба источника путём сбора: вердикт рубежей вставки по каждому кандидату (ничего не пишет)")
+    p_source_probe.add_argument("source_id", type=int)
+    p_source_probe.add_argument("--json", action="store_true", help="полный отчёт в JSON: все кандидаты")
+    p_source_probe.add_argument("--rows", type=int, default=15,
+                                help="в таблице — не больше N строк на вердикт (полный список — --json)")
+    p_source_probe.set_defaults(func=cmd_source_probe)
 
     p_digest = sub.add_parser("digest-content", help="собрать digest_content.json из обработанных статей")
     p_digest.add_argument("month", help="YYYY-MM")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 import logging
@@ -3260,6 +3261,31 @@ def _plain_address(url: str | None) -> str:
     parts = urlsplit((url or "").strip().lower())
     address = f"{parts.netloc.removeprefix('www.')}{parts.path.rstrip('/')}"
     return f"{address}?{parts.query}" if parts.query else address
+
+
+@contextmanager
+def read_only_connection():
+    """Соединение только для чтения: каждый запрос — своя транзакция READ ONLY.
+
+    Автокоммит — чтобы проба не держала транзакцию, пока качает страницы: открытая
+    транзакция держит блокировку таблицы и задержала бы выкат схемы на всё это время.
+    """
+    conn = get_connection()
+    try:
+        conn.commit()  # тестовое подключение открывает транзакцию своим SET search_path
+        conn.autocommit = True
+        conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        yield conn
+    finally:
+        conn.close()
+
+
+def articles_by_urls(conn, urls: Sequence[str]) -> dict[str, dict]:
+    """Статьи по точным адресам (и скрытые) — кто держит адрес, для отчёта пробы."""
+    if not urls:
+        return {}
+    rows = conn.execute(f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE url = ANY(%s)", (list(urls),)).fetchall()
+    return {row[1]: _holder(row) for row in rows}
 
 
 def insert_article(rec: dict) -> bool:
