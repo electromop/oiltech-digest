@@ -17,6 +17,7 @@ from oiltech_digest.ingestion.dates import guess_date_text as _guess_date_from_t
 from oiltech_digest.ingestion.dates import parse_datetime as _parse_datetime
 from oiltech_digest.ingestion.listing_cards import (
     GENERIC_LINK_TEXT_RE as _GENERIC_LINK_TEXT_RE,
+    PAGE_ORDER,
     card_of as _card_of,
     fallback_title as _fallback_title,
     ordered as _ordered,
@@ -266,8 +267,11 @@ def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> li
                                 or published_at)
             seen.add(item.url)
             candidates.append((len(candidates), CandidateLink(item.url, item.title, item.score + 2, published_at)))
-    # Селектор задан человеком под эту ленту — её порядок и есть порядок свежести.
-    return _ordered(candidates, trust_page_order=True)
+    # Селектор задан человеком под эту ленту — её порядок и есть порядок свежести. С
+    # `listing_strategy='page_order'` — целиком, вместе с карточками без даты. Только
+    # здесь, а не в общем разборе: без селектора первыми на странице идут шапка и меню.
+    keep_page_order = (source.get("listing_strategy") or "").strip().lower() == PAGE_ORDER
+    return _ordered(candidates, trust_page_order=True, keep_page_order=keep_page_order)
 
 
 _TRACKING_PARAMS = {

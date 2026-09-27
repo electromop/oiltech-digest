@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 #   listing_selector — опционально; CSS/XPath карточек листинга. Нужен, когда на странице
 #     НЕСКОЛЬКО блоков ссылок и «чужой» побеждает по очкам (сквозной сайдбар общей ленты
 #     у федеральных СМИ). При заданном селекторе кандидаты берутся ТОЛЬКО из него.
+#   listing_strategy — опционально; 'page_order' = лента, выбранная селектором, уже идёт
+#     от новых к старым, и её порядок не перестраивается по датам (карточка без даты
+#     не уходит за лимит). Без listing_selector/article_link_selector не действует.
 #   rss_url        — опционально; для RSS-лент с нестандартным/сменившимся URL фида.
 #   url            — опционально; для telegram/прочих с исправленным каналом/адресом.
 #   network_region — опционально ('external' = фетчить через зарубежный воркер).
@@ -369,10 +372,13 @@ def apply_overrides() -> dict:
             # ленты, а не рубрики, и видеть дату публикации.
             new_link_selector = fields.get("article_link_selector")
             new_date_selector = fields.get("article_date_selector")
+            # Порядок ленты (listing_cards.PAGE_ORDER) — поле жило в базе и админке, но не
+            # в реестре, как селекторы JPT до 13.09: прописанное, оно не доехало бы.
+            new_listing_strategy = fields.get("listing_strategy")
             want_type = fields.get("source_type")
             select = ("SELECT id, parse_strategy, listing_url, rss_url, url, network_region, "
                       "source_type, listing_selector, article_link_selector, "
-                      "article_date_selector FROM sources WHERE name = %s")
+                      "article_date_selector, listing_strategy FROM sources WHERE name = %s")
             select_params: tuple = (name,)
             if want_type is not None:
                 select += " AND source_type = %s"
@@ -395,7 +401,7 @@ def apply_overrides() -> dict:
                 )
                 continue
             (source_id, cur_strategy, cur_listing, cur_rss, cur_url, cur_region, _,
-             cur_selector, cur_link_selector, cur_date_selector) = rows[0]
+             cur_selector, cur_link_selector, cur_date_selector, cur_listing_strategy) = rows[0]
             listing_changed = new_listing is not None and (cur_listing or "") != new_listing
             rss_changed = new_rss is not None and (cur_rss or "") != new_rss
             url_changed = new_url is not None and (cur_url or "") != new_url
@@ -405,9 +411,12 @@ def apply_overrides() -> dict:
                                      and (cur_link_selector or "") != new_link_selector)
             date_selector_changed = (new_date_selector is not None
                                      and (cur_date_selector or "") != new_date_selector)
+            listing_strategy_changed = (new_listing_strategy is not None
+                                        and (cur_listing_strategy or "") != new_listing_strategy)
             if (cur_strategy == new_strategy and not listing_changed and not rss_changed
                     and not url_changed and not region_changed and not selector_changed
-                    and not link_selector_changed and not date_selector_changed):
+                    and not link_selector_changed and not date_selector_changed
+                    and not listing_strategy_changed):
                 unchanged += 1
                 continue
 
@@ -440,13 +449,17 @@ def apply_overrides() -> dict:
             if new_date_selector is not None:
                 sets.append("article_date_selector = %(article_date_selector)s")
                 params["article_date_selector"] = new_date_selector
+            if new_listing_strategy is not None:
+                sets.append("listing_strategy = %(listing_strategy)s")
+                params["listing_strategy"] = new_listing_strategy
             conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = %(id)s", params)
             changed += 1
-            logger.info("source override: %s → %s%s%s%s%s%s%s%s", name, new_strategy,
+            logger.info("source override: %s → %s%s%s%s%s%s%s%s%s", name, new_strategy,
                         f" listing={new_listing}" if new_listing else "",
                         f" selector={new_selector}" if new_selector else "",
                         f" link_selector={new_link_selector}" if new_link_selector else "",
                         f" date_selector={new_date_selector}" if new_date_selector else "",
+                        f" order={new_listing_strategy}" if new_listing_strategy else "",
                         f" rss={new_rss}" if new_rss else "",
                         f" url={new_url}" if new_url else "",
                         f" region={new_region}" if new_region else "")
