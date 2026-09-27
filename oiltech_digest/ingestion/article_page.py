@@ -8,12 +8,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS
 from oiltech_digest.ingestion import dates, normalize
-from oiltech_digest.ingestion.article_fetcher import extract_main_text
+from oiltech_digest.ingestion.article_fetcher import _trafilatura_extract, extract_main_text
 from oiltech_digest.ingestion.dates import guess_date_text as _guess_date_from_text
 from oiltech_digest.ingestion.dates import parse_datetime as _parse_datetime
+
+logger = logging.getLogger(__name__)
 
 
 def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[str, datetime | None, str]:
@@ -51,10 +54,30 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
         )
     ) or dates.date_from_markup(doc)
 
-    raw_text = extract_main_text(content, title=title)
+    raw_text = _own_text(content, title, extract_main_text(content, title=title))
     if len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
         raw_text = _visible_text(doc)
     return title, published_at, raw_text
+
+
+def _own_text(content: bytes | str, title: str, text: str) -> str:
+    """Текст, который принадлежит заголовку: основное извлечение или, если оно взяло
+    чужой блок, второй разбор (trafilatura).
+
+    Страж принадлежности (№24) стоял только в дозагрузке, а первичный разбор принимал
+    любой блок длиннее порога. У Eni это окно чат-бота на каждой странице: 3177 одинаковых
+    знаков, первая «статья» легла в базу, остальные отбивал рубеж «то же тело» (25.09).
+    Второй разбор принимаем, только если он сам про заголовок, — иначе остаётся прежний
+    текст: хуже, чем было, не делаем. Короткий текст сюда не относится — для него есть
+    запасной путь ниже по стеку.
+    """
+    if len(text) < MIN_ARTICLE_TEXT_CHARS or normalize.title_matches_body(title, text):
+        return text
+    alternative = _trafilatura_extract(content)
+    if len(alternative) >= MIN_ARTICLE_TEXT_CHARS and normalize.title_matches_body(title, alternative):
+        logger.debug("parse_article_page: основное извлечение не про заголовок %r — взят второй разбор", title)
+        return alternative
+    return text
 
 
 # Запасной текст страницы длиннее этого — уже не статья, а вся страница целиком.
