@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Source, SourceDiagnostics, SourceHealth } from "../../api/types";
 import {
   countSourceStates,
@@ -150,6 +150,29 @@ describe("source states on the sources screen", () => {
     // Ревью F: вчера днём, смотрим сегодня утром — 18 ч, но это «вчера», а не «сегодня».
     const morning = new Date("2026-09-25T06:00:00Z");
     expect(lastLoadLabel("2026-09-24T12:00:00Z", morning)).toEqual({ date: "24.09.2026", ago: "вчера" });
+  });
+
+  describe("in a browser outside Moscow", () => {
+    // «Требует внимания» сервер ставит по календарю Москвы (source_health_report), и колонка
+    // обязана считать дни так же в любом поясе браузера. Екатеринбург — UTC+5.
+    beforeEach(() => {
+      vi.stubEnv("TZ", "Asia/Yekaterinburg");
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("counts days by the Moscow calendar, like the server's stale verdict", () => {
+      // Те же моменты, что в tests/test_source_stale_threshold.py: новый день — в 00:00 МСК (21:00 UTC).
+      const midnight = "2026-09-21T21:00:00Z"; // 22.09 00:00 МСК
+      expect(lastLoadLabel(midnight, new Date("2026-09-28T20:59:00Z"))).toEqual({ date: "22.09.2026", ago: "6 дн. назад" });
+      expect(lastLoadLabel(midnight, new Date("2026-09-28T21:00:00Z"))).toEqual({ date: "22.09.2026", ago: "7 дн. назад" });
+      // Минутой раньше — ещё 21.09 по Москве: в 23:59 МСК 28.09 это уже 7 дней.
+      expect(lastLoadLabel("2026-09-21T20:59:00Z", new Date("2026-09-28T20:59:00Z"))).toEqual({
+        date: "21.09.2026",
+        ago: "7 дн. назад",
+      });
+    });
   });
 
   it("explains an archived source instead of calling it switched off", () => {
