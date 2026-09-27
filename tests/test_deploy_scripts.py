@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from oiltech_digest import lanes
 
@@ -235,7 +236,9 @@ def test_core_guard_covers_every_ai_lane():
 # --- NL ------------------------------------------------------------------------------------
 
 
-NL_SERVICES = ["external-worker", "external-worker-bulk", "external-worker-fetch", "external-worker-browser"]
+# Список — из compose, а не копией: при слиянии в агентный репозиторий пятый воркер
+# (nl-agents-1) пришёл в compose, а скрипт по умолчанию выкатывал бы четыре (ревью 27.09).
+NL_SERVICES = list(yaml.safe_load((ROOT / "docker-compose.external-worker.yml").read_text())["services"])
 
 
 def test_nl_deploy_restarts_workers_one_by_one_after_checkin(tmp_path):

@@ -45,7 +45,7 @@ docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --no-dep
 - **Никогда** `up -d --build` без имени сервиса: 20.09 так поднялся планировщик агентов,
   за 8,5 ч задублировал сбор MVP-1 ($4,48 ИИ, 208 задач без потребителя) и выполнил радар
   дня на РФ-ядре (OpenAI 403 → радар 21.09 потерян). Теперь конвейер (`tasks`, `worker`,
-  `playwright-worker`, `scheduler`) — под профилем `pipeline`, `docs` — под `docs`: голый
+  `playwright-worker`, `scheduler`) — под профилем `pipeline`, `docs` — под `archive` (сессия B): голый
   `up` поднимает только `db`, `bootstrap`, `agents-app` (сторож — `tests/test_signal_radar_robustness.py`).
 - Внешние очереди (`external-*`) не исполняются в процессе, который ставит задачу, даже при
   `BACKGROUND_JOB_INLINE=1` (`background_jobs.runs_inline`).

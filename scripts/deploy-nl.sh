@@ -2,7 +2,7 @@
 # Выкат воркеров NL: по одному контейнеру, с мягкой остановкой.
 #
 #   scripts/deploy-nl.sh [--ref origin/main] [СЕРВИС...]
-#   СЕРВИС (по умолчанию все): external-worker external-worker-bulk external-worker-fetch external-worker-browser
+#   СЕРВИС (по умолчанию все): external-worker external-worker-bulk external-worker-fetch external-worker-browser external-worker-agents
 #
 # Запускать на NL в каталоге репозитория (/root/oiltech-digest). Шаги:
 #   1. git fetch + reset --hard на REF, дальше работает версия скрипта из нового кода;
@@ -17,7 +17,7 @@
 set -eu
 
 COMPOSE_FILE=docker-compose.external-worker.yml
-ALL_SERVICES="external-worker external-worker-bulk external-worker-fetch external-worker-browser"
+ALL_SERVICES="external-worker external-worker-bulk external-worker-fetch external-worker-browser external-worker-agents"
 CHECKIN_TIMEOUT="${DEPLOY_NL_CHECKIN_TIMEOUT:-120}"
 
 log() {
