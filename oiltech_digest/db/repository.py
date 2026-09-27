@@ -5498,7 +5498,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
                    COALESCE(best_evidence.published_at, sig.last_seen_at) AS published_at,
                    'mixed' AS language,
                    '' AS image_url,
-                   COALESCE(best_evidence.publisher, 'Радар сигналов') AS source_name,
+                   COALESCE(best_evidence.publisher, 'Технологический радар') AS source_name,
                    COALESCE(sig.summary, sig.thesis, '') AS summary,
                    TRUE AS selected_for_digest,
                    sig.score AS total_score,

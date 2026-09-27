@@ -80,7 +80,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       setBusy(true);
       setSignals(await listSignals({ maturity: maturity || undefined, theme: theme || undefined, limit: 150, evidenceLimit: 5 }));
     } catch (error) {
-      handleError(error, "Не удалось загрузить радар сигналов");
+      handleError(error, "Не удалось загрузить технологический радар");
     } finally {
       setBusy(false);
     }
@@ -194,7 +194,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       <header className="screenHeader">
         <div>
           <div className="eyebrow">Signal Discovery</div>
-          <h1>Радар сигналов</h1>
+          <h1>Технологический радар</h1>
         </div>
         <div className="signalRadarHeaderStats" aria-label="Сводка радара">
           <span><strong>{visibleSignals.length}</strong> сигналов</span>
