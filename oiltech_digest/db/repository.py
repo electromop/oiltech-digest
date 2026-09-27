@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+import logging
 from pathlib import Path
 import re
 from typing import Literal, NamedTuple, get_args
@@ -17,6 +18,8 @@ from oiltech_digest import auth, config, contract, lanes
 from oiltech_digest.ingestion import normalize
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
+
+logger = logging.getLogger(__name__)
 
 # Единый источник правды для набора пер-юзерных рабочих статусов статьи (#12).
 # ДОЛЖЕН совпадать с union Article["status"] во фронте (frontend/src/api/types.ts).
@@ -3194,11 +3197,19 @@ def insert_article(rec: dict) -> bool:
             # summary ленты, и один постоянный тизер-заглушка отрезал бы источник
             # целиком после первой же статьи.
             twin = conn.execute(
-                "SELECT 1 FROM articles WHERE source_id = %s AND body_hash = %s "
+                "SELECT id, url FROM articles WHERE source_id = %s AND body_hash = %s "
                 "AND NOT pending_deletion LIMIT 1",
                 (int(source_id), body_hash),
             ).fetchone()
             if twin is not None:
+                if twin[1] != rec.get("url"):
+                    # Отказ этого рубежа в сводке сбора сливался с «дублями» (~3000 за цикл) и
+                    # был немым: 25.09 у Eni так молча отбивалась каждая новая статья — с каждой
+                    # страницы извлекался один и тот же текст виджета чат-бота.
+                    logger.warning("insert_article: у %s то же тело, что у статьи %s (%s) того же "
+                                   "источника — не вставлено: либо копия той же статьи по другому "
+                                   "адресу, либо извлекается общий блок страницы, а не статья",
+                                   rec.get("url"), twin[0], twin[1])
                 return False
         cur = conn.execute(
             """

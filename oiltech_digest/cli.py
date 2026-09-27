@@ -863,6 +863,26 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
         print(f"  {key}: {count}")
 
 
+def cmd_repair_url_keys(args: argparse.Namespace) -> None:
+    """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер — в query
+    (Минэнерго, EIA, Новатэк, Лукойл, РГУ Губкина); схема тогда же спрятала «копии».
+    По умолчанию сухой прогон: сколько ключей пересчитается и сколько статей вернётся."""
+    from oiltech_digest.ingestion import url_key_repair
+
+    result = url_key_repair.repair_url_keys(apply=args.apply)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(f"repair-url-keys: ключей пересчитать={result['key_updates']} вернуть в ленту={result['unhidden']} "
+          f"остаются скрытыми={sum(result['kept_hidden'].values())} {result['kept_hidden']} "
+          + ("[записано]" if result["apply"] else "[сухой прогон, без записи]"))
+    for source, counts in result["by_source"].items():
+        print(f"  {source}: {counts}")
+    for item in result["key_conflicts"]:
+        print(f"  ДУБЛЬ В ЛЕНТЕ: статья {item['id']} ({item['url']}) — её новый ключ уже у статьи "
+              f"{item['holder_id']}; ключ не менялся, решить вручную")
+
+
 def cmd_enqueue_external_refetch(args: argparse.Namespace) -> None:
     """Дозаполнить тело статей-обрывков у источников зарубежного контура.
 
@@ -1902,6 +1922,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_bodies.add_argument("--batch", type=int, default=25, help="статей в задаче перерасчёта")
     p_repair_bodies.add_argument("--json", action="store_true")
     p_repair_bodies.set_defaults(func=cmd_repair_article_bodies)
+
+    p_repair_keys = sub.add_parser(
+        "repair-url-keys",
+        help="пересчитать ключ адреса (номер статьи из query) и вернуть в ленту спрятанное склейкой 13.09")
+    p_repair_keys.add_argument("--apply", action="store_true", help="записать (без флага — сухой прогон)")
+    p_repair_keys.add_argument("--json", action="store_true")
+    p_repair_keys.set_defaults(func=cmd_repair_url_keys)
 
     p_set_region = sub.add_parser("set-source-region", help="проставить network_region (auto|ru|external) источникам по id")
     p_set_region.add_argument("--ids", required=True, help="список id через запятую, напр. 16,84,64")
