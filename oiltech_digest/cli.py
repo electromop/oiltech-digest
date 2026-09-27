@@ -285,6 +285,24 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
     from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
+    if getattr(args, "scripts_only", False):
+        # Только алфавит буквы и пробел на стыке — безопасно по всему корпусу. Полный
+        # словарь по старым карточкам без ревью не гоняем: его замены ломали падеж.
+        from oiltech_digest.processing import mixed_script
+
+        report = mixed_script.repair_cards(apply=not args.dry_run, article_ids=[args.article_id] if args.article_id else None)
+        if args.json:
+            # Полный список: по нему откатывают (ревью 27.09), --show — только для экрана.
+            print(json.dumps(report, ensure_ascii=False, default=str))
+            return
+        suffix = " [dry-run]" if args.dry_run else ""
+        print(f"terminology-repair --scripts-only{suffix}: полей к исправлению={report['changed_fields']}")
+        for item in report["changes"][: args.show]:
+            print(f"  article={item['article_id']} field={item['field']}")
+            print(f"    before: {str(item['before'])[:180]}")
+            print(f"    after:  {str(item['after'])[:180]}")
+        return
+
     scanned = changed = 0
     changes = []
     for article in repository.list_article_texts_for_terminology_audit(limit=args.limit, article_id=args.article_id):
@@ -312,7 +330,7 @@ def cmd_repair_terminology(args: argparse.Namespace) -> None:
                     title_ru=updates.get("title_ru"),
                 )
     if args.json:
-        print(json.dumps({"dry_run": args.dry_run, "scanned": scanned, "changed_fields": changed, "changes": changes[: args.show]}, ensure_ascii=False, default=str))
+        print(json.dumps({"dry_run": args.dry_run, "scanned": scanned, "changed_fields": changed, "changes": changes}, ensure_ascii=False, default=str))
         return
     suffix = " [dry-run]" if args.dry_run else ""
     print(f"terminology-repair{suffix}: статей проверено={scanned}, полей к исправлению={changed}")
@@ -712,6 +730,58 @@ def cmd_enqueue_translate(args: argparse.Namespace) -> None:
         f"enqueue-translate: без перевода={len(ids)}, задач={len(job_ids)}, батч={batch}, "
         f"queue={decision.queue_name} region={decision.execution_region} ({decision.reason})"
     )
+
+
+def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
+    """Перегенерировать суть и перевод заголовка у статей со словами из двух алфавитов.
+
+    Двойники и склейку чинит `repair-terminology --scripts-only` без ИИ; здесь — полуперевод
+    («управляego», «наshore»), который лечит только новый ответ модели. Ядро запишет только
+    суть и перевод (гейт, теги и балл остаются). По умолчанию — только выборка.
+    """
+    from oiltech_digest.processing import mixed_script
+
+    selection = mixed_script.resummarize_selection(args.article_id)
+    summary_ids, title_ids = selection["summary"], selection["title"]
+    if args.limit:
+        summary_ids, title_ids = summary_ids[: args.limit], title_ids[: args.limit]
+    print(
+        f"enqueue-resummarize: суть — {len(summary_ids)} статей, только заголовок — {len(title_ids)}; "
+        f"брак в самом исходном заголовке (переводом не лечится) — {len(selection['source_title'])}"
+    )
+    if args.dry_run:
+        print(f"  [dry-run] суть: {summary_ids[:50]}")
+        print(f"  [dry-run] заголовок: {title_ids[:50]}")
+        return
+    try:
+        jobs = mixed_script.enqueue_resummarize(summary_ids, title_ids, batch_size=args.batch_size)
+    except RuntimeError as exc:
+        raise SystemExit(f"enqueue-resummarize: {exc}") from exc
+    print(f"  задач: {len(jobs)} ({jobs})")
+
+
+def _utc_datetime(value: str) -> datetime:
+    """ISO-время из командной строки; без пояса — UTC (пояс сессии базы тут ни при чём)."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def cmd_repair_telegram_titles(args: argparse.Namespace) -> None:
+    """Склеенные заголовки Telegram (до 25.09 парсер терял переносы строк) — без сети."""
+    from oiltech_digest.ingestion import telegram_titles
+
+    if not args.dry_run and not args.before:
+        raise SystemExit("repair-telegram-titles: для записи укажите --before — время выката исправленного парсера")
+    report = telegram_titles.repair(apply=not args.dry_run, collected_before=args.before)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, default=str))
+        return
+    suffix = " [dry-run]" if args.dry_run else ""
+    print(f"repair-telegram-titles{suffix}: статей Telegram={report['scanned']}, заголовков к правке={report['changed']}")
+    for change in report["changes"][: args.show]:
+        print(f"  article={change['article_id']}")
+        print(f"    before: {change['before'][:160]}")
+        print(f"    after:  {change['after']}")
 
 
 def cmd_reprints(args: argparse.Namespace) -> None:
@@ -1781,6 +1851,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_terms.add_argument("--article-id", type=int, default=None)
     p_repair_terms.add_argument("--show", type=int, default=30)
     p_repair_terms.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_repair_terms.add_argument("--scripts-only", action="store_true",
+                                help="только двойники и склейка алфавитов (без замен словаря) — для всего корпуса")
     p_repair_terms.add_argument("--json", action="store_true")
     p_repair_terms.set_defaults(func=cmd_repair_terminology)
 
@@ -1795,6 +1867,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval_terms.add_argument("--markdown-path", default="docs/translation_terminology_work_report.md")
     p_eval_terms.add_argument("--json", action="store_true")
     p_eval_terms.set_defaults(func=cmd_eval_terminology)
+
+    p_resummarize = sub.add_parser("enqueue-resummarize", help="перегенерировать суть у статей со словами из двух алфавитов (по умолчанию выборка)")
+    p_resummarize.add_argument("--article-id", type=int, action="append", default=None)
+    p_resummarize.add_argument("--limit", type=int, default=0)
+    p_resummarize.add_argument("--batch-size", type=int, default=20)
+    p_resummarize.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_resummarize.set_defaults(func=cmd_enqueue_resummarize)
+
+    p_tg_titles = sub.add_parser("repair-telegram-titles", help="починить склеенные заголовки Telegram по сохранённым данным (по умолчанию dry-run)")
+    p_tg_titles.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_tg_titles.add_argument("--before", type=_utc_datetime, default=None,
+                             help="только статьи, собранные до этого момента (ISO, UTC) — время выката нового парсера")
+    p_tg_titles.add_argument("--show", type=int, default=30)
+    p_tg_titles.add_argument("--json", action="store_true")
+    p_tg_titles.set_defaults(func=cmd_repair_telegram_titles)
 
     p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
     add_ai_args(p_tag)
