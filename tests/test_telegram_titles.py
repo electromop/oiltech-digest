@@ -83,7 +83,14 @@ def test_missing_space_after_a_short_word_is_not_a_line_break():
         "Началась сертификация аэротакси дляЯНАО и для eVTOL в этом году",
     ):
         assert telegram_titles.repaired_title(title, frequency) == title
-    # А короткой единицей строка кончается (прогон на проде 27.09).
+    # А короткой единицей строка кончается (прогон на проде 27.09), и вопросом-рубрикой тоже.
+    headings = {**frequency, "когда": 900, "рассказываем": 300, "как": 5000, "эксперты": 200}
+    assert telegram_titles.repaired_title("Выставки осени: где и когдаРассказываем о главных событиях", headings) == (
+        "Выставки осени: где и когда"
+    )
+    assert telegram_titles.repaired_title("Новые правила для нефтяников: что и какЭксперты оценили", headings) == (
+        "Новые правила для нефтяников: что и как"
+    )
     units = {**frequency, "т": 900, "км": 700}
     assert telegram_titles.repaired_title("Установлен кормовой блок массой 215 тМасса установки выросла", units) == (
         "Установлен кормовой блок массой 215 т"

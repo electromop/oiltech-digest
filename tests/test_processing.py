@@ -363,6 +363,8 @@ def test_allowed_mixed_script_brands_are_left_alone():
     for brand in ("PROНЕФТЬ", "PROНефть", "Farш", "PROНЕФТИ", "Dostaевского"):
         assert normalize_scripts(f"журнал {brand} пишет") == f"журнал {brand} пишет"
         assert mixed_script_words(brand) == []
+    # Бренд узнаётся по слову без окончания, а не по первым буквам: «Dостаевский» ≠ «Dоставка».
+    assert mixed_script_words("Dосрочно и Dоставка") == ["Dосрочно", "Dоставка"]
 
 
 def test_single_twin_inside_a_word_is_fixed_not_cut():
@@ -379,13 +381,44 @@ def test_single_twin_inside_a_word_is_fixed_not_cut():
         assert normalize_scripts(bad) == good, bad
 
 
+def test_single_latin_letter_word_is_cut_from_a_long_russian_word():
+    """Проверка правок 27.09: одна латинская буква перед русским словом — слово («B2B»,
+    «Plan B»), если справа длинное слово; перед коротким — двойник в единице («MПа»)."""
+    for glued, split in {
+        "B2BПлатформа": "B2B Платформа",
+        "E&PКомпании": "E&P Компании",
+        "Plan BКомпания": "Plan B Компания",
+        "планBКомпания": "план B Компания",
+        "5GПрезидент": "5G Президент",
+        "давление 20 MПа": "давление 20 МПа",
+        "выработка 5 MВтч": "выработка 5 МВтч",
+    }.items():
+        assert normalize_scripts(glued) == split, glued
+
+
 def test_latin_abbreviation_with_russian_ending_is_not_turned_cyrillic():
     """Ревью 27.09: P, H, B по виду делали из аббревиатуры кириллицу — «BOPы» → «ВОРы».
-    Такое слово остаётся смешанным и уходит на повтор, а не молча портится."""
+    Такое слово остаётся смешанным и уходит на повтор, а не молча портится. Слово капсом —
+    двойники, по большинству: «СЕКТOP» не уходит в латиницу, «HOBATЭК» чинится."""
     for kept in ("BOPы", "EPCконтракт", "OPECстраны"):
         assert normalize_scripts(kept) == kept, kept
         assert mixed_script_words(kept) == [kept]
     assert normalize_scripts("ПAO и ОPEX") == "ПАО и OPEX"
+    for bad, good in {"СЕКТOP": "СЕКТОР", "МАСТEP": "МАСТЕР", "ТОМСКHEФТЬ": "ТОМСКНЕФТЬ",
+                      "HOBATЭК": "НОВАТЭК", "POCHEФТЬ": "РОСНЕФТЬ"}.items():
+        assert normalize_scripts(bad) == good, bad
+
+
+def test_replacements_see_every_article_term_not_only_the_prompt_dozen():
+    """Проверка правок 27.09: словарь брал 12 первых терминов статьи (длина подсказки модели),
+    а offshore в нём 16-й — в длинной статье замены «оффшор» не срабатывали."""
+    article = {
+        "title": "Offshore program",
+        "raw_text": "completion, workover, spudded, ESP, drilling mud, MPD, MWD, LWD, coiled tubing, "
+                    "subsea tieback, flowback, produced water, offshore",
+    }
+
+    assert enforce_glossary_text("Оффшорная установка работает на оффшоре.", article) == "Шельфовая установка работает на шельфе."
 
 
 def test_completion_repair_needs_the_term_and_keeps_adjectives():

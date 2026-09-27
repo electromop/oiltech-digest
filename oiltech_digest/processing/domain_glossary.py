@@ -72,7 +72,9 @@ MIXED_SCRIPT_ALLOW: frozenset[str] = frozenset(_tuple(_GLOSSARY_DATA.get("mixed_
 PHRASE_REPAIRS: tuple[tuple[str, str], ...] = _pairs(_GLOSSARY_DATA.get("phrase_repairs"))
 
 
-def relevant_glossary_terms(article: dict, *, limit: int = 12) -> list[GlossaryTerm]:
+def relevant_glossary_terms(article: dict, *, limit: int | None = 12) -> list[GlossaryTerm]:
+    """Термины статьи в порядке словаря. limit — для подсказки модели (длина промпта); замены и
+    аудит берут все (limit=None): offshore в словаре 16-й, и в длинной статье выпадал бы."""
     text = _article_text(article)
     matches = [term for term in GLOSSARY if any(_contains_term(text, source) for source in term.source_terms)]
     return matches[:limit]
@@ -125,7 +127,7 @@ def terminology_warnings(text: str, article: dict) -> list[dict[str, str]]:
             if re.search(pattern, text or "", flags=re.I)
         )
     article_text = _article_text(article)
-    for term in relevant_glossary_terms(article):
+    for term in relevant_glossary_terms(article, limit=None):
         if any(_contains_term(article_text, word) for word in term.warn_unless_source):
             continue
         warnings.extend(
@@ -150,7 +152,7 @@ def _terms_for(text: str, article: dict) -> list[GlossaryTerm]:
     слова в контексте нет. Так и было у радара 22.09: в доказательстве сигнала — обзор
     Westwood без «spudded», а в его сути — «спудрил».
     """
-    terms = relevant_glossary_terms(article)
+    terms = relevant_glossary_terms(article, limit=None)
     for term in GLOSSARY:
         if term in terms or not term.warn_patterns:
             continue
@@ -172,30 +174,32 @@ _LAT_TO_CYR = str.maketrans("aoecxpyAOECXPHBKMTk", "аоесхруАОЕСХРН
 _CYR_TO_LAT = str.maketrans("аоесхАОЕСХКМТ", "aoecxAOECXKMT")
 _TWINS_LAT = frozenset("aoecxpyAOECXPHBKMTk")
 _TWINS_CYR = frozenset("аоесхАОЕСХКМТ")
-# Заглавные латинские буквы подряд в русском слове — аббревиатура, а не двойники, если
-# среди них двойник только по виду (P, H, B) или за ними русское окончание: «BOPы»,
-# «EPCконтракт», «OPECстраны» по виду стали бы «ВОРы», «ЕРСконтракт» (ревью 27.09).
-# «ПAO», «ТEKСТ» — двойники.
-_LATIN_CAPS = re.compile(r"[A-Z]{2,}")
-_LOOK_ONLY_CAPS = frozenset("PHB")
+# Заглавные латинские подряд, а за ними русская строчная, — аббревиатура с русским
+# окончанием или словом: «BOPы», «EPCконтракт», «OPECстраны». По виду они стали бы «ВОРы»,
+# «ЕРСконтракт» (ревью 27.09) — такое слово не трогаем, оно уходит на повтор. В слове
+# капсом («ПAO», «СЕКТOP», «HOВАТЭК») латиница — двойники.
+_LATIN_ABBREVIATION = re.compile(r"[A-Z]{2,}(?=[а-яё])")
 # Стык алфавитов внутри слова — склейка двух слов: «присутствиеHoneywell», «вPermian»,
 # «СШАChina», «FTШвейцар». Внутри одного алфавита так не режем: «КазМунайГаз»,
-# «МосБиржа», «кВт» — настоящие слова (замер 25.09). Латиница слева — от двух букв:
-# одна латинская буква перед русской — двойник («MВт», «kВт»), а не слово; кириллица —
-# и одной буквой, это предлог («сExxonMobil»).
+# «МосБиржа», «кВт» — настоящие слова (замер 25.09). Кириллица слева — и одной буквой,
+# это предлог («сExxonMobil»). Одна латинская буква слева — слово, только если справа
+# длинное слово («B2BПлатформа», «Plan BКомпания»); перед коротким это двойник в
+# единице измерения («MВт», «MПа», «kВт»).
 _SCRIPT_GLUE = re.compile(
     r"(?<=[а-яё])(?=[A-Z])|(?<=[A-Za-z][a-z])(?=[А-ЯЁ])"
     r"|(?<=[А-ЯЁ])(?=[A-Z][a-z])|(?<=[A-Za-z][A-Z])(?=[А-ЯЁ][а-яё])"
+    r"|(?<![A-Za-z][A-Z])(?<=[A-Z])(?=[А-ЯЁ][а-яё]{3})"
 )
 _LINK_GLUE = re.compile(r"(?<=[А-Яа-яЁё])(?=https?://)")
 
 
 def _allow_stem(word: str) -> str:
-    """Начало слова до стыка алфавитов и ещё две буквы: по нему бренд узнаётся и в
-    другом падеже («PROНЕФТИ», «Dostaевского»), а не только в форме из списка."""
+    """Бренд без окончания — по нему он узнаётся и в другом падеже («PROНЕФТИ»,
+    «Dostaевского»). Не короче стыка алфавитов и двух букв после него («Farш» — целиком):
+    по «Dос» узнавались бы и «Dосрочно», «Dоставка»."""
     for index in range(1, len(word)):
         if bool(_LATIN.match(word[index - 1])) != bool(_LATIN.match(word[index])):
-            return word[: index + 2]
+            return word[: max(len(word) - 2, index + 2)]
     return word
 
 
@@ -209,22 +213,22 @@ def _allowed_mixed(word: str) -> bool:
 def _single_twins(word: str) -> str:
     """Буква-двойник, у которой с обеих сторон буквы другого алфавита, — опечатка, а не
     стык двух слов: «КазMунайГаз», «ExxonМobil», «ИнтерPАО», «кBт». Её чиним до склейки,
-    иначе стык алфавитов разрезал бы слово: «Каз МунайГаз» (ревью 27.09)."""
+    иначе стык алфавитов разрезал бы слово: «Каз МунайГаз» (ревью 27.09).
+
+    Не опечатка — однобуквенное слово между двумя словами: строчная между заглавными
+    («BPсShell») и заглавная перед словом с заглавной («планBКомпания»)."""
     chars = list(word)
     for index in range(1, len(word) - 1):
         char, before, after = word[index], word[index - 1], word[index + 1]
+        if char.islower() and before.isupper() and after.isupper():
+            continue
+        if char.isupper() and after.isupper() and word[index + 2 : index + 3].islower():
+            continue
         if char in _TWINS_LAT and _CYRILLIC.match(before) and _CYRILLIC.match(after):
             chars[index] = char.translate(_LAT_TO_CYR)
         elif char in _TWINS_CYR and _LATIN.match(before) and _LATIN.match(after):
             chars[index] = char.translate(_CYR_TO_LAT)
     return "".join(chars)
-
-
-def _latin_abbreviation(word: str) -> bool:
-    for match in _LATIN_CAPS.finditer(word):
-        if _LOOK_ONLY_CAPS & set(match.group(0)) or re.match(r"[а-яё]", word[match.end() : match.end() + 1]):
-            return True
-    return False
 
 
 def normalize_scripts(text: str) -> str:
@@ -250,9 +254,9 @@ def normalize_scripts(text: str) -> str:
     def one_script(word: str) -> str:
         latin = [ch for ch in word if _LATIN.match(ch)]
         cyrillic = [ch for ch in word if _CYRILLIC.match(ch)]
-        if not latin or not cyrillic:
+        if not latin or not cyrillic or _LATIN_ABBREVIATION.search(word):
             return word
-        to_cyrillic = all(ch in _TWINS_LAT for ch in latin) and not _latin_abbreviation(word)
+        to_cyrillic = all(ch in _TWINS_LAT for ch in latin)
         to_latin = all(ch in _TWINS_CYR for ch in cyrillic)
         if to_cyrillic and to_latin:
             if len(latin) == len(cyrillic):
