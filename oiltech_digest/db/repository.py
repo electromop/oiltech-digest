@@ -2858,6 +2858,76 @@ def requeue_released_external_job(job_id: int, *, lease_token_hash: str, payload
         return bool(cur.rowcount)
 
 
+def fail_finalizing_external_job(
+    job_id: int,
+    *,
+    lease_token_hash: str,
+    payload: dict,
+    error_message: str,
+    retryable: bool,
+    retry_delay_seconds: int | None = None,
+) -> bool:
+    """Задача сбоила, но сделанную часть воркер вернул (шаг завис, external_worker.LeaseKeeper).
+
+    Ядро уже записало её и вычло из задачи (contract.remaining_after_partial); дальше — как
+    fail_external_background_job: попытка списана, задача в очереди с паузой или failed, если
+    попытки кончились. Не как release: зависание может сидеть в самой задаче, и без списания
+    она крутилась бы вечно. payload — остаток: и ручной перезапуск failed не позовёт модель за
+    записанное. Ждёт задачу в 'finalizing' — ядро застолбило её на время записи."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT attempts, max_attempts
+            FROM background_jobs
+            WHERE id = %s
+              AND execution_region = 'external'
+              AND status = 'finalizing'
+              AND lease_token_hash = %s
+            FOR UPDATE
+            """,
+            (job_id, lease_token_hash),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return False
+        if retryable and int(row["attempts"] or 0) < int(row["max_attempts"] or 0):
+            conn.execute(
+                """
+                UPDATE background_jobs
+                SET status = 'queued',
+                    progress = 0,
+                    run_after = now() + (%s::text || ' seconds')::interval,
+                    started_at = NULL,
+                    claimed_by = NULL,
+                    lease_token_hash = NULL,
+                    lease_expires_at = NULL,
+                    payload_json = %s,
+                    error_message = %s
+                WHERE id = %s
+                """,
+                (retry_delay_seconds if retry_delay_seconds is not None else 60, Json(_jsonable(payload)),
+                 error_message, job_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE background_jobs
+                SET status = 'failed',
+                    claimed_by = NULL,
+                    lease_token_hash = NULL,
+                    lease_expires_at = NULL,
+                    payload_json = %s,
+                    error_message = %s,
+                    finished_at = now()
+                WHERE id = %s
+                """,
+                (Json(_jsonable(payload)), error_message, job_id),
+            )
+        conn.commit()
+        return True
+
+
 def finish_external_background_job(job_id: int, *, lease_token_hash: str, result: dict | None = None) -> bool:
     with get_connection() as conn:
         cur = conn.execute(

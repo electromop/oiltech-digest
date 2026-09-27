@@ -522,6 +522,109 @@ def test_release_with_all_work_done_finishes_job(isolated_db, monkeypatch):
     assert stored["result_json"]["applied"]["articles"] == 2
 
 
+def _fail(core: TestClient, job: dict, result=None):
+    return core.post(f"/api/external-worker/jobs/{job['id']}/fail", headers=AUTH,
+                     json={"lease_token": job["lease_token"], "error": "нет продвижения 1200 с",
+                           "retryable": True, "retry_after_seconds": 60, "result": result})
+
+
+def test_stalled_job_writes_done_part_and_spends_its_attempt(isolated_db, monkeypatch):
+    """Хвост сессии C: зависший пакет приходит через fail со снимком. Сделанное пишется и
+    вычитается, как при release, но попытка списывается: задача, которая виснет сама (вечный
+    вызов, регулярка по тексту статьи), иначе крутилась бы без конца — класс 24.07 (задача 1181)."""
+    ids = _seed(3)
+    calls: list = []
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI(calls))
+    created = repository.create_background_job("process_articles", {"article_ids": ids, "limit": 3},
+                                               queue_name="external-ai", execution_region="external",
+                                               capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+    done = external_ai.process_payload(job["payload"], heartbeat=_stop_before(3))  # снимок: 2 статьи
+
+    assert _fail(core, job, done).status_code == 200
+
+    stored = repository.get_background_job(int(created["id"]))
+    assert stored["status"] == "queued"
+    assert stored["attempts"] == 1  # попытка списана
+    assert stored["payload_json"]["article_ids"] == ids[2:]
+    assert "reserved_article_ids" not in stored["payload_json"]
+    assert "сделано до сбоя: 2" in stored["error_message"]
+    with connection.get_connection() as conn:
+        written = {int(row[0]) for row in conn.execute(
+            "SELECT article_id FROM article_cards WHERE relevant IS TRUE AND summary IS NOT NULL").fetchall()}
+        runs = conn.execute("SELECT COUNT(*) FROM ai_processing_runs WHERE job_id = %s AND stage = 'relevance'",
+                            (int(created["id"]),)).fetchone()[0]
+        delay = conn.execute("SELECT EXTRACT(EPOCH FROM run_after - now()) FROM background_jobs WHERE id = %s",
+                             (int(created["id"]),)).fetchone()[0]
+        conn.execute("UPDATE background_jobs SET run_after = now() WHERE id = %s", (int(created["id"]),))
+        conn.commit()
+    assert written == set(ids[:2]) and runs == 2
+    assert 50 < float(delay) <= 61  # пауза ретрая из запроса, как у обычного fail
+
+    calls.clear()
+    again = _claim(core)
+    assert [article["id"] for article in again["payload"]["articles"]] == ids[2:]
+    external_ai.process_payload(again["payload"])
+    assert calls == ["title: Статья 2"]  # за записанное модель второй раз не зовётся
+
+
+def test_stalled_job_out_of_attempts_fails_but_keeps_done_part(isolated_db, monkeypatch):
+    ids = _seed(3)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
+    created = repository.create_background_job("process_articles", {"article_ids": ids, "limit": 3},
+                                               queue_name="external-ai", execution_region="external",
+                                               capability="openai", max_attempts=1)
+    core = _core(monkeypatch)
+    job = _claim(core)
+    done = external_ai.process_payload(job["payload"], heartbeat=_stop_before(2))
+
+    assert _fail(core, job, done).status_code == 200
+
+    stored = repository.get_background_job(int(created["id"]))
+    assert stored["status"] == "failed" and stored["lease_token_hash"] is None
+    assert stored["payload_json"]["article_ids"] == ids[1:]  # ручной перезапуск возьмёт только остаток
+    with connection.get_connection() as conn:
+        written = {int(row[0]) for row in conn.execute("SELECT article_id FROM article_cards").fetchall()}
+    assert written == {ids[0]}
+
+
+def test_stalled_dry_run_goes_back_whole(isolated_db, monkeypatch):
+    """Пробный прогон по частям не складывается (как и при release) — обычный fail целиком."""
+    ids = _seed(3)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
+    created = repository.create_background_job("recheck_relevance", {"article_ids": ids, "dry_run": True},
+                                               queue_name="external-ai", execution_region="external",
+                                               capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+    done = external_ai.process_recheck_payload(job["payload"], heartbeat=_stop_before(3))
+    assert done.get("partial") is True
+
+    assert _fail(core, job, done).status_code == 200
+
+    stored = repository.get_background_job(int(created["id"]))
+    assert stored["status"] == "queued" and stored["attempts"] == 1
+    assert stored["payload_json"]["article_ids"] == ids
+
+
+def test_stalled_fail_with_done_part_needs_the_live_lease(isolated_db, monkeypatch):
+    ids = _seed(2)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _CountingAI([]))
+    repository.create_background_job("process_articles", {"article_ids": ids}, queue_name="external-ai",
+                                     execution_region="external", capability="openai")
+    core = _core(monkeypatch)
+    job = _claim(core)
+    done = external_ai.process_payload(job["payload"], heartbeat=_stop_before(2))
+
+    forged = _fail(core, {**job, "lease_token": "чужой"}, done)
+
+    assert forged.status_code == 409
+    assert repository.get_background_job(job["id"])["status"] == "running"
+    with connection.get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM article_cards").fetchone()[0] == 0
+
+
 def test_release_needs_the_live_lease(isolated_db, monkeypatch):
     _seed(1)
     repository.create_background_job("process_articles", {"limit": 1}, queue_name="external-ai",

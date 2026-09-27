@@ -255,6 +255,9 @@ class ExternalWorkerFailRequest(ExternalWorkerLeaseRequest):
     error: str
     retryable: bool = True
     retry_after_seconds: int | None = None
+    # Сделанная часть пакета (partial): так зависший ИИ-пакет отдаёт сторож аренды воркера.
+    # Воркер до 28.09 поля не шлёт — тогда это прежний fail.
+    result: dict[str, Any] | None = None
 
 
 class ExternalWorkerReleaseRequest(ExternalWorkerLeaseRequest):
@@ -1570,6 +1573,8 @@ def external_worker_fail(
     payload: ExternalWorkerFailRequest,
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
+    if payload.result and _fail_with_done_part(job_id, payload):
+        return {"ok": True}
     ok = repository.fail_external_background_job(
         job_id,
         lease_token_hash=_sha256_hex(payload.lease_token),
@@ -1580,6 +1585,46 @@ def external_worker_fail(
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
     return {"ok": True}
+
+
+def _fail_with_done_part(job_id: int, payload: ExternalWorkerFailRequest) -> bool:
+    """Сбой ИИ-пакета со снимком сделанного (шаг завис — external_worker.LeaseKeeper).
+
+    Сделанное пишется и вычитается из задачи, как при release, — модель не зовётся второй раз
+    за оплаченное. Но попытка списывается (repository.fail_finalizing_external_job): зависание
+    может сидеть в самой задаче. False — снимок не принимается (вид без частичного итога,
+    пробный прогон): тогда это обычный fail."""
+    job = repository.get_background_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    original = dict(job.get("payload_json") or {})
+    if not contract.accepts_partial(job.get("kind"), payload.result, original):
+        return False
+    lease_token_hash = _sha256_hex(payload.lease_token)
+    # Застолбить, как complete и release: пока пишется сделанное, реапер аренд её не переотдаст.
+    if not repository.begin_external_background_job_finalize(job_id, lease_token_hash=lease_token_hash):
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+
+    def fail(rest: dict[str, Any], note: str) -> bool:
+        return repository.fail_finalizing_external_job(
+            job_id, lease_token_hash=lease_token_hash, payload=rest, error_message=f"{payload.error}; {note}",
+            retryable=payload.retryable, retry_delay_seconds=payload.retry_after_seconds,
+        )
+
+    try:
+        remaining = contract.remaining_after_partial(job.get("kind"), original, payload.result)
+        applied = _apply_external_result(job, payload.result, job_id)
+    except Exception:
+        # Снимок не лёг — задача уходит целиком, как обычный fail.
+        fail(contract.without_reservation(original), "частичный итог не записан")
+        raise
+    if remaining is None:
+        ok = repository.finish_external_background_job(job_id, lease_token_hash=lease_token_hash, result=applied)
+    else:
+        ok = fail(remaining, f"сделано до сбоя: {contract.done_count(payload.result)}")
+    if not ok:
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    return True
 
 
 @app.get("/api/stats/monthly")

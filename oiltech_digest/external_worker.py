@@ -185,7 +185,11 @@ class ExternalWorkerClient:
         )
         response.raise_for_status()
 
-    def fail(self, job: dict[str, Any], error: str, *, retryable: bool = True, retry_after_seconds: int = 300) -> None:
+    def fail(self, job: dict[str, Any], error: str, *, retryable: bool = True, retry_after_seconds: int = 300,
+             result: dict[str, Any] | None = None) -> None:
+        """Задача не удалась: попытка списывается. result — сделанная часть пакета (partial, так
+        отдаёт зависшую задачу сторож аренды): ядро запишет её и вычтет из задачи, как при
+        release. Ядро до 28.09 поле не знает и молча пропускает — тогда это прежний fail."""
         response = self.session.post(
             f"{self.core_api_url}/api/external-worker/jobs/{job['id']}/fail",
             json={
@@ -193,8 +197,9 @@ class ExternalWorkerClient:
                 "error": error[:1000],
                 "retryable": retryable,
                 "retry_after_seconds": retry_after_seconds,
+                "result": json_ready(result) if result else None,
             },
-            timeout=30,
+            timeout=60 if result else 30,
         )
         response.raise_for_status()
 
@@ -301,7 +306,8 @@ class LeaseKeeper:
     Здесь это не зависит от обработчика. 409 от ядра — аренда отозвана: помечаем, и
     ближайший heartbeat обработчика прерывает работу (LeaseLost), чтобы не платить за
     выброшенный результат. Если обработчик перестал подавать признаки продвижения
-    (touch), задача возвращается в очередь, процесс перестаёт брать новые, ждёт
+    (touch), задача возвращается в очередь — ИИ-пакет со снимком сделанного, чтобы
+    оплаченное не оплачивалось второй раз, — процесс перестаёт брать новые, ждёт
     соседние потоки и перезапускается — зависание лечится само, а не держит полосу."""
 
     def __init__(
@@ -353,13 +359,26 @@ class LeaseKeeper:
                 logger.warning("external_heartbeat_failed job_id=%s", self.job.get("id"))
 
     def _restart_stalled(self) -> None:
+        # Отчёт забираем у обработчика: проснувшись, он уже не отчитается второй раз. Снимок —
+        # сделанное на последней границе шага (worker_shutdown), как у остановки по SIGTERM.
+        mine, done = worker_shutdown.SHUTDOWN.take(self.job)
+        if not mine:
+            # Итог уже в пути (complete) или задачу вернул главный поток: зависания нет, а fail
+            # отсюда мог бы обогнать оплаченный итог.
+            logger.warning("external_job_stall_skipped job_id=%s — отчёт уже у обработчика", self.job.get("id"))
+            return
+        if str(self.job.get("kind") or "") not in contract.PARTIAL_KINDS:
+            done = None  # сбор и документ частичного итога не отдают — уходят целиком, как раньше
         logger.error(
-            "external_job_stalled job_id=%s kind=%s — нет продвижения %ss: в очередь, процесс на перезапуск",
-            self.job.get("id"), self.job.get("kind"), int(self.stall_seconds),
+            "external_job_stalled job_id=%s kind=%s — нет продвижения %ss: в очередь (сделано: %s), процесс на перезапуск",
+            self.job.get("id"), self.job.get("kind"), int(self.stall_seconds), contract.done_count(done),
         )
         try:
+            # fail, а не release: попытка списывается. Зависание может сидеть в самой задаче (вечный
+            # вызов, регулярка по тексту статьи) — с release такая задача крутилась бы без конца,
+            # каждые 20 минут перезапуская процесс (класс 24.07, задача 1181).
             self.client.fail(self.job, f"нет продвижения {int(self.stall_seconds)} с", retryable=True,
-                             retry_after_seconds=60)
+                             retry_after_seconds=60, result=done)
         except Exception:  # noqa: BLE001 - задача вернётся по истечении аренды
             logger.warning("external_job_stall_fail_report_failed job_id=%s", self.job.get("id"))
         _DRAINING.set()
@@ -371,12 +390,14 @@ class LeaseKeeper:
 
 def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
     shutdown = worker_shutdown.SHUTDOWN
-    fork = getattr(client, "fork", None)
-    keeper = LeaseKeeper(fork() if callable(fork) else client, job).start()
+    # Сначала в реестр, потом сторож: зависшую задачу он забирает оттуда вместе со снимком.
+    shutdown.track(client, job)
+    keeper: LeaseKeeper | None = None
 
     def beat(done: dict[str, Any] | None = None) -> None:
         # done — итог пакета на границе шага: его отдаст главный поток, если следующий шаг
-        # зависнет дольше срока остановки (ИИ-пакет: шаг — статья, до пяти вызовов модели).
+        # зависнет дольше срока остановки, или сторож аренды, если шаг завис дольше своего срока
+        # (ИИ-пакет: шаг — статья, до пяти вызовов модели).
         if keeper.lost.is_set():
             raise external_ai.LeaseLost(f"lease lost for job {job.get('id')}")
         if done is not None:
@@ -386,11 +407,13 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
         keeper.touch()
         _safe_heartbeat(client, job)
 
-    shutdown.track(client, job)
     try:
+        fork = getattr(client, "fork", None)
+        keeper = LeaseKeeper(fork() if callable(fork) else client, job).start()
         _run_job(client, job, beat)
     finally:
-        keeper.stop()
+        if keeper is not None:
+            keeper.stop()
         shutdown.untrack(job)
 
 
