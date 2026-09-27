@@ -1791,6 +1791,29 @@ def signal_memory(
     return [_clean(row) for row in repository.list_signal_agent_memory(memory_type=memory_type, status=normalized_status, limit=limit)]
 
 
+@app.get("/api/signals/search-health")
+def signal_search_health(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Здоровье поиска последнего ежедневного прогона радара — только админу.
+
+    23–27.09 Brave отвечал 402 во всех темах, задача оставалась ok, и пять дней этого никто
+    не видел. Обычный пользователь сюда не ходит (403), его экран не меняется."""
+    run = repository.latest_signal_generation_run(
+        payload_subset={"schedule": background_jobs.DAILY_SIGNAL_DISCOVERY_MARKER}
+    )
+    result = (run or {}).get("result_json") or {}
+    health = result.get("search_health")
+    if not run or not health:
+        return {"search_health": None}
+    return _clean({"search_health": {
+        **health,
+        "run_id": run["id"],
+        "job_id": run["background_job_id"],
+        "run_at": run["run_at"],
+        "status": run["status"],
+        "signals": result.get("signals"),
+    }})
+
+
 @app.post("/api/jobs/signal-discovery")
 def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     if payload.days < 1 or payload.days > 90:

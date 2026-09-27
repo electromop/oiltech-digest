@@ -787,6 +787,7 @@ def apply_discovery(
             "total_evidence": topic.get("total_evidence", 0),
             "skipped_reviewed": topic.get("skipped_reviewed", 0),
             "web_search": topic.get("web_search"),
+            "web_error": _search_error_summary(topic.get("web_search")),
             "clusters": topic.get("clusters", 0),
             "signals": judged,
             "duplicates": topic_duplicates,
@@ -961,11 +962,7 @@ def discover_signals(config: SignalDiscoveryConfig) -> dict[str, Any]:
             )
         raise
     if generation_run_id is not None:
-        repository.finish_signal_generation_run(generation_run_id, status="ok", result={
-            "topics": len(result["topics"]),
-            "signals": result["all_signals"],
-            "returned_signals": len(result["signals"]),
-        })
+        _finish_generation_run(generation_run_id, result)
     return result
 
 
@@ -1051,6 +1048,7 @@ def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, A
         topics.append({
             "topic": row["topic"],
             "web_status": web.get("status"),
+            "web_error": row.get("web_error"),
             "queries": len(web.get("queries") or []),
             "results": web.get("results"),
             # Без этих трёх полей в задаче не видно, работают ли раунды поиска,
@@ -1076,12 +1074,130 @@ def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, A
         "dedup": applied.get("dedup"),
     }
     if generation_run_id is not None:
-        repository.finish_signal_generation_run(generation_run_id, status="ok", result={
-            "topics": len(topics),
-            "signals": applied["all_signals"],
-            "returned_signals": len(applied["signals"]),
-        })
+        _finish_generation_run(generation_run_id, applied)
     return summary
+
+
+# Поиск ответил: выдача есть или честно пуста. Остальные статусы (error, missing_api_key,
+# not_configured, unsupported_provider) — тема осталась без поиска.
+_SEARCH_ANSWERED = frozenset({"ok", "empty"})
+# «запрос: HTTP 402 {тело}» — так ошибки складывают agent._search_brave и _search_serpapi.
+_SEARCH_HTTP_ERROR_RE = re.compile(r"(?:^|: )HTTP (\d{3})\b ?(.*)", re.S)
+_SEARCH_ERROR_FIELDS = ("detail", "message", "code")
+# Текст ошибки видит админ на экране, а SerpAPI передаёт ключ в адресе запроса.
+_SEARCH_SECRET_PARAM_RE = re.compile(r"\b(api_key|apikey|key|token)=[^&\s'\")]+", re.I)
+
+
+def _search_error_summary(web_search: dict[str, Any] | None) -> str | None:
+    """Первая ошибка поиска темы коротко: код HTTP и суть — «HTTP 402 Usage limit exceeded».
+
+    Считается на ядре из строк errors, которые везут и прогон на месте, и воркер любой
+    сборки, — итог темы на обоих путях один. 23–27.09 Brave отвечал 402 во всех темах, а в
+    итог шёл только web_status «error»: по базе причину было не узнать."""
+    if not web_search:
+        return None
+    errors = [str(item).strip() for item in web_search.get("errors") or [] if str(item).strip()]
+    if errors:
+        return _short_search_error(errors[0], [str(query) for query in web_search.get("queries") or []])
+    status = str(web_search.get("status") or "")
+    if not status or status in _SEARCH_ANSWERED:
+        return None
+    return _trim(str(web_search.get("reason") or status), 160)
+
+
+def _short_search_error(text: str, queries: list[str]) -> str:
+    text = _SEARCH_SECRET_PARAM_RE.sub(r"\1=***", text)
+    match = _SEARCH_HTTP_ERROR_RE.search(text)
+    if match is None:
+        # Исключение запроса: «запрос: текст». В запросе тоже бывает «: » — срезаем известный.
+        for query in sorted(queries, key=len, reverse=True):
+            if query and text.startswith(f"{query}: "):
+                text = text[len(query) + 2:]
+                break
+        return _trim(text, 160)
+    detail = _search_error_detail(match.group(2))
+    return f"HTTP {match.group(1)} {detail}" if detail else f"HTTP {match.group(1)}"
+
+
+def _search_error_detail(body: str) -> str:
+    """Суть из тела ответа: detail / message / code ошибки (схема Brave), иначе сам текст.
+
+    Тело приходит обрезанным до 200 знаков, и целый JSON бывает не разобрать — тогда поля
+    ищутся по тексту; обрывок JSON или HTML без таких полей — только код."""
+    body = body.strip()
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        nested = payload.get("error")
+        for source in (nested if isinstance(nested, dict) else {}, payload):
+            for field in _SEARCH_ERROR_FIELDS:
+                if isinstance(source.get(field), str) and source[field].strip():
+                    return _search_error_text(source[field])
+        return _search_error_text(nested) if isinstance(nested, str) else ""
+    for field in _SEARCH_ERROR_FIELDS:
+        match = re.search(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
+        if match:
+            try:
+                return _search_error_text(json.loads(f'"{match.group(1)}"'))
+            except ValueError:
+                return _search_error_text(match.group(1))
+    return "" if body.startswith(("{", "[", "<")) else _search_error_text(body)
+
+
+def _search_error_text(value: str) -> str:
+    return _trim(value.strip().rstrip("."), 120)
+
+
+def _search_failed(web_search: dict[str, Any] | None) -> bool:
+    status = str((web_search or {}).get("status") or "")
+    return bool(status) and status not in _SEARCH_ANSWERED
+
+
+def _search_health(topic_results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Здоровье поиска прогона: в скольких темах искали, во скольких поиск не ответил,
+    первая ошибка (её код HTTP и провайдер — для текста админу). Без веб-поиска — None."""
+    searched = [row for row in topic_results if row.get("web_search")]
+    if not searched:
+        return None
+    failed = [row for row in searched if _search_failed(row["web_search"])]
+    first = failed[0] if failed else {}
+    first_error = first.get("web_error")
+    code = re.match(r"HTTP (\d{3})\b", first_error or "")
+    return {
+        "topics": len(searched),
+        "failed": len(failed),
+        "first_error": first_error,
+        "http_status": int(code.group(1)) if code else None,
+        "provider": (first.get("web_search") or {}).get("provider"),
+    }
+
+
+def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> None:
+    """Записать прогон в signal_generation_runs — одинаково на пути на месте и через воркер.
+
+    Поиск не ответил ни в одной теме — прогон failed с понятной причиной: веб-доказательств
+    нет ни у одной темы (ежедневный прогон ищет только в вебе — у него это ноль сигналов).
+    Статус ЗАДАЧИ остаётся ok: его читает правило «ежедневный уже ставили в эти сутки»
+    (background_jobs.enqueue_daily_signal_discovery). Статус прогона не читает никто, кроме
+    выгрузки для обучения (signal_training), а там он не фильтр."""
+    result: dict[str, Any] = {
+        "topics": len(applied["topic_results"]),
+        "signals": applied["all_signals"],
+        "returned_signals": len(applied["signals"]),
+    }
+    finish: dict[str, Any] = {"status": "ok", "result": result}
+    health = _search_health(applied["topic_results"])
+    if health is not None:
+        result["search_health"] = health
+        if health["failed"] == health["topics"]:
+            finish["status"] = "failed"
+            finish["error_message"] = (
+                f"Поиск не ответил во всех темах прогона ({health['failed']} из {health['topics']}): "
+                f"{health['first_error'] or 'причина не записана'}"
+            )
+    repository.finish_signal_generation_run(generation_run_id, **finish)
 
 
 def judge_signal(evidence: list[dict[str, Any]], topic: str, *, offline: bool = True) -> dict[str, Any]:

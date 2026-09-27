@@ -1233,6 +1233,32 @@ def finish_signal_generation_run(
         conn.commit()
 
 
+def latest_signal_generation_run(*, payload_subset: dict) -> dict | None:
+    """Последний завершённый прогон радара, чья задача содержит payload_subset (ежедневный —
+    {"schedule": "daily_signal_discovery"}). Идущий не берём: итога у него ещё нет.
+
+    Время прогона — старт задачи: у пути через воркер строка прогона появляется только при
+    записи итога, её started_at — это конец прогона, а не начало."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT sgr.id, sgr.status, sgr.result_json, sgr.error_message, sgr.finished_at,
+                   bj.id AS background_job_id,
+                   COALESCE(bj.started_at, bj.created_at) AS run_at
+            FROM signal_generation_runs sgr
+            JOIN background_jobs bj ON bj.id = sgr.background_job_id
+            WHERE bj.kind = 'signal_discovery'
+              AND bj.payload_json @> %s::jsonb
+              AND sgr.status <> 'running'
+            ORDER BY bj.created_at DESC, sgr.id DESC
+            LIMIT 1
+            """,
+            (Json(_jsonable(payload_subset)),),
+        )
+        return cur.fetchone()
+
+
 def create_signal_training_example(
     *,
     generation_run_id: int | None,
