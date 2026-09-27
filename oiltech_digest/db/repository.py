@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 import logging
@@ -15,7 +16,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest import auth, config, contract, lanes
-from oiltech_digest.ingestion import normalize
+from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
 
@@ -3150,6 +3151,117 @@ def _jsonable(value):
 #  articles
 # ---------------------------------------------------------------------------
 
+class InsertVerdict(NamedTuple):
+    """Чем кончится insert_article для записи. `holder` — статья, в которую запись
+    упёрлась: {id, url, title, source_id, hidden, position}; у записи этого же прогона
+    пробы id нет (None)."""
+
+    verdict: str
+    url_key: str
+    body_hash: str | None
+    holder: dict | None = None
+
+
+_HOLDER_COLUMNS = "id, url, title, source_id, pending_deletion"
+
+
+def insert_verdict(conn, rec: dict, pending: Sequence[dict] = ()) -> InsertVerdict:
+    """Рубежи insert_article по записи — единственная их реализация. Только SELECT.
+
+    insert_article зовёт её перед INSERT; проба источника (`source-probe`) — вместо
+    вставки, в соединении только для чтения. Второй копии рубежей нет, поэтому вердикт
+    пробы — это ровно то, что сделал бы сбор.
+
+    `pending` — записи, которые проба «вставила бы» раньше в том же прогоне. Сбор их
+    вставляет по-настоящему, и следующая запись прогона упирается в них так же, как в
+    строки базы: у Eni 25.09 с каждой страницы извлекался один текст виджета — первая
+    статья легла бы, остальные отбились бы по телу. Сбор `pending` не передаёт.
+
+    Порядок рубежей — порядок вставки: ключ адреса среди видимых статей → то же тело у
+    видимой статьи того же источника → тот же адрес у любой строки (его держит
+    уникальный индекс по url, ON CONFLICT (url) в insert_article).
+    """
+    url = rec.get("url") or ""
+    key = normalize.url_key(url)
+    body_hash = normalize.compute_body_hash(rec.get("raw_text"))
+    source_id = rec.get("source_id")
+    earlier = [(p, normalize.url_key(p.get("url") or ""), normalize.compute_body_hash(p.get("raw_text")))
+               for p in pending]
+    if key:
+        holder = _holder(conn.execute(
+            f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE url_key = %s AND NOT pending_deletion LIMIT 1",
+            (key,),
+        ).fetchone()) or next((_pending_holder(p) for p, p_key, _ in earlier if p_key == key), None)
+        if holder is not None:
+            same = _same_article(holder, url, rec.get("title"))
+            return InsertVerdict(verdicts.DUP_URL_KEY_SAME if same else verdicts.DUP_URL_KEY_OTHER,
+                                 key, body_hash, holder)
+    # Третий рубеж: одинаковое ТЕЛО у того же источника. Такая же проверка уже
+    # стояла в дозагрузке (article_fetcher), но только на замену текста — на
+    # первичной вставке её не было, и брак заезжал свободно.
+    #
+    # Замер прода 17.09: 830 статей с повторяющимся телом, 311 у активных
+    # источников, за 134 уже заплачен ИИ. У Новатэка так набралось 82 «статьи»
+    # из 86 — это оказались страницы навигации сайта (/ru/esg, /ru/press/
+    # calculator, даже PDF политики конфиденциальности): парсер берёт из
+    # листинга все ссылки подряд, включая меню, а сайт отдаёт на них одну и ту
+    # же оболочку. Разные статьи одного источника не совпадают телом побайтово,
+    # поэтому проверка безопасна. Перепечатки между источниками НЕ трогаем —
+    # это задача №21, и там нужен семантический дедуп, а не хэш.
+    if body_hash and source_id is not None:
+        # NOT pending_deletion — как на соседнем рубеже по url_key. Скрытая копия
+        # иначе блокировала бы пересбор навсегда: у RSS телом на вставке служит
+        # summary ленты, и один постоянный тизер-заглушка отрезал бы источник
+        # целиком после первой же статьи.
+        holder = _holder(conn.execute(
+            f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE source_id = %s AND body_hash = %s "
+            "AND NOT pending_deletion LIMIT 1",
+            (int(source_id), body_hash),
+        ).fetchone()) or next((_pending_holder(p) for p, _, p_body in earlier
+                               if p_body == body_hash and p.get("source_id") == source_id), None)
+        if holder is not None:
+            return InsertVerdict(verdicts.DUP_BODY_HASH, key, body_hash, holder)
+    # Тот же адрес — у любой строки, в том числе скрытой: его держит уникальный индекс по url.
+    holder = _holder(conn.execute(
+        f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE url = %s LIMIT 1", (url,),
+    ).fetchone()) or next((_pending_holder(p) for p, _, _ in earlier if (p.get("url") or "") == url), None)
+    if holder is not None:
+        return InsertVerdict(verdicts.KNOWN, key, body_hash, holder)
+    return InsertVerdict(verdicts.WOULD_INSERT, key, body_hash)
+
+
+def _holder(row) -> dict | None:
+    if row is None:
+        return None
+    return {"id": int(row[0]), "url": row[1], "title": row[2], "source_id": row[3],
+            "hidden": bool(row[4]), "position": None}
+
+
+def _pending_holder(rec: dict) -> dict:
+    return {"id": None, "url": rec.get("url") or "", "title": rec.get("title") or "",
+            "source_id": rec.get("source_id"), "hidden": False, "position": None}
+
+
+def _same_article(holder: dict, url: str, title: str | None) -> bool:
+    """Ключ совпал — та же ли это статья? Проверка самого ключа, поэтому не через url_key.
+
+    Та же — если адрес тот же с точностью до оформления (схема, www, регистр, якорь,
+    хвостовой слэш; query — целиком, как есть) или тот же заголовок. Иначе ключ склеил
+    разные статьи: 25.09 так молча терялись все новые статьи Минэнерго, EIA, Губкина,
+    Лукойла — ключ срезал номер статьи из query. Без этого различителя «дубль по ключу»
+    выглядит одинаково для нормы (та же статья пришла снова) и для потери.
+    """
+    if _plain_address(holder.get("url")) == _plain_address(url):
+        return True
+    return " ".join((holder.get("title") or "").lower().split()) == " ".join((title or "").lower().split())
+
+
+def _plain_address(url: str | None) -> str:
+    parts = urlsplit((url or "").strip().lower())
+    address = f"{parts.netloc.removeprefix('www.')}{parts.path.rstrip('/')}"
+    return f"{address}?{parts.query}" if parts.query else address
+
+
 def insert_article(rec: dict) -> bool:
     """Вставить статью. Дубликаты игнорируются. Возвращает True, если строка вставлена.
 
@@ -3164,53 +3276,24 @@ def insert_article(rec: dict) -> bool:
     делся; по `url_key` — новый частичный (скрытые копии его не занимают). Пишем первым
     попавшийся конфликт, поэтому проверку по ключу делаем явным запросом до вставки:
     ON CONFLICT умеет целиться только в один индекс за раз.
+
+    Решение «вставлять или нет» — insert_verdict (рубежи в одном месте, их же читает
+    проба источника); ON CONFLICT (url) остаётся страховкой от гонки двух вставок.
     """
-    url_key = normalize.url_key(rec.get("url") or "")
-    rec = {**rec, "image_url": rec.get("image_url"),
-           "body_hash": normalize.compute_body_hash(rec.get("raw_text")),
-           "url_key": url_key}
     with get_connection() as conn:
-        if url_key:
-            seen = conn.execute(
-                "SELECT 1 FROM articles WHERE url_key = %s AND NOT pending_deletion LIMIT 1",
-                (url_key,),
-            ).fetchone()
-            if seen is not None:
-                return False
-        # Третий рубеж: одинаковое ТЕЛО у того же источника. Такая же проверка уже
-        # стояла в дозагрузке (article_fetcher), но только на замену текста — на
-        # первичной вставке её не было, и брак заезжал свободно.
-        #
-        # Замер прода 17.09: 830 статей с повторяющимся телом, 311 у активных
-        # источников, за 134 уже заплачен ИИ. У Новатэка так набралось 82 «статьи»
-        # из 86 — это оказались страницы навигации сайта (/ru/esg, /ru/press/
-        # calculator, даже PDF политики конфиденциальности): парсер берёт из
-        # листинга все ссылки подряд, включая меню, а сайт отдаёт на них одну и ту
-        # же оболочку. Разные статьи одного источника не совпадают телом побайтово,
-        # поэтому проверка безопасна. Перепечатки между источниками НЕ трогаем —
-        # это задача №21, и там нужен семантический дедуп, а не хэш.
-        body_hash = rec.get("body_hash")
-        source_id = rec.get("source_id")
-        if body_hash and source_id is not None:
-            # NOT pending_deletion — как на соседнем рубеже по url_key. Скрытая копия
-            # иначе блокировала бы пересбор навсегда: у RSS телом на вставке служит
-            # summary ленты, и один постоянный тизер-заглушка отрезал бы источник
-            # целиком после первой же статьи.
-            twin = conn.execute(
-                "SELECT id, url FROM articles WHERE source_id = %s AND body_hash = %s "
-                "AND NOT pending_deletion LIMIT 1",
-                (int(source_id), body_hash),
-            ).fetchone()
-            if twin is not None:
-                if twin[1] != rec.get("url"):
-                    # Отказ этого рубежа в сводке сбора сливался с «дублями» (~3000 за цикл) и
-                    # был немым: 25.09 у Eni так молча отбивалась каждая новая статья — с каждой
-                    # страницы извлекался один и тот же текст виджета чат-бота.
-                    logger.warning("insert_article: у %s то же тело, что у статьи %s (%s) того же "
-                                   "источника — не вставлено: либо копия той же статьи по другому "
-                                   "адресу, либо извлекается общий блок страницы, а не статья",
-                                   rec.get("url"), twin[0], twin[1])
-                return False
+        verdict = insert_verdict(conn, rec)
+        if verdict.verdict == verdicts.DUP_BODY_HASH and verdict.holder["url"] != rec.get("url"):
+            # Отказ этого рубежа в сводке сбора сливался с «дублями» (~3000 за цикл) и
+            # был немым: 25.09 у Eni так молча отбивалась каждая новая статья — с каждой
+            # страницы извлекался один и тот же текст виджета чат-бота.
+            logger.warning("insert_article: у %s то же тело, что у статьи %s (%s) того же "
+                           "источника — не вставлено: либо копия той же статьи по другому "
+                           "адресу, либо извлекается общий блок страницы, а не статья",
+                           rec.get("url"), verdict.holder["id"], verdict.holder["url"])
+        if verdict.verdict != verdicts.WOULD_INSERT:
+            return False
+        rec = {**rec, "image_url": rec.get("image_url"),
+               "body_hash": verdict.body_hash, "url_key": verdict.url_key}
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, url_key, published_at,
