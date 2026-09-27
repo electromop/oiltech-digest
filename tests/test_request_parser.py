@@ -623,3 +623,38 @@ def test_short_card_caption_does_not_replace_page_title():
     title, _, _ = request_parser.parse_article_page(page, "Learn more")
 
     assert title == "ADNOC awards drilling contract for Hail and Ghasha"
+
+
+def test_article_redirected_to_the_home_page_is_not_an_article(monkeypatch):
+    """Сколково Energy (25.09): energy.skolkovo.ru переадресует ЛЮБОЙ адрес (301) на главную
+    www.skolkovo.ru. Лента — это главная школы, ссылки с неё парсер собирает от старого
+    хоста, и каждая «статья» оказывается той же главной: общий заголовок сайта и описание
+    кампуса. Её резал предфильтр по слову «ресторан» — но это случайность: любое другое
+    описание на главной легло бы в ленту новостью. Страница, куда сайт увёл со статьи на
+    главную, статьёй не является."""
+    home = ("<html><head><meta property='og:title' content='Школа управления СКОЛКОВО - "
+            "бизнес-образование, бизнес-обучение в России'></head><body><main>"
+            + "<p>Школа управления СКОЛКОВО — ведущая бизнес-школа России, программы для компаний "
+              "и предпринимателей.</p>" * 4 + "</main></body></html>").encode()
+    monkeypatch.setattr(request_parser, "fetch", lambda url: home)
+    monkeypatch.setattr(request_parser, "final_url_of", lambda url: "https://www.skolkovo.ru/")
+    candidate = request_parser.CandidateLink(
+        url="https://energy.skolkovo.ru/interviews/pyat-variantov-budushego/",
+        title="Пять вариантов будущего: о новой очереди кампуса", score=6, published_at=None)
+
+    assert request_parser.fetch_article_candidate(candidate, {"id": 52, "name": "Сколково Energy"}) is None
+
+
+def test_ordinary_redirects_keep_the_article(monkeypatch):
+    # Хвостовой слэш, https, www, красивый адрес вместо ?p= — обычные переадресации статьи.
+    monkeypatch.setattr(request_parser, "fetch", lambda url: ARTICLE_HTML)
+    cases = [
+        ("https://example.com/news/field-automation", "https://example.com/news/field-automation/"),
+        ("http://example.com/news/field-automation", "https://www.example.com/news/field-automation"),
+        ("https://example.com/?p=678", "https://example.com/2026/05/field-automation/"),
+        ("https://example.com/?p=678", "https://example.com/?p=678"),
+    ]
+    for url, final in cases:
+        monkeypatch.setattr(request_parser, "final_url_of", lambda requested, final=final: final)
+        candidate = request_parser.CandidateLink(url=url, title="", score=6, published_at=None)
+        assert request_parser.fetch_article_candidate(candidate, {"id": 7}) is not None, (url, final)

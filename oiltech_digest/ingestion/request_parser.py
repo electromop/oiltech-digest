@@ -29,7 +29,7 @@ from oiltech_digest.ingestion.listing_cards import link_key as _link_key
 # (playwright_parser, manual_import, source_diagnostics берут его из request_parser).
 from oiltech_digest.ingestion.article_page import first_non_empty as _first_non_empty
 from oiltech_digest.ingestion.article_page import parse_article_page
-from oiltech_digest.ingestion.http_client import fetch
+from oiltech_digest.ingestion.http_client import fetch, final_url_of
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
 logger = logging.getLogger(__name__)
@@ -196,6 +196,11 @@ def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | No
     content = fetch(candidate.url)
     if content is None:
         return None
+    if _moved_to_home_page(candidate.url, final_url_of(candidate.url)):
+        # Сайт увёл со статьи на главную (переехал, статья снята) — это не статья.
+        logger.debug("request_parser: %s переадресован на главную %s — пропуск",
+                     candidate.url, final_url_of(candidate.url))
+        return None
     title, published_at, raw_text = parse_article_page(content, candidate.title)
     final_published = published_at or candidate.published_at
     if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
@@ -210,6 +215,21 @@ def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | No
         "language": _guess_language(source),
         "content_hash": normalize.compute_content_hash(title, candidate.url),
     }
+
+
+def _moved_to_home_page(url: str, final_url: str | None) -> bool:
+    """Переадресация со статьи на главную сайта (путь «/» без query).
+
+    Сколково Energy (25.09): energy.skolkovo.ru отдаёт 301 на www.skolkovo.ru/ для ЛЮБОГО
+    адреса, и каждая «статья» была главной школы — общий заголовок сайта, описание кампуса.
+    От вставки спасал только предфильтр (слово «ресторан» в описании), то есть случайность.
+    Обычные переадресации статьи (слэш, https, www, красивый адрес вместо `?p=`) ведут не на
+    главную; ссылка, которая сама указывает на главную с query (`/?p=678`), не судится.
+    """
+    if not final_url or final_url == url:
+        return False
+    final, own = urlsplit(final_url), urlsplit(url)
+    return final.path in ("", "/") and not final.query and own.path not in ("", "/")
 
 
 def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> list[CandidateLink]:
