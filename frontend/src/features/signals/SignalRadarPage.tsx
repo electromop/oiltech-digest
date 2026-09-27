@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError } from "../../api/client";
-import { createSignalFeedback, listSignals, updateSignal } from "../../api/signals";
+import { createSignalFeedback, getSignalSearchHealth, listSignals, updateSignal } from "../../api/signals";
+import type { SignalSearchHealth } from "../../api/signals";
 import type { Signal, SignalFeedbackPayload } from "../../api/types";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
@@ -50,6 +51,38 @@ const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> 
   { value: "merge_duplicate", label: "Дубль — тот же сигнал или технологический кластер" },
 ];
 
+// Сутки радара и крон 07:15 — по Москве, поэтому и время прогона показываем по Москве.
+const RADAR_TIME_ZONE = "Europe/Moscow";
+
+function formatRunMoment(value: string | null): string {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const day = date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", timeZone: RADAR_TIME_ZONE });
+  const time = date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: RADAR_TIME_ZONE });
+  return `${day} в ${time}`;
+}
+
+function describeSearchError(health: SignalSearchHealth): string {
+  if (health.http_status === 402 && health.provider === "brave") {
+    return "HTTP 402 — исчерпан месячный лимит поиска Brave";
+  }
+  return (health.first_error || "").trim();
+}
+
+// Плашка только для админа: 23–27.09 поиск не отвечал ни в одной теме, задача была «ok»,
+// и пять дней этого никто не видел. После прогона без сбоев плашки нет.
+function searchHealthNotice(health: SignalSearchHealth | null): string {
+  if (!health || !health.topics || !health.failed) return "";
+  const when = formatRunMoment(health.run_at);
+  const topicsWord = health.topics % 10 === 1 && health.topics % 100 !== 11 ? "темы" : "тем";
+  const cause = describeSearchError(health);
+  const noSignals = health.signals === 0 ? " Новых сигналов нет." : "";
+  return (
+    `Прогон${when ? ` ${when}` : ""}: поиск не ответил в ${health.failed} из ${health.topics} ${topicsWord}` +
+    `${cause ? ` (${cause})` : ""}.${noSignals}`
+  );
+}
+
 export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: Props) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [busy, setBusy] = useState(false);
@@ -60,10 +93,20 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
+  const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
 
   useEffect(() => {
     void reload();
   }, []);
+
+  useEffect(() => {
+    // Обычный пользователь здоровье поиска не запрашивает: эндпоинт только для админа.
+    if (!isAdmin) return;
+    getSignalSearchHealth()
+      .then((response) => setSearchHealth(response.search_health))
+      // Служебная плашка не должна мешать экрану: не загрузилась — её просто нет.
+      .catch(() => setSearchHealth(null));
+  }, [isAdmin]);
 
   function handleError(error: unknown, fallback: string) {
     const statusCode = error instanceof ApiError ? error.status : 0;
@@ -188,6 +231,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
 
   const digestCount = visibleSignals.filter((signal) => signal.selected_for_digest).length;
   const feedbackCount = visibleSignals.reduce((sum, signal) => sum + Number(signal.feedback_count || 0), 0);
+  const searchNotice = isAdmin ? searchHealthNotice(searchHealth) : "";
 
   return (
     <section className="screenStack">
@@ -202,6 +246,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           <span>обратная связь: <strong>{feedbackCount}</strong></span>
         </div>
       </header>
+
+      {searchNotice ? (
+        // Стиль спокойного уведомления экранов ленты и выпуска (не красный).
+        <div className="archiveNotice" role="status">
+          <span>{searchNotice}</span>
+        </div>
+      ) : null}
 
       <section className="signalRadarToolbar">
         <label>
