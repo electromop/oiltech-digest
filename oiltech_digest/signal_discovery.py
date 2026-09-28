@@ -931,6 +931,26 @@ def _store_candidate(
     rejected = bool(candidate.get("rejected"))
     signal_id = None
     if not rejected and not config.dry_run:
+        repeat_of = _repeat_of_existing_card(signal, cluster)
+        if repeat_of is not None:
+            # Все ссылки кандидата уже в других видимых карточках: это они же, найденные
+            # снова (другой темой или с новым ключом). Новая карточка осталась бы без
+            # единого источника — вместо неё отмечаем прежнюю.
+            repository.touch_signal(repeat_of)
+            signal["id"] = repeat_of
+            if generation_run_id is not None:
+                repository.create_signal_training_example(
+                    generation_run_id=generation_run_id,
+                    signal_id=repeat_of,
+                    topic=topic_name,
+                    signal_key=signal["signal_key"],
+                    pipeline_verdict="duplicate",
+                    input_payload=candidate.get("training_input") or {},
+                    raw_output={**(candidate.get("raw_output") or {}),
+                                "duplicate_reason": f"все ссылки уже в карточке {repeat_of}"},
+                    normalized_output=signal,
+                )
+            return repeat_of
         signal_id = repository.upsert_signal(signal)
         signal["id"] = signal_id
         for item in cluster:
@@ -948,6 +968,21 @@ def _store_candidate(
             normalized_output=signal,
         )
     return signal_id
+
+
+def _repeat_of_existing_card(signal: dict[str, Any], cluster: list[dict[str, Any]]) -> int | None:
+    """Карточка, которой уже принадлежат ВСЕ ссылки кандидата, — или None.
+
+    Своя карточка (тот же ключ) не в счёт: это обычное обновление. Если ссылки у
+    нескольких карточек — берём ту, у которой их больше."""
+    urls = [str(item.get("source_url") or "") for item in cluster if item.get("source_url")]
+    if not urls:
+        return None
+    owners = repository.visible_evidence_owners(urls)
+    foreign = [owners[url]["id"] for url in urls if url in owners and owners[url]["signal_key"] != signal.get("signal_key")]
+    if len(foreign) < len(urls):
+        return None
+    return max(set(foreign), key=foreign.count)
 
 
 def _merge_duplicate(
