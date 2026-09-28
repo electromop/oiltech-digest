@@ -348,6 +348,7 @@ def _run_diagnose_source(payload: dict[str, Any], job_id: int) -> dict[str, Any]
 
 
 def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.source_discovery import budget
     from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources, get_topic_gaps
     from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate
 
@@ -370,9 +371,18 @@ def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dic
     total_evaluated = 0
     total_evaluation_jobs = 0
 
+    daily_limits = budget.limits_from_payload(payload)
+    budget_stop: dict[str, Any] | None = None
+
     for index, topic in enumerate(topics, start=1):
         progress = int(min(85, 10 + (index - 1) * 70 / max(len(topics), 1)))
         repository.update_background_job_progress(job_id, progress)
+        # Суточный бюджет — не только у цикла: разовый поиск и шаги плана тоже создают
+        # кандидатов и ставят платную оценку (дефект 4).
+        topic_budget = budget.check(daily_limits, count_loop_runs=False)
+        if topic_budget["blocked"]:
+            budget_stop = topic_budget
+            break
         discovery = discover_sources(DiscoveryConfig(
             topic=topic,
             limit=limit,
@@ -403,6 +413,14 @@ def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dic
                 # Раньше флажок здесь не смотрелся: с воркером агентов на NL каждое нажатие
                 # «Поставить в очередь» стоило бы до 26 вызовов модели на кандидата.
                 if not offline and config.EXTERNAL_WORKERS_ENABLED and config.AI_EXECUTION_REGION == "external":
+                    evaluation_budget = budget.check(daily_limits, count_loop_runs=False)
+                    if evaluation_budget["blocked"]:
+                        budget_stop = evaluation_budget
+                        topic_result["evaluations"].append({
+                            "candidate_id": int(candidate_id),
+                            "skipped": evaluation_budget["reason"],
+                        })
+                        continue
                     evaluation_job = repository.create_background_job(
                         "source_candidate_evaluate",
                         {
@@ -421,7 +439,9 @@ def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dic
                     topic_result["evaluations"].append({
                         "candidate_id": int(candidate_id),
                         "job_id": int(evaluation_job["id"]),
-                        "queued": "external-ai",
+                        # Фактическая очередь задачи: create_background_job может переложить её
+                        # в другую полосу (lanes.route), и метка "external-ai" врала бы.
+                        "queued": evaluation_job["queue_name"],
                     })
                     total_evaluation_jobs += 1
                     continue
@@ -442,13 +462,16 @@ def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dic
         results.append(topic_result)
 
     repository.update_background_job_progress(job_id, 95)
-    return {
+    result = {
         "topics": topics,
         "candidates": total_candidates,
         "evaluated": total_evaluated,
         "evaluation_jobs": total_evaluation_jobs,
         "results": results,
     }
+    if budget_stop is not None:
+        result["budget_stop"] = {key: budget_stop.get(key) for key in ("reason", "projected", "limits", "error")}
+    return result
 
 
 def _run_source_discovery_plan(payload: dict[str, Any], job_id: int) -> dict[str, Any]:

@@ -5,6 +5,16 @@ from oiltech_digest.db import connection
 from oiltech_digest.db import repository
 
 
+def _stub_empty_daily_budget(monkeypatch):
+    # Разовый поиск источников сверяется с суточным бюджетом агента — без заглушки тест
+    # читал бы счётчики из настоящей базы.
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "source_discovery_daily_usage",
+        lambda: {"loop_runs": 0, "candidates_created": 0, "candidate_evaluations": 0},
+    )
+
+
 def test_background_job_run_records_success(monkeypatch, isolated_db):
     job = repository.create_background_job("test_success", {"value": 3})
 
@@ -173,6 +183,7 @@ def test_enqueue_daily_signal_discovery_creates_web_only_ai_job(monkeypatch):
 
 
 def test_discover_source_candidates_job_uses_topic_gaps_and_evaluates(monkeypatch):
+    _stub_empty_daily_budget(monkeypatch)
     from oiltech_digest.source_discovery import agent
     from oiltech_digest.source_discovery import sandbox
 
@@ -236,6 +247,7 @@ def test_discover_source_candidates_job_uses_topic_gaps_and_evaluates(monkeypatc
 
 
 def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch):
+    _stub_empty_daily_budget(monkeypatch)
     from oiltech_digest.source_discovery import agent
 
     jobs = []
@@ -256,7 +268,9 @@ def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch
     monkeypatch.setattr(
         background_jobs.repository,
         "create_background_job",
-        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs}) or {"id": 99},
+        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs})
+        # Репозиторий может переложить задачу в другую полосу (lanes.route) — метка берётся из строки задачи.
+        or {"id": 99, "queue_name": "external-agents"},
     )
 
     result = background_jobs._run_discover_source_candidates(
@@ -272,6 +286,7 @@ def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch
 
     assert result["evaluated"] == 0
     assert result["evaluation_jobs"] == 1
+    assert result["results"][0]["evaluations"][0]["queued"] == "external-agents"
     assert jobs[0]["agent_run_id"] is None
     assert jobs == [
         {
@@ -290,6 +305,64 @@ def test_discover_source_candidates_job_enqueues_external_evaluation(monkeypatch
             "agent_run_id": None,
         }
     ]
+
+
+def test_discover_source_candidates_job_stops_at_daily_candidate_budget(monkeypatch):
+    # Дефект 4: лимит смотрел только цикл, разовый поиск и шаги плана шли сверх него.
+    from oiltech_digest.source_discovery import agent
+
+    searched = []
+    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: None)
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "source_discovery_daily_usage",
+        lambda: {"loop_runs": 99, "candidates_created": 100, "candidate_evaluations": 0},
+    )
+    monkeypatch.setattr(agent, "discover_sources", lambda config: searched.append(config.topic) or {"candidates": []})
+
+    result = background_jobs._run_discover_source_candidates({"topics": ["бурение"]}, job_id=1)
+
+    assert searched == []
+    assert result["candidates"] == 0
+    assert result["budget_stop"]["reason"] == "daily_candidate_budget_reached"
+    assert result["budget_stop"]["limits"]["candidates_created"] == 100
+
+
+def test_discover_source_candidates_job_does_not_enqueue_evaluation_over_budget(monkeypatch):
+    from oiltech_digest.source_discovery import agent
+
+    jobs = []
+    monkeypatch.setattr(background_jobs.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr(background_jobs.repository, "update_background_job_progress", lambda job_id, value: None)
+    # До поиска лимит оценок ещё не исчерпан (4 из 5); к моменту постановки оценки его
+    # добрали параллельные задачи.
+    evaluations_today = iter([4, 5])
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "source_discovery_daily_usage",
+        lambda: {"loop_runs": 0, "candidates_created": 1, "candidate_evaluations": next(evaluations_today)},
+    )
+    monkeypatch.setattr(
+        agent,
+        "discover_sources",
+        lambda config: {"task_id": 7, "search": {"status": "ok"}, "candidates": [{"id": 42}]},
+    )
+    monkeypatch.setattr(
+        background_jobs.repository,
+        "create_background_job",
+        lambda kind, payload, **kwargs: jobs.append(kind) or {"id": 99, "queue_name": "external-agents"},
+    )
+
+    result = background_jobs._run_discover_source_candidates(
+        {"topics": ["бурение"], "offline": False, "max_daily_evaluations": 5},
+        job_id=1,
+    )
+
+    assert jobs == []
+    assert result["evaluation_jobs"] == 0
+    assert result["results"][0]["evaluations"] == [{"candidate_id": 42, "skipped": "daily_evaluation_budget_reached"}]
+    assert result["budget_stop"]["reason"] == "daily_evaluation_budget_reached"
 
 
 def test_source_discovery_plan_job_builds_plan_and_queues_actions(monkeypatch):
@@ -871,6 +944,7 @@ def test_worker_loop_once_processes_queued_jobs(monkeypatch, isolated_db):
 
 
 def test_discover_source_candidates_offline_does_not_enqueue_paid_ai(monkeypatch):
+    _stub_empty_daily_budget(monkeypatch)
     # Флажок «Без ИИ» (offline=True): оценка по правилам на месте, в очередь ИИ — ничего.
     # Раньше флажок здесь не смотрелся, и с воркером агентов на NL каждое нажатие
     # «Поставить в очередь» стоило бы до 26 вызовов модели на кандидата.
