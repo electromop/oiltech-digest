@@ -24,6 +24,7 @@ class ProbeResult:
     seconds: float | None = None
     error: str | None = None
     proxy: str | None = None
+    final_url: str | None = None  # куда привела переадресация (для правила «увёл на главную»)
 
 
 def diagnose_source(source: dict, limit: int = 5) -> dict:
@@ -79,6 +80,11 @@ def diagnose_request_source(source: dict, limit: int = 5) -> dict:
             article_checks.append(check)
             continue
 
+        if request_parser._moved_to_home_page(candidate.url, article_probe.final_url):
+            # То же правило, что у сбора и source-probe (fetch_article): главная сайта — не статья.
+            check.update({"verdict": "redirected_home", "final_url": article_probe.final_url})
+            article_checks.append(check)
+            continue
         title, published_at, raw_text = request_parser.parse_article_page(article_content, candidate.title)
         pre_filter = should_keep_article(title, raw_text, source)
         check.update(
@@ -311,6 +317,7 @@ def probe_url(url: str, timeout: int = REQUEST_TIMEOUT) -> tuple[ProbeResult, by
             bytes=len(response.content),
             seconds=round(response.elapsed.total_seconds(), 2),
             proxy=proxy_label,
+            final_url=response.url,
         )
         if response.status_code >= 400:
             return result, None
