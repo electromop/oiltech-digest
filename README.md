@@ -174,6 +174,7 @@ uvicorn oiltech_digest.api:app --reload --port 8000
 | `external-queues-status` | состояние внешних очередей и heartbeat воркера |
 | `digest-content` / `digest-save` | собрать/сохранить выпуск дайджеста |
 | `source-health` / `source-diagnose` | диагностика покрытия источников |
+| `source-probe <id>` | почему источник молчит: путь сбора и вердикт рубежей вставки по каждому кандидату (`known`, `too_short`, `prefilter`, `DUP_URL_KEY_SAME/OTHER`, `DUP_BODY_HASH`, `WOULD_INSERT`); ничего не пишет, `--json` — полный список |
 | `stats` / `ai-cost-report` | статистика и стоимость AI |
 
 `python -m oiltech_digest.cli <команда> --help` — подробности по любой команде.

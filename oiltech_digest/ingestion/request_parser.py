@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -12,7 +13,8 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
 from oiltech_digest.db import repository
-from oiltech_digest.ingestion import dates, normalize
+from oiltech_digest.ingestion import dates, normalize, verdicts
+from oiltech_digest.ingestion.verdicts import ArticleFetch, Step
 from oiltech_digest.ingestion.dates import guess_date_text as _guess_date_from_text
 from oiltech_digest.ingestion.dates import parse_datetime as _parse_datetime
 from oiltech_digest.ingestion.listing_cards import (
@@ -58,16 +60,84 @@ class CandidateLink:
 
 
 def parse_source(source: dict, max_age_days: int | None = None, article_limit: int = REQUEST_ARTICLE_LIMIT) -> dict:
+    candidates = listing_candidates(source, article_limit)
+    if candidates is None:
+        return _empty_stats()
+    return insert_candidates(source, candidates, max_age_days=max_age_days)
+
+
+def listing_candidates(source: dict, article_limit: int = REQUEST_ARTICLE_LIMIT) -> list[CandidateLink] | None:
+    """Кандидаты ленты источника — так, как их берёт сбор. None — ленты нет: адрес не
+    задан или страница не скачалась. Зовут сбор и проба источника."""
     listing_url = source.get("listing_url") or source.get("url")
     if not listing_url:
-        return _empty_stats()
-
+        return None
     content = fetch(listing_url)
     if content is None:
-        return _empty_stats()
+        return None
+    return extract_candidate_links(source, listing_url, content, limit=article_limit)
 
-    candidates = extract_candidate_links(source, listing_url, content, limit=article_limit)
-    return insert_candidates(source, candidates, max_age_days=max_age_days)
+
+def candidate_steps(
+    source: dict,
+    candidates: list[CandidateLink],
+    max_age_days: int | None = None,
+    article_fetcher=None,
+) -> Iterator[Step]:
+    """Рубежи сбора по каждому кандидату, в порядке сбора. Одна реализация на двоих:
+    insert_candidates вставляет READY, проба источника спрашивает рубежи вставки. Ленивый:
+    сбор вставляет кандидата прежде, чем смотрит следующего. `article_fetcher` отдаёт
+    ArticleFetch или, как fetch_article_candidate, запись/None (тогда отказ — fetch_failed)."""
+    if article_fetcher is None:
+        article_fetcher = fetch_article
+
+    # Дедуп держится на articles.url (уникальный индекс + ON CONFLICT), а не на
+    # хрупких оптимизациях. Раньше здесь были три «замораживателя», из-за которых
+    # источники со структурно стабильным листингом (корпоративные newsroom без
+    # даты в URL → published_at=None → сортировка по score вырождается в алфавит,
+    # топ-N и его hash неизменны) навсегда застывали на первом улове:
+    #   1) short-circuit по last_listing_hash — пропускал ВЕСЬ источник;
+    #   2) break по last_seen_article_url — обрывал на первом же знакомом URL;
+    #   3) break по known_streak>=3 — обрывал, пряча новые статьи в хвосте списка.
+    # Теперь проходим всех кандидатов: знакомые (уже в БД) пропускаем без фетча,
+    # новые — добавляем. listing_hash по-прежнему пишем — для диагностики.
+    cutoff = None
+    if max_age_days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+    for candidate in candidates:
+        seen = {"url": candidate.url, "title": candidate.title, "published_at": candidate.published_at}
+        if repository.article_exists(candidate.url):
+            yield Step(verdicts.KNOWN, **seen)
+            continue
+
+        if cutoff is not None and candidate.published_at and candidate.published_at < cutoff:
+            yield Step(verdicts.OLD, **seen)
+            continue
+
+        try:
+            fetched = article_fetcher(candidate, source)
+        except Exception as exc:  # noqa: BLE001 - одна статья не роняет весь источник
+            logger.warning("request_parser: статья %s пропущена: %s: %s", candidate.url, type(exc).__name__, exc)
+            yield Step(verdicts.FETCH_FAILED, **seen, detail=f"{type(exc).__name__}: {exc}"[:200])
+            continue
+        if not isinstance(fetched, ArticleFetch):
+            fetched = ArticleFetch(fetched, None if fetched is not None else verdicts.FETCH_FAILED)
+        article = fetched.article
+        if article is None:
+            yield Step(fetched.failure or verdicts.FETCH_FAILED, candidate.url, fetched.title or candidate.title,
+                       candidate.published_at, fetched.text_chars, detail=fetched.detail)
+            continue
+        got = {"url": candidate.url, "title": article["title"], "published_at": article.get("published_at"),
+               "text_chars": len(article.get("raw_text") or ""), "record": article}
+        if cutoff is not None and article.get("published_at") and article["published_at"] < cutoff:
+            yield Step(verdicts.OLD, **got)
+            continue
+        pre_filter = should_keep_article(article["title"], article.get("raw_text") or "", source)
+        if not pre_filter.keep:
+            yield Step(verdicts.PREFILTER, **got, detail=", ".join(pre_filter.matched_noise[:5]))
+            continue
+        yield Step(verdicts.READY, **got)
 
 
 def insert_candidates(
@@ -80,67 +150,28 @@ def insert_candidates(
 
     Extracted from parse_source so alternative fetch backends (e.g. Playwright)
     can reuse the same insertion logic after obtaining their own candidate list.
+    Рубежи до вставки — candidate_steps, сама вставка — insert_article.
     """
-    if article_fetcher is None:
-        article_fetcher = fetch_article_candidate
-
-    # Дедуп держится на articles.url (уникальный индекс + ON CONFLICT), а не на
-    # хрупких оптимизациях. Раньше здесь были три «замораживателя», из-за которых
-    # источники со структурно стабильным листингом (корпоративные newsroom без
-    # даты в URL → published_at=None → сортировка по score вырождается в алфавит,
-    # топ-N и его hash неизменны) навсегда застывали на первом улове:
-    #   1) short-circuit по last_listing_hash — пропускал ВЕСЬ источник;
-    #   2) break по last_seen_article_url — обрывал на первом же знакомом URL;
-    #   3) break по known_streak>=3 — обрывал, пряча новые статьи в хвосте списка.
-    # Теперь проходим всех кандидатов: знакомые (уже в БД) пропускаем без фетча,
-    # новые — добавляем. listing_hash по-прежнему пишем — для диагностики.
     listing_hash = _listing_hash(candidates)
-
-    cutoff = None
-    if max_age_days is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-
     added = attempted = skipped_old = skipped_irrelevant = skipped_known = 0
-    newest_seen_url: str | None = None
-    newest_seen_published: datetime | None = None
-
-    for candidate in candidates:
-        if newest_seen_url is None:
-            newest_seen_url = candidate.url
-            newest_seen_published = candidate.published_at
-
-        if repository.article_exists(candidate.url):
+    for step in candidate_steps(source, candidates, max_age_days, article_fetcher):
+        if step.stage == verdicts.KNOWN:
             skipped_known += 1
-            continue
-
-        if cutoff is not None and candidate.published_at and candidate.published_at < cutoff:
+        elif step.stage == verdicts.OLD:
             skipped_old += 1
-            continue
-
-        try:
-            article = article_fetcher(candidate, source)
-        except Exception as exc:  # noqa: BLE001 - одна статья не роняет весь источник
-            logger.warning("request_parser: статья %s пропущена: %s: %s", candidate.url, type(exc).__name__, exc)
-            continue
-        if article is None:
-            continue
-        if cutoff is not None and article.get("published_at") and article["published_at"] < cutoff:
-            skipped_old += 1
-            continue
-        pre_filter = should_keep_article(article["title"], article.get("raw_text") or "", source)
-        if not pre_filter.keep:
+        elif step.stage == verdicts.PREFILTER:
             skipped_irrelevant += 1
-            continue
+        elif step.stage == verdicts.READY:
+            attempted += 1
+            if repository.insert_article(step.record):
+                added += 1
 
-        attempted += 1
-        if repository.insert_article(article):
-            added += 1
-
+    newest = candidates[0] if candidates else None
     repository.touch_last_parsed(source["id"])
     repository.update_source_request_state(
         source["id"],
-        last_seen_article_url=newest_seen_url,
-        last_seen_published_at=newest_seen_published,
+        last_seen_article_url=newest.url if newest else None,
+        last_seen_published_at=newest.published_at if newest else None,
         last_listing_hash=listing_hash,
     )
     return {
@@ -193,20 +224,20 @@ def extract_candidate_links(source: dict | str, listing_url: str | bytes, conten
     return _ordered(candidates, trust_page_order=False)[:limit]
 
 
-def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | None:
+def fetch_article(candidate: CandidateLink, source: dict) -> ArticleFetch:
+    """Скачать статью-кандидата: запись для вставки или причина, почему её нет."""
     content = fetch(candidate.url)
     if content is None:
-        return None
-    if _moved_to_home_page(candidate.url, final_url_of(candidate.url)):
+        return ArticleFetch(None, verdicts.FETCH_FAILED)
+    final_url = final_url_of(candidate.url)
+    if _moved_to_home_page(candidate.url, final_url):
         # Сайт увёл со статьи на главную (переехал, статья снята) — это не статья.
-        logger.debug("request_parser: %s переадресован на главную %s — пропуск",
-                     candidate.url, final_url_of(candidate.url))
-        return None
+        return ArticleFetch(None, verdicts.REDIRECTED_HOME, detail=f"→ {final_url}")
     title, published_at, raw_text = parse_article_page(content, candidate.title)
     final_published = published_at or candidate.published_at
     if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
-        return None
-    return {
+        return ArticleFetch(None, verdicts.TOO_SHORT, title, len(raw_text))
+    return ArticleFetch({
         "source_id": source["id"],
         "title": title[:500],
         "url": candidate.url,
@@ -215,7 +246,12 @@ def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | No
         "text_truncated": normalize.is_truncated(raw_text),
         "language": _guess_language(source),
         "content_hash": normalize.compute_content_hash(title, candidate.url),
-    }
+    }, None, title, len(raw_text))
+
+
+def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | None:
+    """Запись статьи или None — для кода, которому причина не нужна (зарубежный воркер)."""
+    return fetch_article(candidate, source).article
 
 
 def _moved_to_home_page(url: str, final_url: str | None) -> bool:

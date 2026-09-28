@@ -50,17 +50,38 @@ export function countSourceStates(sources: Source[], healthById: Map<number, Sou
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Сколько календарных дней назад — как и сама дата, по местному календарю, а не
- *  полными сутками: иначе вчерашние 13:00 в 11:00 давали «24.09 · сегодня». */
+// Дату и дни «Последней загрузки» считаем по Москве, как сервер — вердикт stale
+// (source_health_report): «7 дн. назад» здесь ⇔ «Требует внимания» там. Пояс браузера не
+// берём: у зрителя не из Москвы день сменяется в другой час, и число разошлось бы с состоянием.
+const MSK_TIME_ZONE = "Europe/Moscow";
+const mskDateParts = new Intl.DateTimeFormat("en-US", {
+  timeZone: MSK_TIME_ZONE,
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+});
+
+/** Номер календарного дня по Москве: дни вычитаются без часов и переводов времени. */
+function mskDayNumber(date: Date) {
+  const part = Object.fromEntries(mskDateParts.formatToParts(date).map(({ type, value }) => [type, Number(value)]));
+  return Date.UTC(part.year, part.month - 1, part.day) / DAY_MS;
+}
+
+/** Сколько календарных дней назад — по календарю Москвы, как и сама дата, а не полными
+ *  сутками: иначе вчерашние 13:00 в 11:00 давали «24.09 · сегодня». */
 function calendarDaysAgo(value: string, now: Date) {
-  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  return Math.max(0, Math.round((startOfDay(now) - startOfDay(new Date(value))) / DAY_MS));
+  return Math.max(0, mskDayNumber(now) - mskDayNumber(new Date(value)));
 }
 
 /** «Последняя загрузка» — когда от источника пришёл последний материал. */
 export function lastLoadLabel(value: string | null | undefined, now: Date = new Date()) {
   if (!value || Number.isNaN(new Date(value).getTime())) return null;
-  const date = new Date(value).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const date = new Date(value).toLocaleDateString("ru-RU", {
+    timeZone: MSK_TIME_ZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
   const days = calendarDaysAgo(value, now);
   const ago = days === 0 ? "сегодня" : days === 1 ? "вчера" : `${days} дн. назад`;
   return { date, ago };
