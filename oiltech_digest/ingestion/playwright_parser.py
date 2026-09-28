@@ -27,7 +27,8 @@ from urllib.parse import unquote, urlsplit
 
 from oiltech_digest.db import repository
 from oiltech_digest.config import MIN_ARTICLE_TEXT_CHARS, REQUEST_ARTICLE_LIMIT
-from oiltech_digest.ingestion import normalize
+from oiltech_digest.ingestion import normalize, verdicts
+from oiltech_digest.ingestion.verdicts import ArticleFetch
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +280,7 @@ def parse_source(source: dict, max_age_days: int | None = None, article_limit: i
         source,
         candidates,
         max_age_days=max_age_days,
-        article_fetcher=rendered_article,
+        article_fetcher=render_article,
     )
     repository.touch_last_parsed(source["id"])
     return stats
@@ -311,20 +312,22 @@ def render_listing_candidates(source: dict, listing_url: str, limit: int = REQUE
     return []
 
 
-def rendered_article(candidate, source: dict) -> dict | None:
+def render_article(candidate, source: dict) -> ArticleFetch:
     """Статья через браузер. Текст короче порога — ещё попытка с ожиданием дольше.
 
-    Блок (403/429/503) повтором не лечится — тогда выходим сразу.
+    Блок (403/429/503) повтором не лечится — тогда выходим сразу. Возвращает
+    ArticleFetch: запись для вставки или причину, почему её нет.
     """
     from oiltech_digest.ingestion.request_parser import parse_article_page
 
+    outcome = ArticleFetch(None, verdicts.FETCH_FAILED)
     for settle_ms in ARTICLE_SETTLE_MS:
         content = fetch_rendered(candidate.url, settle_ms=settle_ms)
         if content is None:
-            return None
+            return ArticleFetch(None, verdicts.FETCH_FAILED, detail=last_fetch_status() or "")
         title, published_at, raw_text = parse_article_page(content, candidate.title)
         if title and len(raw_text) >= MIN_ARTICLE_TEXT_CHARS:
-            return {
+            return ArticleFetch({
                 "source_id": source["id"],
                 "title": title[:500],
                 "url": candidate.url,
@@ -333,8 +336,14 @@ def rendered_article(candidate, source: dict) -> dict | None:
                 "text_truncated": normalize.is_truncated(raw_text),
                 "language": _guess_language(source),
                 "content_hash": normalize.compute_content_hash(title, candidate.url),
-            }
-    return None
+            }, None, title, len(raw_text))
+        outcome = ArticleFetch(None, verdicts.TOO_SHORT, title, len(raw_text))
+    return outcome
+
+
+def rendered_article(candidate, source: dict) -> dict | None:
+    """Запись статьи или None — для кода, которому причина не нужна (зарубежный воркер)."""
+    return render_article(candidate, source).article
 
 
 def _empty_stats() -> dict[str, Any]:
