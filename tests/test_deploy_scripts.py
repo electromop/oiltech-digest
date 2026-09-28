@@ -5,11 +5,13 @@ docker, git и sleep подменены заглушками в PATH: кажда
 Каждый тест падает на коде до правки (скриптов не было)."""
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from oiltech_digest import lanes
 
@@ -235,7 +237,20 @@ def test_core_guard_covers_every_ai_lane():
 # --- NL ------------------------------------------------------------------------------------
 
 
-NL_SERVICES = ["external-worker", "external-worker-bulk", "external-worker-fetch", "external-worker-browser"]
+# Список — из compose, а не копией: при слиянии в агентный репозиторий пятый воркер
+# (nl-agents-1) пришёл в compose, а скрипт по умолчанию выкатывал бы четыре (ревью 27.09).
+NL_SERVICES = list(yaml.safe_load((ROOT / "docker-compose.external-worker.yml").read_text())["services"])
+
+
+def test_nl_deploy_script_lists_exactly_the_compose_workers():
+    """В обе стороны: лишний воркер в скрипте, которого нет в compose, прежний тест пропускал
+    (строку сборки он искал подстрокой). Порядок сравниваем тоже: сборке он безразличен (у всех
+    один build), но это порядок перезапуска по одному — тест ниже проверяет его по compose."""
+    script = (ROOT / "scripts" / "deploy-nl.sh").read_text()
+    declared = re.findall(r'^ALL_SERVICES="([^"]*)"$', script, re.M)
+
+    assert len(declared) == 1, "в deploy-nl.sh должна быть ровно одна строка ALL_SERVICES=\"...\""
+    assert declared[0].split() == NL_SERVICES
 
 
 def test_nl_deploy_restarts_workers_one_by_one_after_checkin(tmp_path):
@@ -244,7 +259,8 @@ def test_nl_deploy_restarts_workers_one_by_one_after_checkin(tmp_path):
     result, calls = _run(tmp_path, repo, "deploy-nl.sh")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    build = _index(calls, "compose -f docker-compose.external-worker.yml build " + " ".join(NL_SERVICES))
+    build = _index(calls, "compose -f docker-compose.external-worker.yml build ")
+    assert calls[build] == "docker compose -f docker-compose.external-worker.yml build " + " ".join(NL_SERVICES)
     previous = build
     for service in NL_SERVICES:
         up = _index(calls, f"up -d --no-deps {service}")

@@ -8,10 +8,12 @@ executor for Redis/Celery later without changing frontend-facing endpoints.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import logging
 import time
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from oiltech_digest import config
 from oiltech_digest.db import repository
@@ -25,6 +27,78 @@ from oiltech_digest.processing.pipeline import (
 
 _executor = ThreadPoolExecutor(max_workers=max(1, config.BACKGROUND_JOB_WORKERS))
 logger = logging.getLogger(__name__)
+DAILY_SIGNAL_DISCOVERY_MARKER = "daily_signal_discovery"
+# «Ежедневный» — это календарные сутки заказчика, а не «24 часа назад».
+DAILY_SIGNAL_DISCOVERY_TZ = ZoneInfo("Europe/Moscow")
+
+
+def daily_signal_discovery_payload() -> dict[str, Any]:
+    return {
+        "topic": None,
+        "days": config.SIGNAL_DISCOVERY_DAYS,
+        "limit": config.SIGNAL_DISCOVERY_LIMIT,
+        "min_score": config.SIGNAL_DISCOVERY_MIN_SCORE,
+        "offline": False,
+        "dry_run": False,
+        "max_signals": config.SIGNAL_DISCOVERY_MAX_SIGNALS,
+        "web_search": True,
+        "web_only": True,
+        "web_query_limit": config.SIGNAL_DISCOVERY_WEB_QUERY_LIMIT,
+        "research_rounds": config.SIGNAL_DISCOVERY_RESEARCH_ROUNDS,
+        "web_fulltext_limit": config.SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT,
+        "trigger": "scheduler_daily",
+        "schedule": DAILY_SIGNAL_DISCOVERY_MARKER,
+    }
+
+
+def _hours_since_local_midnight(now: datetime | None = None) -> float:
+    local = (now or datetime.now(timezone.utc)).astimezone(DAILY_SIGNAL_DISCOVERY_TZ)
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return round(max((local - midnight).total_seconds() / 3600, 0.01), 4)
+
+
+def enqueue_daily_signal_discovery(*, force: bool = False) -> dict[str, Any]:
+    if not config.SIGNAL_DISCOVERY_DAILY_ENABLED and not force:
+        return {"enqueued": False, "reason": "disabled"}
+
+    marker = {"schedule": DAILY_SIGNAL_DISCOVERY_MARKER}
+    # С полуночи по Москве, а не «за 24 часа»: 18.09 запуск в 17:15 МСК заблокировал
+    # утренний крон 19.09 (прошло 14 ч из 24), и радар в тот день не отработал.
+    # При фиксированном часе крона окно ровно в 24 ч — ещё и гонка секунд.
+    lookback_hours = _hours_since_local_midnight()
+    # 'failed' — тоже попытка этого дня. Без него упавшая задача ставилась заново на
+    # каждом цикле планировщика (30 мин): 134 запуска за 5 дней вместо 5. Пока падение
+    # было мгновенным (403 на первом вызове), это ничего не стоило; падение в конце
+    # прогона сжигало бы почти весь его бюджет каждые полчаса.
+    if not force and repository.has_recent_background_job(
+        kind="signal_discovery",
+        payload_subset=marker,
+        lookback_hours=lookback_hours,
+        statuses=("queued", "running", "finalizing", "ok", "failed"),
+    ):
+        return {
+            "enqueued": False,
+            "reason": "already_scheduled",
+            "lookback_hours": lookback_hours,
+        }
+
+    # Маршрут спрашиваем у политики, а не прибиваем к 'ru'. Радар генерирует
+    # поисковые запросы через OpenAI, а OpenAI отвечает РФ-адресам 403
+    # unsupported_country_region_territory — поэтому жёсткий регион 'ru' ронял
+    # ежедневную задачу КАЖДЫЙ раз, молча: сигналы стояли с 13.09.
+    # Остальные ИИ-стадии давно ходят этим же маршрутом, через внешний воркер.
+    from oiltech_digest import network_policy
+
+    decision = network_policy.route_ai_processing()
+    job = enqueue(
+        "signal_discovery",
+        daily_signal_discovery_payload(),
+        queue_name=decision.queue_name,
+        execution_region=decision.execution_region,
+        capability=decision.capability,
+        max_attempts=1,
+    )
+    return {"enqueued": True, "job": job, "lookback_hours": lookback_hours}
 
 
 def enqueue(
@@ -272,6 +346,204 @@ def _run_diagnose_source(payload: dict[str, Any], job_id: int) -> dict[str, Any]
     return result
 
 
+def _run_discover_source_candidates(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.source_discovery import budget
+    from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources, get_topic_gaps
+    from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate
+
+    topics = [str(item).strip() for item in payload.get("topics") or [] if str(item).strip()]
+    if not topics:
+        gaps = get_topic_gaps(limit=int(payload.get("topic_limit") or 3))
+        topics = [str(row.get("topic") or "").strip() for row in gaps if str(row.get("topic") or "").strip()]
+    if not topics:
+        return {"topics": [], "candidates": 0, "evaluated": 0, "reason": "no topic gaps found"}
+
+    limit = int(payload.get("limit") or 10)
+    offline = bool(payload.get("offline", False))
+    fetch_inspection = bool(payload.get("fetch_inspection", False))
+    test_parse = bool(payload.get("test_parse", True))
+    auto_evaluate = bool(payload.get("auto_evaluate", True))
+    article_limit = int(payload.get("article_limit") or 5)
+    agent_run_id = int(payload["agent_run_id"]) if payload.get("agent_run_id") else None
+    results: list[dict[str, Any]] = []
+    total_candidates = 0
+    total_evaluated = 0
+    total_evaluation_jobs = 0
+
+    daily_limits = budget.limits_from_payload(payload)
+    budget_stop: dict[str, Any] | None = None
+
+    for index, topic in enumerate(topics, start=1):
+        progress = int(min(85, 10 + (index - 1) * 70 / max(len(topics), 1)))
+        repository.update_background_job_progress(job_id, progress)
+        # Суточный бюджет — не только у цикла: разовый поиск и шаги плана тоже создают
+        # кандидатов и ставят платную оценку (дефект 4).
+        topic_budget = budget.check(daily_limits, count_loop_runs=False)
+        if topic_budget["blocked"]:
+            budget_stop = topic_budget
+            break
+        discovery = discover_sources(DiscoveryConfig(
+            topic=topic,
+            limit=limit,
+            seed_urls=tuple(payload.get("seed_urls") or ()),
+            offline=offline,
+            dry_run=False,
+            fetch_inspection=fetch_inspection,
+            test_parse=test_parse,
+            run_id=agent_run_id,
+        ))
+        topic_result = {
+            "topic": topic,
+            "task_id": discovery.get("task_id"),
+            "search": discovery.get("search"),
+            "candidates": [
+                {"id": item.get("id"), "url": item.get("url"), "action": item.get("recommended_action")}
+                for item in discovery.get("candidates") or []
+            ],
+            "evaluations": [],
+        }
+        total_candidates += len(topic_result["candidates"])
+        if auto_evaluate:
+            for item in discovery.get("candidates") or []:
+                candidate_id = item.get("id")
+                if not candidate_id:
+                    continue
+                # В платную очередь ИИ — только если человек снял флажок «Без ИИ» (offline=False).
+                # Раньше флажок здесь не смотрелся: с воркером агентов на NL каждое нажатие
+                # «Поставить в очередь» стоило бы до 26 вызовов модели на кандидата.
+                if not offline and config.EXTERNAL_WORKERS_ENABLED and config.AI_EXECUTION_REGION == "external":
+                    evaluation_budget = budget.check(daily_limits, count_loop_runs=False)
+                    if evaluation_budget["blocked"]:
+                        budget_stop = evaluation_budget
+                        topic_result["evaluations"].append({
+                            "candidate_id": int(candidate_id),
+                            "skipped": evaluation_budget["reason"],
+                        })
+                        continue
+                    evaluation_job = repository.create_background_job(
+                        "source_candidate_evaluate",
+                        {
+                            "candidate_id": int(candidate_id),
+                            "article_limit": article_limit,
+                            "offline": False,
+                            "collect": True,
+                            "process": True,
+                        },
+                        queue_name="external-ai",
+                        execution_region="external",
+                        capability="openai",
+                        max_attempts=1,
+                        agent_run_id=agent_run_id,
+                    )
+                    topic_result["evaluations"].append({
+                        "candidate_id": int(candidate_id),
+                        "job_id": int(evaluation_job["id"]),
+                        # Фактическая очередь задачи: create_background_job может переложить её
+                        # в другую полосу (lanes.route), и метка "external-ai" врала бы.
+                        "queued": evaluation_job["queue_name"],
+                    })
+                    total_evaluation_jobs += 1
+                    continue
+                evaluation = evaluate_source_candidate(
+                    int(candidate_id),
+                    article_limit=article_limit,
+                    offline=True,
+                    collect=True,
+                    process=True,
+                )
+                topic_result["evaluations"].append({
+                    "candidate_id": int(candidate_id),
+                    "metrics": evaluation.get("metrics"),
+                    "recommended_action": evaluation.get("recommended_action"),
+                    "next_status": evaluation.get("next_status"),
+                })
+                total_evaluated += 1
+        results.append(topic_result)
+
+    repository.update_background_job_progress(job_id, 95)
+    result = {
+        "topics": topics,
+        "candidates": total_candidates,
+        "evaluated": total_evaluated,
+        "evaluation_jobs": total_evaluation_jobs,
+        "results": results,
+    }
+    if budget_stop is not None:
+        result["budget_stop"] = {key: budget_stop.get(key) for key in ("reason", "projected", "limits", "error")}
+    return result
+
+
+def _run_source_discovery_plan(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.planner import PlannerConfig, build_plan, enqueue_plan_actions
+
+    run_id = repository.create_agent_run(
+        "source_discovery_cycle",
+        trigger=str(payload.get("trigger") or "background_job"),
+        payload={**payload, "background_job_id": job_id},
+    )
+    repository.update_background_job_progress(job_id, 20)
+    try:
+        plan = build_plan(PlannerConfig(
+            days=int(payload.get("days") or 30),
+            target_per_topic=int(payload.get("target_per_topic") or 10),
+            topic_limit=int(payload.get("topic_limit") or 5),
+            candidate_limit=int(payload.get("candidate_limit") or 10),
+            max_actions=int(payload.get("max_actions") or 5),
+            persist_memory=bool(payload.get("persist_memory", True)),
+            run_id=run_id,
+        ))
+        repository.update_background_job_progress(job_id, 70)
+        queued = enqueue_plan_actions(
+            plan,
+            offline=bool(payload.get("offline", True)),
+            evaluate=bool(payload.get("evaluate", True)),
+            run_id=run_id,
+        )
+        repository.update_background_job_progress(job_id, 95)
+        result = {**plan, "run_id": run_id, "queued": queued}
+        repository.finish_agent_run(run_id, status="ok", result=result)
+        return result
+    except Exception as exc:
+        repository.finish_agent_run(run_id, status="failed", result={}, error_message=str(exc)[:1000])
+        raise
+
+
+def _run_source_discovery_loop(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.source_discovery.loop import AgentLoopConfig, run_agent_loop
+
+    repository.update_background_job_progress(job_id, 10)
+    result = run_agent_loop(AgentLoopConfig(
+        goal=str(payload.get("goal") or "Найти новые полезные источники сигналов"),
+        days=int(payload.get("days") or 30),
+        target_per_topic=int(payload.get("target_per_topic") or 10),
+        topic_limit=int(payload.get("topic_limit") or 5),
+        candidate_limit=int(payload.get("candidate_limit") or 10),
+        max_actions=int(payload.get("max_actions") or 5),
+        max_iterations=int(payload.get("max_iterations") or 3),
+        offline=bool(payload.get("offline", True)),
+        fetch_inspection=bool(payload.get("fetch_inspection", False)),
+        test_parse=bool(payload.get("test_parse", True)),
+        dry_run=bool(payload.get("dry_run", False)),
+        auto_evaluate=bool(payload.get("auto_evaluate", True)),
+        article_limit=int(payload.get("article_limit") or 5),
+        persist_memory=bool(payload.get("persist_memory", True)),
+        max_daily_loop_runs=int(payload.get("max_daily_loop_runs") or 4),
+        max_daily_candidates=int(payload.get("max_daily_candidates") or 100),
+        max_daily_evaluations=int(payload.get("max_daily_evaluations") or 100),
+    ))
+    repository.update_background_job_progress(job_id, 95)
+    return result
+
+
+def _run_signal_discovery(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    from oiltech_digest.signal_discovery import config_from_payload, discover_signals
+
+    repository.update_background_job_progress(job_id, 15)
+    result = discover_signals(config_from_payload(payload, background_job_id=job_id))
+    repository.update_background_job_progress(job_id, 95)
+    return result
+
+
 def job_download_path(job: dict[str, Any]) -> Path | None:
     result = job.get("result_json") or {}
     path = result.get("path")
@@ -314,4 +586,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "diagnose_source": _run_diagnose_source,
     "reprint_review": _run_reprint_review,
     "refetch_text": _run_refetch_text,
+    "source_discovery_plan": _run_source_discovery_plan,
+    "source_discovery_loop": _run_source_discovery_loop,
+    "discover_source_candidates": _run_discover_source_candidates,
+    "signal_discovery": _run_signal_discovery,
 }

@@ -222,6 +222,53 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5-nano": (0.05, 0.40),
 }
 
+# --- Source discovery ---
+# По умолчанию внешний поиск выключен: MVP можно гонять через --seed-url без ключей.
+# Поддержанные провайдеры: none / brave / serpapi.
+SOURCE_DISCOVERY_SEARCH_PROVIDER = os.environ.get("SOURCE_DISCOVERY_SEARCH_PROVIDER", "none").strip().lower()
+SOURCE_DISCOVERY_SEARCH_TIMEOUT = int(os.environ.get("SOURCE_DISCOVERY_SEARCH_TIMEOUT", "20"))
+# Агент поиска источников должен отсеивать старые архивы и разделы без живого
+# потока. Порог намеренно отдельный от основного парсинга: тут мы оцениваем новый
+# источник, а не историческую догрузку уже принятого источника.
+SOURCE_DISCOVERY_FRESHNESS_DAYS = int(os.environ.get("SOURCE_DISCOVERY_FRESHNESS_DAYS", "180"))
+SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE = int(os.environ.get("SOURCE_DISCOVERY_STALE_RESULT_YEAR_GRACE", "1"))
+BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
+
+# --- Signal discovery ---
+# Ежедневный радар сигналов ставится scheduler'ом в очередь один раз за окно.
+# Дефолты намеренно web-only и не-offline: это новый агент поиска сигналов, который
+# ищет гибко по web/китайским запросам, а не только по уже заведённым sources.
+SIGNAL_DISCOVERY_DAILY_ENABLED = os.environ.get("SIGNAL_DISCOVERY_DAILY_ENABLED", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
+SIGNAL_DISCOVERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_LIMIT", "120"))
+SIGNAL_DISCOVERY_MIN_SCORE = float(os.environ.get("SIGNAL_DISCOVERY_MIN_SCORE", "40"))
+# MAX_SIGNALS — сколько кластеров КАЖДОЙ темы уходит судье (а не сколько сигналов вернуть):
+# 13 тем × 6 = до 78 вызовов модели на прогон. Прежние 20 на 21 тему давали до 420.
+SIGNAL_DISCOVERY_MAX_SIGNALS = int(os.environ.get("SIGNAL_DISCOVERY_MAX_SIGNALS", "6"))
+# Запросов к поиску на тему: 13 × 4 = 52 на прогон, ~1600 в месяц при ежедневном запуске.
+SIGNAL_DISCOVERY_WEB_QUERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_WEB_QUERY_LIMIT", "4"))
+# Раунды research-loop: 1 = только широкий поиск, 2 = широкий поиск + уточнение по найденным зацепкам.
+SIGNAL_DISCOVERY_RESEARCH_ROUNDS = int(os.environ.get("SIGNAL_DISCOVERY_RESEARCH_ROUNDS", "2"))
+# Сколько web-результатов на тему докачивать целиком (страница, а не сниппет поисковика)
+# перед кластеризацией и судьёй. 0 отключает докачку и оставляет только сниппеты.
+SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT", "20"))
+# Докачка идёт на воркере: таймаут одной страницы и бюджет времени на тему. Без них
+# 20 медленных страниц × 20 с (+ повторы SSL-пути) съедали аренду задачи в 600 с.
+SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS = int(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS", "8"))
+SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS = float(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS", "120"))
+# Откуда брать темы радара: tags — корневые тематики заказчика (пункт 12), table —
+# таблица signal_radar_topics (прежние 21 тема из сида).
+SIGNAL_RADAR_TOPIC_SOURCE = os.environ.get("SIGNAL_RADAR_TOPIC_SOURCE", "tags").strip().lower()
+# Сколько пар «одно ли событие» судит дедуп радара за прогон (signal_dedup). Едет
+# воркеру в снимке задачи — менять можно без пересборки NL.
+SIGNAL_DEDUP_MAX_PAIRS = int(os.environ.get("SIGNAL_DEDUP_MAX_PAIRS", "400"))
+
 # Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
 # (июль 2026): >120 источников (слайды 4–5); бюджет ИИ ≈10 000 ₽/мес при потоке
 # 5 000 статей/мес (слайд 7). Курс для пересчёта cost_usd в рубли берётся у ЦБ РФ

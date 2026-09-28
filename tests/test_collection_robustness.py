@@ -105,8 +105,15 @@ def test_enqueue_never_runs_external_queue_inline(monkeypatch, isolated_db):
 
 def test_every_long_running_service_disables_inline_execution():
     services = yaml.safe_load((Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text())["services"]
+    # Сервис приложения зовётся по-разному (app у основного стека, agents-app у агентного,
+    # чтобы не делить имя в общей сети) — проверяются все долгоживущие сервисы из образа.
+    long_running = {
+        name for name, service in services.items()
+        if "build" in service and service.get("restart") == "unless-stopped"
+    }
 
-    for name in ("app", "tasks", "worker", "playwright-worker", "scheduler"):
+    assert {"tasks", "worker", "playwright-worker", "scheduler"} < long_running
+    for name in long_running:
         assert services[name]["environment"]["BACKGROUND_JOB_INLINE"] == "0", name
 
 

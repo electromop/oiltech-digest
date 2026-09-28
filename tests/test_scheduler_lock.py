@@ -184,6 +184,12 @@ def test_scheduler_script_takes_the_lock_before_any_step():
     assert lock_line < first_step
 
 
+def _app_service(services: dict) -> str:
+    """Сервис приложения зовётся по-разному: app у основного стека, agents-app у агентного
+    (общая сеть не даёт делить имя) — до смены идентичности стека в D."""
+    return "app" if "app" in services else "agents-app"
+
+
 def test_bare_compose_up_cannot_start_pipeline_services():
     """Голый `up -d` 21.09 поднял всё. Конвейер — только по профилю или по имени сервиса."""
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
@@ -191,7 +197,8 @@ def test_bare_compose_up_cannot_start_pipeline_services():
         assert "pipeline" in (services[name].get("profiles") or []), name
     # tasks — архивный модуль (сессия B): его голый `up` тоже не поднимает, но другим профилем.
     assert services["tasks"].get("profiles"), "tasks"
-    for name in ("db", "app", "caddy"):
+    # Caddy — только у основного стека; у агентного до смены идентичности в D его нет.
+    for name in ("db", _app_service(services), *(["caddy"] if "caddy" in services else [])):
         assert not services[name].get("profiles"), name
 
 
@@ -373,7 +380,7 @@ def test_services_that_launch_chromium_reap_zombies():
     systemd — 15% от threads-max): каждый рендер оставлял ~2 процесса, которые python под
     PID 1 не подбирает. init (tini) подбирает осиротевших, и слоты не кончаются."""
     core = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
-    for name in ("scheduler", "app", "worker", "playwright-worker"):
+    for name in ("scheduler", _app_service(core), "worker", "playwright-worker"):
         assert core[name].get("init") is True, name
     nl = yaml.safe_load((ROOT / "docker-compose.external-worker.yml").read_text())["services"]
     assert nl["external-worker-browser"].get("init") is True

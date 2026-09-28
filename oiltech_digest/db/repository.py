@@ -620,6 +620,15 @@ def approve_source_candidate(
     rss_url = url if strategy == "rss" else None
     listing_url = None if strategy == "rss" else url
     with get_connection() as conn:
+        same_name = conn.execute(
+            "SELECT url, listing_url, rss_url FROM sources WHERE name = %s AND source_type = %s",
+            (source_name, source_type),
+        ).fetchone()
+        domain = normalize_domain(url)
+        if same_name and domain and domain not in {normalize_domain(str(value or "")) for value in same_name}:
+            # Имя берётся из заголовка страницы и бывает общим («Press Releases», «News»):
+            # без этого ON CONFLICT ниже молча переписал бы адрес ЧУЖОГО источника.
+            source_name = f"{source_name} ({domain})"
         cur = conn.execute(
             """
             INSERT INTO sources (
@@ -935,9 +944,10 @@ def upsert_signal(signal: dict) -> int:
             """
             INSERT INTO signals (
               signal_key, title, title_ru, theme, summary, thesis, transferability, maturity, confidence, score,
-              why_now, why_not_noise, companies_json, industries_json, evidence_count
+              why_now, why_not_noise, companies_json, industries_json, evidence_count,
+              interest_score, why_interesting
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = EXCLUDED.title,
               title_ru = EXCLUDED.title_ru,
@@ -953,6 +963,10 @@ def upsert_signal(signal: dict) -> int:
               companies_json = EXCLUDED.companies_json,
               industries_json = EXCLUDED.industries_json,
               evidence_count = EXCLUDED.evidence_count,
+              -- Балл интереса — сравнение внутри пачки; тема из одного кандидата его
+              -- не получает, и прошлый балл не должен стираться NULL'ом.
+              interest_score = COALESCE(EXCLUDED.interest_score, signals.interest_score),
+              why_interesting = COALESCE(NULLIF(EXCLUDED.why_interesting, ''), signals.why_interesting),
               last_seen_at = now(),
               updated_at = now()
             RETURNING id
@@ -973,6 +987,8 @@ def upsert_signal(signal: dict) -> int:
                 Json(_jsonable(signal.get("companies") or [])),
                 Json(_jsonable(signal.get("industries") or [])),
                 int(signal.get("evidence_count") or 0),
+                float(signal["interest_score"]) if signal.get("interest_score") is not None else None,
+                (signal.get("why_interesting") or None),
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -990,7 +1006,18 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_url) DO UPDATE SET
-              signal_id = EXCLUDED.signal_id,
+              -- Ссылка видимой карточки к другой не переезжает: иначе у прежней не
+              -- оставалось источника, а счётчик показывал старое число (сигнал 97,
+              -- замечание 22.09). Переезд — только из скрытого дубля в главную.
+              signal_id = CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM signals owner
+                  WHERE owner.id = signal_evidence.signal_id
+                    AND owner.merged_into_signal_id IS NULL
+                    AND owner.id <> EXCLUDED.signal_id
+                ) THEN signal_evidence.signal_id
+                ELSE EXCLUDED.signal_id
+              END,
               article_id = COALESCE(EXCLUDED.article_id, signal_evidence.article_id),
               title = EXCLUDED.title,
               title_ru = EXCLUDED.title_ru,
@@ -1045,6 +1072,182 @@ def refresh_signal_evidence_count(signal_id: int) -> int:
         return int(row[0]) if row else 0
 
 
+# Разобранная карточка — у неё есть суждение человека: вердикт, комментарий или статус,
+# отличный от «наблюдать» (дайджест, архив, шум, дубль). Дедуп такую не прячет и не
+# склеивает с другой разобранной; её ссылки радар не приносит повторно.
+_SIGNAL_REVIEWED_SQL = """(
+  EXISTS (SELECT 1 FROM signal_feedback_events sfe_r
+          WHERE sfe_r.signal_id = {alias}.id
+            AND (COALESCE(sfe_r.verdict, '') <> '' OR sfe_r.event_type = 'comment_added'))
+  OR EXISTS (SELECT 1 FROM user_signal_states uss_r
+             WHERE uss_r.signal_id = {alias}.id AND uss_r.status <> 'watch')
+)"""
+
+
+def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit: int = 300) -> list[dict]:
+    """Сохранённые карточки радара для сверки дублей на внешнем воркере (базы у него нет).
+
+    Разобранные Виктором — всегда, любого возраста: по ним видно, что он уже одобрил
+    или отклонил, и повтор того же события не должен вернуться новой карточкой.
+    Неразобранные — за окно. fresh — появилась за последние дни: только такие
+    неразобранные карточки сверяются между собой (см. signal_dedup._eligible)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT s.id, s.signal_key, s.title, s.title_ru, s.theme,
+                   left(s.summary, 400) AS summary,
+                   s.companies_json AS companies, s.score, s.evidence_count,
+                   (s.first_seen_at >= now() - make_interval(days => %s)) AS fresh,
+                   to_char(s.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS first_seen_day,
+                   v.verdict,
+                   {reviewed} AS reviewed,
+                   COALESCE(ev.urls, ARRAY[]::text[]) AS evidence_urls
+            FROM signals s
+            LEFT JOIN LATERAL (
+              SELECT sfe.verdict
+              FROM signal_feedback_events sfe
+              WHERE sfe.signal_id = s.id AND COALESCE(sfe.verdict, '') <> ''
+              ORDER BY sfe.created_at DESC, sfe.id DESC
+              LIMIT 1
+            ) v ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT array_agg(top.source_url ORDER BY top.strength DESC, top.id) AS urls
+              FROM (
+                SELECT source_url, strength, id
+                FROM signal_evidence
+                WHERE signal_id = s.id
+                ORDER BY strength DESC, id
+                LIMIT 10
+              ) top
+            ) ev ON TRUE
+            WHERE s.merged_into_signal_id IS NULL
+              AND ({reviewed} OR s.last_seen_at >= now() - make_interval(days => %s))
+            ORDER BY {reviewed} DESC, s.last_seen_at DESC, s.id DESC
+            LIMIT %s
+            """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s")),
+            (fresh_days, window_days, limit),
+        )
+        rows = cur.fetchall()
+    return [
+        {**row, "score": float(row["score"] or 0), "companies": list(row["companies"] or []),
+         "evidence_urls": list(row["evidence_urls"] or [])}
+        for row in rows
+    ]
+
+
+def resolve_signal_merge_root(signal_id: int) -> int | None:
+    """Главная карточка группы: идти по merged_into_signal_id до видимой. None — нет такой."""
+    with get_connection() as conn:
+        current = int(signal_id)
+        for _ in range(10):
+            row = conn.execute("SELECT merged_into_signal_id FROM signals WHERE id = %s", (current,)).fetchone()
+            if row is None:
+                return None
+            if row[0] is None:
+                return current
+            current = int(row[0])
+    return None
+
+
+def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "") -> bool:
+    """Скрыть карточку-дубль со ссылкой на главную. Не удаляет: пометку снимает UPDATE.
+
+    Разобранную карточку не прячем, даже если судья счёл её дублем: между выдачей
+    задачи и её завершением её могли успеть разобрать или выбрать в дайджест."""
+    root = resolve_signal_merge_root(into_signal_id)
+    if root is None or root == int(signal_id):
+        return False
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            UPDATE signals
+            SET merged_into_signal_id = %s, merge_reason = %s, updated_at = now()
+            WHERE id = %s
+              AND merged_into_signal_id IS NULL
+              AND NOT {reviewed}
+            RETURNING id
+            """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="signals")),
+            (root, (reason or "")[:500] or None, int(signal_id)),
+        ).fetchone()
+        if row is not None:
+            # Группа всегда в один шаг: всё, что было склеено с этой карточкой, — к корню.
+            conn.execute(
+                "UPDATE signals SET merged_into_signal_id = %s, updated_at = now() WHERE merged_into_signal_id = %s",
+                (root, int(signal_id)),
+            )
+        conn.commit()
+        return row is not None
+
+
+def touch_signal(signal_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE signals SET last_seen_at = now(), updated_at = now() WHERE id = %s", (int(signal_id),))
+        conn.commit()
+
+
+def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
+    """Каким видимым карточкам уже принадлежат ссылки: {url: {id, signal_key}}."""
+    urls = [url for url in urls if url]
+    if not urls:
+        return {}
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT e.source_url, s.id, s.signal_key
+            FROM signal_evidence e
+            JOIN signals s ON s.id = e.signal_id
+            WHERE e.source_url = ANY(%s)
+              AND s.merged_into_signal_id IS NULL
+            """,
+            (list(urls),),
+        )
+        return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
+
+
+def refresh_all_signal_evidence_counts() -> int:
+    """Пересчитать evidence_count у всех карточек; вернуть, у скольких он был неверен.
+
+    Ссылки раньше молча переезжали между карточками, а счётчик пересчитывался только у
+    получателя: у прежней оставалось старое число при пустом списке ссылок."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            WITH actual AS (
+              SELECT s.id, COUNT(e.id)::int AS n
+              FROM signals s
+              LEFT JOIN signal_evidence e ON e.signal_id = s.id
+              GROUP BY s.id
+            )
+            UPDATE signals s
+            SET evidence_count = actual.n, updated_at = now()
+            FROM actual
+            WHERE actual.id = s.id AND s.evidence_count <> actual.n
+            """,
+        )
+        changed = cur.rowcount
+        conn.commit()
+        return int(changed or 0)
+
+
+def signal_key_owners(keys: list[str]) -> dict[str, dict]:
+    """Каким сохранённым карточкам уже принадлежат ключи кандидатов: id, склеена ли, разобрана ли."""
+    if not keys:
+        return {}
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT s.signal_key, s.id, s.merged_into_signal_id, {reviewed} AS reviewed
+            FROM signals s
+            WHERE s.signal_key = ANY(%s)
+            """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s")),
+            (list(keys),),
+        )
+        return {row["signal_key"]: row for row in cur.fetchall()}
+
+
 def create_signal_generation_run(
     *,
     config_payload: dict,
@@ -1085,6 +1288,32 @@ def finish_signal_generation_run(
             (status, Json(_jsonable(result or {})), error_message, run_id),
         )
         conn.commit()
+
+
+def latest_signal_generation_run(*, payload_subset: dict) -> dict | None:
+    """Последний завершённый прогон радара, чья задача содержит payload_subset (ежедневный —
+    {"schedule": "daily_signal_discovery"}). Идущий не берём: итога у него ещё нет.
+
+    Время прогона — старт задачи: у пути через воркер строка прогона появляется только при
+    записи итога, её started_at — это конец прогона, а не начало."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT sgr.id, sgr.status, sgr.result_json, sgr.error_message, sgr.finished_at,
+                   bj.id AS background_job_id,
+                   COALESCE(bj.started_at, bj.created_at) AS run_at
+            FROM signal_generation_runs sgr
+            JOIN background_jobs bj ON bj.id = sgr.background_job_id
+            WHERE bj.kind = 'signal_discovery'
+              AND bj.payload_json @> %s::jsonb
+              AND sgr.status <> 'running'
+            ORDER BY bj.created_at DESC, sgr.id DESC
+            LIMIT 1
+            """,
+            (Json(_jsonable(payload_subset)),),
+        )
+        return cur.fetchone()
 
 
 def create_signal_training_example(
@@ -1214,7 +1443,8 @@ def list_signal_training_examples(
 
 def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50,
                  user_id: int | None = None) -> list[dict]:
-    clauses = []
+    # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup).
+    clauses = ["s.merged_into_signal_id IS NULL"]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -1241,7 +1471,8 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                              SELECT 1 FROM signal_evidence se
                              WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
                            ))
-                   ) AS feedback_count
+                   ) AS feedback_count,
+                   (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count
             FROM signals s
             LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
             {where}
@@ -1288,10 +1519,11 @@ def list_signal_evidence(signal_id: int, *, limit: int = 20) -> list[dict]:
             SELECT *
             FROM signal_evidence
             WHERE signal_id = %s
+               OR signal_id IN (SELECT id FROM signals WHERE merged_into_signal_id = %s)
             ORDER BY strength DESC, published_at DESC NULLS LAST, created_at DESC
             LIMIT %s
             """,
-            (signal_id, limit),
+            (signal_id, signal_id, limit),
         )
         return cur.fetchall()
 
@@ -1525,10 +1757,18 @@ def source_discovery_daily_usage() -> dict[str, int]:
             """
             SELECT
               (
+                -- Нажатие, остановленное лимитом до первой итерации, — не цикл: без этого
+                -- условия каждое такое нажатие росло в счётчике («9/6» при лимите 6).
                 SELECT COUNT(*)::int
-                FROM agent_runs
-                WHERE kind = 'source_discovery_loop'
-                  AND created_at >= date_trunc('day', now())
+                FROM agent_runs r
+                WHERE r.kind = 'source_discovery_loop'
+                  AND r.created_at >= date_trunc('day', now())
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM agent_actions a
+                    WHERE a.run_id = r.id
+                      AND a.action_type = 'source_discovery_loop_budget_stop'
+                  )
               ) AS loop_runs,
               (
                 SELECT COUNT(*)::int
@@ -1682,6 +1922,66 @@ def list_signal_agent_memory(
             params,
         )
         return cur.fetchall()
+
+
+def merge_signal_agent_memory_facts(memory_id: int, patch: dict) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE signal_agent_memory SET facts_json = facts_json || %s::jsonb, updated_at = now() WHERE id = %s",
+            (Json(_jsonable(patch)), memory_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def get_signal_theme(signal_id: int) -> str | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT theme FROM signals WHERE id = %s", (signal_id,)).fetchone()
+        return str(row[0]) if row and row[0] else None
+
+
+def set_signal_agent_memory_status(memory_id: int, status: str) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE signal_agent_memory
+            SET status = %s,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (status, memory_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def list_reviewed_signal_urls() -> list[str]:
+    """Адреса материалов, по которым человек уже вынес суждение о сигнале.
+
+    Радар не должен приносить их снова: отклонённое вернулось бы тем же сигналом,
+    а одобренное перезаписалось бы новой оценкой модели поверх разобранного
+    (signal_evidence.source_url уникален — повторная находка забирает материал себе)."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            WITH reviewed AS (
+                SELECT f.signal_id AS id FROM signal_feedback_events f
+                WHERE f.signal_id IS NOT NULL
+                  AND (f.verdict IS NOT NULL OR f.event_type = 'comment_added')
+            )
+            SELECT DISTINCT e.source_url
+            FROM signal_evidence e
+            WHERE e.signal_id IN (SELECT id FROM reviewed)
+               -- ссылки скрытых дублей разобранной карточки — тоже разобраны
+               OR e.signal_id IN (SELECT s.id FROM signals s WHERE s.merged_into_signal_id IN (SELECT id FROM reviewed))
+            UNION
+            SELECT DISTINCT f.source_url
+            FROM signal_feedback_events f
+            WHERE f.signal_id IS NOT NULL
+              AND COALESCE(f.source_url, '') <> ''
+            """
+        )
+        return [str(row[0]) for row in cur.fetchall() if row[0]]
 
 
 def update_agent_memory_status(memory_id: int, status: str) -> bool:
@@ -2227,6 +2527,8 @@ def create_background_job(
     max_attempts: int = 3,
     agent_run_id: int | None = None,
 ) -> dict:
+    # Агентные задачи — в свою полосу, как бы их ни назвал вызывающий код (lanes.route).
+    queue_name = lanes.route(queue_name, kind)
     # Внешняя очередь принимает только то, что её воркер умеет исполнять (lanes.py).
     lanes.check_enqueue(queue_name, kind)
     with get_connection() as conn:
@@ -5439,7 +5741,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
                    COALESCE(best_evidence.published_at, sig.last_seen_at) AS published_at,
                    'mixed' AS language,
                    '' AS image_url,
-                   COALESCE(best_evidence.publisher, 'Радар сигналов') AS source_name,
+                   COALESCE(best_evidence.publisher, 'Технологический радар') AS source_name,
                    COALESCE(sig.summary, sig.thesis, '') AS summary,
                    TRUE AS selected_for_digest,
                    sig.score AS total_score,

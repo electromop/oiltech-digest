@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import requests
 
-from oiltech_digest import config, contract, worker_shutdown
+from oiltech_digest import config, contract, signal_discovery, worker_shutdown
 from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
@@ -281,6 +281,10 @@ _JOB_STALL_SECONDS = {
     "reprint_review": 1200,
     "scrape_source": 600,
     "refetch_text": 600,
+    # Радар подаёт beat на каждую тему, кластер, запрос поиска, страницу и пару дедупа —
+    # между ними один вызов модели или одна страница, как у ИИ-видов.
+    "source_candidate_evaluate": 1200,
+    "signal_discovery": 1200,
 }
 # Процесс перед перезапуском перестаёт брать задачи и ждёт соседние потоки полосы: выход
 # рвал бы их здоровые задачи (ждали бы истечения аренды и теряли попытку).
@@ -430,6 +434,9 @@ _HANDLERS: dict[str, tuple[Any, str]] = {
     "scrape_source": (external_fetch, "process_payload"),
     "reprint_review": (external_ai, "process_reprint_review_payload"),
     "refetch_text": (external_fetch, "process_refetch_text_payload"),
+    # Агентные виды (полоса external-agents): оценка кандидата в источники и радар сигналов.
+    "source_candidate_evaluate": (external_ai, "process_source_candidate_payload"),
+    "signal_discovery": (signal_discovery, "process_external_payload"),
 }
 
 
