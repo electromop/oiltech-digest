@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -22,6 +23,7 @@ from oiltech_digest.db import repository
 from oiltech_digest.ingestion import request_parser
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 from oiltech_digest.ingestion.source_diagnostics import probe_url
+from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.source_discovery.prompts import (
     SEARCH_QUERY_INSTRUCTIONS,
@@ -35,6 +37,8 @@ DEFAULT_MAX_QUERIES = 8
 TEMPORARY_UNAVAILABLE_COOLDOWN_HOURS = 24
 TEMPORARY_UNAVAILABLE_REJECT_AFTER = 3
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class DiscoveryConfig:
@@ -289,13 +293,20 @@ def generate_search_queries(
     if offline:
         return _merge_queries(combo_queries + remembered, _offline_queries(topic, DEFAULT_MAX_QUERIES, strategy=strategy), limit=limit, exclude=muted)
     client = make_client(False)
-    response = client.complete_json(
-        SEARCH_QUERY_INSTRUCTIONS,
-        f"topic: {topic}\nstrategy: {strategy}\nlimit: {limit}\n{_topic_search_context(topic)}",
-        SEARCH_QUERY_SCHEMA,
-        max_output_tokens=600,
-    )
-    queries = [str(item).strip() for item in response.data.get("queries") or [] if str(item).strip()]
+    try:
+        response = client.complete_json(
+            SEARCH_QUERY_INSTRUCTIONS,
+            f"topic: {topic}\nstrategy: {strategy}\nlimit: {limit}\n{_topic_search_context(topic)}",
+            SEARCH_QUERY_SCHEMA,
+            max_output_tokens=600,
+        )
+        queries = [str(item).strip() for item in response.data.get("queries") or [] if str(item).strip()]
+    except (AIClientError, requests.RequestException) as exc:
+        # Запросы от модели — улучшение, а не обязательный шаг: при сбое идём на
+        # запросах по правилам. Раньше сбой здесь ронял весь прогон радара по всем
+        # темам (28.09: ответ без текста — лимит ушёл на рассуждение).
+        logger.warning("генерация поисковых запросов не удалась (%s), тема %r — запросы по правилам", exc, topic)
+        queries = []
     generated = _merge_queries(queries, _offline_queries(topic, DEFAULT_MAX_QUERIES, strategy=strategy), limit=DEFAULT_MAX_QUERIES)
     return _merge_queries(combo_queries + remembered, generated, limit=limit, exclude=muted)
 

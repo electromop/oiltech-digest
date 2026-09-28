@@ -192,6 +192,23 @@ def test_discover_sources_on_core_goes_without_ai_when_ai_is_external(monkeypatc
     assert result["ai_forced_offline"] is True
 
 
+def test_generate_search_queries_falls_back_to_rules_when_model_fails(monkeypatch):
+    # 28.09: ответ модели без текста (лимит ушёл на рассуждение) ронял весь прогон радара.
+    from oiltech_digest.processing.openai_client import AIClientError
+
+    class Broken:
+        def complete_json(self, *args, **kwargs):
+            raise AIClientError("OpenAI response does not contain output text (status=incomplete)")
+
+    monkeypatch.setattr(agent, "make_client", lambda offline: Broken())
+    monkeypatch.setattr(agent.repository, "list_agent_memory", lambda **kwargs: [])
+
+    queries = agent.generate_search_queries("роботизация бурения", offline=False, limit=4)
+
+    assert queries == agent.generate_search_queries("роботизация бурения", offline=True, limit=4)
+    assert queries
+
+
 def test_search_web_none_provider_is_explicit_noop(monkeypatch):
     monkeypatch.setattr(agent.app_config, "SOURCE_DISCOVERY_SEARCH_PROVIDER", "none")
 
