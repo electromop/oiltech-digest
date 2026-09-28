@@ -1,0 +1,484 @@
+from oiltech_digest.ingestion.source_diagnostics import ProbeResult
+from oiltech_digest.source_discovery import sandbox
+
+
+def test_collect_candidate_articles_writes_sandbox_rows(monkeypatch):
+    listing = b"""
+    <html><body>
+      <a href="/news/robotic-drilling">Robotic drilling system improves oilfield operations</a>
+    </body></html>
+    """
+    article = b"""
+    <html><head><title>Robotic drilling system improves oilfield operations</title></head>
+    <body><article>
+      <p>The company deployed a robotic drilling system for oilfield well construction.</p>
+      <p>The technology improves uptime, safety and operational control for upstream teams.</p>
+    </article></body></html>
+    """
+    rows = []
+
+    def fake_probe(url, timeout=20):
+        if url == "https://example.com/news":
+            return ProbeResult(url=url, status=200, bytes=len(listing)), listing
+        return ProbeResult(url=url, status=200, bytes=len(article)), article
+
+    monkeypatch.setattr(sandbox, "probe_url", fake_probe)
+    monkeypatch.setattr(
+        sandbox.repository,
+        "upsert_source_candidate_article",
+        lambda candidate_id, rec: rows.append({"candidate_id": candidate_id, **rec}) or 101,
+    )
+
+    result = sandbox.collect_candidate_articles(
+        {"id": 42, "url": "https://example.com/news", "name": "Example"},
+        article_limit=3,
+    )
+
+    assert result["inserted_or_updated"] == 1
+    assert rows[0]["candidate_id"] == 42
+    assert rows[0]["url"] == "https://example.com/news/robotic-drilling"
+    assert rows[0]["prefilter_keep"] is True
+
+
+def test_process_candidate_articles_saves_ai_result(monkeypatch):
+    saved = []
+    article = {
+        "id": 101,
+        "candidate_id": 42,
+        "title": "Robotic drilling system improves oilfield operations",
+        "url": "https://example.com/news/robotic-drilling",
+        "raw_text": "The company deployed a robotic drilling system for oilfield well construction.",
+        "language": "en",
+        "source_name": "Example",
+        "source_category": "роботизация бурения",
+    }
+    tags = [{"id": 7, "name": "Бурение", "parent_id": None, "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}]
+    criteria = [{"id": 9, "name": "Технологическая значимость", "weight": 100, "keywords_json": [], "keywords_en_json": ["drilling"]}]
+
+    monkeypatch.setattr(sandbox.repository, "list_enabled_tags", lambda: tags)
+    monkeypatch.setattr(sandbox.repository, "list_enabled_scoring_criteria", lambda: criteria)
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=True: [article],
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_article_result",
+        lambda article_id, payload: saved.append({"article_id": article_id, **payload}),
+    )
+
+    stats = sandbox.process_candidate_articles(42, limit=5, offline=True)
+
+    assert stats == {"processed": 1, "relevant": 1, "rejected": 0, "errors": 0}
+    assert saved[0]["article_id"] == 101
+    assert saved[0]["relevant"] is True
+    assert saved[0]["processing_status"] == "ok"
+    assert saved[0]["total_score"] == 33.33
+    assert saved[0]["relevance_model"] == "offline-keywords"
+    assert saved[0]["relevance_reason"] == "без ИИ: ключевые слова тематики «Бурение» (1)"
+
+
+def test_offline_relevance_rejects_article_without_topic_keywords(monkeypatch):
+    # Дефект 3: без ИИ заглушка отвечала «релевантно» на всё, и вердикт кандидата завышался.
+    # Тема кандидата («роботизация бурения») совпадает с ключом тега, но в расчёт не идёт.
+    saved = []
+    rejected = []
+    article = {
+        "id": 102,
+        "candidate_id": 42,
+        "title": "Company announces quarterly dividend",
+        "url": "https://example.com/news/dividend",
+        "raw_text": "The board approved a dividend payment to shareholders.",
+        "language": "en",
+        "source_name": "Example",
+        "source_category": "роботизация бурения",
+    }
+    tags = [{"id": 7, "name": "Бурение", "parent_id": None, "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}]
+
+    monkeypatch.setattr(sandbox.repository, "list_enabled_tags", lambda: tags)
+    monkeypatch.setattr(sandbox.repository, "list_enabled_scoring_criteria", lambda: [{"id": 9, "name": "Значимость", "weight": 100}])
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=True: [article],
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_article_result",
+        lambda article_id, payload: saved.append(payload),
+    )
+    monkeypatch.setattr(sandbox, "_save_rejected", lambda article, reason, model: rejected.append((article["id"], reason, model)))
+
+    stats = sandbox.process_candidate_articles(42, limit=5, offline=True)
+
+    assert stats == {"processed": 1, "relevant": 0, "rejected": 1, "errors": 0}
+    assert saved == []
+    assert rejected == [(102, "без ИИ: в тексте нет ключевых слов тематик заказчика", "offline-keywords")]
+
+
+def test_evaluate_source_candidate_uses_ai_recommendation_with_evidence(monkeypatch):
+    updates = []
+    actions = []
+    recommendations = []
+    memory_updates = []
+    articles = [
+        {
+            "title": "Robotic drilling system",
+            "url": "https://example.com/news/robotic-drilling",
+            "relevant": True,
+            "summary": "Запущена роботизированная буровая.",
+            "total_score": 82,
+            "score_label": "Высокая",
+            "processing_status": "ok",
+        }
+    ]
+
+    monkeypatch.setattr(
+        sandbox.repository,
+        "get_source_candidate",
+        lambda candidate_id: {
+            "id": candidate_id,
+            "url": "https://example.com/news",
+            "name": "Example",
+            "topic": "роботизация бурения",
+        },
+    )
+    monkeypatch.setattr(sandbox.repository, "create_agent_task", lambda *args, **kwargs: 77)
+    monkeypatch.setattr(sandbox, "collect_candidate_articles", lambda candidate, article_limit=5: {"inserted_or_updated": 1, "errors": 0, "articles": []})
+    monkeypatch.setattr(sandbox, "process_candidate_articles", lambda candidate_id, limit=5, offline=True: {"processed": 1, "relevant": 1, "rejected": 0, "errors": 0})
+    monkeypatch.setattr(
+        sandbox.repository,
+        "source_candidate_article_metrics",
+        lambda candidate_id: {
+            "tested_articles": 1,
+            "relevant_articles": 1,
+            "avg_score": 82,
+            "duplicate_count": 0,
+            "noise_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=False: articles,
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "recommend_source_action",
+        lambda metrics, offline=True, evidence=None: recommendations.append({
+            "metrics": metrics,
+            "offline": offline,
+            "evidence": evidence,
+        }) or {
+            "recommended_action": "test_more",
+            "reason": "AI просит проверить больше материалов.",
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_quality",
+        lambda candidate, metrics, evidence, offline=True: {
+            "source": "ai",
+            "model": "test-model",
+            "quality_label": "перспективный",
+            "usefulness_score": 64,
+            "topic_fit": "Подходит теме.",
+            "article_pattern": "Есть технические материалы.",
+            "useful_summary": "Источник дает материалы по роботизации бурения.",
+            "strengths": ["Есть релевантный материал."],
+            "risks": ["Малая выборка."],
+            "next_checks": ["Проверить регулярность."],
+            "confidence": 0.62,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_regularity",
+        lambda candidate, collected, evidence: {
+            "source": "rules",
+            "regularity_label": "active_but_sparse",
+            "is_regular": True,
+            "sample_size": 1,
+            "dated_articles": 1,
+            "articles_last_30_days": 1,
+            "articles_last_90_days": 1,
+            "latest_age_days": 3,
+            "archive_suspected": False,
+            "section_updates": True,
+            "reason": "Источник обновляется, но выборка мала.",
+            "risks": [],
+            "next_checks": [],
+            "confidence": 0.62,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "apply_candidate_learning",
+        lambda candidate_id, **kwargs: {"candidate_id": candidate_id, "event_type": kwargs["event_type"]},
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "upsert_agent_memory",
+        lambda **kwargs: memory_updates.append(kwargs) or 501,
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_assessment",
+        lambda candidate_id, **kwargs: updates.append({"candidate_id": candidate_id, **kwargs}),
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "record_agent_action",
+        lambda task_id, action_type, **kwargs: actions.append({"task_id": task_id, "action_type": action_type, **kwargs}),
+    )
+
+    result = sandbox.evaluate_source_candidate(42, article_limit=5, offline=False)
+
+    assert recommendations[0]["offline"] is False
+    assert recommendations[0]["evidence"] == articles
+    assert updates[0]["recommended_action"] == "test_more"
+    assert updates[0]["review_comment"].startswith("Итоговая оценка источника")
+    assert "AI просит проверить больше материалов." in updates[0]["review_comment"]
+    assert "AI-оценка источника" in updates[0]["review_comment"]
+    assert "Регулярность источника" in updates[0]["review_comment"]
+    assert result["source_quality"]["quality_label"] == "перспективный"
+    assert result["source_regularity"]["regularity_label"] == "active_but_sparse"
+    assert result["source_health"]["recommended_action"] == "test_more"
+    assert result["quality_memory"] == {"ok": True, "memory_id": 501}
+    assert memory_updates[0]["memory_type"] == "source_candidate_quality"
+    assert memory_updates[0]["facts"]["source_quality"]["useful_summary"] == "Источник дает материалы по роботизации бурения."
+    assert memory_updates[0]["facts"]["source_regularity"]["regularity_label"] == "active_but_sparse"
+    assert memory_updates[0]["facts"]["source_health"]["verdict"] == "promising_needs_more_data"
+    assert result["review_comment"] == updates[0]["review_comment"]
+    assert actions[0]["action_type"] == "evaluate_source_candidate_finished"
+
+
+def test_evaluate_source_candidate_rejects_zero_relevant_after_sandbox(monkeypatch):
+    updates = []
+    articles = [
+        {
+            "title": f"Industry item {index}",
+            "url": f"https://example.com/news/{index}",
+            "relevant": False,
+            "summary": "",
+            "total_score": 0,
+            "score_label": "Без оценки",
+            "processing_status": "rejected",
+        }
+        for index in range(5)
+    ]
+
+    monkeypatch.setattr(
+        sandbox.repository,
+        "get_source_candidate",
+        lambda candidate_id: {
+            "id": candidate_id,
+            "url": "https://example.com/news",
+            "name": "Example",
+            "topic": "ГРП, МГРП и стимуляция",
+        },
+    )
+    monkeypatch.setattr(sandbox.repository, "create_agent_task", lambda *args, **kwargs: 77)
+    monkeypatch.setattr(sandbox, "collect_candidate_articles", lambda candidate, article_limit=5: {"inserted_or_updated": 5, "errors": 0, "articles": []})
+    monkeypatch.setattr(sandbox, "process_candidate_articles", lambda candidate_id, limit=5, offline=True: {"processed": 5, "relevant": 0, "rejected": 5, "errors": 0})
+    monkeypatch.setattr(
+        sandbox.repository,
+        "source_candidate_article_metrics",
+        lambda candidate_id: {
+            "tested_articles": 5,
+            "relevant_articles": 0,
+            "avg_score": 70,
+            "duplicate_count": 0,
+            "noise_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=False: articles,
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "recommend_source_action",
+        lambda metrics, offline=True, evidence=None: {
+            "recommended_action": "human_review",
+            "reason": "Средний балл высокий, но релевантность спорная.",
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_quality",
+        lambda candidate, metrics, evidence, offline=True: {
+            "source": "rules",
+            "quality_label": "перспективный",
+            "usefulness_score": 80,
+            "topic_fit": "",
+            "article_pattern": "",
+            "useful_summary": "",
+            "strengths": [],
+            "risks": [],
+            "next_checks": [],
+            "confidence": 0.5,
+        },
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_regularity",
+        lambda candidate, collected, evidence: {
+            "regularity_label": "active_but_sparse",
+            "archive_suspected": False,
+            "reason": "",
+            "risks": [],
+            "next_checks": [],
+            "confidence": 0.5,
+        },
+    )
+    monkeypatch.setattr(sandbox, "apply_candidate_learning", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(sandbox.repository, "upsert_agent_memory", lambda **kwargs: 501)
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_assessment",
+        lambda candidate_id, **kwargs: updates.append({"candidate_id": candidate_id, **kwargs}),
+    )
+    monkeypatch.setattr(sandbox.repository, "record_agent_action", lambda *args, **kwargs: None)
+
+    result = sandbox.evaluate_source_candidate(42, article_limit=5, offline=False)
+
+    assert updates[0]["recommended_action"] == "reject"
+    assert updates[0]["status"] == "rejected"
+    assert result["source_health"]["recommended_action"] == "reject"
+
+
+def test_online_relevance_is_decided_by_model_not_keywords(monkeypatch):
+    # С ИИ ключи тематик не подменяют гейт: статья без ключей, которую модель сочла
+    # релевантной, проходит, а модель и причина — из ответа модели.
+    from oiltech_digest.processing.openai_client import AIResponse
+
+    saved = []
+    gate_calls = []
+    article = {
+        "id": 103,
+        "candidate_id": 42,
+        "title": "Operator digitizes well construction workflow",
+        "url": "https://example.com/news/workflow",
+        "raw_text": "The operator moved well construction planning to a digital platform.",
+        "language": "en",
+        "source_name": "Example",
+        "source_category": "роботизация бурения",
+    }
+    tags = [{"id": 7, "name": "Бурение", "parent_id": None, "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}]
+
+    monkeypatch.setattr(sandbox.repository, "list_enabled_tags", lambda: tags)
+    monkeypatch.setattr(sandbox.repository, "list_enabled_scoring_criteria", lambda: [{"id": 9, "name": "Значимость", "weight": 100}])
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=True: [article],
+    )
+    monkeypatch.setattr(
+        sandbox.repository,
+        "update_source_candidate_article_result",
+        lambda article_id, payload: saved.append(payload),
+    )
+    monkeypatch.setattr(sandbox.pipeline, "make_client", lambda offline: sandbox.pipeline.OfflineAIClient())
+    monkeypatch.setattr(
+        sandbox.pipeline,
+        "relevance_article",
+        lambda article, client, *args, **kwargs: gate_calls.append(article["id"])
+        or AIResponse({"relevant": True, "reason": "цифровизация строительства скважин"}, "gpt-test", 10, 2),
+    )
+
+    stats = sandbox.process_candidate_articles(42, limit=5, offline=False)
+
+    assert gate_calls == [103]
+    assert stats["relevant"] == 1
+    assert saved[0]["relevance_model"] == "gpt-test"
+    assert saved[0]["relevance_reason"] == "цифровизация строительства скважин"
+
+
+def test_offline_candidate_without_topic_keywords_is_not_recommended_to_add(monkeypatch):
+    # Сквозной смысл дефекта 3: пять статей без ключей тематик без ИИ больше не дают «add».
+    from oiltech_digest.source_discovery.agent import recommend_source_action
+
+    rejected = []
+    articles = [
+        {
+            "id": 200 + index,
+            "candidate_id": 42,
+            "title": f"Company news #{index}",
+            "url": f"https://example.com/news/{index}",
+            "raw_text": "The board met shareholders and approved the annual report.",
+            "language": "en",
+            "source_category": "роботизация бурения",
+        }
+        for index in range(5)
+    ]
+    tags = [{"id": 7, "name": "Бурение", "parent_id": None, "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}]
+
+    monkeypatch.setattr(sandbox.repository, "list_enabled_tags", lambda: tags)
+    monkeypatch.setattr(sandbox.repository, "list_enabled_scoring_criteria", lambda: [{"id": 9, "name": "Значимость", "weight": 100}])
+    monkeypatch.setattr(
+        sandbox.repository,
+        "list_source_candidate_articles",
+        lambda candidate_id, limit=5, only_unprocessed=True: articles,
+    )
+    monkeypatch.setattr(sandbox, "_save_rejected", lambda article, reason, model: rejected.append(article["id"]))
+
+    stats = sandbox.process_candidate_articles(42, limit=5, offline=True)
+    recommendation = recommend_source_action(
+        {
+            "tested_articles": 5,
+            "processed_articles": stats["processed"],
+            "relevant_articles": stats["relevant"],
+            "noise_count": stats["rejected"],
+        },
+        offline=True,
+    )
+
+    assert stats == {"processed": 5, "relevant": 0, "rejected": 5, "errors": 0}
+    assert len(rejected) == 5
+    assert recommendation["recommended_action"] == "reject"
+
+
+def test_evaluation_on_core_goes_without_ai_when_ai_is_external(monkeypatch):
+    # Дефект 1: песочница на РФ-ядре с ИИ получала 403 от OpenAI. При вынесенном ИИ
+    # все её ИИ-шаги идут по правилам, и итог это говорит.
+    offline_seen = {}
+    monkeypatch.setattr(sandbox.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(sandbox.config, "AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr(
+        sandbox.repository,
+        "get_source_candidate",
+        lambda candidate_id: {"id": candidate_id, "url": "https://example.com/news", "topic": "бурение"},
+    )
+    monkeypatch.setattr(sandbox.repository, "create_agent_task", lambda *args, **kwargs: 77)
+    monkeypatch.setattr(
+        sandbox,
+        "process_candidate_articles",
+        lambda candidate_id, limit=5, offline=True: offline_seen.setdefault("process", offline)
+        and {"processed": 0, "relevant": 0, "rejected": 0, "errors": 0},
+    )
+    monkeypatch.setattr(sandbox.repository, "source_candidate_article_metrics", lambda candidate_id: {"tested_articles": 0, "relevant_articles": 0, "avg_score": None, "duplicate_count": 0, "noise_count": 0})
+    monkeypatch.setattr(sandbox.repository, "list_source_candidate_articles", lambda candidate_id, limit=5, only_unprocessed=False: [])
+    monkeypatch.setattr(
+        sandbox,
+        "recommend_source_action",
+        lambda metrics, offline=True, evidence=None: offline_seen.setdefault("recommend", offline)
+        and {"recommended_action": "human_review", "reason": "мало данных"},
+    )
+    monkeypatch.setattr(
+        sandbox,
+        "assess_source_quality",
+        lambda candidate, metrics, evidence, offline=True: offline_seen.setdefault("quality", offline)
+        and {"source": "rules", "quality_label": "сомнительный"},
+    )
+    monkeypatch.setattr(sandbox, "apply_candidate_learning", lambda candidate_id, **kwargs: None)
+    monkeypatch.setattr(sandbox.repository, "upsert_agent_memory", lambda **kwargs: 1)
+    monkeypatch.setattr(sandbox.repository, "update_source_candidate_assessment", lambda candidate_id, **kwargs: None)
+    monkeypatch.setattr(sandbox.repository, "record_agent_action", lambda *args, **kwargs: None)
+
+    result = sandbox.evaluate_source_candidate(42, offline=False, collect=False)
+
+    assert offline_seen == {"process": True, "recommend": True, "quality": True}
+    assert result["ai_forced_offline"] is True

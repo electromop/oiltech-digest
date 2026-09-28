@@ -694,8 +694,7 @@ describe("App smoke", () => {
     expect(screen.getAllByRole("button", { name: heading }).length).toBeGreaterThanOrEqual(1);
   });
 
-  // Агентная ветвь с 18.09 — на поддомене; в меню MVP-1 — ссылки на неё, а не экраны.
-  it("админ видит в меню ссылки на радар и агента источников на поддомене агентов", async () => {
+  it("админ видит экран агента источников в навигации", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -704,14 +703,13 @@ describe("App smoke", () => {
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
     expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
-    const radar = screen.getAllByRole("link", { name: "Технологический радар" });
-    expect(radar[0]).toHaveAttribute("href", "https://agents.oiltech-digest.ru/?screen=signal-radar");
-    expect(screen.getAllByRole("link", { name: "Агент источников" })[0]).toHaveAttribute(
-      "href", "https://agents.oiltech-digest.ru/?screen=source-agent",
-    );
+    // В едином контуре радар и агент источников — родные экраны, не ссылки на поддомен.
+    expect(screen.getAllByRole("button", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: "Агент источников" }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("обычный пользователь видит радар, но не агента источников", async () => {
+  it("обычный пользователь не видит экран агента и не открывает его по прямой ссылке", async () => {
+    window.history.replaceState(null, "", "/?screen=source-agent");
 
     const adminImpl = fetchMock.getMockImplementation();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -728,9 +726,10 @@ describe("App smoke", () => {
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
-    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
-    expect(screen.queryAllByRole("link", { name: "Агент источников" })).toHaveLength(0);
-    expect(screen.getAllByRole("link", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByRole("heading", { name: "Нет доступа" })).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "Агент источников" })).toHaveLength(0);
+    // Радар — не админский экран: обычный пользователь видит его в меню.
+    expect(screen.getAllByRole("button", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("обычный пользователь не видит группу «Прототипы» и не открывает их по прямой ссылке", async () => {
