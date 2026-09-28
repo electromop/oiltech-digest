@@ -16,6 +16,7 @@ from oiltech_digest.ingestion.relevance_filter import should_keep_article
 from oiltech_digest.ingestion.source_diagnostics import probe_url
 from oiltech_digest.processing import pipeline
 from oiltech_digest.source_discovery.agent import (
+    core_ai_offline,
     recommend_source_action,
     _name_from_domain,
     _status_for_recommendation,
@@ -24,6 +25,8 @@ from oiltech_digest.source_discovery.learning import apply_candidate_learning
 from oiltech_digest.source_discovery.source_health import assess_source_health, health_comment
 from oiltech_digest.source_discovery.source_quality import assess_source_quality, quality_comment
 from oiltech_digest.source_discovery.source_regularity import assess_source_regularity, regularity_comment
+
+OFFLINE_RELEVANCE_MODEL = "offline-keywords"
 
 
 def evaluate_source_candidate(
@@ -38,6 +41,10 @@ def evaluate_source_candidate(
     candidate = repository.get_source_candidate(candidate_id)
     if candidate is None:
         raise ValueError(f"source candidate id={candidate_id} not found")
+    # Песочница исполняется на ядре: при вынесенном ИИ OpenAI отсюда отвечает 403.
+    # Оценка с ИИ идёт задачей source_candidate_evaluate на NL, а не сюда.
+    ai_forced_offline = core_ai_offline(offline) and not offline
+    offline = core_ai_offline(offline)
 
     task_id = repository.create_agent_task(
         "evaluate_source_candidate",
@@ -113,6 +120,7 @@ def evaluate_source_candidate(
         "source_health": source_health,
         "recommended_action": final_recommendation["recommended_action"],
         "next_status": next_status,
+        "ai_forced_offline": ai_forced_offline,
         "review_comment": review_comment,
         "quality_memory": quality_memory,
         "learning": learning,
@@ -275,10 +283,9 @@ def process_candidate_articles(candidate_id: int, *, limit: int = 5, offline: bo
                 stats["rejected"] += 1
                 continue
 
-            rel_resp = pipeline.relevance_article(article, client)
-            relevant = bool(rel_resp.data.get("relevant"))
+            relevant, relevance_reason, relevance_model = _relevance(article, tags, client, offline=offline)
             if not relevant:
-                _save_rejected(article, rel_resp.data.get("reason"), rel_resp.model)
+                _save_rejected(article, relevance_reason, relevance_model)
                 stats["rejected"] += 1
                 continue
 
@@ -295,8 +302,8 @@ def process_candidate_articles(candidate_id: int, *, limit: int = 5, offline: bo
                 int(article["id"]),
                 {
                     "relevant": True,
-                    "relevance_reason": rel_resp.data.get("reason"),
-                    "relevance_model": rel_resp.model,
+                    "relevance_reason": relevance_reason,
+                    "relevance_model": relevance_model,
                     "summary": summary_resp.data.get("summary"),
                     "summary_model": summary_resp.model,
                     "title_ru": title_ru,
@@ -323,6 +330,21 @@ def process_candidate_articles(candidate_id: int, *, limit: int = 5, offline: bo
             )
             stats["errors"] += 1
     return stats
+
+
+def _relevance(article: dict, tags: list[dict], client, *, offline: bool) -> tuple[bool, str | None, str | None]:
+    if not offline:
+        response = pipeline.relevance_article(article, client)
+        return bool(response.data.get("relevant")), response.data.get("reason"), response.model
+    # Без ИИ OfflineAIClient на релевантность всегда отвечает «да», и вердикт по такой
+    # выборке завышен: все статьи релевантны → «add». Вместо заглушки — ключи тематик
+    # заказчика в заголовке и тексте. Тему кандидата (source_category) не смотрим: её
+    # название почти всегда совпадает с ключом своего тега, и проверка снова стала бы «да».
+    match = pipeline.keyword_tag({"title": article.get("title"), "raw_text": article.get("raw_text")}, tags)
+    if not match["matches"]:
+        return False, "без ИИ: в тексте нет ключевых слов тематик заказчика", OFFLINE_RELEVANCE_MODEL
+    tag_name = next((tag.get("name") for tag in tags if tag["id"] == match["tag_id"]), None)
+    return True, f"без ИИ: ключевые слова тематики «{tag_name}» ({match['matches']})", OFFLINE_RELEVANCE_MODEL
 
 
 def _candidate_as_source(candidate: dict) -> dict:

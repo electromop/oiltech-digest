@@ -1701,10 +1701,18 @@ def source_discovery_daily_usage() -> dict[str, int]:
             """
             SELECT
               (
+                -- Нажатие, остановленное лимитом до первой итерации, — не цикл: без этого
+                -- условия каждое такое нажатие росло в счётчике («9/6» при лимите 6).
                 SELECT COUNT(*)::int
-                FROM agent_runs
-                WHERE kind = 'source_discovery_loop'
-                  AND created_at >= date_trunc('day', now())
+                FROM agent_runs r
+                WHERE r.kind = 'source_discovery_loop'
+                  AND r.created_at >= date_trunc('day', now())
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM agent_actions a
+                    WHERE a.run_id = r.id
+                      AND a.action_type = 'source_discovery_loop_budget_stop'
+                  )
               ) AS loop_runs,
               (
                 SELECT COUNT(*)::int

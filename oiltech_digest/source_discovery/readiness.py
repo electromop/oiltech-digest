@@ -6,6 +6,7 @@ from typing import Any
 
 from oiltech_digest import config
 from oiltech_digest.db import repository
+from oiltech_digest.source_discovery import budget
 
 
 def source_discovery_readiness() -> dict[str, Any]:
@@ -219,11 +220,7 @@ def _budget_status() -> dict[str, Any]:
             }],
             "recommendations": ["Проверьте миграции таблиц agent_runs, agent_actions и background_jobs."],
         }
-    limits = {
-        "loop_runs": _env_int("SOURCE_DISCOVERY_MAX_DAILY_LOOP_RUNS", 4),
-        "candidates_created": _env_int("SOURCE_DISCOVERY_MAX_DAILY_CANDIDATES", 100),
-        "candidate_evaluations": _env_int("SOURCE_DISCOVERY_MAX_DAILY_EVALUATIONS", 100),
-    }
+    limits = budget.default_limits()
     issues = []
     for key, limit in limits.items():
         if limit and int(usage.get(key) or 0) >= limit:

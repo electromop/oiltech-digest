@@ -232,7 +232,9 @@ def test_agent_loop_delegates_evaluation_to_external_worker(monkeypatch):
     monkeypatch.setattr(
         loop.repository,
         "create_background_job",
-        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs}) or {"id": 901},
+        lambda kind, payload, **kwargs: jobs.append({"kind": kind, "payload": payload, **kwargs})
+        # Репозиторий может переложить задачу в другую полосу (lanes.route) — метка берётся из строки задачи.
+        or {"id": 901, "queue_name": "external-agents"},
     )
     monkeypatch.setattr(
         loop,
@@ -282,6 +284,26 @@ def test_agent_loop_delegates_evaluation_to_external_worker(monkeypatch):
     assert observation["evaluated_count"] == 0
     assert observation["evaluation_jobs"] == 1
     assert memory[0]["facts"]["evaluation_jobs"] == 1
+
+
+def test_delegated_evaluation_reports_the_queue_the_job_landed_in(monkeypatch):
+    # Метка — из строки задачи, а не строкой: после слияния с ядром MVP-1 lanes.route
+    # перекладывает оценку кандидата из external-ai в external-agents.
+    monkeypatch.setattr(loop.config, "EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr(loop.config, "AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr(
+        loop.repository,
+        "create_background_job",
+        lambda kind, payload, **kwargs: {"id": 5, "queue_name": "external-agents"},
+    )
+
+    results = loop._evaluate_discovered_candidates(
+        {"candidates": [{"id": 11}]},
+        loop.AgentLoopConfig(offline=False),
+        run_id=77,
+    )
+
+    assert results == [{"ok": True, "queued": "external-agents", "candidate_id": 11, "job_id": 5}]
 
 
 def test_agent_loop_stops_before_planning_when_daily_candidate_budget_is_reached(monkeypatch):
