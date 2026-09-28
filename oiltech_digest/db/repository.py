@@ -1006,7 +1006,18 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_url) DO UPDATE SET
-              signal_id = EXCLUDED.signal_id,
+              -- Ссылка видимой карточки к другой не переезжает: иначе у прежней не
+              -- оставалось источника, а счётчик показывал старое число (сигнал 97,
+              -- замечание 22.09). Переезд — только из скрытого дубля в главную.
+              signal_id = CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM signals owner
+                  WHERE owner.id = signal_evidence.signal_id
+                    AND owner.merged_into_signal_id IS NULL
+                    AND owner.id <> EXCLUDED.signal_id
+                ) THEN signal_evidence.signal_id
+                ELSE EXCLUDED.signal_id
+              END,
               article_id = COALESCE(EXCLUDED.article_id, signal_evidence.article_id),
               title = EXCLUDED.title,
               title_ru = EXCLUDED.title_ru,
@@ -1173,6 +1184,51 @@ def touch_signal(signal_id: int) -> None:
     with get_connection() as conn:
         conn.execute("UPDATE signals SET last_seen_at = now(), updated_at = now() WHERE id = %s", (int(signal_id),))
         conn.commit()
+
+
+def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
+    """Каким видимым карточкам уже принадлежат ссылки: {url: {id, signal_key}}."""
+    urls = [url for url in urls if url]
+    if not urls:
+        return {}
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT e.source_url, s.id, s.signal_key
+            FROM signal_evidence e
+            JOIN signals s ON s.id = e.signal_id
+            WHERE e.source_url = ANY(%s)
+              AND s.merged_into_signal_id IS NULL
+            """,
+            (list(urls),),
+        )
+        return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
+
+
+def refresh_all_signal_evidence_counts() -> int:
+    """Пересчитать evidence_count у всех карточек; вернуть, у скольких он был неверен.
+
+    Ссылки раньше молча переезжали между карточками, а счётчик пересчитывался только у
+    получателя: у прежней оставалось старое число при пустом списке ссылок."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            WITH actual AS (
+              SELECT s.id, COUNT(e.id)::int AS n
+              FROM signals s
+              LEFT JOIN signal_evidence e ON e.signal_id = s.id
+              GROUP BY s.id
+            )
+            UPDATE signals s
+            SET evidence_count = actual.n, updated_at = now()
+            FROM actual
+            WHERE actual.id = s.id AND s.evidence_count <> actual.n
+            """,
+        )
+        changed = cur.rowcount
+        conn.commit()
+        return int(changed or 0)
 
 
 def signal_key_owners(keys: list[str]) -> dict[str, dict]:

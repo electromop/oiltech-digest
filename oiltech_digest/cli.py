@@ -2059,6 +2059,13 @@ def cmd_retire_signal_query_hints(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_refresh_signal_evidence_counts(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    changed = repository.refresh_all_signal_evidence_counts()
+    print(f"refresh-signal-evidence-counts: исправлено карточек {changed}")
+
+
 def cmd_assign_signal_hint_topics(args: argparse.Namespace) -> None:
     from oiltech_digest.signal_discovery import assign_query_hint_topics
 
@@ -2916,6 +2923,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_assign_hints.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
     p_assign_hints.add_argument("--json", action="store_true")
     p_assign_hints.set_defaults(func=cmd_assign_signal_hint_topics)
+
+    sub.add_parser(
+        "refresh-signal-evidence-counts",
+        help="пересчитать число ссылок у карточек радара (у тех, чьи ссылки переехали в другие)",
+    ).set_defaults(func=cmd_refresh_signal_evidence_counts)
 
     p_export_signal_training = sub.add_parser(
         "export-signal-training-jsonl",
