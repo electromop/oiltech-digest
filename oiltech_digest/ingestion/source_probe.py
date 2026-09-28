@@ -19,10 +19,11 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
+from urllib.parse import urlsplit
 
 import feedparser
 
-from oiltech_digest.db import repository
+from oiltech_digest.db import connection, repository
 from oiltech_digest.ingestion import playwright_parser, request_parser, rss_parser, telegram_parser, verdicts
 from oiltech_digest.ingestion.verdicts import Step
 
@@ -37,7 +38,7 @@ def probe_source(source: dict) -> dict:
         "notes": _notes(source),
         "rows": [],
     }
-    with repository.read_only_connection() as conn:
+    with connection.read_only_connection() as conn:
         report["read_only"] = conn.execute("SHOW transaction_read_only").fetchone()[0] == "on"
         report["rows"] = _judge(conn, _steps(source, listing))
     counts = Counter(row["verdict"] for row in report["rows"])
@@ -98,7 +99,8 @@ def _steps(source: dict, listing: dict) -> Iterable[Step]:
 
 
 def _judge(conn, steps: Iterable[Step]) -> list[dict]:
-    """Вердикт по каждому шагу: рубежи сбора — как есть, дошедшее до вставки — insert_verdict."""
+    """Вердикт по каждому шагу: рубежи сбора — как есть, дошедшее до вставки — insert_verdict;
+    занятый ключ адреса проба делит на SAME и OTHER (key_verdict)."""
     rows: list[dict] = []
     pending: list[dict] = []
     positions: dict[str, int] = {}
@@ -107,6 +109,8 @@ def _judge(conn, steps: Iterable[Step]) -> list[dict]:
         if step.stage == verdicts.READY:
             result = repository.insert_verdict(conn, step.record, pending)
             verdict, holder = result.verdict, result.holder
+            if verdict == verdicts.DUP_URL_KEY:
+                verdict = key_verdict(holder, step.record.get("url") or "", step.record.get("title"))
             if verdict == verdicts.WOULD_INSERT:
                 pending.append(step.record)
                 positions.setdefault(step.record.get("url") or "", position)
@@ -121,6 +125,35 @@ def _judge(conn, steps: Iterable[Step]) -> list[dict]:
     for row in known:
         row["holder"] = holders.get(row["url"])
     return rows
+
+
+def key_verdict(holder: dict, url: str, title: str | None) -> str:
+    """Ключ адреса занят — этой же статьёй (SAME) или другой (OTHER: ключ склеил разные
+    статьи — потеря)? Без различителя «дубль по ключу» выглядит одинаково для нормы и для
+    потери: 25.09 так молча терялись все новые статьи Минэнерго, EIA, Губкина, Лукойла.
+
+    Проверка самого ключа, поэтому не через url_key: та же статья — если адрес тот же с
+    точностью до схемы, www, регистра хоста и хвостового слэша, или тот же заголовок.
+    Якорь и регистр пути/query — различия: по ним ключ как раз и склеивает.
+    """
+    if _plain_address(holder.get("url")) == _plain_address(url):
+        return verdicts.DUP_URL_KEY_SAME
+    same_title = " ".join((holder.get("title") or "").lower().split()) == " ".join((title or "").lower().split())
+    return verdicts.DUP_URL_KEY_SAME if same_title else verdicts.DUP_URL_KEY_OTHER
+
+
+def _plain_address(url: str | None) -> str:
+    raw = (url or "").strip()
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw  # кривой адрес (Invalid IPv6 URL, NFKC) не разобрать — сравниваем как есть
+    address = parts.netloc.lower().removeprefix("www.") + parts.path.rstrip("/")
+    if parts.query:
+        address += f"?{parts.query}"
+    if parts.fragment:
+        address += f"#{parts.fragment}"
+    return address
 
 
 def _notes(source: dict) -> list[str]:

@@ -118,7 +118,8 @@ def test_insert_article_decides_by_the_verdict_the_probe_reads(isolated_db, monk
 
     По каждому рубежу: сперва вердикт в соединении только для чтения (путь пробы), затем
     настоящая insert_article на той же базе — она обязана решить ТЕМ ЖЕ вердиктом и
-    вставить ровно тогда, когда проба сказала WOULD_INSERT."""
+    вставить ровно тогда, когда проба сказала WOULD_INSERT. Вставка знает только «ключ
+    занят» (DUP_URL_KEY); та же ли это статья — разметка пробы, её тесты ниже."""
     source = _source()
     other = _source(name="Другой", url="https://other.example")
     _article(source, "https://site.example/news/3", "Третья статья", "скрытое тело " * 20, hidden=True)
@@ -136,12 +137,10 @@ def test_insert_article_decides_by_the_verdict_the_probe_reads(isolated_db, monk
         (rec(source, f"{base}/1?from=main", "Первая статья", DRILLING), verdicts.WOULD_INSERT),
         # Та же статья в другом написании: схема, www, хвостовой слэш.
         (rec(source, "http://www.site.example/news/1/?from=main", "Первая", "другое тело " * 20),
-         verdicts.DUP_URL_KEY_SAME),
-        # Другой трекинговый хвост, заголовок тот же — та же статья.
-        (rec(source, f"{base}/1?from=feed", "Первая статья", "третье тело " * 20), verdicts.DUP_URL_KEY_SAME),
-        # Ключ тот же, а адрес и заголовок другие — ключ склеил разные статьи (потеря).
+         verdicts.DUP_URL_KEY),
+        # Ключ тот же, а адрес и заголовок другие: для вставки — тот же отказ.
         (rec(source, f"{base}/1?from=feed", "Совсем другая статья", "четвёртое тело " * 20),
-         verdicts.DUP_URL_KEY_OTHER),
+         verdicts.DUP_URL_KEY),
         # То же тело у видимой статьи того же источника.
         (rec(source, f"{base}/2", "Вторая статья", DRILLING), verdicts.DUP_BODY_HASH),
         # То же тело у ДРУГОГО источника — не рубеж: перепечатки — задача дедупа.
@@ -150,7 +149,7 @@ def test_insert_article_decides_by_the_verdict_the_probe_reads(isolated_db, monk
         (rec(source, f"{base}/3", "Третья статья", "новое тело " * 20), verdicts.KNOWN),
     ]
     for record, expected in cases:
-        with repository.read_only_connection() as ro:
+        with connection.read_only_connection() as ro:
             probed = real(ro, record)
         inserted = repository.insert_article(record)
 
@@ -257,6 +256,60 @@ def test_rss_probe_matches_real_collection(isolated_db, monkeypatch):
     assert stats["added"] == 1
 
 
+@pytest.mark.parametrize("broken", [
+    "https://exa[mple.com/news/1",          # urlsplit: Invalid IPv6 URL
+    "https://exa＃mple.com/news/1",     # «＃» по NFKC становится «#»: urlsplit отказывает
+])
+def test_malformed_link_breaks_neither_collection_nor_probe(isolated_db, monkeypatch, capsys, broken):
+    """Ревью #72: разметка SAME/OTHER звала urlsplit без except ValueError внутри
+    insert_verdict — то есть и в настоящей вставке. Статья с кривым адресом, собранная в
+    прошлом цикле, в следующем роняла бы parse_source источника целиком (и complete итогов
+    NL — 500). Прежний insert_article на ней просто возвращал False."""
+    source = _source(parse_strategy="rss", rss_url="https://feed.example/rss", url="https://feed.example")
+    _article(source, broken, "Статья с кривым адресом о бурении", "тело кривой статьи " * 20)
+    feed = _feed([
+        ("Статья с кривым адресом о бурении", broken, "Анонс про нефть."),
+        ("Новая скважина дала нефть", "https://feed.example/a/2", DRILLING),
+    ])
+    monkeypatch.setattr(rss_parser, "fetch", lambda url: feed)
+
+    stats = rss_parser.parse_source(repository.get_source(source["id"]))
+
+    assert stats["added"] == 1, "сбор источника не должен падать на знакомой статье с кривым адресом"
+    assert "https://feed.example/a/2" in _urls()
+
+    cli.main(["source-probe", str(source["id"])])
+
+    lines = capsys.readouterr().out.splitlines()
+    assert any(verdicts.DUP_URL_KEY_SAME in line and broken in line for line in lines)
+    assert lines[-1] == "итого 2: WOULD_INSERT=0 · DUP_URL_KEY_SAME=2"
+
+
+@pytest.mark.parametrize("stored, fresh, expected", [
+    # Ключ срезает якорь: две новости одной страницы пресс-центра — разные статьи.
+    ("https://site.example/press/#n1", "https://site.example/press/#n2", verdicts.DUP_URL_KEY_OTHER),
+    # Ключ снижает регистр всего адреса, а номер статьи в query бывает с регистром.
+    ("https://site.example/news?id=AbC", "https://site.example/news?id=aBc", verdicts.DUP_URL_KEY_OTHER),
+    ("https://site.example/News/Item", "https://site.example/news/item", verdicts.DUP_URL_KEY_OTHER),
+    # Схема, www, регистр хоста и хвостовой слэш — оформление одного адреса.
+    ("https://site.example/news/7", "http://www.SITE.example/news/7/", verdicts.DUP_URL_KEY_SAME),
+])
+def test_same_article_means_same_address_up_to_scheme_www_and_slash(isolated_db, monkeypatch, stored, fresh,
+                                                                     expected):
+    """Ревью #72: разметка повторяла нормализации ключа (регистр всего адреса, якорь), и
+    разные статьи, склеенные ключом по якорю или регистру, получали SAME — потеря выглядела
+    нормой. Заголовки здесь разные, так что вердикт решает только адрес."""
+    source = _source(parse_strategy="rss", rss_url="https://feed.example/rss", url="https://feed.example")
+    _article(source, stored, "Первая новость о бурении", "первое тело " * 20)
+    feed = _feed([("Вторая новость о бурении", fresh, "Анонс про нефть.")])
+    monkeypatch.setattr(rss_parser, "fetch", lambda url: feed)
+
+    report = source_probe.probe_source(source)
+
+    assert _verdicts(report) == [(fresh, expected)]
+    assert report["rows"][0]["holder"]["url"] == stored
+
+
 def test_telegram_probe_follows_last_seen_rules_of_collection(isolated_db, monkeypatch):
     """Состояние прошлого сбора собрано так, чтобы пройти все ветки: последний увиденный
     пост (11) в ленте есть, а его дата — позже поста 12 (так бывает, когда пост правили)."""
@@ -360,8 +413,10 @@ def test_source_probe_command_opens_only_read_only_connections(isolated_db, monk
         modes.append(conn.execute("SHOW transaction_read_only").fetchone()[0])
         return conn
 
-    monkeypatch.setattr(repository, "get_connection", connect)
     before = _snapshot()
+    # Все соединения процесса: и репозитория, и модуля connection (соединение самой пробы).
+    monkeypatch.setattr(repository, "get_connection", connect)
+    monkeypatch.setattr(connection, "get_connection", connect)
 
     cli.main(["source-probe", str(source["id"])])
 

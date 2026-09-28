@@ -21,6 +21,23 @@ def get_connection() -> psycopg.Connection:
 
 
 @contextmanager
+def read_only_connection():
+    """Соединение только для чтения: каждый запрос — своя транзакция READ ONLY.
+
+    Автокоммит — чтобы проба не держала транзакцию, пока качает страницы: открытая
+    транзакция держит блокировку таблицы и задержала бы выкат схемы на всё это время.
+    """
+    conn = get_connection()
+    try:
+        conn.commit()  # тестовое подключение открывает транзакцию своим SET search_path
+        conn.autocommit = True
+        conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
 def read_only_process():
     """Внутри блока каждое НОВОЕ соединение процесса — только для чтения: запись отклонит база.
 

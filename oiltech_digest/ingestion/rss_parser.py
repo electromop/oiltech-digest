@@ -80,8 +80,25 @@ def feed_entry_steps(source: dict, content: bytes, max_age_days: int | None = No
             continue
 
         published = normalize.parse_date(entry)
+        seen = {"url": url, "title": title[:500], "published_at": published}
+        if cutoff is not None and published is not None and published < cutoff:
+            yield Step(verdicts.OLD, **seen)
+            continue
+
         summary = normalize.clean_html(entry.get("summary", entry.get("description", "")))
-        record = {
+        pre_filter = should_keep_article(title, summary, source)
+        if not pre_filter.keep:
+            logger.info(
+                "RSS pre-filter skipped %s: %s (%s)",
+                source.get("name"),
+                title,
+                ", ".join(pre_filter.matched_noise[:5]),
+            )
+            yield Step(verdicts.PREFILTER, **seen, text_chars=len(summary),
+                       detail=", ".join(pre_filter.matched_noise[:5]))
+            continue
+
+        yield Step(verdicts.READY, **seen, text_chars=len(summary), record={
             "source_id": source["id"],
             "title": title[:500],
             "url": url,
@@ -91,24 +108,7 @@ def feed_entry_steps(source: dict, content: bytes, max_age_days: int | None = No
             "language": language,
             "content_hash": normalize.compute_content_hash(title, url),
             "image_url": normalize.extract_image(entry) or None,
-        }
-        step = {"url": url, "title": record["title"], "published_at": published,
-                "text_chars": len(summary), "record": record}
-        if cutoff is not None and published is not None and published < cutoff:
-            yield Step(verdicts.OLD, **step)
-            continue
-
-        pre_filter = should_keep_article(title, summary, source)
-        if not pre_filter.keep:
-            logger.info(
-                "RSS pre-filter skipped %s: %s (%s)",
-                source.get("name"),
-                title,
-                ", ".join(pre_filter.matched_noise[:5]),
-            )
-            yield Step(verdicts.PREFILTER, **step, detail=", ".join(pre_filter.matched_noise[:5]))
-            continue
-        yield Step(verdicts.READY, **step)
+        })
 
 
 def collected_externally(source: dict) -> bool:

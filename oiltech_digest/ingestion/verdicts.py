@@ -8,10 +8,13 @@
 `prefilter` — отсеял предфильтр, `ready` — дошёл до вставки.
 
 Рубежи самой вставки (заглавными) решает `repository.insert_verdict` — единственная их
-реализация, её зовёт и insert_article: `DUP_URL_KEY_SAME` — ключ адреса занят этой же
-статьёй, `DUP_URL_KEY_OTHER` — ключ занят ДРУГОЙ статьёй (склейка — потеря),
+реализация, её зовёт и insert_article: `DUP_URL_KEY` — ключ адреса занят видимой статьёй,
 `DUP_BODY_HASH` — такое же тело у видимой статьи источника, `known` — тот же адрес у
 скрытой строки, `WOULD_INSERT` — вставилась бы.
+
+`DUP_URL_KEY` проба делит на `DUP_URL_KEY_SAME` (ключ занят этой же статьёй) и
+`DUP_URL_KEY_OTHER` (ДРУГОЙ статьёй — склейка, потеря). Вставке это различие не нужно,
+поэтому его считает только проба (source_probe.key_verdict).
 
 Шаги (`Step`) общие для сбора и пробы источника (`source-probe`): сбор по ним считает
 сводку и вставляет `ready`, проба печатает вердикт. Одна реализация — один ответ.
@@ -29,6 +32,7 @@ TOO_SHORT = "too_short"
 PREFILTER = "prefilter"
 READY = "ready"
 
+DUP_URL_KEY = "DUP_URL_KEY"
 DUP_URL_KEY_SAME = "DUP_URL_KEY_SAME"
 DUP_URL_KEY_OTHER = "DUP_URL_KEY_OTHER"
 DUP_BODY_HASH = "DUP_BODY_HASH"
@@ -59,9 +63,9 @@ class ArticleFetch:
 class Step:
     """Чем для одного кандидата кончились рубежи сбора до вставки.
 
-    `record` — запись для insert_article: у READY всегда, у PREFILTER и OLD — если
-    статья уже скачана. `detail` — почему: слова шума предфильтра, статус загрузки,
-    правило «последнего увиденного поста».
+    `record` — запись для insert_article: у READY всегда, у PREFILTER и OLD страницы
+    статьи — если она уже скачана. `detail` — почему: слова шума предфильтра, статус
+    загрузки, правило «последнего увиденного поста».
     """
 
     stage: str

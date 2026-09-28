@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 import logging
@@ -3181,6 +3180,9 @@ def insert_verdict(conn, rec: dict, pending: Sequence[dict] = ()) -> InsertVerdi
     Порядок рубежей — порядок вставки: ключ адреса среди видимых статей → то же тело у
     видимой статьи того же источника → тот же адрес у любой строки (его держит
     уникальный индекс по url, ON CONFLICT (url) в insert_article).
+
+    Та же ли статья заняла ключ (SAME/OTHER), решает не здесь, а проба: вставке это не
+    нужно, а разбор адреса на кривом URL падал бы и ронял сбор источника.
     """
     url = rec.get("url") or ""
     key = normalize.url_key(url)
@@ -3194,9 +3196,7 @@ def insert_verdict(conn, rec: dict, pending: Sequence[dict] = ()) -> InsertVerdi
             (key,),
         ).fetchone()) or next((_pending_holder(p) for p, p_key, _ in earlier if p_key == key), None)
         if holder is not None:
-            same = _same_article(holder, url, rec.get("title"))
-            return InsertVerdict(verdicts.DUP_URL_KEY_SAME if same else verdicts.DUP_URL_KEY_OTHER,
-                                 key, body_hash, holder)
+            return InsertVerdict(verdicts.DUP_URL_KEY, key, body_hash, holder)
     # Третий рубеж: одинаковое ТЕЛО у того же источника. Такая же проверка уже
     # стояла в дозагрузке (article_fetcher), но только на замену текста — на
     # первичной вставке её не было, и брак заезжал свободно.
@@ -3241,43 +3241,6 @@ def _holder(row) -> dict | None:
 def _pending_holder(rec: dict) -> dict:
     return {"id": None, "url": rec.get("url") or "", "title": rec.get("title") or "",
             "source_id": rec.get("source_id"), "hidden": False, "position": None}
-
-
-def _same_article(holder: dict, url: str, title: str | None) -> bool:
-    """Ключ совпал — та же ли это статья? Проверка самого ключа, поэтому не через url_key.
-
-    Та же — если адрес тот же с точностью до оформления (схема, www, регистр, якорь,
-    хвостовой слэш; query — целиком, как есть) или тот же заголовок. Иначе ключ склеил
-    разные статьи: 25.09 так молча терялись все новые статьи Минэнерго, EIA, Губкина,
-    Лукойла — ключ срезал номер статьи из query. Без этого различителя «дубль по ключу»
-    выглядит одинаково для нормы (та же статья пришла снова) и для потери.
-    """
-    if _plain_address(holder.get("url")) == _plain_address(url):
-        return True
-    return " ".join((holder.get("title") or "").lower().split()) == " ".join((title or "").lower().split())
-
-
-def _plain_address(url: str | None) -> str:
-    parts = urlsplit((url or "").strip().lower())
-    address = f"{parts.netloc.removeprefix('www.')}{parts.path.rstrip('/')}"
-    return f"{address}?{parts.query}" if parts.query else address
-
-
-@contextmanager
-def read_only_connection():
-    """Соединение только для чтения: каждый запрос — своя транзакция READ ONLY.
-
-    Автокоммит — чтобы проба не держала транзакцию, пока качает страницы: открытая
-    транзакция держит блокировку таблицы и задержала бы выкат схемы на всё это время.
-    """
-    conn = get_connection()
-    try:
-        conn.commit()  # тестовое подключение открывает транзакцию своим SET search_path
-        conn.autocommit = True
-        conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
-        yield conn
-    finally:
-        conn.close()
 
 
 def articles_by_urls(conn, urls: Sequence[str]) -> dict[str, dict]:

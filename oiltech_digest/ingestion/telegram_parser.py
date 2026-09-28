@@ -134,16 +134,6 @@ def post_steps(source: dict, posts: list[TelegramPost], max_age_days: int | None
             yield Step(verdicts.OLD, **seen, detail="не новее последнего поста прошлого сбора")
             continue
 
-        record = {
-            "source_id": source["id"],
-            "title": post.title[:500],
-            "url": post.url,
-            "published_at": post.published_at,
-            "raw_text": post.text,
-            "text_truncated": False,
-            "language": "ru",
-            "content_hash": normalize.compute_content_hash(post.title, post.url),
-        }
         pre_filter = should_keep_article(post.title, post.text, source)
         if not pre_filter.keep:
             logger.info(
@@ -152,9 +142,19 @@ def post_steps(source: dict, posts: list[TelegramPost], max_age_days: int | None
                 post.title,
                 ", ".join(pre_filter.matched_noise[:5]),
             )
-            yield Step(verdicts.PREFILTER, **seen, record=record, detail=", ".join(pre_filter.matched_noise[:5]))
+            yield Step(verdicts.PREFILTER, **seen, detail=", ".join(pre_filter.matched_noise[:5]))
             continue
-        yield Step(verdicts.READY, **seen, record=record)
+
+        yield Step(verdicts.READY, **seen, record={
+            "source_id": source["id"],
+            "title": post.title[:500],
+            "url": post.url,
+            "published_at": post.published_at,
+            "raw_text": post.text,
+            "text_truncated": False,
+            "language": "ru",
+            "content_hash": normalize.compute_content_hash(post.title, post.url),
+        })
 
 
 def preview_url_for_source(source: dict) -> str | None:
