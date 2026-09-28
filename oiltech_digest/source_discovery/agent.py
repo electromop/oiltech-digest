@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -22,6 +23,7 @@ from oiltech_digest.db import repository
 from oiltech_digest.ingestion import request_parser
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 from oiltech_digest.ingestion.source_diagnostics import probe_url
+from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.source_discovery.prompts import (
     SEARCH_QUERY_INSTRUCTIONS,
@@ -36,6 +38,8 @@ TEMPORARY_UNAVAILABLE_COOLDOWN_HOURS = 24
 TEMPORARY_UNAVAILABLE_REJECT_AFTER = 3
 
 
+logger = logging.getLogger(__name__)
+
 @dataclass(frozen=True)
 class DiscoveryConfig:
     topic: str
@@ -47,6 +51,18 @@ class DiscoveryConfig:
     test_parse: bool = False
     run_id: int | None = None
     query_strategy: str = "balanced"
+
+
+def core_ai_offline(offline: bool) -> bool:
+    """Работать ли без ИИ здесь, на ядре.
+
+    При вынесенном ИИ (EXTERNAL_WORKERS_ENABLED и AI_EXECUTION_REGION=external) ядро
+    стоит на РФ-адресе, и OpenAI отвечает ему 403: снятый флажок «Без ИИ» ронял поиск
+    и цикл (дефект 1). Пока ИИ-часть агента источников не перенесена на NL, на ядре
+    она работает по правилам. Передача оценки кандидата на NL смотрит на исходный
+    флажок и от этого не меняется.
+    """
+    return offline or (app_config.EXTERNAL_WORKERS_ENABLED and app_config.AI_EXECUTION_REGION == "external")
 
 
 def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
@@ -76,10 +92,11 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
             status="running",
         )
 
+    ai_offline = core_ai_offline(config.offline)
     gaps = get_topic_gaps(limit=10)
     queries = generate_search_queries(
         config.topic,
-        offline=config.offline,
+        offline=ai_offline,
         limit=DEFAULT_MAX_QUERIES,
         strategy=config.query_strategy,
     )
@@ -168,7 +185,7 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
         }
         recommendation = recommend_source_action(
             {**metrics, "inspection": inspection},
-            offline=config.offline,
+            offline=ai_offline,
             evidence=(parse_result or {}).get("candidates") or [],
         )
         if recommendation.get("recommended_action") == "reject":
@@ -220,6 +237,7 @@ def discover_sources(config: DiscoveryConfig) -> dict[str, Any]:
         "dry_run": config.dry_run,
         "task_id": task_id,
         "topic": config.topic,
+        "ai_forced_offline": ai_offline and not config.offline,
         "topic_gaps": gaps,
         "queries": queries,
         "query_strategy": config.query_strategy,
@@ -275,13 +293,20 @@ def generate_search_queries(
     if offline:
         return _merge_queries(combo_queries + remembered, _offline_queries(topic, DEFAULT_MAX_QUERIES, strategy=strategy), limit=limit, exclude=muted)
     client = make_client(False)
-    response = client.complete_json(
-        SEARCH_QUERY_INSTRUCTIONS,
-        f"topic: {topic}\nstrategy: {strategy}\nlimit: {limit}\n{_topic_search_context(topic)}",
-        SEARCH_QUERY_SCHEMA,
-        max_output_tokens=600,
-    )
-    queries = [str(item).strip() for item in response.data.get("queries") or [] if str(item).strip()]
+    try:
+        response = client.complete_json(
+            SEARCH_QUERY_INSTRUCTIONS,
+            f"topic: {topic}\nstrategy: {strategy}\nlimit: {limit}\n{_topic_search_context(topic)}",
+            SEARCH_QUERY_SCHEMA,
+            max_output_tokens=600,
+        )
+        queries = [str(item).strip() for item in response.data.get("queries") or [] if str(item).strip()]
+    except (AIClientError, requests.RequestException) as exc:
+        # Запросы от модели — улучшение, а не обязательный шаг: при сбое идём на
+        # запросах по правилам. Раньше сбой здесь ронял весь прогон радара по всем
+        # темам (28.09: ответ без текста — лимит ушёл на рассуждение).
+        logger.warning("генерация поисковых запросов не удалась (%s), тема %r — запросы по правилам", exc, topic)
+        queries = []
     generated = _merge_queries(queries, _offline_queries(topic, DEFAULT_MAX_QUERIES, strategy=strategy), limit=DEFAULT_MAX_QUERIES)
     return _merge_queries(combo_queries + remembered, generated, limit=limit, exclude=muted)
 
@@ -713,7 +738,7 @@ def test_source_candidate(
     metrics = parse_result["metrics"]
     recommendation = recommend_source_action(
         metrics,
-        offline=offline,
+        offline=core_ai_offline(offline),
         evidence=parse_result.get("candidates") or [],
     )
     next_status = _status_for_recommendation(recommendation["recommended_action"])

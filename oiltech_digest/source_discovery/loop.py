@@ -13,6 +13,7 @@ from typing import Any
 
 from oiltech_digest import config
 from oiltech_digest.db import repository
+from oiltech_digest.source_discovery import budget
 from oiltech_digest.source_discovery.agent import DiscoveryConfig, discover_sources
 from oiltech_digest.source_discovery.planner import PlannerConfig, build_plan
 from oiltech_digest.source_discovery.sandbox import evaluate_source_candidate
@@ -235,40 +236,14 @@ def _iteration_result(iteration: int, plan: dict[str, Any], observations: list[d
 
 
 def _budget_state(config_value: AgentLoopConfig, *, candidates_in_run: int = 0) -> dict[str, Any]:
-    try:
-        usage = repository.source_discovery_daily_usage()
-    except Exception as exc:  # noqa: BLE001 - budget read failure should stop autonomous work conservatively
-        return {
-            "blocked": True,
-            "reason": "budget_usage_unavailable",
-            "error": str(exc)[:1000],
-        }
-    limits = {
-        "loop_runs": max(0, int(config_value.max_daily_loop_runs)),
-        "candidates_created": max(0, int(config_value.max_daily_candidates)),
-        "candidate_evaluations": max(0, int(config_value.max_daily_evaluations)),
-    }
-    projected_candidates = int(usage.get("candidates_created") or 0) + int(candidates_in_run)
-    checks = {
-        "loop_runs": int(usage.get("loop_runs") or 0),
-        "candidates_created": projected_candidates,
-        "candidate_evaluations": int(usage.get("candidate_evaluations") or 0),
-    }
-    if limits["loop_runs"] and checks["loop_runs"] > limits["loop_runs"]:
-        reason = "daily_loop_budget_reached"
-    elif limits["candidates_created"] and checks["candidates_created"] >= limits["candidates_created"]:
-        reason = "daily_candidate_budget_reached"
-    elif limits["candidate_evaluations"] and checks["candidate_evaluations"] >= limits["candidate_evaluations"]:
-        reason = "daily_evaluation_budget_reached"
-    else:
-        reason = ""
-    return {
-        "blocked": bool(reason),
-        "reason": reason,
-        "usage": usage,
-        "projected": checks,
-        "limits": limits,
-    }
+    return budget.check(
+        {
+            "loop_runs": max(0, int(config_value.max_daily_loop_runs)),
+            "candidates_created": max(0, int(config_value.max_daily_candidates)),
+            "candidate_evaluations": max(0, int(config_value.max_daily_evaluations)),
+        },
+        candidates_in_run=candidates_in_run,
+    )
 
 
 def _strategy_for_iteration(iteration: int) -> str:
@@ -328,7 +303,7 @@ def _evaluate_discovered_candidates(discovery: dict[str, Any], config: AgentLoop
                 )
                 results.append({
                     "ok": True,
-                    "queued": "external-ai",
+                    "queued": job["queue_name"],
                     "candidate_id": int(candidate_id),
                     "job_id": int(job["id"]),
                 })
