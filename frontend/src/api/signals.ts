@@ -46,7 +46,15 @@ export function getSignalSearchHealth() {
 }
 
 export function createSignalFeedback(payload: SignalFeedbackPayload) {
-  return apiFetch<{ ok: boolean; event_id: number; memory_ids: number[]; memories: number }>("/api/signals/feedback", {
+  return apiFetch<{
+    ok: boolean;
+    event_id: number;
+    memory_ids: number[];
+    memories: number;
+    // Сколько прежних вердиктов по карточке погашено и скрыта ли она как дубль («Дубль #ID»).
+    superseded?: number;
+    merged?: boolean;
+  }>("/api/signals/feedback", {
     method: "POST",
     body: JSON.stringify(payload),
   });

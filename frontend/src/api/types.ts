@@ -246,6 +246,11 @@ export type Signal = {
   user_status_updated_at?: string | null;
   feedback_count?: number;
   merged_count?: number;
+  // Тема — одна из 13 тематик заказчика; false — свободный текст первой партии радара (13.09).
+  theme_is_topic?: boolean;
+  // Правки людей из ОС поверх текста модели: исходные — для справки.
+  original_title_ru?: string | null;
+  original_summary?: string | null;
   // Ревью пачки: насколько сигнал интересен на фоне соседей по прогону и почему.
   interest_score?: number | null;
   why_interesting?: string | null;
@@ -274,6 +279,8 @@ export type SignalFeedbackPayload = {
     | "reject"
     | "wrong_domain"
     | "merge_duplicate"
+    // «Не тот блок»: бизнес-сигнал в технологическом радаре (встреча с заказчиком 21.09).
+    | "wrong_block"
     // Прежняя шкала: с экрана убрана, но в старых записях встречается.
     | "needs_better_source"
     | "bad_translation"
@@ -837,7 +844,10 @@ export type ArticlePatch = {
 };
 
 export type DigestContentItem = {
-  article_id?: number;
+  // Сигнал радара в выпуске — не статья: у него signal_id, а article_id пуст.
+  item_type?: "article" | "signal";
+  article_id?: number | null;
+  signal_id?: number | null;
   category: string;
   title: string;
   summary: string;

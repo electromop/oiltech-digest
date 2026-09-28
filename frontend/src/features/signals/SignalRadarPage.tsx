@@ -48,8 +48,12 @@ const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> 
   { value: "background_material", label: "Фоновый материал — benchmark или контекст" },
   { value: "reject", label: "Низкая ценность / шум — по теме, но без новой ценности" },
   { value: "wrong_domain", label: "Не релевантно — вне интересов Компании" },
+  // Встреча с заказчиком 21.09, решение 5: находка годная, но это бизнес-сигнал.
+  { value: "wrong_block", label: "Не тот блок — бизнес-сигнал, а не технология" },
   { value: "merge_duplicate", label: "Дубль — тот же сигнал или технологический кластер" },
 ];
+
+const EARLY_THEME_GROUP = "Ранние карточки — тема вне 13 тематик";
 
 // Сутки радара и крон 07:15 — по Москве, поэтому и время прогона показываем по Москве.
 const RADAR_TIME_ZONE = "Europe/Moscow";
@@ -60,6 +64,22 @@ function formatRunMoment(value: string | null): string {
   const day = date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", timeZone: RADAR_TIME_ZONE });
   const time = date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: RADAR_TIME_ZONE });
   return `${day} в ${time}`;
+}
+
+// Дата поступления карточки (встреча 21.09): первая находка радаром, по Москве.
+function formatArrival(signal: Signal): string {
+  const value = signal.first_seen_at || signal.created_at;
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: RADAR_TIME_ZONE });
+}
+
+// Цвет среднего балла группы — те же пороги, что у групп «Бизнес-сигналов».
+function scoreClass(score: number) {
+  if (!score) return "muted";
+  if (score >= 65) return "ok";
+  if (score >= 40) return "warn";
+  return "bad";
 }
 
 // Причина по-русски; прочее — короткий текст сервера. Код HTTP — впереди, как у 402:
@@ -105,6 +125,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
@@ -143,7 +164,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     }
   }
 
-  const themes = useMemo(() => [...new Set(signals.map((signal) => signal.theme).filter(Boolean))].sort(), [signals]);
+  // В фильтре — только тематики заказчика: ранние карточки со свободной темой — отдельным блоком.
+  const themes = useMemo(
+    () => [...new Set(signals.filter((signal) => signal.theme_is_topic !== false).map((signal) => signal.theme).filter(Boolean))].sort(),
+    [signals],
+  );
   const visibleSignals = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return signals;
@@ -159,6 +184,32 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       ].some((value) => String(value || "").toLowerCase().includes(q)),
     );
   }, [search, signals]);
+
+  const groups = useMemo(() => {
+    const byTheme = new Map<string, Signal[]>();
+    for (const signal of visibleSignals) {
+      // Ранние карточки (первая партия 13.09) — с темой свободным текстом: один блок, а не
+      // десятки блоков по одной карточке. Тематику им даст разбор, а не догадка по словам.
+      const key = signal.theme_is_topic === false ? EARLY_THEME_GROUP : signal.theme || "Без темы";
+      byTheme.set(key, [...(byTheme.get(key) || []), signal]);
+    }
+    const best = (items: Signal[]) => Math.max(...items.map((item) => Number(item.score || 0)));
+    return [...byTheme.entries()].sort(
+      (a, b) =>
+        Number(a[0] === EARLY_THEME_GROUP) - Number(b[0] === EARLY_THEME_GROUP) ||
+        best(b[1]) - best(a[1]) ||
+        a[0].localeCompare(b[0], "ru"),
+    );
+  }, [visibleSignals]);
+
+  function toggleGroup(group: string) {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
+  }
 
   async function setDigest(signal: Signal, selected: boolean) {
     try {
@@ -210,7 +261,14 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           item.id === signal.id ? { ...item, feedback_count: (item.feedback_count || 0) + 1 } : item,
         ),
       );
-      showToast(`ОС сохранена, memory-записей: ${result.memories}`);
+      showToast(
+        result.merged
+          ? "Отзыв сохранён: карточка скрыта как дубль, её ссылки — в главной карточке"
+          : "Отзыв сохранён — агент учтёт его в следующем прогоне радара",
+      );
+      if (result.merged) {
+        setSignals((current) => current.filter((item) => item.id !== signal.id));
+      }
     } catch (error) {
       handleError(error, "Не удалось сохранить обратную связь по сигналу");
     } finally {
@@ -293,13 +351,52 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         <button type="button" className="ghostButton" disabled={busy} onClick={() => void reload()}>
           {busy ? "Обновляем" : "Обновить"}
         </button>
+        {groups.length ? (
+          <>
+            <button type="button" className="ghostButton" onClick={() => setExpandedGroups(new Set(groups.map(([group]) => group)))}>
+              Развернуть всё
+            </button>
+            <button type="button" className="ghostButton" onClick={() => setExpandedGroups(new Set())}>
+              Свернуть всё
+            </button>
+          </>
+        ) : null}
       </section>
 
       <section className="signalRadarList">
         {busy ? (
           <div className="emptyState">Загружаем сигналы...</div>
         ) : visibleSignals.length ? (
-          visibleSignals.map((signal) => {
+          <div className="articleGroupsStack">
+          {groups.map(([group, groupSignals]) => {
+            // Свёрнуто по умолчанию, как в «Бизнес-сигналах»; раскрыто при поиске, выбранной
+            // теме или если блок один — сворачивать нечего.
+            const groupOpen =
+              expandedGroups.has(group) || Boolean(search.trim()) || theme === group || groups.length === 1;
+            const groupAvg = Math.round(
+              groupSignals.reduce((sum, item) => sum + Number(item.score || 0), 0) / groupSignals.length,
+            );
+            return (
+            <section className="articleGroupCard" key={group}>
+              <button
+                type="button"
+                className={groupOpen ? "articleGroupHead articleGroupToggle open" : "articleGroupHead articleGroupToggle"}
+                onClick={() => toggleGroup(group)}
+                aria-expanded={groupOpen}
+                aria-label={groupOpen ? `Свернуть группу ${group}` : `Раскрыть группу ${group}`}
+              >
+                <span className="articleGroupHeadMain">
+                  <svg className="groupChevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M4 6.5 8 10l4-3.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="miniPill muted">{group}</span>
+                </span>
+                <span className="articleGroupHeadMeta">
+                  <span className="metaText">{groupSignals.length} сигналов · средняя</span>
+                  <span className={`miniPill ${scoreClass(groupAvg)}`}>{groupAvg}</span>
+                </span>
+              </button>
+              {groupOpen ? groupSignals.map((signal) => {
             const isExpanded = expanded.has(signal.id);
             const isFeedbackOpen = feedbackOpen.has(signal.id);
             const savingThis = Boolean(saving[signal.id]);
@@ -315,33 +412,21 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                       <span>Зрелость: {MATURITY_LABELS[signal.maturity] || signal.maturity}</span>
                       <span>{Math.round(Number(signal.score || 0))} баллов</span>
                       <span>{signal.evidence_count} ссылок</span>
+                      {formatArrival(signal) ? <span>Поступил: {formatArrival(signal)}</span> : null}
                       {/* Дубли того же события скрыты, их ссылки — в этой карточке. */}
                       {Number(signal.merged_count || 0) > 0 ? (
                         <span>Объединено дублей: {signal.merged_count}</span>
                       ) : null}
                     </div>
-                    {/* Издатели показываются сразу, до раскрытия: «давай источник
-                        сделаем открытым сразу» — по нему судят о доверии к сигналу. */}
-                    {signal.evidence?.length ? (
-                      <div className="signalPublishers">
-                        {[...new Set((signal.evidence || []).map((item) => item.publisher).filter(Boolean))].map(
-                          (publisher) => (
-                            <span className="signalPublisherChip" key={publisher as string}>{publisher}</span>
-                          ),
-                        )}
-                      </div>
-                    ) : null}
                     <h2>{signal.title_ru || signal.title}</h2>
                   </div>
                   <div className="signalRadarActions">
                     <button type="button" className="ghostButton compactButton" onClick={() => toggleExpanded(signal.id)}>
                       {isExpanded ? "Скрыть" : "Ссылки"}
                     </button>
-                    {isAdmin ? (
-                      <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
-                        Обратная связь
-                      </button>
-                    ) : null}
+                    <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
+                      Обратная связь
+                    </button>
                     <button
                       type="button"
                       className={signal.selected_for_digest ? "dangerButton compactButton" : "primaryButton compactButton"}
@@ -390,7 +475,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   </div>
                 ) : null}
 
-                {isAdmin && isFeedbackOpen ? (
+                {isFeedbackOpen ? (
                   <div className="signalFeedbackBox">
                     <div className="signalFeedbackGrid">
                       <label>
@@ -455,17 +540,21 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                       </button>
                     </div>
                   </div>
-                ) : isAdmin ? (
+                ) : (
                   <div className="signalFeedbackCollapsed">
                     <span>Обратная связь: {signal.feedback_count || 0}</span>
                     <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
                       Обратная связь
                     </button>
                   </div>
-                ) : null}
+                )}
               </article>
             );
-          })
+          }) : null}
+            </section>
+            );
+          })}
+          </div>
         ) : (
           <div className="emptyState">Сигналов по выбранным фильтрам нет.</div>
         )}
