@@ -195,16 +195,16 @@ def store_signal_feedback(
         "duplicate_of_signal_id": str(duplicate_of_signal_id or ""),
     })
     superseded = 0
-    if verdict and (signal_id is not None or signal_title):
+    if verdict and signal_id is not None:
         # Новый вердикт по карточке заменяет прежний (последнее слово — у последнего отзыва),
         # а отказ гасит подсказки поиска, выросшие из её прежнего одобрения.
-        superseded += repository.supersede_signal_feedback_memory(
-            signal_id=signal_id, signal_title=signal_title, memory_types=VERDICT_MEMORY_TYPES,
-        )
+        superseded += len(repository.supersede_signal_feedback_memory(
+            signal_id=signal_id, memory_types=VERDICT_MEMORY_TYPES,
+        ))
         if verdict in NEGATIVE_VERDICTS:
-            superseded += repository.supersede_signal_feedback_memory(
-                signal_id=signal_id, signal_title=signal_title, memory_types=SEARCH_MEMORY_TYPES,
-            )
+            superseded += len(repository.supersede_signal_feedback_memory(
+                signal_id=signal_id, memory_types=SEARCH_MEMORY_TYPES,
+            ))
     memory_ids = []
     for item in extracted_items:
         subject = _memory_subject(item["subject"])
@@ -240,25 +240,36 @@ def learn_from_digest_selection(
     """«В дайджест» на карточке радара — положительный пример для агента.
 
     Выбор в выпуск — это «Сильный сигнал» по шкале заказчика: агент учится на нём так же,
-    как на вердикте из формы (пример для судьи, подсказка поиска в теме карточки). Снятие
-    отметки гасит только то, что выросло из выбора в дайджест, — разбор человека остаётся."""
-    signal = repository.get_signal_brief(signal_id) or {}
-    title = str(signal.get("title_ru") or signal.get("title") or "").strip()
+    как на вердикте из формы (пример для судьи, подсказка поиска в теме карточки). Пример —
+    свой у каждого пользователя: снятие отметки одним не отменяет выбор другого.
+
+    Выбор гасит прежний ОТКАЗ по карточке (последнее слово — положительное) и запоминает, что
+    погасил. Когда отметку снимает последний выбравший, отказ возвращается: случайная
+    отметка не должна стирать разбор человека. Обучающие примеры к событию выбора не
+    привязываются: у него нет вердикта, а привязку потом ждёт отзыв из формы."""
     if not selected:
         superseded = repository.supersede_signal_feedback_memory(
-            signal_id=signal_id, signal_title=None,
-            memory_types=VERDICT_MEMORY_TYPES + SEARCH_MEMORY_TYPES, origin=DIGEST_SELECTION_ORIGIN,
+            signal_id=signal_id, memory_types=VERDICT_MEMORY_TYPES + SEARCH_MEMORY_TYPES,
+            origin=DIGEST_SELECTION_ORIGIN, user_id=user_id,
         )
-        return {"memories": 0, "superseded": superseded}
-    # Выбор в выпуск — последнее слово: прежний ОТКАЗ по этой карточке больше не пример
-    # «так не делать». Положительный разбор человека (с причиной) остаётся.
-    superseded = repository.supersede_signal_feedback_memory(
-        signal_id=signal_id, signal_title=title, memory_types=("signal_verdict",),
-        subjects=tuple(sorted(NEGATIVE_VERDICTS)),
+        restored = 0
+        rows = repository.list_signal_memory_by_origin(signal_id, DIGEST_SELECTION_ORIGIN)
+        if not any(row.get("status") == "active" for row in rows):
+            restore_ids = sorted({
+                int(memory_id)
+                for row in rows
+                for memory_id in ((row.get("facts_json") or {}).get("superseded_negative_ids") or [])
+            })
+            restored = repository.restore_signal_feedback_memory(restore_ids)
+        return {"memories": 0, "superseded": len(superseded), "restored": restored}
+
+    signal = repository.get_signal_brief(signal_id) or {}
+    title = str(signal.get("title_ru") or signal.get("title") or "").strip()
+    negatives = repository.supersede_signal_feedback_memory(
+        signal_id=signal_id, memory_types=("signal_verdict",), subjects=tuple(sorted(NEGATIVE_VERDICTS)),
     )
-    topic = str(signal.get("theme") or "").strip() or None
     facts = {
-        "topic": topic,
+        "topic": str(signal.get("theme") or "").strip() or None,
         "signal_id": signal_id,
         "origin": DIGEST_SELECTION_ORIGIN,
         "signal_title": title,
@@ -266,21 +277,20 @@ def learn_from_digest_selection(
         "reason": "Выбран в дайджест",
         "feedback_event_id": event_id,
         "user_id": user_id,
+        "superseded_negative_ids": [int(row["id"]) for row in negatives],
     }
-    if event_id is not None:
-        repository.attach_feedback_to_signal_training_examples(event_id, signal_id=signal_id)
     memory_ids = []
     for item in extract_feedback_memories({"Сигнал": title, "verdict": "strong_signal", "reason": "Выбран в дайджест"}):
         subject = _memory_subject(item["subject"])
         memory_ids.append(repository.upsert_signal_agent_memory(
-            memory_key=_memory_key(item["memory_type"], subject, f"{DIGEST_SELECTION_ORIGIN}:{signal_id}"),
+            memory_key=_memory_key(item["memory_type"], subject, f"{DIGEST_SELECTION_ORIGIN}:{signal_id}:{user_id}"),
             memory_type=item["memory_type"],
             subject=subject,
             status="active",
             score=float(item.get("score") or 0),
             facts={**facts, **(item.get("facts") or {}), "raw_subject": item["subject"]},
         ))
-    return {"memories": len(memory_ids), "superseded": superseded}
+    return {"memories": len(memory_ids), "superseded": len(negatives), "restored": 0}
 
 
 def extract_feedback_memories(row: dict[str, str]) -> list[dict[str, Any]]:

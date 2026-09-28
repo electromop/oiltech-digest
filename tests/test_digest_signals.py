@@ -83,3 +83,17 @@ def test_draft_save_stores_articles_only(monkeypatch):
     save_digest_draft("2026-09", user_id=3)
 
     assert [item["article_id"] for item in saved["items"]] == [10]
+
+
+def test_hidden_draft_articles_fall_back_to_current_selection(monkeypatch):
+    # Все статьи черновика с тех пор скрыты (перепечатка, удаление) — выпуск как раньше
+    # берёт текущую подборку, а не одни сигналы.
+    _patch(monkeypatch, saved_items=[{"article_id": 11}], candidates=[_row(12), _row(7, item_type="signal")])
+    monkeypatch.setattr(digest.repository, "digest_items_by_article_ids", lambda ids, user_id=None: [])
+
+    content = build_digest_content("2026-09", user_id=3)
+
+    assert [(item["item_type"], item["article_id"] or item["signal_id"]) for item in content["news"]] == [
+        ("article", 12),
+        ("signal", 7),
+    ]

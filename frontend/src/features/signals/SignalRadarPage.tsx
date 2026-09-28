@@ -126,6 +126,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Свёрнутые вручную — сильнее авто-раскрытия при поиске и выбранной теме.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
@@ -202,11 +204,17 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     );
   }, [visibleSignals]);
 
-  function toggleGroup(group: string) {
+  function toggleGroup(group: string, open: boolean) {
     setExpandedGroups((current) => {
       const next = new Set(current);
-      if (next.has(group)) next.delete(group);
+      if (open) next.delete(group);
       else next.add(group);
+      return next;
+    });
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (open) next.add(group);
+      else next.delete(group);
       return next;
     });
   }
@@ -267,7 +275,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           : "Отзыв сохранён — агент учтёт его в следующем прогоне радара",
       );
       if (result.merged) {
+        // Список заново: у главной карточки растёт «Объединено дублей» и появляются ссылки дубля.
         setSignals((current) => current.filter((item) => item.id !== signal.id));
+        void reload();
       }
     } catch (error) {
       handleError(error, "Не удалось сохранить обратную связь по сигналу");
@@ -353,10 +363,24 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         </button>
         {groups.length ? (
           <>
-            <button type="button" className="ghostButton" onClick={() => setExpandedGroups(new Set(groups.map(([group]) => group)))}>
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => {
+                setExpandedGroups(new Set(groups.map(([group]) => group)));
+                setCollapsedGroups(new Set());
+              }}
+            >
               Развернуть всё
             </button>
-            <button type="button" className="ghostButton" onClick={() => setExpandedGroups(new Set())}>
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => {
+                setExpandedGroups(new Set());
+                setCollapsedGroups(new Set(groups.map(([group]) => group)));
+              }}
+            >
               Свернуть всё
             </button>
           </>
@@ -371,8 +395,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           {groups.map(([group, groupSignals]) => {
             // Свёрнуто по умолчанию, как в «Бизнес-сигналах»; раскрыто при поиске, выбранной
             // теме или если блок один — сворачивать нечего.
-            const groupOpen =
-              expandedGroups.has(group) || Boolean(search.trim()) || theme === group || groups.length === 1;
+            const forcedOpen = Boolean(search.trim()) || theme === group || groups.length === 1;
+            const groupOpen = !collapsedGroups.has(group) && (expandedGroups.has(group) || forcedOpen);
             const groupAvg = Math.round(
               groupSignals.reduce((sum, item) => sum + Number(item.score || 0), 0) / groupSignals.length,
             );
@@ -381,7 +405,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
               <button
                 type="button"
                 className={groupOpen ? "articleGroupHead articleGroupToggle open" : "articleGroupHead articleGroupToggle"}
-                onClick={() => toggleGroup(group)}
+                onClick={() => toggleGroup(group, groupOpen)}
                 aria-expanded={groupOpen}
                 aria-label={groupOpen ? `Свернуть группу ${group}` : `Раскрыть группу ${group}`}
               >

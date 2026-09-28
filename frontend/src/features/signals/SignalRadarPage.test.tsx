@@ -256,6 +256,17 @@ describe("SignalRadarPage", () => {
       expect(screen.getByRole("option", { name: "Бурение" })).toBeInTheDocument();
     });
 
+    it("блок, раскрытый поиском, всё равно сворачивается кнопкой", async () => {
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
+
+      fireEvent.change(screen.getByPlaceholderText("ZEUS IQ, бурение, робот..."), { target: { value: "буровая" } });
+      expect(screen.getByText("Роботизированная буровая установка")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Свернуть группу Бурение" }));
+      expect(screen.queryByText("Роботизированная буровая установка")).not.toBeInTheDocument();
+    });
+
     it("вместо строки издателей — число ссылок и дата поступления", async () => {
       const { container } = render(
         <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,

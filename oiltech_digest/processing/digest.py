@@ -274,18 +274,20 @@ def build_digest_content(
             rows = repository.digest_items_by_article_ids(saved_ids[:limit])
             # В черновике хранятся только статьи (monthly_digest_items.article_id → articles).
             # Сигналы радара, выбранные в дайджест, добавляются заново — иначе после
-            # «Сохранить черновик» они из выпуска пропадали.
-            rows = [
-                *rows,
-                *[
-                    row
-                    for row in repository.digest_candidates(
-                        month=month, limit=limit, min_score=min_score, user_id=user_id,
-                        max_score=max_score, search=search, top_tag=top_tag,
-                    )
-                    if row.get("item_type") == "signal"
-                ],
-            ]
+            # «Сохранить черновик» они из выпуска пропадали. Если все статьи черновика с тех
+            # пор скрыты, остаётся прежний откат к текущей подборке (ниже) — она сигналы включает.
+            if rows:
+                rows = [
+                    *rows,
+                    *[
+                        row
+                        for row in repository.digest_candidates(
+                            month=month, limit=limit, min_score=min_score, user_id=user_id,
+                            max_score=max_score, search=search, top_tag=top_tag,
+                        )
+                        if row.get("item_type") == "signal"
+                    ],
+                ]
     if not rows:
         rows = repository.digest_candidates(
             month=month,

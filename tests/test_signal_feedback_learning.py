@@ -128,8 +128,10 @@ def test_digest_selection_is_a_strong_example_and_unselect_retracts_it(isolated_
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=user)
     assert _active("signal_verdict", signal) == ["strong_signal"]
 
-    signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=user)
-    assert _active("signal_verdict", signal) == []
+    # Случайная отметка не стирает разбор человека: после снятия отказ возвращается.
+    result = signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=user)
+    assert result["restored"] == 1
+    assert _active("signal_verdict", signal) == ["reject"]
 
 
 def test_card_without_links_is_hidden_and_human_corrections_survive_rediscovery(isolated_db):
@@ -207,3 +209,97 @@ def test_old_verdict_is_replaced_even_after_the_card_was_retitled(isolated_db):
         status = conn.execute("SELECT status FROM signal_agent_memory WHERE memory_key = 'legacy-verdict'").fetchone()[0]
     assert status == "superseded"
     assert _active("signal_verdict", signal) == ["wrong_block"]
+
+
+def test_colleague_keeps_digest_example_until_the_last_one_unselects(isolated_db):
+    first, second = _user(), int(repository.create_user("second@example.test", "long-enough-password", "user")["id"])
+    signal = _signal("both", "Роботизированная обсадка", url="https://example.com/casing")
+
+    signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=first)
+    signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=second)
+    signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=second)
+
+    # Второй снял отметку, у первого карточка в выпуске — пример остаётся.
+    assert _active("signal_verdict", signal) == ["strong_signal"]
+
+
+def test_duplicate_verdict_spares_card_chosen_for_the_issue(isolated_db):
+    user = _user()
+    main = _signal("m", "ZenaTech: дроны", url="https://example.com/m")
+    chosen = _signal("c", "ZenaTech дроны для инспекций", url="https://example.com/c")
+    repository.set_user_signal_status(user, chosen, status="digest")
+
+    result = signal_feedback.store_signal_feedback(
+        {"signal_id": chosen, "signal_title": "ZenaTech дроны", "verdict": "merge_duplicate",
+         "duplicate_of_signal_id": main, "comment": ""},
+        user_id=user,
+    )
+
+    # Выбранная в выпуск карточка не исчезает с экрана, оставаясь в выпуске.
+    assert result["merged"] is False
+    assert chosen in {row["id"] for row in repository.list_signals(limit=50)}
+
+
+def test_hidden_duplicate_does_not_enter_the_issue(isolated_db):
+    user = _user()
+    main = _signal("m2", "Сделка ZenaTech", url="https://example.com/m2")
+    dup = _signal("d2", "ZenaTech купила", url="https://example.com/d2")
+    repository.set_user_signal_status(user, dup, status="digest")
+    repository.mark_signal_merged(dup, main, "судья дедупа", respect_review=True)
+    with repository.get_connection() as conn:  # дубль, скрытый раньше отметки в выпуск
+        conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (main, dup))
+        conn.commit()
+
+    rows = repository.digest_candidates(user_id=user, min_score=0)
+
+    assert dup not in {row["id"] for row in rows if row.get("item_type") == "signal"}
+
+
+def test_same_title_on_another_card_is_left_alone(isolated_db):
+    user = _user()
+    twin_a = _signal("ta", "Автономная буровая установка", url="https://example.com/ta")
+    twin_b = _signal("tb", "Автономная буровая установка", url="https://example.com/tb")
+    signal_feedback.store_signal_feedback(
+        {"signal_id": twin_a, "signal_title": "Автономная буровая установка", "verdict": "approved",
+         "reason": "внедрение", "comment": ""},
+        user_id=user,
+    )
+
+    signal_feedback.store_signal_feedback(
+        {"signal_id": twin_b, "signal_title": "Автономная буровая установка", "verdict": "merge_duplicate",
+         "duplicate_of_signal_id": twin_a, "comment": ""},
+        user_id=user,
+    )
+
+    # «Дубль» на второй карточке не гасит одобрение первой с тем же заголовком.
+    assert _active("signal_verdict", twin_a) == ["approved"]
+
+
+def test_digest_selection_leaves_training_examples_for_real_feedback(isolated_db):
+    user = _user()
+    signal = _signal("tr", "Сейсморазведка без кабеля", url="https://example.com/tr")
+    example = repository.create_signal_training_example(
+        generation_run_id=None, signal_id=signal, topic=THEME, signal_key="tr", pipeline_verdict="kept",
+        input_payload={}, raw_output={}, normalized_output={},
+    )
+    event = repository.record_signal_feedback_event(None, "added_to_digest", signal_id=signal, user_id=user)
+
+    signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=user, event_id=event)
+
+    with repository.get_connection() as conn:
+        linked = conn.execute("SELECT feedback_event_id FROM signal_training_examples WHERE id = %s", (example,)).fetchone()[0]
+    assert linked is None
+
+
+def test_mistaken_duplicate_can_be_undone(isolated_db):
+    user = _user()
+    main = _signal("um", "Главная", url="https://example.com/um")
+    dup = _signal("ud", "Ошибочно дубль", url="https://example.com/ud")
+    signal_feedback.store_signal_feedback(
+        {"signal_id": dup, "signal_title": "Ошибочно дубль", "verdict": "merge_duplicate",
+         "duplicate_of_signal_id": main, "comment": ""},
+        user_id=user,
+    )
+
+    assert repository.unmerge_signal(dup) is True
+    assert dup in {row["id"] for row in repository.list_signals(limit=50)}

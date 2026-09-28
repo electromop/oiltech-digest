@@ -68,7 +68,7 @@ def test_store_signal_feedback_writes_event_and_memories(monkeypatch):
     monkeypatch.setattr(
         signal_feedback.repository,
         "supersede_signal_feedback_memory",
-        lambda **kwargs: calls.setdefault("superseded", []).append(kwargs) or 0,
+        lambda **kwargs: calls.setdefault("superseded", []).append(kwargs) or [],
     )
     monkeypatch.setattr(
         signal_feedback.repository,
@@ -116,7 +116,7 @@ def test_structured_signal_feedback_writes_verdict_and_corrections(monkeypatch):
     monkeypatch.setattr(
         signal_feedback.repository,
         "supersede_signal_feedback_memory",
-        lambda **kwargs: calls.setdefault("superseded", []).append(kwargs) or 0,
+        lambda **kwargs: calls.setdefault("superseded", []).append(kwargs) or [],
     )
     monkeypatch.setattr(
         signal_feedback.repository,
