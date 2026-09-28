@@ -2019,7 +2019,6 @@ def supersede_signal_feedback_memory(
     signal_id: int,
     memory_types: tuple[str, ...],
     origin: str | None = None,
-    subjects: tuple[str, ...] | None = None,
     user_id: int | None = None,
 ) -> list[dict]:
     """Погасить активную память ОС по карточке (статус 'superseded', строки не удаляются).
@@ -2027,8 +2026,8 @@ def supersede_signal_feedback_memory(
     Карточка узнаётся только по своему номеру: signal_id в фактах (строки с 28.09) или отзыв,
     из которого строка выросла (строки до 28.09 — у всех есть feedback_event_id). По заголовку
     не сравниваем: у двух карточек он бывает одинаковым, и «Дубль» на одной гасил бы память
-    другой. `origin`, `subjects`, `user_id` — сузить до этого происхождения, этих вердиктов,
-    этого пользователя. Возвращает погашенные строки — по ним можно вернуть их обратно."""
+    другой. `origin`, `user_id` — сузить до этого происхождения и этого пользователя.
+    Возвращает погашенные строки."""
     clauses = [
         "status = 'active'",
         "memory_type = ANY(%s)",
@@ -2038,9 +2037,6 @@ def supersede_signal_feedback_memory(
                     (SELECT e.id::text FROM signal_feedback_events e WHERE e.signal_id = %s)))""",
     ]
     params: list = [list(memory_types), str(int(signal_id)), int(signal_id)]
-    if subjects:
-        clauses.append("subject = ANY(%s)")
-        params.append(list(subjects))
     if origin:
         clauses.append("facts_json->>'origin' = %s")
         params.append(origin)

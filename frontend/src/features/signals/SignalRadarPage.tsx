@@ -273,12 +273,14 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         result.merged
           ? "Отзыв сохранён: карточка скрыта как дубль, её ссылки — в главной карточке"
           : result.merge_skipped
-            ? "Отзыв сохранён, но карточка не скрыта: она выбрана в дайджест или главной карточки с таким номером нет"
+            ? "Отзыв сохранён, карточка не скрыта: она уже скрыта, выбрана в дайджест или главной с таким номером нет"
             : "Отзыв сохранён — агент учтёт его в следующем прогоне радара",
       );
       if (result.merged) {
         // Список заново: у главной карточки растёт «Объединено дублей» и появляются ссылки дубля.
         setSignals((current) => current.filter((item) => item.id !== signal.id));
+      }
+      if (result.merged || result.merge_skipped) {
         void reload();
       }
     } catch (error) {
