@@ -92,9 +92,12 @@ class Shutdown:
         with self._lock:
             self._jobs.pop(int(job["id"]), None)
 
-    def in_work(self) -> int:
+    def in_work(self, exclude: dict[str, Any] | None = None) -> int:
+        """Сколько задач в работе. exclude — не считать эту (сторож ждёт соседей своей задачи)."""
         with self._lock:
-            return len(self._jobs)
+            if exclude is None:
+                return len(self._jobs)
+            return sum(1 for key in self._jobs if key != int(exclude["id"]))
 
     def checkpoint(self, job: dict[str, Any], done: dict[str, Any]) -> None:
         """Граница шага: запомнить сделанное — его отдаст главный поток, если шаг зависнет."""
