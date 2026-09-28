@@ -59,6 +59,7 @@ function initialSuggestedFrequency() {
 export function SourcesPage({ onUnauthorized, showToast }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [health, setHealth] = useState<SourceHealth[]>([]);
+  const [loadedAt, setLoadedAt] = useState(() => new Date());
   const [diagnostics, setDiagnostics] = useState<Record<number, SourceDiagnostics>>({});
   const [drafts, setDrafts] = useState<DraftMap>({});
   const [loading, setLoading] = useState(true);
@@ -88,6 +89,9 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
       const [sourcesPayload, healthPayload] = await Promise.all([listSources(), listSourceHealth()]);
       setSources(sourcesPayload);
       setHealth(healthPayload);
+      // «N дн. назад» считаем от этого момента, а не от перерисовки: состояние сервер посчитал
+      // сейчас, и после полуночи МСК поиск или раскрытие строки дали бы «7 дн. назад» у «штатно».
+      setLoadedAt(new Date());
     } catch (error) {
       handleError(error, "Не удалось загрузить источники");
     } finally {
@@ -436,6 +440,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
             sources={visibleSources}
             healthById={healthById}
             diagnostics={diagnostics}
+            loadedAt={loadedAt}
             expandedId={expandedId}
             onToggle={(sourceId) => setExpandedId((current) => (current === sourceId ? null : sourceId))}
             renderDetails={renderDetails}

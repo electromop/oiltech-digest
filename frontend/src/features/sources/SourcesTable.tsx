@@ -8,6 +8,8 @@ type Props = {
   sources: Source[];
   healthById: Map<number, SourceHealth>;
   diagnostics: Record<number, SourceDiagnostics>;
+  // Когда загружены состояния: «N дн. назад» и «Проблема» считаются от него, а не от перерисовки.
+  loadedAt: Date;
   expandedId: number | null;
   onToggle: (sourceId: number) => void;
   renderDetails: (source: Source) => ReactNode;
@@ -16,7 +18,7 @@ type Props = {
 // Таблица по документу заказчика (19.09): «экран выглядит очень административно —
 // перейти к таблице». Колонки — его. Всё, что было на карточке (сбор вкл/выкл,
 // настройка, диагностика, архив, обратная связь), — в раскрытой строке.
-export function SourcesTable({ sources, healthById, diagnostics, expandedId, onToggle, renderDetails }: Props) {
+export function SourcesTable({ sources, healthById, diagnostics, loadedAt, expandedId, onToggle, renderDetails }: Props) {
   return (
     <div className="jobsTableWrap">
       <table className={`jobsTable ${styles.table}`}>
@@ -35,7 +37,7 @@ export function SourcesTable({ sources, healthById, diagnostics, expandedId, onT
           {sources.map((source) => {
             const health = healthById.get(source.id);
             const state = sourceState(source, health);
-            const last = lastLoadLabel(health?.last_article_at);
+            const last = lastLoadLabel(health?.last_article_at, loadedAt);
             const expanded = expandedId === source.id;
             const primaryUrl = source.url || source.rss_url || source.listing_url || "";
             return (
@@ -63,7 +65,7 @@ export function SourcesTable({ sources, healthById, diagnostics, expandedId, onT
                     )}
                   </td>
                   <td className={styles.num}>{health?.articles_30d ?? "—"}</td>
-                  <td className={styles.problem}>{sourceProblem(source, health, diagnostics[source.id])}</td>
+                  <td className={styles.problem}>{sourceProblem(source, health, diagnostics[source.id], loadedAt)}</td>
                   <td className={styles.actionCell}>
                     <button
                       type="button"

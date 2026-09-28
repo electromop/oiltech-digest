@@ -15,7 +15,7 @@ from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, config, contract, lanes
+from oiltech_digest import auth, config, contract, feed_window, lanes
 from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
@@ -3723,18 +3723,28 @@ def sources_by_strategy() -> list[dict]:
 SOURCE_HEALTH_VERDICTS = ("no_articles", "stale", "ok", "disabled", "archived")
 
 
-def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | None = None) -> list[dict]:
+def source_health_report(stale_days: int | None = None, limit: int = 300, verdict: str | None = None) -> list[dict]:
     """Per-source article coverage verdict for operations diagnostics.
+
+    stale («Требует внимания») — последняя загрузка stale_days и больше календарных дней
+    назад по Москве, как «N дн. назад» в колонке «Последняя загрузка» (sourceUtils.ts):
+    при 7 «7 дн. назад» уже требует внимания, «6 дн. назад» — ещё нет. Скользящие
+    7 × 24 ч с колонкой расходились до суток. Сегодня по МСК — с часов окна ленты
+    (feed_window._now), тесты их замораживают. Без явного порога —
+    config.SOURCE_STALE_DAYS, одно правило для экрана, API, CLI и замеров.
 
     Архивный источник — отдельный вердикт 'archived', а не 'disabled': архив выключает
     сбор (enabled = FALSE), и раньше он попадал в «Выкл». Экран источников считал
     плитки по этому отчёту вместе с архивом, а список и счётчик в шапке — без него:
     19.09 заказчик видел на одном экране «133 источника» и «173» в каталоге.
     """
+    if stale_days is None:
+        stale_days = config.SOURCE_STALE_DAYS
+    today = feed_window.current().today
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             WITH src AS (
               SELECT s.id, s.name, s.enabled, s.parse_strategy, s.source_type,
                      s.url, s.rss_url, s.listing_url, s.archived_at,
@@ -3751,7 +3761,8 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
                        WHEN archived_at IS NOT NULL THEN 'archived'
                        WHEN NOT enabled THEN 'disabled'
                        WHEN articles = 0 THEN 'no_articles'
-                       WHEN last_article_at < now() - (%s::text || ' days')::interval THEN 'stale'
+                       WHEN %s::date - (last_article_at AT TIME ZONE '{feed_window.MSK.key}')::date >= %s
+                         THEN 'stale'
                        ELSE 'ok'
                      END AS verdict
               FROM src
@@ -3772,7 +3783,7 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
               name
             LIMIT %s
             """,
-            (stale_days, verdict, verdict, limit),
+            (today, stale_days, verdict, verdict, limit),
         )
         return cur.fetchall()
 

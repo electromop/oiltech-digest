@@ -785,7 +785,8 @@ def list_sources(
 
 @app.get("/api/source-health")
 def source_health(
-    stale_days: int = Query(3, ge=1, le=30),
+    # Экран порог не передаёт: без него отчёт берёт config.SOURCE_STALE_DAYS.
+    stale_days: int | None = Query(None, ge=1, le=30),
     limit: int = Query(500, ge=1, le=1000),
     verdict: str | None = Query(None, pattern=f"^({'|'.join(repository.SOURCE_HEALTH_VERDICTS)})$"),
     user: dict[str, Any] = Depends(require_user),
