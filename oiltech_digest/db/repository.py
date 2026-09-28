@@ -2059,33 +2059,6 @@ def supersede_signal_feedback_memory(
         return rows
 
 
-def restore_signal_feedback_memory(memory_ids: list[int]) -> int:
-    """Вернуть погашенные строки памяти ОС (например, отказ, погашенный выбором в дайджест)."""
-    ids = [int(memory_id) for memory_id in memory_ids if memory_id is not None]
-    if not ids:
-        return 0
-    with get_connection() as conn:
-        cur = conn.execute(
-            "UPDATE signal_agent_memory SET status = 'active', updated_at = now()"
-            " WHERE id = ANY(%s) AND status = 'superseded'",
-            (ids,),
-        )
-        conn.commit()
-        return int(cur.rowcount or 0)
-
-
-def list_signal_memory_by_origin(signal_id: int, origin: str, *, memory_type: str = "signal_verdict") -> list[dict]:
-    """Строки памяти карточки этого происхождения — любого статуса."""
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT id, status, facts_json FROM signal_agent_memory"
-            " WHERE memory_type = %s AND facts_json->>'origin' = %s AND facts_json->>'signal_id' = %s ORDER BY id",
-            (memory_type, origin, str(int(signal_id))),
-        )
-        return cur.fetchall()
-
-
 def unmerge_signal(signal_id: int) -> bool:
     """Снять пометку дубля (ошибочный «Дубль #ID»): карточка снова видна."""
     with get_connection() as conn:

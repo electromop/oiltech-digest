@@ -126,11 +126,10 @@ def test_digest_selection_is_a_strong_example_and_unselect_retracts_it(isolated_
     )
 
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=user)
-    assert _active("signal_verdict", signal) == ["strong_signal"]
+    # Выбор — свой пример «Сильный сигнал»; вердикт человека из формы он не трогает.
+    assert _active("signal_verdict", signal) == ["reject", "strong_signal"]
 
-    # Случайная отметка не стирает разбор человека: после снятия отказ возвращается.
-    result = signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=user)
-    assert result["restored"] == 1
+    signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=user)
     assert _active("signal_verdict", signal) == ["reject"]
 
 
@@ -236,7 +235,7 @@ def test_duplicate_verdict_spares_card_chosen_for_the_issue(isolated_db):
     )
 
     # Выбранная в выпуск карточка не исчезает с экрана, оставаясь в выпуске.
-    assert result["merged"] is False
+    assert result["merged"] is False and result["merge_skipped"] is True
     assert chosen in {row["id"] for row in repository.list_signals(limit=50)}
 
 
@@ -303,3 +302,25 @@ def test_mistaken_duplicate_can_be_undone(isolated_db):
 
     assert repository.unmerge_signal(dup) is True
     assert dup in {row["id"] for row in repository.list_signals(limit=50)}
+
+
+def test_cards_with_same_title_and_verdict_keep_separate_memory(isolated_db):
+    user = _user()
+    first = _signal("same1", "Автоматизация буровой", url="https://example.com/s1")
+    second = _signal("same2", "Автоматизация буровой", url="https://example.com/s2")
+    for signal in (first, second):
+        signal_feedback.store_signal_feedback(
+            {"signal_id": signal, "signal_title": "Автоматизация буровой", "verdict": "approved",
+             "reason": "внедрение", "comment": ""},
+            user_id=user,
+        )
+
+    signal_feedback.store_signal_feedback(
+        {"signal_id": second, "signal_title": "Автоматизация буровой", "verdict": "reject",
+         "reason": "повтор", "comment": ""},
+        user_id=user,
+    )
+
+    # Отказ по второй карточке не забирает одобрение первой: у каждой своя строка памяти.
+    assert _active("signal_verdict", first) == ["approved"]
+    assert _active("signal_verdict", second) == ["reject"]

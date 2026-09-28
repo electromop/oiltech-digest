@@ -54,6 +54,8 @@ export function createSignalFeedback(payload: SignalFeedbackPayload) {
     // Сколько прежних вердиктов по карточке погашено и скрыта ли она как дубль («Дубль #ID»).
     superseded?: number;
     merged?: boolean;
+    // «Дубль» не скрыл карточку: она выбрана в дайджест или главной с таким номером нет.
+    merge_skipped?: boolean;
   }>("/api/signals/feedback", {
     method: "POST",
     body: JSON.stringify(payload),
