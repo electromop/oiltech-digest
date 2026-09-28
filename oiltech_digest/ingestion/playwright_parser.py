@@ -21,8 +21,11 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import threading
-from typing import Any
+import uuid
+from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import unquote, urlsplit
 
 from oiltech_digest.db import repository
@@ -106,24 +109,58 @@ def with_base_href(html_text: str, final_url: str) -> str:
 # Срок рендера сверх его собственных сроков: goto ограничен timeout_ms, пауза — settle_ms,
 # а page.content() и browser.close() у Playwright не ограничены ничем. 24.09 content() у
 # листинга JPT не вернулся 20 ч 45 мин и держал весь шаг parse; 25.09 его отпустило
-# убийство chrome («Target page, context or browser has been closed»). Запас — на new_page,
-# content() и close(): в норме это секунды.
+# убийство chrome («Target page, context or browser has been closed»). Запас — на запуск,
+# new_page, content() и close(): в норме это секунды.
 RENDER_DEADLINE_SLACK_SECONDS = 30.0
 
+# Метка рендера в командной строке его браузера: Chromium чужой ключ пропускает и хелперам
+# не передаёт — она есть только у процесса браузера, лидера его группы (проверено 28.09 на
+# headless shell 1.62: macOS и Linux).
+_RENDER_MARKER = "--oiltech-render"
+_PROC = Path("/proc")
 
-def _browser_pid(browser: Any) -> int | None:
-    """PID процесса браузера: в API Playwright его нет, а CDP отдаёт. Сбой — None, не исключение."""
+
+def _process_command_lines() -> list[tuple[int, str]]:
+    """(PID, командная строка) процессов системы: /proc на Linux (в образах ядра и NL `ps` нет),
+    `ps` на macOS (разработка)."""
+    if _PROC.is_dir():
+        rows = []
+        for entry in _PROC.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                raw = (entry / "cmdline").read_bytes()
+            except OSError:
+                continue  # процесс успел выйти
+            rows.append((int(entry.name), raw.replace(b"\0", b" ").decode("utf-8", "replace")))
+        return rows
+    listing = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True,
+                             timeout=10, check=True).stdout
+    rows = []
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if pid.isdigit():
+            rows.append((int(pid), command))
+    return rows
+
+
+def _browser_pid(marker: str) -> int | None:
+    """PID браузера этого рендера — по метке в его командной строке. Сбой — None, не исключение.
+
+    В API Playwright PID нет. До 28.09 его спрашивали у CDP (SystemInfo.getProcessInfo), но у
+    вызова CDP-сессии нет срока, а снятие браузера его не отпускает — дочерние сессии Playwright
+    при обрыве связи не закрывает (замер 28.09: вызов к замолчавшему браузеру держался, пока жив
+    драйвер). Из-за этого и срок нельзя было взвести раньше: чтобы снять браузер, нужен PID.
+    Таблица процессов не зависит ни от браузера, ни от драйвера."""
     try:
-        session = browser.new_browser_cdp_session()
-        info = session.send("SystemInfo.getProcessInfo")
-        session.detach()
-        pids = [int(p["id"]) for p in info.get("processInfo") or [] if p.get("type") == "browser"]
-    except Exception as exc:  # noqa: BLE001 - без PID рендер идёт, только без сторожа
-        logger.warning("playwright: PID браузера не получен (%s) — срок рендера не сторожится", exc)
+        pids = [pid for pid, command in _process_command_lines()
+                if marker in command.split() and "--type=" not in command]
+    except Exception as exc:  # noqa: BLE001 - без PID рендер идёт; сторож поищет браузер ещё раз по сроку
+        logger.warning("playwright: PID браузера не получен (%s)", exc)
         return None
     # 0 и 1 — не браузер: killpg(0) снял бы группу самого шага (скрипт, сторож), 1 — init.
     if len(pids) != 1 or pids[0] <= 1:
-        logger.warning("playwright: CDP назвал процесс браузера неясно (%s) — срок рендера не сторожится", pids)
+        logger.warning("playwright: PID браузера не получен — по метке найдено %s", pids)
         return None
     return pids[0]
 
@@ -147,38 +184,48 @@ class _RenderDeadline:
     """Сторож срока одного рендера: по истечении снимает браузер.
 
     Вызов Playwright, который ждёт мёртвый браузер, отпускает с ошибкой «closed» — так
-    25.09 и сняли зависший parse руками. Бьёт только в свой браузер: рендеры идут и
-    параллельно (API — пул потоков), и «все chrome процесса» задели бы чужие. После
-    cancel() сторож не убьёт уже ничего: снятие и отмена идут под одним замком.
+    25.09 и сняли зависший parse руками; так же отпускает и зависший launch() (замер 28.09).
+    Взводится до запуска браузера: launch() без ответа браузера Playwright ждёт 180 с. PID
+    сообщает рендер после запуска (watch); если срок вышел раньше — сторож ищет браузер по
+    метке сам (locate). Бьёт только в свой браузер: рендеры идут и параллельно (API — пул
+    потоков), и «все chrome процесса» задели бы чужие. После cancel() сторож не убьёт уже
+    ничего: снятие и отмена идут под одним замком.
     """
 
-    def __init__(self, pid: int | None, seconds: float, url: str) -> None:
+    def __init__(self, seconds: float, url: str, locate: Callable[[], int | None]) -> None:
         self.fired = False
-        self._pid = pid
+        self._pid: int | None = None
+        self._locate = locate
         self._seconds = seconds
         self._url = url
         self._lock = threading.Lock()
         self._done = False
-        self._timer: threading.Timer | None = None
-        if pid is not None:
-            self._timer = threading.Timer(seconds, self._expire)
-            self._timer.daemon = True
-            self._timer.start()
+        self._timer = threading.Timer(seconds, self._expire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def watch(self, pid: int | None) -> None:
+        with self._lock:
+            self._pid = pid
 
     def _expire(self) -> None:
         with self._lock:
             if self._done:
                 return
+            pid = self._pid if self._pid is not None else self._locate()
+            if pid is None:
+                logger.warning("playwright %s — рендер не уложился в %.0f с, но браузер не найден: снять нечего",
+                               self._url, self._seconds)
+                return
             self.fired = True
             logger.warning("playwright %s — рендер не уложился в %.0f с: браузер снят (pid %s)",
-                           self._url, self._seconds, self._pid)
-            _kill_browser(self._pid)
+                           self._url, self._seconds, pid)
+            _kill_browser(pid)
 
     def cancel(self) -> None:
         with self._lock:
             self._done = True
-        if self._timer is not None:
-            self._timer.cancel()
+        self._timer.cancel()
 
 
 def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcontentloaded",
@@ -204,41 +251,45 @@ def fetch_rendered(url: str, timeout_ms: int = 30_000, wait_until: str = "domcon
     deadline: _RenderDeadline | None = None
     try:
         with sync_playwright() as pw:
+            # По метке сторож найдёт браузер этого рендера среди чужих, не спрашивая его самого.
+            marker = f"{_RENDER_MARKER}={uuid.uuid4().hex}"
             # --no-sandbox: Chromium под root в Docker; --disable-dev-shm-usage: малый /dev/shm
             # на сервере 1.9 ГБ RAM (иначе краши вкладок). Те же флаги, что в PDF-экспорте.
             launch_kwargs: dict[str, Any] = {
                 "headless": True,
-                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+                "args": ["--no-sandbox", "--disable-dev-shm-usage", marker],
             }
             proxy = _playwright_proxy_for(url)
             if proxy:
                 launch_kwargs["proxy"] = proxy
                 logger.info("playwright %s — через прокси %s", url, proxy.get("server"))
-            browser = pw.chromium.launch(**launch_kwargs)
-            deadline = _RenderDeadline(_browser_pid(browser), deadline_seconds, url)
+            # Срок — с запуска: зависший launch() снимается так же, как зависший content().
+            deadline = _RenderDeadline(deadline_seconds, url, lambda: _browser_pid(marker))
             try:
-                page = browser.new_page(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"
-                    )
-                )
-                response = page.goto(url, timeout=timeout_ms, wait_until=wait_until)
-                if response is not None and response.status in _BLOCK_STATUSES:
-                    logger.warning("playwright %s — статус %s (WAF/блок), пропуск", url, response.status)
-                    _last_fetch.status = f"blocked:{response.status}"
-                    return None
-                _last_fetch.status = f"ok:{response.status if response is not None else '-'}"
-                if settle_ms:
-                    page.wait_for_timeout(settle_ms)
-                html_content = with_base_href(page.content(), page.url)
-            finally:
-                # close() тоже под сроком: у зависшего браузера висит и он.
+                browser = pw.chromium.launch(**launch_kwargs)
                 try:
-                    browser.close()
+                    deadline.watch(_browser_pid(marker))
+                    page = browser.new_page(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        )
+                    )
+                    response = page.goto(url, timeout=timeout_ms, wait_until=wait_until)
+                    if response is not None and response.status in _BLOCK_STATUSES:
+                        logger.warning("playwright %s — статус %s (WAF/блок), пропуск", url, response.status)
+                        _last_fetch.status = f"blocked:{response.status}"
+                        return None
+                    _last_fetch.status = f"ok:{response.status if response is not None else '-'}"
+                    if settle_ms:
+                        page.wait_for_timeout(settle_ms)
+                    html_content = with_base_href(page.content(), page.url)
                 finally:
-                    deadline.cancel()
+                    # close() тоже под сроком: у зависшего браузера висит и он.
+                    browser.close()
+            finally:
+                deadline.cancel()
         return html_content.encode("utf-8") if isinstance(html_content, str) else html_content
     except Exception as exc:  # noqa: BLE001
         if deadline is not None and deadline.fired:

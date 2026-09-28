@@ -4,6 +4,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -193,7 +194,8 @@ def test_render_deadline_kills_the_whole_browser_process_group():
     helper = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"
     browser = subprocess.Popen([sys.executable, "-c", helper], start_new_session=True)
     try:
-        deadline = playwright_parser._RenderDeadline(browser.pid, 0.3, "https://example.com/slow")
+        deadline = playwright_parser._RenderDeadline(0.3, "https://example.com/slow", locate=lambda: None)
+        deadline.watch(browser.pid)
         browser.wait(timeout=10)
         assert deadline.fired
         assert browser.returncode == -signal.SIGKILL
@@ -205,10 +207,25 @@ def test_render_deadline_kills_the_whole_browser_process_group():
             pass
 
 
+def test_render_deadline_finds_the_browser_itself_when_launch_never_returned():
+    """Срок вышел раньше, чем стал известен PID (launch не вернулся): сторож ищет браузер сам."""
+    browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        deadline = playwright_parser._RenderDeadline(0.3, "https://example.com/launch", locate=lambda: browser.pid)
+        browser.wait(timeout=10)
+        assert deadline.fired
+        assert browser.returncode == -signal.SIGKILL
+    finally:
+        if browser.poll() is None:
+            browser.kill()
+            browser.wait()
+
+
 def test_render_deadline_cancelled_in_time_kills_nothing():
     browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
     try:
-        deadline = playwright_parser._RenderDeadline(browser.pid, 0.3, "https://example.com/fast")
+        deadline = playwright_parser._RenderDeadline(0.3, "https://example.com/fast", locate=lambda: browser.pid)
+        deadline.watch(browser.pid)
         deadline.cancel()
         time.sleep(0.8)
         assert browser.poll() is None
@@ -218,48 +235,66 @@ def test_render_deadline_cancelled_in_time_kills_nothing():
         browser.wait()
 
 
-def test_render_without_a_browser_pid_is_not_guarded():
-    deadline = playwright_parser._RenderDeadline(None, 0.01, "https://example.com")
+def test_render_whose_browser_is_not_found_kills_nothing():
+    deadline = playwright_parser._RenderDeadline(0.01, "https://example.com", locate=lambda: None)
     time.sleep(0.1)
     assert not deadline.fired
     deadline.cancel()
 
 
-def _browser_answering(info):
-    class Session:
-        def send(self, method):
-            assert method == "SystemInfo.getProcessInfo"
-            return info
-
-        def detach(self):
-            pass
-
-    class Browser:
-        def new_browser_cdp_session(self):
-            return Session()
-
-    return Browser()
-
-
-def test_browser_pid_comes_from_cdp_and_failure_is_not_fatal():
-    good = {"processInfo": [{"type": "GPU", "id": 2}, {"type": "browser", "id": 1234}]}
-    assert playwright_parser._browser_pid(_browser_answering(good)) == 1234
-
-    class NoCdp:
-        def new_browser_cdp_session(self):
-            raise RuntimeError("CDP недоступен")
-
-    assert playwright_parser._browser_pid(NoCdp()) is None
-    # Кривой ответ — тоже None, а не исключение до try/finally с browser.close().
-    for info in ({}, {"processInfo": [{"type": "browser"}]}, {"processInfo": [{"type": "browser", "id": "x"}]}):
-        assert playwright_parser._browser_pid(_browser_answering(info)) is None
+def test_browser_pid_comes_from_the_marker_in_its_command_line():
+    """Метка рендера — только в командной строке его браузера: чужой рендер (пул потоков API)
+    со своей меткой не заденет. Проверка на настоящей таблице процессов этой системы."""
+    marker = f"--oiltech-render={uuid.uuid4().hex}"
+    browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "--disable-gpu", marker])
+    try:
+        deadline = time.monotonic() + 5
+        while playwright_parser._browser_pid(marker) is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert playwright_parser._browser_pid(marker) == browser.pid
+        assert playwright_parser._browser_pid(f"--oiltech-render={uuid.uuid4().hex}") is None
+    finally:
+        browser.kill()
+        browser.wait()
 
 
-def test_browser_pid_zero_or_one_is_never_used():
-    """killpg(0) снял бы группу самого шага — скрипт и сторожа, killpg(1) бьёт в init."""
+def test_linux_process_table_is_read_from_proc(monkeypatch, tmp_path):
+    """В образах ядра и NL `ps` нет — таблица читается из /proc: аргументы там через NUL."""
+    for pid, cmdline in (("19", b"/root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-linux/headless_shell"
+                                b"\0--no-sandbox\0--oiltech-render=abc\0--remote-debugging-pipe\0"),
+                         ("21", b"headless_shell\0--type=zygote\0--oiltech-render=abc\0")):
+        (tmp_path / pid).mkdir()
+        (tmp_path / pid / "cmdline").write_bytes(cmdline)
+    (tmp_path / "self").mkdir()  # не процесс
+    (tmp_path / "77").mkdir()  # процесс вышел между обходом и чтением: cmdline нет
+    monkeypatch.setattr(playwright_parser, "_PROC", tmp_path)
+
+    assert playwright_parser._browser_pid("--oiltech-render=abc") == 19
+
+
+def test_browser_pid_lookup_failure_or_doubt_is_not_fatal(monkeypatch):
+    """Без PID рендер идёт, только без сторожа — сбой поиска не роняет его до try/finally с close()."""
+    marker = "--oiltech-render=abc"
+
+    def unreadable():
+        raise PermissionError("таблица процессов недоступна")
+
+    monkeypatch.setattr(playwright_parser, "_process_command_lines", unreadable)
+    assert playwright_parser._browser_pid(marker) is None
+
+    def table(*rows):
+        monkeypatch.setattr(playwright_parser, "_process_command_lines", lambda: list(rows))
+
+    table((1234, f"chrome --headless {marker}"), (1235, f"chrome --type=renderer {marker}"))
+    assert playwright_parser._browser_pid(marker) == 1234  # хелпер с меткой браузером не считается
+    table((1234, f"chrome {marker}"), (1300, f"chrome {marker}"))
+    assert playwright_parser._browser_pid(marker) is None  # два браузера с одной меткой — не угадываем
+    table((1234, f"chrome {marker}x"))
+    assert playwright_parser._browser_pid(marker) is None  # метка сверяется целиком
+    # killpg(0) снял бы группу самого шага — скрипт и сторожа, killpg(1) бьёт в init.
     for pid in (0, 1):
-        info = {"processInfo": [{"type": "browser", "id": pid}]}
-        assert playwright_parser._browser_pid(_browser_answering(info)) is None
+        table((pid, f"chrome {marker}"))
+        assert playwright_parser._browser_pid(marker) is None
 
 
 # Настоящий Chromium: срок рендера — это снятый браузер, подделка вызова его не проверит.
@@ -297,8 +332,8 @@ pids = []
 # getattr — чтобы на коде до правки тест падал по делу (рендер не вернулся), а не на AttributeError.
 real_browser_pid = getattr(pp, "_browser_pid", None)
 if real_browser_pid is not None:
-    def spy(browser):
-        pids.append(real_browser_pid(browser))
+    def spy(marker):
+        pids.append(real_browser_pid(marker))
         return pids[-1]
     pp._browser_pid = spy
 
@@ -353,3 +388,99 @@ def test_render_that_never_returns_is_cut_by_the_deadline(chromium):
     assert wedge["seconds"] < 20  # срок 5 + 1 + 2 = 8 с от запуска браузера
     assert len(wedge["pids"]) == 2 and all(wedge["pids"])
     assert not any(_alive(pid) for pid in wedge["pids"]), "браузер пережил рендер"
+
+
+# Брешь #67: срок взводился после launch() и после вызова CDP за PID браузера — зависание там
+# не снималось. «Браузер», который запускается, но на рукопожатие по трубе не отвечает:
+FAKE_BROWSER = """#!/usr/bin/env python3
+import os, time
+with open(os.environ["BROWSER_PIDS"], "a") as fh:
+    fh.write(f"{os.getpid()}\\n")
+time.sleep(600)
+"""
+
+HANG_CHILD = r"""
+import json, os, signal, sys, time
+from playwright.sync_api._generated import BrowserType
+from oiltech_digest.ingestion import playwright_parser as pp
+
+pp.RENDER_DEADLINE_SLACK_SECONDS = 2
+mode, fake = sys.argv[1], sys.argv[2]
+real_launch = BrowserType.launch
+
+
+def launch(self, **kwargs):
+    if mode == "no-handshake":
+        return real_launch(self, **{**kwargs, "executable_path": fake})
+    browser = real_launch(self, **kwargs)
+    # Браузер жив, но сразу после запуска перестаёт отвечать: следующий вызов не вернётся.
+    session = browser.new_browser_cdp_session()
+    info = session.send("SystemInfo.getProcessInfo")["processInfo"]
+    session.detach()
+    pid = next(int(p["id"]) for p in info if p["type"] == "browser")
+    with open(os.environ["BROWSER_PIDS"], "a") as fh:
+        fh.write(f"{pid}\n")
+    os.kill(pid, signal.SIGSTOP)
+    return browser
+
+
+BrowserType.launch = launch
+started = time.monotonic()
+html = pp.fetch_rendered("http://127.0.0.1:9/never", timeout_ms=5000, settle_ms=0)
+print(json.dumps({"html": html is not None, "status": pp.last_fetch_status(),
+                  "seconds": time.monotonic() - started}), flush=True)
+"""
+
+
+def _dies(pid: int, timeout: float = 5.0) -> bool:
+    """Процесс ушёл: зомби подбирает его родитель (драйвер) или launchd — на это нужен миг."""
+    deadline = time.monotonic() + timeout
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not _alive(pid)
+
+
+def _kill_groups(pids: list[int]) -> None:
+    for pid in pids:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+@pytest.mark.parametrize("mode", ["no-handshake", "stopped"])
+def test_render_hung_before_the_browser_pid_is_known_is_cut_too(chromium, tmp_path, mode):
+    """no-handshake: launch() ждёт браузер, который не отвечает, — у Playwright 1.62 это 180 с
+    (замер 28.09), а не 30, как думали 25.09. stopped: браузер замолчал сразу после запуска —
+    вызов CDP за его PID не вернётся никогда: срока у него нет, а снятие браузера его не
+    отпускает (замер 28.09 — держал, пока жив драйвер). Теперь срок взведён до запуска, а PID
+    ищется по метке в командной строке браузера, без вызова, который может не вернуться."""
+    fake = tmp_path / "fake-browser"
+    fake.write_text(FAKE_BROWSER)
+    fake.chmod(0o755)
+    pids_log = tmp_path / "browser.pids"
+    child = subprocess.Popen(
+        [sys.executable, "-c", HANG_CHILD, mode, str(fake)],
+        cwd=str(ROOT),
+        env={**os.environ, "PROXY_URL": "", "PROXY_HOST_OVERRIDES": "", "BROWSER_PIDS": str(pids_log)},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
+    try:
+        out, err = child.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, signal.SIGKILL)  # драйвер — в группе ребёнка
+        child.communicate()
+        pytest.fail(f"{mode}: рендер не вернулся за 40 с — зависание до срока не снимается")
+    finally:
+        # Остановленный браузер и подделка сами не выйдут: у них своя группа (detached у Playwright).
+        browser_pids = [int(line) for line in pids_log.read_text().split()] if pids_log.exists() else []
+        survivors = [pid for pid in browser_pids if not _dies(pid)]
+        _kill_groups(browser_pids)
+    rows = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+    assert len(rows) == 1, err[-2000:]
+
+    assert rows[0]["status"] == "error:render_timeout", err[-2000:]
+    assert rows[0]["html"] is False
+    assert rows[0]["seconds"] < 20  # срок 5 + 0 + 2 = 7 с — теперь от запуска браузера
+    assert len(browser_pids) == 1 and survivors == [], "браузер пережил срок рендера"
