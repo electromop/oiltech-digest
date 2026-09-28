@@ -239,6 +239,8 @@ def test_merge_hides_repeat_counts_it_and_spares_reviewed(isolated_db):
     reviewed = repository.upsert_signal(_signal_row("reviewed", "ZenaTech и Velocity"))
     later = repository.upsert_signal(_signal_row("later", "Сделка ZenaTech"))
     repository.upsert_signal_evidence(repeat, {"source_url": "https://a.example/1", "title": "t"})
+    # Карточка без единой ссылки в список не попадает (сигнал 97) — у разобранной ссылка есть.
+    repository.upsert_signal_evidence(reviewed, {"source_url": "https://a.example/reviewed", "title": "t"})
     with repository.get_connection() as conn:
         conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict) VALUES (%s, 'verdict', 'approved')",
                      (reviewed,))
@@ -328,6 +330,7 @@ def test_duplicate_carrying_key_of_visible_card_hides_that_card_too(isolated_db)
 def test_duplicate_carrying_key_of_reviewed_card_updates_that_card(isolated_db):
     target = repository.upsert_signal(_signal_row("target", "Покупка Velocity Geomatics"))
     owner = repository.upsert_signal(_signal_row("owner", "ZenaTech купила Velocity"))
+    repository.upsert_signal_evidence(target, {"source_url": "https://a.example/target", "title": "t"})
     repository.upsert_signal_evidence(owner, {"source_url": "https://a.example/u", "title": "t"})
     _verdict(owner, "too_generic")
     again = _candidate("ZenaTech купила Velocity", ["ZenaTech"], key="owner", url="https://a.example/u")

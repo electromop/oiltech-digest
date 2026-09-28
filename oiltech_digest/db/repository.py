@@ -396,7 +396,12 @@ def upsert_source_candidate(rec: dict) -> int:
               normalized_domain = EXCLUDED.normalized_domain,
               name = COALESCE(EXCLUDED.name, source_candidates.name),
               candidate_type = COALESCE(EXCLUDED.candidate_type, source_candidates.candidate_type),
-              status = EXCLUDED.status,
+              -- Решение оператора (одобрен, отклонён, отложен) повторная находка того же
+              -- адреса агентом не отменяет: раньше отклонённый кандидат оживал как «new».
+              status = CASE
+                WHEN source_candidates.status IN ('approved', 'rejected', 'paused') THEN source_candidates.status
+                ELSE EXCLUDED.status
+              END,
               discovered_by = EXCLUDED.discovered_by,
               discovery_reason = COALESCE(EXCLUDED.discovery_reason, source_candidates.discovery_reason),
               topic = COALESCE(EXCLUDED.topic, source_candidates.topic),
@@ -1150,24 +1155,35 @@ def resolve_signal_merge_root(signal_id: int) -> int | None:
     return None
 
 
-def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "") -> bool:
+def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *, respect_review: bool = True) -> bool:
     """Скрыть карточку-дубль со ссылкой на главную. Не удаляет: пометку снимает UPDATE.
 
     Разобранную карточку не прячем, даже если судья счёл её дублем: между выдачей
-    задачи и её завершением её могли успеть разобрать или выбрать в дайджест."""
+    задачи и её завершением её могли успеть разобрать или выбрать в дайджест.
+    `respect_review=False` — решение человека («Дубль #ID» в обратной связи): сам отзыв
+    делает карточку разобранной, и без этого флага она не спряталась бы никогда."""
     root = resolve_signal_merge_root(into_signal_id)
     if root is None or root == int(signal_id):
         return False
+    if respect_review:
+        review_clause = "AND NOT " + _SIGNAL_REVIEWED_SQL.format(alias="signals")
+    else:
+        # Решение человека прячет и разобранную карточку, но не выбранную в дайджест: иначе она
+        # исчезла бы с экрана и осталась в выпуске без способа её оттуда убрать.
+        review_clause = (
+            "AND NOT EXISTS (SELECT 1 FROM user_signal_states uss_d"
+            " WHERE uss_d.signal_id = signals.id AND uss_d.status = 'digest')"
+        )
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             UPDATE signals
             SET merged_into_signal_id = %s, merge_reason = %s, updated_at = now()
             WHERE id = %s
               AND merged_into_signal_id IS NULL
-              AND NOT {reviewed}
+              {review_clause}
             RETURNING id
-            """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="signals")),
+            """,
             (root, (reason or "")[:500] or None, int(signal_id)),
         ).fetchone()
         if row is not None:
@@ -1441,10 +1457,46 @@ def list_signal_training_examples(
         return list(cur.fetchall())
 
 
+# Исправления из обратной связи («Рекомендуемый заголовок», «…формулировка сути»):
+# последнее непустое по карточке. Накладываются при чтении — текст модели в signals не
+# затирается, и повторная находка той же карточки прогоном радара правку не перепишет.
+_SIGNAL_CORRECTIONS_LATERAL = """
+LEFT JOIN LATERAL (
+  SELECT
+    (SELECT e.corrected_title FROM signal_feedback_events e
+     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_title, '')) <> ''
+     ORDER BY e.id DESC LIMIT 1) AS corrected_title,
+    (SELECT e.corrected_thesis FROM signal_feedback_events e
+     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_thesis, '')) <> ''
+     ORDER BY e.id DESC LIMIT 1) AS corrected_thesis
+) corr ON TRUE
+"""
+
+
+def apply_signal_corrections(row: dict) -> dict:
+    """Заголовок и суть карточки — с правками людей поверх текста модели."""
+    title = (row.get("corrected_title") or "").strip()
+    thesis = (row.get("corrected_thesis") or "").strip()
+    if title:
+        row["original_title_ru"] = row.get("title_ru")
+        row["title_ru"] = title
+    if thesis:
+        row["original_summary"] = row.get("summary")
+        row["summary"] = thesis
+    return row
+
+
 def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50,
                  user_id: int | None = None) -> list[dict]:
     # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup).
-    clauses = ["s.merged_into_signal_id IS NULL"]
+    # Карточка без единой ссылки (своей или склеенного дубля) не показывается: оценить её
+    # нельзя (сигнал 97, замечание заказчика 22.09).
+    clauses = [
+        "s.merged_into_signal_id IS NULL",
+        """EXISTS (SELECT 1 FROM signal_evidence e
+                   WHERE e.signal_id = s.id
+                      OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id))""",
+    ]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -1453,12 +1505,16 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
         clauses.append("s.theme ILIKE %s")
         params.append(f"%{theme}%")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params = [user_id, *params, limit]
+    params = [SYSTEM_TAG_UNCLASSIFIED, user_id, *params, limit]
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
             SELECT s.*,
+                   -- Тема — одна из тематик заказчика (корневые теги). Первая партия радара
+                   -- (13.09) писала тему свободным текстом: экран собирает такие в отдельный блок.
+                   (s.theme IN (SELECT t.name FROM tags t
+                                WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s)) AS theme_is_topic,
                    COALESCE(uss.status, 'watch') AS user_status,
                    (COALESCE(uss.status, 'watch') = 'digest') AS selected_for_digest,
                    uss.analyst_comment AS user_comment,
@@ -1472,16 +1528,19 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                              WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
                            ))
                    ) AS feedback_count,
-                   (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count
+                   (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
+                   corr.corrected_title,
+                   corr.corrected_thesis
             FROM signals s
             LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
+            {_SIGNAL_CORRECTIONS_LATERAL.format(alias="s")}
             {where}
             ORDER BY s.score DESC, s.last_seen_at DESC
             LIMIT %s
             """,
             params,
         )
-        return cur.fetchall()
+        return [apply_signal_corrections(row) for row in cur.fetchall()]
 
 
 def set_user_signal_status(
@@ -1922,6 +1981,90 @@ def list_signal_agent_memory(
             params,
         )
         return cur.fetchall()
+
+
+def list_signal_verdict_memory_balanced(*, limit_each: int = 60) -> list[dict]:
+    """Вердикты ОС для судьи: сильнейшие одобрения и сильнейшие отказы — поровну.
+
+    Общая выдача памяти идёт по весу (score DESC), а у отказов вес −80: как только
+    одобрений наберётся больше лимита, до судьи не дошёл бы ни один отказ — а это как раз
+    то, чего заказчик просит не приносить."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            (SELECT * FROM signal_agent_memory
+             WHERE memory_type = 'signal_verdict' AND status = 'active' AND score >= 0
+             ORDER BY score DESC, updated_at DESC LIMIT %s)
+            UNION ALL
+            (SELECT * FROM signal_agent_memory
+             WHERE memory_type = 'signal_verdict' AND status = 'active' AND score < 0
+             ORDER BY score ASC, updated_at DESC LIMIT %s)
+            """,
+            (limit_each, limit_each),
+        )
+        rows = cur.fetchall()
+    return sorted(rows, key=lambda row: (float(row.get("score") or 0), str(row.get("updated_at") or "")), reverse=True)
+
+
+def get_signal_brief(signal_id: int) -> dict | None:
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT id, title, title_ru, theme FROM signals WHERE id = %s", (int(signal_id),))
+        return cur.fetchone()
+
+
+def supersede_signal_feedback_memory(
+    *,
+    signal_id: int,
+    memory_types: tuple[str, ...],
+    origin: str | None = None,
+    user_id: int | None = None,
+) -> list[dict]:
+    """Погасить активную память ОС по карточке (статус 'superseded', строки не удаляются).
+
+    Карточка узнаётся только по своему номеру: signal_id в фактах (строки с 28.09) или отзыв,
+    из которого строка выросла (строки до 28.09 — у всех есть feedback_event_id). По заголовку
+    не сравниваем: у двух карточек он бывает одинаковым, и «Дубль» на одной гасил бы память
+    другой. `origin`, `user_id` — сузить до этого происхождения и этого пользователя.
+    Возвращает погашенные строки."""
+    clauses = [
+        "status = 'active'",
+        "memory_type = ANY(%s)",
+        """(facts_json->>'signal_id' = %s
+            OR (facts_json->>'signal_id' IS NULL
+                AND (facts_json->>'feedback_event_id') IN
+                    (SELECT e.id::text FROM signal_feedback_events e WHERE e.signal_id = %s)))""",
+    ]
+    params: list = [list(memory_types), str(int(signal_id)), int(signal_id)]
+    if origin:
+        clauses.append("facts_json->>'origin' = %s")
+        params.append(origin)
+    if user_id is not None:
+        clauses.append("facts_json->>'user_id' = %s")
+        params.append(str(int(user_id)))
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"UPDATE signal_agent_memory SET status = 'superseded', updated_at = now()"
+            f" WHERE {' AND '.join(clauses)} RETURNING id, memory_type, subject, facts_json",
+            params,
+        )
+        rows = cur.fetchall()
+        conn.commit()
+        return rows
+
+
+def unmerge_signal(signal_id: int) -> bool:
+    """Снять пометку дубля (ошибочный «Дубль #ID»): карточка снова видна."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "UPDATE signals SET merged_into_signal_id = NULL, merge_reason = NULL, updated_at = now()"
+            " WHERE id = %s AND merged_into_signal_id IS NOT NULL RETURNING id",
+            (int(signal_id),),
+        ).fetchone()
+        conn.commit()
+        return row is not None
 
 
 def merge_signal_agent_memory_facts(memory_id: int, patch: dict) -> bool:
@@ -5736,13 +5879,13 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         cur.execute(
             f"""
             SELECT sig.id,
-                   COALESCE(sig.title_ru, sig.title) AS title,
+                   COALESCE(corr.corrected_title, sig.title_ru, sig.title) AS title,
                    COALESCE(best_evidence.source_url, '') AS url,
                    COALESCE(best_evidence.published_at, sig.last_seen_at) AS published_at,
                    'mixed' AS language,
                    '' AS image_url,
                    COALESCE(best_evidence.publisher, 'Технологический радар') AS source_name,
-                   COALESCE(sig.summary, sig.thesis, '') AS summary,
+                   COALESCE(corr.corrected_thesis, sig.summary, sig.thesis, '') AS summary,
                    TRUE AS selected_for_digest,
                    sig.score AS total_score,
                    sig.maturity AS score_label,
@@ -5758,7 +5901,9 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               ORDER BY strength DESC, published_at DESC NULLS LAST, created_at DESC
               LIMIT 1
             ) best_evidence ON TRUE
+            {_SIGNAL_CORRECTIONS_LATERAL.format(alias="sig")}
             WHERE uss.status = 'digest'
+              AND sig.merged_into_signal_id IS NULL
               AND sig.maturity <> 'reject'
               AND sig.score >= %(min_score)s
               {max_score_clause.replace('COALESCE(sc.total_score, 0)', 'sig.score')}

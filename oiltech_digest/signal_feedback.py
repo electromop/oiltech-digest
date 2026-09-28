@@ -32,7 +32,17 @@ FEEDBACK_MEMORY_TYPES = {
 # заказчик браковал литий, тем больше радар его искал («сейчас там один литий»).
 # Брак, дубль и «слишком общее» — повод НЕ искать такое, а не искать ещё.
 QUERY_HINT_VERDICTS = {"strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation"}
-NEGATIVE_VERDICTS = {"reject", "wrong_domain", "too_generic", "merge_duplicate"}
+# «Не тот блок» (встреча с заказчиком 21.09, решение 5): находка годная, но это бизнес-сигнал,
+# а не технология — для технологического радара это отказ с понятной судье причиной.
+NEGATIVE_VERDICTS = {"reject", "wrong_domain", "too_generic", "merge_duplicate", "wrong_block"}
+# Память, которую новый вердикт по той же карточке заменяет: иначе «одобрено» и
+# «отклонено» по одной карточке оставались активными вместе.
+VERDICT_MEMORY_TYPES = ("signal_verdict", "signal_duplicate")
+# Чему учит поиск: после отказа по карточке подсказки из неё больше не нужны.
+SEARCH_MEMORY_TYPES = ("signal_query_hint", "signal_source_preference")
+# Выбор сигнала в дайджест — это «Сильный сигнал» по шкале заказчика; строки памяти
+# помечены происхождением, чтобы снятие отметки гасило только их.
+DIGEST_SELECTION_ORIGIN = "digest_selection"
 
 # Снимок памяти для прогона без базы (внешний воркер в NL её не имеет). Пока снимок
 # установлен, чтение памяти идёт из него, а не из repository.
@@ -48,7 +58,11 @@ def memory_snapshot_rows(*, limit: int = MEMORY_SNAPSHOT_LIMIT) -> dict[str, lis
     Результат сериализуем в JSON: уезжает внешнему воркеру в payload задачи."""
     snapshot: dict[str, list[dict[str, Any]]] = {}
     for memory_type in sorted(FEEDBACK_MEMORY_TYPES):
-        rows = repository.list_signal_agent_memory(memory_type=memory_type, status="active", limit=limit)
+        if memory_type == "signal_verdict":
+            # Одобрения и отказы поровну: иначе по весу в снимок попадали бы одни одобрения.
+            rows = repository.list_signal_verdict_memory_balanced(limit_each=max(1, limit // 2))
+        else:
+            rows = repository.list_signal_agent_memory(memory_type=memory_type, status="active", limit=limit)
         snapshot[memory_type] = [
             json.loads(json.dumps(
                 {
@@ -77,6 +91,8 @@ def _memory_rows(memory_type: str, *, limit: int) -> list[dict[str, Any]]:
     snapshot = _MEMORY_SNAPSHOT.get()
     if snapshot is not None:
         return list(snapshot.get(memory_type) or [])[:limit]
+    if memory_type == "signal_verdict":
+        return repository.list_signal_verdict_memory_balanced(limit_each=max(1, limit // 2))
     return repository.list_signal_agent_memory(memory_type=memory_type, status="active", limit=limit)
 
 
@@ -152,6 +168,8 @@ def store_signal_feedback(
     facts = {
         "topic": topic,
         "row_number": row.get("#") or row.get("row_number"),
+        "signal_id": signal_id,
+        "origin": row.get("origin") or "feedback_form",
         "signal_title": signal_title,
         "source_url": source_url,
         "source": row.get("Источник") or row.get("source"),
@@ -176,18 +194,100 @@ def store_signal_feedback(
         "corrected_thesis": corrected_thesis,
         "duplicate_of_signal_id": str(duplicate_of_signal_id or ""),
     })
+    superseded = 0
+    if verdict and signal_id is not None:
+        # Новый вердикт по карточке заменяет прежний (последнее слово — у последнего отзыва),
+        # а отказ гасит подсказки поиска, выросшие из её прежнего одобрения.
+        superseded += len(repository.supersede_signal_feedback_memory(
+            signal_id=signal_id, memory_types=VERDICT_MEMORY_TYPES,
+        ))
+        if verdict in NEGATIVE_VERDICTS:
+            superseded += len(repository.supersede_signal_feedback_memory(
+                signal_id=signal_id, memory_types=SEARCH_MEMORY_TYPES,
+            ))
     memory_ids = []
     for item in extracted_items:
         subject = _memory_subject(item["subject"])
         memory_ids.append(repository.upsert_signal_agent_memory(
-            memory_key=_memory_key(item["memory_type"], subject, item.get("topic") or signal_title),
+            # Вердикт и дубль — о конкретной карточке: ключ по её номеру. По заголовку две
+            # карточки с одинаковым заголовком и вердиктом делили одну строку памяти.
+            memory_key=_memory_key(
+                item["memory_type"],
+                subject,
+                f"signal:{signal_id}"
+                if signal_id is not None and item["memory_type"] in VERDICT_MEMORY_TYPES
+                else item.get("topic") or signal_title,
+            ),
             memory_type=item["memory_type"],
             subject=subject,
             status=item.get("status") or "active",
             score=float(item.get("score") or 0),
             facts={**facts, **(item.get("facts") or {}), "raw_subject": item["subject"]},
         ))
-    return {"event_id": event_id, "memory_ids": memory_ids, "memories": len(memory_ids)}
+    merged = False
+    if verdict == "merge_duplicate" and duplicate_of_signal_id and signal_id is not None:
+        # «Дубль #ID» от человека прячет карточку сразу, её ссылки видны в главной. Сам отзыв
+        # делает карточку разобранной, поэтому защиту разобранных здесь не применяем.
+        merged = repository.mark_signal_merged(
+            signal_id,
+            duplicate_of_signal_id,
+            reason=f"обратная связь: дубль #{duplicate_of_signal_id}" + (f" — {reason}" if reason else ""),
+            respect_review=False,
+        )
+    result = {"event_id": event_id, "memory_ids": memory_ids, "memories": len(memory_ids),
+              "superseded": superseded, "merged": merged}
+    if verdict == "merge_duplicate" and duplicate_of_signal_id and signal_id is not None and not merged:
+        # Не скрыта: выбрана кем-то в дайджест, уже скрыта или главной карточки с таким номером нет.
+        result["merge_skipped"] = True
+    return result
+
+
+def learn_from_digest_selection(
+    signal_id: int,
+    *,
+    selected: bool,
+    user_id: int | None = None,
+    event_id: int | None = None,
+) -> dict[str, Any]:
+    """«В дайджест» на карточке радара — положительный пример для агента.
+
+    Выбор в выпуск — это «Сильный сигнал» по шкале заказчика: агент учится на нём так же,
+    как на вердикте из формы (пример для судьи, подсказка поиска в теме карточки). Пример
+    свой у каждого пользователя; снятие отметки гасит только его. Вердиктов людей из формы
+    выбор не трогает: «последнее слово» — за явным отзывом, а случайная отметка не должна
+    стирать разбор. Обучающие примеры к событию выбора не привязываются: у него нет
+    вердикта, а привязку ждёт отзыв из формы."""
+    if not selected:
+        superseded = repository.supersede_signal_feedback_memory(
+            signal_id=signal_id, memory_types=VERDICT_MEMORY_TYPES + SEARCH_MEMORY_TYPES,
+            origin=DIGEST_SELECTION_ORIGIN, user_id=user_id,
+        )
+        return {"memories": 0, "superseded": len(superseded)}
+
+    signal = repository.get_signal_brief(signal_id) or {}
+    title = str(signal.get("title_ru") or signal.get("title") or "").strip()
+    facts = {
+        "topic": str(signal.get("theme") or "").strip() or None,
+        "signal_id": signal_id,
+        "origin": DIGEST_SELECTION_ORIGIN,
+        "signal_title": title,
+        "verdict": "strong_signal",
+        "reason": "Выбран в дайджест",
+        "feedback_event_id": event_id,
+        "user_id": user_id,
+    }
+    memory_ids = []
+    for item in extract_feedback_memories({"Сигнал": title, "verdict": "strong_signal", "reason": "Выбран в дайджест"}):
+        subject = _memory_subject(item["subject"])
+        memory_ids.append(repository.upsert_signal_agent_memory(
+            memory_key=_memory_key(item["memory_type"], subject, f"{DIGEST_SELECTION_ORIGIN}:{signal_id}:{user_id}"),
+            memory_type=item["memory_type"],
+            subject=subject,
+            status="active",
+            score=float(item.get("score") or 0),
+            facts={**facts, **(item.get("facts") or {}), "raw_subject": item["subject"]},
+        ))
+    return {"memories": len(memory_ids), "superseded": 0}
 
 
 def extract_feedback_memories(row: dict[str, str]) -> list[dict[str, Any]]:
@@ -329,6 +429,8 @@ def _normalize_verdict(value: Any) -> str | None:
         "дубль": "merge_duplicate",
         "duplicate": "merge_duplicate",
         "merge": "merge_duplicate",
+        "не тот блок": "wrong_block",
+        "бизнес": "wrong_block",
     }
     verdict = aliases.get(verdict, verdict)
     allowed = {
@@ -340,6 +442,8 @@ def _normalize_verdict(value: Any) -> str | None:
         "reject",
         "wrong_domain",
         "merge_duplicate",
+        # «Не тот блок» — бизнес-сигнал в технологическом радаре (встреча 21.09, решение 5).
+        "wrong_block",
         # Ниже — вердикты прежней шкалы. С экрана убраны (заказчик их не просил),
         # но приём оставлен: в signal_feedback_events уже лежат строки с ними,
         # и запрет сделал бы прошлую разметку невалидной задним числом.
@@ -371,7 +475,7 @@ def _verdict_score(verdict: str) -> float:
         return 40
     if verdict == "background_material":
         return 25
-    if verdict in {"reject", "wrong_domain", "too_generic"}:
+    if verdict in {"reject", "wrong_domain", "too_generic", "wrong_block"}:
         return -80
     if verdict in {"bad_translation", "needs_better_source"}:
         return 45
@@ -455,7 +559,10 @@ def feedback_prompt_block(topic: str | None = None, *, limit: int = 20) -> str:
                 if len(reason) > PROMPT_REASON_CHARS:
                     reason = reason[:PROMPT_REASON_CHARS].rstrip() + "…"
                 signal_title = str(facts.get("signal_title") or "").strip()
-                lines.append(f"- verdict={row.get('subject')} signal={signal_title} reason={reason}")
+                verdict_text = str(row.get("subject") or "")
+                if verdict_text == "wrong_block":
+                    verdict_text = "wrong_block (это бизнес-сигнал, а не технология — не для технологического радара)"
+                lines.append(f"- verdict={verdict_text} signal={signal_title} reason={reason}")
     if memory["signal_duplicate"]:
         lines.append("feedback_duplicate_examples:")
         for row in memory["signal_duplicate"][:limit]:

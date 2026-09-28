@@ -1734,19 +1734,33 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Signal not found")
+    event_id = None
     if target_status == "digest":
-        repository.record_signal_feedback_event(
+        event_id = repository.record_signal_feedback_event(
             None,
             "added_to_digest",
             signal_id=signal_id,
             user_id=int(user["id"]),
             comment=patch.analyst_comment,
         )
+    if target_status in {"digest", "watch"} and patch.selected_for_digest is not None:
+        # Выбор в дайджест — «Сильный сигнал» для обучения агента; снятие гасит этот пример.
+        # Сбой обучения не должен отменять отметку, которую пользователь уже поставил.
+        from oiltech_digest.signal_feedback import learn_from_digest_selection
+
+        try:
+            learn_from_digest_selection(
+                signal_id, selected=target_status == "digest", user_id=int(user["id"]), event_id=event_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("обучение на выборе в дайджест не записано: сигнал %s", signal_id, exc_info=True)
     return {"ok": True}
 
 
+# Отзыв о сигнале оставляет любой пользователь: на отзывах коллег заказчика учится агент
+# (решение владельца 28.09). До этого форма была только у админа, и ОС коллег не доходила.
 @app.post("/api/signals/feedback")
-def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     from oiltech_digest.signal_feedback import store_signal_feedback
 
     if not any([

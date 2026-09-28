@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getSignalSearchHealth, type SignalSearchHealth } from "../../api/signals";
+import { getSignalSearchHealth, listSignals, type SignalSearchHealth } from "../../api/signals";
 import type { Signal } from "../../api/types";
 import { SignalRadarPage } from "./SignalRadarPage";
 
@@ -193,5 +193,88 @@ describe("SignalRadarPage", () => {
     expect(await screen.findByText("Карточка без ревью пачки")).toBeInTheDocument();
     expect(getSignalSearchHealth).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/поиск не ответил/)).not.toBeInTheDocument();
+  });
+
+  describe("экран для коллег заказчика", () => {
+    const drilling = {
+      ...baseSignal,
+      id: 21,
+      signal_key: "k21",
+      theme: "Бурение",
+      title_ru: "Роботизированная буровая установка",
+      score: 80,
+      first_seen_at: "2026-09-25T09:00:00Z",
+      evidence: [
+        { id: 1, signal_id: 21, article_id: null, source_url: "https://worldoil.com/a", title: "Robotic rig",
+          title_ru: null, publisher: "worldoil.com", published_at: null } as never,
+      ],
+    };
+    const ecology = { ...baseSignal, id: 22, signal_key: "k22", theme: "Экология", title_ru: "Спутник MethaneSAT", score: 60 };
+
+    beforeEach(() => {
+      vi.mocked(listSignals).mockResolvedValueOnce([drilling, ecology]);
+    });
+
+    it("сигналы — блоками по темам, как бизнес-сигналы: свёрнуты, раскрываются", async () => {
+      renderRadar(false);
+
+      expect(await screen.findByRole("button", { name: "Раскрыть группу Бурение" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Раскрыть группу Экология" })).toBeInTheDocument();
+      expect(screen.queryByText("Роботизированная буровая установка")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Развернуть всё" }));
+
+      expect(screen.getByText("Роботизированная буровая установка")).toBeInTheDocument();
+      expect(screen.getByText("Спутник MethaneSAT")).toBeInTheDocument();
+    });
+
+    it("обычный пользователь оставляет ОС, в оценках есть «Не тот блок»", async () => {
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Обратная связь" })[0]);
+
+      expect(
+        screen.getByRole("option", { name: "Не тот блок — бизнес-сигнал, а не технология" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Сохранить" })).toBeInTheDocument();
+    });
+
+    it("ранние карточки со свободной темой — одним блоком последним, не в фильтре тем", async () => {
+      vi.mocked(listSignals).mockReset();
+      vi.mocked(listSignals).mockResolvedValue([
+        drilling,
+        { ...ecology, id: 31, signal_key: "k31", theme: "HSE/бурение", theme_is_topic: false, title_ru: "Ранняя 1" },
+        { ...ecology, id: 32, signal_key: "k32", theme: "R&D / добыча лития", theme_is_topic: false, title_ru: "Ранняя 2" },
+      ]);
+      renderRadar(false);
+
+      const early = await screen.findByRole("button", { name: "Раскрыть группу Ранние карточки — тема вне 13 тематик" });
+      const groups = screen.getAllByRole("button", { name: /^Раскрыть группу/ });
+      expect(groups[groups.length - 1]).toBe(early);
+      expect(screen.queryByRole("option", { name: "HSE/бурение" })).not.toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Бурение" })).toBeInTheDocument();
+    });
+
+    it("блок, раскрытый поиском, всё равно сворачивается кнопкой", async () => {
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
+
+      fireEvent.change(screen.getByPlaceholderText("ZEUS IQ, бурение, робот..."), { target: { value: "буровая" } });
+      expect(screen.getByText("Роботизированная буровая установка")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Свернуть группу Бурение" }));
+      expect(screen.queryByText("Роботизированная буровая установка")).not.toBeInTheDocument();
+    });
+
+    it("вместо строки издателей — число ссылок и дата поступления", async () => {
+      const { container } = render(
+        <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+
+      expect(screen.getByText("Поступил: 25.09.2026")).toBeInTheDocument();
+      expect(container.querySelector(".signalPublisherChip")).toBeNull();
+    });
   });
 });

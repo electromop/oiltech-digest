@@ -1746,6 +1746,10 @@ def cmd_source_candidate_add(args: argparse.Namespace) -> None:
         "review_comment": args.comment,
     })
     print(f"source-candidate-add: id={candidate_id} url={args.url}")
+    # Решение оператора (одобрен/отклонён/отложен) повторное добавление не сбрасывает — скажем об этом.
+    current = (repository.get_source_candidate(candidate_id) or {}).get("status")
+    if args.status and current and current != args.status:
+        print(f"  статус остался «{current}» — решение оператора; сменить: PATCH кандидата в интерфейсе")
 
 
 def cmd_source_candidates(args: argparse.Namespace) -> None:
@@ -2064,6 +2068,13 @@ def cmd_refresh_signal_evidence_counts(args: argparse.Namespace) -> None:
 
     changed = repository.refresh_all_signal_evidence_counts()
     print(f"refresh-signal-evidence-counts: исправлено карточек {changed}")
+
+
+def cmd_unmerge_signal(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    ok = repository.unmerge_signal(args.signal_id)
+    print(f"unmerge-signal: #{args.signal_id} " + ("снова видна на радаре" if ok else "не была скрыта как дубль"))
 
 
 def cmd_assign_signal_hint_topics(args: argparse.Namespace) -> None:
@@ -2923,6 +2934,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_assign_hints.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
     p_assign_hints.add_argument("--json", action="store_true")
     p_assign_hints.set_defaults(func=cmd_assign_signal_hint_topics)
+
+    p_unmerge = sub.add_parser("unmerge-signal", help="снять пометку дубля с карточки радара (ошибочный «Дубль #ID»)")
+    p_unmerge.add_argument("signal_id", type=int)
+    p_unmerge.set_defaults(func=cmd_unmerge_signal)
 
     sub.add_parser(
         "refresh-signal-evidence-counts",

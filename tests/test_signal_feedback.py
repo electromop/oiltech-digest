@@ -64,6 +64,17 @@ def test_store_signal_feedback_writes_event_and_memories(monkeypatch):
         "attach_feedback_to_signal_training_examples",
         lambda *args, **kwargs: calls.setdefault("attachments", []).append((args, kwargs)) or 1,
     )
+    monkeypatch.setattr(signal_feedback.repository, "get_signal_theme", lambda signal_id: "Бурение")
+    monkeypatch.setattr(
+        signal_feedback.repository,
+        "supersede_signal_feedback_memory",
+        lambda **kwargs: calls.setdefault("superseded", []).append(kwargs) or [],
+    )
+    monkeypatch.setattr(
+        signal_feedback.repository,
+        "mark_signal_merged",
+        lambda *args, **kwargs: calls.setdefault("merged", []).append((args, kwargs)) or True,
+    )
 
     result = signal_feedback.store_signal_feedback(
         {
@@ -101,6 +112,17 @@ def test_structured_signal_feedback_writes_verdict_and_corrections(monkeypatch):
         "attach_feedback_to_signal_training_examples",
         lambda *args, **kwargs: calls.setdefault("attachments", []).append((args, kwargs)) or 1,
     )
+    monkeypatch.setattr(signal_feedback.repository, "get_signal_theme", lambda signal_id: "Бурение")
+    monkeypatch.setattr(
+        signal_feedback.repository,
+        "supersede_signal_feedback_memory",
+        lambda **kwargs: calls.setdefault("superseded", []).append(kwargs) or [],
+    )
+    monkeypatch.setattr(
+        signal_feedback.repository,
+        "mark_signal_merged",
+        lambda *args, **kwargs: calls.setdefault("merged", []).append((args, kwargs)) or True,
+    )
 
     result = signal_feedback.store_signal_feedback(
         {
@@ -129,3 +151,6 @@ def test_structured_signal_feedback_writes_verdict_and_corrections(monkeypatch):
     assert "signal_verdict" in memory_types
     assert "signal_duplicate" in memory_types
     assert "signal_title_correction" in memory_types
+    # «Дубль #5» от человека прячет карточку сразу — защита разобранных тут не действует.
+    assert calls["merged"] == [((7, 5), {"reason": "обратная связь: дубль #5 — Тот же инфоповод", "respect_review": False})]
+    assert result["merged"] is True
