@@ -217,9 +217,9 @@ def test_core_writes_paid_result_as_is_when_glossary_context_fails(monkeypatch):
 
 
 def test_apply_only_writes_summary_and_translation_but_bills_every_stage(monkeypatch):
-    """Перегенерация сути (enqueue-resummarize): воркер гоняет весь конвейер — пометки он не
-    знает, — а ядро пишет только суть и перевод. Гейт, передумав, не уберёт статью из ленты,
-    балл не сдвинется у отобранного в выпуск; оплаченные вызовы учтены все."""
+    """Перегенерация сути (enqueue-resummarize): воркер NL старой сборки гоняет весь конвейер —
+    пометки он не знает, — а ядро пишет только суть и перевод. Гейт, передумав, не уберёт статью
+    из ленты, балл не сдвинется у отобранного в выпуск; оплаченные вызовы учтены все."""
     writes, runs = [], []
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
     monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: writes.append("summary"))
@@ -269,9 +269,14 @@ def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
 
     regular = external_ai.build_process_articles_payload({"article_ids": [7]}, job_id=1)
     regen = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["summary", "translation"]}, job_id=2)
+    rescore = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["scoring"]}, job_id=3)
 
     assert regular["articles"][0]["summary"] == article["summary"]
     assert regen["articles"][0]["summary"] is None
+    # Пометку исполняет воркер (28.09): балл без перегенерации сути считается по записанной сути —
+    # новой, как раньше, у него уже не будет.
+    assert rescore["articles"][0]["summary"] == article["summary"]
+    assert (regular.get("only"), regen["only"], rescore["only"]) == (None, ["summary", "translation"], ["scoring"])
 
 
 def test_malformed_only_is_rejected_before_articles_are_reserved(monkeypatch):
@@ -299,6 +304,75 @@ def test_core_passes_only_from_job_payload_to_apply(monkeypatch):
     assert seen == {"only": ["summary", "translation"], "job_id": 42}
     api._apply_external_result({"kind": "process_articles", "payload_json": {}}, {"external_ai": True, "articles": []}, 43)
     assert seen["only"] is None
+
+
+def _gate_says_no(calls: list):
+    """Офлайн-модель, чей гейт отвергает любую статью, — и список схем, за которые её звали."""
+    from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient
+
+    class GateSaysNo(OfflineAIClient):
+        def complete_json(self, instructions, user_input, schema, **kwargs):
+            calls.append(schema["name"])
+            if schema["name"] == "article_relevance":
+                return AIResponse(data={"relevant": False, "reason": "передумал"}, model="gate", input_tokens=1)
+            return super().complete_json(instructions, user_input, schema, **kwargs)
+
+    return GateSaysNo()
+
+
+def _regeneration_payload(only) -> dict:
+    return {
+        "offline": True,
+        "only": only,
+        "articles": [
+            # Стоп-слово родительского тега в заголовке: гейт отсёк бы статью без модели.
+            {"id": 1, "title": "Oil prices rally", "url": "https://e.com/1", "language": "en",
+             "raw_text": "Oil prices rally after drilling news.", "source_name": "S"},
+            {"id": 2, "title": "Бурение на шельфе", "url": "https://e.ru/2", "language": "ru",
+             "raw_text": "Бурение на шельфе Сахалина.", "source_name": "S"},
+        ],
+        "tags": [{"id": 10, "name": "Бурение", "parent_id": None, "negative_keywords_json": ["rally"],
+                  "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}],
+        "criteria": [{"id": 20, "name": "Значимость", "weight": 100, "keywords_json": [], "keywords_en_json": []}],
+    }
+
+
+def test_worker_runs_only_the_stages_the_core_will_write(monkeypatch):
+    """Перегенерация сути (27.09): воркер гонял весь конвейер, а ядро писало только суть и
+    перевод — один гейт был 71 % расхода ($0,59 из $0,83), и статью, которую он отверг, воркер
+    оставлял без новой сути. Пометка only теперь приходит воркеру: не запрошенное не зовётся,
+    гейт (и стоп-слова) суть не отменяет."""
+    calls: list = []
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _gate_says_no(calls))
+
+    result = external_ai.process_payload(_regeneration_payload(["summary", "translation"]))
+
+    assert sorted(calls) == ["article_summary", "article_summary", "article_title_translation"]
+    for item in result["articles"]:
+        assert set(item) == {"article_id", "errors", "summary", "translation"}, item
+    assert result["stats"]["summary"] == 2 and result["stats"]["rejected"] == 0
+
+
+def test_gate_still_gates_when_only_asks_for_it(monkeypatch):
+    """Пометка с гейтом — гейт работает, как в полном конвейере: отвергнутое дальше не зовётся."""
+    calls: list = []
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _gate_says_no(calls))
+
+    result = external_ai.process_payload(_regeneration_payload(["relevance", "summary"]))
+
+    assert calls == ["article_relevance"]  # первую отсекло стоп-слово, вторую — модель
+    assert [item["relevance"]["model"] for item in result["articles"]] == ["negative-keyword", "gate"]
+    assert all("summary" not in item for item in result["articles"])
+
+
+def test_worker_rejects_malformed_only_before_any_model_call(monkeypatch):
+    """payload — граница: строка «summary» дала бы множество букв, и воркер не сделал бы ничего."""
+    calls: list = []
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _gate_says_no(calls))
+
+    with pytest.raises(external_ai.InvalidJobPayload, match="only"):
+        external_ai.process_payload(_regeneration_payload("summary"))
+    assert calls == []
 
 
 def _recheck_result(relevant: bool) -> dict:

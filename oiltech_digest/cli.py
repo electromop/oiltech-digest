@@ -1209,21 +1209,26 @@ def cmd_sources(args: argparse.Namespace) -> None:
 def cmd_source_health(args: argparse.Namespace) -> None:
     from collections import Counter
 
+    from oiltech_digest import config, feed_window
     from oiltech_digest.db import repository
 
     # Вердикты проверяются здесь, а не choices= парсера: сборка парсера не импортирует
     # репозиторий (NL-воркер зовёт cli без базы), а список живёт в одном месте.
     if args.verdict and args.verdict not in repository.SOURCE_HEALTH_VERDICTS:
         raise SystemExit(f"--verdict: одно из {', '.join(repository.SOURCE_HEALTH_VERDICTS)}")
-    rows = repository.source_health_report(stale_days=args.stale_days, limit=args.limit, verdict=args.verdict)
+    # Порог печатается в шапке: число stale без него не сравнить с прошлыми замерами (до 28.09 — 3 дня).
+    stale_days = config.SOURCE_STALE_DAYS if args.stale_days is None else args.stale_days
+    rows = repository.source_health_report(stale_days=stale_days, limit=args.limit, verdict=args.verdict)
     counts = Counter(row["verdict"] for row in rows)
     print(
-        "source-health: "
+        f"source-health: stale_days={stale_days}, "
         + ", ".join(f"{name}={counts.get(name, 0)}" for name in repository.SOURCE_HEALTH_VERDICTS)
     )
     for row in rows:
         last = row.get("last_article_at")
-        last_s = last.date().isoformat() if hasattr(last, "date") else "—"
+        # Дата по Москве, как в правиле stale: в поясе сессии БД (на проде UTC) загрузка
+        # с 00:00 до 03:00 МСК печаталась днём раньше, и дни не сходились с вердиктом.
+        last_s = last.astimezone(feed_window.MSK).date().isoformat() if hasattr(last, "astimezone") else "—"
         print(
             f"{row['id']:>4} {row['verdict']:<11} {row.get('parse_strategy') or '-':<8} "
             f"{int(row['articles'] or 0):>5} last={last_s} · {row['name']}"
@@ -1273,6 +1278,27 @@ def cmd_source_diagnose(args: argparse.Namespace) -> None:
         raise SystemExit(f"Источник не найден: {args.source_id}")
     result = diagnose_source(source, limit=args.limit)
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+def cmd_source_probe(args: argparse.Namespace) -> None:
+    """Проба источника путём сбора: вердикт рубежей вставки по каждому кандидату.
+
+    Отвечает на «почему источник молчит» там, где source-diagnose останавливается на
+    «скачалось и прошло предфильтр»: ключ адреса занят той же или другой статьёй, то же
+    тело, адрес уже в базе. Рубежи — те же функции, что у вставки. Ничего не пишет: все
+    соединения процесса — только для чтения, запись отклонит сама база."""
+    from oiltech_digest.db import connection, repository
+    from oiltech_digest.ingestion import source_probe
+
+    with connection.read_only_process():
+        source = repository.get_source(args.source_id)
+        if source is None:
+            raise SystemExit(f"Источник не найден: {args.source_id}")
+        report = source_probe.probe_source(source)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        return
+    print(source_probe.format_report(report, rows_per_verdict=args.rows))
 
 
 def _audit_row(source: dict, diag: dict) -> dict:
@@ -3017,7 +3043,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_agent_loop.set_defaults(func=cmd_enqueue_agent_loop)
 
     p_source_health = sub.add_parser("source-health", help="вердикты покрытия источников: ok/stale/no_articles/disabled/archived")
-    p_source_health.add_argument("--stale-days", type=int, default=3)
+    p_source_health.add_argument(
+        "--stale-days", type=int, default=None, help="порог stale, сут.; по умолчанию config.SOURCE_STALE_DAYS",
+    )
     p_source_health.add_argument("--limit", type=int, default=300)
     p_source_health.add_argument("--verdict", default=None, help="ok / stale / no_articles / disabled / archived")
     p_source_health.set_defaults(func=cmd_source_health)
@@ -3054,6 +3082,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_source_diag.add_argument("source_id", type=int)
     p_source_diag.add_argument("--limit", type=int, default=5, help="сколько кандидатов/постов проверить")
     p_source_diag.set_defaults(func=cmd_source_diagnose)
+
+    p_source_probe = sub.add_parser(
+        "source-probe",
+        help="проба источника путём сбора: вердикт рубежей вставки по каждому кандидату (ничего не пишет)")
+    p_source_probe.add_argument("source_id", type=int)
+    p_source_probe.add_argument("--json", action="store_true", help="полный отчёт в JSON: все кандидаты")
+    p_source_probe.add_argument("--rows", type=int, default=15,
+                                help="в таблице — не больше N строк на вердикт (полный список — --json)")
+    p_source_probe.set_defaults(func=cmd_source_probe)
 
     p_digest = sub.add_parser("digest-content", help="собрать digest_content.json из обработанных статей")
     p_digest.add_argument("month", help="YYYY-MM")
@@ -3158,7 +3195,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--verdict", nargs="+", choices=["stale", "no_articles"],
         default=None, help="вердикты для обработки (по умолчанию: stale no_articles)",
     )
-    p_source_retry.add_argument("--stale-days", type=int, default=3)
+    p_source_retry.add_argument(
+        "--stale-days", type=int, default=None, help="порог stale, сут.; по умолчанию config.SOURCE_STALE_DAYS",
+    )
     p_source_retry.add_argument("--max-age-days", type=int, default=None)
     p_source_retry.set_defaults(func=cmd_source_retry)
 

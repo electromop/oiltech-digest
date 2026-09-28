@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 import logging
@@ -14,8 +15,8 @@ from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, config, contract, lanes
-from oiltech_digest.ingestion import normalize
+from oiltech_digest import auth, config, contract, feed_window, lanes
+from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
 
@@ -3096,6 +3097,76 @@ def requeue_released_external_job(job_id: int, *, lease_token_hash: str, payload
         return bool(cur.rowcount)
 
 
+def fail_finalizing_external_job(
+    job_id: int,
+    *,
+    lease_token_hash: str,
+    payload: dict,
+    error_message: str,
+    retryable: bool,
+    retry_delay_seconds: int | None = None,
+) -> bool:
+    """Задача сбоила, но сделанную часть воркер вернул (шаг завис, external_worker.LeaseKeeper).
+
+    Ядро уже записало её и вычло из задачи (contract.remaining_after_partial); дальше — как
+    fail_external_background_job: попытка списана, задача в очереди с паузой или failed, если
+    попытки кончились. Не как release: зависание может сидеть в самой задаче, и без списания
+    она крутилась бы вечно. payload — остаток: и ручной перезапуск failed не позовёт модель за
+    записанное. Ждёт задачу в 'finalizing' — ядро застолбило её на время записи."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT attempts, max_attempts
+            FROM background_jobs
+            WHERE id = %s
+              AND execution_region = 'external'
+              AND status = 'finalizing'
+              AND lease_token_hash = %s
+            FOR UPDATE
+            """,
+            (job_id, lease_token_hash),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return False
+        if retryable and int(row["attempts"] or 0) < int(row["max_attempts"] or 0):
+            conn.execute(
+                """
+                UPDATE background_jobs
+                SET status = 'queued',
+                    progress = 0,
+                    run_after = now() + (%s::text || ' seconds')::interval,
+                    started_at = NULL,
+                    claimed_by = NULL,
+                    lease_token_hash = NULL,
+                    lease_expires_at = NULL,
+                    payload_json = %s,
+                    error_message = %s
+                WHERE id = %s
+                """,
+                (retry_delay_seconds if retry_delay_seconds is not None else 60, Json(_jsonable(payload)),
+                 error_message, job_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE background_jobs
+                SET status = 'failed',
+                    claimed_by = NULL,
+                    lease_token_hash = NULL,
+                    lease_expires_at = NULL,
+                    payload_json = %s,
+                    error_message = %s,
+                    finished_at = now()
+                WHERE id = %s
+                """,
+                (Json(_jsonable(payload)), error_message, job_id),
+            )
+        conn.commit()
+        return True
+
+
 def finish_external_background_job(job_id: int, *, lease_token_hash: str, result: dict | None = None) -> bool:
     with get_connection() as conn:
         cur = conn.execute(
@@ -3388,6 +3459,106 @@ def _jsonable(value):
 #  articles
 # ---------------------------------------------------------------------------
 
+class InsertVerdict(NamedTuple):
+    """Чем кончится insert_article для записи. `holder` — статья, в которую запись
+    упёрлась: {id, url, title, source_id, hidden, position}; у записи этого же прогона
+    пробы id нет (None)."""
+
+    verdict: str
+    url_key: str
+    body_hash: str | None
+    holder: dict | None = None
+
+
+_HOLDER_COLUMNS = "id, url, title, source_id, pending_deletion"
+
+
+def insert_verdict(conn, rec: dict, pending: Sequence[dict] = ()) -> InsertVerdict:
+    """Рубежи insert_article по записи — единственная их реализация. Только SELECT.
+
+    insert_article зовёт её перед INSERT; проба источника (`source-probe`) — вместо
+    вставки, в соединении только для чтения. Второй копии рубежей нет, поэтому вердикт
+    пробы — это ровно то, что сделал бы сбор.
+
+    `pending` — записи, которые проба «вставила бы» раньше в том же прогоне. Сбор их
+    вставляет по-настоящему, и следующая запись прогона упирается в них так же, как в
+    строки базы: у Eni 25.09 с каждой страницы извлекался один текст виджета — первая
+    статья легла бы, остальные отбились бы по телу. Сбор `pending` не передаёт.
+
+    Порядок рубежей — порядок вставки: ключ адреса среди видимых статей → то же тело у
+    видимой статьи того же источника → тот же адрес у любой строки (его держит
+    уникальный индекс по url, ON CONFLICT (url) в insert_article).
+
+    Та же ли статья заняла ключ (SAME/OTHER), решает не здесь, а проба: вставке это не
+    нужно, а разбор адреса на кривом URL падал бы и ронял сбор источника.
+    """
+    url = rec.get("url") or ""
+    key = normalize.url_key(url)
+    body_hash = normalize.compute_body_hash(rec.get("raw_text"))
+    source_id = rec.get("source_id")
+    earlier = [(p, normalize.url_key(p.get("url") or ""), normalize.compute_body_hash(p.get("raw_text")))
+               for p in pending]
+    if key:
+        holder = _holder(conn.execute(
+            f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE url_key = %s AND NOT pending_deletion LIMIT 1",
+            (key,),
+        ).fetchone()) or next((_pending_holder(p) for p, p_key, _ in earlier if p_key == key), None)
+        if holder is not None:
+            return InsertVerdict(verdicts.DUP_URL_KEY, key, body_hash, holder)
+    # Третий рубеж: одинаковое ТЕЛО у того же источника. Такая же проверка уже
+    # стояла в дозагрузке (article_fetcher), но только на замену текста — на
+    # первичной вставке её не было, и брак заезжал свободно.
+    #
+    # Замер прода 17.09: 830 статей с повторяющимся телом, 311 у активных
+    # источников, за 134 уже заплачен ИИ. У Новатэка так набралось 82 «статьи»
+    # из 86 — это оказались страницы навигации сайта (/ru/esg, /ru/press/
+    # calculator, даже PDF политики конфиденциальности): парсер берёт из
+    # листинга все ссылки подряд, включая меню, а сайт отдаёт на них одну и ту
+    # же оболочку. Разные статьи одного источника не совпадают телом побайтово,
+    # поэтому проверка безопасна. Перепечатки между источниками НЕ трогаем —
+    # это задача №21, и там нужен семантический дедуп, а не хэш.
+    if body_hash and source_id is not None:
+        # NOT pending_deletion — как на соседнем рубеже по url_key. Скрытая копия
+        # иначе блокировала бы пересбор навсегда: у RSS телом на вставке служит
+        # summary ленты, и один постоянный тизер-заглушка отрезал бы источник
+        # целиком после первой же статьи.
+        holder = _holder(conn.execute(
+            f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE source_id = %s AND body_hash = %s "
+            "AND NOT pending_deletion LIMIT 1",
+            (int(source_id), body_hash),
+        ).fetchone()) or next((_pending_holder(p) for p, _, p_body in earlier
+                               if p_body == body_hash and p.get("source_id") == source_id), None)
+        if holder is not None:
+            return InsertVerdict(verdicts.DUP_BODY_HASH, key, body_hash, holder)
+    # Тот же адрес — у любой строки, в том числе скрытой: его держит уникальный индекс по url.
+    holder = _holder(conn.execute(
+        f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE url = %s LIMIT 1", (url,),
+    ).fetchone()) or next((_pending_holder(p) for p, _, _ in earlier if (p.get("url") or "") == url), None)
+    if holder is not None:
+        return InsertVerdict(verdicts.KNOWN, key, body_hash, holder)
+    return InsertVerdict(verdicts.WOULD_INSERT, key, body_hash)
+
+
+def _holder(row) -> dict | None:
+    if row is None:
+        return None
+    return {"id": int(row[0]), "url": row[1], "title": row[2], "source_id": row[3],
+            "hidden": bool(row[4]), "position": None}
+
+
+def _pending_holder(rec: dict) -> dict:
+    return {"id": None, "url": rec.get("url") or "", "title": rec.get("title") or "",
+            "source_id": rec.get("source_id"), "hidden": False, "position": None}
+
+
+def articles_by_urls(conn, urls: Sequence[str]) -> dict[str, dict]:
+    """Статьи по точным адресам (и скрытые) — кто держит адрес, для отчёта пробы."""
+    if not urls:
+        return {}
+    rows = conn.execute(f"SELECT {_HOLDER_COLUMNS} FROM articles WHERE url = ANY(%s)", (list(urls),)).fetchall()
+    return {row[1]: _holder(row) for row in rows}
+
+
 def insert_article(rec: dict) -> bool:
     """Вставить статью. Дубликаты игнорируются. Возвращает True, если строка вставлена.
 
@@ -3402,53 +3573,24 @@ def insert_article(rec: dict) -> bool:
     делся; по `url_key` — новый частичный (скрытые копии его не занимают). Пишем первым
     попавшийся конфликт, поэтому проверку по ключу делаем явным запросом до вставки:
     ON CONFLICT умеет целиться только в один индекс за раз.
+
+    Решение «вставлять или нет» — insert_verdict (рубежи в одном месте, их же читает
+    проба источника); ON CONFLICT (url) остаётся страховкой от гонки двух вставок.
     """
-    url_key = normalize.url_key(rec.get("url") or "")
-    rec = {**rec, "image_url": rec.get("image_url"),
-           "body_hash": normalize.compute_body_hash(rec.get("raw_text")),
-           "url_key": url_key}
     with get_connection() as conn:
-        if url_key:
-            seen = conn.execute(
-                "SELECT 1 FROM articles WHERE url_key = %s AND NOT pending_deletion LIMIT 1",
-                (url_key,),
-            ).fetchone()
-            if seen is not None:
-                return False
-        # Третий рубеж: одинаковое ТЕЛО у того же источника. Такая же проверка уже
-        # стояла в дозагрузке (article_fetcher), но только на замену текста — на
-        # первичной вставке её не было, и брак заезжал свободно.
-        #
-        # Замер прода 17.09: 830 статей с повторяющимся телом, 311 у активных
-        # источников, за 134 уже заплачен ИИ. У Новатэка так набралось 82 «статьи»
-        # из 86 — это оказались страницы навигации сайта (/ru/esg, /ru/press/
-        # calculator, даже PDF политики конфиденциальности): парсер берёт из
-        # листинга все ссылки подряд, включая меню, а сайт отдаёт на них одну и ту
-        # же оболочку. Разные статьи одного источника не совпадают телом побайтово,
-        # поэтому проверка безопасна. Перепечатки между источниками НЕ трогаем —
-        # это задача №21, и там нужен семантический дедуп, а не хэш.
-        body_hash = rec.get("body_hash")
-        source_id = rec.get("source_id")
-        if body_hash and source_id is not None:
-            # NOT pending_deletion — как на соседнем рубеже по url_key. Скрытая копия
-            # иначе блокировала бы пересбор навсегда: у RSS телом на вставке служит
-            # summary ленты, и один постоянный тизер-заглушка отрезал бы источник
-            # целиком после первой же статьи.
-            twin = conn.execute(
-                "SELECT id, url FROM articles WHERE source_id = %s AND body_hash = %s "
-                "AND NOT pending_deletion LIMIT 1",
-                (int(source_id), body_hash),
-            ).fetchone()
-            if twin is not None:
-                if twin[1] != rec.get("url"):
-                    # Отказ этого рубежа в сводке сбора сливался с «дублями» (~3000 за цикл) и
-                    # был немым: 25.09 у Eni так молча отбивалась каждая новая статья — с каждой
-                    # страницы извлекался один и тот же текст виджета чат-бота.
-                    logger.warning("insert_article: у %s то же тело, что у статьи %s (%s) того же "
-                                   "источника — не вставлено: либо копия той же статьи по другому "
-                                   "адресу, либо извлекается общий блок страницы, а не статья",
-                                   rec.get("url"), twin[0], twin[1])
-                return False
+        verdict = insert_verdict(conn, rec)
+        if verdict.verdict == verdicts.DUP_BODY_HASH and verdict.holder["url"] != rec.get("url"):
+            # Отказ этого рубежа в сводке сбора сливался с «дублями» (~3000 за цикл) и
+            # был немым: 25.09 у Eni так молча отбивалась каждая новая статья — с каждой
+            # страницы извлекался один и тот же текст виджета чат-бота.
+            logger.warning("insert_article: у %s то же тело, что у статьи %s (%s) того же "
+                           "источника — не вставлено: либо копия той же статьи по другому "
+                           "адресу, либо извлекается общий блок страницы, а не статья",
+                           rec.get("url"), verdict.holder["id"], verdict.holder["url"])
+        if verdict.verdict != verdicts.WOULD_INSERT:
+            return False
+        rec = {**rec, "image_url": rec.get("image_url"),
+               "body_hash": verdict.body_hash, "url_key": verdict.url_key}
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, url_key, published_at,
@@ -3889,18 +4031,28 @@ def sources_by_strategy() -> list[dict]:
 SOURCE_HEALTH_VERDICTS = ("no_articles", "stale", "ok", "disabled", "archived")
 
 
-def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | None = None) -> list[dict]:
+def source_health_report(stale_days: int | None = None, limit: int = 300, verdict: str | None = None) -> list[dict]:
     """Per-source article coverage verdict for operations diagnostics.
+
+    stale («Требует внимания») — последняя загрузка stale_days и больше календарных дней
+    назад по Москве, как «N дн. назад» в колонке «Последняя загрузка» (sourceUtils.ts):
+    при 7 «7 дн. назад» уже требует внимания, «6 дн. назад» — ещё нет. Скользящие
+    7 × 24 ч с колонкой расходились до суток. Сегодня по МСК — с часов окна ленты
+    (feed_window._now), тесты их замораживают. Без явного порога —
+    config.SOURCE_STALE_DAYS, одно правило для экрана, API, CLI и замеров.
 
     Архивный источник — отдельный вердикт 'archived', а не 'disabled': архив выключает
     сбор (enabled = FALSE), и раньше он попадал в «Выкл». Экран источников считал
     плитки по этому отчёту вместе с архивом, а список и счётчик в шапке — без него:
     19.09 заказчик видел на одном экране «133 источника» и «173» в каталоге.
     """
+    if stale_days is None:
+        stale_days = config.SOURCE_STALE_DAYS
+    today = feed_window.current().today
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             WITH src AS (
               SELECT s.id, s.name, s.enabled, s.parse_strategy, s.source_type,
                      s.url, s.rss_url, s.listing_url, s.archived_at,
@@ -3917,7 +4069,8 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
                        WHEN archived_at IS NOT NULL THEN 'archived'
                        WHEN NOT enabled THEN 'disabled'
                        WHEN articles = 0 THEN 'no_articles'
-                       WHEN last_article_at < now() - (%s::text || ' days')::interval THEN 'stale'
+                       WHEN %s::date - (last_article_at AT TIME ZONE '{feed_window.MSK.key}')::date >= %s
+                         THEN 'stale'
                        ELSE 'ok'
                      END AS verdict
               FROM src
@@ -3938,7 +4091,7 @@ def source_health_report(stale_days: int = 3, limit: int = 300, verdict: str | N
               name
             LIMIT %s
             """,
-            (stale_days, verdict, verdict, limit),
+            (today, stale_days, verdict, verdict, limit),
         )
         return cur.fetchall()
 

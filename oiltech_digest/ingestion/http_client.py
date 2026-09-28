@@ -50,6 +50,8 @@ _DEFAULT_HEADERS = {
 }
 
 _thread_local = threading.local()
+# (запрошенный адрес, конечный после переадресаций) последнего удачного запроса потока.
+_last_response = threading.local()
 _host_lock = threading.Lock()
 _host_next_allowed: dict[str, float] = {}
 _host_cooldown_until: dict[str, float] = {}
@@ -70,7 +72,19 @@ def probe(url: str, timeout: int = 10) -> bytes | None:
     return _request(url, timeout=timeout, quiet=True, retries=1)
 
 
+def final_url_of(url: str) -> str | None:
+    """Куда привели переадресации последний удачный `fetch(url)` в этом потоке.
+
+    None — не знаем: запрос был к другому адресу, не удался или ответ пришёл запасным
+    путём (SSL-фоллбэк). Нужен, чтобы отличить статью от главной, на которую сайт увёл со
+    статьи: у Сколково Energy любой адрес energy.skolkovo.ru — 301 на www.skolkovo.ru/.
+    """
+    requested, final = getattr(_last_response, "pair", (None, None))
+    return final if requested == url else None
+
+
 def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
+    _last_response.pair = (None, None)
     host = _host(url)
     if _is_host_cooling_down(host):
         logger.debug("HTTP %s — host cooldown active, skip", url)
@@ -102,6 +116,7 @@ def _request(url: str, timeout: int, quiet: bool, retries: int) -> bytes | None:
                 if resp.status_code in {403, 429}:
                     return None
             resp.raise_for_status()
+            _last_response.pair = (url, getattr(resp, "url", None) or None)
             return resp.content
         except requests.exceptions.SSLError as exc:
             last_err = exc

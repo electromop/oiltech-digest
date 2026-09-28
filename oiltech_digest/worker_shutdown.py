@@ -9,6 +9,9 @@ EXTERNAL_WORKER_STOP_STEP_SECONDS, возвращает главный пото�
 граница шага в ИИ-пакете — целая статья, до пяти вызовов модели подряд, и без снимка
 оплаченное до зависшего шага пропало бы (ревью 23.09).
 
+Тот же снимок отдаёт и сторож аренды, когда шаг завис дольше срока (external_worker.LeaseKeeper):
+процесс уходит на перезапуск, а сделанное не выбрасывается (хвост сессии C, 28.09).
+
 Здесь — состояние процесса и надзор главного потока; как задачу вернуть — external_worker.
 """
 
@@ -30,15 +33,15 @@ REPORT_SECONDS = 15.0
 
 class _Job:
     """Задача в работе у процесса. Отчитаться о ней должен ровно один: поток обработчика
-    (complete/release/fail) или главный поток на остановке — иначе пустой release главного
-    потока мог бы обогнать уже готовый итог."""
+    (complete/release/fail), главный поток на остановке или сторож аренды при зависшем шаге —
+    иначе пустой release главного потока мог бы обогнать уже готовый итог."""
 
     __slots__ = ("client", "job", "state", "done")
 
     def __init__(self, client: Any, job: dict[str, Any]) -> None:
         self.client = client
         self.job = job
-        self.state = "working"  # working → reporting (обработчик) | returned (главный поток)
+        self.state = "working"  # working → reporting (обработчик) | returned (главный поток, сторож)
         self.done: dict[str, Any] | None = None  # снимок сделанного на последней границе шага
 
 
@@ -89,9 +92,12 @@ class Shutdown:
         with self._lock:
             self._jobs.pop(int(job["id"]), None)
 
-    def in_work(self) -> int:
+    def in_work(self, exclude: dict[str, Any] | None = None) -> int:
+        """Сколько задач в работе. exclude — не считать эту (сторож ждёт соседей своей задачи)."""
         with self._lock:
-            return len(self._jobs)
+            if exclude is None:
+                return len(self._jobs)
+            return sum(1 for key in self._jobs if key != int(exclude["id"]))
 
     def checkpoint(self, job: dict[str, Any], done: dict[str, Any]) -> None:
         """Граница шага: запомнить сделанное — его отдаст главный поток, если шаг зависнет."""
@@ -118,6 +124,19 @@ class Shutdown:
             for entry in taken:
                 entry.state = "returned"
             return taken
+
+    def take(self, job: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+        """Сторож аренды забирает зависшую задачу, чтобы отчитаться за неё (external_worker).
+
+        (True, снимок сделанного или None) — отчитывается сторож, поток обработчика, проснувшись,
+        уже промолчит. (False, None) — отчёт уже у обработчика (итог в пути), задачу вернул главный
+        поток на остановке или её нет в реестре: обработчик уже отчитался и вышел."""
+        with self._lock:
+            entry = self._jobs.get(int(job["id"]))
+            if entry is None or entry.state != "working":
+                return False, None
+            entry.state = "returned"
+            return True, entry.done
 
     def reporting(self) -> bool:
         with self._lock:

@@ -33,8 +33,10 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
 
     С job_id (выдача воркеру) статьи резервируются за задачей: соседняя ИИ-полоса не
     возьмёт те же и не оплатит их второй раз (repository.reserve_process_articles).
-    Пометка only проверяется здесь, до выдачи: при записи ответ модели уже оплачен."""
-    stages_to_write(payload.get("only"))
+    Пометка only проверяется здесь, до выдачи: при записи ответ модели уже оплачен. Она же
+    уходит воркеру — не запрошенное он не зовёт (process_payload); воркер до 28.09 её не
+    знает и гоняет весь конвейер, а ядро всё равно пишет только запрошенное."""
+    stages = stages_to_write(payload.get("only"))
     article_ids = [int(item) for item in payload.get("article_ids") or []]
     limit = int(payload.get("limit") or contract.PROCESS_LIMIT_DEFAULT)
     if job_id is not None:
@@ -44,11 +46,12 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         articles = repository.get_articles_by_ids(article_ids, include_summary=True)
     else:
         articles = repository.get_articles_needing_pipeline(limit)
-    if payload.get("only"):
+    if payload.get("only") and "summary" in stages:
         # Перегенерация сути: старая суть с браком («электроэнergyю») ушла бы в промпт
-        # (_article_prompt кладёт summary), и модель повторила бы её слово в слово.
+        # (_article_prompt кладёт summary), и модель повторила бы её слово в слово. Без
+        # перегенерации сути записанная остаётся: теги и балл считаются по ней.
         articles = [{**article, "summary": None} for article in articles]
-    return {
+    worker_payload = {
         "kind": "process_articles",
         "offline": bool(payload.get("offline", False)),
         "limit": limit,
@@ -57,6 +60,9 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         "tags": [_jsonable_dict(tag) for tag in repository.list_enabled_tags()],
         "criteria": [_jsonable_dict(item) for item in repository.list_enabled_scoring_criteria()],
     }
+    if payload.get("only"):
+        worker_payload["only"] = list(payload["only"])
+    return worker_payload
 
 
 def build_source_candidate_evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -123,7 +129,15 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     переотдаётся/ретраится, не закоммитив ничего. Колбэк не должен ронять обработку.
     Ему передаётся итог на этот момент: если следующая статья зависнет на остановке
     воркера, сделанное уйдёт ядру и не оплатится второй раз (worker_shutdown).
+
+    ``only`` в payload — какие стадии нужны (перегенерация сути: только суть и перевод).
+    Остальные не зовутся: ядро их всё равно не запишет (apply_process_result), а платили за
+    них больше двух третей расхода перегенерации (27.09 один гейт — $0,59 из $0,83). Без
+    стадии relevance нет и гейта: его вердикт ядро не пишет, а отвергнутая им статья осталась
+    бы со старой сутью (27.09 — 7 из 52). Пометки нет (старое ядро, обычный пакет) — весь
+    конвейер, как раньше.
     """
+    stages = stages_to_write(payload.get("only"))  # граница: битая пометка — до любого вызова модели
     client = make_client(bool(payload.get("offline", False)))
     tags = payload.get("tags") or []
     criteria = payload.get("criteria") or []
@@ -160,71 +174,77 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         try:
-            # Стоп-слова родительских тегов: отсекаем статью ДО любых AI-вызовов (бэклог #6).
-            blocked_reason = _negative_keyword_block(article, tags)
-            if blocked_reason:
-                item["relevance"] = {
-                    "relevant": False,
-                    "reason": blocked_reason,
-                    "model": "negative-keyword",
-                    "provider": "offline",
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "total_tokens": 0,
-                    "cost_usd": 0.0,
-                }
-                result["stats"]["rejected"] += 1
-                result["articles"].append(item)
-                continue
-            # Гейт релевантности ПЕРВЫМ — на сыром тексте, до суммаризации.
-            # Нерелевантное дальше не суммируем/не тегируем/не скорим (чистота + экономия).
-            relevance_resp = relevance_article(article, client, tags=tags)
-            relevant = bool(relevance_resp.data.get("relevant"))
-            item["relevance"] = _response_payload(
-                relevance_resp,
-                {"relevant": relevant, "reason": relevance_resp.data.get("reason")},
-            )
-            result["stats"]["relevant" if relevant else "rejected"] += 1
-            if not relevant:
-                result["articles"].append(item)
-                continue
+            if "relevance" in stages:
+                # Стоп-слова родительских тегов: отсекаем статью ДО любых AI-вызовов (бэклог #6).
+                blocked_reason = _negative_keyword_block(article, tags)
+                if blocked_reason:
+                    item["relevance"] = {
+                        "relevant": False,
+                        "reason": blocked_reason,
+                        "model": "negative-keyword",
+                        "provider": "offline",
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                        "cost_usd": 0.0,
+                    }
+                    result["stats"]["rejected"] += 1
+                    result["articles"].append(item)
+                    continue
+                # Гейт релевантности ПЕРВЫМ — на сыром тексте, до суммаризации.
+                # Нерелевантное дальше не суммируем/не тегируем/не скорим (чистота + экономия).
+                relevance_resp = relevance_article(article, client, tags=tags)
+                relevant = bool(relevance_resp.data.get("relevant"))
+                item["relevance"] = _response_payload(
+                    relevance_resp,
+                    {"relevant": relevant, "reason": relevance_resp.data.get("reason")},
+                )
+                result["stats"]["relevant" if relevant else "rejected"] += 1
+                if not relevant:
+                    result["articles"].append(item)
+                    continue
 
-            summary_resp = summarize_article(article, client)
-            item["summary"] = _response_payload(
-                summary_resp,
-                {"summary": summary_resp.data["summary"]},
-            )
-            article["summary"] = summary_resp.data["summary"]
-            result["stats"]["summary"] += 1
+            if "summary" in stages:
+                summary_resp = summarize_article(article, client)
+                item["summary"] = _response_payload(
+                    summary_resp,
+                    {"summary": summary_resp.data["summary"]},
+                )
+                article["summary"] = summary_resp.data["summary"]
+                result["stats"]["summary"] += 1
 
-            # Перевод заголовка — отдельная стадия (AI только для иностранных заголовков).
-            title_ru, translate_resp = title_ru_for_article(article, client)
-            if title_ru is not None:
-                if translate_resp is not None:
-                    item["translation"] = _response_payload(translate_resp, {"title_ru": title_ru})
-                    result["stats"]["translated"] += 1
-                else:
-                    item["translation"] = {"title_ru": title_ru, "model": None, "provider": "offline",
-                                           "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+            if "translation" in stages:
+                # Перевод заголовка — отдельная стадия (AI только для иностранных заголовков).
+                title_ru, translate_resp = title_ru_for_article(article, client)
+                if title_ru is not None:
+                    if translate_resp is not None:
+                        item["translation"] = _response_payload(translate_resp, {"title_ru": title_ru})
+                        result["stats"]["translated"] += 1
+                    else:
+                        item["translation"] = {"title_ru": title_ru, "model": None, "provider": "offline",
+                                               "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                                               "cost_usd": 0.0}
 
-            tag_resp = tag_article(article, tags, client)
-            tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
-            if tag_id == 0:
-                tag_id = int(keyword_tag(article, tags)["tag_id"])
-            item["tagging"] = _response_payload(
-                tag_resp,
-                {
-                    "tag_id": tag_id,
-                    "confidence": _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
-                    "rationale": tag_resp.data.get("rationale"),
-                },
-            )
-            result["stats"]["tagged"] += 1
+            if "tagging" in stages:
+                tag_resp = tag_article(article, tags, client)
+                tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
+                if tag_id == 0:
+                    tag_id = int(keyword_tag(article, tags)["tag_id"])
+                item["tagging"] = _response_payload(
+                    tag_resp,
+                    {
+                        "tag_id": tag_id,
+                        "confidence": _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
+                        "rationale": tag_resp.data.get("rationale"),
+                    },
+                )
+                result["stats"]["tagged"] += 1
 
-            score_resp = score_article(article, criteria, client)
-            score_payload = normalize_score_payload(article, criteria, score_resp.data)
-            item["scoring"] = _response_payload(score_resp, score_payload)
-            result["stats"]["scored"] += 1
+            if "scoring" in stages:
+                score_resp = score_article(article, criteria, client)
+                score_payload = normalize_score_payload(article, criteria, score_resp.data)
+                item["scoring"] = _response_payload(score_resp, score_payload)
+                result["stats"]["scored"] += 1
         except Exception as exc:  # noqa: BLE001 - one bad article must not kill the whole batch
             result["stats"]["errors"] += 1
             item["errors"].append(str(exc)[:1000])
@@ -618,8 +638,9 @@ def apply_process_result(
     job_id — id задачи-источника: уходит в ai_processing_runs для идемпотентности биллинга
     (баг H1/T2). Повторное применение того же результата (ретрай/переотдача) не двоит счёт.
 
-    only — какие стадии записать (перегенерация сути: `enqueue-resummarize`). Воркер
-    гоняет весь конвейер, он пометки не знает, — и так задачу исполняет любая сборка NL.
+    only — какие стадии записать (перегенерация сути: `enqueue-resummarize`). Воркер с 28.09
+    не запрошенное не зовёт (process_payload), а сборка NL до 28.09 пометки не знает и гоняет
+    весь конвейер — поэтому фильтр остаётся здесь: так задачу исполняет любая сборка NL.
     Остальное не пишется: гейт, передумав, убрал бы статью из ленты, а теги и балл
     сдвинулись бы у отобранного в выпуск. Расход по всем стадиям учитывается — он оплачен."""
     write = stages_to_write(only)

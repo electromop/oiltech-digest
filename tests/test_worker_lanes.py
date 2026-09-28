@@ -33,6 +33,7 @@ class _Client:
         self.heartbeats = 0
         self.completed: list = []
         self.failed: list = []
+        self.fail_results: list = []  # что пришло с fail в поле result (снимок сделанного)
         self.heartbeat_error = heartbeat_error
         self.forked = forked
         self.worker_id = "nl-test"
@@ -51,8 +52,9 @@ class _Client:
     def complete(self, job, result):
         self.completed.append(result)
 
-    def fail(self, job, error, *, retryable=True, retry_after_seconds=300):
+    def fail(self, job, error, *, retryable=True, retry_after_seconds=300, result=None):
         self.failed.append((error, retryable))
+        self.fail_results.append(result)
 
 
 def _wait_until(condition, timeout: float = 2.0) -> bool:
@@ -104,6 +106,7 @@ def test_hung_job_goes_back_to_queue_and_process_restarts(monkeypatch):
     monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
     restarted = threading.Event()
     client = _Client()
+    worker_shutdown.SHUTDOWN.track(client, dict(JOB))  # задача в работе у процесса, как в _handle_job
 
     keeper = external_worker.LeaseKeeper(client, dict(JOB), interval=0.01, stall_seconds=0.05,
                                          drain_seconds=0.1, on_deadline=restarted.set)
@@ -151,6 +154,119 @@ def test_restart_waits_for_sibling_threads_to_finish(monkeypatch):
 
     assert _wait_until(lambda: restarted_at)
     assert restarted_at[0] >= sibling_done - 0.05
+
+
+def test_restart_waits_for_sibling_even_if_stalled_handler_wakes_up(monkeypatch):
+    """Ревью #73: зависший обработчик проснулся во время ожидания и вышел из реестра — счётчик
+    «> 1» падал до числа соседей, и os._exit обрывал здоровую соседку. Ждём соседей без своей."""
+    monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
+    shutdown = worker_shutdown.Shutdown()
+    monkeypatch.setattr(worker_shutdown, "SHUTDOWN", shutdown)
+    sibling = {"id": 8, "kind": "scrape_source"}
+    shutdown.track(_Client(), dict(JOB))  # зависшая
+    shutdown.track(_Client(), sibling)  # и соседняя
+    restarted_at = []
+    keeper = external_worker.LeaseKeeper(_Client(), dict(JOB), interval=0.01, stall_seconds=0.02,
+                                         drain_seconds=5, on_deadline=lambda: restarted_at.append(time.monotonic()))
+    keeper.start()
+    time.sleep(0.1)
+    shutdown.untrack(dict(JOB))  # зависший обработчик проснулся и вышел
+    # Соседка работает дольше первой проверки ожидания (сторож опрашивает раз в секунду):
+    # иначе к проверке ушли бы обе, и старый код тоже прошёл бы.
+    sibling_done = time.monotonic() + 2.4
+    time.sleep(2.4)
+    shutdown.untrack(sibling)  # соседка закончила
+
+    assert _wait_until(lambda: restarted_at, timeout=5.0)
+    assert restarted_at[0] >= sibling_done - 0.05
+
+
+def _stalling(monkeypatch, kind: str, handler) -> tuple[_Client, list]:
+    """Задача, чей шаг не возвращается дольше срока; перезапуск процесса — без выхода из pytest.
+    handler(unblock) → (модуль, имя, обработчик): шаг висит, пока тест не отпустит unblock."""
+    monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
+    monkeypatch.setattr(external_worker.config, "EXTERNAL_WORKER_HEARTBEAT_SECONDS", 0.01)
+    # Запас на медленный старт потока под нагрузкой: сработай сторож до первой границы шага —
+    # снимка ещё не было бы, и тест упал бы не по делу.
+    monkeypatch.setitem(external_worker._JOB_STALL_SECONDS, kind, 0.5)
+    restarted: list = []
+    monkeypatch.setattr(external_worker.os, "_exit", restarted.append)
+    unblock = threading.Event()
+    monkeypatch.setattr(*handler(unblock))
+    client = _Client()
+    worker = threading.Thread(target=external_worker._handle_job, args=(client, {**JOB, "kind": kind}), daemon=True)
+    worker.start()
+    assert _wait_until(lambda: restarted, 3.0), "зависание не замечено"
+    unblock.set()  # обработчик просыпается и доходит до своего отчёта
+    worker.join(2)
+    return client, restarted
+
+
+def test_stalled_step_hands_back_what_was_done_before_it(monkeypatch):
+    """Хвост сессии C: шаг ИИ-пакета завис дольше срока — процесс уходит на перезапуск, а задача
+    уходила ядру через fail без снимка: три оплаченные статьи делались и оплачивались заново.
+    Теперь с fail уходит снимок на последней границе шага, а обработчик, проснувшись, молчит."""
+
+    def handler(unblock):
+        def process_payload(payload, heartbeat=None):
+            result = {"external_ai": True, "articles": []}
+            for index in range(3):
+                heartbeat(result)
+                result["articles"].append({"article_id": index})
+            heartbeat(result)  # граница четвёртой статьи, дальше — вызов модели, который не возвращается
+            unblock.wait(5)
+            result["articles"].append({"article_id": 3})
+            return result
+        return external_ai, "process_payload", process_payload
+
+    client, restarted = _stalling(monkeypatch, "process_articles", handler)
+
+    assert restarted == [70]
+    assert len(client.failed) == 1 and client.failed[0][1] is True  # retryable: попытка списана, но задача вернётся
+    assert client.completed == []  # проснувшийся обработчик второй раз не отчитался
+    handed = client.fail_results[0]
+    assert handed and handed["partial"] is True
+    assert [item["article_id"] for item in handed["articles"]] == [0, 1, 2]
+
+
+def test_stalled_fetch_goes_back_whole_as_before(monkeypatch):
+    """Сбор частичного итога не отдаёт (ИИ не зовёт — повторить дёшево), документ — одна карточка
+    на файл: зависшие, они по-прежнему уходят fail целиком. Отчёт — один и здесь."""
+
+    def handler(unblock):
+        def process_payload(payload, heartbeat=None):
+            heartbeat()
+            unblock.wait(5)  # страница, которая не отдаётся
+            return {"external_fetch": True, "articles": []}
+        return external_worker.external_fetch, "process_payload", process_payload
+
+    client, restarted = _stalling(monkeypatch, "scrape_source", handler)
+
+    assert restarted == [70]
+    assert client.fail_results == [None] and client.completed == []
+
+
+@pytest.mark.parametrize("handler", ["reporting", "gone"])
+def test_stall_noticed_while_handler_reports_leaves_the_report_to_it(monkeypatch, handler):
+    """Итог уже в пути (complete) или обработчик уже отчитался и вышел: fail сторожа мог бы
+    обогнать оплаченный полный итог, и тот ушёл бы в повтор. Сторож не отчитывается и процесс
+    не перезапускает — зависания нет."""
+    monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
+    restarted: list = []
+    monkeypatch.setattr(external_worker.os, "_exit", restarted.append)
+    client = _Client()
+    job = dict(JOB)
+    worker_shutdown.SHUTDOWN.track(client, job)
+    if handler == "reporting":
+        assert worker_shutdown.SHUTDOWN.begin_report(job)  # поток обработчика забрал отчёт себе
+    else:
+        worker_shutdown.SHUTDOWN.untrack(job)  # обработчик отчитался и вышел из _handle_job
+
+    keeper = external_worker.LeaseKeeper(client, job, interval=0.01, stall_seconds=0.05, drain_seconds=0.1).start()
+    time.sleep(0.3)
+    keeper.stop()
+
+    assert client.failed == [] and restarted == []
 
 
 def test_stall_limits_are_per_kind():

@@ -50,6 +50,34 @@ def test_fetch_returns_content_on_success(monkeypatch):
     assert http_client.fetch("https://example.com/feed") == b"hello"
 
 
+def test_final_url_of_reports_where_redirects_led_for_that_url_only(monkeypatch):
+    """Конечный адрес после переадресаций — чтобы отличить статью от главной, на которую
+    сайт увёл со статьи (Сколково Energy). Только для того же запрошенного адреса: чужой
+    или неудачный запрос не должен подсказать «конечный адрес» следующему."""
+    http_client._host_cooldown_until.clear()
+    http_client._host_next_allowed.clear()
+
+    class RedirectedResponse(DummyResponse):
+        url = "https://www.skolkovo.ru/"
+
+    class DummySession:
+        def get(self, url, *args, **kwargs):
+            if "missing" in url:
+                return DummyResponse(status_code=404)
+            return RedirectedResponse(content=b"home")
+
+    monkeypatch.setattr(http_client, "_get_session", lambda: DummySession())
+    monkeypatch.setattr(http_client, "_wait_for_host_slot", lambda host: None)
+    monkeypatch.setattr(http_client.time, "sleep", lambda seconds: None)
+
+    assert http_client.fetch("https://energy.skolkovo.ru/news/a/") == b"home"
+    assert http_client.final_url_of("https://energy.skolkovo.ru/news/a/") == "https://www.skolkovo.ru/"
+    assert http_client.final_url_of("https://energy.skolkovo.ru/news/b/") is None
+
+    assert http_client.fetch("https://energy.skolkovo.ru/missing/") is None
+    assert http_client.final_url_of("https://energy.skolkovo.ru/news/a/") is None
+
+
 def test_proxy_for_returns_none_without_config(monkeypatch):
     monkeypatch.setattr(http_client, "PROXY_URL", "")
     monkeypatch.setattr(http_client, "PROXY_HOST_OVERRIDES", {})

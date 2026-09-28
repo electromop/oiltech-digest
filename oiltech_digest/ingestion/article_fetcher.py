@@ -25,8 +25,14 @@ MIN_GAIN_RATIO = 2.0
 
 _DROP_XPATH = (
     ".//script", ".//style", ".//noscript", ".//svg", ".//iframe",
-    ".//nav", ".//footer", ".//header", ".//aside", ".//form",
+    ".//nav", ".//footer", ".//header", ".//aside",
 )
+# <form> выбрасывается, только если в ней есть поля ввода: поиск, подписка, комментарий —
+# их подписи и подсказки не текст статьи. Форма БЕЗ полей — обёртка вёрстки: CMS VSB
+# (китайские университеты) кладёт новость в <form name="_newscontent_fromname">. Пока
+# чистка выбрасывала любую <form>, у SWPU с каждой страницы извлекалось меню сайта
+# (549 знаков), и рубеж «то же тело» отбивал все новые статьи после первой (25.09).
+_FORM_FIELDS_XPATH = ".//input[not(@type='hidden')]|.//select|.//textarea|.//button"
 _BAD_CLASS_RE = re.compile(
     r"(nav|menu|footer|header|cookie|banner|share|social|subscribe|"
     r"newsletter|advert|promo|related|sidebar|breadcrumb|comment)",
@@ -253,6 +259,10 @@ def extract_main_text(content: bytes | str, title: str = "") -> str:
             parent = node.getparent()
             if parent is not None:
                 parent.remove(node)
+    for form in doc.xpath(".//form"):
+        parent = form.getparent()
+        if parent is not None and form.xpath(_FORM_FIELDS_XPATH):
+            parent.remove(form)
 
     root = scope if scope is not None else doc
     candidates = root.xpath("descendant-or-self::article|descendant-or-self::main")

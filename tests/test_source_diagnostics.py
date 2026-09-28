@@ -67,6 +67,29 @@ def test_diagnose_request_source_reports_insertable_candidate(monkeypatch):
     assert result["article_checks"][0]["prefilter_keep"] is True
 
 
+def test_diagnose_request_source_flags_article_moved_to_home_page(monkeypatch):
+    """Ревью #74: «Диагностика» считала главную сайта статьёй (Сколково Energy: 301 на главную
+    для любого адреса), хотя сбор и source-probe такой кандидат уже отбивали."""
+    def fake_probe(url, timeout=20):
+        if url == "https://example.com/news":
+            return ProbeResult(url=url, status=200, bytes=len(LISTING_HTML)), LISTING_HTML
+        if url == "https://example.com/news/2026/06/drilling-automation-platform":
+            return ProbeResult(url=url, status=200, bytes=len(ARTICLE_HTML),
+                               final_url="https://example.com/"), ARTICLE_HTML
+        raise AssertionError(url)
+
+    monkeypatch.setattr(source_diagnostics, "probe_url", fake_probe)
+
+    result = source_diagnostics.diagnose_source(
+        {"id": 7, "name": "Example", "parse_strategy": "request", "listing_url": "https://example.com/news"},
+        limit=3,
+    )
+
+    assert result["article_checks"][0]["verdict"] == "redirected_home"
+    assert result["article_checks"][0]["final_url"] == "https://example.com/"
+    assert result["verdict"] == "no_insertable_articles"
+
+
 def test_diagnose_request_source_reports_no_candidates(monkeypatch):
     monkeypatch.setattr(
         source_diagnostics,

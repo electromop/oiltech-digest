@@ -29,7 +29,13 @@ def spaced_text(node) -> str:
         return ""
 
 
-def ordered(candidates: list[tuple[int, object]], *, trust_page_order: bool) -> list:
+# `sources.listing_strategy`: лента, выбранная селектором, уже идёт от новых к старым —
+# её порядок не перестраивать по датам. Задаётся источнику в реестре оверрайдов.
+PAGE_ORDER = "page_order"
+
+
+def ordered(candidates: list[tuple[int, object]], *, trust_page_order: bool,
+            keep_page_order: bool = False) -> list:
     """Порядок, в котором кандидаты идут под лимит: свежее — первым.
 
     Раньше сортировка была `(-балл, есть ли дата, дата ПО ВОЗРАСТАНИЮ, адрес)`: из
@@ -40,7 +46,15 @@ def ordered(candidates: list[tuple[int, object]], *, trust_page_order: bool) -> 
     Теперь: датированные — от новых к старым; недатированные — в порядке страницы
     (при заданном селекторе это и есть лента) или, без селектора, сперва по баллу
     статейности, а внутри балла — в порядке страницы.
+
+    `keep_page_order` — порядок страницы целиком, датированные не поднимаются над
+    недатированными. Только для ленты источника, выбранной селектором (`PAGE_ORDER`):
+    у Petronas свежайший релиз идёт первым, в блоке «Featured News» БЕЗ даты, а за ним —
+    двенадцать датированных карточек, и по общему правилу он уходил за лимит 12 (25.09).
+    Общее правило не меняется: смена порядка 18.09 дала массовый пересбор старья.
     """
+    if keep_page_order:
+        return [item for _, item in sorted(candidates, key=lambda pair: pair[0])]
     dated = [pair for pair in candidates if pair[1].published_at is not None]
     undated = [pair for pair in candidates if pair[1].published_at is None]
     dated.sort(key=lambda pair: (-pair[1].published_at.timestamp(), pair[0]))

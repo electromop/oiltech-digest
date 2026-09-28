@@ -623,3 +623,96 @@ def test_short_card_caption_does_not_replace_page_title():
     title, _, _ = request_parser.parse_article_page(page, "Learn more")
 
     assert title == "ADNOC awards drilling contract for Hail and Ghasha"
+
+
+def test_article_redirected_to_the_home_page_is_not_an_article(monkeypatch):
+    """Сколково Energy (25.09): energy.skolkovo.ru переадресует ЛЮБОЙ адрес (301) на главную
+    www.skolkovo.ru. Лента — это главная школы, ссылки с неё парсер собирает от старого
+    хоста, и каждая «статья» оказывается той же главной: общий заголовок сайта и описание
+    кампуса. Её резал предфильтр по слову «ресторан» — но это случайность: любое другое
+    описание на главной легло бы в ленту новостью. Страница, куда сайт увёл со статьи на
+    главную, статьёй не является."""
+    home = ("<html><head><meta property='og:title' content='Школа управления СКОЛКОВО - "
+            "бизнес-образование, бизнес-обучение в России'></head><body><main>"
+            + "<p>Школа управления СКОЛКОВО — ведущая бизнес-школа России, программы для компаний "
+              "и предпринимателей.</p>" * 4 + "</main></body></html>").encode()
+    monkeypatch.setattr(request_parser, "fetch", lambda url: home)
+    monkeypatch.setattr(request_parser, "final_url_of", lambda url: "https://www.skolkovo.ru/")
+    candidate = request_parser.CandidateLink(
+        url="https://energy.skolkovo.ru/interviews/pyat-variantov-budushego/",
+        title="Пять вариантов будущего: о новой очереди кампуса", score=6, published_at=None)
+
+    assert request_parser.fetch_article_candidate(candidate, {"id": 52, "name": "Сколково Energy"}) is None
+
+
+def test_ordinary_redirects_keep_the_article(monkeypatch):
+    # Хвостовой слэш, https, www, красивый адрес вместо ?p= — обычные переадресации статьи.
+    monkeypatch.setattr(request_parser, "fetch", lambda url: ARTICLE_HTML)
+    cases = [
+        ("https://example.com/news/field-automation", "https://example.com/news/field-automation/"),
+        ("http://example.com/news/field-automation", "https://www.example.com/news/field-automation"),
+        ("https://example.com/?p=678", "https://example.com/2026/05/field-automation/"),
+        ("https://example.com/?p=678", "https://example.com/?p=678"),
+    ]
+    for url, final in cases:
+        monkeypatch.setattr(request_parser, "final_url_of", lambda requested, final=final: final)
+        candidate = request_parser.CandidateLink(url=url, title="", score=6, published_at=None)
+        assert request_parser.fetch_article_candidate(candidate, {"id": 7}) is not None, (url, final)
+
+
+# --- Свежая карточка без даты первой на странице (Petronas, 25.09) --------------------
+# Лента релизов Petronas открывается «Featured News» — свежайшим релизом без даты, дальше
+# сетка датированных карточек. `ordered()` ставит недатированные после ВСЕХ датированных,
+# и при 12 датированных на странице свежайший релиз уходил за лимит 12 навсегда.
+# Общее правило не трогаем (смена порядка 18.09 дала массовый пересбор старья):
+# источнику, чья лента уже идёт от новых к старым, задают `listing_strategy='page_order'`.
+
+PETRONAS_LIKE_HTML = b"""<html><body>
+<div role="article" class="JgeneralBanner"><p>Featured News</p>
+  <h1><span>PETRONAS Marks 30 Years in Turkmenistan with New Agreements</span></h1>
+  <a href="/media/media-releases/petronas-marks-30-years-turkmenistan" class="JgeneralMainBtn"><p>Read More</p></a>
+</div>
+<div class="grid">
+  <div role="article"><p>15 Sep, 2026</p>
+    <h3><a href="/media/media-releases/invests-future-talent">PETRONAS Invests in Future Talent Through Education</a></h3></div>
+  <div role="article"><p>14 Sep, 2026</p>
+    <h3><a href="/media/media-releases/lng-supply-agreement">METLEN and PETRONAS enter into LNG Supply Agreement</a></h3></div>
+  <div role="article"><p>11 Sep, 2026</p>
+    <h3><a href="/media/media-releases/jogmec-master-agreement">PETRONAS and JOGMEC Strengthen LNG Collaboration</a></h3></div>
+</div>
+<a href="/media/reports">Integrated and Annual Reports of the company</a>
+</body></html>"""
+PETRONAS_SELECTOR = 'div[role="article"] a[href*="/media/media-releases/"]'
+
+
+def test_undated_featured_card_falls_behind_dated_ones_by_default():
+    # Для всех остальных источников порядок прежний — это и есть симптом Petronas.
+    source = {"article_link_selector": PETRONAS_SELECTOR}
+    candidates = request_parser.extract_candidate_links(
+        source, "https://www.petronas.com/media/media-releases", PETRONAS_LIKE_HTML, limit=3)
+
+    assert [c.url.rsplit("/", 1)[-1] for c in candidates] == [
+        "invests-future-talent", "lng-supply-agreement", "jogmec-master-agreement"]
+
+
+def test_page_order_strategy_keeps_undated_featured_card_first():
+    source = {"article_link_selector": PETRONAS_SELECTOR, "listing_strategy": "page_order"}
+    candidates = request_parser.extract_candidate_links(
+        source, "https://www.petronas.com/media/media-releases", PETRONAS_LIKE_HTML, limit=3)
+
+    assert [c.url.rsplit("/", 1)[-1] for c in candidates] == [
+        "petronas-marks-30-years-turkmenistan", "invests-future-talent", "lng-supply-agreement"]
+    assert candidates[0].title == "PETRONAS Marks 30 Years in Turkmenistan with New Agreements"
+    assert candidates[0].published_at is None
+    assert candidates[1].published_at.date().isoformat() == "2026-09-15", "даты карточек на месте"
+
+
+def test_page_order_strategy_without_selector_changes_nothing():
+    # Без селектора первыми на странице идут шапка и меню: порядок страницы там не свежесть.
+    plain = request_parser.extract_candidate_links(
+        {}, "https://www.petronas.com/media/media-releases", PETRONAS_LIKE_HTML, limit=4)
+    with_strategy = request_parser.extract_candidate_links(
+        {"listing_strategy": "page_order"}, "https://www.petronas.com/media/media-releases",
+        PETRONAS_LIKE_HTML, limit=4)
+
+    assert [c.url for c in with_strategy] == [c.url for c in plain]
