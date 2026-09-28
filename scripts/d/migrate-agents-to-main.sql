@@ -26,14 +26,18 @@ BEGIN
   IF (SELECT count(*) FROM agents_src.signals) = 0 THEN
     RAISE EXCEPTION 'agents_src.signals пуст — источник не загружен';
   END IF;
-  -- В агентные таблицы основной базы после разделения не писал никто: их строки есть в
-  -- базе агентов. Строка основной базы новее разделения и без пары — была бы потеряна.
-  FOR t IN SELECT name FROM d_tables WHERE name <> 'user_signal_states' LOOP
+  -- После разделения в агентные таблицы основной базы пишет только лента — в
+  -- signal_feedback_events (пометки статей); их строки сохраняются ниже (шаг 4). Остальные
+  -- 13 таблиц основной базы после 18.09 не менялись. Номер после разделения совпадает с
+  -- чужой строкой базы агентов, поэтому «своя» строка — та же пара id и created_at (так
+  -- выглядят и строки, перенесённые прошлым прогоном).
+  FOR t IN SELECT name FROM d_tables WHERE name NOT IN ('user_signal_states', 'signal_feedback_events') LOOP
     EXECUTE format(
       'SELECT count(*) FROM public.%I p WHERE p.created_at >= (SELECT at FROM d_fork)
-         AND NOT EXISTS (SELECT 1 FROM agents_src.%I s WHERE s.id = p.id)', t, t) INTO lost;
+         AND NOT EXISTS (SELECT 1 FROM agents_src.%I s WHERE s.id = p.id AND s.created_at = p.created_at)',
+      t, t) INTO lost;
     IF lost > 0 THEN
-      RAISE EXCEPTION 'в основной базе % новых строк в %, которых нет в базе агентов', lost, t;
+      RAISE EXCEPTION 'в основной базе % строк в % новее разделения — их нет в базе агентов', lost, t;
     END IF;
   END LOOP;
   IF EXISTS (SELECT 1 FROM agents_src.users s JOIN public.users u ON u.id = s.id
@@ -103,6 +107,13 @@ WHERE NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = s.user_id);
 -- (ON DELETE SET NULL). Запомнить до замены, вернуть после.
 CREATE TEMP TABLE d_keep_agent_run AS
 SELECT id, agent_run_id FROM public.background_jobs WHERE agent_run_id IS NOT NULL;
+-- Пометки статей в основной ленте после разделения (PATCH /api/articles пишет журнал в
+-- signal_feedback_events): вернуть после замены с новыми номерами.
+CREATE TEMP TABLE d_main_feedback_new AS
+SELECT * FROM public.signal_feedback_events p
+WHERE p.created_at >= (SELECT at FROM d_fork)
+  AND NOT EXISTS (SELECT 1 FROM agents_src.signal_feedback_events s
+                  WHERE s.id = p.id AND s.created_at = p.created_at);
 
 -- 5. Замена: удалить от детей к родителям, вставить от родителей к детям.
 DO $$
@@ -127,18 +138,23 @@ UPDATE public.background_jobs b SET agent_run_id = k.agent_run_id
 FROM d_keep_agent_run k
 WHERE b.id = k.id AND EXISTS (SELECT 1 FROM public.agent_runs r WHERE r.id = k.agent_run_id);
 
--- 6. Отметки пользователей о статьях агентов после разделения — по url_key.
+-- 6. Отметки пользователей о статьях в интерфейсе агентов после разделения. Статья агентов
+-- после 18.09 — по url_key; статья до разделения — тот же номер в обеих базах. Отметка
+-- основной базы по той же паре пользователь×статья остаётся (ON CONFLICT DO NOTHING).
 DO $$
-DECLARE n bigint;
+DECLARE n bigint; total bigint;
 BEGIN
   INSERT INTO public.user_article_states (user_id, article_id, status, analyst_comment, updated_at)
-  SELECT s.user_id, m.main_id, s.status, s.analyst_comment, s.updated_at
+  SELECT s.user_id, coalesce(m.main_id, s.article_id), s.status, s.analyst_comment, s.updated_at
   FROM agents_src.user_article_states s
-  JOIN d_article_map m ON m.agents_id = s.article_id AND m.main_id IS NOT NULL
+  LEFT JOIN d_article_map m ON m.agents_id = s.article_id
   WHERE EXISTS (SELECT 1 FROM public.users u WHERE u.id = s.user_id)
+    AND (m.main_id IS NOT NULL
+         OR (m.agents_id IS NULL AND EXISTS (SELECT 1 FROM public.articles a WHERE a.id = s.article_id)))
   ON CONFLICT DO NOTHING;
   GET DIAGNOSTICS n = ROW_COUNT;
-  RAISE NOTICE 'user_article_states: добавлено %', n;
+  SELECT count(*) INTO total FROM agents_src.user_article_states;
+  RAISE NOTICE 'user_article_states: в источнике %, добавлено % (остальные — уже отмечены в основной или без статьи)', total, n;
 END $$;
 
 -- 7. Счётчики номеров — за максимумом вставленного.
@@ -151,21 +167,44 @@ BEGIN
   END LOOP;
 END $$;
 
--- 8. Сверка: в основной базе ровно то, что в источнике.
+-- Пометки основной ленты после разделения — обратно, с новыми номерами. Ссылки на строки
+-- радара, которых после замены нет, — NULL.
+DO $$
+DECLARE c text; n bigint;
+BEGIN
+  SELECT string_agg(quote_ident(column_name), ',' ORDER BY ordinal_position) INTO c
+  FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'signal_feedback_events' AND column_name <> 'id';
+  UPDATE d_main_feedback_new f SET signal_id = NULL
+  WHERE f.signal_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.signals s WHERE s.id = f.signal_id);
+  UPDATE d_main_feedback_new f SET duplicate_of_signal_id = NULL
+  WHERE f.duplicate_of_signal_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.signals s WHERE s.id = f.duplicate_of_signal_id);
+  UPDATE d_main_feedback_new f SET signal_evidence_id = NULL
+  WHERE f.signal_evidence_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.signal_evidence e WHERE e.id = f.signal_evidence_id);
+  EXECUTE format('INSERT INTO public.signal_feedback_events (%s) SELECT %s FROM d_main_feedback_new ORDER BY id', c, c);
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RAISE NOTICE 'signal_feedback_events: пометок основной ленты после разделения возвращено %', n;
+END $$;
+
+-- 8. Сверка: в основной базе ровно то, что в источнике (плюс возвращённые пометки ленты).
 DO $$
 DECLARE t text; a bigint; b bigint;
 BEGIN
   FOR t IN SELECT name FROM d_tables ORDER BY pos LOOP
     EXECUTE format('SELECT count(*) FROM agents_src.%I', t) INTO a;
+    IF t = 'signal_feedback_events' THEN
+      a := a + (SELECT count(*) FROM d_main_feedback_new);
+    END IF;
     EXECUTE format('SELECT count(*) FROM public.%I', t) INTO b;
     IF a <> b THEN
-      RAISE EXCEPTION 'сверка %: источник %, основная %', t, a, b;
+      RAISE EXCEPTION 'сверка %: ожидалось %, в основной %', t, a, b;
     END IF;
   END LOOP;
   IF (SELECT count(*) FROM public.users) < (SELECT count(*) FROM agents_src.users) THEN
     RAISE EXCEPTION 'сверка users: пользователей меньше, чем в базе агентов';
   END IF;
-  RAISE NOTICE 'сверка сошлась; отметок по статьям без пары удалено: %; ссылок agent_run_id возвращено: %',
+  RAISE NOTICE 'сверка сошлась; пометок ленты возвращено: %; отметок по статьям без пары удалено: %; ссылок agent_run_id возвращено: %',
+    (SELECT count(*) FROM d_main_feedback_new),
     (SELECT count(*) FROM d_feedback_orphans),
     (SELECT count(*) FROM public.background_jobs b JOIN d_keep_agent_run k ON k.id = b.id
      WHERE b.agent_run_id = k.agent_run_id);

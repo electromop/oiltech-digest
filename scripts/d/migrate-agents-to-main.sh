@@ -27,6 +27,16 @@ cols() { src -At -c "SELECT string_agg(quote_ident(column_name), ',' ORDER BY or
 
 echo "== $(date -u '+%F %T') ${SRC_C}/${SRC_DB} → ${DST_C}/${DST_DB}"
 
+# Работа пользователей в интерфейсе агентов после разделения, которую этот перенос не
+# забирает (выпуски, отзывы, документы), — стоп: её надо переносить отдельно.
+extra=$(src -At -c "SELECT
+  (SELECT count(*) FROM monthly_digests WHERE created_at >= '$FORK') +
+  (SELECT count(*) FROM monthly_digest_items di JOIN monthly_digests d ON d.id = di.digest_id
+     WHERE d.created_at >= '$FORK' OR d.updated_at >= '$FORK') +
+  (SELECT count(*) FROM feedback_entries WHERE created_at >= '$FORK') +
+  (SELECT count(*) FROM documents WHERE created_at >= '$FORK')" < /dev/null)
+[ "$extra" = "0" ] || { echo "СТОП: в базе агентов после 18.09 есть выпуски/отзывы/документы ($extra строк)"; exit 1; }
+
 # Колонки сигналов, которых нет у основной базы (schema.sql:728–733). Весь init-db на живой
 # базе не запускается: в schema.sql есть массовые UPDATE (например, пометка дублей статей).
 dst -q < /dev/null -c "
