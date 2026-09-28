@@ -283,6 +283,7 @@ def test_batch_review_duplicate_merges_into_primary_card(monkeypatch):
     links: list[tuple[int, str]] = []
     examples: list[tuple[str, str]] = []
     monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
+    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
     monkeypatch.setattr(repository, "upsert_signal", lambda signal: upserted.append(signal["signal_key"]) or 10)
     monkeypatch.setattr(
         repository, "upsert_signal_evidence", lambda signal_id, item: links.append((signal_id, item["source_url"])) or 1
@@ -386,6 +387,7 @@ def test_search_queries_use_current_year_not_2026(monkeypatch):
 def test_external_summary_shows_rounds_fulltext_and_batch_review(monkeypatch):
     monkeypatch.setattr(repository, "create_signal_generation_run", lambda **kwargs: None)
     monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
+    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
     result = {
         "signal_discovery": True,
         "config": {"web_only": True, "offline": False, "dry_run": True},
@@ -454,10 +456,14 @@ def test_bare_compose_up_starts_only_core_services():
 
     unprofiled = {name for name, service in services.items() if not service.get("profiles")}
 
-    assert unprofiled == {"db", "bootstrap", "agents-app"}
-    for name in ("tasks", "worker", "playwright-worker", "scheduler"):
+    # Единый контур (D): стек MVP-1 — приложение `app` и Caddy; конвейер — профилем
+    # `pipeline`, архивный трекер задач — профилем `archive`.
+    assert unprofiled == {"db", "bootstrap", "app", "caddy"}
+    for name in ("worker", "playwright-worker", "scheduler"):
         assert services[name]["profiles"] == ["pipeline"]
         assert services[name]["environment"]["BACKGROUND_JOB_INLINE"] == "0"
+    assert services["tasks"]["profiles"] == ["archive"]
+    assert services["tasks"]["environment"]["BACKGROUND_JOB_INLINE"] == "0"
 
 
 def test_worker_result_does_not_carry_web_evidence_twice(monkeypatch):
