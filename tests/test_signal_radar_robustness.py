@@ -345,6 +345,8 @@ def test_run_dedup_redirects_batch_duplicate_when_its_primary_is_merged(monkeypa
 def test_upsert_signal_keeps_interest_when_next_run_has_none(isolated_db):
     base = {"signal_key": "k-interest", "title": "T", "theme": "Бурение", "maturity": "watch", "score": 70}
     signal_id = repository.upsert_signal({**base, "interest_score": 88, "why_interesting": "первое внедрение"})
+    # Карточка без единой ссылки в список не попадает (сигнал 97) — даём ей ссылку.
+    repository.upsert_signal_evidence(signal_id, {"source_url": "https://example.com/interest", "title": "T"})
     repository.upsert_signal(dict(base))  # тема из одного кандидата ревью пачки не проходит
 
     row = next(item for item in repository.list_signals(limit=10) if item["id"] == signal_id)

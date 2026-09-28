@@ -272,6 +272,20 @@ def build_digest_content(
         saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
         if saved_ids:
             rows = repository.digest_items_by_article_ids(saved_ids[:limit])
+            # В черновике хранятся только статьи (monthly_digest_items.article_id → articles).
+            # Сигналы радара, выбранные в дайджест, добавляются заново — иначе после
+            # «Сохранить черновик» они из выпуска пропадали.
+            rows = [
+                *rows,
+                *[
+                    row
+                    for row in repository.digest_candidates(
+                        month=month, limit=limit, min_score=min_score, user_id=user_id,
+                        max_score=max_score, search=search, top_tag=top_tag,
+                    )
+                    if row.get("item_type") == "signal"
+                ],
+            ]
     if not rows:
         rows = repository.digest_candidates(
             month=month,
@@ -295,10 +309,15 @@ def build_digest_content(
         # из первого предложения поста — без чистки «🔥» уезжает прямо в выпуск.
         title = strip_emoji(enforce_glossary_text(row.get("title") or "", glossary_context))
         summary = strip_emoji(enforce_glossary_text(row.get("summary") or "", glossary_context))
+        # Сигнал радара — не статья: его номер из таблицы signals. Раньше он уезжал в
+        # article_id, и сохранение черновика падало на внешнем ключе или цепляло чужую статью.
+        item_type = row.get("item_type") or "article"
         news.append(
             {
                 "category": tag,
-                "article_id": row["id"],
+                "item_type": item_type,
+                "article_id": row["id"] if item_type == "article" else None,
+                "signal_id": row["id"] if item_type == "signal" else None,
                 "title": title,
                 "source": row["source_name"],
                 "url": row["url"],

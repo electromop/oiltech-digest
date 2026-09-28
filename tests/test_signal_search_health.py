@@ -332,7 +332,8 @@ def _get(path: str, user: dict):
 def test_search_health_goes_to_admin_only(radar, monkeypatch):
     _brave_answers(monkeypatch, lambda query: (402, BRAVE_402))
     job = _daily_through_worker(monkeypatch)
-    repository.upsert_signal({"signal_key": "k-old", "title": "Прошлый сигнал", "theme": "Бурение", "score": 60})
+    old = repository.upsert_signal({"signal_key": "k-old", "title": "Прошлый сигнал", "theme": "Бурение", "score": 60})
+    repository.upsert_signal_evidence(old, {"source_url": "https://example.com/old", "title": "Прошлый сигнал"})
 
     admin = _get("/api/signals/search-health", ADMIN)
 
