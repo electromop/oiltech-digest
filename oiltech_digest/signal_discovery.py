@@ -19,11 +19,13 @@ from typing import Any, Callable, Iterator
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+import requests
+
 from oiltech_digest import config as app_config
 from oiltech_digest import signal_dedup
 from oiltech_digest.db import repository
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
-from oiltech_digest.processing.openai_client import AIResponse
+from oiltech_digest.processing.openai_client import AIClientError, AIResponse
 from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.signal_feedback import (
     apply_feedback_glossary,
@@ -648,9 +650,13 @@ def run_discovery(
             skipped_reviewed = len(evidence) - len(fresh)
             clusters = _cluster_evidence(fresh, topic_name)
             candidates = []
+            judge_errors: list[str] = []
             for cluster in _clusters_for_judging(clusters, config.max_signals):
                 beat()
-                signal, raw_output = judge_signal_snapshot(cluster, topic_name, offline=config.offline)
+                judged = _judge_with_retry(cluster, topic_name, offline=config.offline, beat=beat, errors=judge_errors)
+                if judged is None:
+                    continue
+                signal, raw_output = judged
                 if topic.get("tag_id") is not None:
                     # Тема радара = тематика заказчика: фильтр «Тема» на экране — это его 13 тегов,
                     # а не свободный текст модели (было 34 разных «темы» на 38 сигналов).
@@ -676,9 +682,48 @@ def run_discovery(
                 "web_search": web_search,
                 "clusters": len(clusters),
                 "candidates": candidates,
+                "judge_errors": judge_errors,
                 "batch_review": batch_review,
             })
     return {"topics": topics_out, "dedup": _dedupe_run(config, snapshot, topics_out, beat)}
+
+
+# Судья зовётся на каждый кластер, до 78 раз за прогон. Без повтора один таймаут или
+# сбой DNS ронял весь прогон, и оплаченная работа по всем темам пропадала: сигналы
+# пишутся ядром только в конце (прогон 28.09: ReadTimeout на судье, 0 сигналов).
+JUDGE_ATTEMPTS = 3
+JUDGE_RETRY_PAUSE_SECONDS = 5.0
+
+
+def _judge_with_retry(
+    cluster: list[dict[str, Any]],
+    topic_name: str,
+    *,
+    offline: bool,
+    beat: Callable[[], None],
+    errors: list[str],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Судья с повтором на временных сбоях; не вышло — кластер пропускается, не прогон.
+
+    Постоянные ошибки API (400/401/403) пробрасываются: ключ или адрес не те, и
+    повторять бессмысленно — это должно быть видно сразу, как 403 с РФ-адреса."""
+    for attempt in range(1, JUDGE_ATTEMPTS + 1):
+        try:
+            return judge_signal_snapshot(cluster, topic_name, offline=offline)
+        except (requests.RequestException, AIClientError) as exc:
+            if isinstance(exc, AIClientError) and not _is_transient_ai_error(exc):
+                raise
+            if attempt == JUDGE_ATTEMPTS:
+                errors.append(f"{type(exc).__name__}: {str(exc)[:300]}")
+                return None
+            beat()
+            time.sleep(JUDGE_RETRY_PAUSE_SECONDS * attempt)
+    return None
+
+
+def _is_transient_ai_error(exc: Exception) -> bool:
+    text = str(exc)
+    return bool(re.search(r"API error (429|5\d\d)\b", text)) or "non-JSON output" in text
 
 
 def _dedupe_run(
