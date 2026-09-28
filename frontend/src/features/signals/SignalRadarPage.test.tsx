@@ -64,7 +64,7 @@ const CAUSES: Array<[string, Partial<SignalSearchHealth>, string]> = [
   [
     "провайдер не подключён",
     { cause: "not_configured", provider: "none", http_status: null, first_error: "search provider is not connected yet" },
-    `${RUN} поиск не выполнен в 13 из 13 тем (поиск не настроен — нет ключа). Новых сигналов нет.`,
+    `${RUN} поиск не выполнен в 13 из 13 тем (провайдер поиска не подключён). Новых сигналов нет.`,
   ],
   [
     "неизвестный провайдер — текст сервера",
@@ -94,6 +94,15 @@ const CAUSES: Array<[string, Partial<SignalSearchHealth>, string]> = [
       first_error: "HTTPSConnectionPool(host='api.search.brave.com', port=443): Read timed out. (read timeout=20)",
     },
     `${RUN} поиск не ответил в 13 из 13 тем (поиск не ответил вовремя). Новых сигналов нет.`,
+  ],
+  [
+    "TLS или прокси",
+    {
+      cause: "connection",
+      http_status: null,
+      first_error: "HTTPSConnectionPool(host='api.search.brave.com', port=443): Max retries exceeded (SSLError)",
+    },
+    `${RUN} поиск не ответил в 13 из 13 тем (нет соединения с поиском). Новых сигналов нет.`,
   ],
   [
     "прочая ошибка HTTP — текст сервера",

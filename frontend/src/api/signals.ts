@@ -37,8 +37,8 @@ export type SignalSearchHealth = {
   http_status: number | null;
   provider: string | null;
   // not_configured — поиск не вызывался (нет ключа, провайдер не подключён); network — таймаут
-  // или обрыв соединения; null — сбоя нет. Считает ядро (signal_discovery._search_failure_cause).
-  cause: "not_configured" | "unsupported_provider" | "http" | "network" | "other" | null;
+  // или обрыв соединения; connection — TLS или прокси; null — сбоя нет. Считает ядро (signal_discovery._search_failure_cause).
+  cause: "not_configured" | "unsupported_provider" | "http" | "network" | "connection" | "other" | null;
 };
 
 export function getSignalSearchHealth() {

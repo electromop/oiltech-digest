@@ -66,11 +66,15 @@ function formatRunMoment(value: string | null): string {
 // внутри скобок плашки вторых скобок нет.
 function describeSearchError(health: SignalSearchHealth): string {
   const code = health.http_status;
-  if (health.cause === "not_configured") return "поиск не настроен — нет ключа";
+  if (health.cause === "not_configured") {
+    // provider «none» — поиск не подключён вовсе (ключ может быть на месте); иначе нет ключа.
+    return health.provider === "none" ? "провайдер поиска не подключён" : "поиск не настроен — нет ключа";
+  }
   if (code === 402 && health.provider === "brave") return "HTTP 402 — исчерпан месячный лимит поиска Brave";
   if (code === 429) return "HTTP 429 — превышен лимит запросов к поиску";
   if (code != null && code >= 500 && code <= 599) return `HTTP ${code} — сервис поиска недоступен`;
   if (health.cause === "network") return "поиск не ответил вовремя";
+  if (health.cause === "connection") return "нет соединения с поиском";
   return (health.first_error || "").trim();
 }
 

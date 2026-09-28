@@ -241,6 +241,12 @@ NO_DNS = (
     "port=80): Failed to resolve 'api.search.brave.invalid' ([Errno 8] nodename nor servname provided, or not known)\"))"
 )
 
+TLS_FAILURE = (
+    "HTTPSConnectionPool(host='api.search.brave.com', port=443): Max retries exceeded with url: "
+    "/res/v1/web/search?q=x (Caused by SSLError(SSLError(1, '[SSL: WRONG_VERSION_NUMBER] wrong version number "
+    "(_ssl.c:1000)')))"
+)
+
 
 @pytest.mark.parametrize(
     ("web_search", "cause"),
@@ -258,6 +264,11 @@ NO_DNS = (
         # 504 с «Timeout» в теле — это ответ сервиса, а не сеть.
         ({"status": "error", "provider": "brave", "errors": ["q: HTTP 504 Gateway Timeout"]}, "http"),
         ({"status": "error", "provider": "brave", "errors": ["q: Expecting value: line 1 column 1 (char 0)"]}, "other"),
+        # TLS в общей обёртке urllib3 «Max retries exceeded» — не «не ответил вовремя» (проверка 28.09).
+        ({"status": "error", "provider": "brave", "errors": [f"q: {TLS_FAILURE}"]}, "connection"),
+        # Слова самого запроса не решают причину: «connection broken» здесь — только в запросе.
+        ({"status": "error", "provider": "brave", "queries": ["2026 premium connection broken"],
+          "errors": ["2026 premium connection broken: Expecting value: line 1 column 1 (char 0)"]}, "other"),
     ],
 )
 def test_run_health_names_the_cause_of_the_first_failure(web_search, cause):

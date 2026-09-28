@@ -1084,10 +1084,15 @@ _SEARCH_ANSWERED = frozenset({"ok", "empty"})
 # Поиск не вызывался: нет ключа или провайдер не подключён (agent.search_web).
 _SEARCH_NOT_CONFIGURED = frozenset({"missing_api_key", "not_configured"})
 # Таймаут и обрыв соединения — так их пишет requests (ReadTimeout, ConnectTimeout, ConnectionError).
+# «Max retries exceeded» — общая обёртка urllib3 (её же получают TLS и прокси), в шаблон не входит:
+# у настоящего таймаута и отказа внутри неё есть свои слова.
 _SEARCH_NETWORK_ERROR_RE = re.compile(
-    r"timed out|timeout|max retries exceeded|connection (?:refused|reset|aborted|broken)|remote ?disconnected"
-    r"|failed to resolve",
+    r"timed out|timeout|connection (?:refused|reset|aborted|broken)|remote ?disconnected|failed to resolve",
     re.I,
+)
+# TLS и прокси — соединение не установилось (сертификат, прокси): не «не ответил вовремя».
+_SEARCH_CONNECTION_ERROR_RE = re.compile(
+    r"SSLError|\[SSL|CERTIFICATE_VERIFY_FAILED|ProxyError|Tunnel connection failed", re.I
 )
 # «запрос: HTTP 402 {тело}» — так ошибки складывают agent._search_brave и _search_serpapi.
 _SEARCH_HTTP_ERROR_RE = re.compile(r"(?:^|: )HTTP (\d{3})\b ?(.*)", re.S)
@@ -1113,16 +1118,19 @@ def _search_error_summary(web_search: dict[str, Any] | None) -> str | None:
     return _trim(str(web_search.get("reason") or status), 160)
 
 
+def _strip_search_query(text: str, queries: list[str]) -> str:
+    """«запрос: текст» → «текст». В запросе тоже бывает «: » — срезаем известный запрос."""
+    for query in sorted((str(q) for q in queries), key=len, reverse=True):
+        if query and text.startswith(f"{query}: "):
+            return text[len(query) + 2:]
+    return text
+
+
 def _short_search_error(text: str, queries: list[str]) -> str:
     text = _SEARCH_SECRET_PARAM_RE.sub(r"\1=***", text)
     match = _SEARCH_HTTP_ERROR_RE.search(text)
     if match is None:
-        # Исключение запроса: «запрос: текст». В запросе тоже бывает «: » — срезаем известный.
-        for query in sorted(queries, key=len, reverse=True):
-            if query and text.startswith(f"{query}: "):
-                text = text[len(query) + 2:]
-                break
-        return _trim(text, 160)
+        return _trim(_strip_search_query(text, queries), 160)
     detail = _search_error_detail(match.group(2))
     return f"HTTP {match.group(1)} {detail}" if detail else f"HTTP {match.group(1)}"
 
@@ -1187,7 +1195,7 @@ def _search_health(topic_results: list[dict[str, Any]]) -> dict[str, Any] | None
 def _search_failure_cause(web_search: dict[str, Any], *, http: bool) -> str:
     """not_configured — поиск не вызывался (нет ключа, провайдер не подключён);
     unsupported_provider — в настройке неизвестный провайдер; http — ответ с кодом ошибки;
-    network — таймаут или обрыв соединения; other — прочее.
+    network — таймаут или обрыв соединения; connection — TLS или прокси; other — прочее.
 
     Сеть узнаём по сырой строке ошибки: в first_error она обрезана до 160 знаков, и слова
     «Connection refused» / «Failed to resolve» у requests стоят дальше."""
@@ -1199,7 +1207,13 @@ def _search_failure_cause(web_search: dict[str, Any], *, http: bool) -> str:
     if http:
         return "http"
     errors = [str(item) for item in web_search.get("errors") or [] if str(item).strip()]
-    return "network" if errors and _SEARCH_NETWORK_ERROR_RE.search(errors[0]) else "other"
+    if not errors:
+        return "other"
+    # Слова самого запроса («… connection broken: …») не должны решать причину.
+    raw = _strip_search_query(errors[0], web_search.get("queries") or [])
+    if _SEARCH_CONNECTION_ERROR_RE.search(raw):
+        return "connection"
+    return "network" if _SEARCH_NETWORK_ERROR_RE.search(raw) else "other"
 
 
 def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> None:

@@ -54,7 +54,7 @@ docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --no-dep
 - Проверка радара — только через очередь (`enqueue-signal-discovery … --dry-run`), не
   `discover-signals`: тот исполняется на РФ и всегда получает 403 от OpenAI.
 - NL-воркер пересобирает владелец (команда — в разделе «Радар сигналов через NL»).
-- Выкат NL (`scripts/deploy-nl.sh`) — не во время ежедневного радара (крон 07:15 МСК, прогон до ~20 мин):
+- Выкат NL (`scripts/deploy-nl.sh`) — не во время ежедневного радара (в едином контуре его ставит планировщик на первом цикле после 00:00 МСК, до D — крон 07:15 МСК; прогон до ~20 мин):
   перезапускается и `external-worker-agents`, а прогон радара по частям не сохраняется (`signal_discovery`
   не в `PARTIAL_KINDS`) — начнётся заново, с повторными запросами к Brave и судье. Проверка на ядре:
   `cli external-queues-status` (у `external-agents` running=0) или `cli live-ai-leases`. Страж в скрипте — задача D.
