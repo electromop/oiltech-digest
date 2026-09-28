@@ -432,7 +432,7 @@ def test_source_health_endpoint(monkeypatch):
     monkeypatch.setattr(
         api.repository,
         "source_health_report",
-        lambda stale_days=3, limit=500, verdict=None: [
+        lambda stale_days=None, limit=500, verdict=None: [
             {
                 "id": 7,
                 "name": "Example",
@@ -460,7 +460,7 @@ def test_source_health_endpoint_accepts_archived_verdict(monkeypatch):
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     seen: dict = {}
 
-    def fake_report(stale_days=3, limit=500, verdict=None):
+    def fake_report(stale_days=None, limit=500, verdict=None):
         seen["verdict"] = verdict
         return []
 
