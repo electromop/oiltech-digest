@@ -54,46 +54,60 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # «Quantum Computing Use Cases for the Oil and Gas Industry»).
     # Сами строки источников заводит scripts/add_jpt_sections.sql — реестр их только
     # настраивает: apply_overrides UPDATE'ит существующие, а не создаёт.
+    # 28.09 разделы — через NL (network_region external → очередь external-playwright). С РФ
+    # jpt.spe.org (CloudFront) принимает TLS и молчит: 0 байт за 60 с дважды, из-за рубежа —
+    # 206 КБ за 1,4 с, рендер раздела 7 с. На ядре это goto по 30 с × 8 разделов × 2 попытки.
+    # Новых статей разделы почти не дают (их раньше забирает основной JPT), но на NL остаются
+    # страховкой для него; знакомые адреса воркер не качает (known_urls — по сайту). Исключение
+    # из правила «регион — через set-source-region»: эти строки целиком живут в реестре.
     "JPT — R&D и инновации": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/r-d-innovation",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     "JPT — Роботизация": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/robotics-unmanned-systems",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     "JPT — Бурение": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/drilling",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     "JPT — Заканчивание": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/completions",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     "JPT — Внутрискважинные работы": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/well-intervention",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     "JPT — Инспекция и ТОиР": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/inspection-maintenance",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     "JPT — Промышленная безопасность": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/safety",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
     "JPT — Водоподготовка": {"source_type": "Journal", "parse_strategy": "playwright",
         "listing_url": "https://jpt.spe.org/topic/water-management",
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
-        "article_date_selector": ".PromoB-by-line, .PromoA-by-line"},
+        "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        "network_region": "external"},
 
     # Проверено на проде:
     # Ревизия 17.07: без listing_url скребли главную и замолчали с 01.07. Явный newsroom
@@ -119,7 +133,12 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "EIA": {"parse_strategy": "rss", "rss_url": "https://www.eia.gov/rss/todayinenergy.xml"},  # +15
     # JS-корпораты, ПОДТВЕРЖДЁННЫЕ на проде (request + listing_url на newsroom отдаёт
     # статьи; анти-заморозка в request_parser держит свежие релизы от застревания):
-    "Eni": {"parse_strategy": "request", "listing_url": "https://www.eni.com/en-IT/media.html"},  # +3 на проде
+    # Eni, 28.09: на /media.html рядом с релизами — вечные страницы (media kit, журнал WE,
+    # дело OPL 245). Пока у всех было тело чат-бота, их отбивал рубеж «то же тело»; с
+    # починкой извлечения (article_page._own_text) они легли бы в ленту. Селектор — только
+    # релизы: 5 кандидатов 16–25.09. /media/press-release.html рисуется скриптом (0 релизов).
+    "Eni": {"parse_strategy": "request", "listing_url": "https://www.eni.com/en-IT/media.html",
+            "article_link_selector": 'a[href*="/media/press-release/20"]'},
     "Petrobras": {"parse_strategy": "request", "listing_url": "https://agencia.petrobras.com.br/en/mais-recentes"},  # +6 на проде
     "IEA": {"parse_strategy": "request", "listing_url": "https://www.iea.org/news"},  # +4 на проде
     "CNOOC": {"parse_strategy": "request", "listing_url": "https://www.cnoocltd.com/english/presscenter/pressreleases/2026/"},  # +6 (годовой путь — обновить в 2027)
@@ -174,6 +193,8 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     # source-health большинство западных playwright-источников парсятся с РФ (свежие
     # статьи), а live-аудит у них флапает таймаутом. Реальные кандидаты на external
     # помечаются осознанно по id через `set-source-region` и A/B-тестятся (см. CLI).
+    # Исключение — разделы JPT (вверху): их строки целиком живут в реестре, и таймаут с РФ
+    # у них не флап, а устройство сети (замер 28.09).
     # JS-SPA, ПОДТВЕРЖДЕНЫ playwright-рендером 2026-06-26 (source-dump-listing --render с
     # РФ-core дал реальные ссылки на статьи; request-стратегия давала пустой shell →
     # no_candidates). Гео-доступны с РФ, рендер локальный, роутинг не нужен:
@@ -201,8 +222,14 @@ SOURCE_OVERRIDES: dict[str, dict] = {
                     "rss_url": "https://www.kmg.kz/ru/press-center/press-releases/rss/"},  # 196 записей за 2026
 
     # -- Иностранные: правильный раздел новостей вместо главной/наград --
+    # Petronas, 28.09: лента открывается «Featured News» — свежайшим релизом БЕЗ даты, за ним
+    # 12 датированных карточек. По общему правилу датированные идут вперёд, и свежайший уходил
+    # за лимит 12 («30 Years in Turkmenistan» 25.09). Порядок страницы и есть свежесть —
+    # page_order; селектор оставляет только карточки релизов (без меню и отчётов).
     "Petronas": {"parse_strategy": "request",
-                 "listing_url": "https://www.petronas.com/media/media-releases"},  # был rss.xml = НАГРАДЫ
+                 "listing_url": "https://www.petronas.com/media/media-releases",  # был rss.xml = НАГРАДЫ
+                 "article_link_selector": 'div[role="article"] a[href*="/media/media-releases/"]',
+                 "listing_strategy": "page_order"},
     "Mubadala Energy": {"parse_strategy": "request",
                         "listing_url": "https://mubadalaenergy.com/all-news/",
                         # 18.09: без селектора свежие новости («Learn more»-карточки)
@@ -260,7 +287,16 @@ SOURCE_OVERRIDES: dict[str, dict] = {
         # но это ОБЩАЯ лента: замер 22.08 — ?tag=ТЭК, ?tag=нефть, ?tag=энергетика вернули ОДИН
         # И ТОТ ЖЕ список (Wildberries, ЦИК, погода в Москве). Неверный URL здесь не падает,
         # а тихо отдаёт мусор — то есть выглядит как успешно применённый оверрайд.
-        "listing_url": "https://www.interfax.ru/tags/%D0%A2%D0%AD%D0%9A/"},
+        # 28.09 тег ТЭК → тег «нефть». /tags/ТЭК/ — про безопасность объектов ТЭК (удары
+        # БПЛА, ЧОПы, теракты), свежее — 01.09; заголовки 22.08 выше — из того же тега.
+        # Отраслевой рубрики у interfax.ru нет, из тегов живые и отраслевые — «нефть» (25.09
+        # «Цена нефти Brent снизилась…», 23.09 «Саудовская Аравия… увеличила добычу нефти на
+        # 14,2%», 14.09 «Нефтедобыча в Казахстане упала на 8,4%»), «Газпром», «СПГ»;
+        # «энергетика» — тоже про удары, «нефтедобыча» — 2014 год. Селектор обязателен: без
+        # него первым идёт «Все новости», а блок популярного вытесняет выдачу тега.
+        "listing_url": "https://www.interfax.ru/tags/%D0%BD%D0%B5%D1%84%D1%82%D1%8C/",
+        "listing_selector": ".sPageResult > div",
+        "article_link_selector": "h3 a"},
     # NB: rss_url Интерфакса остаётся общей лентой издания. При parse_strategy='request' он не
     # читается (диспетчер в rss_parser.parse_all жёстко по parse_strategy), но возврат стратегии
     # на 'rss' — хоть руками, хоть discover-rss — вернёт мусор. Профильного фида у тега нет.
@@ -336,6 +372,18 @@ SOURCE_OVERRIDES: dict[str, dict] = {
     "PetroChina / 中国石油股份": {
         "parse_strategy": "playwright",
         "listing_url": "https://www.petrochina.com.cn/petrochina/xwxx/xwgg_list.shtml"},
+
+    # ==== Хвосты молчащих источников, 28.09 (ветка fix/sources-tails-0928, разбор — в PR) ====
+    "Southwest Petroleum University": {
+        # SWPU (id 23065, из админки) смотрел на главную /en/: меню («Achievements Release»)
+        # и анонсы лекций. С починкой извлечения (форма без полей ввода) они легли бы в ленту
+        # новостями. Лента новостей — /en/index/NEWS.htm: 15 кандидатов, все с датой.
+        "parse_strategy": "request", "listing_url": "https://www.swpu.edu.cn/en/index/NEWS.htm"},
+    # НЕ в реестре, 28.09 — настройкой не лечатся, решение за владельцем (см. тот же PR):
+    #   «Сколково Energy» и «Центр энергетики Московской школы управления СКОЛКОВО» —
+    #   energy.skolkovo.ru переадресует любой адрес на главную бизнес-школы (мусор закрывает
+    #   request_parser._moved_to_home_page), преемник «Энергия будущего» почти не пишет → архив.
+    #   ONGC — ongcindia.com не отвечает ни из РФ, ни из KZ и US → проба через NL, иначе архив.
 }
 
 
