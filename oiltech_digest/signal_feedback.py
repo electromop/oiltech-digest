@@ -545,6 +545,10 @@ def feedback_prompt_block(topic: str | None = None, *, limit: int = 20) -> str:
     if verdict_rows:
         rows = verdict_rows
         negatives = [row for row in rows if str(row.get("subject") or "") in NEGATIVE_VERDICTS]
+        # Настоящие отказы (вес −80) — первыми. «Дубль» тоже в NEGATIVE_VERDICTS, но с весом
+        # +85: на проде 28.09 11 дублей занимали все места раздела, 16 отказов не доходили.
+        # Сортировка устойчивая — при равном весе остаётся порядок «свежие первыми».
+        negatives.sort(key=lambda row: float(row.get("score") or 0))
         positives = [row for row in rows if str(row.get("subject") or "") not in NEGATIVE_VERDICTS]
         for title, subset, cap in (
             ("feedback_approved_examples (так делать):", positives, PROMPT_POSITIVE_EXAMPLES),

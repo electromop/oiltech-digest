@@ -116,6 +116,28 @@ def test_rejected_examples_reach_the_judge_even_behind_many_approvals(isolated_d
         assert "Школьный проект по литию" in signal_feedback.feedback_prompt_block()
 
 
+def test_duplicates_do_not_crowd_real_rejections_out_of_the_judge_prompt(isolated_db):
+    # Память прода 28.09: «Дубль» числится среди отказов, но с весом +85, и 11 дублей
+    # занимали все 8 мест раздела — ни один из 16 настоящих отказов (−80) судья не видел.
+    for subject, score, count in (("approved", 90, 12), ("merge_duplicate", 85, 11),
+                                  ("reject", -80, 10), ("wrong_domain", -80, 3), ("too_generic", -80, 3)):
+        for index in range(count):
+            repository.upsert_signal_agent_memory(
+                memory_key=f"{subject}-{index}", memory_type="signal_verdict", subject=subject, score=score,
+                facts={"signal_title": f"{subject} {index}", "reason": "разметка"},
+            )
+
+    snapshot = signal_feedback.memory_snapshot_rows()
+    for block in (signal_feedback.feedback_prompt_block(), None):
+        if block is None:
+            with signal_feedback.use_memory_snapshot(snapshot):
+                block = signal_feedback.feedback_prompt_block()
+        rejected = block.split("feedback_rejected_examples", 1)[1].split("feedback_", 1)[0]
+        verdicts = [line.split("verdict=", 1)[1].split(" ", 1)[0] for line in rejected.splitlines() if "verdict=" in line]
+        assert len(verdicts) == signal_feedback.PROMPT_NEGATIVE_EXAMPLES
+        assert set(verdicts) <= {"reject", "wrong_domain", "too_generic"}
+
+
 def test_digest_selection_is_a_strong_example_and_unselect_retracts_it(isolated_db):
     user = _user()
     signal = _signal("dig", "Цифровой двойник скважины у оператора", url="https://example.com/twin")
