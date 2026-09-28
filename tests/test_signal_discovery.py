@@ -1086,6 +1086,7 @@ def test_batch_review_ai_rejects_noise_candidate(monkeypatch):
         "duplicates": 0,
         "decisions": [{"signal_key": "drop-me", "action": "reject", "reason": "Общий обзор рынка без нового факта."}],
         "interest_scores": {"keep-me": 88.0},
+        "refused_duplicates": [],
     }
     assert keep["rejected"] is False
     assert keep["signal"]["interest_score"] == 88.0

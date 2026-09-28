@@ -446,7 +446,12 @@ BATCH_REVIEW_INSTRUCTIONS = """Ты — финальный контроль ка
 - на фоне всей пачки видно, что это не отдельное событие, а общий обзор рынка,
   трюизм или пересказ уже известного тренда без нового факта;
 - в пачке несколько кандидатов от одного вендора с одинаковой рекламной подачей —
-  оставь только самый содержательный, остальные убери.
+  оставь только самый содержательный, остальные убери как шум (keep=false БЕЗ
+  duplicate_of_signal_key): это не дубль, у них разные факты.
+
+Дубль — только одно и то же событие. Одна компания, но разные факты (цифровое
+обновление SLB и меморандум SLB с PDVSA; два разных контракта) — НЕ дубль: у дубля
+ссылки уходят в главную карточку, и в ней окажутся две разные истории.
 
 Не выдумывай факты, которых нет во входе. Не убирай кандидата только из-за похожей
 темы — разные компании или разные технологии внутри одной темы это нормально и
@@ -985,6 +990,16 @@ def _repeat_of_existing_card(signal: dict[str, Any], cluster: list[dict[str, Any
     return max(set(foreign), key=foreign.count)
 
 
+def _same_event_by_rule(candidate: dict[str, Any], target: dict[str, Any]) -> bool:
+    """Похожи ли два кандидата на одно событие без модели: общая ссылка или заголовок."""
+    left, right = candidate["signal"], target["signal"]
+    left_urls = signal_dedup.url_keys([str(item.get("source_url") or "") for item in left.get("evidence") or []])
+    right_urls = signal_dedup.url_keys([str(item.get("source_url") or "") for item in right.get("evidence") or []])
+    if left_urls & right_urls:
+        return True
+    return signal_dedup._overlap(signal_dedup.title_stems(left), signal_dedup.title_stems(right)) >= signal_dedup.PAIR_MIN_OVERLAP
+
+
 def _merge_duplicate(
     config: SignalDiscoveryConfig,
     topic_name: str,
@@ -1259,12 +1274,26 @@ def _batch_review_candidates(
         if not decision.get("keep", True)
     }
     targets = {key: target for key, target in targets.items() if target and target != key and target in by_key}
+    # Ссылки дубля уходят в главную карточку. Модель склеивала разные события одного
+    # вендора (сигнал 71 — две темы в одной карточке; 28.09 — обновление SLB ушло в
+    # MoU SLB—PDVSA). Дубль принимаем, только если у пары общая ссылка или похожий
+    # заголовок; иначе кандидат остаётся своей карточкой — одно событие на разных языках
+    # потом поймает судья дедупа (общая компания — его правило пар).
+    refused = {key for key, target in targets.items() if not _same_event_by_rule(by_key[key], by_key[target])}
+    for key in refused:
+        targets.pop(key)
+        kept.add(key)
 
     dropped: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
-    unscored: list[dict[str, Any]] = [item for key, item in by_key.items() if key not in decisions]
+    unscored: list[dict[str, Any]] = [item for key, item in by_key.items() if key not in decisions or key in refused]
     for key, decision in decisions.items():
         candidate = by_key[key]
+        if key in refused:
+            candidate["signal"]["batch_review_reason"] = (
+                "Модель сочла дублем, но у пары нет общей ссылки и похожего заголовка — оставлено отдельной карточкой."
+            )
+            continue
         if key in kept:
             # Судья оценивал score в изоляции; interest_score — сравнение внутри пачки,
             # поэтому именно он должен решать финальную сортировку, а не сырой score.
@@ -1305,6 +1334,7 @@ def _batch_review_candidates(
         "reviewed": len(reviewable),
         "dropped": len(dropped),
         "duplicates": len(duplicates),
+        "refused_duplicates": sorted(refused),
         "decisions": dropped + duplicates,
         "interest_scores": interest_scores,
     }

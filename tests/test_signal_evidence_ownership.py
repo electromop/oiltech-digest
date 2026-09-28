@@ -137,3 +137,62 @@ def test_refresh_all_counts_fixes_cards_left_with_stale_number(isolated_db):
     assert repository.refresh_all_signal_evidence_counts() == 1
     assert _count(emptied) == 0
     assert repository.refresh_all_signal_evidence_counts() == 0
+
+
+# --- Сигнал 71: две разные истории в одной карточке -----------------------------------
+
+
+def _review(monkeypatch, decisions):
+    from oiltech_digest.processing.openai_client import AIResponse
+
+    class Client:
+        def complete_json(self, *args, **kwargs):
+            return AIResponse(data={"decisions": decisions}, model="fake-ai")
+
+    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Client())
+
+
+def _item(key, title, urls):
+    return {"signal": {"signal_key": key, "title": title, "title_ru": title, "score": 60, "companies": ["SLB"],
+                       "evidence": [{"source_url": url, "title": title} for url in urls]},
+            "raw_output": {}, "rejected": False}
+
+
+def _decision(key, keep, duplicate_of=""):
+    return {"signal_key": key, "keep": keep, "duplicate_of_signal_key": duplicate_of, "reason": "тот же вендор",
+            "interest_score": 70 if keep else 0, "why_interesting": ""}
+
+
+def test_batch_review_does_not_glue_different_events_of_one_vendor(monkeypatch):
+    # 28.09: цифровое обновление SLB модель пометила дублем MoU SLB—PDVSA.
+    _review(monkeypatch, [_decision("mou", True), _decision("update", False, duplicate_of="mou")])
+    mou = _item("mou", "Меморандум SLB и PDVSA о цифровой трансформации Венесуэлы", ["https://slb.com/pdvsa"])
+    update = _item("update", "SLB: масштабная интеграция цифровых инструментов на месторождениях", [URL])
+
+    result = signal_discovery._batch_review_candidates([mou, update], ENERGY, offline=False)
+
+    assert "duplicate_of" not in update
+    assert update["rejected"] is False
+    assert result["refused_duplicates"] == ["update"]
+    assert result["duplicates"] == 0
+
+
+def test_batch_review_keeps_real_duplicate_with_similar_title(monkeypatch):
+    _review(monkeypatch, [_decision("a", True), _decision("b", False, duplicate_of="a")])
+    a = _item("a", "Меморандум SLB и PDVSA о цифровой трансформации", ["https://slb.com/pdvsa"])
+    b = _item("b", "SLB и PDVSA подписали меморандум о цифровой трансформации", ["https://energiesmedia.com/x"])
+
+    signal_discovery._batch_review_candidates([a, b], ENERGY, offline=False)
+
+    assert b["duplicate_of"] == {"signal_key": "a"}
+
+
+def test_batch_review_keeps_real_duplicate_with_shared_link(monkeypatch):
+    # Английский и русский заголовки общих основ почти не дают — общая ссылка решает.
+    _review(monkeypatch, [_decision("ru", True), _decision("en", False, duplicate_of="ru")])
+    ru = _item("ru", "Меморандум о цифровой трансформации", ["https://slb.com/pdvsa"])
+    en = _item("en", "SLB signs MoU with PDVSA", ["https://slb.com/pdvsa/"])
+
+    signal_discovery._batch_review_candidates([ru, en], ENERGY, offline=False)
+
+    assert en["duplicate_of"] == {"signal_key": "ru"}

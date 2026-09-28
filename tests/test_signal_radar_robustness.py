@@ -29,10 +29,12 @@ def _web_item(url: str) -> dict:
 
 
 def _candidate(key: str, score: float = 70, urls: list[str] | None = None) -> dict:
+    # Общий заголовок: ревью пачки принимает дубль, только если пара похожа по правилу
+    # (общая ссылка или заголовок) — здесь кандидаты пересказывают одно событие.
     return {
         "signal": {
             "signal_key": key,
-            "title": key,
+            "title": f"Контракт Альфа на бурение скважин {key}",
             "score": score,
             "companies": [],
             "evidence": [{"source_url": url, "title": key} for url in urls or []],
