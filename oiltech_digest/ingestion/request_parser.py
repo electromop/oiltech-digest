@@ -19,6 +19,7 @@ from oiltech_digest.ingestion.dates import guess_date_text as _guess_date_from_t
 from oiltech_digest.ingestion.dates import parse_datetime as _parse_datetime
 from oiltech_digest.ingestion.listing_cards import (
     GENERIC_LINK_TEXT_RE as _GENERIC_LINK_TEXT_RE,
+    PAGE_ORDER,
     card_of as _card_of,
     fallback_title as _fallback_title,
     ordered as _ordered,
@@ -27,8 +28,11 @@ from oiltech_digest.ingestion.listing_cards import (
     spaced_text as _spaced_text,
 )
 from oiltech_digest.ingestion.listing_cards import link_key as _link_key
-from oiltech_digest.ingestion.article_fetcher import extract_main_text
-from oiltech_digest.ingestion.http_client import fetch
+# Разбор страницы статьи живёт в article_page; здесь — реэкспорт для прежних вызовов
+# (playwright_parser, manual_import, source_diagnostics берут его из request_parser).
+from oiltech_digest.ingestion.article_page import first_non_empty as _first_non_empty
+from oiltech_digest.ingestion.article_page import parse_article_page
+from oiltech_digest.ingestion.http_client import fetch, final_url_of
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 
 logger = logging.getLogger(__name__)
@@ -225,6 +229,10 @@ def fetch_article(candidate: CandidateLink, source: dict) -> ArticleFetch:
     content = fetch(candidate.url)
     if content is None:
         return ArticleFetch(None, verdicts.FETCH_FAILED)
+    final_url = final_url_of(candidate.url)
+    if _moved_to_home_page(candidate.url, final_url):
+        # Сайт увёл со статьи на главную (переехал, статья снята) — это не статья.
+        return ArticleFetch(None, verdicts.REDIRECTED_HOME, detail=f"→ {final_url}")
     title, published_at, raw_text = parse_article_page(content, candidate.title)
     final_published = published_at or candidate.published_at
     if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
@@ -246,62 +254,19 @@ def fetch_article_candidate(candidate: CandidateLink, source: dict) -> dict | No
     return fetch_article(candidate, source).article
 
 
-def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[str, datetime | None, str]:
-    try:
-        doc = normalize.parse_html(content)
-    except (ValueError, TypeError):
-        return fallback_title, None, ""
+def _moved_to_home_page(url: str, final_url: str | None) -> bool:
+    """Переадресация со статьи на главную сайта (путь «/» без query).
 
-    title = _first_non_empty(
-        doc.xpath("string(//meta[@property='og:title']/@content)"),
-        doc.xpath("string(//meta[@name='twitter:title']/@content)"),
-        # НЕ string(//h1[1]): XPath string() склеивает текст всех потомков БЕЗ разделителя.
-        # У Neftegaz.ru лид лежит внутри того же <h1>, и на выходе получалось
-        # «…развивает российские технологии ГРПНа Южно-Приобском месторождении…» —
-        # заказчик присылал это дважды (22.08 «текст сливается», 08.09 «потеряли Ва»).
-        # Склейка ломала и дедуп: content_hash считается по заголовку, поэтому одна
-        # публикация с лидом и без лида давала разные хэши.
-        _text_with_separators(doc, "//h1[1]"),
-        # Заголовок карточки ленты — раньше <title> страницы. У CNOOC нет ни og:title, ни
-        # <h1>, а <title> — название раздела: 18.09 все 7 собранных новостей получили
-        # один заголовок «中国海洋石油集团有限公司 公司新闻». Короткая подпись карточки
-        # («Подробнее») заголовком не считается.
-        fallback_title if len(normalize.clean_html(fallback_title or "")) >= 12 else "",
-        doc.xpath("string(//title)"),
-        fallback_title,
-    )
-    title = normalize.clean_html(title)[:500]
-
-    published_at = _parse_datetime(
-        _first_non_empty(
-            doc.xpath("string(//meta[@property='article:published_time']/@content)"),
-            doc.xpath("string(//meta[@name='pubdate']/@content)"),
-            doc.xpath("string(//time[1]/@datetime)"),
-            _guess_date_from_text(doc.xpath("string(//time[1])")),
-        )
-    ) or dates.date_from_markup(doc)
-
-    raw_text = extract_main_text(content, title=title)
-    if len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
-        raw_text = _visible_text(doc)
-    return title, published_at, raw_text
-
-
-# Запасной текст страницы длиннее этого — уже не статья, а вся страница целиком.
-_FALLBACK_TEXT_LIMIT = 20000
-
-
-def _visible_text(doc) -> str:
-    """Текст страницы без скриптов и стилей — запасной путь, когда статья не выделилась.
-
-    `text_content()` забирает и содержимое `<script>`: у ТеДо в «текст статьи» ложилось
-    132 тыс. знаков JSON, у Kuwait Oil — 444 тыс. На проде 18.09 — 42 статьи длиннее
-    50 тыс. знаков, 36 из них со скриптами, самая большая 768 тыс. Модель читает
-    первые 6000 знаков — то есть судила бы JavaScript вместо новости.
+    Сколково Energy (25.09): energy.skolkovo.ru отдаёт 301 на www.skolkovo.ru/ для ЛЮБОГО
+    адреса, и каждая «статья» была главной школы — общий заголовок сайта, описание кампуса.
+    От вставки спасал только предфильтр (слово «ресторан» в описании), то есть случайность.
+    Обычные переадресации статьи (слэш, https, www, красивый адрес вместо `?p=`) ведут не на
+    главную; ссылка, которая сама указывает на главную с query (`/?p=678`), не судится.
     """
-    for node in doc.xpath("//script|//style|//noscript|//template|//svg"):
-        node.drop_tree()
-    return normalize.clean_html(" ".join(doc.itertext()))[:_FALLBACK_TEXT_LIMIT]
+    if not final_url or final_url == url:
+        return False
+    final, own = urlsplit(final_url), urlsplit(url)
+    return final.path in ("", "/") and not final.query and own.path not in ("", "/")
 
 
 def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> list[CandidateLink]:
@@ -338,8 +303,11 @@ def _extract_candidates_with_selector(doc, listing_url: str, source: dict) -> li
                                 or published_at)
             seen.add(item.url)
             candidates.append((len(candidates), CandidateLink(item.url, item.title, item.score + 2, published_at)))
-    # Селектор задан человеком под эту ленту — её порядок и есть порядок свежести.
-    return _ordered(candidates, trust_page_order=True)
+    # Селектор задан человеком под эту ленту — её порядок и есть порядок свежести. С
+    # `listing_strategy='page_order'` — целиком, вместе с карточками без даты. Только
+    # здесь, а не в общем разборе: без селектора первыми на странице идут шапка и меню.
+    keep_page_order = (source.get("listing_strategy") or "").strip().lower() == PAGE_ORDER
+    return _ordered(candidates, trust_page_order=True, keep_page_order=keep_page_order)
 
 
 _TRACKING_PARAMS = {
@@ -482,27 +450,6 @@ def _node_text(node) -> str:
         return normalize.clean_html(node.text_content())
     except Exception:
         return ""
-
-
-def _text_with_separators(doc, xpath: str) -> str:
-    """Текст узла с ПРОБЕЛОМ между вложенными элементами.
-
-    Замена XPath `string(...)`, который склеивает соседние текстовые узлы вплотную.
-    Пустые узлы отбрасываем, остальное соединяем одним пробелом; схлопывание
-    повторов делает `normalize.clean_html` выше по стеку.
-    """
-    try:
-        parts = [str(part).strip() for part in doc.xpath(f"{xpath}//text()")]
-    except Exception:  # noqa: BLE001 — битый XPath не должен ронять разбор статьи
-        return ""
-    return " ".join(part for part in parts if part)
-
-
-def _first_non_empty(*values: str) -> str:
-    for value in values:
-        if value and str(value).strip():
-            return str(value).strip()
-    return ""
 
 
 def _listing_hash(candidates: list[CandidateLink]) -> str | None:

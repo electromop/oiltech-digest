@@ -4,8 +4,10 @@
 
 Рубежи сбора ДО вставки (строчными) проходит парсер источника: `known` — адрес уже
 в базе (или сбор считает пост знакомым), `old` — старее окна свежести, `fetch_failed` —
-страница статьи не скачалась, `too_short` — нет заголовка или текст короче порога,
-`prefilter` — отсеял предфильтр, `ready` — дошёл до вставки.
+страница статьи не скачалась, `redirected_home` — скачалась, но сайт увёл со статьи на
+свою главную (переехал или снял статью: лечится сменой ленты или архивом, а не маршрутом
+через NL или браузером — поэтому не `fetch_failed`), `too_short` — нет заголовка или
+текст короче порога, `prefilter` — отсеял предфильтр, `ready` — дошёл до вставки.
 
 Рубежи самой вставки (заглавными) решает `repository.insert_verdict` — единственная их
 реализация, её зовёт и insert_article: `DUP_URL_KEY` — ключ адреса занят видимой статьёй,
@@ -28,6 +30,7 @@ from datetime import datetime
 KNOWN = "known"
 OLD = "old"
 FETCH_FAILED = "fetch_failed"
+REDIRECTED_HOME = "redirected_home"
 TOO_SHORT = "too_short"
 PREFILTER = "prefilter"
 READY = "ready"
@@ -39,7 +42,7 @@ DUP_BODY_HASH = "DUP_BODY_HASH"
 WOULD_INSERT = "WOULD_INSERT"
 
 # Порядок в сводке: сперва ответ на вопрос «даёт ли источник новое», дальше — по пути сбора.
-ORDER = (WOULD_INSERT, KNOWN, OLD, FETCH_FAILED, TOO_SHORT, PREFILTER,
+ORDER = (WOULD_INSERT, KNOWN, OLD, FETCH_FAILED, REDIRECTED_HOME, TOO_SHORT, PREFILTER,
          DUP_URL_KEY_SAME, DUP_URL_KEY_OTHER, DUP_BODY_HASH)
 
 
@@ -47,9 +50,10 @@ ORDER = (WOULD_INSERT, KNOWN, OLD, FETCH_FAILED, TOO_SHORT, PREFILTER,
 class ArticleFetch:
     """Чем кончилась загрузка статьи-кандидата: запись для вставки — или почему её нет.
 
-    `failure` — FETCH_FAILED (страница не получена) или TOO_SHORT (нет заголовка или текст
-    короче MIN_ARTICLE_TEXT_CHARS). Для сбора обе причины — просто «статьи нет», для пробы
-    источника — разные ответы на вопрос «почему молчит».
+    `failure` — FETCH_FAILED (страница не получена), REDIRECTED_HOME (сайт увёл со статьи
+    на главную) или TOO_SHORT (нет заголовка или текст короче MIN_ARTICLE_TEXT_CHARS). Для
+    сбора все причины — просто «статьи нет», для пробы источника — разные ответы на вопрос
+    «почему молчит».
     """
 
     article: dict | None

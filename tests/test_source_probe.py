@@ -218,6 +218,33 @@ def test_request_probe_gives_every_verdict_and_matches_real_collection(isolated_
     assert stats["added"] == 2
 
 
+def test_probe_shows_article_redirected_to_home_page_as_its_own_verdict(isolated_db, monkeypatch):
+    """Сколково Energy: сайт отдаёт 301 со ЛЮБОЙ статьи на свою главную. Это не сбой загрузки —
+    fetch_failed отправил бы искать маршрут (NL, браузер), а лечится сменой ленты или архивом.
+    Проба показывает причину отдельным вердиктом с конечным адресом, сбор такое не вставляет."""
+    source = _source(listing_url="https://site.example/news", article_link_selector="a.news")
+    base = "https://site.example/news"
+    home = _page("Школа управления — бизнес-образование", DRILLING * 3)
+    pages = {base: _listing(["/news/1", "/news/2"]), f"{base}/1": home,
+             f"{base}/2": _page("Новая скважина дала первую нефть", DRILLING * 2)}
+    monkeypatch.setattr(request_parser, "fetch", pages.get)
+    monkeypatch.setattr(request_parser, "final_url_of",
+                        lambda url: "https://www.site.example/" if url == f"{base}/1" else url)
+
+    report = source_probe.probe_source(source)
+
+    assert _verdicts(report) == [(f"{base}/1", verdicts.REDIRECTED_HOME), (f"{base}/2", verdicts.WOULD_INSERT)]
+    assert report["rows"][0]["detail"] == "→ https://www.site.example/"
+    assert report["counts"][verdicts.REDIRECTED_HOME] == 1
+    assert "redirected_home" in source_probe.format_report(report)
+
+    urls_before = _urls()
+    stats = request_parser.parse_source(repository.get_source(source["id"]))
+
+    assert _urls() - urls_before == _would_insert(report) == {f"{base}/2"}
+    assert stats["added"] == 1
+
+
 def test_rss_probe_matches_real_collection(isolated_db, monkeypatch):
     source = _source(parse_strategy="rss", rss_url="https://feed.example/rss", url="https://feed.example")
     base = "https://feed.example/a"

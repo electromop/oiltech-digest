@@ -353,3 +353,46 @@ def test_title_with_a_typo_still_finds_its_block_when_it_clearly_leads():
 
     assert "Судно доставило уголь" in text
     assert "Гидра" not in text
+
+
+# --- Статья внутри <form> без полей ввода (SWPU, 25.09) ------------------------------
+# CMS VSB (её ставят китайские университеты) оборачивает новость в
+# <form name="_newscontent_fromname"> — ни одного поля ввода, просто обёртка. Чистка
+# выбрасывала ЛЮБУЮ <form> как поиск или подписку, и статья уходила вместе с ней: у SWPU
+# с каждой страницы извлекалось меню сайта (549 знаков), рубеж «то же тело» пропустил
+# первую такую «статью» и дальше молча отбивал все новые.
+
+_VSB_MENU = "".join(f'<li><a href="/en/index/p{n}.htm">Menu item {n}</a></li>' for n in range(24))
+VSB_NEWS_HTML = f"""
+<html><body>
+<div id="content">
+  <ul>{_VSB_MENU}</ul>
+  <form name="_newscontent_fromname">
+    <div>Ministry of Education Approved Establishment of SWPU-Russian School of Geological Energy</div>
+    <div id="vsb_content" class="article-content"><div class="v_news_content">
+      <p>Recently, the Ministry of Education announced the results for Chinese-foreign cooperative programs.</p>
+      <p>The SWPU-Russian School of Geological Energy focuses on exploration geology and energy engineering.</p>
+      <p>Students study petroleum geology, reservoir engineering and drilling technology with Russian faculty.</p>
+    </div></div>
+  </form>
+  <form class="search"><input type="text" name="q">
+    <p>Search the site for news, events and publications of the university.</p></form>
+</div>
+</body></html>
+""".encode()
+
+
+def test_article_wrapped_in_a_form_without_inputs_is_kept():
+    text = article_fetcher.extract_main_text(
+        VSB_NEWS_HTML, title="Ministry of Education Approved Establishment of SWPU-Russian School of Geological Energy")
+
+    assert "announced the results for Chinese-foreign cooperative programs" in text
+    assert "reservoir engineering and drilling technology" in text
+    assert "Menu item" not in text
+
+
+def test_form_with_input_fields_is_still_dropped():
+    # Поиск, подписка, комментарии — подписи и подсказки формы не текст статьи.
+    text = article_fetcher.extract_main_text(VSB_NEWS_HTML)
+
+    assert "Search the site for news" not in text
