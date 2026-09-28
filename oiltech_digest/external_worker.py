@@ -384,7 +384,9 @@ class LeaseKeeper:
             logger.warning("external_job_stall_fail_report_failed job_id=%s", self.job.get("id"))
         _DRAINING.set()
         deadline = time.monotonic() + self.drain_seconds
-        while worker_shutdown.SHUTDOWN.in_work() > 1 and time.monotonic() < deadline:
+        # Соседей — без своей задачи: проснись зависший обработчик во время ожидания и выйди из
+        # реестра, «> 1» упало бы до числа соседей и os._exit оборвал бы здоровую (ревью #73).
+        while worker_shutdown.SHUTDOWN.in_work(exclude=self.job) > 0 and time.monotonic() < deadline:
             time.sleep(1.0)
         self.on_deadline()
 
@@ -443,7 +445,9 @@ def _claim_report(job: dict[str, Any]) -> bool:
     """Отчитаться о задаче может один: этот поток — если её ещё не вернул главный поток."""
     if worker_shutdown.SHUTDOWN.begin_report(job):
         return True
-    logger.warning("external_job_report_skipped job_id=%s — задачу уже вернули ядру на остановке", job.get("id"))
+    # Вернуть мог главный поток (остановка по SIGTERM) или сторож (зависание) — не гадаем.
+    logger.warning("external_job_report_skipped job_id=%s — о задаче уже отчитался другой поток "
+                   "(остановка или сторож зависания)", job.get("id"))
     return False
 
 

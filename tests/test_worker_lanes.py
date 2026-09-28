@@ -156,6 +156,31 @@ def test_restart_waits_for_sibling_threads_to_finish(monkeypatch):
     assert restarted_at[0] >= sibling_done - 0.05
 
 
+def test_restart_waits_for_sibling_even_if_stalled_handler_wakes_up(monkeypatch):
+    """Ревью #73: зависший обработчик проснулся во время ожидания и вышел из реестра — счётчик
+    «> 1» падал до числа соседей, и os._exit обрывал здоровую соседку. Ждём соседей без своей."""
+    monkeypatch.setattr(external_worker, "_DRAINING", threading.Event())
+    shutdown = worker_shutdown.Shutdown()
+    monkeypatch.setattr(worker_shutdown, "SHUTDOWN", shutdown)
+    sibling = {"id": 8, "kind": "scrape_source"}
+    shutdown.track(_Client(), dict(JOB))  # зависшая
+    shutdown.track(_Client(), sibling)  # и соседняя
+    restarted_at = []
+    keeper = external_worker.LeaseKeeper(_Client(), dict(JOB), interval=0.01, stall_seconds=0.02,
+                                         drain_seconds=5, on_deadline=lambda: restarted_at.append(time.monotonic()))
+    keeper.start()
+    time.sleep(0.1)
+    shutdown.untrack(dict(JOB))  # зависший обработчик проснулся и вышел
+    # Соседка работает дольше первой проверки ожидания (сторож опрашивает раз в секунду):
+    # иначе к проверке ушли бы обе, и старый код тоже прошёл бы.
+    sibling_done = time.monotonic() + 2.4
+    time.sleep(2.4)
+    shutdown.untrack(sibling)  # соседка закончила
+
+    assert _wait_until(lambda: restarted_at, timeout=5.0)
+    assert restarted_at[0] >= sibling_done - 0.05
+
+
 def _stalling(monkeypatch, kind: str, handler) -> tuple[_Client, list]:
     """Задача, чей шаг не возвращается дольше срока; перезапуск процесса — без выхода из pytest.
     handler(unblock) → (модуль, имя, обработчик): шаг висит, пока тест не отпустит unblock."""

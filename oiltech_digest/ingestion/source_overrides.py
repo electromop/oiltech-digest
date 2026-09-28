@@ -183,6 +183,9 @@ SOURCE_OVERRIDES: dict[str, dict] = {
         "listing_selector": ".PromoB, .PromoA",
         "article_link_selector": ".PromoB-title a, .PromoA-title a",
         "article_date_selector": ".PromoB-by-line, .PromoA-by-line",
+        # 28.09 (решение владельца): с российского адреса CDN JPT принимает соединение и
+        # молчит — как у разделов JPT ниже; на проде уже `set-source-region`, реестр — правда.
+        "network_region": "external",
     },
     # НЕ в реестре — listing отдаёт навигацию/SPA-оболочку вместо статей, нужен
     # listing_selector или другой URL (тюнинг отдельной задачей):
