@@ -182,6 +182,7 @@ def test_core_writes_duplicate_links_into_main_card_and_hides_old_repeats(monkey
                         lambda sid, into, reason="": merged.append((sid, into, reason)) or True)
     monkeypatch.setattr(repository, "create_signal_training_example", lambda **kwargs: examples.append(kwargs) or 1)
     monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
+    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
     main = _candidate("Татнефть строит завод сорбентов", ["Татнефть"], key="t1", url="https://a.example/2")
     repeat = _candidate("Завод сорбентов Татнефти", ["Татнефть"], key="t2", url="https://b.example/3")
     old = _candidate("ZenaTech покупает Velocity", ["ZenaTech"], key="z1", url="https://a.example/1")
@@ -216,6 +217,7 @@ def test_core_keeps_signal_when_main_card_is_gone(monkeypatch):
     monkeypatch.setattr(repository, "refresh_signal_evidence_count", lambda sid: 1)
     monkeypatch.setattr(repository, "resolve_signal_merge_root", lambda sid: None)
     monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
+    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
     repeat = _candidate("ZenaTech покупает Velocity", ["ZenaTech"], key="z1", url="https://a.example/1")
     run = {"topics": [{"topic": GEO, "candidates": [
         {"signal": repeat, "rejected": False, "duplicate_of": {"signal_id": 999}}]}], "dedup": {"pairs": 1}}

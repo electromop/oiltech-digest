@@ -125,6 +125,7 @@ def test_discover_signals_persists_when_not_dry_run(monkeypatch):
     saved = {"signals": 0, "evidence": 0}
     # Сверка ключей и снимок для дедупа ходят в базу — в этом тесте её нет.
     monkeypatch.setattr(signal_discovery.repository, "signal_key_owners", lambda keys: {})
+    monkeypatch.setattr(signal_discovery.repository, "visible_evidence_owners", lambda urls: {})
     monkeypatch.setattr(signal_discovery.repository, "list_signals_for_dedup", lambda: [])
 
     monkeypatch.setattr(
@@ -174,6 +175,7 @@ def test_discover_signals_persists_generation_training_examples(monkeypatch):
     captured = {"examples": []}
     # Сверка ключей и снимок для дедупа ходят в базу — в этом тесте её нет.
     monkeypatch.setattr(signal_discovery.repository, "signal_key_owners", lambda keys: {})
+    monkeypatch.setattr(signal_discovery.repository, "visible_evidence_owners", lambda urls: {})
     monkeypatch.setattr(signal_discovery.repository, "list_signals_for_dedup", lambda: [])
 
     monkeypatch.setattr(

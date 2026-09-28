@@ -169,6 +169,7 @@ def test_core_applies_external_result_and_records_generation_run(monkeypatch):
         repository, "finish_signal_generation_run", lambda run_id, **kwargs: finished.append((run_id, kwargs))
     )
     monkeypatch.setattr(repository, "signal_key_owners", lambda keys: {})
+    monkeypatch.setattr(repository, "visible_evidence_owners", lambda urls: {})
     accepted = _signal(DRILLING, "Accepted")
     accepted.update({"signal_key": "k1", "evidence_count": 1,
                      "evidence": [{"source_url": "https://new.example/rig", "title": "Accepted"}]})
