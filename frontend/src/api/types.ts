@@ -244,6 +244,11 @@ export type Signal = {
   updated_at: string | null;
   user_status?: "watch" | "digest" | "archive" | "noise" | "duplicate" | string;
   selected_for_digest?: boolean;
+  // Месяц выпуска карточки (ГГГГ-ММ) — месяц поступления на радар по Москве, и закрыт ли он
+  // (окно месяца, решение владельца 29.09): в закрытом месяце «В дайджест» и «Убрать» не
+  // работают, сервер отвечает 409. Считает сервер — своей формулы у экрана нет.
+  digest_month?: string;
+  digest_locked?: boolean;
   user_comment?: string | null;
   user_status_updated_at?: string | null;
   feedback_count?: number;

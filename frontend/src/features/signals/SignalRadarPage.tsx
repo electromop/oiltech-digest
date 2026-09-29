@@ -9,6 +9,7 @@ import {
 } from "../../api/signals";
 import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
 import type { Signal, SignalEvidence, SignalFeedbackPayload } from "../../api/types";
+import { radarDigestLockedText } from "../articles/feedWindow";
 import { StatCard } from "../shared/StatCard";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 
@@ -400,6 +401,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       afterListChange();
     } catch (error) {
       handleError(error, "Не удалось обновить статус сигнала");
+      // 409 — месяц карточки закрылся, пока экран был открыт (5-е число): выборка заново,
+      // чтобы кнопка погасла по признаку сервера, а не ждала «Обновить».
+      if (error instanceof ApiError && error.status === 409) reload({ keepLoaded: true });
     } finally {
       setSaving((current) => ({ ...current, [signal.id]: false }));
     }
@@ -708,6 +712,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
             const primaryUrl = signal.evidence?.[0]?.source_url;
             const arrival = formatArrival(signal);
             const tone = scoreTone(signal);
+            // Месяц карточки закрыт (признак сервера): отметку «в дайджест» не ставят и не снимают.
+            const digestLocked = Boolean(signal.digest_locked);
             return (
               <article className="articleCardReact" key={signal.id}>
                 {/* Свёрнутая строка, как у «Бизнес-сигналов» (документ заказчика 19.09):
@@ -748,8 +754,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                     <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
                     <button
                       type="button"
-                      className={signal.selected_for_digest ? "dangerButton compactButton" : "primaryButton compactButton"}
-                      disabled={savingThis}
+                      className={`${signal.selected_for_digest ? "dangerButton" : "primaryButton"} compactButton signalDigestButton`}
+                      disabled={savingThis || digestLocked}
+                      title={digestLocked ? radarDigestLockedText(signal.digest_month ?? "") : undefined}
                       onClick={() => void setDigest(signal, !signal.selected_for_digest)}
                     >
                       {signal.selected_for_digest ? "Убрать" : "В дайджест"}

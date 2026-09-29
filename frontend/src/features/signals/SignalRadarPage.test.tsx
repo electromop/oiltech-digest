@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSignalFeedback,
@@ -787,6 +787,85 @@ describe("SignalRadarPage", () => {
 
       expect(screen.getByText("Поступил: 25.09.2026")).toBeInTheDocument();
       expect(container.querySelector(".signalPublisherChip")).toBeNull();
+    });
+  });
+
+  // Решение владельца 29.09: у карточки закрытого месяца (месяц — по дате поступления на радар)
+  // отметку «в дайджест» не ставят и не снимают, как статус статьи в архиве ленты. Закрыт ли
+  // месяц карточки, говорит сервер (digest_locked): своей формулы у экрана нет.
+  describe("карточка закрытого месяца", () => {
+    const august: Signal = {
+      ...baseSignal, id: 41, signal_key: "k41", theme: "Бурение", title_ru: "Августовская карточка",
+      first_seen_at: "2026-08-20T09:00:00Z", digest_month: "2026-08", digest_locked: true,
+    };
+    const augustChosen: Signal = {
+      ...august, id: 42, signal_key: "k42", title_ru: "Августовская, уже в выпуске",
+      selected_for_digest: true, user_status: "digest",
+    };
+    const september: Signal = {
+      ...august, id: 43, signal_key: "k43", title_ru: "Сентябрьская карточка",
+      first_seen_at: "2026-09-20T09:00:00Z", digest_month: "2026-09", digest_locked: false,
+    };
+
+    function digestButton(title: string, name: string) {
+      return within(screen.getByText(title).closest("article") as HTMLElement).getByRole("button", { name });
+    }
+
+    it("«В дайджест» и «Убрать» неактивны, с подсказкой; у открытого месяца — как раньше", async () => {
+      serve([august, augustChosen, september]);
+      renderRadar(false);
+      await screen.findByText("Августовская карточка");
+
+      const hint =
+        "Карточка в архиве за август 2026 (по дате поступления): отметку «в дайджест» не поменять — архив только для просмотра.";
+      for (const [title, name] of [["Августовская карточка", "В дайджест"], ["Августовская, уже в выпуске", "Убрать"]]) {
+        const button = digestButton(title, name);
+        expect(button).toBeDisabled();
+        expect(button).toHaveAttribute("title", hint);
+        fireEvent.click(button);
+      }
+      expect(updateSignal).not.toHaveBeenCalled();
+
+      const open = digestButton("Сентябрьская карточка", "В дайджест");
+      expect(open).toBeEnabled();
+      expect(open).not.toHaveAttribute("title");
+      fireEvent.click(open);
+      await waitFor(() => expect(updateSignal).toHaveBeenCalledWith(43, { selected_for_digest: true }));
+    });
+
+    it("месяц закрылся, пока экран был открыт: отказ сервера — текстом, кнопка гаснет", async () => {
+      const detail =
+        "Карточка радара относится к архиву за сентябрь 2026 (по дате поступления на радар). Архив открыт " +
+        "только для просмотра: отметку «в дайджест» у карточек прошлых месяцев ставить и снимать нельзя.";
+      serve([september]);
+      const showToast = vi.fn();
+      render(<SignalRadarPage onUnauthorized={() => undefined} showToast={showToast} />);
+      const button = await screen.findByRole("button", { name: "В дайджест" });
+      // 5-е число застало вкладку открытой: на экране кнопка ещё активна, а сервер месяц уже закрыл
+      // и отказывает настоящим ответом FastAPI — JSON {"detail": "…"} с кодом 409.
+      serve([{ ...september, digest_locked: true }]);
+      const actual = await vi.importActual<typeof import("../../api/signals")>("../../api/signals");
+      vi.mocked(updateSignal).mockImplementation(actual.updateSignal);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          new Response(JSON.stringify({ detail }), { status: 409, headers: { "Content-Type": "application/json" } }),
+        ),
+      );
+      try {
+        fireEvent.click(button);
+
+        await waitFor(() => expect(showToast).toHaveBeenCalledWith(detail, "error"));
+        expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining('"detail"'), expect.anything());
+        // Выборка перечитана: у карточки теперь признак сервера — кнопка неактивна, с подсказкой.
+        await waitFor(() => expect(screen.getByRole("button", { name: "В дайджест" })).toBeDisabled());
+        expect(screen.getByRole("button", { name: "В дайджест" })).toHaveAttribute(
+          "title",
+          "Карточка в архиве за сентябрь 2026 (по дате поступления): отметку «в дайджест» не поменять — архив только для просмотра.",
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 });
