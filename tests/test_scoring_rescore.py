@@ -221,7 +221,9 @@ def test_enqueue_rescore_puts_scoring_only_batches_into_the_bulk_lane(isolated_d
     assert _stored_score(first) == ("business", scoring_profiles.criteria_snapshot(business))
     capsys.readouterr()
     _cli("enqueue-rescore", "--month", "2026-09")
-    assert "N=1" in capsys.readouterr().out   # пересчитанная статья выпала из выборки
+    # Пересчитанная статья выпала из выборки, вторая ждёт в своей задаче — повторно не ставится.
+    out = capsys.readouterr().out
+    assert "N=0" in out and "повторно не ставятся: 1" in out
 
 
 def test_enqueue_rescore_refuses_what_it_must_not_do(isolated_db, monkeypatch):
@@ -238,3 +240,73 @@ def test_enqueue_rescore_refuses_what_it_must_not_do(isolated_db, monkeypatch):
         _cli("enqueue-rescore", "--profile", "tech_radar", "--month", "2026-09")
     with connection.get_connection() as conn:
         assert conn.execute("SELECT count(*) FROM background_jobs").fetchone()[0] == 0
+
+
+def _external_ai(monkeypatch, *, bulk: bool) -> None:
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr("oiltech_digest.config.AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr("oiltech_digest.config.AI_BULK_LANE_ENABLED", bulk)
+
+
+def _jobs() -> list[tuple]:
+    with connection.get_connection() as conn:
+        return conn.execute("SELECT queue_name, payload_json FROM background_jobs ORDER BY id").fetchall()
+
+
+def test_second_run_does_not_queue_the_same_articles_again(isolated_db, monkeypatch, capsys):
+    """Ревью PR #82: резерв выдачи считает занятыми только задачи в работе — повторный --no-dry-run
+    до выдачи первых задач поставил бы те же статьи ещё раз и оплатил бы их дважды. Задача,
+    которая балл не считает (перегенерация сути), статью не занимает."""
+    _freeze_feed_window(monkeypatch)
+    seed_default_scoring_criteria()
+    business = repository.list_enabled_scoring_criteria()
+    first, second, third = (_feed_article(n) for n in range(1, 4))
+    for article_id in (first, second, third):
+        _give_score(article_id, business, snapshot=None)
+    _external_ai(monkeypatch, bulk=True)
+    repository.create_background_job("process_articles", {"article_ids": [third], "limit": 1,
+                                                          "only": ["summary", "translation"]},
+                                     queue_name="external-ai-bulk", execution_region="external", capability="openai")
+
+    _cli("enqueue-rescore", "--month", "2026-09", "--no-dry-run", "--limit", "2")
+    capsys.readouterr()
+    _cli("enqueue-rescore", "--month", "2026-09", "--no-dry-run")
+
+    out = capsys.readouterr().out
+    assert "N=1" in out and "повторно не ставятся: 2" in out
+    scoring = [payload["article_ids"] for _, payload in _jobs() if payload.get("only") == ["scoring"]]
+    assert scoring == [[first, second], [third]]
+
+
+def test_dry_run_names_the_lane_and_the_live_lane_needs_consent(isolated_db, monkeypatch, capsys):
+    """Без полосы пересчётов ~140 пачек месяца встали бы в поток дня перед новыми статьями
+    (18.09 28 пачек задержали его на 4,5 ч): сухой прогон это показывает, запись — отказывает."""
+    _freeze_feed_window(monkeypatch)
+    seed_default_scoring_criteria()
+    _give_score(_feed_article(1), repository.list_enabled_scoring_criteria(), snapshot=None)
+    _external_ai(monkeypatch, bulk=False)
+
+    _cli("enqueue-rescore", "--month", "2026-09")
+    out = capsys.readouterr().out
+    assert "полоса: external-ai (external); воркеры полосы: нет" in out
+    assert "ВНИМАНИЕ: полоса пересчётов выключена" in out and "нет живого воркера" in out
+
+    with pytest.raises(SystemExit, match="поток дня"):
+        _cli("enqueue-rescore", "--month", "2026-09", "--no-dry-run")
+    assert _jobs() == []
+    _cli("enqueue-rescore", "--month", "2026-09", "--no-dry-run", "--allow-live-lane")
+    assert [queue for queue, _ in _jobs()] == ["external-ai"]
+
+
+def test_dry_run_shows_the_live_worker_of_the_bulk_lane(isolated_db, monkeypatch, capsys):
+    _freeze_feed_window(monkeypatch)
+    seed_default_scoring_criteria()
+    _give_score(_feed_article(1), repository.list_enabled_scoring_criteria(), snapshot=None)
+    _external_ai(monkeypatch, bulk=True)
+    repository.record_external_consumer("nl-ai-bulk-1", queues=["external-ai-bulk"], build="abc", contract_number=1)
+
+    _cli("enqueue-rescore", "--month", "2026-09")
+
+    out = capsys.readouterr().out
+    assert "полоса: external-ai-bulk (external); воркеры полосы: nl-ai-bulk-1 (задачу просил" in out
+    assert "ВНИМАНИЕ" not in out

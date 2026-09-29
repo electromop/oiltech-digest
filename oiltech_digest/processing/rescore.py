@@ -11,9 +11,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
-from oiltech_digest import config, feed_window, network_policy, scoring_profiles
+from psycopg import errors as pg_errors
+
+from oiltech_digest import config, feed_window, lanes, network_policy, scoring_profiles
 # Модулем, а не функцией: тестовая фикстура подменяет connection.get_connection.
 from oiltech_digest.db import connection, repository
 
@@ -55,10 +58,11 @@ def rescore_selection(profile: str, month: str) -> dict[str, Any]:
             """,
             (scoring_profiles.ARTICLE_SCORING_PROFILE, profile, period),
         ).fetchall()
+    queued = _queued_for_scoring()
     selection: dict[str, Any] = {
         "profile": profile, "month": period, "scored": len(rows),
         "up_to_date": 0, "weights_only": 0, "changed": 0, "no_snapshot": 0,
-        "article_ids": [], "in_digest": 0,
+        "queued": 0, "article_ids": [], "in_digest": 0,
     }
     for article_id, stored, in_digest in rows:
         if stored is None:
@@ -70,9 +74,66 @@ def rescore_selection(profile: str, month: str) -> dict[str, Any]:
             continue
         else:
             selection["changed"] += 1
+        if int(article_id) in queued:
+            # Повторный --no-dry-run не ставит статью второй раз, пока её балл ещё впереди.
+            selection["queued"] += 1
+            continue
         selection["article_ids"].append(int(article_id))
         selection["in_digest"] += int(bool(in_digest))
     return selection
+
+
+def _queued_for_scoring() -> set[int]:
+    """Статьи в задачах, которые их балл ещё посчитают: process_articles с явным списком и стадией
+    scoring (пометка only со scoring или без пометки) — в очереди, в работе или в записи итога.
+    Резерв выдачи считает занятыми только задачи в работе, поэтому второй запуск пересчёта до
+    выдачи первых задач поставил бы те же статьи ещё раз и оплатил бы их дважды."""
+    with connection.get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT (jsonb_array_elements_text(payload_json->'article_ids'))::bigint
+            FROM background_jobs
+            WHERE kind = 'process_articles'
+              AND status IN ('queued', 'running', 'finalizing')
+              AND jsonb_typeof(payload_json->'article_ids') = 'array'
+              AND (jsonb_typeof(payload_json->'only') IS DISTINCT FROM 'array'
+                   OR payload_json->'only' ? 'scoring')
+            """
+        ).fetchall()
+    return {int(row[0]) for row in rows}
+
+
+def rescore_lane(*, now: datetime | None = None) -> dict[str, Any]:
+    """Куда встанут задачи пересчёта и есть ли у полосы живой воркер — для сухого прогона.
+
+    Без полосы пересчётов (AI_BULK_LANE_ENABLED) задачи ушли бы в поток дня external-ai и
+    стояли бы перед обработкой новых статей: 18.09 28 пачек задержали поток на 4,5 ч."""
+    decision = network_policy.route_ai_bulk()
+    lane: dict[str, Any] = {"queue": decision.queue_name, "region": decision.execution_region,
+                            "bulk": decision.queue_name == lanes.AI_BULK, "workers": [], "warnings": []}
+    if decision.execution_region != "external":
+        lane["warnings"].append("внешний контур ИИ выключен — с --no-dry-run команда откажет")
+        return lane
+    if not lane["bulk"]:
+        lane["warnings"].append(
+            f"полоса пересчётов выключена (AI_BULK_LANE_ENABLED) — задачи встали бы в поток дня "
+            f"{decision.queue_name} перед новыми статьями; --no-dry-run откажет без --allow-live-lane"
+        )
+    now = now or datetime.now(timezone.utc)
+    try:
+        consumers = repository.list_external_consumers()
+    except pg_errors.UndefinedTable:
+        consumers = []
+    for consumer in consumers:
+        if decision.queue_name in (consumer.get("queues") or []) and consumer.get("last_seen_at"):
+            minutes = (now - consumer["last_seen_at"]).total_seconds() / 60
+            lane["workers"].append((consumer["consumer"], round(minutes)))
+    if not any(minutes <= lanes.CONSUMER_ACTIVE_HOURS * 60 for _, minutes in lane["workers"]):
+        lane["warnings"].append(
+            f"у полосы {decision.queue_name} нет живого воркера (задачу не просили {lanes.CONSUMER_ACTIVE_HOURS} ч) "
+            "— задачи будут ждать"
+        )
+    return lane
 
 
 def scoring_cost_estimate(count: int, *, days: int = 30) -> dict[str, Any]:
@@ -107,13 +168,22 @@ def scoring_cost_estimate(count: int, *, days: int = 30) -> dict[str, Any]:
     }
 
 
-def enqueue_rescore(article_ids: list[int], *, batch_size: int = 20) -> list[int]:
-    """Задачи внешнего контура: process_articles с явным списком и пометкой only=["scoring"]."""
+def enqueue_rescore(article_ids: list[int], *, batch_size: int = 20, allow_live_lane: bool = False) -> list[int]:
+    """Задачи внешнего контура: process_articles с явным списком и пометкой only=["scoring"].
+
+    Только в полосу пересчётов: в потоке дня сотня пачек встала бы перед новыми статьями.
+    Сознательно в поток дня — allow_live_lane."""
     decision = network_policy.route_ai_bulk()
     if decision.execution_region != "external":
         # Локальный конвейер пометки only не знает, а у оценённой статьи балл пропускает:
         # задача прошла бы молча впустую.
         raise RuntimeError("пересчёт балла идёт только через внешний контур ИИ")
+    if decision.queue_name != lanes.AI_BULK and not allow_live_lane:
+        raise RuntimeError(
+            f"полоса пересчётов выключена (AI_BULK_LANE_ENABLED): задачи встали бы в поток дня "
+            f"{decision.queue_name} перед новыми статьями. Включите полосу (и воркер external-worker-bulk "
+            "на NL) или поставьте сознательно: --allow-live-lane"
+        )
     batch = max(1, batch_size)
     jobs = []
     for start in range(0, len(article_ids), batch):

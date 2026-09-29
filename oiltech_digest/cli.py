@@ -812,8 +812,8 @@ def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
 def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
     """Пересчитать балл статей месяца с ИИ — после смены текстов или набора критериев профиля.
 
-    Сначала всегда сухой прогон (по умолчанию): выборка N и стоимость по формуле ADR 0002.
-    Задачи — только с --no-dry-run, решение о запуске — за владельцем."""
+    Сначала всегда сухой прогон (по умолчанию): выборка N, стоимость по формуле ADR 0002 и полоса,
+    куда встанут задачи. Задачи — только с --no-dry-run, решение о запуске — за владельцем."""
     from oiltech_digest.processing import rescore
 
     try:
@@ -822,27 +822,33 @@ def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
         raise SystemExit(f"enqueue-rescore: {exc}") from exc
     ids = selection["article_ids"][: args.limit] if args.limit else selection["article_ids"]
     estimate = rescore.scoring_cost_estimate(len(ids))
+    lane = rescore.rescore_lane()
     print(
         f"enqueue-rescore: профиль {selection['profile']}, месяц {selection['month']} — видимых оценённых статей "
         f"{selection['scored']}: посчитаны текущим набором {selection['up_to_date']} (из них другие только веса — "
         f"{selection['weights_only']}, им хватит rescore-recompute), набор или тексты другие {selection['changed']}, "
         f"без снимка (до профилей) {selection['no_snapshot']}"
     )
-    print(f"  к пересчёту с ИИ: N={len(ids)} (из них выбраны в дайджест: {selection['in_digest']})")
+    print(f"  к пересчёту с ИИ: N={len(ids)} (из них выбраны в дайджест: {selection['in_digest']}); "
+          f"уже в задачах пересчёта, повторно не ставятся: {selection['queued']}")
     if estimate["model"] is None:
         print(f"  стоимость не оценить: вызовов scoring за {estimate['days']} дней нет")
     else:
         print(
-            f"  стоимость ≈ ${estimate['usd_total']:.2f}: модель {estimate['model']}, за {estimate['days']} дней "
-            f"{estimate['runs']} вызовов scoring, в среднем in={estimate['avg_input_tokens']} / "
+            f"  стоимость ≈ ${estimate['usd_total']:.2f}: модель {estimate['model']}, вызовов scoring за "
+            f"{estimate['days']} дней: {estimate['runs']}, в среднем in={estimate['avg_input_tokens']} / "
             f"out={estimate['avg_output_tokens']} токенов, ставки ${estimate['price_in']}/${estimate['price_out']} "
             f"за 1М → ${estimate['usd_per_call']:.5f} за вызов; сверять со счётом провайдера"
         )
+    workers = ", ".join(f"{name} (задачу просил {minutes} мин назад)" for name, minutes in lane["workers"]) or "нет"
+    print(f"  полоса: {lane['queue']} ({lane['region']}); воркеры полосы: {workers}")
+    for warning in lane["warnings"]:
+        print(f"  ВНИМАНИЕ: {warning}")
     if args.dry_run:
         print("  [dry-run] задачи не поставлены (поставить: --no-dry-run)")
         return
     try:
-        jobs = rescore.enqueue_rescore(ids, batch_size=args.batch_size)
+        jobs = rescore.enqueue_rescore(ids, batch_size=args.batch_size, allow_live_lane=args.allow_live_lane)
     except RuntimeError as exc:
         raise SystemExit(f"enqueue-rescore: {exc}") from exc
     print(f"  задач: {len(jobs)} ({jobs[:20]}{' …' if len(jobs) > 20 else ''})")
@@ -2684,6 +2690,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_rescore.add_argument("--limit", type=int, default=0, help="не больше N статей (0 — все)")
     p_rescore.add_argument("--batch-size", type=int, default=20)
     p_rescore.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_rescore.add_argument("--allow-live-lane", action="store_true",
+                           help="ставить в поток дня, если полоса пересчётов выключена (обычно — нет)")
     p_rescore.set_defaults(func=cmd_enqueue_rescore)
 
     p_process = sub.add_parser("process", help="summary → tagging → scoring")
