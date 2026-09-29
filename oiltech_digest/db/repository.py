@@ -5904,7 +5904,9 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             {_SIGNAL_CORRECTIONS_LATERAL.format(alias="sig")}
             WHERE uss.status = 'digest'
               AND sig.merged_into_signal_id IS NULL
-              AND sig.maturity <> 'reject'
+              -- Зрелости «Отклонено» здесь нет (29.09): это оценка модели, а экран радара
+              -- показывает такие карточки с кнопкой «В дайджест», и повторная находка
+              -- перезаписывает зрелость выбранной карточки. Выбор человека — членство.
               AND sig.score >= %(min_score)s
               {max_score_clause.replace('COALESCE(sc.total_score, 0)', 'sig.score')}
               {signal_month_clause}

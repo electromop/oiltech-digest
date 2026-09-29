@@ -413,3 +413,27 @@ def test_unmarked_article_leaves_the_saved_issue_without_resaving(issue):
     # Снова отмечена — возвращается на своё место в черновике.
     analyst.mark(a["mid"])
     assert analyst.issue() == [("article", a["low"]), ("article", a["mid"])]
+
+
+# ---------------------------------------------------------------------------
+#  Дефект: оценка модели («Отклонено») уносила выбранную человеком карточку радара
+# ---------------------------------------------------------------------------
+
+def test_radar_card_rated_reject_by_the_model_stays_in_the_issue_it_was_chosen_for(issue):
+    """Экран радара показывает и карточки со зрелостью «Отклонено» — с кнопкой «В дайджест»;
+    повторная находка перезаписывает зрелость и балл карточки. Сборщик выпуска такие
+    карточки отбрасывал: радар отвечал «Сигнал добавлен в дайджест», а в выпуске его не было.
+    Отметка человека — членство в выпуске, оценка модели — только порядок."""
+    analyst, s = issue["analyst"], issue["s"]
+    weak = _signal("weak", first_seen=_msk(2026, 9, 15, 0, 20), maturity="reject", score=18,
+                   evidence_published=_utc(2026, 9, 14, 9))
+    analyst.mark_signal(weak)
+    analyst.mark_signal(s["sep"])
+
+    # Повторная находка выбранной карточки: модель теперь считает её слабой.
+    repository.upsert_signal({
+        "signal_key": "sep", "title": "Сигнал sep", "title_ru": "Сигнал sep", "theme": THEME,
+        "summary": "Суть сигнала sep.", "maturity": "reject", "score": 4,
+    })
+
+    assert analyst.issue() == [("signal", weak), ("signal", s["sep"])]
