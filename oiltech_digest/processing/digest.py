@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import re
+import secrets
 from html import escape
 from pathlib import Path
 from datetime import UTC, datetime
@@ -1212,7 +1213,9 @@ def write_digest_export(
     )
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    base_name = f"digest-{month or 'all'}-{stamp}"
+    # Выпуск у каждого свой, а каталог выгрузок общий: без случайного хвоста две выгрузки
+    # одного месяца в одну секунду писали один файл, и первый скачивал выпуск второго.
+    base_name = f"digest-{month or 'all'}-{stamp}-{secrets.token_hex(3)}"
     normalized_format = "docx" if export_format == "doc" else export_format
 
     if normalized_format == "pdf":

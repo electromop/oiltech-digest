@@ -100,6 +100,9 @@ class _Person:
 
     def export(self, export_format: str, month: str = SEPT) -> bytes:
         """Кнопка выгрузки: задача → воркер → скачивание, как на экране."""
+        return self.download(self.start_export(export_format, month))
+
+    def start_export(self, export_format: str, month: str = SEPT) -> int:
         response = self.post(
             "/api/jobs/digest-export",
             json={"month": month, "export_format": export_format, "limit": 500, "min_score": 0,
@@ -110,6 +113,9 @@ class _Person:
         background_jobs.run(job_id)
         job = self.get(f"/api/jobs/{job_id}").json()
         assert job["status"] == "ok", job
+        return job_id
+
+    def download(self, job_id: int) -> bytes:
         download = self.get(f"/api/jobs/{job_id}/download")
         assert download.status_code == 200, download.text
         return download.content
@@ -508,3 +514,31 @@ def test_new_scores_do_not_take_marked_items_out_of_the_issue(issue):
     saved = analyst.get(f"/api/monthly-digests/{SEPT}").json()
     assert {item["article_id"] for item in saved["items"]} == set(marked)
     assert set(analyst.issue()) == expected
+
+
+# ---------------------------------------------------------------------------
+#  Дефект (п. 5): выгрузки двух людей в одну секунду писали один файл
+# ---------------------------------------------------------------------------
+
+class _SameSecond(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 10, 3, 12, 0, 0, tzinfo=tz)
+
+
+def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(issue, monkeypatch):
+    """Файл выгрузки назывался digest-<месяц>-<секунда>: две выгрузки одного месяца в одну
+    секунду (двадцать человек собирают сентябрь до 05.10, HTML готовится за доли секунды)
+    писали в один файл — и первый скачивал выпуск второго."""
+    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
+    analyst.mark(a["hi"])
+    colleague.mark(a["low"])
+    monkeypatch.setattr(digest_module, "datetime", _SameSecond)
+
+    mine = analyst.start_export("html")
+    theirs = colleague.start_export("html")
+
+    mine_html = analyst.download(mine).decode("utf-8")
+    theirs_html = colleague.download(theirs).decode("utf-8")
+    assert "Материал hi" in mine_html and "Материал low" not in mine_html
+    assert "Материал low" in theirs_html and "Материал hi" not in theirs_html
