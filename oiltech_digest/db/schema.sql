@@ -167,23 +167,6 @@ CREATE TABLE IF NOT EXISTS scoring_criteria (
   created_at       TIMESTAMPTZ DEFAULT now(),
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
--- Профили скоринга (сессия G, ADR 0002): «Бизнес-сигналы» (business) и «Технологический
--- радар» (tech_radar). Колонка с умолчанием, без UPDATE: строки, что были до профилей,
--- читаются как business, и лента считается тем же набором, что и раньше. Имя уникально в
--- пределах профиля: «Технологическая новизна» есть и в наборе радара, и в старом сиде.
--- На живой базе эти строки выполняются вручную ДО выката кода (scripts/g/), выкат —
--- --no-schema. Глобальный индекс имён снимается ПОСЛЕ выката: старый код пишет
--- ON CONFLICT (name) и без этого индекса не сохранил бы новый критерий.
-ALTER TABLE scoring_criteria ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'business';
-DO $$
-BEGIN
-  ALTER TABLE scoring_criteria
-    ADD CONSTRAINT scoring_criteria_profile_check CHECK (profile IN ('business', 'tech_radar'));
-EXCEPTION
-  WHEN duplicate_object THEN NULL;
-END $$;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_scoring_criteria_profile_name ON scoring_criteria(profile, name);
-DROP INDEX IF EXISTS idx_scoring_criteria_name;
 
 CREATE TABLE IF NOT EXISTS article_scores (
   id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -203,6 +186,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_article_scores_article_unique ON article_s
 -- (изменились только веса) или нужен новый вызов модели (тексты или набор другие).
 ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS profile TEXT;
 ALTER TABLE article_scores ADD COLUMN IF NOT EXISTS criteria_snapshot JSONB;
+-- Профили скоринга (сессия G, ADR 0002): «Бизнес-сигналы» (business) и «Технологический
+-- радар» (tech_radar). Колонка с умолчанием, без UPDATE: строки, что были до профилей,
+-- читаются как business, и лента считается тем же набором, что и раньше. Имя уникально в
+-- пределах профиля: «Технологическая новизна» есть и в наборе радара, и в старом сиде.
+-- На живой базе эти строки выполняются вручную ДО выката кода (scripts/g/), выкат —
+-- --no-schema. Глобальный индекс имён снимается ПОСЛЕ выката: старый код пишет
+-- ON CONFLICT (name) и без этого индекса не сохранил бы новый критерий. Блок — после
+-- article_scores: порядок таблиц как у записи балла и у шага 1 выката.
+ALTER TABLE scoring_criteria ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'business';
+DO $$
+BEGIN
+  ALTER TABLE scoring_criteria
+    ADD CONSTRAINT scoring_criteria_profile_check CHECK (profile IN ('business', 'tech_radar'));
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scoring_criteria_profile_name ON scoring_criteria(profile, name);
+DROP INDEX IF EXISTS idx_scoring_criteria_name;
 
 CREATE TABLE IF NOT EXISTS article_score_items (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
