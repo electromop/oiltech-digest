@@ -19,6 +19,7 @@ from oiltech_digest import auth, config, contract, feed_window, lanes
 from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
+from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profile
 
 logger = logging.getLogger(__name__)
 
@@ -5467,62 +5468,121 @@ def upsert_article_tag(article_id: int, tag_id: int, confidence: float,
         conn.commit()
 
 
-def upsert_scoring_criterion(rec: dict) -> int:
+def _upsert_scoring_criterion(conn, rec: dict, profile: str) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO scoring_criteria (profile, name, description, weight, keywords_json,
+                                      keywords_en_json, enabled, sort_order)
+        VALUES (%(profile)s, %(name)s, %(description)s, %(weight)s, %(keywords_json)s,
+                %(keywords_en_json)s, TRUE, %(sort_order)s)
+        -- Сид ГАРАНТИРУЕТ СУЩЕСТВОВАНИЕ критериев по умолчанию, но НЕ переопределяет
+        -- решения человека. Раньше здесь стояло `enabled = TRUE`, и каждый деплой
+        -- воскрешал критерии, которые заказчик выключил в UI. Это не теория: 11.09
+        -- заказчик утром перестроил профиль (5 критериев, сумма ровно 100), в 11:40
+        -- прошёл деплой брендинга, bootstrap поднял обратно три старых — и через две
+        -- минуты он написал «а что случилось со скорингом? там сейчас 9 параметров».
+        -- Хуже того, сумма весов стала бы 175 вместо 100, и стадия скоринга падает
+        -- целиком на первой же статье (_validate_weights).
+        -- Вес и флаг — территория человека (экран «Скоринг»), сид их не трогает.
+        -- Ключевые слова дополняем, а не заменяем: их там тоже правят руками.
+        ON CONFLICT (profile, name) DO UPDATE SET
+            description = COALESCE(scoring_criteria.description, EXCLUDED.description),
+            keywords_json = (
+                SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                FROM jsonb_array_elements(
+                    COALESCE(scoring_criteria.keywords_json, '[]'::jsonb) || EXCLUDED.keywords_json
+                ) AS w
+            ),
+            keywords_en_json = (
+                SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                FROM jsonb_array_elements(
+                    COALESCE(scoring_criteria.keywords_en_json, '[]'::jsonb) || EXCLUDED.keywords_en_json
+                ) AS w
+            ),
+            updated_at = now()
+        RETURNING id
+        """,
+        {
+            "description": None,
+            "sort_order": 0,
+            **rec,
+            "profile": profile,
+            "keywords_json": Json(rec.get("keywords_json") or []),
+            "keywords_en_json": Json(rec.get("keywords_en_json") or []),
+        },
+    )
+    return int(cur.fetchone()[0])
+
+
+def upsert_scoring_criterion(rec: dict, profile: str = ARTICLE_SCORING_PROFILE) -> int:
+    """Критерий по имени в профиле: нет — завести включённым; есть — дополнить, не переписывая."""
+    profile = check_profile(profile)
     with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO scoring_criteria (name, description, weight, keywords_json,
-                                          keywords_en_json, enabled, sort_order)
-            VALUES (%(name)s, %(description)s, %(weight)s, %(keywords_json)s,
-                    %(keywords_en_json)s, TRUE, %(sort_order)s)
-            -- Сид ГАРАНТИРУЕТ СУЩЕСТВОВАНИЕ критериев по умолчанию, но НЕ переопределяет
-            -- решения человека. Раньше здесь стояло `enabled = TRUE`, и каждый деплой
-            -- воскрешал критерии, которые заказчик выключил в UI. Это не теория: 11.09
-            -- заказчик утром перестроил профиль (5 критериев, сумма ровно 100), в 11:40
-            -- прошёл деплой брендинга, bootstrap поднял обратно три старых — и через две
-            -- минуты он написал «а что случилось со скорингом? там сейчас 9 параметров».
-            -- Хуже того, сумма весов стала бы 175 вместо 100, и стадия скоринга падает
-            -- целиком на первой же статье (_validate_weights).
-            -- Вес и флаг — территория человека (экран «Скоринг»), сид их не трогает.
-            -- Ключевые слова дополняем, а не заменяем: их там тоже правят руками.
-            ON CONFLICT (name) DO UPDATE SET
-                description = COALESCE(scoring_criteria.description, EXCLUDED.description),
-                keywords_json = (
-                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
-                    FROM jsonb_array_elements(
-                        COALESCE(scoring_criteria.keywords_json, '[]'::jsonb) || EXCLUDED.keywords_json
-                    ) AS w
-                ),
-                keywords_en_json = (
-                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
-                    FROM jsonb_array_elements(
-                        COALESCE(scoring_criteria.keywords_en_json, '[]'::jsonb) || EXCLUDED.keywords_en_json
-                    ) AS w
-                ),
-                updated_at = now()
-            RETURNING id
-            """,
-            {
-                **rec,
-                "keywords_json": Json(rec.get("keywords_json") or []),
-                "keywords_en_json": Json(rec.get("keywords_en_json") or []),
-            },
-        )
-        criterion_id = cur.fetchone()[0]
+        criterion_id = _upsert_scoring_criterion(conn, rec, profile)
         conn.commit()
         return criterion_id
 
 
-def list_enabled_scoring_criteria() -> list[dict]:
+# Сид профилей скоринга — по одному за раз (bootstrap и ручной seed-scoring разом). Ключ свой:
+# 7_290_922 всю жизнь держит планировщик (singleton.SCHEDULER_LOCK_KEY), а seed-scoring он
+# запускает дочерним процессом в bootstrap — на общем ключе сид ждал бы его вечно.
+_SEED_SCORING_LOCK = 7_290_923
+
+
+def seed_scoring_profile(profile: str, records: list[dict]) -> int:
+    """Набор критериев по умолчанию — только в ПУСТОЙ профиль и одной транзакцией.
+
+    Пустой — без единой строки, включённой или выключенной. В непустой профиль сид не
+    добавляет ничего (сессия G): у профиля business на проде свой набор с суммой 100, и сид
+    со своим набором сделал бы 200 — оценка встала бы на локальных путях и раздулась бы на
+    NL. Прежний сид по имени к тому же воскрешал переименованное: заказчик сменил имя —
+    следующий bootstrap заводил старое заново, включённым.
+
+    Одна транзакция: при сбое на середине не останется профиль из пары критериев с суммой
+    55, который следующий сид счёл бы уже заведённым. Возвращает число заведённых
+    критериев; 0 — профиль не пуст."""
+    profile = check_profile(profile)
+    try:
+        with get_connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SEED_SCORING_LOCK,))
+            if conn.execute("SELECT 1 FROM scoring_criteria WHERE profile = %s LIMIT 1", (profile,)).fetchone():
+                return 0
+            for rec in records:
+                _upsert_scoring_criterion(conn, rec, profile)
+            conn.commit()
+    except pg_errors.UniqueViolation as exc:
+        if _violated_index(exc) == "idx_scoring_criteria_name":
+            raise RuntimeError(
+                f"профиль {profile} не заведён: имя критерия уже занято в другом профиле, а в базе "
+                "ещё глобальный индекс имён idx_scoring_criteria_name. Снимите его (шаг 3 выката, "
+                "scripts/g/scoring-profiles-after-deploy.sql) и повторите seed-scoring."
+            ) from exc
+        raise
+    return len(records)
+
+
+def _violated_index(exc: pg_errors.UniqueViolation) -> str | None:
+    diag = getattr(exc, "diag", None)
+    return getattr(diag, "constraint_name", None)
+
+
+def list_enabled_scoring_criteria(profile: str = ARTICLE_SCORING_PROFILE) -> list[dict]:
+    """Активные критерии профиля, в порядке экрана.
+
+    Умолчание — business: им оценивается статья ленты. Так его получают все читатели, не
+    знающие профилей, — конвейер, пакет для NL, песочница агента источников, — и видят ровно
+    прежний набор ленты, а не оба профиля с суммой 200 (ADR 0002)."""
+    profile = check_profile(profile)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
             SELECT *
             FROM scoring_criteria
-            WHERE enabled = TRUE
+            WHERE enabled = TRUE AND profile = %s
             ORDER BY sort_order, id
-            """
+            """,
+            (profile,),
         )
         return cur.fetchall()
 
@@ -5537,12 +5597,18 @@ def delete_scoring_criterion(criterion_id: int) -> None:
     «убрать старые, не актуальные» критерии — по одному это гарантированно ломало бы
     скоринг на каждом шаге. Теперь удаление отклоняется с понятным текстом, а привести
     профиль в порядок можно одним «Сохранить» (bulk), где веса пересчитываются вместе.
+
+    Сумма — в профиле удаляемого критерия (сессия G): по всей таблице с двумя профилями
+    она 200, и отказ получало бы любое удаление, а сломать сумму можно было бы соседу.
     """
     with get_connection() as conn:
+        found = conn.execute("SELECT profile FROM scoring_criteria WHERE id = %s", (criterion_id,)).fetchone()
+        if found is None:
+            return  # нечего удалять — как и раньше, без ошибки
         row = conn.execute(
             "SELECT COALESCE(SUM(weight), 0) FROM scoring_criteria "
-            "WHERE enabled = TRUE AND id <> %s",
-            (criterion_id,),
+            "WHERE enabled = TRUE AND profile = %s AND id <> %s",
+            (found[0], criterion_id),
         ).fetchone()
         remaining = round(float(row[0]), 2)
         if remaining != 100:
@@ -5557,61 +5623,80 @@ def delete_scoring_criterion(criterion_id: int) -> None:
         conn.commit()
 
 
-def save_scoring_criteria(items: list[dict]) -> dict:
+def save_scoring_criteria(items: list[dict], profile: str = ARTICLE_SCORING_PROFILE) -> dict:
     """Bulk-сохранение профиля критериев (как кнопка «Сохранить» в мокапе).
 
     Валидирует сумму весов = 100. Существующие обновляются по id, новые вставляются,
     отсутствующие в списке — отключаются (soft delete, чтобы не рвать FK).
+
+    Всё — в пределах профиля (сессия G): «Сохранить» вкладки «Бизнес-сигналы» раньше
+    выключило бы весь «Технологический радар», которого нет в её списке. Критерий другого
+    профиля по id не правится и в этот не переезжает — отказ, ничего не записано.
     """
+    profile = check_profile(profile)
     total = round(sum(float(i.get("weight") or 0) for i in items), 2)
     if total != 100:
         raise ValueError(f"Сумма весов критериев должна быть 100, сейчас {total}")
 
     keep_ids: list[int] = []
-    with get_connection() as conn:
-        for it in items:
-            payload = {
-                "name": it["name"],
-                "description": it.get("description"),
-                "weight": it["weight"],
-                "keywords_json": Json(it.get("keywords_json") or []),
-                "keywords_en_json": Json(it.get("keywords_en_json") or []),
-                "sort_order": it.get("sort_order") or 0,
-            }
-            if it.get("id"):
-                conn.execute(
-                    """
-                    UPDATE scoring_criteria SET name=%(name)s, description=%(description)s,
-                        weight=%(weight)s, keywords_json=%(keywords_json)s,
-                        keywords_en_json=%(keywords_en_json)s, sort_order=%(sort_order)s,
-                        enabled=TRUE, updated_at=now()
-                    WHERE id=%(id)s
-                    """,
-                    {**payload, "id": int(it["id"])},
-                )
-                keep_ids.append(int(it["id"]))
-            else:
-                cur = conn.execute(
-                    """
-                    INSERT INTO scoring_criteria (name, description, weight, keywords_json,
-                                                  keywords_en_json, enabled, sort_order)
-                    VALUES (%(name)s, %(description)s, %(weight)s, %(keywords_json)s,
-                            %(keywords_en_json)s, TRUE, %(sort_order)s)
-                    ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description,
-                        weight=EXCLUDED.weight, keywords_json=EXCLUDED.keywords_json,
-                        keywords_en_json=EXCLUDED.keywords_en_json, enabled=TRUE, updated_at=now()
-                    RETURNING id
-                    """,
-                    payload,
-                )
-                keep_ids.append(int(cur.fetchone()[0]))
-        if keep_ids:
+    try:
+        with get_connection() as conn:
+            for it in items:
+                payload = {
+                    "profile": profile,
+                    "name": it["name"],
+                    "description": it.get("description"),
+                    "weight": it["weight"],
+                    "keywords_json": Json(it.get("keywords_json") or []),
+                    "keywords_en_json": Json(it.get("keywords_en_json") or []),
+                    "sort_order": it.get("sort_order") or 0,
+                }
+                if it.get("id"):
+                    cur = conn.execute(
+                        """
+                        UPDATE scoring_criteria SET name=%(name)s, description=%(description)s,
+                            weight=%(weight)s, keywords_json=%(keywords_json)s,
+                            keywords_en_json=%(keywords_en_json)s, sort_order=%(sort_order)s,
+                            enabled=TRUE, updated_at=now()
+                        WHERE id=%(id)s AND profile=%(profile)s
+                        """,
+                        {**payload, "id": int(it["id"])},
+                    )
+                    if cur.rowcount != 1:
+                        raise ValueError(
+                            f"Критерия id={int(it['id'])} нет в профиле «{profile}» — "
+                            "обновите страницу: список устарел или открыт на другой вкладке."
+                        )
+                    keep_ids.append(int(it["id"]))
+                else:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO scoring_criteria (profile, name, description, weight, keywords_json,
+                                                      keywords_en_json, enabled, sort_order)
+                        VALUES (%(profile)s, %(name)s, %(description)s, %(weight)s, %(keywords_json)s,
+                                %(keywords_en_json)s, TRUE, %(sort_order)s)
+                        ON CONFLICT (profile, name) DO UPDATE SET description=EXCLUDED.description,
+                            weight=EXCLUDED.weight, keywords_json=EXCLUDED.keywords_json,
+                            keywords_en_json=EXCLUDED.keywords_en_json, enabled=TRUE, updated_at=now()
+                        RETURNING id
+                        """,
+                        payload,
+                    )
+                    keep_ids.append(int(cur.fetchone()[0]))
             conn.execute(
-                "UPDATE scoring_criteria SET enabled=FALSE, updated_at=now() WHERE id <> ALL(%s)",
-                (keep_ids,),
+                "UPDATE scoring_criteria SET enabled=FALSE, updated_at=now() "
+                "WHERE profile = %s AND id <> ALL(%s)",
+                (profile, keep_ids),
             )
-        conn.commit()
-    return {"saved": len(items), "weight_sum": total}
+            conn.commit()
+    except pg_errors.UniqueViolation as exc:
+        if _violated_index(exc) == "idx_scoring_criteria_name":
+            raise ValueError(
+                "Такое имя уже есть у критерия другого профиля, а в базе ещё глобальный индекс имён "
+                "(шаг 3 выката ADR 0002 не сделан). Переименуйте критерий или снимите индекс."
+            ) from exc
+        raise ValueError("Два критерия профиля с одним именем: имена в профиле должны различаться.") from exc
+    return {"saved": len(items), "weight_sum": total, "profile": profile}
 
 
 def replace_article_score(article_id: int, total_score: float, score_label: str,

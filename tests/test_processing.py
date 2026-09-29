@@ -14,7 +14,7 @@ from oiltech_digest.processing.domain_glossary import (
 from oiltech_digest.processing import digest
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient, _extract_output_text
-from oiltech_digest.processing.seed import DEFAULT_SCORING_CRITERIA, _split_keywords, _tag_signal_enrichment
+from oiltech_digest.processing.seed import DEFAULT_SCORING_PROFILES, _split_keywords, _tag_signal_enrichment
 
 
 class _RecordingClient:
@@ -231,8 +231,13 @@ def test_signal_enrichment_adds_chinese_hse_keywords():
     assert "防碰撞系统" in extra["keywords_cn"]
 
 
-def test_default_scoring_weights_equal_100():
-    assert sum(item["weight"] for item in DEFAULT_SCORING_CRITERIA) == 100
+def test_default_scoring_weights_equal_100_in_each_profile():
+    from oiltech_digest.scoring_profiles import SCORING_PROFILES
+
+    assert set(DEFAULT_SCORING_PROFILES) == set(SCORING_PROFILES)
+    for criteria in DEFAULT_SCORING_PROFILES.values():
+        assert sum(item["weight"] for item in criteria) == 100
+        assert len({item["name"] for item in criteria}) == len(criteria)
 
 
 def test_keyword_tag_selects_best_tag():

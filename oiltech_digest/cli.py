@@ -207,7 +207,11 @@ def cmd_seed_scoring(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.seed import seed_default_scoring_criteria
 
     stats = seed_default_scoring_criteria()
-    print(f"Seed критериев скоринга: {stats['criteria']}, сумма весов={stats['weight_sum']}")
+    for profile, row in stats.items():
+        if row["added"]:
+            print(f"Seed критериев скоринга, {profile}: заведено {row['added']}, сумма весов={row['weight_sum']}")
+        else:
+            print(f"Seed критериев скоринга, {profile}: не тронут — в профиле уже есть критерии")
 
 
 def cmd_apply_source_overrides(args: argparse.Namespace) -> None:
@@ -2482,7 +2486,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_cf.set_defaults(func=cmd_cleanup_future_dates)
 
     sub.add_parser("seed-tags", help="загрузить 13 тематик заказчика").set_defaults(func=cmd_seed_tags)
-    sub.add_parser("seed-scoring", help="создать базовые критерии скоринга").set_defaults(func=cmd_seed_scoring)
+    sub.add_parser(
+        "seed-scoring", help="завести критерии по умолчанию в пустые профили скоринга (непустые не трогает)"
+    ).set_defaults(func=cmd_seed_scoring)
     sub.add_parser("apply-source-overrides", help="применить playwright/listing-оверрайды источников").set_defaults(func=cmd_apply_source_overrides)
 
     def add_ai_args(p):
