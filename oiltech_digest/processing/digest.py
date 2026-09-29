@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from oiltech_digest import config
+from oiltech_digest import config, feed_window
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
@@ -355,14 +355,15 @@ def build_digest_content(
         )
     title_template = issue_cfg["title_template_with_month"] if month else issue_cfg["title_template"]
     intro_template = issue_cfg["intro_template_with_month"] if month else issue_cfg["intro_template"]
-    title = title_template.format(month=month or "")
-    intro = intro_template.format(month=month or "")
+    month_text = _issue_month_text(month)
+    title = title_template.format(month=month_text)
+    intro = intro_template.format(month=month_text)
     return {
         "month": month,
         "title": title,
         "issue": {
             "title": title,
-            "period": month or issue_cfg["period_label_all"],
+            "period": month_text or issue_cfg["period_label_all"],
             "preheader": issue_cfg["preheader"],
             "intro": intro,
             "highlights_title": issue_cfg["highlights_title"],
@@ -389,6 +390,19 @@ def build_digest_content(
         "branding": branding,
     }
 
+
+
+def _issue_month_text(month: str | None) -> str:
+    """Месяц в шапке выпуска словами: «2026-09» → «сентябрь 2026 г».
+
+    Правка заказчика 24.08 (#428915) к выпуску за август: «за 2026-08» → «за август
+    2026 г», и в заголовке выпуска. Незнакомая строка месяца остаётся как есть."""
+    if not month:
+        return ""
+    try:
+        return f"{feed_window.month_label(feed_window.parse_month(month))} г"
+    except ValueError:
+        return month
 
 
 def _render_footer_contact(footer: dict) -> str:

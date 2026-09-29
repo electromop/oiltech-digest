@@ -688,3 +688,25 @@ def test_reprint_robot_does_not_hide_a_copy_chosen_for_the_issue(issue):
     )
     feed = {row["id"] for row in analyst.get("/api/articles", params={"limit": 5000}).json()}
     assert a["low"] not in feed and a["mid"] in feed and copy in feed
+
+
+# ---------------------------------------------------------------------------
+#  Дефект: месяц в шапке выпуска — «2026-09» вместо слов (правка заказчика 24.08)
+# ---------------------------------------------------------------------------
+
+def test_issue_header_names_the_month_in_words(issue):
+    """Заказчик 24.08 (#428915) в выпуске за август: «за 2026-08» → «за август 2026 г», и в
+    заголовке выпуска. Август собирали скриптом с этой правкой, а продукт так и писал
+    «2026-09» — первый выпуск, собранный самими пользователями, повторил бы замечание."""
+    analyst = issue["analyst"]
+    analyst.mark(issue["a"]["hi"])
+
+    content = analyst.get("/api/digest-content", params={"month": SEPT, "limit": 500, "min_score": 0}).json()
+    assert "обзоры за сентябрь 2026 г," in content["issue"]["intro"]
+    assert content["title"] == "Нефтесервисный дайджест · сентябрь 2026 г"
+    # Для имён файлов и запросов месяц прежний.
+    assert content["month"] == SEPT
+
+    html = analyst.export("html").decode("utf-8")
+    assert "обзоры за сентябрь 2026 г," in html
+    assert "2026-09" not in html

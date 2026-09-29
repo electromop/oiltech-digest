@@ -113,7 +113,7 @@ def test_build_digest_content_uses_branding_config(monkeypatch):
     assert content["hero"]["headline"] == "ТЕСТОВЫЙ ДАЙДЖЕСТ"
     assert content["hero"]["image_url"] == "https://example.com/hero.jpg"
     assert content["issue"]["preheader"] == "Тестовый прехедер"
-    assert content["issue"]["intro"] == "Интро за 2026-05"
+    assert content["issue"]["intro"] == "Интро за май 2026 г"  # месяц словами — правка заказчика 24.08
     assert content["issue"]["news_title"] == "Материалы"
     assert content["issue"]["read_more_label"] == "Открыть"
     assert content["issue"]["empty_summary_text"] == "Нет сути"
