@@ -19,6 +19,7 @@ from oiltech_digest import auth, config, contract, feed_window, lanes
 from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
+from oiltech_digest import scoring_profiles
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profile
 
 logger = logging.getLogger(__name__)
@@ -5701,21 +5702,41 @@ def save_scoring_criteria(items: list[dict], profile: str = ARTICLE_SCORING_PROF
 
 def replace_article_score(article_id: int, total_score: float, score_label: str,
                           explanation: str, items: list[dict],
-                          model: str | None = None) -> None:
+                          model: str | None = None, *, profile: str | None = None,
+                          criteria_snapshot: list[dict] | None = None) -> None:
+    """Балл статьи с подпунктами и происхождением: профиль и снимок критериев (сессия G).
+
+    Снимок присылает тот, кто считал балл. Нет его (итог сборки NL до сессии G) — строим
+    здесь по id подпунктов из текущих критериев: пакет выдан минуты назад, и расхождение
+    возможно, только если веса правили именно в эти минуты."""
     with get_connection() as conn:
+        if criteria_snapshot is None or profile is None:
+            ids = [int(item["criterion_id"]) for item in items]
+            cur = conn.cursor(row_factory=dict_row)
+            rows = cur.execute(
+                "SELECT * FROM scoring_criteria WHERE id = ANY(%s) ORDER BY sort_order, id", (ids,)
+            ).fetchall() if ids else []
+            if criteria_snapshot is None and rows:
+                criteria_snapshot = scoring_profiles.criteria_snapshot(rows)
+            if profile is None:
+                profile = scoring_profiles.profile_of(rows)
         cur = conn.execute(
             """
-            INSERT INTO article_scores (article_id, model, total_score, score_label, explanation)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO article_scores (article_id, model, total_score, score_label, explanation,
+                                        profile, criteria_snapshot)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (article_id) DO UPDATE SET
                 model = EXCLUDED.model,
                 total_score = EXCLUDED.total_score,
                 score_label = EXCLUDED.score_label,
                 explanation = EXCLUDED.explanation,
+                profile = EXCLUDED.profile,
+                criteria_snapshot = EXCLUDED.criteria_snapshot,
                 updated_at = now()
             RETURNING id
             """,
-            (article_id, model, total_score, score_label, explanation),
+            (article_id, model, total_score, score_label, explanation, profile,
+             Json(criteria_snapshot) if criteria_snapshot is not None else None),
         )
         score_id = cur.fetchone()[0]
         conn.execute("DELETE FROM article_score_items WHERE article_score_id = %s", (score_id,))

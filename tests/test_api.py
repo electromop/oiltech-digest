@@ -25,6 +25,8 @@ class FakeCursor:
             self.rows = [
                 {
                     "article_id": 42,
+                    "criterion_id": 7,
+                    "criteria_snapshot": None,  # балл до профилей (сессия G): вес — текущий
                     "name": "Технологическая значимость",
                     "weight": 40,
                     "final_score": 88,

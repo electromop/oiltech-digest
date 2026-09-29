@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from oiltech_digest import contract
 from oiltech_digest.db import repository
+from oiltech_digest.scoring_profiles import SCORING_PROFILES
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.pipeline import (
@@ -624,14 +625,39 @@ def _write_tagging(article_id: int, payload: dict[str, Any], context: dict[str, 
 
 
 def _write_scoring(article_id: int, payload: dict[str, Any], context: dict[str, Any] | None) -> None:
+    items = payload.get("items") or []
+    profile, snapshot = _score_provenance(payload, items)
     repository.replace_article_score(
         article_id,
         float(payload["total_score"]),
         str(payload["score_label"]),
         str(payload.get("explanation") or ""),
-        payload.get("items") or [],
+        items,
         payload.get("model"),
+        profile=profile,
+        criteria_snapshot=snapshot,
     )
+
+
+def _score_provenance(payload: dict[str, Any], items: list[dict[str, Any]]) -> tuple[str | None, list[dict] | None]:
+    """Профиль и снимок критериев из итога воркера — граница, чужую форму не пишем.
+
+    Сборка NL до сессии G их не присылает, битые или не покрывающие подпункты отбрасываются:
+    тогда (None) ядро строит их само по id подпунктов (repository.replace_article_score)."""
+    profile = payload.get("profile") if payload.get("profile") in SCORING_PROFILES else None
+    raw = payload.get("criteria_snapshot")
+    if not isinstance(raw, list) or not raw:
+        return profile, None
+    try:
+        snapshot = [
+            {"id": int(entry["id"]), "name": str(entry["name"]), "weight": float(entry["weight"]),
+             "text_hash": str(entry["text_hash"])}
+            for entry in raw
+        ]
+        covered = {int(item["criterion_id"]) for item in items} <= {entry["id"] for entry in snapshot}
+    except (KeyError, TypeError, ValueError):
+        return profile, None
+    return profile, (snapshot if covered else None)
 
 
 _STAGE_WRITERS = {

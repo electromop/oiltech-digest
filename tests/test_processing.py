@@ -777,7 +777,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     monkeypatch.setattr(
         pipeline.repository,
         "replace_article_score",
-        lambda article_id, total_score, score_label, explanation, items, model=None: state.update(
+        lambda article_id, total_score, score_label, explanation, items, model=None, *, profile=None,
+        criteria_snapshot=None: state.update(
             {
                 "score_article_id": article_id,
                 "total_score": total_score,
@@ -785,6 +786,7 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
                 "score_explanation": explanation,
                 "score_items": items,
                 "score_model": model,
+                "score_snapshot": criteria_snapshot,
             }
         ),
     )
@@ -809,6 +811,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     assert state["tag_id"] == 10
     assert state["total_score"] >= 65
     assert state["score_label"] in {"Выше средней", "Высокая"}
+    # Балл помнит, каким набором посчитан (сессия G): снимок критериев на момент оценки.
+    assert [(s["id"], s["weight"]) for s in state["score_snapshot"]] == [(20, 100.0)]
     # Релевантность идёт ПЕРВОЙ — гейт до суммаризации (фикс «мусор в выборке» 2026-06).
     # Перевод заголовка — отдельная стадия после сути.
     assert [run["stage"] for run in state["runs"]] == ["relevance", "summary", "translation", "tagging", "scoring"]

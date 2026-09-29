@@ -112,7 +112,8 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
     monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: calls.append(("summary", args)))
     monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *args: calls.append(("relevance", args)))
     monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: calls.append(("tagging", args)))
-    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args: calls.append(("scoring", args)))
+    monkeypatch.setattr(external_ai.repository, "replace_article_score",
+                        lambda *args, **kwargs: calls.append(("scoring", args)))
     monkeypatch.setattr(external_ai.repository, "insert_ai_run", lambda rec: calls.append(("run", rec["stage"])))
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
 
@@ -226,7 +227,7 @@ def test_apply_only_writes_summary_and_translation_but_bills_every_stage(monkeyp
     monkeypatch.setattr(external_ai.repository, "set_article_title_ru", lambda *args: writes.append("translation"))
     monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *args: writes.append("relevance"))
     monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: writes.append("tagging"))
-    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args: writes.append("scoring"))
+    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args, **kwargs: writes.append("scoring"))
     monkeypatch.setattr(external_ai, "_insert_run", lambda article_id, stage, payload, **kwargs: runs.append(stage))
     item = {
         "article_id": 1,

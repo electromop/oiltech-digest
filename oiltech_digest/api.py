@@ -2728,14 +2728,18 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    """Per-criterion scoring breakdown grouped by article id."""
+    """Per-criterion scoring breakdown grouped by article id.
+
+    Вес — из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
+    после правки на экране дал бы разбивку, которая в итог не складывается. У балла до
+    профилей снимка нет — вес текущий, как раньше."""
     if not article_ids:
         return {}
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         """
-        SELECT s.article_id, sc.name, sc.weight, asi.final_score, asi.ai_score,
-               asi.keyword_score, asi.rationale
+        SELECT s.article_id, asi.criterion_id, sc.name, sc.weight, s.criteria_snapshot,
+               asi.final_score, asi.ai_score, asi.keyword_score, asi.rationale
         FROM article_score_items asi
         JOIN article_scores s ON s.id = asi.article_score_id
         JOIN scoring_criteria sc ON sc.id = asi.criterion_id
@@ -2746,10 +2750,12 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
     )
     grouped: dict[int, list[dict[str, Any]]] = {}
     for row in cur.fetchall():
+        scored_weight = _snapshot_weight(row["criteria_snapshot"], int(row["criterion_id"]))
+        weight = scored_weight if scored_weight is not None else row["weight"]
         grouped.setdefault(int(row["article_id"]), []).append(
             {
                 "name": row["name"],
-                "weight": float(row["weight"]) if row["weight"] is not None else 0.0,
+                "weight": float(weight) if weight is not None else 0.0,
                 "final_score": float(row["final_score"]) if row["final_score"] is not None else 0.0,
                 "ai_score": float(row["ai_score"]) if row["ai_score"] is not None else None,
                 "keyword_score": float(row["keyword_score"]) if row["keyword_score"] is not None else None,
@@ -2757,6 +2763,13 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
             }
         )
     return grouped
+
+
+def _snapshot_weight(snapshot: Any, criterion_id: int) -> float | None:
+    for entry in snapshot if isinstance(snapshot, list) else []:
+        if isinstance(entry, dict) and entry.get("id") == criterion_id and entry.get("weight") is not None:
+            return float(entry["weight"])
+    return None
 
 
 def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
