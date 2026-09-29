@@ -7,7 +7,7 @@ import {
   listSignals,
   updateSignal,
 } from "../../api/signals";
-import type { SignalFilters, SignalSearchHealth, SignalSummary } from "../../api/signals";
+import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
 import type { Signal, SignalFeedbackPayload } from "../../api/types";
 
 // Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему
@@ -16,6 +16,10 @@ export const RADAR_PAGE_SIZE = 100;
 // Задержка серверного поиска — как у ленты бизнес-сигналов: запрос не на каждую букву.
 const SEARCH_DELAY_MS = 400;
 const EVIDENCE_PER_CARD = 5;
+// Без фильтров видно всё: в отличие от ленты, радар слабые карточки по умолчанию не прячет.
+const SCORE_MIN = 0;
+const SCORE_MAX = 100;
+const DEFAULT_SORT: SignalSort = "score_desc";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -87,6 +91,19 @@ function formatArrival(signal: Signal): string {
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: RADAR_TIME_ZONE });
 }
 
+// «из 1 сигнала», «из 21 сигнала», но «из 2 сигналов», «из 11 сигналов».
+function signalsAfterFrom(count: number): string {
+  return count % 10 === 1 && count % 100 !== 11 ? "сигнала" : "сигналов";
+}
+
+// Балл карточки — 0–100: поле пустое или вне шкалы — край шкалы, а не ошибка сервера.
+function clampScore(value: string, fallback: number): number {
+  if (value.trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(SCORE_MIN, Math.min(SCORE_MAX, number));
+}
+
 // Цвет среднего балла группы — те же пороги, что у групп «Бизнес-сигналов».
 function scoreClass(score: number) {
   if (!score) return "muted";
@@ -141,6 +158,12 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [maturity, setMaturity] = useState("");
   const [theme, setTheme] = useState("");
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<SignalSort>(DEFAULT_SORT);
+  const [scoreMin, setScoreMin] = useState(SCORE_MIN);
+  const [scoreMax, setScoreMax] = useState(SCORE_MAX);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -151,8 +174,16 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
 
   const filters: SignalFilters = useMemo(
-    () => ({ q: search.trim() || undefined, theme: theme || undefined, maturity: maturity || undefined }),
-    [search, theme, maturity],
+    () => ({
+      q: search.trim() || undefined,
+      theme: theme || undefined,
+      maturity: maturity || undefined,
+      minScore: scoreMin !== SCORE_MIN ? scoreMin : undefined,
+      maxScore: scoreMax !== SCORE_MAX ? scoreMax : undefined,
+      since: dateFrom || undefined,
+      until: dateTo || undefined,
+    }),
+    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo],
   );
   // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
   // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
@@ -160,13 +191,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const pendingTimer = useRef<number | undefined>(undefined);
   const firstRequest = useRef(true);
 
-  function load(query: SignalFilters, delay: number) {
+  function load(query: SignalFilters, order: SignalSort, delay: number) {
     window.clearTimeout(pendingTimer.current);
     const seq = ++requestSeq.current;
     setSearching(true);
     pendingTimer.current = window.setTimeout(() => {
       Promise.all([
-        listSignals({ ...query, limit: RADAR_PAGE_SIZE, offset: 0, evidenceLimit: EVIDENCE_PER_CARD }),
+        listSignals({ ...query, sort: order, limit: RADAR_PAGE_SIZE, offset: 0, evidenceLimit: EVIDENCE_PER_CARD }),
         getSignalSummary(query),
       ])
         .then(([rows, counts]) => {
@@ -189,8 +220,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   useEffect(() => {
     const delay = firstRequest.current ? 0 : SEARCH_DELAY_MS;
     firstRequest.current = false;
-    load(filters, delay);
-  }, [filters]);
+    load(filters, sort, delay);
+  }, [filters, sort]);
 
   useEffect(() => () => window.clearTimeout(pendingTimer.current), []);
 
@@ -214,7 +245,18 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   }
 
   function reload() {
-    load(filters, 0);
+    load(filters, sort, 0);
+  }
+
+  function resetFilters() {
+    setSearch("");
+    setTheme("");
+    setMaturity("");
+    setSort(DEFAULT_SORT);
+    setScoreMin(SCORE_MIN);
+    setScoreMax(SCORE_MAX);
+    setDateFrom("");
+    setDateTo("");
   }
 
   async function showMore() {
@@ -223,6 +265,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       setLoadingMore(true);
       const rows = await listSignals({
         ...filters,
+        sort,
         limit: RADAR_PAGE_SIZE,
         offset: signals.length,
         evidenceLimit: EVIDENCE_PER_CARD,
@@ -257,12 +300,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       const key = signal.theme_is_topic === false ? EARLY_THEME_GROUP : signal.theme || "Без темы";
       byTheme.set(key, [...(byTheme.get(key) || []), signal]);
     }
-    const best = (items: Signal[]) => Math.max(...items.map((item) => Number(item.score || 0)));
+    // Блоки — в порядке выдачи, как у ленты: первым тот, чья карточка первая по выбранной
+    // сортировке (по баллу — блок с лучшей карточкой, «сначала новые» — со свежей).
+    // Ранние карточки — всегда последним блоком.
     return [...byTheme.entries()].sort(
-      (a, b) =>
-        Number(a[0] === EARLY_THEME_GROUP) - Number(b[0] === EARLY_THEME_GROUP) ||
-        best(b[1]) - best(a[1]) ||
-        a[0].localeCompare(b[0], "ru"),
+      (a, b) => Number(a[0] === EARLY_THEME_GROUP) - Number(b[0] === EARLY_THEME_GROUP),
     );
   }, [visibleSignals]);
 
@@ -380,6 +422,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const digestCount = visibleSignals.filter((signal) => signal.selected_for_digest).length;
   const feedbackCount = visibleSignals.reduce((sum, signal) => sum + Number(signal.feedback_count || 0), 0);
   const searchNotice = isAdmin ? searchHealthNotice(searchHealth) : "";
+  // «N из M сигналов»: N — в выборке по фильтрам, M — весь радар (оба числа — с сервера).
+  const countBadge = searching
+    ? "Обновляем выборку…"
+    : summary
+      ? `${summary.matching} из ${summary.total} ${signalsAfterFrom(summary.total)}` +
+        (remaining > 0 ? ` · показаны ${visibleSignals.length}` : "")
+      : "";
 
   return (
     <section className="screenStack">
@@ -402,58 +451,128 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         </div>
       ) : null}
 
-      <section className="signalRadarToolbar">
-        <label>
-          <span>Поиск</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ZEUS IQ, бурение, робот..." />
-        </label>
-        <label>
-          <span>Зрелость</span>
-          <select value={maturity} onChange={(event) => setMaturity(event.target.value)}>
-            <option value="">Все</option>
-            <option value="watch">Наблюдать</option>
-            <option value="shortlist">Кандидат</option>
-            <option value="proven">Подтверждено</option>
-            <option value="reject">Отклонено</option>
-          </select>
-        </label>
-        <label>
-          <span>Тема</span>
-          <select value={theme} onChange={(event) => setTheme(event.target.value)}>
-            <option value="">Все темы</option>
-            {themes.map((item) => <option value={item} key={item}>{item}</option>)}
-          </select>
-        </label>
-        <button type="button" className="ghostButton" disabled={searching} onClick={reload}>
-          {searching ? "Обновляем" : "Обновить"}
-        </button>
-        {groups.length ? (
-          <>
-            <button
-              type="button"
-              className="ghostButton"
-              onClick={() => {
-                setExpandedGroups(new Set(groups.map(([group]) => group)));
-                setCollapsedGroups(new Set());
-              }}
-            >
-              Развернуть всё
+      {/* Раскладка — как у «Бизнес-сигналов» (документ заказчика 19.09): действия в шапке
+          панели, поиск и тема первой строкой, зрелость и сортировка второй, остальное —
+          в «Расширенных фильтрах». */}
+      <section className="panel">
+        <div className="panelHeader">
+          <h2>Каталог технологических сигналов</h2>
+          <div className="settingsActions signalRadarPanelActions">
+            {countBadge ? <span className="badge">{countBadge}</span> : null}
+            {groups.length ? (
+              <>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => {
+                    setExpandedGroups(new Set(groups.map(([group]) => group)));
+                    setCollapsedGroups(new Set());
+                  }}
+                >
+                  Развернуть всё
+                </button>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => {
+                    setExpandedGroups(new Set());
+                    setCollapsedGroups(new Set(groups.map(([group]) => group)));
+                  }}
+                >
+                  Свернуть всё
+                </button>
+              </>
+            ) : null}
+            <button type="button" className="ghostButton signalRadarRefresh" disabled={searching} onClick={reload}>
+              Обновить
             </button>
-            <button
-              type="button"
-              className="ghostButton"
-              onClick={() => {
-                setExpandedGroups(new Set());
-                setCollapsedGroups(new Set(groups.map(([group]) => group)));
-              }}
-            >
-              Свернуть всё
-            </button>
-          </>
-        ) : null}
-      </section>
+          </div>
+        </div>
 
-      <section className="signalRadarList">
+        <div className="articlesFiltersRow">
+          <label className="field">
+            <span>Поиск</span>
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Поиск по радару: название, суть, источник, #номер"
+            />
+          </label>
+          <label className="field">
+            <span>Тема</span>
+            <select value={theme} onChange={(event) => setTheme(event.target.value)}>
+              <option value="">Все темы</option>
+              {themes.map((item) => <option value={item} key={item}>{item}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="articlesFiltersRow signalRadarFiltersSecondary">
+          <label className="field">
+            <span>Зрелость</span>
+            <select value={maturity} onChange={(event) => setMaturity(event.target.value)}>
+              <option value="">Любая зрелость</option>
+              <option value="watch">Наблюдать</option>
+              <option value="shortlist">Кандидат</option>
+              <option value="proven">Подтверждено</option>
+              <option value="reject">Отклонено</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Сортировка</span>
+            <select value={sort} onChange={(event) => setSort(event.target.value as SignalSort)}>
+              <option value="score_desc">Балл: по убыванию</option>
+              <option value="date_desc">Сначала новые</option>
+              <option value="score_asc">Балл: по возрастанию</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="advancedToggleRow">
+          <button type="button" className="ghostButton" onClick={() => setShowAdvancedFilters((current) => !current)}>
+            {showAdvancedFilters ? "Скрыть расширенные фильтры" : "Расширенные фильтры"}
+          </button>
+        </div>
+
+        {showAdvancedFilters ? (
+          <div className="articlesAdvancedGrid">
+            <label className="field">
+              <span>Балл от</span>
+              <input
+                type="number"
+                min={SCORE_MIN}
+                max={SCORE_MAX}
+                value={scoreMin}
+                onChange={(event) => setScoreMin(clampScore(event.target.value, SCORE_MIN))}
+              />
+            </label>
+            <label className="field">
+              <span>Балл до</span>
+              <input
+                type="number"
+                min={SCORE_MIN}
+                max={SCORE_MAX}
+                value={scoreMax}
+                onChange={(event) => setScoreMax(clampScore(event.target.value, SCORE_MAX))}
+              />
+            </label>
+            <label className="field">
+              <span>Поступил с</span>
+              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Поступил по</span>
+              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            </label>
+            <div className="field">
+              <span>&nbsp;</span>
+              <button type="button" className="ghostButton" onClick={resetFilters}>
+                Сбросить
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {!loaded ? (
           <div className="emptyState">Загружаем сигналы...</div>
         ) : visibleSignals.length ? (

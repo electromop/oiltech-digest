@@ -5195,24 +5195,12 @@ button {
   font-size: 1rem;
 }
 
-.signalRadarToolbar {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(210px, 280px) auto;
-  gap: 8px;
-  align-items: end;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
+/* Фильтры радара — сетка ленты (.articlesFiltersRow): вторая строка («Зрелость»,
+   «Сортировка») — те же колонки, что у первой, со своим отступом. */
+.signalRadarFiltersSecondary {
+  margin-top: 8px;
 }
 
-.signalRadarToolbar label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.signalRadarToolbar span,
 .signalFeedbackBox span,
 .signalFeedbackCollapsed span,
 .signalRadarFacts span {
@@ -5221,11 +5209,6 @@ button {
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0;
-}
-
-.signalRadarList {
-  display: grid;
-  gap: 8px;
 }
 
 .signalRadarCard {
@@ -5428,8 +5411,26 @@ button {
   border-top: 1px solid rgba(226, 232, 240, 0.65);
 }
 
+/* Телефон: шапка панели уже в столбик (правило ≤720px выше). Кнопки шапки — ровной
+   сеткой в две колонки, а не рваной строкой: «Обновить» — во всю ширину под ними. */
+@media (max-width: 720px) {
+  .signalRadarPanelActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .signalRadarPanelActions .badge {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .signalRadarPanelActions .signalRadarRefresh {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 900px) {
-  .signalRadarToolbar,
   .signalRadarCardTop,
   .signalRadarBody,
   .signalFeedbackGrid,

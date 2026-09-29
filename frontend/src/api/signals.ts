@@ -13,7 +13,11 @@ export type SignalFilters = {
   maxScore?: number;
 };
 
+// По баллу (как раньше), «сначала новые» — по дате «Поступил», по баллу по возрастанию.
+export type SignalSort = "score_desc" | "date_desc" | "score_asc";
+
 export type SignalQuery = SignalFilters & {
+  sort?: SignalSort;
   limit?: number;
   offset?: number;
   evidenceLimit?: number;
@@ -35,6 +39,7 @@ export function listSignals(query: SignalQuery = {}) {
   const params = filterParams(query);
   params.set("limit", String(query.limit ?? 100));
   params.set("evidence_limit", String(query.evidenceLimit ?? 5));
+  if (query.sort) params.set("sort", query.sort);
   if (query.offset) params.set("offset", String(query.offset));
   return apiFetch<Signal[]>(`/api/signals?${params.toString()}`);
 }

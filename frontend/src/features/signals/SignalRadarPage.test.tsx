@@ -51,17 +51,29 @@ const DEFAULT_CARDS: Signal[] = [
 // по всем карточкам, а не по тем, что экран уже загрузил.
 function matches(card: Signal, query: SignalQuery) {
   const q = (query.q || "").toLowerCase();
+  const arrival = (card.first_seen_at || "").slice(0, 10);
   return (
     (!query.theme || card.theme === query.theme)
     && (!query.maturity || card.maturity === query.maturity)
     && (!q || `${card.title_ru || ""} ${card.title}`.toLowerCase().includes(q))
+    && (query.minScore == null || card.score >= query.minScore)
+    && (query.maxScore == null || card.score <= query.maxScore)
+    && (!query.since || arrival >= query.since)
+    && (!query.until || arrival <= query.until)
   );
+}
+
+function ordered(cards: Signal[], sort: SignalQuery["sort"]) {
+  const seen = (card: Signal) => card.first_seen_at || "";
+  if (sort === "date_desc") return [...cards].sort((a, b) => seen(b).localeCompare(seen(a)));
+  if (sort === "score_asc") return [...cards].sort((a, b) => a.score - b.score);
+  return [...cards].sort((a, b) => b.score - a.score);
 }
 
 function serve(cards: Signal[]) {
   vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => {
     const offset = query.offset ?? 0;
-    return cards.filter((card) => matches(card, query)).slice(offset, offset + (query.limit ?? 100));
+    return ordered(cards.filter((card) => matches(card, query)), query.sort).slice(offset, offset + (query.limit ?? 100));
   });
   vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => {
     const topics = cards.filter((card) => card.theme_is_topic !== false).map((card) => card.theme);
@@ -369,6 +381,61 @@ describe("SignalRadarPage", () => {
       expect(await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`)).toBeInTheDocument();
       expect(lastListQuery()).toMatchObject({ offset: RADAR_PAGE_SIZE });
       expect(screen.queryByRole("button", { name: /Показать ещё/ })).not.toBeInTheDocument();
+    });
+
+    it("«Сначала новые» — сортировка с сервера, блоки идут в её порядке", async () => {
+      const fresh = { ...ecology, first_seen_at: "2026-09-27T09:00:00Z" };
+      serve([drilling, fresh]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Экология" });
+      const groupNames = () =>
+        screen.getAllByRole("button", { name: /^Раскрыть группу/ }).map((item) => item.getAttribute("aria-label"));
+      expect(groupNames()).toEqual(["Раскрыть группу Бурение", "Раскрыть группу Экология"]);
+
+      fireEvent.change(screen.getByRole("combobox", { name: /^Сортировка/ }), { target: { value: "date_desc" } });
+
+      await waitFor(() => expect(groupNames()).toEqual(["Раскрыть группу Экология", "Раскрыть группу Бурение"]));
+      expect(lastListQuery()).toMatchObject({ sort: "date_desc" });
+    });
+
+    it("в шапке панели — «N из M сигналов» по всему радару", async () => {
+      renderRadar(false);
+      expect(await screen.findByText("2 из 2 сигналов")).toBeInTheDocument();
+
+      fireEvent.change(await screen.findByRole("combobox", { name: /^Тема/ }), { target: { value: "Экология" } });
+
+      expect(await screen.findByText("1 из 2 сигналов")).toBeInTheDocument();
+    });
+
+    it("расширенные фильтры: балл и период «Поступил» уходят на сервер, «Сбросить» возвращает всё", async () => {
+      const fresh = { ...ecology, first_seen_at: "2026-09-27T09:00:00Z" };
+      serve([drilling, fresh]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Экология" });
+
+      fireEvent.change(screen.getByRole("combobox", { name: /^Сортировка/ }), { target: { value: "score_asc" } });
+      fireEvent.click(screen.getByRole("button", { name: "Расширенные фильтры" }));
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Балл от" }), { target: { value: "70" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ minScore: 70, sort: "score_asc" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /группу Экология/ })).not.toBeInTheDocument(),
+      );
+
+      fireEvent.change(screen.getByLabelText("Поступил с"), { target: { value: "2026-09-26" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ minScore: 70, since: "2026-09-26" }));
+      expect(await screen.findByText("Сигналов по выбранным фильтрам нет.")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+
+      expect(await screen.findByRole("button", { name: /группу Экология/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /группу Бурение/ })).toBeInTheDocument();
+      const query = lastListQuery();
+      expect([query.minScore, query.maxScore, query.since, query.until, query.theme, query.q]).toEqual(
+        [undefined, undefined, undefined, undefined, undefined, undefined],
+      );
+      expect(query.sort ?? "score_desc").toBe("score_desc");
+      expect(screen.getByRole("spinbutton", { name: "Балл от" })).toHaveValue(0);
+      expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toHaveValue("score_desc");
     });
 
     it("вместо строки издателей — число ссылок и дата поступления", async () => {
