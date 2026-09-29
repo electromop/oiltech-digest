@@ -1566,6 +1566,52 @@ def test_reprint_candidates_skip_invisible_articles(isolated_db):
     assert title_b not in titles, "статья из архивного источника не должна попадать в кандидаты"
 
 
+def test_reprint_candidates_catch_wood_mackenzie_case_0921(isolated_db):
+    """Жалоба заказчика 21.09: одна новость Wood Mackenzie трижды в ленте бизнес-сигналов.
+
+    На скрине — Oilfield Technology и World Pipelines (собраны 17.09) и сам Wood Mackenzie
+    (18.09). Заголовки — с публичных страниц изданий (og:title и h1): текст у трёх один,
+    разница только в регистре. С параметрами планировщика (окно 7 дней, LIMIT 200) правило
+    обязано отдать судье все три пары — и отдаёт. Значит, промах 21.09 не в правиле пар, а
+    в прогоне или в ответе судьи; это меряется на проде. Соседняя новость того же дня из
+    другого издания (Neftegaz.ru, тот же скрин) в пары не попадает.
+    """
+    from oiltech_digest.processing import reprints
+
+    same_news = "Wood Mackenzie: strong balance sheets set 2027 up for oil and gas portfolio renewal"
+    rows = (
+        ("Oilfield Technology", same_news, "2026-09-17T11:35:00+01:00"),
+        ("World Pipelines", same_news, "2026-09-17T11:32:00+01:00"),
+        ("Wood Mackenzie", "Wood Mackenzie: Strong Balance Sheets Set 2027 Up for Oil and Gas Portfolio Renewal",
+         "2026-09-17T08:19:25+00:00"),
+        ("Neftegaz.ru", "Итальянская Eni продала азербайджанской SOCAR 10% акций проекта Baleine в Кот-д'Ивуаре",
+         "2026-09-17T10:00:00+03:00"),
+    )
+    ids = []
+    with connection.get_connection() as conn:
+        for n, (source, title, published) in enumerate(rows):
+            source_id = conn.execute(
+                "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+                "VALUES (%s, 'Media', %s, TRUE, 'rss') RETURNING id",
+                (source, f"https://src{n}.example"),
+            ).fetchone()[0]
+            ids.append(conn.execute(
+                "INSERT INTO articles (source_id, title, url, raw_text, language, published_at) "
+                "VALUES (%s, %s, %s, 'текст', 'en', %s) RETURNING id",
+                (source_id, title, f"https://src{n}.example/news", published),
+            ).fetchone()[0])
+        conn.commit()
+    copies = ids[:3]
+
+    # Как в scripts/docker-scheduler.sh: --days 7 --limit 200, порог и разрыв дат — умолчания.
+    pairs = reprints.find_candidates(days=7, limit=200)
+
+    found = {(int(p["a_id"]), int(p["b_id"])): float(p["overlap"]) for p in pairs}
+    assert set(found) == {(copies[0], copies[1]), (copies[0], copies[2]), (copies[1], copies[2])}, \
+        "три копии — три пары судье, соседняя новость в пары не попадает"
+    assert set(found.values()) == {1.0}, "основы слов у трёх заголовков совпадают целиком"
+
+
 def test_marking_article_as_its_own_reprint_is_rejected(isolated_db):
     from oiltech_digest.db import repository
 
