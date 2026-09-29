@@ -4,8 +4,10 @@ import {
   getSignalSearchHealth,
   getSignalSummary,
   listSignals,
+  updateSignal,
   type SignalQuery,
   type SignalSearchHealth,
+  type SignalSummary,
 } from "../../api/signals";
 import type { Signal } from "../../api/types";
 import { RADAR_PAGE_SIZE, SignalRadarPage } from "./SignalRadarPage";
@@ -70,7 +72,9 @@ function ordered(cards: Signal[], sort: SignalQuery["sort"]) {
   return [...cards].sort((a, b) => b.score - a.score);
 }
 
-function serve(cards: Signal[]) {
+type Tiles = Omit<SignalSummary, "matching" | "themes">;
+
+function serve(cards: Signal[], tiles: Partial<Tiles> = {}) {
   vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => {
     const offset = query.offset ?? 0;
     return ordered(cards.filter((card) => matches(card, query)), query.sort).slice(offset, offset + (query.limit ?? 100));
@@ -79,10 +83,19 @@ function serve(cards: Signal[]) {
     const topics = cards.filter((card) => card.theme_is_topic !== false).map((card) => card.theme);
     return {
       total: cards.length,
+      new_7d: 0,
+      in_digest: cards.filter((card) => card.selected_for_digest).length,
+      with_feedback: cards.filter((card) => Number(card.feedback_count || 0) > 0).length,
+      merged: cards.reduce((sum, card) => sum + Number(card.merged_count || 0), 0),
+      ...tiles,
       matching: cards.filter((card) => matches(card, query)).length,
       themes: [...new Set(topics)].sort().map((theme) => ({ theme, count: topics.filter((item) => item === theme).length })),
     };
   });
+}
+
+function tileValue(label: string) {
+  return screen.getByText(label).closest(".statCardReact")?.querySelector(".statValueReact")?.textContent;
 }
 
 function lastListQuery(): SignalQuery {
@@ -396,6 +409,47 @@ describe("SignalRadarPage", () => {
 
       await waitFor(() => expect(groupNames()).toEqual(["Раскрыть группу Экология", "Раскрыть группу Бурение"]));
       expect(lastListQuery()).toMatchObject({ sort: "date_desc" });
+    });
+
+    it("над радаром — плитки, как у «Бизнес-сигналов»: числа с сервера, поиск их не меняет", async () => {
+      serve([drilling, ecology], { total: 76, new_7d: 18, in_digest: 3, with_feedback: 12, merged: 5 });
+      const { container } = render(
+        <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,
+      );
+      await screen.findByText("Всего сигналов");
+
+      const tiles = {
+        "Всего сигналов": "76",
+        "Новые за 7 дней": "18",
+        "В дайджесте": "3",
+        "С обратной связью": "12",
+        "Объединено дублей": "5",
+      };
+      for (const [label, value] of Object.entries(tiles)) expect(tileValue(label)).toBe(value);
+      // Строки-сводки «N сигналов · N в дайджесте · обратная связь: N» больше нет.
+      expect(container.querySelector(".signalRadarHeaderStats")).toBeNull();
+
+      fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "буровая" } });
+      await waitFor(() => expect(lastListQuery().q).toBe("буровая"));
+      expect(await screen.findByText("1 из 76 сигналов")).toBeInTheDocument();
+      expect(tileValue("Всего сигналов")).toBe("76");
+    });
+
+    it("выбор в дайджест обновляет плитку «В дайджесте»", async () => {
+      vi.mocked(updateSignal).mockResolvedValue({ ok: true });
+      let inDigest = 0;
+      serve([drilling]);
+      const counts = vi.mocked(getSignalSummary).getMockImplementation()!;
+      vi.mocked(getSignalSummary).mockImplementation(async (query) => ({ ...(await counts(query)), in_digest: inDigest }));
+      renderRadar(false);
+      await screen.findByText("В дайджесте");
+      expect(tileValue("В дайджесте")).toBe("0");
+
+      inDigest = 1;
+      fireEvent.click(await screen.findByRole("button", { name: "В дайджест" }));
+
+      await waitFor(() => expect(tileValue("В дайджесте")).toBe("1"));
+      expect(updateSignal).toHaveBeenCalledWith(21, { selected_for_digest: true });
     });
 
     it("в шапке панели — «N из M сигналов» по всему радару", async () => {

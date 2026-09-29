@@ -5174,27 +5174,6 @@ button {
   background: var(--sem-bad-bg);
 }
 
-.signalRadarHeaderStats {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  color: var(--text-soft);
-  font-size: 0.84rem;
-}
-
-.signalRadarHeaderStats span {
-  display: inline-flex;
-  gap: 5px;
-  align-items: baseline;
-  white-space: nowrap;
-}
-
-.signalRadarHeaderStats strong {
-  color: #0f172a;
-  font-size: 1rem;
-}
-
 /* Фильтры радара — сетка ленты (.articlesFiltersRow): вторая строка («Зрелость»,
    «Сортировка») — те же колонки, что у первой, со своим отступом. */
 .signalRadarFiltersSecondary {
@@ -5433,12 +5412,10 @@ button {
 @media (max-width: 900px) {
   .signalRadarCardTop,
   .signalRadarBody,
-  .signalFeedbackGrid,
-  .signalRadarHeaderStats {
+  .signalFeedbackGrid {
     grid-template-columns: 1fr;
   }
 
-  .signalRadarHeaderStats,
   .signalFeedbackCollapsed {
     align-items: flex-start;
   }

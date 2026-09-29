@@ -48,6 +48,11 @@ export function listSignals(query: SignalQuery = {}) {
 // (только тематики заказчика: ранние карточки со свободной темой сервер сюда не кладёт).
 export type SignalSummary = {
   total: number;
+  // Плитки — по всему радару, поиск их не меняет; «в дайджесте» — выбор этого пользователя.
+  new_7d: number;
+  in_digest: number;
+  with_feedback: number;
+  merged: number;
   matching: number;
   themes: Array<{ theme: string; count: number }>;
 };

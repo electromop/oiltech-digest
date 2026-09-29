@@ -1500,6 +1500,14 @@ _RADAR_VISIBLE_SQL = (
 _RADAR_TOPIC_SQL = (
     "(s.theme IN (SELECT t.name FROM tags t WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s))"
 )
+# Отзыв о карточке — по её номеру или по адресу её ссылки (как «Обратная связь: N» на ней).
+_RADAR_FEEDBACK_SQL = """
+  FROM signal_feedback_events sfe
+  WHERE sfe.signal_id = s.id
+     OR (sfe.source_url IS NOT NULL AND EXISTS (
+          SELECT 1 FROM signal_evidence se
+          WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
+        ))"""
 # «Поступил» на экране — дата первой находки по Москве (сутки радара — московские).
 _RADAR_ARRIVAL_DATE_SQL = "(s.first_seen_at AT TIME ZONE 'Europe/Moscow')::date"
 RADAR_SORTS = {
@@ -1586,15 +1594,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    (COALESCE(uss.status, 'watch') = 'digest') AS selected_for_digest,
                    uss.analyst_comment AS user_comment,
                    uss.updated_at AS user_status_updated_at,
-                   (
-                     SELECT COUNT(*)
-                     FROM signal_feedback_events sfe
-                     WHERE sfe.signal_id = s.id
-                        OR (sfe.source_url IS NOT NULL AND EXISTS (
-                             SELECT 1 FROM signal_evidence se
-                             WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
-                           ))
-                   ) AS feedback_count,
+                   (SELECT COUNT(*) {_RADAR_FEEDBACK_SQL}) AS feedback_count,
                    (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
                    corr.corrected_title,
                    corr.corrected_thesis
@@ -1611,13 +1611,36 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
 
 
 def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
-    """Числа над списком радара — той же видимостью карточки, что и список: сколько всего,
-    сколько в текущей выборке (фильтры — как у list_signals) и тематики для фильтра «Тема»."""
+    """Числа над списком радара — той же видимостью карточки, что и список. Плитки — по всему
+    радару (поиск их не меняет); «в дайджесте» — выбор этого пользователя, как кнопка на
+    карточке. matching — сколько в текущей выборке (фильтры — как у list_signals)."""
     clauses, filter_params = _radar_filters(**filters)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute(f"SELECT COUNT(*) AS total FROM signals s WHERE {_RADAR_VISIBLE_SQL}")
-        total = int(cur.fetchone()["total"])
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE s.first_seen_at >= now() - interval '7 days') AS new_7d,
+                   COUNT(*) FILTER (WHERE uss.status = 'digest') AS in_digest,
+                   COUNT(*) FILTER (WHERE EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})) AS with_feedback
+            FROM signals s
+            LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
+            WHERE {_RADAR_VISIBLE_SQL}
+            """,
+            [user_id],
+        )
+        tiles = {key: int(value) for key, value in cur.fetchone().items()}
+        # Дубли, скрытые в видимых карточках: их ссылки — в главной карточке.
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS merged
+            FROM signals d
+            JOIN signals s ON s.id = d.merged_into_signal_id
+            WHERE {_RADAR_VISIBLE_SQL}
+            """
+        )
+        tiles["merged"] = int(cur.fetchone()["merged"])
+        total = tiles["total"]
         matching = total
         if len(clauses) > 1:
             cur.execute(
@@ -1641,7 +1664,7 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
             [SYSTEM_TAG_UNCLASSIFIED],
         )
         themes = [{"theme": row["theme"], "count": int(row["count"])} for row in cur.fetchall()]
-    return {"total": total, "matching": matching, "themes": themes}
+    return {**tiles, "matching": matching, "themes": themes}
 
 
 def set_user_signal_status(

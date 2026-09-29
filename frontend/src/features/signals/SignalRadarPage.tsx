@@ -9,6 +9,7 @@ import {
 } from "../../api/signals";
 import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
 import type { Signal, SignalFeedbackPayload } from "../../api/types";
+import { StatCard } from "../shared/StatCard";
 
 // Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему
 // радару, а не экран по загруженным карточкам (замечание заказчика 19.09).
@@ -248,6 +249,17 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     load(filters, sort, 0);
   }
 
+  // Плитки после «В дайджест» и отзыва: числа — с сервера, по всему радару. Ответ для
+  // устаревшей выборки не применяется; сбой тихий — плитки просто остаются прежними.
+  function refreshSummary() {
+    const seq = requestSeq.current;
+    getSignalSummary(filters)
+      .then((counts) => {
+        if (seq === requestSeq.current) setSummary(counts);
+      })
+      .catch(() => undefined);
+  }
+
   function resetFilters() {
     setSearch("");
     setTheme("");
@@ -333,6 +345,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         ),
       );
       showToast(selected ? "Сигнал добавлен в дайджест" : "Сигнал убран из дайджеста");
+      refreshSummary();
     } catch (error) {
       handleError(error, "Не удалось обновить статус сигнала");
     } finally {
@@ -386,6 +399,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       }
       if (result.merged || result.merge_skipped) {
         reload();
+      } else {
+        refreshSummary();
       }
     } catch (error) {
       handleError(error, "Не удалось сохранить обратную связь по сигналу");
@@ -419,8 +434,6 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     }));
   }
 
-  const digestCount = visibleSignals.filter((signal) => signal.selected_for_digest).length;
-  const feedbackCount = visibleSignals.reduce((sum, signal) => sum + Number(signal.feedback_count || 0), 0);
   const searchNotice = isAdmin ? searchHealthNotice(searchHealth) : "";
   // «N из M сигналов»: N — в выборке по фильтрам, M — весь радар (оба числа — с сервера).
   const countBadge = searching
@@ -437,11 +450,6 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           <div className="eyebrow">Signal Discovery</div>
           <h1>Технологический радар</h1>
         </div>
-        <div className="signalRadarHeaderStats" aria-label="Сводка радара">
-          <span><strong>{visibleSignals.length}</strong> сигналов</span>
-          <span><strong>{digestCount}</strong> в дайджесте</span>
-          <span>обратная связь: <strong>{feedbackCount}</strong></span>
-        </div>
       </header>
 
       {searchNotice ? (
@@ -449,6 +457,18 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         <div className="archiveNotice" role="status">
           <span>{searchNotice}</span>
         </div>
+      ) : null}
+
+      {/* Плитки, как у «Бизнес-сигналов» (документ заказчика 19.09), — по всему радару:
+          поиск и фильтры сужают список, но не эти числа. */}
+      {summary ? (
+        <section className="statsGridReact" aria-label="Сводка радара">
+          <StatCard label="Всего сигналов" value={summary.total} />
+          <StatCard label="Новые за 7 дней" value={summary.new_7d} />
+          <StatCard label="В дайджесте" value={summary.in_digest} />
+          <StatCard label="С обратной связью" value={summary.with_feedback} />
+          <StatCard label="Объединено дублей" value={summary.merged} />
+        </section>
       ) : null}
 
       {/* Раскладка — как у «Бизнес-сигналов» (документ заказчика 19.09): действия в шапке

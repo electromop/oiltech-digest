@@ -3,6 +3,7 @@ import { DEFAULT_ARTICLE_LIMIT, listArticles, type ArticleQuery, updateArticle }
 import { getDashboardStats } from "../../api/stats";
 import type { ArchiveMonth, Article, DashboardStats } from "../../api/types";
 import { FeedbackPanel } from "../feedback/FeedbackPanel";
+import { StatCard } from "../shared/StatCard";
 import { archiveNoticeText, monthLabel, useFeedWindow, windowPeriodText } from "./feedWindow";
 
 const NO_ARCHIVE_MONTHS: ArchiveMonth[] = [];
@@ -828,15 +829,6 @@ export function ArticlesPage(props: Props) {
         )}
       </section>
     </section>
-  );
-}
-
-function StatCard(props: { label: string; value: number }) {
-  return (
-    <div className="statCardReact">
-      <div className="statValueReact">{props.value}</div>
-      <div className="metaText">{props.label}</div>
-    </div>
   );
 }
 
