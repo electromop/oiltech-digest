@@ -90,6 +90,27 @@ describe("экран «Скоринг»: вкладки наборов крит�
     expect(saved.map((item) => [item.id, item.weight])).toEqual([[11, 30], [12, 25], [13, 45]]);
   });
 
+  it("ключевые слова делятся и по переносу строки, как на экране «Теги»", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByDisplayValue("Стратегическая значимость для нефтесервиса");
+    const [ru] = screen.getAllByLabelText("Ключевые слова RU / любые");
+    const [en] = screen.getAllByLabelText("EN-нормализация");
+
+    // Набор столбиком: перевод строки в конце не съедается, пока поле в фокусе.
+    await user.type(ru, "ГРП{Enter}гидроразрыв,{Enter}грп");
+    expect(ru).toHaveValue("ГРП\nгидроразрыв,\nгрп");
+    // Вставка столбика из таблицы — отдельные слова, пустые строки отброшены.
+    fireEvent.change(en, { target: { value: "hydraulic fracturing\n\nproppant" } });
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => expect(requested("PUT")).toEqual(["/api/scoring-criteria?profile=business"]));
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")!;
+    const [first] = JSON.parse(String((put[1] as RequestInit).body)) as Array<{ keywords_json: string[]; keywords_en_json: string[] }>;
+    expect(first.keywords_json).toEqual(["ГРП", "гидроразрыв"]); // повтор без учёта регистра не добавлен
+    expect(first.keywords_en_json).toEqual(["hydraulic fracturing", "proppant"]);
+  });
+
   it("уход с вкладки с несохранёнными правками — только после подтверждения", async () => {
     const user = userEvent.setup();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);

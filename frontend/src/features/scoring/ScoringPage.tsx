@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { deleteScoringCriterion, listScoringCriteria, saveScoringCriteria } from "../../api/scoring";
 import type { ScoringCriterion, ScoringProfile } from "../../api/types";
+import { mergeKeywords } from "../tags/KeywordChips";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -227,20 +228,16 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
                     </label>
                     {/* RU и EN — друг под другом во всю ширину (документ заказчика 19.09):
                         рядом по 240 px длинный список ключей читался только прокруткой. */}
-                    <label className="field fieldWide">
-                      <span>Ключевые слова RU / любые</span>
-                      <textarea
-                        value={(criterion.keywords_json || []).join(", ")}
-                        onChange={(event) => updateCriterion(index, "keywords_json", splitKeywords(event.target.value))}
-                      />
-                    </label>
-                    <label className="field fieldWide">
-                      <span>EN-нормализация</span>
-                      <textarea
-                        value={(criterion.keywords_en_json || []).join(", ")}
-                        onChange={(event) => updateCriterion(index, "keywords_en_json", splitKeywords(event.target.value))}
-                      />
-                    </label>
+                    <KeywordsField
+                      label="Ключевые слова RU / любые"
+                      values={criterion.keywords_json}
+                      onChange={(values) => updateCriterion(index, "keywords_json", values)}
+                    />
+                    <KeywordsField
+                      label="EN-нормализация"
+                      values={criterion.keywords_en_json}
+                      onChange={(values) => updateCriterion(index, "keywords_en_json", values)}
+                    />
                   </div>
                   <div className="settingsCardFoot">
                     <button type="button" className="ghostButton dangerButton" onClick={() => void removeCriterion(index)}>
@@ -262,11 +259,25 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
   );
 }
 
-function splitKeywords(value: string) {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+// Ключи — столбиком или через запятую, как на экране «Теги» (mergeKeywords): пустые куски
+// отбрасываются, повтор без учёта регистра не добавляется. Пока поле в фокусе, в нём набранный
+// текст как есть: разбор на каждом нажатии съедал запятую и перевод строки в конце, и новое
+// слово было не начать. Список при этом обновляется сразу — «Сохранить» видит его без ухода из поля.
+function KeywordsField(props: { label: string; values: string[] | null; onChange: (values: string[]) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label className="field fieldWide">
+      <span>{props.label}</span>
+      <textarea
+        value={draft ?? (props.values || []).join(", ")}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          props.onChange(mergeKeywords([], event.target.value));
+        }}
+        onBlur={() => setDraft(null)}
+      />
+    </label>
+  );
 }
 
 function InlineLoader(props: { label: string }) {
