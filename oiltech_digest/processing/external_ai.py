@@ -120,6 +120,24 @@ class StopRequested(LeaseLost):
     """
 
 
+def _stages_left(article: dict[str, Any], stages: frozenset[str]) -> frozenset[str]:
+    """Стадии пакета планировщика, которых у статьи ещё нет (#53).
+
+    Как локальный конвейер (pipeline.process_pipeline_articles): записанные вердикт гейта,
+    суть, перевод, тег и балл заново не зовутся, отвергнутая гейтом статья дальше не идёт.
+    Поля кладёт ядро (repository.get_articles_by_ids с include_summary)."""
+    if article.get("relevant") is False:
+        return frozenset()
+    done = {
+        "relevance": article.get("relevant") is True,
+        "summary": bool(article.get("summary")),
+        "translation": bool(article.get("title_ru")),
+        "tagging": article.get("existing_tag_id") is not None,
+        "scoring": article.get("existing_score_id") is not None,
+    }
+    return frozenset(stage for stage in stages if not done[stage])
+
+
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Run the AI pipeline without direct database access.
 
@@ -153,6 +171,11 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                   "tagged": 0, "translated": 0, "scored": 0, "errors": 0},
         "articles": [],
     }
+    # Пакет планировщика — ни списка статей, ни пометки only (#53): только недостающие стадии.
+    # Он берёт статьи, которым не хватает ЛЮБОЙ стадии, и статья без перевода или с упавшим
+    # тегом получала новую суть и новый балл на каждом проходе. Явный список (перекачка тела,
+    # импорт статьи) и only пересчитывают запрошенное целиком, как раньше.
+    scheduler_batch = not payload.get("article_ids") and payload.get("only") is None
     for article in payload.get("articles") or []:
         if heartbeat is not None:
             try:
@@ -173,6 +196,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 pass
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
+        todo = _stages_left(article, stages) if scheduler_batch else stages
         try:
             if "relevance" in stages:
                 # Стоп-слова родительских тегов: отсекаем статью ДО любых AI-вызовов (бэклог #6).
@@ -191,6 +215,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                     result["stats"]["rejected"] += 1
                     result["articles"].append(item)
                     continue
+            if "relevance" in todo:
                 # Гейт релевантности ПЕРВЫМ — на сыром тексте, до суммаризации.
                 # Нерелевантное дальше не суммируем/не тегируем/не скорим (чистота + экономия).
                 relevance_resp = relevance_article(article, client, tags=tags)
@@ -204,7 +229,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                     result["articles"].append(item)
                     continue
 
-            if "summary" in stages:
+            if "summary" in todo:
                 summary_resp = summarize_article(article, client)
                 item["summary"] = _response_payload(
                     summary_resp,
@@ -213,7 +238,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 article["summary"] = summary_resp.data["summary"]
                 result["stats"]["summary"] += 1
 
-            if "translation" in stages:
+            if "translation" in todo:
                 # Перевод заголовка — отдельная стадия (AI только для иностранных заголовков).
                 title_ru, translate_resp = title_ru_for_article(article, client)
                 if title_ru is not None:
@@ -225,7 +250,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                                                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
                                                "cost_usd": 0.0}
 
-            if "tagging" in stages:
+            if "tagging" in todo:
                 tag_resp = tag_article(article, tags, client)
                 tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
                 if tag_id == 0:
@@ -240,7 +265,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 )
                 result["stats"]["tagged"] += 1
 
-            if "scoring" in stages:
+            if "scoring" in todo:
                 score_resp = score_article(article, criteria, client)
                 score_payload = normalize_score_payload(article, criteria, score_resp.data)
                 item["scoring"] = _response_payload(score_resp, score_payload)

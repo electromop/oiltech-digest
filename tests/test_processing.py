@@ -83,12 +83,45 @@ def test_external_ai_irrelevant_skips_summary_tag_score(monkeypatch):
     assert "summary" not in item and "scoring" not in item
 
 
+def test_scheduler_batch_does_not_rescore_scored_article(monkeypatch):
+    """#53: пакет планировщика (без article_ids) проходит на NL только недостающие стадии, как
+    локальный конвейер. Раньше статья без перевода получала новую суть и новый балл на каждом проходе."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    payload = _external_payload({"relevant": True, "summary": "готовая суть", "title_ru": None,
+                                 "existing_tag_id": 10, "existing_score_id": 7})
+
+    result = external_ai.process_payload(payload)
+
+    assert [c["name"] for c in client.calls] == []  # старый код: гейт, суть, тег и балл заново
+    item = result["articles"][0]
+    assert set(item) == {"article_id", "errors", "translation"}  # недостающее — только перевод
+    assert item["translation"]["title_ru"] == payload["articles"][0]["title"]  # русский — без модели
+
+
+def test_explicit_article_list_and_only_recompute_what_is_asked(monkeypatch):
+    """Страж #53: явный список (перекачка тела, импорт статьи) пересчитывает всё, как раньше, а
+    пометка only — запрошенные стадии, даже у статьи с готовыми сутью, тегом и баллом."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    done = {"relevant": True, "summary": "готовая суть", "title_ru": "готовый заголовок",
+            "existing_tag_id": 10, "existing_score_id": 7}
+
+    external_ai.process_payload({**_external_payload(done), "article_ids": [1]})
+    assert [c["name"] for c in client.calls] == ["article_relevance", "article_summary", "article_tag", "article_score"]
+
+    client.calls.clear()
+    external_ai.process_payload({**_external_payload(done), "only": ["scoring"]})
+    assert [c["name"] for c in client.calls] == ["article_score"]
+
+
 def test_external_ai_relevance_runs_first_and_ignores_summary(monkeypatch):
     """Гейт идёт ПЕРВЫМ и судит по сырому тексту — AI-суть не попадает ему на вход."""
     client = _RecordingClient(relevant=True)
     monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
 
-    result = external_ai.process_payload(_external_payload({"summary": "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ"}))
+    # Явный список (перекачка тела): статья с готовой сутью заново проходит весь конвейер.
+    result = external_ai.process_payload({**_external_payload({"summary": "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ"}), "article_ids": [1]})
 
     names = [c["name"] for c in client.calls]
     assert names[0] == "article_relevance"
