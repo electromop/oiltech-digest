@@ -16,7 +16,12 @@ from zipfile import ZipFile
 from oiltech_digest.db import connection
 from oiltech_digest.processing import digest as digest_module
 from tests.digest_user_path_support import SEPT, add_article, add_signal, issue_key, msk, pdf_content, utc
-from tests.digest_user_path_support import chromium, issue, silent_image_host  # noqa: F401 — фикстуры
+from tests.digest_user_path_support import (  # noqa: F401 — фикстуры
+    chromium,
+    issue,
+    refusing_image_host,
+    silent_image_host,
+)
 
 
 def test_export_of_a_45_item_issue_in_html_and_docx_matches_the_preview(issue):
@@ -110,7 +115,9 @@ def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(is
     assert "Материал low" in theirs_html and "Материал hi" not in theirs_html
 
 
-def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(chromium, silent_image_host, monkeypatch):
+def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(
+    chromium, silent_image_host, monkeypatch, caplog,
+):
     """Дефект до 29.09. Картинки статей Chromium грузит сам, с РФ-ядра. Замер 29.09: 40 позиций
     без внешних картинок — PDF за 1,9 с; две «молчащие» картинки из сорока — set_content(
     wait_until="load") ждал до потолка Playwright и через 30 с падал TimeoutError: выгрузка PDF
@@ -122,11 +129,28 @@ def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(chro
     content = pdf_content(40, {3: f"{silent_image_host}/a.jpg", 17: f"{silent_image_host}/b.jpg"})
 
     started = time.monotonic()
-    pdf = digest_module.render_digest_pdf(content)
+    with caplog.at_level("WARNING", logger=digest_module.__name__):
+        pdf = digest_module.render_digest_pdf(content)
     elapsed = time.monotonic() - started
 
     assert pdf.startswith(b"%PDF")
     assert elapsed < 20, f"PDF печатался {elapsed:.1f} с"
+    assert "digest_pdf_images_replaced count=2" in caplog.text
+
+
+def test_pdf_shows_the_rubric_tile_instead_of_a_refused_image(chromium, refusing_image_host, monkeypatch, caplog):
+    """Сайт, закрытый для РФ-адресов, отвечает на картинку сразу 403: загрузка страницы
+    кончается вовремя, но в PDF на месте картинки выходил значок «битой» картинки с повтором
+    заголовка статьи (проверено снимком карточки 29.09). Такая картинка тоже меняется на
+    плашку рубрики; DOCX битые картинки и раньше просто пропускал."""
+    monkeypatch.setattr(digest_module, "_is_unusable_digest_image_url", lambda url: not url)
+    content = pdf_content(3, {0: f"{refusing_image_host}/a.jpg"})
+
+    with caplog.at_level("WARNING", logger=digest_module.__name__):
+        pdf = digest_module.render_digest_pdf(content)
+
+    assert pdf.startswith(b"%PDF")
+    assert "digest_pdf_images_replaced count=1" in caplog.text
 
 
 def test_docx_spends_a_bounded_time_on_silent_article_images(silent_image_host, monkeypatch):

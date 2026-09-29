@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import re
 import secrets
 import time
@@ -20,6 +21,8 @@ from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = Path(__file__).resolve().parent
 EMAIL_TEMPLATE = "digest_email_template.html"
@@ -49,8 +52,8 @@ _PDF_FOOTER_TEMPLATE = (
 # Сколько PDF ждёт картинки карточек. Их Chromium грузит сам, с сайтов-источников; хост,
 # который принял соединение и молчит (или режет пакеты), держал set_content(wait_until=
 # "load") до потолка Playwright в 30 с, и выгрузка падала TimeoutError на каждой попытке
-# (замер 29.09: две такие картинки из сорока). Не дождались — плашка рубрики, как у
-# статьи без картинки.
+# (замер 29.09: две такие картинки из сорока). Не дождались или сайт отказал (403/404) —
+# плашка рубрики, как у статьи без картинки. Возвращает, сколько картинок заменено.
 _PDF_IMAGES_WAIT_MS = 15_000
 _PDF_SWAP_UNLOADED_IMAGES_JS = """
 async (fallbacks) => {
@@ -62,6 +65,7 @@ async (fallbacks) => {
     swapped.push(img.decode().catch(() => undefined));
   });
   await Promise.all(swapped);
+  return swapped.length;
 }
 """
 
@@ -1005,11 +1009,16 @@ def render_digest_pdf(content: dict) -> bytes:
             try:
                 page.wait_for_load_state("load", timeout=_PDF_IMAGES_WAIT_MS)
             except PlaywrightTimeoutError:
-                # Порядок картинок карточек = порядок новостей: у каждой карточки одна.
-                page.evaluate(
-                    _PDF_SWAP_UNLOADED_IMAGES_JS,
-                    [_news_placeholder_data_uri(item.get("category")) for item in content.get("news", [])],
-                )
+                pass  # недогрузившиеся картинки заменит плашка ниже
+            # Сайт, закрытый для РФ-адресов, отвечает на картинку сразу 403: загрузка кончается
+            # вовремя, а в карточке выходил значок «битой» картинки с повтором заголовка.
+            # Порядок картинок карточек = порядок новостей: у каждой карточки одна.
+            replaced = page.evaluate(
+                _PDF_SWAP_UNLOADED_IMAGES_JS,
+                [_news_placeholder_data_uri(item.get("category")) for item in content.get("news", [])],
+            )
+            if replaced:
+                logger.warning("digest_pdf_images_replaced count=%s", replaced)
             pdf_bytes = page.pdf(
                 format="A4",
                 print_background=True,

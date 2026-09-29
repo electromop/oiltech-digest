@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from fastapi.testclient import TestClient
@@ -260,3 +261,22 @@ def silent_image_host():
     server.close()
     for conn in held:
         conn.close()
+
+
+class _Refuse(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802 — имя задаёт http.server
+        self.send_response(403)
+        self.end_headers()
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+@pytest.fixture()
+def refusing_image_host():
+    """Хост картинки, который сразу отвечает 403 — как сайт, закрытый для РФ-адресов."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Refuse)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
