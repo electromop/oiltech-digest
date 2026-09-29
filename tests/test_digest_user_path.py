@@ -1,211 +1,21 @@
-"""Сентябрьский выпуск собирают сами пользователи (решение владельца 29.09).
+"""Сентябрьский выпуск собирают сами пользователи (решение владельца 29.09): сборка.
 
-Путь «отметить → собрать → выгрузить» обычным пользователем, на настоящей базе и через
-те же запросы, что шлёт экран: отметка в ленте и на радаре, конструктор выпуска
-(месяц, лимит 500, «Оценка от 0 до 100»), черновик, выгрузка фоновой задачей и скачивание.
-Каждый тест — один риск пути; тексты тестов называют риск, а не механику.
+Путь «отметить → собрать» обычным пользователем, на настоящей базе и через те же
+запросы, что шлёт экран: отметка в ленте и на радаре, конструктор выпуска (месяц,
+лимит 500, «Оценка от 0 до 100»), черновик. Каждый тест — один риск пути; тексты тестов
+называют риск, а не механику. Выгрузка — test_digest_user_export.py.
 
 Часы окна ленты заморожены на 29.09 12:00 МСК: сентябрь открыт, август — архив.
 """
 
 from __future__ import annotations
 
-import re
-import socket
-import subprocess
-import sys
-import threading
-import time
-from datetime import datetime, timezone
-from io import BytesIO
-from zipfile import ZipFile
-
 import pytest
-from fastapi.testclient import TestClient
 
-from oiltech_digest import api, background_jobs, config, feed_window
+from oiltech_digest import feed_window
 from oiltech_digest.db import connection, repository
-from oiltech_digest.processing import digest as digest_module
-
-MSK = feed_window.MSK
-SEPT = "2026-09"
-THEME = "Бурение и заканчивание скважин"
-
-
-def _utc(*args: int) -> datetime:
-    return datetime(*args, tzinfo=timezone.utc)
-
-
-def _msk(*args: int) -> datetime:
-    return datetime(*args, tzinfo=MSK)
-
-
-class _Person:
-    """Пользователь продукта: каждый запрос идёт от его имени (как сессия в браузере)."""
-
-    def __init__(self, user_id: int, role: str = "user") -> None:
-        self.id = user_id
-        self.role = role
-        self._client = TestClient(api.app)
-
-    def _auth(self) -> None:
-        api.app.dependency_overrides[api.require_user] = lambda: {
-            "id": self.id, "email": f"user{self.id}@example.test", "role": self.role,
-        }
-
-    def get(self, url: str, **kwargs):
-        self._auth()
-        return self._client.get(url, **kwargs)
-
-    def put(self, url: str, **kwargs):
-        self._auth()
-        return self._client.put(url, **kwargs)
-
-    def patch(self, url: str, **kwargs):
-        self._auth()
-        return self._client.patch(url, **kwargs)
-
-    def post(self, url: str, **kwargs):
-        self._auth()
-        return self._client.post(url, **kwargs)
-
-    # --- действия экрана ---------------------------------------------------
-
-    def mark(self, article_id: int, status: str = "digest") -> None:
-        """Статус статьи в ленте: «В дайджест» или любой другой (снятие)."""
-        response = self.patch(f"/api/articles/{article_id}", json={"status": status})
-        assert response.status_code == 200, response.text
-
-    def mark_signal(self, signal_id: int, selected: bool = True) -> None:
-        """Кнопка «В дайджест» / «Убрать» на технологическом радаре."""
-        response = self.patch(f"/api/signals/{signal_id}", json={"selected_for_digest": selected})
-        assert response.status_code == 200, response.text
-
-    def issue(self, month: str = SEPT) -> list[tuple[str, int]]:
-        """Превью выпуска теми же параметрами, что шлёт конструктор по умолчанию."""
-        return [_key(item) for item in self.issue_items(month)]
-
-    def issue_items(self, month: str = SEPT) -> list[dict]:
-        response = self.get(
-            "/api/digest-content",
-            params={"month": month, "limit": 500, "min_score": 0, "max_score": 100},
-        )
-        assert response.status_code == 200, response.text
-        return response.json()["news"]
-
-    def save(self, month: str, article_ids: list[int]):
-        return self.put(
-            f"/api/monthly-digests/{month}",
-            json={
-                "title": f"Нефтесервисный дайджест · {month}",
-                "status": "draft",
-                "items": [{"article_id": article_id} for article_id in article_ids],
-            },
-        )
-
-    def export(self, export_format: str, month: str = SEPT) -> bytes:
-        """Кнопка выгрузки: задача → воркер → скачивание, как на экране."""
-        return self.download(self.start_export(export_format, month))
-
-    def start_export(self, export_format: str, month: str = SEPT) -> int:
-        response = self.post(
-            "/api/jobs/digest-export",
-            json={"month": month, "export_format": export_format, "limit": 500, "min_score": 0,
-                  "max_score": 100, "search": "", "top_tag": ""},
-        )
-        assert response.status_code == 200, response.text
-        job_id = response.json()["job"]["id"]
-        background_jobs.run(job_id)
-        job = self.get(f"/api/jobs/{job_id}").json()
-        assert job["status"] == "ok", job
-        return job_id
-
-    def download(self, job_id: int) -> bytes:
-        download = self.get(f"/api/jobs/{job_id}/download")
-        assert download.status_code == 200, download.text
-        return download.content
-
-
-def _key(item: dict) -> tuple[str, int]:
-    kind = item.get("item_type") or "article"
-    return kind, item["article_id"] if kind == "article" else item["signal_id"]
-
-
-def _article(conn, source_id: int, slug: str, *, published: datetime | None,
-             collected: datetime | None = None, score: float | None = 70,
-             image_url: str = "", title: str | None = None) -> int:
-    article_id = conn.execute(
-        "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language, image_url) "
-        "VALUES (%s, %s, %s, %s, %s, 'Текст материала.', 'ru', %s) RETURNING id",
-        (source_id, title or f"Материал {slug}", f"https://news.example.org/{slug}", published,
-         collected or published or _utc(2026, 9, 15, 12), image_url or None),
-    ).fetchone()[0]
-    conn.execute(
-        "INSERT INTO article_cards (article_id, summary, relevant) VALUES (%s, %s, TRUE)",
-        (article_id, f"Суть материала {slug}."),
-    )
-    if score is not None:
-        conn.execute(
-            "INSERT INTO article_scores (article_id, model, total_score, score_label, explanation) "
-            "VALUES (%s, 'offline', %s, 'Средняя', 'почему')",
-            (article_id, score),
-        )
-    return article_id
-
-
-def _signal(key: str, *, first_seen: datetime, score: float = 75, maturity: str = "shortlist",
-            evidence_published: datetime | None = None, title: str | None = None) -> int:
-    signal_id = repository.upsert_signal({
-        "signal_key": key, "title": title or f"Сигнал {key}", "title_ru": title or f"Сигнал {key}",
-        "theme": THEME, "summary": f"Суть сигнала {key}.", "maturity": maturity, "score": score,
-    })
-    repository.upsert_signal_evidence(signal_id, {
-        "source_url": f"https://radar.example.org/{key}", "title": f"Источник {key}",
-        "publisher": "radar.example.org", "published_at": evidence_published, "strength": 0.8,
-    })
-    with connection.get_connection() as conn:
-        conn.execute(
-            "UPDATE signals SET first_seen_at = %s, last_seen_at = %s, created_at = %s WHERE id = %s",
-            (first_seen, first_seen, first_seen, signal_id),
-        )
-        conn.commit()
-    return signal_id
-
-
-@pytest.fixture()
-def issue(isolated_db, monkeypatch, tmp_path):
-    """Трое: аналитик, его коллега и админ. Сентябрь открыт (29.09), август — архив."""
-    monkeypatch.setattr(feed_window, "_now", lambda: _msk(2026, 9, 29, 12, 0))
-    # Выгрузка — фоновой задачей, но исполняем её в тесте сами, без пула потоков.
-    monkeypatch.setattr(config, "BACKGROUND_JOB_INLINE", False)
-    monkeypatch.setattr(digest_module, "EXPORTS_DIR", tmp_path)
-    # DOCX тянет картинки статей из сети — в тесте сети нет.
-    monkeypatch.setattr(digest_module, "_fetch_docx_image", lambda url, timeout=8: None)
-    analyst = int(repository.create_user("analyst@example.test", "long-enough-password", "user")["id"])
-    colleague = int(repository.create_user("colleague@example.test", "long-enough-password", "user")["id"])
-    admin = int(repository.create_user("admin@example.test", "long-enough-password", "admin")["id"])
-    with connection.get_connection() as conn:
-        source_id = conn.execute(
-            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
-            "VALUES ('World Oil', 'Media', 'https://news.example.org', TRUE, 'request') RETURNING id"
-        ).fetchone()[0]
-        articles = {
-            "hi": _article(conn, source_id, "hi", published=_utc(2026, 9, 10, 12), score=88),
-            "mid": _article(conn, source_id, "mid", published=_utc(2026, 9, 11, 12), score=64),
-            "low": _article(conn, source_id, "low", published=_utc(2026, 9, 12, 12), score=12),
-            "unscored": _article(conn, source_id, "unscored", published=_utc(2026, 9, 13, 12), score=None),
-            "nodate": _article(conn, source_id, "nodate", published=None, collected=_utc(2026, 9, 16, 12), score=55),
-            "aug": _article(conn, source_id, "aug", published=_utc(2026, 8, 20, 12), score=90),
-        }
-        conn.commit()
-    signals = {
-        "sep": _signal("sep", first_seen=_msk(2026, 9, 12, 0, 20), evidence_published=_utc(2026, 9, 11, 9)),
-    }
-    yield {
-        "analyst": _Person(analyst), "colleague": _Person(colleague), "admin": _Person(admin, "admin"),
-        "source": source_id, "a": articles, "s": signals,
-    }
-    api.app.dependency_overrides.clear()
+from tests.digest_user_path_support import SEPT, THEME, add_article, add_signal, msk, utc
+from tests.digest_user_path_support import issue  # noqa: F401 — фикстура выпуска
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +86,55 @@ def test_saved_issue_keeps_manual_order_and_removal_after_reopening(issue):
     assert a["mid"] in still_marked
 
 
+def test_unmarked_article_leaves_the_saved_issue_without_resaving(issue):
+    """Дефект до 29.09. «Из дайджеста» на экране выпуска (статус archive) или другой статус в
+    ленте: статья пропадала из очереди, экран не показывал несохранённых правок — а превью и
+    выгрузка брали её из сохранённого черновика, пока человек не пересохранит его сам."""
+    analyst, a = issue["analyst"], issue["a"]
+    for key in ("hi", "mid", "low"):
+        analyst.mark(a[key])
+    assert analyst.save(SEPT, [a["low"], a["mid"], a["hi"]]).status_code == 200
+
+    analyst.mark(a["mid"], status="archive")  # «Из дайджеста» на экране выпуска
+    analyst.mark(a["hi"], status="noise")     # передумал в ленте
+
+    assert analyst.issue() == [("article", a["low"])]
+    html = analyst.export("html").decode("utf-8")
+    assert "Материал low" in html
+    assert "Материал mid" not in html and "Материал hi" not in html
+
+    # Снова отмечена — возвращается на своё место в черновике.
+    analyst.mark(a["mid"])
+    assert analyst.issue() == [("article", a["low"]), ("article", a["mid"])]
+
+
+def test_issue_draft_takes_only_articles_of_its_own_month(issue, monkeypatch):
+    """Дефект до 29.09. 1–4 октября открыты сентябрь и октябрь. Черновик проверял только
+    «не из архива»: «Все месяцы» + «Сохранить draft» клали в октябрьский черновик сентябрьские
+    статьи (месяц черновика экран брал по часам браузера) — сентябрьский выпуск их не
+    получал, а октябрьский выходил с чужими."""
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 2, 12, 0))
+    analyst, a = issue["analyst"], issue["a"]
+    with connection.get_connection() as conn:
+        october = add_article(conn, issue["source"], "oct", published=None, collected=utc(2026, 10, 2, 9))
+        conn.commit()
+    analyst.mark(a["hi"])
+    analyst.mark(october)
+
+    refused = analyst.save("2026-10", [october, a["hi"]])
+    assert refused.status_code == 409
+    assert "статьи другого месяца (сентябрь 2026)" in refused.json()["detail"]
+    refused = analyst.save(SEPT, [a["hi"], october])
+    assert refused.status_code == 409
+    assert "статьи другого месяца (октябрь 2026)" in refused.json()["detail"]
+    assert analyst.get("/api/monthly-digests/2026-10").status_code == 404
+
+    assert analyst.save(SEPT, [a["hi"]]).status_code == 200
+    assert analyst.save("2026-10", [october]).status_code == 200
+    assert analyst.issue() == [("article", a["hi"])]
+    assert analyst.issue("2026-10") == [("article", october)]
+
+
 # ---------------------------------------------------------------------------
 #  4. Смешанный выпуск, только сигналы, только статьи
 # ---------------------------------------------------------------------------
@@ -312,10 +171,11 @@ def test_issue_of_only_articles_without_date_and_image(issue):
 
 
 # ---------------------------------------------------------------------------
-#  5. Правки заголовка и сути из ОС коллег — в выпуске (накладываются при чтении, #77)
+#  5. Карточки радара: правки ОС, дубли, оценка модели, месяц
 # ---------------------------------------------------------------------------
 
 def test_colleague_corrections_of_a_radar_card_reach_the_issue(issue):
+    """Правки заголовка и сути из ОС коллег накладываются при чтении (#77) — и в выпуске."""
     analyst, colleague, s = issue["analyst"], issue["colleague"], issue["s"]
     analyst.mark_signal(s["sep"])
 
@@ -336,7 +196,7 @@ def test_colleague_corrections_of_a_radar_card_reach_the_issue(issue):
 
 def test_human_duplicate_verdict_does_not_take_a_chosen_card_out_of_the_issue(issue):
     analyst, colleague, s = issue["analyst"], issue["colleague"], issue["s"]
-    main = _signal("main", first_seen=_msk(2026, 9, 14, 0, 20), evidence_published=_utc(2026, 9, 13, 9))
+    main = add_signal("main", first_seen=msk(2026, 9, 14, 0, 20), evidence_published=utc(2026, 9, 13, 9))
     analyst.mark_signal(s["sep"])
 
     response = colleague.post("/api/signals/feedback", json={
@@ -350,96 +210,14 @@ def test_human_duplicate_verdict_does_not_take_a_chosen_card_out_of_the_issue(is
     assert analyst.issue() == [("signal", s["sep"])]
 
 
-# ---------------------------------------------------------------------------
-#  6. Выгрузка: 45 позиций — HTML и DOCX; превью = выгрузка
-# ---------------------------------------------------------------------------
-
-def test_export_of_a_45_item_issue_in_html_and_docx_matches_the_preview(issue):
-    analyst = issue["analyst"]
-    with connection.get_connection() as conn:
-        big = [
-            # Номер с нулём: «big-1» не должен находиться внутри «big-10».
-            _article(
-                conn, issue["source"], f"big-{n:02d}",
-                published=None if n % 10 == 0 else _utc(2026, 9, 1 + n % 28, 12),
-                collected=_utc(2026, 9, 1 + n % 28, 13),
-                score=None if n % 7 == 0 else 20 + n,
-                image_url="" if n % 3 else f"https://img.example.org/{n}.jpg",
-            )
-            for n in range(40)
-        ]
-        conn.commit()
-    signals = [
-        _signal(f"big-{n}", first_seen=_msk(2026, 9, 2 + n, 0, 20), score=30 + n,
-                evidence_published=None if n % 2 else _utc(2026, 9, 1 + n, 9))
-        for n in range(5)
-    ]
-    for article_id in big:
-        analyst.mark(article_id)
-    for signal_id in signals:
-        analyst.mark_signal(signal_id)
-
-    preview = analyst.issue_items()
-    assert len(preview) == 45
-    assert {_key(item) for item in preview} == {("article", i) for i in big} | {("signal", i) for i in signals}
-
-    html = analyst.export("html").decode("utf-8")
-    assert html.count('class="news-card"') == 45
-    for item in preview:
-        assert item["title"] in html
-    # Chromium выбрасывает из PDF относительные ссылки (урок выпуска за август): у каждой
-    # карточки ссылка «Читать далее» — абсолютная.
-    links = re.findall(r'<a href="([^"]*)" style="color:#e83d08', html)
-    assert len(links) == 45 and all(link.startswith("https://") for link in links)
-    # Порядок выгрузки — порядок превью (тот же сборщик).
-    positions = [html.index(item["title"]) for item in preview]
-    assert positions == sorted(positions)
-
-    docx = analyst.export("docx")
-    with ZipFile(BytesIO(docx)) as archive:
-        document_xml = archive.read("word/document.xml").decode("utf-8")
-    for item in preview:
-        assert item["title"] in document_xml
-
-
-# ---------------------------------------------------------------------------
-#  Дефект: снятая отметка оставалась в сохранённом выпуске
-# ---------------------------------------------------------------------------
-
-def test_unmarked_article_leaves_the_saved_issue_without_resaving(issue):
-    """«Из дайджеста» на экране выпуска (статус archive) или другой статус в ленте: статья
-    пропадала из очереди, экран не показывал несохранённых правок — а превью и выгрузка
-    брали её из сохранённого черновика, пока человек не пересохранит его сам."""
-    analyst, a = issue["analyst"], issue["a"]
-    for key in ("hi", "mid", "low"):
-        analyst.mark(a[key])
-    assert analyst.save(SEPT, [a["low"], a["mid"], a["hi"]]).status_code == 200
-
-    analyst.mark(a["mid"], status="archive")  # «Из дайджеста» на экране выпуска
-    analyst.mark(a["hi"], status="noise")     # передумал в ленте
-
-    assert analyst.issue() == [("article", a["low"])]
-    html = analyst.export("html").decode("utf-8")
-    assert "Материал low" in html
-    assert "Материал mid" not in html and "Материал hi" not in html
-
-    # Снова отмечена — возвращается на своё место в черновике.
-    analyst.mark(a["mid"])
-    assert analyst.issue() == [("article", a["low"]), ("article", a["mid"])]
-
-
-# ---------------------------------------------------------------------------
-#  Дефект: оценка модели («Отклонено») уносила выбранную человеком карточку радара
-# ---------------------------------------------------------------------------
-
 def test_radar_card_rated_reject_by_the_model_stays_in_the_issue_it_was_chosen_for(issue):
-    """Экран радара показывает и карточки со зрелостью «Отклонено» — с кнопкой «В дайджест»;
-    повторная находка перезаписывает зрелость и балл карточки. Сборщик выпуска такие
-    карточки отбрасывал: радар отвечал «Сигнал добавлен в дайджест», а в выпуске его не было.
-    Отметка человека — членство в выпуске, оценка модели — только порядок."""
+    """Дефект до 29.09. Экран радара показывает и карточки со зрелостью «Отклонено» — с
+    кнопкой «В дайджест»; повторная находка перезаписывает зрелость и балл карточки. Сборщик
+    выпуска такие карточки отбрасывал: радар отвечал «Сигнал добавлен в дайджест», а в выпуске
+    его не было. Отметка человека — членство в выпуске, оценка модели — только порядок."""
     analyst, s = issue["analyst"], issue["s"]
-    weak = _signal("weak", first_seen=_msk(2026, 9, 15, 0, 20), maturity="reject", score=18,
-                   evidence_published=_utc(2026, 9, 14, 9))
+    weak = add_signal("weak", first_seen=msk(2026, 9, 15, 0, 20), maturity="reject", score=18,
+                      evidence_published=utc(2026, 9, 14, 9))
     analyst.mark_signal(weak)
     analyst.mark_signal(s["sep"])
 
@@ -452,27 +230,23 @@ def test_radar_card_rated_reject_by_the_model_stays_in_the_issue_it_was_chosen_f
     assert analyst.issue() == [("signal", weak), ("signal", s["sep"])]
 
 
-# ---------------------------------------------------------------------------
-#  Дефект: месяц карточки радара в выпуске «плыл» с каждой повторной находкой
-# ---------------------------------------------------------------------------
-
 def test_radar_card_belongs_to_the_issue_of_the_month_it_arrived_in(issue):
-    """Месяц сигнала в выпуске считался по дате лучшей ссылки, а без даты — по last_seen_at,
-    который сдвигает каждая повторная находка (touch_signal, upsert_signal). Ежедневный
-    радар 1–4 октября уносил выбранную в сентябре карточку в октябрьский выпуск, а карточку
-    со старой ссылкой (найдена в сентябре, статья августовская) сентябрьский выпуск не
-    видел вовсе. Месяц карточки — месяц поступления на радар по Москве: эту дату и
+    """Дефект до 29.09. Месяц сигнала в выпуске считался по дате лучшей ссылки, а без даты —
+    по last_seen_at, который сдвигает каждая повторная находка (touch_signal, upsert_signal).
+    Ежедневный радар 1–4 октября уносил выбранную в сентябре карточку в октябрьский выпуск,
+    а карточку со старой ссылкой (найдена в сентябре, статья августовская) сентябрьский
+    выпуск не видел вовсе. Месяц карточки — месяц поступления на радар по Москве: эту дату и
     показывает экран радара («дата поступления»)."""
     analyst = issue["analyst"]
-    undated = _signal("undated", first_seen=_msk(2026, 9, 20, 0, 15))
-    old_link = _signal("old-link", first_seen=_msk(2026, 9, 3, 0, 15), evidence_published=_utc(2026, 8, 28, 9))
+    undated = add_signal("undated", first_seen=msk(2026, 9, 20, 0, 15))
+    old_link = add_signal("old-link", first_seen=msk(2026, 9, 3, 0, 15), evidence_published=utc(2026, 8, 28, 9))
     # Прогон радара 01.10 в 00:15 МСК — по UTC это ещё 30.09, а экран показывает 01.10.2026.
-    october = _signal("october", first_seen=_msk(2026, 10, 1, 0, 15))
+    october = add_signal("october", first_seen=msk(2026, 10, 1, 0, 15))
     for signal_id in (undated, old_link, october):
         analyst.mark_signal(signal_id)
     # Радар 02.10 снова нашёл сентябрьскую карточку.
     with connection.get_connection() as conn:
-        conn.execute("UPDATE signals SET last_seen_at = %s WHERE id = %s", (_msk(2026, 10, 2, 0, 15), undated))
+        conn.execute("UPDATE signals SET last_seen_at = %s WHERE id = %s", (msk(2026, 10, 2, 0, 15), undated))
         conn.commit()
 
     september = set(analyst.issue(SEPT))
@@ -483,14 +257,14 @@ def test_radar_card_belongs_to_the_issue_of_the_month_it_arrived_in(issue):
 
 
 # ---------------------------------------------------------------------------
-#  Балл (п. 3): владелец 29.09 меняет критерии и пересчитывает сентябрь
+#  6. Балл (п. 3) и роботы: отметку человека не уносят ни пересчёт, ни перепечатки
 # ---------------------------------------------------------------------------
 
 def test_new_scores_do_not_take_marked_items_out_of_the_issue(issue):
-    """Отметка человека не должна пропадать из выпуска из-за нового балла: ни в превью и
-    выгрузке, ни в черновике, сохранённом любым путём API. До 29.09 POST /api/monthly-digests
-    по умолчанию сохранял черновик с полом 60 — после пересчёта из него выпадало бы всё,
-    что опустилось ниже."""
+    """Владелец 29.09 меняет критерии скоринга и пересчитывает сентябрь. Отметка человека не
+    должна пропадать из выпуска из-за нового балла: ни в превью и выгрузке, ни в черновике,
+    сохранённом любым путём API. До 29.09 POST /api/monthly-digests по умолчанию сохранял
+    черновик с полом 60 — после пересчёта из него выпадало бы всё, что опустилось ниже."""
     analyst, a, s = issue["analyst"], issue["a"], issue["s"]
     marked = [a["hi"], a["mid"], a["low"], a["unscored"]]
     for article_id in marked:
@@ -523,176 +297,14 @@ def test_new_scores_do_not_take_marked_items_out_of_the_issue(issue):
     assert set(analyst.issue()) == expected
 
 
-# ---------------------------------------------------------------------------
-#  Дефект (п. 5): выгрузки двух людей в одну секунду писали один файл
-# ---------------------------------------------------------------------------
-
-class _SameSecond(datetime):
-    @classmethod
-    def now(cls, tz=None):
-        return cls(2026, 10, 3, 12, 0, 0, tzinfo=tz)
-
-
-def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(issue, monkeypatch):
-    """Файл выгрузки назывался digest-<месяц>-<секунда>: две выгрузки одного месяца в одну
-    секунду (двадцать человек собирают сентябрь до 05.10, HTML готовится за доли секунды)
-    писали в один файл — и первый скачивал выпуск второго."""
-    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
-    analyst.mark(a["hi"])
-    colleague.mark(a["low"])
-    monkeypatch.setattr(digest_module, "datetime", _SameSecond)
-
-    mine = analyst.start_export("html")
-    theirs = colleague.start_export("html")
-
-    mine_html = analyst.download(mine).decode("utf-8")
-    theirs_html = colleague.download(theirs).decode("utf-8")
-    assert "Материал hi" in mine_html and "Материал low" not in mine_html
-    assert "Материал low" in theirs_html and "Материал hi" not in theirs_html
-
-
-# ---------------------------------------------------------------------------
-#  Дефект (п. 6): одна недоступная картинка статьи роняла всю выгрузку PDF
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def chromium():
-    """Есть ли Chromium — проверка мимо кода продукта, чтобы его поломка не выглядела пропуском."""
-    probe = ("from playwright.sync_api import sync_playwright\n"
-             "with sync_playwright() as pw:\n"
-             "    pw.chromium.launch(headless=True, args=['--no-sandbox']).close()\n")
-    try:
-        result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        pytest.skip("Chromium не запустился за 60 с")
-    if result.returncode != 0:
-        pytest.skip(f"Chromium недоступен: {result.stderr.strip()[-200:]}")
-
-
-@pytest.fixture()
-def silent_image_host():
-    """Хост картинки, который принимает соединение и молчит — как недоступный с ядра сайт."""
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("127.0.0.1", 0))
-    server.listen(16)
-    held: list[socket.socket] = []
-
-    def accept() -> None:
-        while True:
-            try:
-                conn, _ = server.accept()
-            except OSError:
-                return
-            held.append(conn)  # не отвечаем и не закрываем
-
-    threading.Thread(target=accept, daemon=True).start()
-    yield f"http://127.0.0.1:{server.getsockname()[1]}"
-    server.close()
-    for conn in held:
-        conn.close()
-
-
-def _pdf_content(count: int, images: dict[int, str]) -> dict:
-    news = [
-        {
-            "category": ("Бурение", "Добыча", "Цифровизация", "Рынок")[n % 4],
-            "item_type": "article", "article_id": n + 1, "signal_id": None,
-            "title": f"Материал {n + 1:02d}", "source": "World Oil",
-            "url": f"https://news.example.org/{n + 1}", "published_at": "2026-09-15",
-            "summary": "Краткая суть материала для карточки выпуска.",
-            "image_url": images.get(n, ""),
-        }
-        for n in range(count)
-    ]
-    return {
-        "month": SEPT,
-        "issue": {"title": "Нефтесервисный дайджест", "intro": "Вступление.", "news_title": "Новости"},
-        "hero": {}, "news": news, "items": news,
-        "footer": {"contact_text": "", "contact_email": "", "note": "Информационная рассылка", "socials": []},
-    }
-
-
-def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(chromium, silent_image_host, monkeypatch):
-    """Картинки статей Chromium грузит сам, с РФ-ядра. Замер 29.09: 40 позиций без внешних
-    картинок — PDF за 1,9 с; две «молчащие» картинки из сорока — set_content(wait_until=
-    "load") ждал до потолка Playwright и через 30 с падал TimeoutError: выгрузка PDF не
-    получалась ни с одной из трёх попыток задачи. Теперь картинки ждём ограниченное время,
-    недогрузившуюся меняем на плашку рубрики — как у статьи без картинки."""
-    # Локальный адрес сборщик считает «тестовым» и сам меняет на плашку — здесь пропускаем его.
-    monkeypatch.setattr(digest_module, "_is_unusable_digest_image_url", lambda url: not url)
-    monkeypatch.setattr(digest_module, "_PDF_IMAGES_WAIT_MS", 2000, raising=False)
-    content = _pdf_content(40, {3: f"{silent_image_host}/a.jpg", 17: f"{silent_image_host}/b.jpg"})
-
-    started = time.monotonic()
-    pdf = digest_module.render_digest_pdf(content)
-    elapsed = time.monotonic() - started
-
-    assert pdf.startswith(b"%PDF")
-    assert elapsed < 20, f"PDF печатался {elapsed:.1f} с"
-
-
-def test_docx_spends_a_bounded_time_on_silent_article_images(silent_image_host, monkeypatch):
-    """Картинки для Word сервер тянет сам, по одной, с таймаутом 8 с на запрос: замер 29.09 —
-    40 позиций без картинок 0,1 с, две молчащие картинки из сорока — 16,2 с. Экран ждёт
-    документ не дольше 160 с: от двадцати молчащих картинок выгрузка на экране обрывалась.
-    Теперь на все картинки общий бюджет, остальные карточки идут без картинки."""
-    monkeypatch.setattr(digest_module, "_DOCX_IMAGES_BUDGET_SECONDS", 2.0, raising=False)
-    content = _pdf_content(40, {n: f"{silent_image_host}/{n}.jpg" for n in (0, 9, 18, 27)})
-
-    started = time.monotonic()
-    docx = digest_module.render_digest_docx(content)
-    elapsed = time.monotonic() - started
-
-    with ZipFile(BytesIO(docx)) as archive:
-        document_xml = archive.read("word/document.xml").decode("utf-8")
-    assert all(f"Материал {n:02d}" in document_xml for n in range(1, 41))
-    assert elapsed < 10, f"DOCX собирался {elapsed:.1f} с"
-
-
-# ---------------------------------------------------------------------------
-#  Дефект: в черновик месяца попадали статьи другого открытого месяца
-# ---------------------------------------------------------------------------
-
-def test_issue_draft_takes_only_articles_of_its_own_month(issue, monkeypatch):
-    """1–4 октября открыты сентябрь и октябрь. Черновик проверял только «не из архива»:
-    «Все месяцы» + «Сохранить draft» клали в октябрьский черновик сентябрьские статьи
-    (месяц черновика экран брал по часам браузера) — сентябрьский выпуск их не получал,
-    а октябрьский выходил с чужими."""
-    monkeypatch.setattr(feed_window, "_now", lambda: _msk(2026, 10, 2, 12, 0))
-    analyst, a = issue["analyst"], issue["a"]
-    with connection.get_connection() as conn:
-        october = _article(conn, issue["source"], "oct", published=None, collected=_utc(2026, 10, 2, 9))
-        conn.commit()
-    analyst.mark(a["hi"])
-    analyst.mark(october)
-
-    refused = analyst.save("2026-10", [october, a["hi"]])
-    assert refused.status_code == 409
-    assert "статьи другого месяца (сентябрь 2026)" in refused.json()["detail"]
-    refused = analyst.save(SEPT, [a["hi"], october])
-    assert refused.status_code == 409
-    assert "статьи другого месяца (октябрь 2026)" in refused.json()["detail"]
-    assert analyst.get("/api/monthly-digests/2026-10").status_code == 404
-
-    assert analyst.save(SEPT, [a["hi"]]).status_code == 200
-    assert analyst.save("2026-10", [october]).status_code == 200
-    assert analyst.issue() == [("article", a["hi"])]
-    assert analyst.issue("2026-10") == [("article", october)]
-
-
-# ---------------------------------------------------------------------------
-#  Дефект: робот перепечаток прятал копию, выбранную человеком в дайджест
-# ---------------------------------------------------------------------------
-
 def test_reprint_robot_does_not_hide_a_copy_chosen_for_the_issue(issue):
-    """Судья перепечаток (последние 14 дней) прячет копию в пользу главной. Если человек
-    выбрал в дайджест именно копию, а главную не отмечал, новость пропадала из его выпуска
-    целиком — и из ленты, откуда её не вернуть. Радар для карточек это уже соблюдает:
-    выбранную в дайджест не прячет даже решение человека (mark_signal_merged)."""
+    """Дефект до 29.09. Судья перепечаток (последние 14 дней) прячет копию в пользу главной.
+    Если человек выбрал в дайджест именно копию, а главную не отмечал, новость пропадала из
+    его выпуска целиком — и из ленты, откуда её не вернуть. Радар для карточек это уже
+    соблюдает: выбранную в дайджест не прячет даже решение человека (mark_signal_merged)."""
     analyst, a = issue["analyst"], issue["a"]
     with connection.get_connection() as conn:
-        copy = _article(conn, issue["source"], "copy", published=_utc(2026, 9, 10, 14), score=40)
+        copy = add_article(conn, issue["source"], "copy", published=utc(2026, 9, 10, 14), score=40)
         conn.commit()
     analyst.mark(copy)
 
@@ -708,25 +320,3 @@ def test_reprint_robot_does_not_hide_a_copy_chosen_for_the_issue(issue):
     )
     feed = {row["id"] for row in analyst.get("/api/articles", params={"limit": 5000}).json()}
     assert a["low"] not in feed and a["mid"] in feed and copy in feed
-
-
-# ---------------------------------------------------------------------------
-#  Дефект: месяц в шапке выпуска — «2026-09» вместо слов (правка заказчика 24.08)
-# ---------------------------------------------------------------------------
-
-def test_issue_header_names_the_month_in_words(issue):
-    """Заказчик 24.08 (#428915) в выпуске за август: «за 2026-08» → «за август 2026 г», и в
-    заголовке выпуска. Август собирали скриптом с этой правкой, а продукт так и писал
-    «2026-09» — первый выпуск, собранный самими пользователями, повторил бы замечание."""
-    analyst = issue["analyst"]
-    analyst.mark(issue["a"]["hi"])
-
-    content = analyst.get("/api/digest-content", params={"month": SEPT, "limit": 500, "min_score": 0}).json()
-    assert "обзоры за сентябрь 2026 г," in content["issue"]["intro"]
-    assert content["title"] == "Нефтесервисный дайджест · сентябрь 2026 г"
-    # Для имён файлов и запросов месяц прежний.
-    assert content["month"] == SEPT
-
-    html = analyst.export("html").decode("utf-8")
-    assert "обзоры за сентябрь 2026 г," in html
-    assert "2026-09" not in html
