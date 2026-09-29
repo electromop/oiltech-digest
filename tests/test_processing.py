@@ -251,6 +251,62 @@ def test_keyword_tag_selects_best_tag():
     assert pipeline.keyword_tag(article, tags)["tag_id"] == 2
 
 
+def test_incident_without_solution_is_capped_by_code():
+    """#54: признак «инцидент без решения» ограничивает балл кодом, а не просьбой к модели.
+    Правило «инциденты — низко» жило только в промпте, и удар по складу ГСМ получил ровно 60."""
+    criteria = [{"id": 1, "name": "Стратегическая значимость", "weight": 60, "keywords_json": [], "keywords_en_json": []},
+                {"id": 2, "name": "Достоверность и актуальность", "weight": 40, "keywords_json": [], "keywords_en_json": []}]
+    answer = {"incident_without_solution": True, "explanation": "удар по складу ГСМ",
+              "items": [{"criterion_id": 1, "ai_score": 60, "rationale": "."},
+                        {"criterion_id": 2, "ai_score": 85, "rationale": "."}]}
+    article = {"title": "Удар по складу ГСМ", "raw_text": "…"}
+
+    result = pipeline.normalize_score_payload(article, criteria, answer)
+
+    assert result["total_score"] <= pipeline.INCIDENT_CRITERION_CAP  # старый код: 70.0
+    assert result["score_label"] == "Низкая"
+    # Страж: признак false или его нет (воркер NL старой сборки) — потолка нет, 60·0,6 + 85·0,4.
+    for flag in ({"incident_without_solution": False}, {}):
+        plain = {"explanation": answer["explanation"], "items": answer["items"], **flag}
+        assert pipeline.normalize_score_payload(article, criteria, plain)["total_score"] == 70.0
+
+
+def test_incident_cap_survives_rescore_without_ai():
+    """#54: rescore-recompute пересчитывает final из сохранённых ai_score и keyword_score
+    (repository.recompute_total_scores_from_items), а признака инцидента в базе нет. Поэтому
+    потолок ложится и на них: иначе пересчёт без ИИ вернул бы инциденту прежний балл."""
+    criteria = [{"id": 1, "name": "Значимость", "weight": 100,
+                 "keywords_json": ["удар", "гсм", "пожар"], "keywords_en_json": []}]
+    article = {"title": "Удар по складу ГСМ", "raw_text": "После удара начался пожар."}
+    answer = {"incident_without_solution": True, "explanation": ".",
+              "items": [{"criterion_id": 1, "ai_score": 60, "rationale": "."}]}
+
+    item = pipeline.normalize_score_payload(article, criteria, answer)["items"][0]
+
+    recomputed = max(item["ai_score"], item["keyword_score"] * pipeline.SCORE_KEYWORD_WEIGHT
+                     + item["ai_score"] * pipeline.SCORE_AI_WEIGHT)  # формула пересчёта
+    assert recomputed <= pipeline.INCIDENT_CRITERION_CAP  # потолок одного final: пересчёт даёт 68
+
+
+def test_score_schema_requires_incident_flag():
+    """#54: признак — обязательное поле ответа модели; офлайн-клиент отвечает false."""
+    from oiltech_digest.processing.prompts import SCORE_SCHEMA
+
+    schema = SCORE_SCHEMA["schema"]
+    assert "incident_without_solution" in schema["required"]
+    assert schema["properties"]["incident_without_solution"] == {"type": "boolean"}
+    offline = OfflineAIClient().complete_json("x", "title: t\ntext: t", SCORE_SCHEMA)
+    assert offline.data["incident_without_solution"] is False
+
+
+def test_scoring_prompt_states_the_incident_band():
+    """#54: у правила есть число — то же, что у потолка в коде."""
+    from oiltech_digest.processing.prompts import SCORING_INSTRUCTIONS
+
+    assert "incident_without_solution" in SCORING_INSTRUCTIONS
+    assert f"0–{pipeline.INCIDENT_CRITERION_CAP}" in SCORING_INSTRUCTIONS
+
+
 def test_glossary_prompt_selects_relevant_oilfield_terms():
     article = {
         "title": "Electric frac fleet expands hydraulic fracturing operations",
