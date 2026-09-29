@@ -12,6 +12,7 @@ from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.pipeline import (
     _negative_keyword_block,
+    _validate_weights,
     keyword_tag,
     make_client,
     normalize_score_payload,
@@ -37,6 +38,9 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
     уходит воркеру — не запрошенное он не зовёт (process_payload); воркер до 28.09 её не
     знает и гоняет весь конвейер, а ядро всё равно пишет только запрошенное."""
     stages = stages_to_write(payload.get("only"))
+    criteria = repository.list_enabled_scoring_criteria()
+    if "scoring" in stages:
+        _refuse_broken_weights(criteria)
     article_ids = [int(item) for item in payload.get("article_ids") or []]
     limit = int(payload.get("limit") or contract.PROCESS_LIMIT_DEFAULT)
     if job_id is not None:
@@ -58,17 +62,33 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         "article_ids": article_ids,
         "articles": [_jsonable_dict(article) for article in articles],
         "tags": [_jsonable_dict(tag) for tag in repository.list_enabled_tags()],
-        "criteria": [_jsonable_dict(item) for item in repository.list_enabled_scoring_criteria()],
+        "criteria": [_jsonable_dict(item) for item in criteria],
     }
     if payload.get("only"):
         worker_payload["only"] = list(payload["only"])
     return worker_payload
 
 
+def _refuse_broken_weights(criteria: list[dict[str, Any]]) -> None:
+    """Сумма весов ≠ 100 (или критериев нет) — задачу с баллом не выдаём.
+
+    Итог балла — Σ final·вес/100 с обрезкой до 100 (pipeline.normalize_score_payload). При
+    сумме 200 он молча раздувается, и ошибки не видно нигде: локальные пути сумму проверяют
+    (_validate_weights), а путь через NL до сессии G — нет. Отказ здесь, до резерва статей:
+    выдача проваливает задачу, воркер её не получает, модель не оплачивается."""
+    try:
+        _validate_weights(criteria)
+    except ValueError as exc:
+        raise InvalidJobPayload(f"критерии скоринга: {exc}") from exc
+
+
 def build_source_candidate_evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Expand a source-candidate evaluation job into a self-contained AI payload."""
     from oiltech_digest.source_discovery.sandbox import collect_candidate_articles
 
+    # Сумма весов — до сбора статей кандидата: иначе и сбор, и оценка пропали бы впустую.
+    criteria = repository.list_enabled_scoring_criteria()
+    _refuse_broken_weights(criteria)
     candidate_id = int(payload["candidate_id"])
     article_limit = int(payload.get("article_limit") or 5)
     collect = bool(payload.get("collect", True))
@@ -94,7 +114,7 @@ def build_source_candidate_evaluate_payload(payload: dict[str, Any]) -> dict[str
         "collected": _jsonable_dict(collected),
         "articles": [_jsonable_dict(article) for article in articles],
         "tags": [_jsonable_dict(tag) for tag in repository.list_enabled_tags()],
-        "criteria": [_jsonable_dict(item) for item in repository.list_enabled_scoring_criteria()],
+        "criteria": [_jsonable_dict(item) for item in criteria],
     }
 
 
@@ -145,6 +165,11 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         raise ValueError("No tags supplied in external AI payload")
     if not criteria:
         raise ValueError("No scoring criteria supplied in external AI payload")
+    if "scoring" in stages:
+        # Сумма весов ≠ 100 — отказ до первого вызова модели, как на локальных путях: итог
+        # Σ final·вес/100 иначе молча исказился бы. Пакет от ядра старше сессии G мог прийти
+        # без этой проверки на выдаче.
+        _validate_weights(criteria)
 
     result: dict[str, Any] = {
         "external_ai": True,
@@ -261,6 +286,9 @@ def process_source_candidate_payload(payload: dict[str, Any], heartbeat: Callabl
         raise ValueError("No tags supplied in external source-candidate payload")
     if not criteria:
         raise ValueError("No scoring criteria supplied in external source-candidate payload")
+    # Как у песочницы на ядре (sandbox.process_candidate_articles): сумма весов ≠ 100 — отказ
+    # до первого вызова модели.
+    _validate_weights(criteria)
 
     result: dict[str, Any] = {
         "external_ai": True,

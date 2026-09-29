@@ -153,6 +153,10 @@ def test_busy_recount_goes_back_to_queue_without_spending_attempt(isolated_db, m
     from fastapi.testclient import TestClient
 
     ids = _articles(2)
+    # Критерии с суммой 100: без них пакет с баллом не выдаётся вовсе (сессия G, C0).
+    with connection.get_connection() as conn:
+        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Значимость', 100, TRUE, 1)")
+        conn.commit()
     live = _running_job({"limit": 1})
     repository.reserve_process_articles(live, limit=1)
     recount = repository.create_background_job("process_articles", {"article_ids": [ids[0]], "limit": 1},
@@ -170,6 +174,33 @@ def test_busy_recount_goes_back_to_queue_without_spending_attempt(isolated_db, m
     stored = repository.get_background_job(int(recount["id"]))
     assert stored["status"] == "queued" and stored["attempts"] == 0
     assert stored["run_after"] > datetime.now(timezone.utc)
+
+
+def test_claim_fails_scoring_batch_when_weights_do_not_sum_to_100(isolated_db, monkeypatch):
+    """Сессия G, C0: пакет с баллом при сумме весов ≠ 100 воркер не получает — выдача проваливает
+    задачу с понятной причиной, статьи не резервируются, модель не оплачивается."""
+    from fastapi.testclient import TestClient
+
+    _articles(2)
+    with connection.get_connection() as conn:
+        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('А', 100, TRUE, 1)")
+        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Б', 30, TRUE, 2)")
+        conn.commit()
+    job = repository.create_background_job("process_articles", {"limit": 2}, queue_name="external-ai",
+                                           execution_region="external", capability="openai")
+    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+
+    response = TestClient(api.app).post(
+        "/api/external-worker/claim",
+        headers={"Authorization": "Bearer secret"},
+        json={"worker_id": "nl-ai-1", "queues": ["external-ai"], "capabilities": ["openai"]},
+    )
+
+    assert response.status_code == 200 and response.json() == {"job": None}
+    stored = repository.get_background_job(int(job["id"]))
+    assert stored["status"] == "failed"
+    assert "критерии скоринга" in stored["error_message"] and "130" in stored["error_message"]
+    assert not (stored["payload_json"] or {}).get("reserved_article_ids")
 
 
 def test_bulk_lane_refuses_relevance_recheck(isolated_db):

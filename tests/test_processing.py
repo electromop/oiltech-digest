@@ -1,3 +1,5 @@
+import pytest
+
 from oiltech_digest.processing import pipeline
 from oiltech_digest.processing.domain_glossary import (
     enforce_glossary_text,
@@ -97,6 +99,33 @@ def test_external_ai_relevance_runs_first_and_ignores_summary(monkeypatch):
     assert "ПОДКРУЧЕННАЯ-СУТЬ-НЕФТЕГАЗ" not in rel_input
     assert "summary:" not in rel_input
     assert result["stats"]["relevant"] == 1
+
+
+def test_external_batch_refuses_weights_not_summing_to_100(monkeypatch):
+    """Сессия G, C0: на боевом пути NL сумма весов не проверялась — при сумме ≠ 100 итог
+    Σ final·вес/100 молча раздувался и обрезался до 100. Отказ — до первого платного вызова."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    payload = _external_payload()
+    first = payload["criteria"][0]
+    payload["criteria"] = [first, {**first, "id": 21, "name": "Второй"}]   # 100 + 100 = 200
+
+    with pytest.raises(ValueError, match="100"):
+        external_ai.process_payload(payload)
+    assert client.calls == []   # ни одного платного вызова
+
+
+def test_external_batch_without_scoring_ignores_the_weights(monkeypatch):
+    """Перегенерация сути (only без scoring) баллы не считает: веса ей не помеха."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    payload = {**_external_payload(), "only": ["summary", "translation"]}
+    payload["criteria"] = [{**payload["criteria"][0], "weight": 60}]
+
+    result = external_ai.process_payload(payload)
+
+    assert result["stats"]["summary"] == 1
+    assert "article_score" not in [c["name"] for c in client.calls]
 
 
 def test_relevance_article_uses_relevance_model_and_reasoning(monkeypatch):

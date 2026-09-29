@@ -187,3 +187,40 @@ def test_apply_source_candidate_result_updates_articles_and_assessment(monkeypat
     assert memory[0]["facts"]["candidate_id"] == 42
     assert actions[0]["action_type"] == "source_candidate_learning"
     assert actions[0]["run_id"] == 77
+
+
+def test_candidate_batch_refuses_weights_not_summing_to_100(monkeypatch):
+    """Сессия G, C0: оценка кандидата на NL сумму весов не проверяла (песочница на ядре —
+    проверяет). Отказ — до первого платного вызова, как у пакета статей."""
+    import pytest
+
+    calls = []
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: object())
+    monkeypatch.setattr(external_ai, "relevance_article", lambda *args, **kwargs: calls.append("relevance"))
+    payload = {
+        "candidate_id": 42,
+        "articles": [{"id": 101, "title": "Drilling", "raw_text": "drilling"}],
+        "tags": [{"id": 7, "name": "Бурение", "parent_id": None}],
+        "criteria": [{"id": 9, "name": "А", "weight": 70}, {"id": 10, "name": "Б", "weight": 70}],
+    }
+
+    with pytest.raises(ValueError, match="140"):
+        external_ai.process_source_candidate_payload(payload)
+    assert calls == []
+
+
+def test_core_refuses_candidate_job_with_weights_not_summing_to_100(monkeypatch):
+    """Ядро не выдаёт такую оценку и не собирает статьи кандидата впустую."""
+    import pytest
+
+    from oiltech_digest.source_discovery import sandbox
+
+    touched = []
+    monkeypatch.setattr(external_ai.repository, "list_enabled_scoring_criteria",
+                        lambda: [{"id": 9, "name": "А", "weight": 60}])
+    monkeypatch.setattr(external_ai.repository, "get_source_candidate", lambda candidate_id: touched.append("candidate"))
+    monkeypatch.setattr(sandbox, "collect_candidate_articles", lambda *args, **kwargs: touched.append("collect"))
+
+    with pytest.raises(external_ai.InvalidJobPayload, match="60"):
+        external_ai.build_source_candidate_evaluate_payload({"candidate_id": 42})
+    assert touched == []
