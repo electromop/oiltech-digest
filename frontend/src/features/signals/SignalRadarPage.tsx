@@ -8,7 +8,7 @@ import {
   updateSignal,
 } from "../../api/signals";
 import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
-import type { Signal, SignalFeedbackPayload } from "../../api/types";
+import type { Signal, SignalEvidence, SignalFeedbackPayload } from "../../api/types";
 import { StatCard } from "../shared/StatCard";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 
@@ -85,12 +85,21 @@ function formatRunMoment(value: string | null): string {
   return `${day} в ${time}`;
 }
 
-// Дата поступления карточки (встреча 21.09): первая находка радаром, по Москве.
-function formatArrival(signal: Signal): string {
-  const value = signal.first_seen_at || signal.created_at;
+function formatDay(value: string | null | undefined): string {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return "";
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: RADAR_TIME_ZONE });
+}
+
+// Дата поступления карточки (встреча 21.09): первая находка радаром, по Москве.
+function formatArrival(signal: Signal): string {
+  return formatDay(signal.first_seen_at || signal.created_at);
+}
+
+// Строка над заголовком ссылки: «издатель · дата публикации» (колонки «Источник» и «Дата
+// публикации» эталона заказчика). Даты нет — нет и пустого «·».
+function evidenceSource(item: SignalEvidence): string {
+  return [item.publisher || "источник", formatDay(item.published_at)].filter(Boolean).join(" · ");
 }
 
 // «из 1 сигнала», «из 21 сигнала», но «из 2 сигналов», «из 11 сигналов».
@@ -753,9 +762,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                         <div className="signalEvidenceHeading">Ссылки</div>
                         {signal.evidence.map((item) => (
                           <a className="signalEvidenceRow" href={item.source_url} target="_blank" rel="noreferrer" key={item.id}>
-                            <span>{item.publisher || "source"}</span>
+                            <span>{evidenceSource(item)}</span>
                             <strong>{item.title_ru || item.title}</strong>
-                            <small>{item.summary_ru || item.extracted_fact || item.evidence_type}</small>
+                            {item.summary_ru || item.extracted_fact ? (
+                              <small>{item.summary_ru || item.extracted_fact}</small>
+                            ) : null}
                           </a>
                         ))}
                       </div>

@@ -5250,12 +5250,11 @@ button {
   background: rgba(239, 246, 255, 0.75);
 }
 
+/* «издатель · дата публикации» — обычным регистром: домен и дату так читать проще. */
 .signalEvidenceRow span {
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: 0.74rem;
+  font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0;
 }
 
 .signalEvidenceRow strong {

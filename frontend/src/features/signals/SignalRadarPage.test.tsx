@@ -588,6 +588,31 @@ describe("SignalRadarPage", () => {
       expect(screen.getByText(label, { selector: ".miniPill" })).toHaveClass(tone);
     });
 
+    it("ссылки-доказательства — «издатель · дата публикации», под ними заголовок", async () => {
+      const link = (id: number, fields: Record<string, unknown>) =>
+        ({ id, signal_id: 21, article_id: null, evidence_type: "article", extracted_fact: null, summary_ru: null,
+           strength: 0, raw_payload_json: {}, created_at: null, updated_at: null, title_ru: null, ...fields }) as never;
+      serve([{
+        ...drilling,
+        evidence: [
+          // 24.09 08:00 UTC — 11:00 по Москве: дата та же, что и у издателя.
+          link(1, { source_url: "https://worldoil.com/a", title: "Robotic rig", title_ru: "Роботизированная буровая",
+                    publisher: "worldoil.com", published_at: "2026-09-24T08:00:00Z" }),
+          link(2, { source_url: "https://example.com/b", title: "Rig report", publisher: null, published_at: null }),
+        ],
+      }]);
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть сигнал" }));
+
+      const first = screen.getByText("worldoil.com · 24.09.2026").closest("a")!;
+      expect(first).toHaveAttribute("href", "https://worldoil.com/a");
+      expect(first).toHaveTextContent("Роботизированная буровая");
+      // Без издателя — по-русски, без даты — без пустого «·»; тип материала («article») не показываем.
+      expect(screen.getByText("источник").closest("a")).toHaveTextContent("Rig report");
+      expect(screen.queryByText("source")).not.toBeInTheDocument();
+      expect(screen.queryByText("article")).not.toBeInTheDocument();
+    });
+
     it("вместо строки издателей — число ссылок и дата поступления", async () => {
       const { container } = render(
         <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,
