@@ -5607,6 +5607,8 @@ def apply_scoring_preset(profile: str, records: list[dict], *, apply: bool = Fal
             result = {
                 "profile": profile,
                 "before": [(row["name"], float(row["weight"])) for row in rows if row["enabled"]],
+                # Для отката после записи: этот набор включается обратно одним UPDATE по id.
+                "before_ids": [int(row["id"]) for row in rows if row["enabled"]],
                 "after": [(rec["name"], float(rec["weight"])) for rec in records],
                 "plan": plan,
                 "changed": any(plan.values()),

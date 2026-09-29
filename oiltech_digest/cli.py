@@ -241,6 +241,10 @@ def cmd_apply_scoring_preset(args: argparse.Namespace) -> None:
     if not result["changed"]:
         print("  изменений нет — набор уже применён")
         return
+    # Прежний набор после записи выключен, не удалён: вернуть его — один UPDATE (ранбук ADR 0002).
+    ids = ", ".join(str(item) for item in result["before_ids"]) or "—"
+    print(f"  id прежнего набора: {ids}; откат после --apply: UPDATE scoring_criteria SET enabled = id IN "
+          f"({ids}), updated_at = now() WHERE profile = '{result['profile']}';")
     plan = result["plan"]
     for key, label in (("add", "заведутся"), ("enable", "включатся"), ("update", "изменятся вес, описание или порядок"),
                        ("disable", "выключатся (не удаляются: подпункты старых баллов остаются целыми)")):

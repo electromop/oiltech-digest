@@ -232,6 +232,97 @@ def test_rollout_rehearsal_on_prod_like_data(isolated_db, monkeypatch, capsys):
     assert "idx_scoring_criteria_name" not in _indexes()
 
 
+def _to_seeded_profiles() -> dict[int, int]:
+    """Данные как на проде, шаги 1 и 3 выката и сид радара."""
+    articles = _prod_like_data()
+    _run_script("scoring-profiles-before-deploy.sql")
+    _run_script("scoring-profiles-after-deploy.sql")
+    seed_default_scoring_criteria()
+    return articles
+
+
+def test_code_rollback_after_seed_gives_old_code_one_set_and_its_index(isolated_db):
+    """Откат «а» ранбука: после сида прежний код читал бы критерии без фильтра профиля — оба набора,
+    сумма 200, — а его «Сохранить» (ON CONFLICT (name)) падало бы без глобального индекса имён.
+    После файла отката — один набор с суммой 100 и индекс на месте; повтор безопасен."""
+    _to_seeded_profiles()
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+
+    _run_script("scoring-profiles-rollback.sql")
+    _run_script("scoring-profiles-rollback.sql")
+
+    assert _criteria("tech_radar") == []
+    assert "idx_scoring_criteria_name" in _indexes()
+    with connection.get_connection() as conn:
+        # Так читает и пишет критерии прежний код: без профиля и по глобальному имени.
+        weights = [float(row[0]) for row in conn.execute("SELECT weight FROM scoring_criteria WHERE enabled = TRUE")]
+        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Новый', 0, TRUE, 90) "
+                     "ON CONFLICT (name) DO UPDATE SET weight = EXCLUDED.weight")
+        conn.commit()
+    assert len(weights) == 5 and sum(weights) == 100
+
+
+def test_preset_rollback_printed_by_the_dry_run_brings_back_the_previous_set(isolated_db, capsys):
+    """Откат «б»: сухой прогон пресета печатает id прежнего набора и готовый UPDATE — на данных как
+    на проде это 789, 3, 791, 792, 793. После записи и этого UPDATE активен прежний набор."""
+    _to_seeded_profiles()
+    tech = _criteria("tech_radar")
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor")
+    rollback = capsys.readouterr().out.split("откат после --apply: ", 1)[1].splitlines()[0]
+    assert rollback == ("UPDATE scoring_criteria SET enabled = id IN (789, 3, 791, 792, 793), updated_at = now() "
+                        "WHERE profile = 'business';")
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+
+    with connection.get_connection() as conn:
+        conn.execute(rollback)
+        conn.commit()
+
+    active = _criteria("business", enabled_only=True)
+    assert sorted(row[0] for row in active) == sorted(PROD_ACTIVE) and sum(row[2] for row in active) == 100
+    assert _criteria("tech_radar") == tech
+
+
+def _scores() -> dict[int, tuple]:
+    with connection.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT s.article_id, s.total_score::float, s.profile, s.criteria_snapshot, "
+            "array_agg(ARRAY[i.criterion_id, i.final_score]::numeric[] ORDER BY i.criterion_id) "
+            "FROM article_scores s JOIN article_score_items i ON i.article_score_id = s.id "
+            "GROUP BY s.id ORDER BY s.article_id"
+        ).fetchall()
+    return {row[0]: row[1:] for row in rows}
+
+
+def test_september_backup_and_restore_bring_back_the_scores(isolated_db):
+    """Откат «в»: пересчёт переписывает балл и удаляет прежние подпункты — копия сентября до него и
+    возврат из неё. Задачи пересчёта в очереди снимаются до возврата; август в копию не входит."""
+    articles = _to_seeded_profiles()
+    before = _scores()
+    _run_script("scoring-backup-2026-09.sql")
+    with pytest.raises(psycopg.errors.DuplicateTable):
+        _run_script("scoring-backup-2026-09.sql")   # первая копия не перезаписывается
+    _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+    viktor = repository.list_enabled_scoring_criteria()
+    items = [{"criterion_id": int(c["id"]), "ai_score": 90, "keyword_score": 0, "final_score": 90} for c in viktor]
+    for article_id in (articles[1], articles[4]):   # пересчитаны сентябрьская и августовская
+        repository.replace_article_score(article_id, 90, "Высокая", "новый балл", items, "gpt")
+    rescored_august = _scores()[articles[4]]
+    job = repository.create_background_job(
+        "process_articles", {"article_ids": [articles[2]], "limit": 1, "offline": False, "only": ["scoring"]},
+        queue_name="external-ai-bulk", execution_region="external", capability="openai",
+    )
+
+    _run_script("scoring-rescore-cancel.sql")
+    _run_script("scoring-restore-2026-09.sql")
+    _run_script("scoring-restore-2026-09.sql")
+
+    assert repository.get_background_job(int(job["id"]))["status"] == "failed"
+    after = _scores()
+    assert {article: after[article] for article in (articles[1], articles[2], articles[3])} == \
+        {article: before[article] for article in (articles[1], articles[2], articles[3])}
+    assert after[articles[4]] == rescored_august
+
+
 def _new_columns() -> set[str]:
     with connection.get_connection() as conn:
         return {row[0] for row in conn.execute(

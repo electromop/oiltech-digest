@@ -8,7 +8,11 @@ BEGIN TRANSACTION READ ONLY;
 --    ленты; tech_radar появится после seed-scoring (шаг 4).
 SELECT profile, count(*) AS active, sum(weight) AS weight_sum
 FROM scoring_criteria WHERE enabled GROUP BY profile ORDER BY profile;
--- 2. Все строки по профилям: выключенные — история, сид их не воскрешает.
+-- 2. Имена активных по профилям — сверка после пресета: в business ровно пять критериев набора
+--    заказчика (ранбук, шаг 5).
+SELECT profile, id, name, weight
+FROM scoring_criteria WHERE enabled ORDER BY profile, sort_order, id;
+-- 2а. Все строки по профилям: выключенные — история, сид их не воскрешает.
 SELECT profile, enabled, count(*) AS criteria
 FROM scoring_criteria GROUP BY profile, enabled ORDER BY profile, enabled;
 -- 3. Индексы имён: после шага 3 остаётся только idx_scoring_criteria_profile_name.
