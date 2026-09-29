@@ -2450,6 +2450,19 @@ button {
   margin-bottom: 14px;
 }
 
+/* Вкладки наборов критериев на экране «Скоринг» (сессия G): отдельной строкой над шапкой
+   с «Нормализовать» / «Сохранить» — чтобы кнопки вкладок не смешивались с действиями. */
+.scoringProfileTabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.scoringProfileNotice {
+  margin-bottom: 14px;
+}
+
 /* «Удалить» внизу карточки — справа и за линией, а не вплотную под полем. */
 .settingsCardFoot {
   display: flex;

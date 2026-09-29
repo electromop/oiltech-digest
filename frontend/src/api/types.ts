@@ -967,6 +967,9 @@ export type DigestDraftSaveResult = {
   content_items?: number;
 };
 
+// Профили скоринга (сессия G, ADR 0002): свой набор критериев у каждой вкладки экрана.
+export type ScoringProfile = "business" | "tech_radar";
+
 export type ScoringCriterion = {
   id: number | null;
   name: string;
@@ -976,6 +979,7 @@ export type ScoringCriterion = {
   keywords_en_json: string[];
   sort_order: number;
   enabled?: boolean;
+  profile?: ScoringProfile;
 };
 
 export type Tag = {

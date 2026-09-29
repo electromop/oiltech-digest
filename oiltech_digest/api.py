@@ -33,6 +33,7 @@ from oiltech_digest.processing.pipeline import (
     process_pipeline_articles,
 )
 from oiltech_digest.readiness import readiness_check
+from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.documents import external as documents_external
@@ -1580,14 +1581,27 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
 
 
 @app.get("/api/scoring-criteria")
-def list_scoring_criteria(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
-    return [_clean(row) for row in repository.list_enabled_scoring_criteria()]
+def list_scoring_criteria(
+    profile: str = Query(ARTICLE_SCORING_PROFILE),
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Критерии профиля — вкладки экрана «Скоринг» (сессия G). Без параметра — business:
+    старый бандл фронта профилей не знает и работает с набором ленты, как раньше."""
+    try:
+        rows = repository.list_enabled_scoring_criteria(profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return [_clean(row) for row in rows]
 
 
 @app.put("/api/scoring-criteria")
-def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def save_scoring_criteria(
+    items: list[ScoringCriterionIn],
+    profile: str = Query(ARTICLE_SCORING_PROFILE),
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
     try:
-        result = repository.save_scoring_criteria([i.model_dump() for i in items])
+        result = repository.save_scoring_criteria([i.model_dump() for i in items], profile=profile)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **result}
@@ -2739,14 +2753,28 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    """Per-criterion scoring breakdown grouped by article id."""
+    """Per-criterion scoring breakdown grouped by article id.
+
+    Вес — из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
+    после правки на экране дал бы разбивку, которая в итог не складывается. У балла до
+    профилей снимка нет (или он битый) — вес текущий, как раньше. Вес достаётся из снимка
+    в запросе: сам снимок в каждой строке разбивки — ~0,7 КБ × пять подпунктов × до 2000
+    статей ленты, мегабайты на каждое открытие ленты (ревью PR #82)."""
     if not article_ids:
         return {}
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         """
-        SELECT s.article_id, sc.name, sc.weight, asi.final_score, asi.ai_score,
-               asi.keyword_score, asi.rationale
+        SELECT s.article_id, sc.name,
+               COALESCE(
+                   (SELECT (entry->>'weight')::numeric
+                    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.criteria_snapshot) = 'array'
+                                                   THEN s.criteria_snapshot ELSE '[]'::jsonb END) AS entry
+                    WHERE entry->>'id' = asi.criterion_id::text
+                      AND jsonb_typeof(entry->'weight') = 'number'
+                    LIMIT 1),
+                   sc.weight) AS weight,
+               asi.final_score, asi.ai_score, asi.keyword_score, asi.rationale
         FROM article_score_items asi
         JOIN article_scores s ON s.id = asi.article_score_id
         JOIN scoring_criteria sc ON sc.id = asi.criterion_id

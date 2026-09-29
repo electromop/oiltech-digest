@@ -1,15 +1,22 @@
 import { apiFetch } from "./client";
-import type { ScoringCriterion } from "./types";
+import type { ScoringCriterion, ScoringProfile } from "./types";
 
-export function listScoringCriteria() {
-  return apiFetch<ScoringCriterion[]>("/api/scoring-criteria");
+function profileQuery(profile: ScoringProfile) {
+  return `?profile=${encodeURIComponent(profile)}`;
 }
 
-export function saveScoringCriteria(items: ScoringCriterion[]) {
-  return apiFetch<{ ok: boolean; saved: number; weight_sum: number }>("/api/scoring-criteria", {
-    method: "PUT",
-    body: JSON.stringify(items),
-  });
+export function listScoringCriteria(profile: ScoringProfile) {
+  return apiFetch<ScoringCriterion[]>(`/api/scoring-criteria${profileQuery(profile)}`);
+}
+
+export function saveScoringCriteria(items: ScoringCriterion[], profile: ScoringProfile) {
+  return apiFetch<{ ok: boolean; saved: number; weight_sum: number; profile: ScoringProfile }>(
+    `/api/scoring-criteria${profileQuery(profile)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(items),
+    },
+  );
 }
 
 export function deleteScoringCriterion(criterionId: number) {

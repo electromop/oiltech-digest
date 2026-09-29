@@ -112,7 +112,8 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
     monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: calls.append(("summary", args)))
     monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *args: calls.append(("relevance", args)))
     monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: calls.append(("tagging", args)))
-    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args: calls.append(("scoring", args)))
+    monkeypatch.setattr(external_ai.repository, "replace_article_score",
+                        lambda *args, **kwargs: calls.append(("scoring", args)))
     monkeypatch.setattr(external_ai.repository, "insert_ai_run", lambda rec: calls.append(("run", rec["stage"])))
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
 
@@ -226,7 +227,7 @@ def test_apply_only_writes_summary_and_translation_but_bills_every_stage(monkeyp
     monkeypatch.setattr(external_ai.repository, "set_article_title_ru", lambda *args: writes.append("translation"))
     monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *args: writes.append("relevance"))
     monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: writes.append("tagging"))
-    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args: writes.append("scoring"))
+    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args, **kwargs: writes.append("scoring"))
     monkeypatch.setattr(external_ai, "_insert_run", lambda article_id, stage, payload, **kwargs: runs.append(stage))
     item = {
         "article_id": 1,
@@ -265,7 +266,9 @@ def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
     monkeypatch.setattr(external_ai.repository, "reserve_process_articles", lambda job_id, **kwargs: [7])
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [dict(article)])
     monkeypatch.setattr(external_ai.repository, "list_enabled_tags", lambda: [])
-    monkeypatch.setattr(external_ai.repository, "list_enabled_scoring_criteria", lambda: [])
+    # Критерии с суммой 100: пакет с баллом без них ядро не выдаёт (сессия G, C0).
+    monkeypatch.setattr(external_ai.repository, "list_enabled_scoring_criteria",
+                        lambda: [{"id": 20, "name": "Значимость", "weight": 100}])
 
     regular = external_ai.build_process_articles_payload({"article_ids": [7]}, job_id=1)
     regen = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["summary", "translation"]}, job_id=2)
@@ -289,6 +292,27 @@ def test_malformed_only_is_rejected_before_articles_are_reserved(monkeypatch):
     with pytest.raises(external_ai.InvalidJobPayload, match="only"):
         external_ai.build_process_articles_payload({"article_ids": [7], "only": "summary"}, job_id=3)
     assert reserved == []
+
+
+def test_core_refuses_scoring_batch_with_weights_not_summing_to_100(monkeypatch):
+    """Сессия G, C0: сумма весов ≠ 100 — задачу не выдаём (InvalidJobPayload), статьи не
+    резервируем. Иначе воркер оплатил бы вызовы, а итог Σ final·вес/100 молча исказился бы."""
+    reserved = []
+    monkeypatch.setattr(external_ai.repository, "reserve_process_articles",
+                        lambda job_id, **kwargs: reserved.append(job_id) or [7])
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [{"id": 7}])
+    monkeypatch.setattr(external_ai.repository, "list_enabled_tags", lambda: [])
+    monkeypatch.setattr(external_ai.repository, "list_enabled_scoring_criteria",
+                        lambda: [{"id": 20, "name": "А", "weight": 100}, {"id": 21, "name": "Б", "weight": 100}])
+
+    for payload in ({"limit": 5}, {"article_ids": [7]}, {"article_ids": [7], "only": ["scoring"]}):
+        with pytest.raises(external_ai.InvalidJobPayload, match="200"):
+            external_ai.build_process_articles_payload(payload, job_id=3)
+    assert reserved == []
+
+    # Перегенерация сути балл не считает — её веса не касаются.
+    regen = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["summary", "translation"]}, job_id=4)
+    assert reserved == [4] and regen["only"] == ["summary", "translation"]
 
 
 def test_core_passes_only_from_job_payload_to_apply(monkeypatch):

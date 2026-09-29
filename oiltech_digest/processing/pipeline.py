@@ -10,7 +10,7 @@ from typing import Any
 
 import logging
 
-from oiltech_digest import config
+from oiltech_digest import config, scoring_profiles
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block, mixed_script_words
@@ -218,6 +218,8 @@ def process_score_articles(articles: list[dict], client) -> dict:
                 payload["explanation"],
                 payload["items"],
                 response.model,
+                profile=payload["profile"],
+                criteria_snapshot=payload["criteria_snapshot"],
             )
             _record_run(article, "scoring", client, response)
             stats["processed"] += 1
@@ -321,6 +323,7 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
                 repository.replace_article_score(
                     article["id"], payload["total_score"], payload["score_label"],
                     payload["explanation"], payload["items"], score_resp.model,
+                    profile=payload["profile"], criteria_snapshot=payload["criteria_snapshot"],
                 )
                 _record_run(article, "scoring", client, score_resp)
                 stats["scored"] += 1
@@ -580,6 +583,10 @@ def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[s
         "score_label": score_label(total_score),
         "explanation": payload.get("explanation") or "",
         "items": items,
+        # Происхождение (сессия G): каким профилем и каким набором критериев посчитан балл —
+        # веса снимка те же, что дали итог выше. На NL — из критериев пакета.
+        "profile": scoring_profiles.profile_of(criteria),
+        "criteria_snapshot": scoring_profiles.criteria_snapshot(criteria),
     }
 
 

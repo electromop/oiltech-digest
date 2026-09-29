@@ -9,46 +9,15 @@ import openpyxl
 
 from oiltech_digest.config import DIRECTIONS_XLSX
 from oiltech_digest.db import repository
+from oiltech_digest.scoring_profiles import SCORING_PRESETS
 
 
 DIRECTIONS_SHEET = "Направления"
 KEYWORDS_SHEET = "Ключевые слова"
 
 
-DEFAULT_SCORING_CRITERIA = [
-    {
-        "name": "Технологическая новизна",
-        "description": "Насколько материал описывает новую или заметно улучшенную технологию, сервис, оборудование или метод.",
-        "weight": 35,
-        "keywords_json": ["новая технология", "пилот", "разработка", "автоматизация", "инновация"],
-        "keywords_en_json": ["new technology", "pilot", "development", "automation", "innovation"],
-        "sort_order": 10,
-    },
-    {
-        "name": "Применимость для РФ и зрелых активов",
-        "description": "Насколько решение потенциально применимо в российских нефтегазовых условиях, на зрелых месторождениях или в сложной логистике.",
-        "weight": 30,
-        "keywords_json": ["зрелые месторождения", "импортозамещение", "трудноизвлекаемые", "снижение затрат"],
-        "keywords_en_json": ["mature fields", "hard-to-recover", "cost reduction", "remote operations"],
-        "sort_order": 20,
-    },
-    {
-        "name": "Бизнес-эффект",
-        "description": "Ожидаемый эффект по добыче, срокам, безопасности, CAPEX/OPEX, НПВ или операционной устойчивости.",
-        "weight": 25,
-        "keywords_json": ["эффект", "экономия", "снижение затрат", "рост добычи", "безопасность"],
-        "keywords_en_json": ["efficiency", "cost savings", "production increase", "safety", "NPT reduction"],
-        "sort_order": 30,
-    },
-    {
-        "name": "Достоверность и зрелость сигнала",
-        "description": "Надёжность источника и зрелость события: промышленный запуск, контракт, результаты испытаний важнее ранних заявлений.",
-        "weight": 10,
-        "keywords_json": ["контракт", "промышленный", "результаты испытаний", "внедрение"],
-        "keywords_en_json": ["contract", "commercial deployment", "field trial", "test results", "implementation"],
-        "sort_order": 40,
-    },
-]
+# Набор по умолчанию для пустого профиля — набор заказчика «viktor» (scoring_profiles.SCORING_PRESETS).
+DEFAULT_SCORING_PROFILES: dict[str, list[dict]] = SCORING_PRESETS["viktor"]
 
 
 TAG_SIGNAL_ENRICHMENT = [
@@ -304,9 +273,15 @@ def seed_tags_from_directions(path=DIRECTIONS_XLSX) -> dict:
 
 
 def seed_default_scoring_criteria() -> dict:
-    for rec in DEFAULT_SCORING_CRITERIA:
-        repository.upsert_scoring_criterion(rec)
-    return {"criteria": len(DEFAULT_SCORING_CRITERIA), "weight_sum": 100}
+    """Набор по умолчанию — в каждый ПУСТОЙ профиль; непустой не трогается совсем.
+
+    Запускается сам в bootstrap (docker-compose, docker-scheduler.sh без SKIP_BOOTSTRAP) и
+    вручную на шаге 4 выката ADR 0002 — тогда заводит пустой ещё профиль tech_radar."""
+    stats = {}
+    for profile, records in DEFAULT_SCORING_PROFILES.items():
+        added = repository.seed_scoring_profile(profile, records)
+        stats[profile] = {"added": added, "weight_sum": sum(rec["weight"] for rec in records) if added else None}
+    return stats
 
 
 def _sheet_dicts(ws) -> list[dict]:

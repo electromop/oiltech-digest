@@ -14,7 +14,7 @@ from oiltech_digest.processing.domain_glossary import (
 from oiltech_digest.processing import digest
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient, _extract_output_text
-from oiltech_digest.processing.seed import DEFAULT_SCORING_CRITERIA, _split_keywords, _tag_signal_enrichment
+from oiltech_digest.processing.seed import DEFAULT_SCORING_PROFILES, _split_keywords, _tag_signal_enrichment
 
 
 class _RecordingClient:
@@ -178,6 +178,33 @@ def test_external_ai_relevance_runs_first_and_ignores_summary(monkeypatch):
     assert result["stats"]["relevant"] == 1
 
 
+def test_external_batch_refuses_weights_not_summing_to_100(monkeypatch):
+    """Сессия G, C0: на боевом пути NL сумма весов не проверялась — при сумме ≠ 100 итог
+    Σ final·вес/100 молча раздувался и обрезался до 100. Отказ — до первого платного вызова."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    payload = _external_payload()
+    first = payload["criteria"][0]
+    payload["criteria"] = [first, {**first, "id": 21, "name": "Второй"}]   # 100 + 100 = 200
+
+    with pytest.raises(ValueError, match="100"):
+        external_ai.process_payload(payload)
+    assert client.calls == []   # ни одного платного вызова
+
+
+def test_external_batch_without_scoring_ignores_the_weights(monkeypatch):
+    """Перегенерация сути (only без scoring) баллы не считает: веса ей не помеха."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    payload = {**_external_payload(), "only": ["summary", "translation"]}
+    payload["criteria"] = [{**payload["criteria"][0], "weight": 60}]
+
+    result = external_ai.process_payload(payload)
+
+    assert result["stats"]["summary"] == 1
+    assert "article_score" not in [c["name"] for c in client.calls]
+
+
 def test_relevance_article_uses_relevance_model_and_reasoning(monkeypatch):
     """Гейт зовётся с отдельной (более сильной) моделью и повышенным reasoning."""
     monkeypatch.setattr(pipeline.config, "OPENAI_RELEVANCE_MODEL", "strong-model")
@@ -281,8 +308,13 @@ def test_signal_enrichment_adds_chinese_hse_keywords():
     assert "防碰撞系统" in extra["keywords_cn"]
 
 
-def test_default_scoring_weights_equal_100():
-    assert sum(item["weight"] for item in DEFAULT_SCORING_CRITERIA) == 100
+def test_default_scoring_weights_equal_100_in_each_profile():
+    from oiltech_digest.scoring_profiles import SCORING_PROFILES
+
+    assert set(DEFAULT_SCORING_PROFILES) == set(SCORING_PROFILES)
+    for criteria in DEFAULT_SCORING_PROFILES.values():
+        assert sum(item["weight"] for item in criteria) == 100
+        assert len({item["name"] for item in criteria}) == len(criteria)
 
 
 def test_keyword_tag_selects_best_tag():
@@ -932,7 +964,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     monkeypatch.setattr(
         pipeline.repository,
         "replace_article_score",
-        lambda article_id, total_score, score_label, explanation, items, model=None: state.update(
+        lambda article_id, total_score, score_label, explanation, items, model=None, *, profile=None,
+        criteria_snapshot=None: state.update(
             {
                 "score_article_id": article_id,
                 "total_score": total_score,
@@ -940,6 +973,7 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
                 "score_explanation": explanation,
                 "score_items": items,
                 "score_model": model,
+                "score_snapshot": criteria_snapshot,
             }
         ),
     )
@@ -964,6 +998,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     assert state["tag_id"] == 10
     assert state["total_score"] >= 65
     assert state["score_label"] in {"Выше средней", "Высокая"}
+    # Балл помнит, каким набором посчитан (сессия G): снимок критериев на момент оценки.
+    assert [(s["id"], s["weight"]) for s in state["score_snapshot"]] == [(20, 100.0)]
     # Релевантность идёт ПЕРВОЙ — гейт до суммаризации (фикс «мусор в выборке» 2026-06).
     # Перевод заголовка — отдельная стадия после сути.
     assert [run["stage"] for run in state["runs"]] == ["relevance", "summary", "translation", "tagging", "scoring"]
