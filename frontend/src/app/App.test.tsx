@@ -945,6 +945,20 @@ describe("App smoke", () => {
     expect(requested.some((url) => url.includes("status=digest") && url.includes("month=2026-08"))).toBe(true);
   });
 
+  it("оформление выпуска — «Предпросмотр оформления», а не «Live preview»", async () => {
+    // Заказчик просил убрать англицизмы с экранов.
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
+    await user.click(await screen.findByRole("button", { name: "Оформление" }));
+
+    expect(await screen.findByRole("heading", { name: "Предпросмотр оформления" })).toBeInTheDocument();
+    expect(screen.queryByText("Live preview")).not.toBeInTheDocument();
+  });
+
   it("конструктор перечитывает выбранное, когда окно сменилось в открытой вкладке", async () => {
     let months = ["2026-09"];
     const baseImpl = fetchMock.getMockImplementation();
