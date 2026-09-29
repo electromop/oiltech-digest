@@ -1,8 +1,29 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
-import { createSignalFeedback, getSignalSearchHealth, listSignals, updateSignal } from "../../api/signals";
-import type { SignalSearchHealth } from "../../api/signals";
-import type { Signal, SignalFeedbackPayload } from "../../api/types";
+import {
+  createSignalFeedback,
+  getSignalSearchHealth,
+  getSignalSummary,
+  listSignals,
+  updateSignal,
+} from "../../api/signals";
+import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
+import type { Signal, SignalEvidence, SignalFeedbackPayload } from "../../api/types";
+import { StatCard } from "../shared/StatCard";
+import { ratingClass, scoreClass } from "../shared/scoreScale";
+
+// Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему
+// радару, а не экран по загруженным карточкам (замечание заказчика 19.09).
+export const RADAR_PAGE_SIZE = 100;
+// Больше за один запрос сервер не отдаёт (/api/signals, limit ≤ 200).
+const RADAR_MAX_PAGE = 200;
+// Задержка серверного поиска — как у ленты бизнес-сигналов: запрос не на каждую букву.
+const SEARCH_DELAY_MS = 400;
+const EVIDENCE_PER_CARD = 5;
+// Без фильтров видно всё: в отличие от ленты, радар слабые карточки по умолчанию не прячет.
+const SCORE_MIN = 0;
+const SCORE_MAX = 100;
+const DEFAULT_SORT: SignalSort = "score_desc";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -66,20 +87,56 @@ function formatRunMoment(value: string | null): string {
   return `${day} в ${time}`;
 }
 
-// Дата поступления карточки (встреча 21.09): первая находка радаром, по Москве.
-function formatArrival(signal: Signal): string {
-  const value = signal.first_seen_at || signal.created_at;
+function formatDay(value: string | null | undefined): string {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return "";
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: RADAR_TIME_ZONE });
 }
 
-// Цвет среднего балла группы — те же пороги, что у групп «Бизнес-сигналов».
-function scoreClass(score: number) {
-  if (!score) return "muted";
-  if (score >= 65) return "ok";
-  if (score >= 40) return "warn";
-  return "bad";
+// Дата поступления карточки (встреча 21.09): первая находка радаром, по Москве.
+function formatArrival(signal: Signal): string {
+  return formatDay(signal.first_seen_at || signal.created_at);
+}
+
+// Строка над заголовком ссылки: «издатель · дата публикации» (колонки «Источник» и «Дата
+// публикации» эталона заказчика). Даты нет — нет и пустого «·».
+function evidenceSource(item: SignalEvidence): string {
+  return [item.publisher || "источник", formatDay(item.published_at)].filter(Boolean).join(" · ");
+}
+
+// «из 1 сигнала», «из 21 сигнала», но «из 2 сигналов», «из 11 сигналов».
+function signalsAfterFrom(count: number): string {
+  return count % 10 === 1 && count % 100 !== 11 ? "сигнала" : "сигналов";
+}
+
+// Балл карточки — 0–100: поле пустое или вне шкалы — край шкалы, а не ошибка сервера.
+function clampScore(value: string, fallback: number): number {
+  if (value.trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(SCORE_MIN, Math.min(SCORE_MAX, number));
+}
+
+// «1 ссылка», «2 ссылки», «5 ссылок».
+function linksWord(count: number): string {
+  const tens = count % 100;
+  const units = count % 10;
+  if (units === 1 && tens !== 11) return "ссылка";
+  if (units >= 2 && units <= 4 && (tens < 12 || tens > 14)) return "ссылки";
+  return "ссылок";
+}
+
+// Мета под заголовком карточки: «тема · N ссылок · зрелость · » — номер карточки следом.
+// Зрелость — оценка модели; оценка человека в ОС называется «Оценка сигнала».
+function cardMeta(signal: Signal): string {
+  const links = Number(signal.evidence_count || 0);
+  const maturity = MATURITY_LABELS[signal.maturity] || signal.maturity;
+  return `${signal.theme} · ${links} ${linksWord(links)} · Зрелость: ${maturity} · `;
+}
+
+// Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
+function scoreTone(signal: Signal): string {
+  return signal.score_label ? ratingClass(signal.score_label) : scoreClass(Number(signal.score || 0));
 }
 
 // Причина по-русски; прочее — короткий текст сервера. Код HTTP — впереди, как у 402:
@@ -119,10 +176,21 @@ function searchHealthNotice(health: SignalSearchHealth | null): string {
 
 export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: Props) {
   const [signals, setSignals] = useState<Signal[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [summary, setSummary] = useState<SignalSummary | null>(null);
+  // Первый ответ ещё не пришёл — вместо списка «Загружаем»; дальше старая выборка видна,
+  // пока идёт новая.
+  const [loaded, setLoaded] = useState(false);
+  const [searching, setSearching] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [maturity, setMaturity] = useState("");
   const [theme, setTheme] = useState("");
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<SignalSort>(DEFAULT_SORT);
+  const [scoreMin, setScoreMin] = useState(SCORE_MIN);
+  const [scoreMax, setScoreMax] = useState(SCORE_MAX);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -132,9 +200,68 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
 
+  const filters: SignalFilters = useMemo(
+    () => ({
+      q: search.trim() || undefined,
+      theme: theme || undefined,
+      maturity: maturity || undefined,
+      minScore: scoreMin !== SCORE_MIN ? scoreMin : undefined,
+      maxScore: scoreMax !== SCORE_MAX ? scoreMax : undefined,
+      since: dateFrom || undefined,
+      until: dateTo || undefined,
+    }),
+    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo],
+  );
+  // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
+  // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
+  const requestSeq = useRef(0);
+  const pendingTimer = useRef<number | undefined>(undefined);
+  const firstRequest = useRef(true);
+  // Новая выборка поставлена или в пути: её ответ заменит список целиком. Ref, а не только
+  // searching: читается после await, где состояние из замыкания уже устарело.
+  const selectionPending = useRef(false);
+  // Текущая выборка — для продолжений после await (отзыв, «В дайджест»): замыкание того
+  // рендера, где нажали кнопку, помнит фильтры на момент нажатия, а не нынешние.
+  const latestQuery = useRef({ filters, sort, loaded: 0 });
   useEffect(() => {
-    void reload();
-  }, []);
+    latestQuery.current = { filters, sort, loaded: signals.length };
+  });
+
+  function load(query: SignalFilters, order: SignalSort, delay: number, size = RADAR_PAGE_SIZE) {
+    window.clearTimeout(pendingTimer.current);
+    const seq = ++requestSeq.current;
+    selectionPending.current = true;
+    setSearching(true);
+    pendingTimer.current = window.setTimeout(() => {
+      Promise.all([
+        listSignals({ ...query, sort: order, limit: size, offset: 0, evidenceLimit: EVIDENCE_PER_CARD }),
+        getSignalSummary(query),
+      ])
+        .then(([rows, counts]) => {
+          if (seq !== requestSeq.current) return;
+          setSignals(rows);
+          setSummary(counts);
+        })
+        .catch((error) => {
+          if (seq === requestSeq.current) handleError(error, "Не удалось загрузить технологический радар");
+        })
+        .finally(() => {
+          if (seq !== requestSeq.current) return;
+          selectionPending.current = false;
+          setSearching(false);
+          setLoaded(true);
+        });
+    }, delay);
+  }
+
+  // Фильтры применяются сразу, без «Обновить»: любая смена — новая выборка с сервера.
+  useEffect(() => {
+    const delay = firstRequest.current ? 0 : SEARCH_DELAY_MS;
+    firstRequest.current = false;
+    load(filters, sort, delay);
+  }, [filters, sort]);
+
+  useEffect(() => () => window.clearTimeout(pendingTimer.current), []);
 
   useEffect(() => {
     // Обычный пользователь здоровье поиска не запрашивает: эндпоинт только для админа.
@@ -155,37 +282,79 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     showToast(message || fallback, "error");
   }
 
-  async function reload() {
+  // keepLoaded — перечитать столько, сколько уже догружено «Показать ещё» (не больше, чем
+  // сервер отдаёт за раз): после склейки дубля человек не теряет место в списке.
+  function reload(options: { keepLoaded?: boolean } = {}) {
+    const { filters: query, sort: order, loaded } = latestQuery.current;
+    const size = options.keepLoaded ? Math.min(RADAR_MAX_PAGE, Math.max(RADAR_PAGE_SIZE, loaded)) : RADAR_PAGE_SIZE;
+    load(query, order, 0, size);
+  }
+
+  // Плитки после «В дайджест» и отзыва: числа — с сервера, по всему радару. Ответ для
+  // устаревшей выборки не применяется; сбой тихий — плитки просто остаются прежними.
+  function refreshSummary() {
+    const seq = requestSeq.current;
+    getSignalSummary(latestQuery.current.filters)
+      .then((counts) => {
+        if (seq === requestSeq.current) setSummary(counts);
+      })
+      .catch(() => undefined);
+  }
+
+  // «В дайджест» или отзыв легли, пока в пути новая выборка: её ответ собран до отметки и
+  // откатил бы её на экране (ревью PR #83) — перечитываем выборку заново, на той же глубине.
+  // Иначе хватает плиток.
+  function afterListChange() {
+    if (selectionPending.current) reload({ keepLoaded: true });
+    else refreshSummary();
+  }
+
+  function resetFilters() {
+    setSearch("");
+    setTheme("");
+    setMaturity("");
+    setSort(DEFAULT_SORT);
+    setScoreMin(SCORE_MIN);
+    setScoreMax(SCORE_MAX);
+    setDateFrom("");
+    setDateTo("");
+  }
+
+  async function showMore() {
+    // Пока идёт новая выборка, догружать нечего: страница легла бы к старому списку по
+    // смещению нового (ревью PR #83). Кнопка в это время и так недоступна.
+    if (searching || selectionPending.current) return;
+    const seq = requestSeq.current;
     try {
-      setBusy(true);
-      setSignals(await listSignals({ maturity: maturity || undefined, theme: theme || undefined, limit: 150, evidenceLimit: 5 }));
+      setLoadingMore(true);
+      const rows = await listSignals({
+        ...filters,
+        sort,
+        limit: RADAR_PAGE_SIZE,
+        offset: signals.length,
+        evidenceLimit: EVIDENCE_PER_CARD,
+      });
+      if (seq !== requestSeq.current) return;
+      // Между страницами радар мог добавить карточку — повтор не рисуем дважды.
+      setSignals((current) => {
+        const known = new Set(current.map((item) => item.id));
+        return [...current, ...rows.filter((item) => !known.has(item.id))];
+      });
     } catch (error) {
-      handleError(error, "Не удалось загрузить технологический радар");
+      handleError(error, "Не удалось загрузить следующие сигналы");
     } finally {
-      setBusy(false);
+      setLoadingMore(false);
     }
   }
 
-  // В фильтре — только тематики заказчика: ранние карточки со свободной темой — отдельным блоком.
-  const themes = useMemo(
-    () => [...new Set(signals.filter((signal) => signal.theme_is_topic !== false).map((signal) => signal.theme).filter(Boolean))].sort(),
-    [signals],
-  );
-  const visibleSignals = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return signals;
-    return signals.filter((signal) =>
-      [
-        signal.title_ru,
-        signal.title,
-        signal.theme,
-        signal.summary,
-        signal.thesis,
-        signal.transferability,
-        ...(signal.evidence || []).map((item) => `${item.title} ${item.title_ru || ""} ${item.publisher || ""}`),
-      ].some((value) => String(value || "").toLowerCase().includes(q)),
-    );
-  }, [search, signals]);
+  // В фильтре — только тематики заказчика, и со всего радара, а не с текущей выборки: иначе
+  // после выбора темы в списке осталась бы она одна. Ранние карточки — отдельным блоком.
+  const themes = useMemo(() => {
+    const names = (summary?.themes ?? []).map((item) => item.theme);
+    return theme && !names.includes(theme) ? [...names, theme] : names;
+  }, [summary, theme]);
+  const visibleSignals = signals;
+  const remaining = Math.max(0, (summary?.matching ?? signals.length) - signals.length);
 
   const groups = useMemo(() => {
     const byTheme = new Map<string, Signal[]>();
@@ -195,12 +364,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       const key = signal.theme_is_topic === false ? EARLY_THEME_GROUP : signal.theme || "Без темы";
       byTheme.set(key, [...(byTheme.get(key) || []), signal]);
     }
-    const best = (items: Signal[]) => Math.max(...items.map((item) => Number(item.score || 0)));
+    // Блоки — в порядке выдачи, как у ленты: первым тот, чья карточка первая по выбранной
+    // сортировке (по баллу — блок с лучшей карточкой, «сначала новые» — со свежей).
+    // Ранние карточки — всегда последним блоком.
     return [...byTheme.entries()].sort(
-      (a, b) =>
-        Number(a[0] === EARLY_THEME_GROUP) - Number(b[0] === EARLY_THEME_GROUP) ||
-        best(b[1]) - best(a[1]) ||
-        a[0].localeCompare(b[0], "ru"),
+      (a, b) => Number(a[0] === EARLY_THEME_GROUP) - Number(b[0] === EARLY_THEME_GROUP),
     );
   }, [visibleSignals]);
 
@@ -229,6 +397,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         ),
       );
       showToast(selected ? "Сигнал добавлен в дайджест" : "Сигнал убран из дайджеста");
+      afterListChange();
     } catch (error) {
       handleError(error, "Не удалось обновить статус сигнала");
     } finally {
@@ -264,6 +433,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         duplicate_of_signal_id: duplicateOfSignalId,
       });
       setFeedbackDrafts((current) => ({ ...current, [signal.id]: EMPTY_FEEDBACK_DRAFT }));
+      // Сохранено — форма закрывается: счётчик «Обратная связь: N» рядом подтверждает отзыв.
+      closeFeedback(signal.id);
       setSignals((current) =>
         current.map((item) =>
           item.id === signal.id ? { ...item, feedback_count: (item.feedback_count || 0) + 1 } : item,
@@ -281,7 +452,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         setSignals((current) => current.filter((item) => item.id !== signal.id));
       }
       if (result.merged || result.merge_skipped) {
-        void reload();
+        reload({ keepLoaded: true });
+      } else {
+        afterListChange();
       }
     } catch (error) {
       handleError(error, "Не удалось сохранить обратную связь по сигналу");
@@ -308,6 +481,24 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     });
   }
 
+  function draftOf(signalId: number): FeedbackDraft {
+    return feedbackDrafts[signalId] || EMPTY_FEEDBACK_DRAFT;
+  }
+
+  function closeFeedback(signalId: number) {
+    setFeedbackOpen((current) => {
+      const next = new Set(current);
+      next.delete(signalId);
+      return next;
+    });
+  }
+
+  // «Отмена» — форма закрывается, черновик не сохраняется.
+  function cancelFeedback(signalId: number) {
+    setFeedbackDrafts((current) => ({ ...current, [signalId]: EMPTY_FEEDBACK_DRAFT }));
+    closeFeedback(signalId);
+  }
+
   function updateFeedbackDraft(signalId: number, patch: Partial<FeedbackDraft>) {
     setFeedbackDrafts((current) => ({
       ...current,
@@ -315,21 +506,20 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     }));
   }
 
-  const digestCount = visibleSignals.filter((signal) => signal.selected_for_digest).length;
-  const feedbackCount = visibleSignals.reduce((sum, signal) => sum + Number(signal.feedback_count || 0), 0);
   const searchNotice = isAdmin ? searchHealthNotice(searchHealth) : "";
+  // «N из M сигналов»: N — в выборке по фильтрам, M — весь радар (оба числа — с сервера).
+  const countBadge = searching
+    ? "Обновляем выборку…"
+    : summary
+      ? `${summary.matching} из ${summary.total} ${signalsAfterFrom(summary.total)}` +
+        (remaining > 0 ? ` · показаны ${visibleSignals.length}` : "")
+      : "";
 
   return (
     <section className="screenStack">
       <header className="screenHeader">
         <div>
-          <div className="eyebrow">Signal Discovery</div>
           <h1>Технологический радар</h1>
-        </div>
-        <div className="signalRadarHeaderStats" aria-label="Сводка радара">
-          <span><strong>{visibleSignals.length}</strong> сигналов</span>
-          <span><strong>{digestCount}</strong> в дайджесте</span>
-          <span>обратная связь: <strong>{feedbackCount}</strong></span>
         </div>
       </header>
 
@@ -340,59 +530,143 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         </div>
       ) : null}
 
-      <section className="signalRadarToolbar">
-        <label>
-          <span>Поиск</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ZEUS IQ, бурение, робот..." />
-        </label>
-        <label>
-          <span>Зрелость</span>
-          <select value={maturity} onChange={(event) => setMaturity(event.target.value)}>
-            <option value="">Все</option>
-            <option value="watch">Наблюдать</option>
-            <option value="shortlist">Кандидат</option>
-            <option value="proven">Подтверждено</option>
-            <option value="reject">Отклонено</option>
-          </select>
-        </label>
-        <label>
-          <span>Тема</span>
-          <select value={theme} onChange={(event) => setTheme(event.target.value)}>
-            <option value="">Все темы</option>
-            {themes.map((item) => <option value={item} key={item}>{item}</option>)}
-          </select>
-        </label>
-        <button type="button" className="ghostButton" disabled={busy} onClick={() => void reload()}>
-          {busy ? "Обновляем" : "Обновить"}
-        </button>
-        {groups.length ? (
-          <>
-            <button
-              type="button"
-              className="ghostButton"
-              onClick={() => {
-                setExpandedGroups(new Set(groups.map(([group]) => group)));
-                setCollapsedGroups(new Set());
-              }}
-            >
-              Развернуть всё
-            </button>
-            <button
-              type="button"
-              className="ghostButton"
-              onClick={() => {
-                setExpandedGroups(new Set());
-                setCollapsedGroups(new Set(groups.map(([group]) => group)));
-              }}
-            >
-              Свернуть всё
-            </button>
-          </>
-        ) : null}
-      </section>
+      {/* Плитки, как у «Бизнес-сигналов» (документ заказчика 19.09), — по всему радару:
+          поиск и фильтры сужают список, но не эти числа. */}
+      {summary ? (
+        <section className="statsGridReact" aria-label="Сводка радара">
+          <StatCard label="Всего сигналов" value={summary.total} />
+          <StatCard label="Новые за 7 дней" value={summary.new_7d} />
+          <StatCard label="В дайджесте" value={summary.in_digest} />
+          <StatCard label="С обратной связью" value={summary.with_feedback} />
+          <StatCard label="Объединено дублей" value={summary.merged} />
+        </section>
+      ) : null}
 
-      <section className="signalRadarList">
-        {busy ? (
+      {/* Раскладка — как у «Бизнес-сигналов» (документ заказчика 19.09): действия в шапке
+          панели, поиск и тема первой строкой, зрелость и сортировка второй, остальное —
+          в «Расширенных фильтрах». */}
+      <section className="panel">
+        <div className="panelHeader">
+          <h2>Каталог технологических сигналов</h2>
+          <div className="settingsActions signalRadarPanelActions">
+            {countBadge ? <span className="badge">{countBadge}</span> : null}
+            {groups.length ? (
+              <>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => {
+                    setExpandedGroups(new Set(groups.map(([group]) => group)));
+                    setCollapsedGroups(new Set());
+                  }}
+                >
+                  Развернуть всё
+                </button>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => {
+                    setExpandedGroups(new Set());
+                    setCollapsedGroups(new Set(groups.map(([group]) => group)));
+                  }}
+                >
+                  Свернуть всё
+                </button>
+              </>
+            ) : null}
+            <button type="button" className="ghostButton signalRadarRefresh" disabled={searching} onClick={() => reload()}>
+              Обновить
+            </button>
+          </div>
+        </div>
+
+        <div className="articlesFiltersRow">
+          <label className="field">
+            <span>Поиск</span>
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Поиск по радару: название, суть, источник, #номер"
+              // Не длиннее, чем принимает API (q ≤ 200): иначе 422 с сырым текстом ошибки.
+              maxLength={200}
+            />
+          </label>
+          <label className="field">
+            <span>Тема</span>
+            <select value={theme} onChange={(event) => setTheme(event.target.value)}>
+              <option value="">Все темы</option>
+              {themes.map((item) => <option value={item} key={item}>{item}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="articlesFiltersRow signalRadarFiltersSecondary">
+          <label className="field">
+            <span>Зрелость</span>
+            <select value={maturity} onChange={(event) => setMaturity(event.target.value)}>
+              <option value="">Любая зрелость</option>
+              <option value="watch">Наблюдать</option>
+              <option value="shortlist">Кандидат</option>
+              <option value="proven">Подтверждено</option>
+              <option value="reject">Отклонено</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Сортировка</span>
+            <select value={sort} onChange={(event) => setSort(event.target.value as SignalSort)}>
+              <option value="score_desc">Балл: по убыванию</option>
+              <option value="date_desc">Сначала новые</option>
+              <option value="score_asc">Балл: по возрастанию</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="advancedToggleRow">
+          <button type="button" className="ghostButton" onClick={() => setShowAdvancedFilters((current) => !current)}>
+            {showAdvancedFilters ? "Скрыть расширенные фильтры" : "Расширенные фильтры"}
+          </button>
+        </div>
+
+        {showAdvancedFilters ? (
+          <div className="articlesAdvancedGrid">
+            <label className="field">
+              <span>Балл от</span>
+              <input
+                type="number"
+                min={SCORE_MIN}
+                max={SCORE_MAX}
+                value={scoreMin}
+                onChange={(event) => setScoreMin(clampScore(event.target.value, SCORE_MIN))}
+              />
+            </label>
+            <label className="field">
+              <span>Балл до</span>
+              <input
+                type="number"
+                min={SCORE_MIN}
+                max={SCORE_MAX}
+                value={scoreMax}
+                onChange={(event) => setScoreMax(clampScore(event.target.value, SCORE_MAX))}
+              />
+            </label>
+            <label className="field">
+              <span>Поступил с</span>
+              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Поступил по</span>
+              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            </label>
+            <div className="field">
+              <span>&nbsp;</span>
+              <button type="button" className="ghostButton" onClick={resetFilters}>
+                Сбросить
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {!loaded ? (
           <div className="emptyState">Загружаем сигналы...</div>
         ) : visibleSignals.length ? (
           <div className="articleGroupsStack">
@@ -424,37 +698,54 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   <span className={`miniPill ${scoreClass(groupAvg)}`}>{groupAvg}</span>
                 </span>
               </button>
-              {groupOpen ? groupSignals.map((signal) => {
+              {groupOpen ? (
+              <div className="articleRows">
+              {groupSignals.map((signal) => {
             const isExpanded = expanded.has(signal.id);
             const isFeedbackOpen = feedbackOpen.has(signal.id);
             const savingThis = Boolean(saving[signal.id]);
+            const title = signal.title_ru || signal.title;
+            const primaryUrl = signal.evidence?.[0]?.source_url;
+            const arrival = formatArrival(signal);
+            const tone = scoreTone(signal);
             return (
-              <article className="signalRadarCard" key={signal.id}>
-                <div className="signalRadarCardTop">
-                  <div>
-                    <div className="signalRadarMeta">
-                      {/* ID виден всегда: без него нельзя сослаться на дубль
-                          в поле «ID дубля» — заказчик спрашивал, где его взять. */}
-                      <span className="signalIdBadge">#{signal.id}</span>
-                      <span className="signalTheme">{signal.theme}</span>
-                      <span>Зрелость: {MATURITY_LABELS[signal.maturity] || signal.maturity}</span>
-                      <span>{Math.round(Number(signal.score || 0))} баллов</span>
-                      <span>{signal.evidence_count} ссылок</span>
-                      {formatArrival(signal) ? <span>Поступил: {formatArrival(signal)}</span> : null}
+              <article className="articleCardReact" key={signal.id}>
+                {/* Свёрнутая строка, как у «Бизнес-сигналов» (документ заказчика 19.09):
+                    заголовок-ссылка и мета слева, дата, балл с оценкой и выбор — справа. */}
+                <div className="articleCardTop">
+                  <button
+                    type="button"
+                    className={isExpanded ? "expandButtonReact open" : "expandButtonReact"}
+                    onClick={() => toggleExpanded(signal.id)}
+                    aria-expanded={isExpanded}
+                    aria-label={isExpanded ? "Свернуть сигнал" : "Раскрыть сигнал"}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <path d="M4 6.5 8 10l4-3.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <div className="articleCardMain">
+                    {primaryUrl ? (
+                      <a href={primaryUrl} target="_blank" rel="noreferrer" className="articleTitleReact">
+                        {title}
+                      </a>
+                    ) : (
+                      <span className="articleTitleReact">{title}</span>
+                    )}
+                    <div className="metaText">
+                      {cardMeta(signal)}
+                      {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}
+                      <span className="signalIdText">#{signal.id}</span>
                       {/* Дубли того же события скрыты, их ссылки — в этой карточке. */}
-                      {Number(signal.merged_count || 0) > 0 ? (
-                        <span>Объединено дублей: {signal.merged_count}</span>
-                      ) : null}
+                      {Number(signal.merged_count || 0) > 0 ? ` · объединено дублей: ${signal.merged_count}` : ""}
                     </div>
-                    <h2>{signal.title_ru || signal.title}</h2>
                   </div>
-                  <div className="signalRadarActions">
-                    <button type="button" className="ghostButton compactButton" onClick={() => toggleExpanded(signal.id)}>
-                      {isExpanded ? "Скрыть" : "Ссылки"}
-                    </button>
-                    <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
-                      Обратная связь
-                    </button>
+                  <div className="articleCardMetrics">
+                    {arrival ? <div className="articleMetric">Поступил: {arrival}</div> : null}
+                    <div className={`miniPill ${tone}`} title="Балл судьи радара">
+                      {Math.round(Number(signal.score || 0))}
+                    </div>
+                    <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
                     <button
                       type="button"
                       className={signal.selected_for_digest ? "dangerButton compactButton" : "primaryButton compactButton"}
@@ -466,122 +757,151 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   </div>
                 </div>
 
-                <div className="signalRadarBody">
-                  <p className="signalRadarSummaryText">{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
-                  <div className="signalRadarFacts">
-                    <div>
-                      <span>Почему сейчас</span>
-                      <p>{signal.why_now || "Нет объяснения"}</p>
+                {isExpanded ? (
+                  <div className="articleDetailReact signalRadarDetail">
+                    <div className="articleDetailGrid">
+                      <div className="articleSummaryBox">
+                        <strong>Суть</strong>
+                        <p>{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
+                      </div>
+                      <div className="signalRadarFacts">
+                        <div>
+                          <span>Почему сейчас</span>
+                          <p>{signal.why_now || "Нет объяснения"}</p>
+                        </div>
+                        <div>
+                          <span>Переносимость</span>
+                          <p>{signal.transferability || "Нет оценки"}</p>
+                        </div>
+                        {/* Сравнение внутри пачки прогона, а не абсолютная оценка судьи:
+                            поэтому рядом с баллом, но порядок списка — по баллу. */}
+                        {signal.why_interesting ? (
+                          <div>
+                            <span>
+                              Почему интересно
+                              {signal.interest_score != null ? ` · ${Math.round(Number(signal.interest_score))}` : ""}
+                            </span>
+                            <p>{signal.why_interesting}</p>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
-                    <div>
-                      <span>Переносимость</span>
-                      <p>{signal.transferability || "Нет оценки"}</p>
-                    </div>
-                    {/* Сравнение внутри пачки прогона, а не абсолютная оценка судьи:
-                        поэтому рядом с баллами, но порядок списка — по баллам. */}
-                    {signal.why_interesting ? (
-                      <div>
-                        <span>
-                          Почему интересно
-                          {signal.interest_score != null ? ` · ${Math.round(Number(signal.interest_score))}` : ""}
-                        </span>
-                        <p>{signal.why_interesting}</p>
+
+                    {signal.evidence?.length ? (
+                      <div className="signalEvidenceList">
+                        <div className="signalEvidenceHeading">Ссылки</div>
+                        {signal.evidence.map((item) => (
+                          <a className="signalEvidenceRow" href={item.source_url} target="_blank" rel="noreferrer" key={item.id}>
+                            <span>{evidenceSource(item)}</span>
+                            <strong>{item.title_ru || item.title}</strong>
+                            {item.summary_ru || item.extracted_fact ? (
+                              <small>{item.summary_ru || item.extracted_fact}</small>
+                            ) : null}
+                          </a>
+                        ))}
                       </div>
                     ) : null}
-                  </div>
-                </div>
 
-                {isExpanded ? (
-                  <div className="signalEvidenceList">
-                    {(signal.evidence || []).map((item) => (
-                      <a className="signalEvidenceRow" href={item.source_url} target="_blank" rel="noreferrer" key={item.id}>
-                        <span>{item.publisher || "source"}</span>
-                        <strong>{item.title_ru || item.title}</strong>
-                        <small>{item.summary_ru || item.extracted_fact || item.evidence_type}</small>
-                      </a>
-                    ))}
+                    {isFeedbackOpen ? (
+                      // Форма ОС (документ заказчика 19.09: «сделать поприятнее оформление»):
+                      // на десктопе две колонки — пары полей одной высоты, подписи как в
+                      // остальных формах, «Отмена» и «Сохранить» справа.
+                      <div className="signalFeedbackBox">
+                        <div className="signalFeedbackGrid">
+                          <label className="field">
+                            <span>Оценка сигнала</span>
+                            <select
+                              value={draftOf(signal.id).verdict}
+                              onChange={(event) =>
+                                updateFeedbackDraft(signal.id, { verdict: event.target.value as FeedbackDraft["verdict"] })
+                              }
+                            >
+                              {VERDICT_LABELS.map((item) => (
+                                <option value={item.value} key={item.value || "empty"}>{item.label}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field signalFeedbackDuplicate">
+                            <span>ID дубля</span>
+                            <input
+                              inputMode="numeric"
+                              value={draftOf(signal.id).duplicateOfSignalId}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { duplicateOfSignalId: event.target.value })}
+                              placeholder="номер главной карточки, если это дубль"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Обоснование оценки</span>
+                            <input
+                              value={draftOf(signal.id).reason}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { reason: event.target.value })}
+                              placeholder="чем обоснована оценка"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Рекомендуемый заголовок</span>
+                            <input
+                              value={draftOf(signal.id).correctedTitle}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { correctedTitle: event.target.value })}
+                              placeholder="если нужно переименовать карточку"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Рекомендуемая формулировка сути</span>
+                            <textarea
+                              value={draftOf(signal.id).correctedThesis}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
+                              placeholder="эталонная формулировка сути сигнала"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Рекомендации AI-агенту</span>
+                            <textarea
+                              value={draftOf(signal.id).comment}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
+                              placeholder="термины, поисковый угол, сильный источник..."
+                            />
+                          </label>
+                        </div>
+                        <div className="signalFeedbackActions">
+                          <span className="metaText">Обратная связь: {signal.feedback_count || 0}</span>
+                          <div className="signalFeedbackButtons">
+                            <button type="button" className="ghostButton" disabled={savingThis} onClick={() => cancelFeedback(signal.id)}>
+                              Отмена
+                            </button>
+                            <button type="button" className="primaryButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
+                              Сохранить
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="signalFeedbackCollapsed">
+                        <span className="metaText">Обратная связь: {signal.feedback_count || 0}</span>
+                        <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
+                          Обратная связь
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : null}
-
-                {isFeedbackOpen ? (
-                  <div className="signalFeedbackBox">
-                    <div className="signalFeedbackGrid">
-                      <label>
-                        <span>Оценка сигнала</span>
-                        <select
-                          value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).verdict}
-                          onChange={(event) =>
-                            updateFeedbackDraft(signal.id, { verdict: event.target.value as FeedbackDraft["verdict"] })
-                          }
-                        >
-                          {VERDICT_LABELS.map((item) => (
-                            <option value={item.value} key={item.value || "empty"}>{item.label}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        <span>ID дубля</span>
-                        <input
-                          inputMode="numeric"
-                          value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).duplicateOfSignalId}
-                          onChange={(event) => updateFeedbackDraft(signal.id, { duplicateOfSignalId: event.target.value })}
-                          placeholder="если это дубль"
-                        />
-                      </label>
-                    </div>
-                    <label className="signalFeedbackField">
-                      <span>Обоснование оценки</span>
-                      <input
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).reason}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { reason: event.target.value })}
-                        placeholder="чем обоснована оценка"
-                      />
-                    </label>
-                    <label className="signalFeedbackField">
-                      <span>Рекомендуемый заголовок</span>
-                      <input
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedTitle}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { correctedTitle: event.target.value })}
-                        placeholder="если нужно переименовать карточку"
-                      />
-                    </label>
-                    <label className="signalFeedbackField">
-                      <span>Рекомендуемая формулировка сути</span>
-                      <textarea
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedThesis}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
-                        placeholder="эталонная формулировка сути сигнала"
-                      />
-                    </label>
-                    <label className="signalFeedbackField">
-                      <span>Рекомендации AI-агенту</span>
-                      <textarea
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).comment}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
-                        placeholder="термины, поисковый угол, сильный источник..."
-                      />
-                    </label>
-                    <div className="signalFeedbackActions">
-                      <span>Обратная связь: {signal.feedback_count || 0}</span>
-                      <button type="button" className="primaryButton compactButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
-                        Сохранить
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="signalFeedbackCollapsed">
-                    <span>Обратная связь: {signal.feedback_count || 0}</span>
-                    <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
-                      Обратная связь
-                    </button>
-                  </div>
-                )}
               </article>
             );
-          }) : null}
+          })}
+              </div>
+              ) : null}
             </section>
             );
           })}
+          {remaining > 0 ? (
+            <div className="showMoreWrap">
+              <button type="button" className="ghostButton" disabled={loadingMore || searching} onClick={() => void showMore()}>
+                {loadingMore
+                  ? "Загружаем…"
+                  : `Показать ещё ${Math.min(RADAR_PAGE_SIZE, remaining)} (осталось ${remaining})`}
+              </button>
+            </div>
+          ) : null}
           </div>
         ) : (
           <div className="emptyState">Сигналов по выбранным фильтрам нет.</div>

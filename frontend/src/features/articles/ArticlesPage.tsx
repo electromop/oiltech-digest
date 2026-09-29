@@ -3,6 +3,8 @@ import { DEFAULT_ARTICLE_LIMIT, listArticles, type ArticleQuery, updateArticle }
 import { getDashboardStats } from "../../api/stats";
 import type { ArchiveMonth, Article, DashboardStats } from "../../api/types";
 import { FeedbackPanel } from "../feedback/FeedbackPanel";
+import { StatCard } from "../shared/StatCard";
+import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { archiveNoticeText, monthLabel, useFeedWindow, windowPeriodText } from "./feedWindow";
 
 const NO_ARCHIVE_MONTHS: ArchiveMonth[] = [];
@@ -829,41 +831,6 @@ export function ArticlesPage(props: Props) {
       </section>
     </section>
   );
-}
-
-function StatCard(props: { label: string; value: number }) {
-  return (
-    <div className="statCardReact">
-      <div className="statValueReact">{props.value}</div>
-      <div className="metaText">{props.label}</div>
-    </div>
-  );
-}
-
-// Шкала цвета согласована с backend score_label (pipeline.py: пороги 80/65/40):
-// «Высокая»/«Выше средней» (>=65) → зелёный, «Средняя» (>=40) → оранжевый,
-// «Низкая» (<40) → красный, нет оценки → нейтральный серый.
-function scoreClass(score: number) {
-  if (!score) return "muted";
-  if (score >= 65) return "ok";
-  if (score >= 40) return "warn";
-  return "bad";
-}
-
-// Текстовый рейтинг (score_label) красим в тот же тон, что и число, — чтобы
-// метка и оценка совпадали по цвету.
-function ratingClass(rating: string) {
-  switch ((rating || "").trim()) {
-    case "Высокая":
-    case "Выше средней":
-      return "ok";
-    case "Средняя":
-      return "warn";
-    case "Низкая":
-      return "bad";
-    default:
-      return "muted";
-  }
 }
 
 function formatDate(value: string | null) {

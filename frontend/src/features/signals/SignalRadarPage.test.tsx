@@ -1,8 +1,17 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getSignalSearchHealth, listSignals, type SignalSearchHealth } from "../../api/signals";
+import {
+  createSignalFeedback,
+  getSignalSearchHealth,
+  getSignalSummary,
+  listSignals,
+  updateSignal,
+  type SignalQuery,
+  type SignalSearchHealth,
+  type SignalSummary,
+} from "../../api/signals";
 import type { Signal } from "../../api/types";
-import { SignalRadarPage } from "./SignalRadarPage";
+import { RADAR_PAGE_SIZE, SignalRadarPage } from "./SignalRadarPage";
 
 const baseSignal: Signal = {
   id: 107,
@@ -29,14 +38,94 @@ const baseSignal: Signal = {
 };
 
 vi.mock("../../api/signals", () => ({
-  listSignals: vi.fn(async () => [
-    { ...baseSignal, interest_score: 91.4, why_interesting: "Единственный открытый источник данных по метану" },
-    { ...baseSignal, id: 3, signal_key: "k3", title_ru: "Карточка без ревью пачки" },
-  ]),
+  listSignals: vi.fn(),
+  getSignalSummary: vi.fn(),
   updateSignal: vi.fn(),
   createSignalFeedback: vi.fn(),
   getSignalSearchHealth: vi.fn(),
 }));
+
+const DEFAULT_CARDS: Signal[] = [
+  { ...baseSignal, interest_score: 91.4, why_interesting: "Единственный открытый источник данных по метану" },
+  { ...baseSignal, id: 3, signal_key: "k3", title_ru: "Карточка без ревью пачки" },
+];
+
+// Сервер радара в миниатюре: выборка, страница и числа над списком считаются «на сервере»
+// по всем карточкам, а не по тем, что экран уже загрузил.
+function matches(card: Signal, query: SignalQuery) {
+  const q = (query.q || "").toLowerCase();
+  const arrival = (card.first_seen_at || "").slice(0, 10);
+  return (
+    (!query.theme || card.theme === query.theme)
+    && (!query.maturity || card.maturity === query.maturity)
+    && (!q || `${card.title_ru || ""} ${card.title}`.toLowerCase().includes(q))
+    && (query.minScore == null || card.score >= query.minScore)
+    && (query.maxScore == null || card.score <= query.maxScore)
+    && (!query.since || arrival >= query.since)
+    && (!query.until || arrival <= query.until)
+  );
+}
+
+function ordered(cards: Signal[], sort: SignalQuery["sort"]) {
+  const seen = (card: Signal) => card.first_seen_at || "";
+  if (sort === "date_desc") return [...cards].sort((a, b) => seen(b).localeCompare(seen(a)));
+  if (sort === "score_asc") return [...cards].sort((a, b) => a.score - b.score);
+  return [...cards].sort((a, b) => b.score - a.score);
+}
+
+type Tiles = Omit<SignalSummary, "matching" | "themes">;
+
+function serve(cards: Signal[], tiles: Partial<Tiles> = {}) {
+  // Своя копия: «В дайджест» и отзывы меняют её, а не общие заготовки карточек; ответы —
+  // снимки на момент ответа, как у настоящего сервера.
+  const state = cards.map((card) => ({ ...card }));
+  vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => {
+    const offset = query.offset ?? 0;
+    return ordered(state.filter((card) => matches(card, query)), query.sort)
+      .slice(offset, offset + (query.limit ?? 100))
+      .map((card) => ({ ...card }));
+  });
+  vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => {
+    const topics = state.filter((card) => card.theme_is_topic !== false).map((card) => card.theme);
+    return {
+      total: state.length,
+      new_7d: 0,
+      in_digest: state.filter((card) => card.selected_for_digest).length,
+      with_feedback: state.filter((card) => Number(card.feedback_count || 0) > 0).length,
+      merged: state.reduce((sum, card) => sum + Number(card.merged_count || 0), 0),
+      ...tiles,
+      matching: state.filter((card) => matches(card, query)).length,
+      themes: [...new Set(topics)].sort().map((theme) => ({ theme, count: topics.filter((item) => item === theme).length })),
+    };
+  });
+  vi.mocked(updateSignal).mockImplementation(async (signalId, patch) => {
+    const card = state.find((item) => item.id === signalId);
+    if (card && patch.selected_for_digest != null) card.selected_for_digest = patch.selected_for_digest;
+    return { ok: true };
+  });
+  vi.mocked(createSignalFeedback).mockImplementation(async (payload) => {
+    const card = state.find((item) => item.id === payload.signal_id);
+    if (card) card.feedback_count = Number(card.feedback_count || 0) + 1;
+    return { ok: true, event_id: 1, memory_ids: [], memories: 0 };
+  });
+}
+
+// Ответ, который придёт, когда тест скажет: выборка «в пути».
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function tileValue(label: string) {
+  return screen.getByText(label).closest(".statCardReact")?.querySelector(".statValueReact")?.textContent;
+}
+
+function lastListQuery(): SignalQuery {
+  return vi.mocked(listSignals).mock.lastCall?.[0] ?? {};
+}
 
 // Ежедневный прогон 27.09: крон 07:15 МСК = 04:15 UTC, Brave 402 во всех темах.
 const failedEverywhere: SignalSearchHealth = {
@@ -128,10 +217,17 @@ function renderRadar(isAdmin: boolean) {
 describe("SignalRadarPage", () => {
   beforeEach(() => {
     vi.mocked(getSignalSearchHealth).mockReset();
+    vi.mocked(listSignals).mockReset();
+    vi.mocked(getSignalSummary).mockReset();
+    vi.mocked(createSignalFeedback).mockReset();
+    vi.mocked(updateSignal).mockReset();
+    serve(DEFAULT_CARDS);
   });
 
   it("показывает «почему интересно» только там, где ревью пачки его дало", async () => {
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    await screen.findByText("Карточка без ревью пачки");
+    for (const button of screen.getAllByRole("button", { name: "Раскрыть сигнал" })) fireEvent.click(button);
 
     expect(await screen.findByText("Единственный открытый источник данных по метану")).toBeInTheDocument();
     expect(screen.getAllByText(/Почему интересно/)).toHaveLength(1);
@@ -212,7 +308,7 @@ describe("SignalRadarPage", () => {
     const ecology = { ...baseSignal, id: 22, signal_key: "k22", theme: "Экология", title_ru: "Спутник MethaneSAT", score: 60 };
 
     beforeEach(() => {
-      vi.mocked(listSignals).mockResolvedValueOnce([drilling, ecology]);
+      serve([drilling, ecology]);
     });
 
     it("сигналы — блоками по темам, как бизнес-сигналы: свёрнуты, раскрываются", async () => {
@@ -231,8 +327,9 @@ describe("SignalRadarPage", () => {
     it("обычный пользователь оставляет ОС, в оценках есть «Не тот блок»", async () => {
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
 
-      fireEvent.click(screen.getAllByRole("button", { name: "Обратная связь" })[0]);
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
 
       expect(
         screen.getByRole("option", { name: "Не тот блок — бизнес-сигнал, а не технология" }),
@@ -241,8 +338,7 @@ describe("SignalRadarPage", () => {
     });
 
     it("ранние карточки со свободной темой — одним блоком последним, не в фильтре тем", async () => {
-      vi.mocked(listSignals).mockReset();
-      vi.mocked(listSignals).mockResolvedValue([
+      serve([
         drilling,
         { ...ecology, id: 31, signal_key: "k31", theme: "HSE/бурение", theme_is_topic: false, title_ru: "Ранняя 1" },
         { ...ecology, id: 32, signal_key: "k32", theme: "R&D / добыча лития", theme_is_topic: false, title_ru: "Ранняя 2" },
@@ -252,19 +348,435 @@ describe("SignalRadarPage", () => {
       const early = await screen.findByRole("button", { name: "Раскрыть группу Ранние карточки — тема вне 13 тематик" });
       const groups = screen.getAllByRole("button", { name: /^Раскрыть группу/ });
       expect(groups[groups.length - 1]).toBe(early);
+      expect(await screen.findByRole("option", { name: "Бурение" })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: "HSE/бурение" })).not.toBeInTheDocument();
-      expect(screen.getByRole("option", { name: "Бурение" })).toBeInTheDocument();
     });
 
     it("блок, раскрытый поиском, всё равно сворачивается кнопкой", async () => {
       renderRadar(false);
       await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
 
-      fireEvent.change(screen.getByPlaceholderText("ZEUS IQ, бурение, робот..."), { target: { value: "буровая" } });
+      fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "буровая" } });
       expect(screen.getByText("Роботизированная буровая установка")).toBeInTheDocument();
+      await waitFor(() => expect(lastListQuery().q).toBe("буровая"));
 
-      fireEvent.click(screen.getByRole("button", { name: "Свернуть группу Бурение" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Свернуть группу Бурение" }));
       expect(screen.queryByText("Роботизированная буровая установка")).not.toBeInTheDocument();
+    });
+
+    it("поиск — на сервере по всему радару", async () => {
+      const deep = { ...drilling, id: 151, signal_key: "k151", title_ru: "Сейсморазведка с дронов", score: 12 };
+      serve([drilling, ecology, deep]);
+      vi.mocked(listSignals).mockImplementationOnce(async () => [drilling, ecology]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
+
+      // Не длиннее, чем принимает API (q ≤ 200): иначе 422 с сырым текстом ошибки.
+      expect(screen.getByRole("textbox", { name: /^Поиск/ })).toHaveAttribute("maxlength", "200");
+      fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "дронов" } });
+
+      expect(await screen.findByText("Сейсморазведка с дронов")).toBeInTheDocument();
+      expect(lastListQuery()).toMatchObject({ q: "дронов", offset: 0 });
+      expect(screen.queryByText("Роботизированная буровая установка")).not.toBeInTheDocument();
+    });
+
+    it("запрос уходит через 400 мс после последней буквы — как у ленты", async () => {
+      vi.useFakeTimers();
+      try {
+        renderRadar(false);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(listSignals).toHaveBeenCalledTimes(1);
+        const input = screen.getByRole("textbox", { name: /^Поиск/ });
+
+        fireEvent.change(input, { target: { value: "бур" } });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(300);
+        });
+        fireEvent.change(input, { target: { value: "буровая" } });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(399);
+        });
+        expect(listSignals).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        // Одна выборка на всё слово, а не на каждую букву.
+        expect(listSignals).toHaveBeenCalledTimes(2);
+        expect(lastListQuery()).toMatchObject({ q: "буровая" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("фильтр сменили, пока сохранялся отзыв «дубль», — список перечитан по новому фильтру", async () => {
+      type SaveResult = Awaited<ReturnType<typeof createSignalFeedback>>;
+      let finishSave: (result: SaveResult) => void = () => undefined;
+      vi.mocked(createSignalFeedback).mockImplementation(
+        () => new Promise<SaveResult>((resolve) => {
+          finishSave = resolve;
+        }),
+      );
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      fireEvent.change(screen.getByLabelText("ID дубля"), { target: { value: "22" } });
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      fireEvent.change(screen.getByRole("combobox", { name: /^Тема/ }), { target: { value: "Экология" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ theme: "Экология" }));
+      const callsBefore = vi.mocked(listSignals).mock.calls.length;
+
+      await act(async () => {
+        finishSave({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
+      });
+
+      await waitFor(() => expect(vi.mocked(listSignals).mock.calls.length).toBeGreaterThan(callsBefore));
+      expect(lastListQuery()).toMatchObject({ theme: "Экология" });
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /группу Бурение/ })).not.toBeInTheDocument(),
+      );
+      expect(screen.getByRole("combobox", { name: /^Тема/ })).toHaveValue("Экология");
+    });
+
+    it("после склейки дубля догруженное «Показать ещё» не пропадает", async () => {
+      serve(Array.from({ length: RADAR_PAGE_SIZE + 1 }, (_, index) => ({
+        ...drilling,
+        id: 1000 + index,
+        signal_key: `k${1000 + index}`,
+        title_ru: `Сигнал номер ${index + 1}`,
+      })));
+      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Показать ещё 1 (осталось 1)" }));
+      await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`);
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Раскрыть сигнал" })[0]);
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      fireEvent.change(screen.getByLabelText("ID дубля"), { target: { value: "1001" } });
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ offset: 0, limit: RADAR_PAGE_SIZE + 1 }));
+      expect(await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`)).toBeInTheDocument();
+    });
+
+    it("выбрал тему — видны только её карточки, без «Обновить»", async () => {
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Экология" });
+
+      fireEvent.change(await screen.findByRole("combobox", { name: /^Тема/ }), { target: { value: "Бурение" } });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /группу Экология/ })).not.toBeInTheDocument(),
+      );
+      // Блок выбранной темы раскрыт сам.
+      expect(screen.getByText("Роботизированная буровая установка")).toBeInTheDocument();
+      expect(lastListQuery()).toMatchObject({ theme: "Бурение" });
+      // Список тем не сжимается до выбранной: он — со всего радара, а не с выборки.
+      expect(screen.getByRole("option", { name: "Экология" })).toBeInTheDocument();
+    });
+
+    it("зрелость тоже применяется сразу", async () => {
+      serve([drilling, { ...ecology, maturity: "proven" }]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
+
+      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "proven" } });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /группу Бурение/ })).not.toBeInTheDocument(),
+      );
+      expect(lastListQuery()).toMatchObject({ maturity: "proven" });
+    });
+
+    it("«Показать ещё» догружает следующую страницу с сервера", async () => {
+      const many = Array.from({ length: RADAR_PAGE_SIZE + 1 }, (_, index) => ({
+        ...drilling,
+        id: 1000 + index,
+        signal_key: `k${1000 + index}`,
+        title_ru: `Сигнал номер ${index + 1}`,
+      }));
+      serve(many);
+      renderRadar(false);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Показать ещё 1 (осталось 1)" }));
+
+      expect(await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`)).toBeInTheDocument();
+      expect(lastListQuery()).toMatchObject({ offset: RADAR_PAGE_SIZE });
+      expect(screen.queryByRole("button", { name: /Показать ещё/ })).not.toBeInTheDocument();
+    });
+
+    it("во время новой выборки «Показать ещё» недоступна и не догружает к старому списку", async () => {
+      serve(Array.from({ length: RADAR_PAGE_SIZE + 1 }, (_, index) => ({
+        ...drilling,
+        id: 1000 + index,
+        signal_key: `k${1000 + index}`,
+        title_ru: `Сигнал номер ${index + 1}`,
+      })));
+      renderRadar(false);
+      const more = await screen.findByRole("button", { name: "Показать ещё 1 (осталось 1)" });
+
+      fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "номер 10" } });
+
+      expect(more).toBeDisabled();
+      fireEvent.click(more);
+      expect(vi.mocked(listSignals).mock.calls.some(([query]) => query?.offset === RADAR_PAGE_SIZE)).toBe(false);
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ q: "номер 10", offset: 0 }));
+    });
+
+    it("«В дайджест», нажатое во время новой выборки, не откатывается её ответом", async () => {
+      serve([drilling]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "В дайджест" });
+      const stale = deferred<Signal[]>();
+      vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
+      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "watch" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "В дайджест" }));
+      expect(await screen.findByRole("button", { name: "Убрать" })).toBeInTheDocument();
+      // Ответ выборки, собранный до отметки, приходит последним.
+      await act(async () => {
+        stale.resolve([{ ...drilling }]);
+      });
+
+      expect(screen.getByRole("button", { name: "Убрать" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
+    });
+
+    it("отзыв, сохранённый во время новой выборки, не откатывается её ответом", async () => {
+      serve([drilling]);
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      fireEvent.change(screen.getByLabelText("Оценка сигнала"), { target: { value: "approved" } });
+      const stale = deferred<Signal[]>();
+      vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
+      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "watch" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+      expect(await screen.findByText("Обратная связь: 1")).toBeInTheDocument();
+      await act(async () => {
+        stale.resolve([{ ...drilling }]);
+      });
+
+      expect(screen.getByText("Обратная связь: 1")).toBeInTheDocument();
+    });
+
+    it("«Сначала новые» — сортировка с сервера, блоки идут в её порядке", async () => {
+      const fresh = { ...ecology, first_seen_at: "2026-09-27T09:00:00Z" };
+      serve([drilling, fresh]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Экология" });
+      const groupNames = () =>
+        screen.getAllByRole("button", { name: /^Раскрыть группу/ }).map((item) => item.getAttribute("aria-label"));
+      expect(groupNames()).toEqual(["Раскрыть группу Бурение", "Раскрыть группу Экология"]);
+
+      fireEvent.change(screen.getByRole("combobox", { name: /^Сортировка/ }), { target: { value: "date_desc" } });
+
+      await waitFor(() => expect(groupNames()).toEqual(["Раскрыть группу Экология", "Раскрыть группу Бурение"]));
+      expect(lastListQuery()).toMatchObject({ sort: "date_desc" });
+    });
+
+    it("над радаром — плитки, как у «Бизнес-сигналов»: числа с сервера, поиск их не меняет", async () => {
+      serve([drilling, ecology], { total: 76, new_7d: 18, in_digest: 3, with_feedback: 12, merged: 5 });
+      const { container } = render(
+        <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,
+      );
+      await screen.findByText("Всего сигналов");
+
+      const tiles = {
+        "Всего сигналов": "76",
+        "Новые за 7 дней": "18",
+        "В дайджесте": "3",
+        "С обратной связью": "12",
+        "Объединено дублей": "5",
+      };
+      for (const [label, value] of Object.entries(tiles)) expect(tileValue(label)).toBe(value);
+      // Строки-сводки «N сигналов · N в дайджесте · обратная связь: N» больше нет.
+      expect(container.querySelector(".signalRadarHeaderStats")).toBeNull();
+
+      fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "буровая" } });
+      await waitFor(() => expect(lastListQuery().q).toBe("буровая"));
+      expect(await screen.findByText("1 из 76 сигналов")).toBeInTheDocument();
+      expect(tileValue("Всего сигналов")).toBe("76");
+    });
+
+    it("выбор в дайджест обновляет плитку «В дайджесте»", async () => {
+      vi.mocked(updateSignal).mockResolvedValue({ ok: true });
+      let inDigest = 0;
+      serve([drilling]);
+      const counts = vi.mocked(getSignalSummary).getMockImplementation()!;
+      vi.mocked(getSignalSummary).mockImplementation(async (query) => ({ ...(await counts(query)), in_digest: inDigest }));
+      renderRadar(false);
+      await screen.findByText("В дайджесте");
+      expect(tileValue("В дайджесте")).toBe("0");
+
+      inDigest = 1;
+      fireEvent.click(await screen.findByRole("button", { name: "В дайджест" }));
+
+      await waitFor(() => expect(tileValue("В дайджесте")).toBe("1"));
+      expect(updateSignal).toHaveBeenCalledWith(21, { selected_for_digest: true });
+    });
+
+    it("в шапке панели — «N из M сигналов» по всему радару", async () => {
+      renderRadar(false);
+      expect(await screen.findByText("2 из 2 сигналов")).toBeInTheDocument();
+
+      fireEvent.change(await screen.findByRole("combobox", { name: /^Тема/ }), { target: { value: "Экология" } });
+
+      expect(await screen.findByText("1 из 2 сигналов")).toBeInTheDocument();
+    });
+
+    it("расширенные фильтры: балл и период «Поступил» уходят на сервер, «Сбросить» возвращает всё", async () => {
+      const fresh = { ...ecology, first_seen_at: "2026-09-27T09:00:00Z" };
+      serve([drilling, fresh]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "Раскрыть группу Экология" });
+
+      fireEvent.change(screen.getByRole("combobox", { name: /^Сортировка/ }), { target: { value: "score_asc" } });
+      fireEvent.click(screen.getByRole("button", { name: "Расширенные фильтры" }));
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Балл от" }), { target: { value: "70" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ minScore: 70, sort: "score_asc" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /группу Экология/ })).not.toBeInTheDocument(),
+      );
+
+      fireEvent.change(screen.getByLabelText("Поступил с"), { target: { value: "2026-09-26" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ minScore: 70, since: "2026-09-26" }));
+      expect(await screen.findByText("Сигналов по выбранным фильтрам нет.")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+
+      expect(await screen.findByRole("button", { name: /группу Экология/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /группу Бурение/ })).toBeInTheDocument();
+      const query = lastListQuery();
+      expect([query.minScore, query.maxScore, query.since, query.until, query.theme, query.q]).toEqual(
+        [undefined, undefined, undefined, undefined, undefined, undefined],
+      );
+      expect(query.sort ?? "score_desc").toBe("score_desc");
+      expect(screen.getByRole("spinbutton", { name: "Балл от" })).toHaveValue(0);
+      expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toHaveValue("score_desc");
+    });
+
+    it("форма ОС — поля как в остальных формах, «Отмена» и «Сохранить» справа; «Отмена» ничего не отправляет", async () => {
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+
+      for (const label of [
+        "Оценка сигнала",
+        "ID дубля",
+        "Обоснование оценки",
+        "Рекомендуемый заголовок",
+        "Рекомендуемая формулировка сути",
+        "Рекомендации AI-агенту",
+      ]) {
+        expect(screen.getByText(label).closest("label")).toHaveClass("field");
+      }
+      const buttons = screen.getByRole("button", { name: "Сохранить" }).parentElement!;
+      expect(buttons).toHaveClass("signalFeedbackButtons");
+      expect([...buttons.querySelectorAll("button")].map((item) => item.textContent)).toEqual(["Отмена", "Сохранить"]);
+
+      fireEvent.change(screen.getByLabelText("Рекомендации AI-агенту"), { target: { value: "искать по-китайски" } });
+      fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+
+      expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
+      expect(createSignalFeedback).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      expect(screen.getByLabelText("Рекомендации AI-агенту")).toHaveValue("");
+    });
+
+    it("после «Сохранить» форма закрывается, а счётчик отзывов растёт", async () => {
+      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 7, memory_ids: [], memories: 0 });
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+
+      fireEvent.change(screen.getByLabelText("Оценка сигнала"), { target: { value: "strong_signal" } });
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument());
+      expect(createSignalFeedback).toHaveBeenCalledWith(expect.objectContaining({ signal_id: 21, verdict: "strong_signal" }));
+      expect(screen.getByText("Обратная связь: 1")).toBeInTheDocument();
+    });
+
+    it("карточка — свёрнутая строка, как у «Бизнес-сигналов», и раскрывается", async () => {
+      const { container } = render(
+        <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+
+      // Заголовок — ссылка на первую ссылку-доказательство, под ним — мета карточки.
+      const title = screen.getByRole("link", { name: "Роботизированная буровая установка" });
+      expect(title).toHaveAttribute("href", "https://worldoil.com/a");
+      expect(title).toHaveAttribute("target", "_blank");
+      expect(screen.getByText(/^Бурение · 2 ссылки · Зрелость: Наблюдать ·/)).toBeInTheDocument();
+      expect(screen.getByText("#21")).toBeInTheDocument();
+      // Тело свёрнуто: суть, «Почему сейчас» и ссылки — только по раскрытию.
+      expect(screen.queryByText("Спутник мониторинга метана перестал выходить на связь.")).not.toBeInTheDocument();
+      expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Обратная связь" })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+
+      expect(screen.getByText("Спутник мониторинга метана перестал выходить на связь.")).toBeInTheDocument();
+      expect(screen.getByText("Почему сейчас")).toBeInTheDocument();
+      expect(screen.getByText("Переносимость")).toBeInTheDocument();
+      expect(screen.getByText("Robotic rig")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Свернуть сигнал" }));
+      expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
+      // Надзаголовка «Signal Discovery» больше нет — экран по-русски.
+      expect(screen.queryByText("Signal Discovery")).not.toBeInTheDocument();
+      expect(container.querySelector(".signalRadarCard")).toBeNull();
+    });
+
+    it.each([
+      [85, "Высокая", "ok"],
+      [70, "Выше средней", "ok"],
+      [50, "Средняя", "warn"],
+      [20, "Низкая", "bad"],
+    ])("балл %s — цветной, со словесной оценкой «%s», как у бизнес-сигналов", async (score, label, tone) => {
+      serve([{ ...drilling, score, score_label: label }]);
+      renderRadar(false);
+
+      const pill = await screen.findByTitle("Балл судьи радара");
+      expect(pill).toHaveTextContent(String(score));
+      expect(pill).toHaveClass("miniPill", tone);
+      expect(screen.getByText(label, { selector: ".miniPill" })).toHaveClass(tone);
+    });
+
+    it("ссылки-доказательства — «издатель · дата публикации», под ними заголовок", async () => {
+      const link = (id: number, fields: Record<string, unknown>) =>
+        ({ id, signal_id: 21, article_id: null, evidence_type: "article", extracted_fact: null, summary_ru: null,
+           strength: 0, raw_payload_json: {}, created_at: null, updated_at: null, title_ru: null, ...fields }) as never;
+      serve([{
+        ...drilling,
+        evidence: [
+          // 24.09 08:00 UTC — 11:00 по Москве: дата та же, что и у издателя.
+          link(1, { source_url: "https://worldoil.com/a", title: "Robotic rig", title_ru: "Роботизированная буровая",
+                    publisher: "worldoil.com", published_at: "2026-09-24T08:00:00Z" }),
+          link(2, { source_url: "https://example.com/b", title: "Rig report", publisher: null, published_at: null }),
+        ],
+      }]);
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть сигнал" }));
+
+      const first = screen.getByText("worldoil.com · 24.09.2026").closest("a")!;
+      expect(first).toHaveAttribute("href", "https://worldoil.com/a");
+      expect(first).toHaveTextContent("Роботизированная буровая");
+      // Без издателя — по-русски, без даты — без пустого «·»; тип материала («article») не показываем.
+      expect(screen.getByText("источник").closest("a")).toHaveTextContent("Rig report");
+      expect(screen.queryByText("source")).not.toBeInTheDocument();
+      expect(screen.queryByText("article")).not.toBeInTheDocument();
     });
 
     it("вместо строки издателей — число ссылок и дата поступления", async () => {

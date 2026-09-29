@@ -1,20 +1,65 @@
 import { apiFetch } from "./client";
 import type { Signal, SignalFeedbackPayload, SignalPatch } from "./types";
 
-export type SignalQuery = {
+// Выборка экрана радара — на сервере, по всей базе (замечание заказчика 19.09): поиск,
+// тема, зрелость, период «Поступил» (даты ГГГГ-ММ-ДД по Москве) и балл.
+export type SignalFilters = {
+  q?: string;
   maturity?: string;
   theme?: string;
+  since?: string;
+  until?: string;
+  minScore?: number;
+  maxScore?: number;
+};
+
+// По баллу (как раньше), «сначала новые» — по дате «Поступил», по баллу по возрастанию.
+export type SignalSort = "score_desc" | "date_desc" | "score_asc";
+
+export type SignalQuery = SignalFilters & {
+  sort?: SignalSort;
   limit?: number;
+  offset?: number;
   evidenceLimit?: number;
 };
 
-export function listSignals(query: SignalQuery = {}) {
+function filterParams(filters: SignalFilters) {
   const params = new URLSearchParams();
+  if (filters.q) params.set("q", filters.q);
+  if (filters.maturity) params.set("maturity", filters.maturity);
+  if (filters.theme) params.set("theme", filters.theme);
+  if (filters.since) params.set("since", filters.since);
+  if (filters.until) params.set("until", filters.until);
+  if (filters.minScore != null) params.set("min_score", String(filters.minScore));
+  if (filters.maxScore != null) params.set("max_score", String(filters.maxScore));
+  return params;
+}
+
+export function listSignals(query: SignalQuery = {}) {
+  const params = filterParams(query);
   params.set("limit", String(query.limit ?? 100));
   params.set("evidence_limit", String(query.evidenceLimit ?? 5));
-  if (query.maturity) params.set("maturity", query.maturity);
-  if (query.theme) params.set("theme", query.theme);
+  if (query.sort) params.set("sort", query.sort);
+  if (query.offset) params.set("offset", String(query.offset));
   return apiFetch<Signal[]>(`/api/signals?${params.toString()}`);
+}
+
+// Числа над списком — по всему радару и по текущей выборке; тематики — для фильтра «Тема»
+// (только тематики заказчика: ранние карточки со свободной темой сервер сюда не кладёт).
+export type SignalSummary = {
+  total: number;
+  // Плитки — по всему радару, поиск их не меняет; «в дайджесте» — выбор этого пользователя.
+  new_7d: number;
+  in_digest: number;
+  with_feedback: number;
+  merged: number;
+  matching: number;
+  themes: Array<{ theme: string; count: number }>;
+};
+
+export function getSignalSummary(filters: SignalFilters = {}) {
+  const params = filterParams(filters).toString();
+  return apiFetch<SignalSummary>(params ? `/api/signals/summary?${params}` : "/api/signals/summary");
 }
 
 export function updateSignal(signalId: number, payload: SignalPatch) {

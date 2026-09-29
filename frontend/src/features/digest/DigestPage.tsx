@@ -982,7 +982,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
 
       <section className="digestPreviewSurface">
         <div className="panelHeader">
-          <h3>Live preview</h3>
+          <h3>Предпросмотр оформления</h3>
           <span className="metaText">Сразу видно, как изменится финальный HTML</span>
         </div>
         {digestPreviewHtml ? (

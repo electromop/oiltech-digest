@@ -5187,47 +5187,12 @@ button {
   background: var(--sem-bad-bg);
 }
 
-.signalRadarHeaderStats {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  color: var(--text-soft);
-  font-size: 0.84rem;
+/* Фильтры радара — сетка ленты (.articlesFiltersRow): вторая строка («Зрелость»,
+   «Сортировка») — те же колонки, что у первой, со своим отступом. */
+.signalRadarFiltersSecondary {
+  margin-top: 8px;
 }
 
-.signalRadarHeaderStats span {
-  display: inline-flex;
-  gap: 5px;
-  align-items: baseline;
-  white-space: nowrap;
-}
-
-.signalRadarHeaderStats strong {
-  color: #0f172a;
-  font-size: 1rem;
-}
-
-.signalRadarToolbar {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(210px, 280px) auto;
-  gap: 8px;
-  align-items: end;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
-}
-
-.signalRadarToolbar label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.signalRadarToolbar span,
-.signalFeedbackBox span,
-.signalFeedbackCollapsed span,
 .signalRadarFacts span {
   font-size: 0.72rem;
   font-weight: 800;
@@ -5236,100 +5201,17 @@ button {
   letter-spacing: 0;
 }
 
-.signalRadarList {
-  display: grid;
-  gap: 8px;
-}
-
-.signalRadarCard {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.signalRadarCardTop {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: start;
-}
-
-.signalRadarCard h2 {
-  margin: 6px 0 0;
-  font-size: 1rem;
-  line-height: 1.32;
-  color: #0f172a;
-}
-
-.signalRadarMeta,
-.signalRadarActions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.signalRadarMeta span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: rgba(241, 245, 249, 0.8);
-  color: var(--text-soft);
-  font-size: 0.71rem;
-  font-weight: 700;
-}
-
-.signalRadarMeta .signalTheme {
-  color: #0f172a;
-  background: rgba(226, 232, 240, 0.88);
-}
-
-/* ID сигнала: моноширинный, чтобы номер читался и переносился в поле «ID дубля». */
-.signalRadarMeta .signalIdBadge {
+/* Карточка радара — строка ленты (.articleCardReact); свои здесь только номер карточки
+   и раскрытая часть. Номер моноширинный и выделяется целиком: его переносят в «ID дубля». */
+.signalIdText {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #0f172a;
-  background: rgba(203, 213, 225, 0.9);
   user-select: all;
 }
 
-/* Издатели до раскрытия карточки: по ним судят о доверии к сигналу. */
-.signalPublishers {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 6px;
-}
-
-.signalPublisherChip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 1px 7px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 999px;
-  color: var(--text-soft);
-  font-size: 0.69rem;
-  font-weight: 600;
-}
-
-.signalRadarBody {
+.signalRadarDetail {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
-  gap: 14px;
-  align-items: start;
-}
-
-.signalRadarSummaryText {
-  margin: 0;
-  max-width: none;
-  color: #1e293b;
-  font-size: 0.9rem;
-  line-height: 1.48;
+  gap: 12px;
 }
 
 .signalRadarFacts {
@@ -5357,6 +5239,14 @@ button {
   padding-top: 4px;
 }
 
+.signalEvidenceHeading {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .signalEvidenceRow {
   display: grid;
   gap: 3px;
@@ -5373,12 +5263,11 @@ button {
   background: rgba(239, 246, 255, 0.75);
 }
 
+/* «издатель · дата публикации» — обычным регистром: домен и дату так читать проще. */
 .signalEvidenceRow span {
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: 0.74rem;
+  font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0;
 }
 
 .signalEvidenceRow strong {
@@ -5392,36 +5281,32 @@ button {
   line-height: 1.4;
 }
 
+/* Форма ОС радара (документ заказчика 19.09: «поприятнее оформление»): карточка-форма,
+   поля — .field, как в остальных формах (подписи обычным регистром); на десктопе две
+   колонки — пары полей одной высоты; «Отмена» и «Сохранить» справа. */
 .signalFeedbackBox {
   display: grid;
-  gap: 8px;
-  margin-top: 2px;
-  padding: 10px;
-  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
   background: rgba(248, 250, 252, 0.7);
-  border-radius: 8px;
-}
-
-.signalFeedbackBox textarea {
-  width: 100%;
-  min-height: 78px;
-  resize: vertical;
 }
 
 .signalFeedbackGrid {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(120px, 180px);
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: start;
 }
 
-.signalFeedbackGrid label,
-.signalFeedbackField {
-  display: grid;
-  gap: 4px;
+.signalFeedbackGrid .field {
+  min-width: 0;
 }
 
-.signalFeedbackField textarea {
-  min-height: 72px;
+/* Номер главной карточки — короткое число: поле не растягивается на всю колонку. */
+.signalFeedbackDuplicate input {
+  max-width: 260px;
 }
 
 .signalFeedbackActions {
@@ -5430,6 +5315,12 @@ button {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.signalFeedbackButtons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .signalFeedbackCollapsed {
@@ -5441,16 +5332,30 @@ button {
   border-top: 1px solid rgba(226, 232, 240, 0.65);
 }
 
+/* Телефон: шапка панели уже в столбик (правило ≤720px выше). Кнопки шапки — ровной
+   сеткой в две колонки, а не рваной строкой: «Обновить» — во всю ширину под ними. */
+@media (max-width: 720px) {
+  .signalRadarPanelActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .signalRadarPanelActions .badge {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .signalRadarPanelActions .signalRadarRefresh {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 900px) {
-  .signalRadarToolbar,
-  .signalRadarCardTop,
-  .signalRadarBody,
-  .signalFeedbackGrid,
-  .signalRadarHeaderStats {
+  .signalFeedbackGrid {
     grid-template-columns: 1fr;
   }
 
-  .signalRadarHeaderStats,
   .signalFeedbackCollapsed {
     align-items: flex-start;
   }

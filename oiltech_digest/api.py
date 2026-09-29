@@ -31,6 +31,7 @@ from oiltech_digest import contract, lanes, network_policy
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
+    score_label,
 )
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE
@@ -1730,19 +1731,56 @@ def seed_signal_topics(user: dict[str, Any] = Depends(require_admin)) -> dict[st
     return {"ok": True, "topics": seed_default_radar_topics()}
 
 
-@app.get("/api/signals")
-def list_signals(
+def _radar_screen_filters(
     maturity: str | None = Query(None, pattern="^(watch|shortlist|proven|reject)$"),
     theme: str | None = None,
+    # Поиск, период «Поступил» (даты по Москве) и балл — на сервере, по всему радару, а не по
+    # загруженной странице (замечание заказчика 19.09).
+    q: str | None = Query(None, max_length=200),
+    since: date | None = None,
+    until: date | None = None,
+    min_score: float | None = Query(None, ge=0, le=100),
+    max_score: float | None = Query(None, ge=0, le=100),
+) -> dict[str, Any]:
+    return {
+        "maturity": maturity,
+        "theme": theme,
+        "q": (q or "").strip() or None,
+        "since": since,
+        "until": until,
+        "min_score": min_score,
+        "max_score": max_score,
+    }
+
+
+@app.get("/api/signals")
+def list_signals(
+    filters: dict[str, Any] = Depends(_radar_screen_filters),
+    sort: str = Query("score_desc", pattern="^(score_desc|date_desc|score_asc)$"),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     evidence_limit: int = Query(3, ge=0, le=20),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
+    cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"]))
+    # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
+    evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
     rows = []
-    for row in repository.list_signals(maturity=maturity, theme=theme, limit=limit, user_id=int(user["id"])):
-        evidence = repository.list_signal_evidence(int(row["id"]), limit=evidence_limit) if evidence_limit else []
-        rows.append(_clean({**row, "evidence": evidence}))
+    for row in cards:
+        # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
+        # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте.
+        label = score_label(float(row.get("score") or 0))
+        rows.append(_clean({**row, "score_label": label, "evidence": evidence.get(int(row["id"]), [])}))
     return rows
+
+
+@app.get("/api/signals/summary")
+def signal_radar_summary(
+    filters: dict[str, Any] = Depends(_radar_screen_filters),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра."""
+    return _clean(repository.signal_radar_summary(user_id=int(user["id"]), **filters))
 
 
 @app.patch("/api/signals/{signal_id}")
