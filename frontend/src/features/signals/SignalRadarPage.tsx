@@ -1,8 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
-import { createSignalFeedback, getSignalSearchHealth, listSignals, updateSignal } from "../../api/signals";
-import type { SignalSearchHealth } from "../../api/signals";
+import {
+  createSignalFeedback,
+  getSignalSearchHealth,
+  getSignalSummary,
+  listSignals,
+  updateSignal,
+} from "../../api/signals";
+import type { SignalFilters, SignalSearchHealth, SignalSummary } from "../../api/signals";
 import type { Signal, SignalFeedbackPayload } from "../../api/types";
+
+// Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему
+// радару, а не экран по загруженным карточкам (замечание заказчика 19.09).
+export const RADAR_PAGE_SIZE = 100;
+// Задержка серверного поиска — как у ленты бизнес-сигналов: запрос не на каждую букву.
+const SEARCH_DELAY_MS = 400;
+const EVIDENCE_PER_CARD = 5;
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -119,7 +132,12 @@ function searchHealthNotice(health: SignalSearchHealth | null): string {
 
 export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: Props) {
   const [signals, setSignals] = useState<Signal[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [summary, setSummary] = useState<SignalSummary | null>(null);
+  // Первый ответ ещё не пришёл — вместо списка «Загружаем»; дальше старая выборка видна,
+  // пока идёт новая.
+  const [loaded, setLoaded] = useState(false);
+  const [searching, setSearching] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [maturity, setMaturity] = useState("");
   const [theme, setTheme] = useState("");
   const [search, setSearch] = useState("");
@@ -132,9 +150,49 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
 
+  const filters: SignalFilters = useMemo(
+    () => ({ q: search.trim() || undefined, theme: theme || undefined, maturity: maturity || undefined }),
+    [search, theme, maturity],
+  );
+  // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
+  // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
+  const requestSeq = useRef(0);
+  const pendingTimer = useRef<number | undefined>(undefined);
+  const firstRequest = useRef(true);
+
+  function load(query: SignalFilters, delay: number) {
+    window.clearTimeout(pendingTimer.current);
+    const seq = ++requestSeq.current;
+    setSearching(true);
+    pendingTimer.current = window.setTimeout(() => {
+      Promise.all([
+        listSignals({ ...query, limit: RADAR_PAGE_SIZE, offset: 0, evidenceLimit: EVIDENCE_PER_CARD }),
+        getSignalSummary(query),
+      ])
+        .then(([rows, counts]) => {
+          if (seq !== requestSeq.current) return;
+          setSignals(rows);
+          setSummary(counts);
+        })
+        .catch((error) => {
+          if (seq === requestSeq.current) handleError(error, "Не удалось загрузить технологический радар");
+        })
+        .finally(() => {
+          if (seq !== requestSeq.current) return;
+          setSearching(false);
+          setLoaded(true);
+        });
+    }, delay);
+  }
+
+  // Фильтры применяются сразу, без «Обновить»: любая смена — новая выборка с сервера.
   useEffect(() => {
-    void reload();
-  }, []);
+    const delay = firstRequest.current ? 0 : SEARCH_DELAY_MS;
+    firstRequest.current = false;
+    load(filters, delay);
+  }, [filters]);
+
+  useEffect(() => () => window.clearTimeout(pendingTimer.current), []);
 
   useEffect(() => {
     // Обычный пользователь здоровье поиска не запрашивает: эндпоинт только для админа.
@@ -155,37 +213,41 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     showToast(message || fallback, "error");
   }
 
-  async function reload() {
+  function reload() {
+    load(filters, 0);
+  }
+
+  async function showMore() {
+    const seq = requestSeq.current;
     try {
-      setBusy(true);
-      setSignals(await listSignals({ maturity: maturity || undefined, theme: theme || undefined, limit: 150, evidenceLimit: 5 }));
+      setLoadingMore(true);
+      const rows = await listSignals({
+        ...filters,
+        limit: RADAR_PAGE_SIZE,
+        offset: signals.length,
+        evidenceLimit: EVIDENCE_PER_CARD,
+      });
+      if (seq !== requestSeq.current) return;
+      // Между страницами радар мог добавить карточку — повтор не рисуем дважды.
+      setSignals((current) => {
+        const known = new Set(current.map((item) => item.id));
+        return [...current, ...rows.filter((item) => !known.has(item.id))];
+      });
     } catch (error) {
-      handleError(error, "Не удалось загрузить технологический радар");
+      handleError(error, "Не удалось загрузить следующие сигналы");
     } finally {
-      setBusy(false);
+      setLoadingMore(false);
     }
   }
 
-  // В фильтре — только тематики заказчика: ранние карточки со свободной темой — отдельным блоком.
-  const themes = useMemo(
-    () => [...new Set(signals.filter((signal) => signal.theme_is_topic !== false).map((signal) => signal.theme).filter(Boolean))].sort(),
-    [signals],
-  );
-  const visibleSignals = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return signals;
-    return signals.filter((signal) =>
-      [
-        signal.title_ru,
-        signal.title,
-        signal.theme,
-        signal.summary,
-        signal.thesis,
-        signal.transferability,
-        ...(signal.evidence || []).map((item) => `${item.title} ${item.title_ru || ""} ${item.publisher || ""}`),
-      ].some((value) => String(value || "").toLowerCase().includes(q)),
-    );
-  }, [search, signals]);
+  // В фильтре — только тематики заказчика, и со всего радара, а не с текущей выборки: иначе
+  // после выбора темы в списке осталась бы она одна. Ранние карточки — отдельным блоком.
+  const themes = useMemo(() => {
+    const names = (summary?.themes ?? []).map((item) => item.theme);
+    return theme && !names.includes(theme) ? [...names, theme] : names;
+  }, [summary, theme]);
+  const visibleSignals = signals;
+  const remaining = Math.max(0, (summary?.matching ?? signals.length) - signals.length);
 
   const groups = useMemo(() => {
     const byTheme = new Map<string, Signal[]>();
@@ -281,7 +343,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         setSignals((current) => current.filter((item) => item.id !== signal.id));
       }
       if (result.merged || result.merge_skipped) {
-        void reload();
+        reload();
       }
     } catch (error) {
       handleError(error, "Не удалось сохранить обратную связь по сигналу");
@@ -362,8 +424,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
             {themes.map((item) => <option value={item} key={item}>{item}</option>)}
           </select>
         </label>
-        <button type="button" className="ghostButton" disabled={busy} onClick={() => void reload()}>
-          {busy ? "Обновляем" : "Обновить"}
+        <button type="button" className="ghostButton" disabled={searching} onClick={reload}>
+          {searching ? "Обновляем" : "Обновить"}
         </button>
         {groups.length ? (
           <>
@@ -392,7 +454,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       </section>
 
       <section className="signalRadarList">
-        {busy ? (
+        {!loaded ? (
           <div className="emptyState">Загружаем сигналы...</div>
         ) : visibleSignals.length ? (
           <div className="articleGroupsStack">
@@ -582,6 +644,15 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
             </section>
             );
           })}
+          {remaining > 0 ? (
+            <div className="showMoreWrap">
+              <button type="button" className="ghostButton" disabled={loadingMore} onClick={() => void showMore()}>
+                {loadingMore
+                  ? "Загружаем…"
+                  : `Показать ещё ${Math.min(RADAR_PAGE_SIZE, remaining)} (осталось ${remaining})`}
+              </button>
+            </div>
+          ) : null}
           </div>
         ) : (
           <div className="emptyState">Сигналов по выбранным фильтрам нет.</div>

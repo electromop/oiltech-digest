@@ -1486,17 +1486,42 @@ def apply_signal_corrections(row: dict) -> dict:
     return row
 
 
-def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50,
-                 user_id: int | None = None) -> list[dict]:
-    # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup).
-    # Карточка без единой ссылки (своей или склеенного дубля) не показывается: оценить её
-    # нельзя (сигнал 97, замечание заказчика 22.09).
-    clauses = [
-        "s.merged_into_signal_id IS NULL",
-        """EXISTS (SELECT 1 FROM signal_evidence e
-                   WHERE e.signal_id = s.id
-                      OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id))""",
-    ]
+# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
+# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
+# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09).
+_RADAR_OWN_EVIDENCE_SQL = (
+    "(e.signal_id = s.id OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id))"
+)
+_RADAR_VISIBLE_SQL = (
+    f"s.merged_into_signal_id IS NULL AND EXISTS (SELECT 1 FROM signal_evidence e WHERE {_RADAR_OWN_EVIDENCE_SQL})"
+)
+# Тема — одна из тематик заказчика (корневые теги). Первая партия радара (13.09) писала
+# тему свободным текстом: экран собирает такие в отдельный блок и в фильтр тем не берёт.
+_RADAR_TOPIC_SQL = (
+    "(s.theme IN (SELECT t.name FROM tags t WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s))"
+)
+# «Поступил» на экране — дата первой находки по Москве (сутки радара — московские).
+_RADAR_ARRIVAL_DATE_SQL = "(s.first_seen_at AT TIME ZONE 'Europe/Moscow')::date"
+RADAR_SORTS = {
+    "score_desc": "s.score DESC, s.last_seen_at DESC, s.id DESC",
+    "date_desc": "s.first_seen_at DESC, s.score DESC, s.id DESC",
+    "score_asc": "s.score ASC, s.first_seen_at DESC, s.id DESC",
+}
+
+
+def _like_contains(text: str) -> str:
+    """Шаблон «содержит» для LIKE: «%» и «_» из запроса человека — обычные символы."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: str | None = None,
+                   since: date | str | None = None, until: date | str | None = None,
+                   min_score: float | None = None, max_score: float | None = None) -> tuple[list[str], list]:
+    """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
+    и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
+    числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля»."""
+    clauses = [_RADAR_VISIBLE_SQL]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -1504,17 +1529,59 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
     if theme:
         clauses.append("s.theme ILIKE %s")
         params.append(f"%{theme}%")
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params = [SYSTEM_TAG_UNCLASSIFIED, user_id, *params, limit]
+    query = (q or "").strip()
+    if query:
+        pattern = _like_contains(query.lower())
+        text_sql = (
+            "LOWER(concat_ws(' ', s.title, s.title_ru, s.theme, s.summary, s.thesis, s.transferability,"
+            " corr.corrected_title, corr.corrected_thesis)) LIKE %s"
+        )
+        evidence_sql = (
+            f"EXISTS (SELECT 1 FROM signal_evidence e WHERE {_RADAR_OWN_EVIDENCE_SQL}"
+            " AND LOWER(concat_ws(' ', e.title, e.title_ru, e.publisher)) LIKE %s)"
+        )
+        alternatives = [text_sql, evidence_sql]
+        params.extend([pattern, pattern])
+        number = query.lstrip("#")
+        if number.isdigit() and len(number) <= 18:
+            alternatives.append("s.id = %s")
+            params.append(int(number))
+        clauses.append(f"({' OR '.join(alternatives)})")
+    if since:
+        clauses.append(f"{_RADAR_ARRIVAL_DATE_SQL} >= %s")
+        params.append(since)
+    if until:
+        clauses.append(f"{_RADAR_ARRIVAL_DATE_SQL} <= %s")
+        params.append(until)
+    if min_score is not None:
+        clauses.append("s.score >= %s")
+        params.append(min_score)
+    if max_score is not None:
+        clauses.append("s.score <= %s")
+        params.append(max_score)
+    return clauses, params
+
+
+def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50,
+                 user_id: int | None = None, q: str | None = None, since: date | str | None = None,
+                 until: date | str | None = None, min_score: float | None = None,
+                 max_score: float | None = None, sort: str = "score_desc", offset: int = 0) -> list[dict]:
+    """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
+    (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу)."""
+    clauses, filter_params = _radar_filters(
+        maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
+    )
+    order_by = RADAR_SORTS.get(sort)
+    if order_by is None:
+        raise ValueError(f"Unknown radar sort: {sort}")
+    where = f"WHERE {' AND '.join(clauses)}"
+    params = [SYSTEM_TAG_UNCLASSIFIED, user_id, *filter_params, limit, max(0, int(offset or 0))]
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
             SELECT s.*,
-                   -- Тема — одна из тематик заказчика (корневые теги). Первая партия радара
-                   -- (13.09) писала тему свободным текстом: экран собирает такие в отдельный блок.
-                   (s.theme IN (SELECT t.name FROM tags t
-                                WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s)) AS theme_is_topic,
+                   {_RADAR_TOPIC_SQL} AS theme_is_topic,
                    COALESCE(uss.status, 'watch') AS user_status,
                    (COALESCE(uss.status, 'watch') = 'digest') AS selected_for_digest,
                    uss.analyst_comment AS user_comment,
@@ -1535,12 +1602,46 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
             {_SIGNAL_CORRECTIONS_LATERAL.format(alias="s")}
             {where}
-            ORDER BY s.score DESC, s.last_seen_at DESC
-            LIMIT %s
+            ORDER BY {order_by}
+            LIMIT %s OFFSET %s
             """,
             params,
         )
         return [apply_signal_corrections(row) for row in cur.fetchall()]
+
+
+def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
+    """Числа над списком радара — той же видимостью карточки, что и список: сколько всего,
+    сколько в текущей выборке (фильтры — как у list_signals) и тематики для фильтра «Тема»."""
+    clauses, filter_params = _radar_filters(**filters)
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(f"SELECT COUNT(*) AS total FROM signals s WHERE {_RADAR_VISIBLE_SQL}")
+        total = int(cur.fetchone()["total"])
+        matching = total
+        if len(clauses) > 1:
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS matching
+                FROM signals s
+                {_SIGNAL_CORRECTIONS_LATERAL.format(alias="s")}
+                WHERE {' AND '.join(clauses)}
+                """,
+                filter_params,
+            )
+            matching = int(cur.fetchone()["matching"])
+        cur.execute(
+            f"""
+            SELECT s.theme, COUNT(*) AS count
+            FROM signals s
+            WHERE {_RADAR_VISIBLE_SQL} AND {_RADAR_TOPIC_SQL}
+            GROUP BY s.theme
+            ORDER BY s.theme
+            """,
+            [SYSTEM_TAG_UNCLASSIFIED],
+        )
+        themes = [{"theme": row["theme"], "count": int(row["count"])} for row in cur.fetchall()]
+    return {"total": total, "matching": matching, "themes": themes}
 
 
 def set_user_signal_status(
