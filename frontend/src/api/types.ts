@@ -231,6 +231,8 @@ export type Signal = {
   maturity: "reject" | "watch" | "shortlist" | "proven" | string;
   confidence: number;
   score: number;
+  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label) — как у бизнес-сигналов.
+  score_label?: string;
   why_now: string | null;
   why_not_noise: string | null;
   companies_json: string[] | null;

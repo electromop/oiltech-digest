@@ -10,6 +10,7 @@ import {
 import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
 import type { Signal, SignalFeedbackPayload } from "../../api/types";
 import { StatCard } from "../shared/StatCard";
+import { ratingClass, scoreClass } from "../shared/scoreScale";
 
 // Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему
 // радару, а не экран по загруженным карточкам (замечание заказчика 19.09).
@@ -105,12 +106,26 @@ function clampScore(value: string, fallback: number): number {
   return Math.max(SCORE_MIN, Math.min(SCORE_MAX, number));
 }
 
-// Цвет среднего балла группы — те же пороги, что у групп «Бизнес-сигналов».
-function scoreClass(score: number) {
-  if (!score) return "muted";
-  if (score >= 65) return "ok";
-  if (score >= 40) return "warn";
-  return "bad";
+// «1 ссылка», «2 ссылки», «5 ссылок».
+function linksWord(count: number): string {
+  const tens = count % 100;
+  const units = count % 10;
+  if (units === 1 && tens !== 11) return "ссылка";
+  if (units >= 2 && units <= 4 && (tens < 12 || tens > 14)) return "ссылки";
+  return "ссылок";
+}
+
+// Мета под заголовком карточки: «тема · N ссылок · зрелость · » — номер карточки следом.
+// Зрелость — оценка модели; оценка человека в ОС называется «Оценка сигнала».
+function cardMeta(signal: Signal): string {
+  const links = Number(signal.evidence_count || 0);
+  const maturity = MATURITY_LABELS[signal.maturity] || signal.maturity;
+  return `${signal.theme} · ${links} ${linksWord(links)} · Зрелость: ${maturity} · `;
+}
+
+// Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
+function scoreTone(signal: Signal): string {
+  return signal.score_label ? ratingClass(signal.score_label) : scoreClass(Number(signal.score || 0));
 }
 
 // Причина по-русски; прочее — короткий текст сервера. Код HTTP — впереди, как у 402:
@@ -447,7 +462,6 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     <section className="screenStack">
       <header className="screenHeader">
         <div>
-          <div className="eyebrow">Signal Discovery</div>
           <h1>Технологический радар</h1>
         </div>
       </header>
@@ -625,37 +639,54 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   <span className={`miniPill ${scoreClass(groupAvg)}`}>{groupAvg}</span>
                 </span>
               </button>
-              {groupOpen ? groupSignals.map((signal) => {
+              {groupOpen ? (
+              <div className="articleRows">
+              {groupSignals.map((signal) => {
             const isExpanded = expanded.has(signal.id);
             const isFeedbackOpen = feedbackOpen.has(signal.id);
             const savingThis = Boolean(saving[signal.id]);
+            const title = signal.title_ru || signal.title;
+            const primaryUrl = signal.evidence?.[0]?.source_url;
+            const arrival = formatArrival(signal);
+            const tone = scoreTone(signal);
             return (
-              <article className="signalRadarCard" key={signal.id}>
-                <div className="signalRadarCardTop">
-                  <div>
-                    <div className="signalRadarMeta">
-                      {/* ID виден всегда: без него нельзя сослаться на дубль
-                          в поле «ID дубля» — заказчик спрашивал, где его взять. */}
-                      <span className="signalIdBadge">#{signal.id}</span>
-                      <span className="signalTheme">{signal.theme}</span>
-                      <span>Зрелость: {MATURITY_LABELS[signal.maturity] || signal.maturity}</span>
-                      <span>{Math.round(Number(signal.score || 0))} баллов</span>
-                      <span>{signal.evidence_count} ссылок</span>
-                      {formatArrival(signal) ? <span>Поступил: {formatArrival(signal)}</span> : null}
+              <article className="articleCardReact" key={signal.id}>
+                {/* Свёрнутая строка, как у «Бизнес-сигналов» (документ заказчика 19.09):
+                    заголовок-ссылка и мета слева, дата, балл с оценкой и выбор — справа. */}
+                <div className="articleCardTop">
+                  <button
+                    type="button"
+                    className={isExpanded ? "expandButtonReact open" : "expandButtonReact"}
+                    onClick={() => toggleExpanded(signal.id)}
+                    aria-expanded={isExpanded}
+                    aria-label={isExpanded ? "Свернуть сигнал" : "Раскрыть сигнал"}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <path d="M4 6.5 8 10l4-3.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <div className="articleCardMain">
+                    {primaryUrl ? (
+                      <a href={primaryUrl} target="_blank" rel="noreferrer" className="articleTitleReact">
+                        {title}
+                      </a>
+                    ) : (
+                      <span className="articleTitleReact">{title}</span>
+                    )}
+                    <div className="metaText">
+                      {cardMeta(signal)}
+                      {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}
+                      <span className="signalIdText">#{signal.id}</span>
                       {/* Дубли того же события скрыты, их ссылки — в этой карточке. */}
-                      {Number(signal.merged_count || 0) > 0 ? (
-                        <span>Объединено дублей: {signal.merged_count}</span>
-                      ) : null}
+                      {Number(signal.merged_count || 0) > 0 ? ` · объединено дублей: ${signal.merged_count}` : ""}
                     </div>
-                    <h2>{signal.title_ru || signal.title}</h2>
                   </div>
-                  <div className="signalRadarActions">
-                    <button type="button" className="ghostButton compactButton" onClick={() => toggleExpanded(signal.id)}>
-                      {isExpanded ? "Скрыть" : "Ссылки"}
-                    </button>
-                    <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
-                      Обратная связь
-                    </button>
+                  <div className="articleCardMetrics">
+                    {arrival ? <div className="articleMetric">Поступил: {arrival}</div> : null}
+                    <div className={`miniPill ${tone}`} title="Балл судьи радара">
+                      {Math.round(Number(signal.score || 0))}
+                    </div>
+                    <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
                     <button
                       type="button"
                       className={signal.selected_for_digest ? "dangerButton compactButton" : "primaryButton compactButton"}
@@ -667,119 +698,129 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   </div>
                 </div>
 
-                <div className="signalRadarBody">
-                  <p className="signalRadarSummaryText">{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
-                  <div className="signalRadarFacts">
-                    <div>
-                      <span>Почему сейчас</span>
-                      <p>{signal.why_now || "Нет объяснения"}</p>
+                {isExpanded ? (
+                  <div className="articleDetailReact signalRadarDetail">
+                    <div className="articleDetailGrid">
+                      <div className="articleSummaryBox">
+                        <strong>Суть</strong>
+                        <p>{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
+                      </div>
+                      <div className="signalRadarFacts">
+                        <div>
+                          <span>Почему сейчас</span>
+                          <p>{signal.why_now || "Нет объяснения"}</p>
+                        </div>
+                        <div>
+                          <span>Переносимость</span>
+                          <p>{signal.transferability || "Нет оценки"}</p>
+                        </div>
+                        {/* Сравнение внутри пачки прогона, а не абсолютная оценка судьи:
+                            поэтому рядом с баллом, но порядок списка — по баллу. */}
+                        {signal.why_interesting ? (
+                          <div>
+                            <span>
+                              Почему интересно
+                              {signal.interest_score != null ? ` · ${Math.round(Number(signal.interest_score))}` : ""}
+                            </span>
+                            <p>{signal.why_interesting}</p>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
-                    <div>
-                      <span>Переносимость</span>
-                      <p>{signal.transferability || "Нет оценки"}</p>
-                    </div>
-                    {/* Сравнение внутри пачки прогона, а не абсолютная оценка судьи:
-                        поэтому рядом с баллами, но порядок списка — по баллам. */}
-                    {signal.why_interesting ? (
-                      <div>
-                        <span>
-                          Почему интересно
-                          {signal.interest_score != null ? ` · ${Math.round(Number(signal.interest_score))}` : ""}
-                        </span>
-                        <p>{signal.why_interesting}</p>
+
+                    {signal.evidence?.length ? (
+                      <div className="signalEvidenceList">
+                        <div className="signalEvidenceHeading">Ссылки</div>
+                        {signal.evidence.map((item) => (
+                          <a className="signalEvidenceRow" href={item.source_url} target="_blank" rel="noreferrer" key={item.id}>
+                            <span>{item.publisher || "source"}</span>
+                            <strong>{item.title_ru || item.title}</strong>
+                            <small>{item.summary_ru || item.extracted_fact || item.evidence_type}</small>
+                          </a>
+                        ))}
                       </div>
                     ) : null}
-                  </div>
-                </div>
 
-                {isExpanded ? (
-                  <div className="signalEvidenceList">
-                    {(signal.evidence || []).map((item) => (
-                      <a className="signalEvidenceRow" href={item.source_url} target="_blank" rel="noreferrer" key={item.id}>
-                        <span>{item.publisher || "source"}</span>
-                        <strong>{item.title_ru || item.title}</strong>
-                        <small>{item.summary_ru || item.extracted_fact || item.evidence_type}</small>
-                      </a>
-                    ))}
+                    {isFeedbackOpen ? (
+                      <div className="signalFeedbackBox">
+                        <div className="signalFeedbackGrid">
+                          <label>
+                            <span>Оценка сигнала</span>
+                            <select
+                              value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).verdict}
+                              onChange={(event) =>
+                                updateFeedbackDraft(signal.id, { verdict: event.target.value as FeedbackDraft["verdict"] })
+                              }
+                            >
+                              {VERDICT_LABELS.map((item) => (
+                                <option value={item.value} key={item.value || "empty"}>{item.label}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>ID дубля</span>
+                            <input
+                              inputMode="numeric"
+                              value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).duplicateOfSignalId}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { duplicateOfSignalId: event.target.value })}
+                              placeholder="если это дубль"
+                            />
+                          </label>
+                        </div>
+                        <label className="signalFeedbackField">
+                          <span>Обоснование оценки</span>
+                          <input
+                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).reason}
+                            onChange={(event) => updateFeedbackDraft(signal.id, { reason: event.target.value })}
+                            placeholder="чем обоснована оценка"
+                          />
+                        </label>
+                        <label className="signalFeedbackField">
+                          <span>Рекомендуемый заголовок</span>
+                          <input
+                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedTitle}
+                            onChange={(event) => updateFeedbackDraft(signal.id, { correctedTitle: event.target.value })}
+                            placeholder="если нужно переименовать карточку"
+                          />
+                        </label>
+                        <label className="signalFeedbackField">
+                          <span>Рекомендуемая формулировка сути</span>
+                          <textarea
+                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedThesis}
+                            onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
+                            placeholder="эталонная формулировка сути сигнала"
+                          />
+                        </label>
+                        <label className="signalFeedbackField">
+                          <span>Рекомендации AI-агенту</span>
+                          <textarea
+                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).comment}
+                            onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
+                            placeholder="термины, поисковый угол, сильный источник..."
+                          />
+                        </label>
+                        <div className="signalFeedbackActions">
+                          <span>Обратная связь: {signal.feedback_count || 0}</span>
+                          <button type="button" className="primaryButton compactButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
+                            Сохранить
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="signalFeedbackCollapsed">
+                        <span>Обратная связь: {signal.feedback_count || 0}</span>
+                        <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
+                          Обратная связь
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : null}
-
-                {isFeedbackOpen ? (
-                  <div className="signalFeedbackBox">
-                    <div className="signalFeedbackGrid">
-                      <label>
-                        <span>Оценка сигнала</span>
-                        <select
-                          value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).verdict}
-                          onChange={(event) =>
-                            updateFeedbackDraft(signal.id, { verdict: event.target.value as FeedbackDraft["verdict"] })
-                          }
-                        >
-                          {VERDICT_LABELS.map((item) => (
-                            <option value={item.value} key={item.value || "empty"}>{item.label}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        <span>ID дубля</span>
-                        <input
-                          inputMode="numeric"
-                          value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).duplicateOfSignalId}
-                          onChange={(event) => updateFeedbackDraft(signal.id, { duplicateOfSignalId: event.target.value })}
-                          placeholder="если это дубль"
-                        />
-                      </label>
-                    </div>
-                    <label className="signalFeedbackField">
-                      <span>Обоснование оценки</span>
-                      <input
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).reason}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { reason: event.target.value })}
-                        placeholder="чем обоснована оценка"
-                      />
-                    </label>
-                    <label className="signalFeedbackField">
-                      <span>Рекомендуемый заголовок</span>
-                      <input
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedTitle}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { correctedTitle: event.target.value })}
-                        placeholder="если нужно переименовать карточку"
-                      />
-                    </label>
-                    <label className="signalFeedbackField">
-                      <span>Рекомендуемая формулировка сути</span>
-                      <textarea
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedThesis}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
-                        placeholder="эталонная формулировка сути сигнала"
-                      />
-                    </label>
-                    <label className="signalFeedbackField">
-                      <span>Рекомендации AI-агенту</span>
-                      <textarea
-                        value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).comment}
-                        onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
-                        placeholder="термины, поисковый угол, сильный источник..."
-                      />
-                    </label>
-                    <div className="signalFeedbackActions">
-                      <span>Обратная связь: {signal.feedback_count || 0}</span>
-                      <button type="button" className="primaryButton compactButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
-                        Сохранить
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="signalFeedbackCollapsed">
-                    <span>Обратная связь: {signal.feedback_count || 0}</span>
-                    <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
-                      Обратная связь
-                    </button>
-                  </div>
-                )}
               </article>
             );
-          }) : null}
+          })}
+              </div>
+              ) : null}
             </section>
             );
           })}

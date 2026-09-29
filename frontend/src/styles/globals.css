@@ -5190,95 +5190,17 @@ button {
   letter-spacing: 0;
 }
 
-.signalRadarCard {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.signalRadarCardTop {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: start;
-}
-
-.signalRadarCard h2 {
-  margin: 6px 0 0;
-  font-size: 1rem;
-  line-height: 1.32;
-  color: #0f172a;
-}
-
-.signalRadarMeta,
-.signalRadarActions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.signalRadarMeta span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: rgba(241, 245, 249, 0.8);
-  color: var(--text-soft);
-  font-size: 0.71rem;
-  font-weight: 700;
-}
-
-.signalRadarMeta .signalTheme {
-  color: #0f172a;
-  background: rgba(226, 232, 240, 0.88);
-}
-
-/* ID сигнала: моноширинный, чтобы номер читался и переносился в поле «ID дубля». */
-.signalRadarMeta .signalIdBadge {
+/* Карточка радара — строка ленты (.articleCardReact); свои здесь только номер карточки
+   и раскрытая часть. Номер моноширинный и выделяется целиком: его переносят в «ID дубля». */
+.signalIdText {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #0f172a;
-  background: rgba(203, 213, 225, 0.9);
   user-select: all;
 }
 
-/* Издатели до раскрытия карточки: по ним судят о доверии к сигналу. */
-.signalPublishers {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 6px;
-}
-
-.signalPublisherChip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 1px 7px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 999px;
-  color: var(--text-soft);
-  font-size: 0.69rem;
-  font-weight: 600;
-}
-
-.signalRadarBody {
+.signalRadarDetail {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
-  gap: 14px;
-  align-items: start;
-}
-
-.signalRadarSummaryText {
-  margin: 0;
-  max-width: none;
-  color: #1e293b;
-  font-size: 0.9rem;
-  line-height: 1.48;
+  gap: 12px;
 }
 
 .signalRadarFacts {
@@ -5304,6 +5226,14 @@ button {
   display: grid;
   gap: 6px;
   padding-top: 4px;
+}
+
+.signalEvidenceHeading {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .signalEvidenceRow {
@@ -5410,8 +5340,6 @@ button {
 }
 
 @media (max-width: 900px) {
-  .signalRadarCardTop,
-  .signalRadarBody,
   .signalFeedbackGrid {
     grid-template-columns: 1fr;
   }

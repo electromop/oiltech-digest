@@ -199,6 +199,8 @@ describe("SignalRadarPage", () => {
 
   it("показывает «почему интересно» только там, где ревью пачки его дало", async () => {
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    await screen.findByText("Карточка без ревью пачки");
+    for (const button of screen.getAllByRole("button", { name: "Раскрыть сигнал" })) fireEvent.click(button);
 
     expect(await screen.findByText("Единственный открытый источник данных по метану")).toBeInTheDocument();
     expect(screen.getAllByText(/Почему интересно/)).toHaveLength(1);
@@ -298,8 +300,9 @@ describe("SignalRadarPage", () => {
     it("обычный пользователь оставляет ОС, в оценках есть «Не тот блок»", async () => {
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
 
-      fireEvent.click(screen.getAllByRole("button", { name: "Обратная связь" })[0]);
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
 
       expect(
         screen.getByRole("option", { name: "Не тот блок — бизнес-сигнал, а не технология" }),
@@ -490,6 +493,53 @@ describe("SignalRadarPage", () => {
       expect(query.sort ?? "score_desc").toBe("score_desc");
       expect(screen.getByRole("spinbutton", { name: "Балл от" })).toHaveValue(0);
       expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toHaveValue("score_desc");
+    });
+
+    it("карточка — свёрнутая строка, как у «Бизнес-сигналов», и раскрывается", async () => {
+      const { container } = render(
+        <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+
+      // Заголовок — ссылка на первую ссылку-доказательство, под ним — мета карточки.
+      const title = screen.getByRole("link", { name: "Роботизированная буровая установка" });
+      expect(title).toHaveAttribute("href", "https://worldoil.com/a");
+      expect(title).toHaveAttribute("target", "_blank");
+      expect(screen.getByText(/^Бурение · 2 ссылки · Зрелость: Наблюдать ·/)).toBeInTheDocument();
+      expect(screen.getByText("#21")).toBeInTheDocument();
+      // Тело свёрнуто: суть, «Почему сейчас» и ссылки — только по раскрытию.
+      expect(screen.queryByText("Спутник мониторинга метана перестал выходить на связь.")).not.toBeInTheDocument();
+      expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Обратная связь" })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+
+      expect(screen.getByText("Спутник мониторинга метана перестал выходить на связь.")).toBeInTheDocument();
+      expect(screen.getByText("Почему сейчас")).toBeInTheDocument();
+      expect(screen.getByText("Переносимость")).toBeInTheDocument();
+      expect(screen.getByText("Robotic rig")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Свернуть сигнал" }));
+      expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
+      // Надзаголовка «Signal Discovery» больше нет — экран по-русски.
+      expect(screen.queryByText("Signal Discovery")).not.toBeInTheDocument();
+      expect(container.querySelector(".signalRadarCard")).toBeNull();
+    });
+
+    it.each([
+      [85, "Высокая", "ok"],
+      [70, "Выше средней", "ok"],
+      [50, "Средняя", "warn"],
+      [20, "Низкая", "bad"],
+    ])("балл %s — цветной, со словесной оценкой «%s», как у бизнес-сигналов", async (score, label, tone) => {
+      serve([{ ...drilling, score, score_label: label }]);
+      renderRadar(false);
+
+      const pill = await screen.findByTitle("Балл судьи радара");
+      expect(pill).toHaveTextContent(String(score));
+      expect(pill).toHaveClass("miniPill", tone);
+      expect(screen.getByText(label, { selector: ".miniPill" })).toHaveClass(tone);
     });
 
     it("вместо строки издателей — число ссылок и дата поступления", async () => {

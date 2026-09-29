@@ -31,6 +31,7 @@ from oiltech_digest import contract, lanes, network_policy
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
+    score_label,
 )
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
@@ -1737,7 +1738,10 @@ def list_signals(
     rows = []
     for row in repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"])):
         evidence = repository.list_signal_evidence(int(row["id"]), limit=evidence_limit) if evidence_limit else []
-        rows.append(_clean({**row, "evidence": evidence}))
+        # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
+        # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте.
+        label = score_label(float(row.get("score") or 0))
+        rows.append(_clean({**row, "score_label": label, "evidence": evidence}))
     return rows
 
 

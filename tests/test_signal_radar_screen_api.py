@@ -183,6 +183,19 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
     assert searched["matching"] == 1
 
 
+def test_card_carries_the_word_rating_by_the_feed_thresholds(user):
+    # Оценка «как у бизнес-сигналов» (документ заказчика 19.09): те же пороги 80/65/40,
+    # что у ленты (pipeline.score_label), — один источник слов и цвета.
+    for key, score in (("a", 85), ("b", 70), ("c", 50), ("d", 20)):
+        _card(key, f"Карточка {key}", score=score)
+
+    rows = _get("/api/signals", user).json()
+
+    assert [(row["score"], row["score_label"]) for row in rows] == [
+        (85, "Высокая"), (70, "Выше средней"), (50, "Средняя"), (20, "Низкая"),
+    ]
+
+
 @pytest.mark.parametrize(
     "params",
     [{"sort": "random"}, {"since": "2026-13-45"}, {"offset": -1}, {"min_score": 101}, {"q": "x" * 201}],
