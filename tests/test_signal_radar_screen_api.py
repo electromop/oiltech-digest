@@ -108,6 +108,54 @@ def test_links_of_the_page_come_in_one_query_the_same_as_card_by_card(user, monk
     assert len(rows[0]["evidence"]) == 2
 
 
+# Определение видимости и поиска по ссылкам «в лоб» — одним OR с вложенным подзапросом, как
+# было до переписывания ради скорости (ревью PR #83: на данных как на проде подзапрос
+# исполнялся по строке). Быстрые запросы обязаны давать ровно ту же выборку.
+_REFERENCE_VISIBLE = """
+SELECT s.id FROM signals s
+WHERE s.merged_into_signal_id IS NULL
+  AND EXISTS (SELECT 1 FROM signal_evidence e
+              WHERE (e.signal_id = s.id
+                     OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id))
+                AND LOWER(concat_ws(' ', e.title, e.title_ru, e.publisher)) LIKE %s)
+"""
+
+
+def _reference_ids(pattern="%"):
+    with repository.get_connection() as conn:
+        return {row[0] for row in conn.execute(_REFERENCE_VISIBLE, (pattern,))}
+
+
+def _merge(duplicate, main):
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (main, duplicate))
+        conn.commit()
+
+
+def test_fast_visibility_and_link_search_select_the_same_cards_as_the_plain_definition(user):
+    _topics(DRILLING)
+    own = _card("own", "Своя ссылка", link_title="Alpha rig", publisher="Rigzone")
+    # Своих ссылок нет — карточку держат ссылки её склеенного дубля.
+    by_duplicate = repository.upsert_signal({"signal_key": "by-dup", "title": "Только у дубля", "theme": DRILLING})
+    _merge(_card("dup-1", "Дубль 1", link_title="Beta drone survey", publisher="WorldOil"), by_duplicate)
+    # Ни своих ссылок, ни ссылок у дубля — карточку не показываем.
+    empty = repository.upsert_signal({"signal_key": "empty", "title": "Без ссылок", "theme": DRILLING})
+    _merge(repository.upsert_signal({"signal_key": "dup-2", "title": "Пустой дубль", "theme": DRILLING}), empty)
+    both = _card("both", "Свои и дубля", link_title="Gamma pump")
+    _merge(_card("dup-3", "Дубль 3", link_title="Delta sensor"), both)
+
+    visible = _reference_ids()
+    assert visible == {own, by_duplicate, both}
+    assert set(_ids(_get("/api/signals", user, limit=50))) == visible
+    summary = _get("/api/signals/summary", user).json()
+    assert (summary["total"], summary["merged"]) == (3, 2)
+    assert summary["themes"] == [{"theme": DRILLING, "count": 3}]
+    for query, expected in (("drone", {by_duplicate}), ("rigzone", {own}), ("delta", {both}), ("gamma", {both})):
+        assert _reference_ids(f"%{query}%") == expected
+        assert set(_ids(_get("/api/signals", user, q=query))) == expected
+        assert _get("/api/signals/summary", user, q=query).json()["matching"] == len(expected)
+
+
 def test_search_finds_the_title_people_corrected(user):
     _card("rig", "Роботизированная буровая установка", score=90)
     signal_id = _card("sat", "MethaneSAT lost contact", theme=ECOLOGY)
