@@ -271,7 +271,9 @@ def build_digest_content(
         saved_digest = repository.get_monthly_digest(month, user_id=user_id)
         saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
         if saved_ids:
-            rows = repository.digest_items_by_article_ids(saved_ids[:limit])
+            # Черновик задаёт порядок, но в выпуск идёт только то, что человек держит «в
+            # дайджест» сейчас: снятая после сохранения статья уходит и из выгрузки.
+            rows = repository.digest_items_by_article_ids(saved_ids[:limit], selected_by=user_id)
             # В черновике хранятся только статьи (monthly_digest_items.article_id → articles).
             # Сигналы радара, выбранные в дайджест, добавляются заново — иначе после
             # «Сохранить черновик» они из выпуска пропадали. Если все статьи черновика с тех

@@ -6035,17 +6035,28 @@ def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
         return {**digest, "items": cur.fetchall()}
 
 
-def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
+def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | None = None) -> list[dict]:
     """Детали статей сохранённого дайджеста по списку id (порядок сохраняется).
 
-    ПЕР-ЮЗЕРНОГО СКОУПА ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО: выбираются только глобальные поля
-    статьи (заголовок, ссылка, суть, скор, теги). Раньше функция принимала `user_id`
-    и НИГДЕ его не использовала — это создавало ложное ощущение фильтрации по владельцу.
-    За принадлежность отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из get_monthly_digest,
-    который скоупит дайджест по user_id.
+    За принадлежность черновика отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из
+    get_monthly_digest, который скоупит дайджест по user_id. Выбираются только глобальные
+    поля статьи (заголовок, ссылка, суть, скор, теги).
+
+    `selected_by` — оставить только статьи, которые этот пользователь ДО СИХ ПОР держит
+    «в дайджест». Черновик задаёт порядок, но не членство: до 29.09 статья, снятая после
+    сохранения («Из дайджеста» на экране выпуска или другой статус в ленте), пропадала из
+    очереди на экране, а превью и выгрузка брали её из черновика, пока его не пересохранят.
     """
     if not article_ids:
         return []
+    selected_clause = ""
+    selected_params: list = []
+    if selected_by is not None:
+        selected_clause = (
+            "AND EXISTS (SELECT 1 FROM user_article_states uas WHERE uas.article_id = a.id"
+            " AND uas.user_id = %s AND uas.status = 'digest')"
+        )
+        selected_params = [selected_by]
     order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -6070,9 +6081,10 @@ def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
               -- сохранённого выпуска (на тот день — 1 из 7 в августе, 2 из 5 в июле).
               AND {visible_sql()}
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
+              {selected_clause}
             ORDER BY {order_case}
             """,
-            [article_ids, *article_ids],
+            [article_ids, *selected_params, *article_ids],
         )
         return cur.fetchall()
 

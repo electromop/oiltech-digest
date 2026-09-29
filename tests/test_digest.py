@@ -135,7 +135,7 @@ def test_build_digest_content_prefers_saved_monthly_digest_order(monkeypatch):
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_items_by_article_ids",
-        lambda article_ids, user_id=None: [
+        lambda article_ids, selected_by=None: [
             {
                 "id": article_id,
                 "title": f"Article {article_id}",

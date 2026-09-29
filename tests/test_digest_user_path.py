@@ -387,3 +387,29 @@ def test_export_of_a_45_item_issue_in_html_and_docx_matches_the_preview(issue):
         document_xml = archive.read("word/document.xml").decode("utf-8")
     for item in preview:
         assert item["title"] in document_xml
+
+
+# ---------------------------------------------------------------------------
+#  Дефект: снятая отметка оставалась в сохранённом выпуске
+# ---------------------------------------------------------------------------
+
+def test_unmarked_article_leaves_the_saved_issue_without_resaving(issue):
+    """«Из дайджеста» на экране выпуска (статус archive) или другой статус в ленте: статья
+    пропадала из очереди, экран не показывал несохранённых правок — а превью и выгрузка
+    брали её из сохранённого черновика, пока человек не пересохранит его сам."""
+    analyst, a = issue["analyst"], issue["a"]
+    for key in ("hi", "mid", "low"):
+        analyst.mark(a[key])
+    assert analyst.save(SEPT, [a["low"], a["mid"], a["hi"]]).status_code == 200
+
+    analyst.mark(a["mid"], status="archive")  # «Из дайджеста» на экране выпуска
+    analyst.mark(a["hi"], status="noise")     # передумал в ленте
+
+    assert analyst.issue() == [("article", a["low"])]
+    html = analyst.export("html").decode("utf-8")
+    assert "Материал low" in html
+    assert "Материал mid" not in html and "Материал hi" not in html
+
+    # Снова отмечена — возвращается на своё место в черновике.
+    analyst.mark(a["mid"])
+    assert analyst.issue() == [("article", a["low"]), ("article", a["mid"])]
