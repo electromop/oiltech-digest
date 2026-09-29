@@ -922,6 +922,13 @@ def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
     несут ещё 75. Без фильтра сумма весов у старой статьи становилась 175 вместо 100 —
     баллы уезжали вверх без причины. И отдельно: статью, оценённую только по ныне
     выключенным критериям, пересчёт обнулил бы молча.
+
+    С сессии G условие строже: пересчёт без ИИ трогает только балл, чьи подпункты — ровно
+    текущий активный набор профиля (а у балла со снимком — ещё и те же тексты). Статья с
+    выключенным критерием среди подпунктов посчитана другим набором: не 140 (с ним) и не 80
+    (по одному живому подпункту, как считал прежний пересчёт), а пропуск — ей нужен
+    пересчёт с ИИ. Баллы здесь — до профилей (без снимка): пересчитываются только явно,
+    с include_legacy.
     """
     from oiltech_digest.db import repository
 
@@ -957,22 +964,23 @@ def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
 
         mixed = add_article("https://s.example/mixed", [live, dead])
         orphan = add_article("https://s.example/orphan", [dead])
+        same_set = add_article("https://s.example/same", [live])
         conn.commit()
 
-    repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8)
+    def totals() -> dict[int, float]:
+        with connection.get_connection() as conn:
+            return {row[0]: float(row[1]) for row in conn.execute("SELECT article_id, total_score FROM article_scores")}
 
-    with connection.get_connection() as conn:
-        mixed_total = conn.execute(
-            "SELECT total_score FROM article_scores WHERE article_id = %s", (mixed,)
-        ).fetchone()[0]
-        orphan_total = conn.execute(
-            "SELECT total_score FROM article_scores WHERE article_id = %s", (orphan,)
-        ).fetchone()[0]
+    strict = repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8)
+    assert strict["recomputed"] == 0 and strict["skipped_no_snapshot"] == 3
+    assert totals() == {mixed: 50, orphan: 50, same_set: 50}, "без снимка тексты не сверить — не трогаем"
 
-    # 80 * 100/100 = 80. С выключенным критерием было бы 80*175/100 = 140 → клампилось в 100.
-    assert float(mixed_total) == 80, f"выключенный критерий всё ещё считается: {mixed_total}"
-    # Статью без единого активного критерия не трогаем, а не обнуляем.
-    assert float(orphan_total) == 50, "статью без активных критериев нельзя обнулять молча"
+    legacy = repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8, include_legacy=True)
+
+    assert legacy["legacy_recomputed"] == 1 and legacy["skipped_no_snapshot"] == 2
+    # 80 * 100/100 = 80 — только у статьи, чьи подпункты ровно текущий набор.
+    # С выключенным критерием было бы 80*175/100 = 140 → клампилось в 100.
+    assert totals() == {mixed: 50, orphan: 50, same_set: 80}, "выключенный критерий всё ещё считается"
 
 
 def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):

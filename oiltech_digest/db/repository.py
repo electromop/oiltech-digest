@@ -5759,7 +5759,9 @@ def replace_article_score(article_id: int, total_score: float, score_label: str,
         conn.commit()
 
 
-def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -> int:
+def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float, *,
+                                      profile: str = ARTICLE_SCORING_PROFILE,
+                                      include_legacy: bool = False, dry_run: bool = False) -> dict:
     """Пересчитать total_score/score_label/final_score из УЖЕ сохранённых ai_score/keyword_score
     (article_score_items) по текущему блендингу — БЕЗ повторного вызова OpenAI и без воркера.
 
@@ -5768,35 +5770,77 @@ def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -
     pipeline.normalize_score_payload: final = max(ai, kw*keyword_weight + ai*ai_weight);
     total = Σ final*weight/100 (вес критерия из scoring_criteria). Пороги score_label синхронны
     pipeline.score_label (80/65/40). ai_score/keyword_score не трогаются → можно гонять повторно
-    или поверх сделать полный AI-перепрогон. Возвращает число обновлённых статей."""
+    или поверх сделать полный AI-перепрогон.
+
+    Сессия G: только в пределах профиля и только там, где пересчёт без ИИ верен.
+    - Балл со снимком — если набор id и хэши текстов снимка совпадают с текущими активными
+      критериями профиля. Отличаться могут только веса: итог — с новыми весами, снимок получает
+      их же. Набор или тексты другие — пропуск (skipped_changed): подпункты отвечали на другие
+      вопросы, нужен пересчёт с ИИ (enqueue-rescore).
+    - Балл без снимка (до профилей) — пропуск (skipped_no_snapshot). С include_legacy —
+      пересчёт, если набор id подпунктов совпадает с текущим; тексты сверить не с чем, решение
+      за владельцем, снимок такому баллу не пишется.
+    Прежний пересчёт брал все активные критерии без сверки: статья, оценённая пятью старыми
+    критериями, из которых активным остался один, получала итог по одному подпункту.
+    Сумма весов профиля ≠ 100 — отказ: пересчёт исказил бы баллы. dry_run — только счёт."""
+    profile = check_profile(profile)
+    current = list_enabled_scoring_criteria(profile)
+    weight_sum = round(sum(float(row["weight"]) for row in current), 2)
+    if weight_sum != 100:
+        raise ValueError(f"Сумма весов профиля {profile} — {weight_sum}, а нужна 100: пересчёт исказил бы баллы")
+    snapshot = scoring_profiles.criteria_snapshot(current)
+    current_texts = scoring_profiles.snapshot_texts(snapshot)
+    stats = {"profile": profile, "recomputed": 0, "legacy_recomputed": 0,
+             "skipped_changed": 0, "skipped_no_snapshot": 0, "dry_run": dry_run}
     with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.criteria_snapshot, array_agg(i.criterion_id)
+            FROM article_scores s
+            JOIN article_score_items i ON i.article_score_id = s.id
+            WHERE COALESCE(s.profile, %s) = %s
+            GROUP BY s.id
+            ORDER BY s.id
+            """,
+            (ARTICLE_SCORING_PROFILE, profile),
+        ).fetchall()
+        matched: list[int] = []
+        legacy: list[int] = []
+        for score_id, stored, item_ids in rows:
+            same_set = {int(item) for item in item_ids} == set(current_texts)
+            if stored is None:
+                if include_legacy and same_set:
+                    legacy.append(int(score_id))
+                else:
+                    stats["skipped_no_snapshot"] += 1
+            elif same_set and scoring_profiles.snapshot_texts(stored) == current_texts:
+                matched.append(int(score_id))
+            else:
+                stats["skipped_changed"] += 1
+        stats["recomputed"], stats["legacy_recomputed"] = len(matched), len(legacy)
+        eligible = matched + legacy
+        if dry_run or not eligible:
+            return stats
         conn.execute(
             """
             UPDATE article_score_items
             SET final_score = ROUND(
                 GREATEST(COALESCE(ai_score, 0),
                          COALESCE(keyword_score, 0) * %s + COALESCE(ai_score, 0) * %s)::numeric, 2)
+            WHERE article_score_id = ANY(%s)
             """,
-            (keyword_weight, ai_weight),
+            (keyword_weight, ai_weight, eligible),
         )
-        cur = conn.execute(
+        conn.execute(
             """
-            -- ТОЛЬКО активные критерии. Без фильтра выключенные продолжали вносить вклад:
-            -- на проде 12.09 три выключенных критерия несут вес 35+30+10 = 75, и сумма
-            -- весов у старой статьи становилась 175 вместо 100 — баллы уезжали вверх без
-            -- всякой причины. Заказчик 11.09 как раз сменил профиль критериев, так что
-            -- «старые items + новые веса» — это не теория, а текущее состояние базы.
+            -- Подпункты каждого балла здесь — ровно активный набор профиля (проверено выше):
+            -- выключенный критерий вклада не вносит, недостающий не обнуляет итог.
             WITH recomputed AS (
-                SELECT i.article_score_id,
-                       SUM(i.final_score * c.weight / 100.0) AS total,
-                       SUM(c.weight) AS weight_sum
+                SELECT i.article_score_id, SUM(i.final_score * c.weight / 100.0) AS total
                 FROM article_score_items i
-                JOIN scoring_criteria c ON c.id = i.criterion_id AND c.enabled
+                JOIN scoring_criteria c ON c.id = i.criterion_id
+                WHERE i.article_score_id = ANY(%s)
                 GROUP BY i.article_score_id
-                -- Статьи, оценённые ТОЛЬКО по ныне выключенным критериям, пропускаем:
-                -- их «пересчёт» дал бы 0 и молча обнулил ленту. Им нужен полноценный
-                -- перепрогон скоринга, а не пересчёт блендинга.
-                HAVING SUM(c.weight) > 0
             )
             UPDATE article_scores s
             SET total_score = ROUND(LEAST(GREATEST(r.total, 0), 100)::numeric, 2),
@@ -5808,10 +5852,16 @@ def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -
                 updated_at = now()
             FROM recomputed r
             WHERE s.id = r.article_score_id
-            """
+            """,
+            (eligible,),
         )
+        if matched:
+            conn.execute(
+                "UPDATE article_scores SET criteria_snapshot = %s, profile = %s WHERE id = ANY(%s)",
+                (Json(snapshot), profile, matched),
+            )
         conn.commit()
-        return cur.rowcount or 0
+    return stats
 
 
 def insert_ai_run(rec: dict) -> None:

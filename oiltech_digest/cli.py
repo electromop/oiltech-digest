@@ -496,15 +496,24 @@ def cmd_score(args: argparse.Namespace) -> None:
 
 def cmd_rescore_recompute(args: argparse.Namespace) -> None:
     """Пересчитать баллы из УЖЕ сохранённых ai_score новым блендингом — без OpenAI и без воркера.
-    Гоняется на ядре (РФ) прямо по БД. Полезно, когда менялась только формула блендинга, а внешний
-    AI-воркер недоступен/дорог. Полный AI-перепрогон (новая модель+промпт) делается отдельно."""
+    Гоняется на ядре (РФ) прямо по БД. Полезно, когда менялась только формула блендинга или веса,
+    а внешний AI-воркер недоступен/дорог. Полный AI-перепрогон (новая модель+промпт) — отдельно.
+
+    С сессии G — по профилю и только у баллов, чей снимок совпадает с текущим набором по id и
+    текстам (изменились только веса); остальные пропускаются и считаются в выводе. Смена текстов
+    или набора — пересчёт с ИИ: enqueue-rescore."""
     from oiltech_digest.db import repository
     from oiltech_digest.processing.pipeline import SCORE_AI_WEIGHT, SCORE_KEYWORD_WEIGHT
 
-    updated = repository.recompute_total_scores_from_items(SCORE_KEYWORD_WEIGHT, SCORE_AI_WEIGHT)
+    try:
+        stats = repository.recompute_total_scores_from_items(
+            SCORE_KEYWORD_WEIGHT, SCORE_AI_WEIGHT, profile=args.profile,
+            include_legacy=args.include_legacy, dry_run=args.dry_run,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"rescore-recompute: {exc}") from exc
     print(json.dumps(
-        {"recomputed_article_scores": updated,
-         "keyword_weight": SCORE_KEYWORD_WEIGHT, "ai_weight": SCORE_AI_WEIGHT},
+        {**stats, "keyword_weight": SCORE_KEYWORD_WEIGHT, "ai_weight": SCORE_AI_WEIGHT},
         ensure_ascii=False))
 
 
@@ -762,6 +771,45 @@ def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
     except RuntimeError as exc:
         raise SystemExit(f"enqueue-resummarize: {exc}") from exc
     print(f"  задач: {len(jobs)} ({jobs})")
+
+
+def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
+    """Пересчитать балл статей месяца с ИИ — после смены текстов или набора критериев профиля.
+
+    Сначала всегда сухой прогон (по умолчанию): выборка N и стоимость по формуле ADR 0002.
+    Задачи — только с --no-dry-run, решение о запуске — за владельцем."""
+    from oiltech_digest.processing import rescore
+
+    try:
+        selection = rescore.rescore_selection(args.profile, args.month)
+    except ValueError as exc:
+        raise SystemExit(f"enqueue-rescore: {exc}") from exc
+    ids = selection["article_ids"][: args.limit] if args.limit else selection["article_ids"]
+    estimate = rescore.scoring_cost_estimate(len(ids))
+    print(
+        f"enqueue-rescore: профиль {selection['profile']}, месяц {selection['month']} — видимых оценённых статей "
+        f"{selection['scored']}: посчитаны текущим набором {selection['up_to_date']} (из них другие только веса — "
+        f"{selection['weights_only']}, им хватит rescore-recompute), набор или тексты другие {selection['changed']}, "
+        f"без снимка (до профилей) {selection['no_snapshot']}"
+    )
+    print(f"  к пересчёту с ИИ: N={len(ids)} (из них выбраны в дайджест: {selection['in_digest']})")
+    if estimate["model"] is None:
+        print(f"  стоимость не оценить: вызовов scoring за {estimate['days']} дней нет")
+    else:
+        print(
+            f"  стоимость ≈ ${estimate['usd_total']:.2f}: модель {estimate['model']}, за {estimate['days']} дней "
+            f"{estimate['runs']} вызовов scoring, в среднем in={estimate['avg_input_tokens']} / "
+            f"out={estimate['avg_output_tokens']} токенов, ставки ${estimate['price_in']}/${estimate['price_out']} "
+            f"за 1М → ${estimate['usd_per_call']:.5f} за вызов; сверять со счётом провайдера"
+        )
+    if args.dry_run:
+        print("  [dry-run] задачи не поставлены (поставить: --no-dry-run)")
+        return
+    try:
+        jobs = rescore.enqueue_rescore(ids, batch_size=args.batch_size)
+    except RuntimeError as exc:
+        raise SystemExit(f"enqueue-rescore: {exc}") from exc
+    print(f"  задач: {len(jobs)} ({jobs[:20]}{' …' if len(jobs) > 20 else ''})")
 
 
 def _utc_datetime(value: str) -> datetime:
@@ -2406,6 +2454,8 @@ def cmd_enqueue_agent_loop(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, SCORING_PROFILES
+
     parser = argparse.ArgumentParser(prog="oiltech_digest.cli", description="OilTech Digest — сбор RSS")
     parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (INFO)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2574,8 +2624,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_rescore_recompute = sub.add_parser(
         "rescore-recompute",
-        help="пересчитать total_score из сохранённых ai_score новым блендингом (без OpenAI/воркера, на ядре)")
+        help="пересчитать total_score из сохранённых ai_score (без OpenAI/воркера, на ядре): "
+             "только баллы профиля, чей снимок совпадает с текущим набором по id и текстам")
+    p_rescore_recompute.add_argument("--profile", choices=SCORING_PROFILES, default=ARTICLE_SCORING_PROFILE)
+    p_rescore_recompute.add_argument(
+        "--include-legacy", action="store_true",
+        help="и баллы без снимка (до профилей) с тем же набором id подпунктов — тексты не сверить")
+    p_rescore_recompute.add_argument("--dry-run", action="store_true", help="только посчитать, ничего не писать")
     p_rescore_recompute.set_defaults(func=cmd_rescore_recompute)
+
+    p_rescore = sub.add_parser(
+        "enqueue-rescore",
+        help="пересчитать балл статей месяца с ИИ по текущему набору профиля (по умолчанию — выборка и стоимость)")
+    p_rescore.add_argument("--profile", choices=SCORING_PROFILES, default=ARTICLE_SCORING_PROFILE)
+    p_rescore.add_argument("--month", required=True, help="ГГГГ-ММ — месяц из окна ленты")
+    p_rescore.add_argument("--limit", type=int, default=0, help="не больше N статей (0 — все)")
+    p_rescore.add_argument("--batch-size", type=int, default=20)
+    p_rescore.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_rescore.set_defaults(func=cmd_enqueue_rescore)
 
     p_process = sub.add_parser("process", help="summary → tagging → scoring")
     add_ai_args(p_process)

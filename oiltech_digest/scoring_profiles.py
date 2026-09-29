@@ -72,6 +72,17 @@ def criteria_snapshot(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def snapshot_texts(snapshot: Any) -> dict[int, str] | None:
+    """{id критерия: хэш текста} снимка — то, что должно совпасть с текущим набором, чтобы
+    балл можно было пересчитать без ИИ (веса могут отличаться). Битый снимок — None."""
+    if not isinstance(snapshot, list) or not snapshot:
+        return None
+    try:
+        return {int(entry["id"]): str(entry["text_hash"]) for entry in snapshot}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def profile_of(criteria: list[dict[str, Any]]) -> str | None:
     """Профиль набора, которым считали. Набор — всегда один профиль; поля нет (пакет от ядра
     до профилей) или профили разные — None: тогда его определит ядро по id подпунктов."""
