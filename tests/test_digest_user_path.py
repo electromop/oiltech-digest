@@ -11,6 +11,11 @@
 from __future__ import annotations
 
 import re
+import socket
+import subprocess
+import sys
+import threading
+import time
 from datetime import datetime, timezone
 from io import BytesIO
 from zipfile import ZipFile
@@ -542,3 +547,84 @@ def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(is
     theirs_html = colleague.download(theirs).decode("utf-8")
     assert "Материал hi" in mine_html and "Материал low" not in mine_html
     assert "Материал low" in theirs_html and "Материал hi" not in theirs_html
+
+
+# ---------------------------------------------------------------------------
+#  Дефект (п. 6): одна недоступная картинка статьи роняла всю выгрузку PDF
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def chromium():
+    """Есть ли Chromium — проверка мимо кода продукта, чтобы его поломка не выглядела пропуском."""
+    probe = ("from playwright.sync_api import sync_playwright\n"
+             "with sync_playwright() as pw:\n"
+             "    pw.chromium.launch(headless=True, args=['--no-sandbox']).close()\n")
+    try:
+        result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        pytest.skip("Chromium не запустился за 60 с")
+    if result.returncode != 0:
+        pytest.skip(f"Chromium недоступен: {result.stderr.strip()[-200:]}")
+
+
+@pytest.fixture()
+def silent_image_host():
+    """Хост картинки, который принимает соединение и молчит — как недоступный с ядра сайт."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(16)
+    held: list[socket.socket] = []
+
+    def accept() -> None:
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            held.append(conn)  # не отвечаем и не закрываем
+
+    threading.Thread(target=accept, daemon=True).start()
+    yield f"http://127.0.0.1:{server.getsockname()[1]}"
+    server.close()
+    for conn in held:
+        conn.close()
+
+
+def _pdf_content(count: int, images: dict[int, str]) -> dict:
+    news = [
+        {
+            "category": ("Бурение", "Добыча", "Цифровизация", "Рынок")[n % 4],
+            "item_type": "article", "article_id": n + 1, "signal_id": None,
+            "title": f"Материал {n + 1:02d}", "source": "World Oil",
+            "url": f"https://news.example.org/{n + 1}", "published_at": "2026-09-15",
+            "summary": "Краткая суть материала для карточки выпуска.",
+            "image_url": images.get(n, ""),
+        }
+        for n in range(count)
+    ]
+    return {
+        "month": SEPT,
+        "issue": {"title": "Нефтесервисный дайджест", "intro": "Вступление.", "news_title": "Новости"},
+        "hero": {}, "news": news, "items": news,
+        "footer": {"contact_text": "", "contact_email": "", "note": "Информационная рассылка", "socials": []},
+    }
+
+
+def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(chromium, silent_image_host, monkeypatch):
+    """Картинки статей Chromium грузит сам, с РФ-ядра. Замер 29.09: 40 позиций без внешних
+    картинок — PDF за 1,9 с; две «молчащие» картинки из сорока — set_content(wait_until=
+    "load") ждал до потолка Playwright и через 30 с падал TimeoutError: выгрузка PDF не
+    получалась ни с одной из трёх попыток задачи. Теперь картинки ждём ограниченное время,
+    недогрузившуюся меняем на плашку рубрики — как у статьи без картинки."""
+    # Локальный адрес сборщик считает «тестовым» и сам меняет на плашку — здесь пропускаем его.
+    monkeypatch.setattr(digest_module, "_is_unusable_digest_image_url", lambda url: not url)
+    monkeypatch.setattr(digest_module, "_PDF_IMAGES_WAIT_MS", 2000, raising=False)
+    content = _pdf_content(40, {3: f"{silent_image_host}/a.jpg", 17: f"{silent_image_host}/b.jpg"})
+
+    started = time.monotonic()
+    pdf = digest_module.render_digest_pdf(content)
+    elapsed = time.monotonic() - started
+
+    assert pdf.startswith(b"%PDF")
+    assert elapsed < 20, f"PDF печатался {elapsed:.1f} с"

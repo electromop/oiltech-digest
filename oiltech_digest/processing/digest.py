@@ -45,6 +45,25 @@ _PDF_FOOTER_TEMPLATE = (
     "</div>"
 )
 
+# Сколько PDF ждёт картинки карточек. Их Chromium грузит сам, с сайтов-источников; хост,
+# который принял соединение и молчит (или режет пакеты), держал set_content(wait_until=
+# "load") до потолка Playwright в 30 с, и выгрузка падала TimeoutError на каждой попытке
+# (замер 29.09: две такие картинки из сорока). Не дождались — плашка рубрики, как у
+# статьи без картинки.
+_PDF_IMAGES_WAIT_MS = 15_000
+_PDF_SWAP_UNLOADED_IMAGES_JS = """
+async (fallbacks) => {
+  window.stop();
+  const swapped = [];
+  document.querySelectorAll("img.news-card-image").forEach((img, index) => {
+    if (img.complete && img.naturalWidth > 0) return;
+    img.src = fallbacks[index] || "";
+    swapped.push(img.decode().catch(() => undefined));
+  });
+  await Promise.all(swapped);
+}
+"""
+
 
 def _asset_bytes(name: str) -> bytes | None:
     path = ASSETS_DIR / name
@@ -955,6 +974,7 @@ def render_digest_pdf(content: dict) -> bytes:
     if font_style:
         html_str = html_str.replace("</head>", font_style + "</head>", 1)
     try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - depends on optional dep
         raise RuntimeError(
@@ -966,7 +986,15 @@ def render_digest_pdf(content: dict) -> bytes:
         browser = pw.chromium.launch(args=["--no-sandbox"])
         try:
             page = browser.new_page()
-            page.set_content(html_str, wait_until="load")
+            page.set_content(html_str, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("load", timeout=_PDF_IMAGES_WAIT_MS)
+            except PlaywrightTimeoutError:
+                # Порядок картинок карточек = порядок новостей: у каждой карточки одна.
+                page.evaluate(
+                    _PDF_SWAP_UNLOADED_IMAGES_JS,
+                    [_news_placeholder_data_uri(item.get("category")) for item in content.get("news", [])],
+                )
             pdf_bytes = page.pdf(
                 format="A4",
                 print_background=True,
