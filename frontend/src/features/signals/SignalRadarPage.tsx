@@ -396,6 +396,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         duplicate_of_signal_id: duplicateOfSignalId,
       });
       setFeedbackDrafts((current) => ({ ...current, [signal.id]: EMPTY_FEEDBACK_DRAFT }));
+      // Сохранено — форма закрывается: счётчик «Обратная связь: N» рядом подтверждает отзыв.
+      closeFeedback(signal.id);
       setSignals((current) =>
         current.map((item) =>
           item.id === signal.id ? { ...item, feedback_count: (item.feedback_count || 0) + 1 } : item,
@@ -440,6 +442,24 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       else next.add(signalId);
       return next;
     });
+  }
+
+  function draftOf(signalId: number): FeedbackDraft {
+    return feedbackDrafts[signalId] || EMPTY_FEEDBACK_DRAFT;
+  }
+
+  function closeFeedback(signalId: number) {
+    setFeedbackOpen((current) => {
+      const next = new Set(current);
+      next.delete(signalId);
+      return next;
+    });
+  }
+
+  // «Отмена» — форма закрывается, черновик не сохраняется.
+  function cancelFeedback(signalId: number) {
+    setFeedbackDrafts((current) => ({ ...current, [signalId]: EMPTY_FEEDBACK_DRAFT }));
+    closeFeedback(signalId);
   }
 
   function updateFeedbackDraft(signalId: number, patch: Partial<FeedbackDraft>) {
@@ -742,12 +762,15 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                     ) : null}
 
                     {isFeedbackOpen ? (
+                      // Форма ОС (документ заказчика 19.09: «сделать поприятнее оформление»):
+                      // на десктопе две колонки — пары полей одной высоты, подписи как в
+                      // остальных формах, «Отмена» и «Сохранить» справа.
                       <div className="signalFeedbackBox">
                         <div className="signalFeedbackGrid">
-                          <label>
+                          <label className="field">
                             <span>Оценка сигнала</span>
                             <select
-                              value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).verdict}
+                              value={draftOf(signal.id).verdict}
                               onChange={(event) =>
                                 updateFeedbackDraft(signal.id, { verdict: event.target.value as FeedbackDraft["verdict"] })
                               }
@@ -757,58 +780,63 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                               ))}
                             </select>
                           </label>
-                          <label>
+                          <label className="field signalFeedbackDuplicate">
                             <span>ID дубля</span>
                             <input
                               inputMode="numeric"
-                              value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).duplicateOfSignalId}
+                              value={draftOf(signal.id).duplicateOfSignalId}
                               onChange={(event) => updateFeedbackDraft(signal.id, { duplicateOfSignalId: event.target.value })}
-                              placeholder="если это дубль"
+                              placeholder="номер главной карточки, если это дубль"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Обоснование оценки</span>
+                            <input
+                              value={draftOf(signal.id).reason}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { reason: event.target.value })}
+                              placeholder="чем обоснована оценка"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Рекомендуемый заголовок</span>
+                            <input
+                              value={draftOf(signal.id).correctedTitle}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { correctedTitle: event.target.value })}
+                              placeholder="если нужно переименовать карточку"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Рекомендуемая формулировка сути</span>
+                            <textarea
+                              value={draftOf(signal.id).correctedThesis}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
+                              placeholder="эталонная формулировка сути сигнала"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Рекомендации AI-агенту</span>
+                            <textarea
+                              value={draftOf(signal.id).comment}
+                              onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
+                              placeholder="термины, поисковый угол, сильный источник..."
                             />
                           </label>
                         </div>
-                        <label className="signalFeedbackField">
-                          <span>Обоснование оценки</span>
-                          <input
-                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).reason}
-                            onChange={(event) => updateFeedbackDraft(signal.id, { reason: event.target.value })}
-                            placeholder="чем обоснована оценка"
-                          />
-                        </label>
-                        <label className="signalFeedbackField">
-                          <span>Рекомендуемый заголовок</span>
-                          <input
-                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedTitle}
-                            onChange={(event) => updateFeedbackDraft(signal.id, { correctedTitle: event.target.value })}
-                            placeholder="если нужно переименовать карточку"
-                          />
-                        </label>
-                        <label className="signalFeedbackField">
-                          <span>Рекомендуемая формулировка сути</span>
-                          <textarea
-                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).correctedThesis}
-                            onChange={(event) => updateFeedbackDraft(signal.id, { correctedThesis: event.target.value })}
-                            placeholder="эталонная формулировка сути сигнала"
-                          />
-                        </label>
-                        <label className="signalFeedbackField">
-                          <span>Рекомендации AI-агенту</span>
-                          <textarea
-                            value={(feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT).comment}
-                            onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
-                            placeholder="термины, поисковый угол, сильный источник..."
-                          />
-                        </label>
                         <div className="signalFeedbackActions">
-                          <span>Обратная связь: {signal.feedback_count || 0}</span>
-                          <button type="button" className="primaryButton compactButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
-                            Сохранить
-                          </button>
+                          <span className="metaText">Обратная связь: {signal.feedback_count || 0}</span>
+                          <div className="signalFeedbackButtons">
+                            <button type="button" className="ghostButton" disabled={savingThis} onClick={() => cancelFeedback(signal.id)}>
+                              Отмена
+                            </button>
+                            <button type="button" className="primaryButton" disabled={savingThis} onClick={() => void submitFeedback(signal)}>
+                              Сохранить
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ) : (
                       <div className="signalFeedbackCollapsed">
-                        <span>Обратная связь: {signal.feedback_count || 0}</span>
+                        <span className="metaText">Обратная связь: {signal.feedback_count || 0}</span>
                         <button type="button" className="ghostButton compactButton" onClick={() => toggleFeedback(signal.id)}>
                           Обратная связь
                         </button>

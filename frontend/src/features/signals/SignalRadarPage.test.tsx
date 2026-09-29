@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createSignalFeedback,
   getSignalSearchHealth,
   getSignalSummary,
   listSignals,
@@ -194,6 +195,7 @@ describe("SignalRadarPage", () => {
     vi.mocked(getSignalSearchHealth).mockReset();
     vi.mocked(listSignals).mockReset();
     vi.mocked(getSignalSummary).mockReset();
+    vi.mocked(createSignalFeedback).mockReset();
     serve(DEFAULT_CARDS);
   });
 
@@ -493,6 +495,50 @@ describe("SignalRadarPage", () => {
       expect(query.sort ?? "score_desc").toBe("score_desc");
       expect(screen.getByRole("spinbutton", { name: "Балл от" })).toHaveValue(0);
       expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toHaveValue("score_desc");
+    });
+
+    it("форма ОС — поля как в остальных формах, «Отмена» и «Сохранить» справа; «Отмена» ничего не отправляет", async () => {
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+
+      for (const label of [
+        "Оценка сигнала",
+        "ID дубля",
+        "Обоснование оценки",
+        "Рекомендуемый заголовок",
+        "Рекомендуемая формулировка сути",
+        "Рекомендации AI-агенту",
+      ]) {
+        expect(screen.getByText(label).closest("label")).toHaveClass("field");
+      }
+      const buttons = screen.getByRole("button", { name: "Сохранить" }).parentElement!;
+      expect(buttons).toHaveClass("signalFeedbackButtons");
+      expect([...buttons.querySelectorAll("button")].map((item) => item.textContent)).toEqual(["Отмена", "Сохранить"]);
+
+      fireEvent.change(screen.getByLabelText("Рекомендации AI-агенту"), { target: { value: "искать по-китайски" } });
+      fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+
+      expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
+      expect(createSignalFeedback).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      expect(screen.getByLabelText("Рекомендации AI-агенту")).toHaveValue("");
+    });
+
+    it("после «Сохранить» форма закрывается, а счётчик отзывов растёт", async () => {
+      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 7, memory_ids: [], memories: 0 });
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+
+      fireEvent.change(screen.getByLabelText("Оценка сигнала"), { target: { value: "strong_signal" } });
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument());
+      expect(createSignalFeedback).toHaveBeenCalledWith(expect.objectContaining({ signal_id: 21, verdict: "strong_signal" }));
+      expect(screen.getByText("Обратная связь: 1")).toBeInTheDocument();
     });
 
     it("карточка — свёрнутая строка, как у «Бизнес-сигналов», и раскрывается", async () => {

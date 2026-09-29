@@ -5180,8 +5180,6 @@ button {
   margin-top: 8px;
 }
 
-.signalFeedbackBox span,
-.signalFeedbackCollapsed span,
 .signalRadarFacts span {
   font-size: 0.72rem;
   font-weight: 800;
@@ -5271,36 +5269,32 @@ button {
   line-height: 1.4;
 }
 
+/* Форма ОС радара (документ заказчика 19.09: «поприятнее оформление»): карточка-форма,
+   поля — .field, как в остальных формах (подписи обычным регистром); на десктопе две
+   колонки — пары полей одной высоты; «Отмена» и «Сохранить» справа. */
 .signalFeedbackBox {
   display: grid;
-  gap: 8px;
-  margin-top: 2px;
-  padding: 10px;
-  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
   background: rgba(248, 250, 252, 0.7);
-  border-radius: 8px;
-}
-
-.signalFeedbackBox textarea {
-  width: 100%;
-  min-height: 78px;
-  resize: vertical;
 }
 
 .signalFeedbackGrid {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(120px, 180px);
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: start;
 }
 
-.signalFeedbackGrid label,
-.signalFeedbackField {
-  display: grid;
-  gap: 4px;
+.signalFeedbackGrid .field {
+  min-width: 0;
 }
 
-.signalFeedbackField textarea {
-  min-height: 72px;
+/* Номер главной карточки — короткое число: поле не растягивается на всю колонку. */
+.signalFeedbackDuplicate input {
+  max-width: 260px;
 }
 
 .signalFeedbackActions {
@@ -5309,6 +5303,12 @@ button {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.signalFeedbackButtons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .signalFeedbackCollapsed {
