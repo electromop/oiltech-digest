@@ -496,3 +496,10 @@ def test_article_breakdown_shows_the_weight_it_was_scored_with(isolated_db):
         breakdown = api._score_items_by_article(conn, [scored, legacy])
     assert [item["weight"] for item in breakdown[scored]] == [60.0, 40.0]
     assert [item["weight"] for item in breakdown[legacy]] == [30.0, 70.0]
+
+    # Битый снимок ленту не роняет: вес — текущий.
+    for broken in ('[{"id": %d, "weight": "шестьдесят"}]' % rows[0]["id"], '{"id": 1}'):
+        with connection.get_connection() as conn:
+            conn.execute("UPDATE article_scores SET criteria_snapshot = %s::jsonb WHERE article_id = %s", (broken, scored))
+            conn.commit()
+            assert [item["weight"] for item in api._score_items_by_article(conn, [scored])[scored]] == [30.0, 70.0]
