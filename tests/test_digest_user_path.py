@@ -180,7 +180,7 @@ def issue(isolated_db, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "BACKGROUND_JOB_INLINE", False)
     monkeypatch.setattr(digest_module, "EXPORTS_DIR", tmp_path)
     # DOCX тянет картинки статей из сети — в тесте сети нет.
-    monkeypatch.setattr(digest_module, "_fetch_docx_image", lambda url: None)
+    monkeypatch.setattr(digest_module, "_fetch_docx_image", lambda url, timeout=8: None)
     analyst = int(repository.create_user("analyst@example.test", "long-enough-password", "user")["id"])
     colleague = int(repository.create_user("colleague@example.test", "long-enough-password", "user")["id"])
     admin = int(repository.create_user("admin@example.test", "long-enough-password", "admin")["id"])
@@ -628,6 +628,24 @@ def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(chro
 
     assert pdf.startswith(b"%PDF")
     assert elapsed < 20, f"PDF печатался {elapsed:.1f} с"
+
+
+def test_docx_spends_a_bounded_time_on_silent_article_images(silent_image_host, monkeypatch):
+    """Картинки для Word сервер тянет сам, по одной, с таймаутом 8 с на запрос: замер 29.09 —
+    40 позиций без картинок 0,1 с, две молчащие картинки из сорока — 16,2 с. Экран ждёт
+    документ не дольше 160 с: от двадцати молчащих картинок выгрузка на экране обрывалась.
+    Теперь на все картинки общий бюджет, остальные карточки идут без картинки."""
+    monkeypatch.setattr(digest_module, "_DOCX_IMAGES_BUDGET_SECONDS", 2.0, raising=False)
+    content = _pdf_content(40, {n: f"{silent_image_host}/{n}.jpg" for n in (0, 9, 18, 27)})
+
+    started = time.monotonic()
+    docx = digest_module.render_digest_docx(content)
+    elapsed = time.monotonic() - started
+
+    with ZipFile(BytesIO(docx)) as archive:
+        document_xml = archive.read("word/document.xml").decode("utf-8")
+    assert all(f"Материал {n:02d}" in document_xml for n in range(1, 41))
+    assert elapsed < 10, f"DOCX собирался {elapsed:.1f} с"
 
 
 # ---------------------------------------------------------------------------
