@@ -1488,15 +1488,22 @@ def apply_signal_corrections(row: dict) -> dict:
     return row
 
 
+def _radar_card_evidence_exists(condition: str = "TRUE") -> str:
+    """Есть ли у карточки s ссылка с условием: своя или её склеенного дубля. Два EXISTS, а не
+    один с «e.signal_id = s.id OR e.signal_id IN (подзапрос)»: такой OR база исполняет
+    подзапросом на каждую ссылку (ревью PR #83; замер на синтетике 600 карточек / 1 651
+    ссылка: список 236 → 21 мс, счётчики 517 → 19 мс, выборки те же)."""
+    return (
+        f"(EXISTS (SELECT 1 FROM signal_evidence e WHERE e.signal_id = s.id AND {condition})"
+        " OR EXISTS (SELECT 1 FROM signals m JOIN signal_evidence e ON e.signal_id = m.id"
+        f" WHERE m.merged_into_signal_id = s.id AND {condition}))"
+    )
+
+
 # Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
 # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
 # (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09).
-_RADAR_OWN_EVIDENCE_SQL = (
-    "(e.signal_id = s.id OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id))"
-)
-_RADAR_VISIBLE_SQL = (
-    f"s.merged_into_signal_id IS NULL AND EXISTS (SELECT 1 FROM signal_evidence e WHERE {_RADAR_OWN_EVIDENCE_SQL})"
-)
+_RADAR_VISIBLE_SQL = f"s.merged_into_signal_id IS NULL AND {_radar_card_evidence_exists()}"
 # Тема — одна из тематик заказчика (корневые теги). Первая партия радара (13.09) писала
 # тему свободным текстом: экран собирает такие в отдельный блок и в фильтр тем не берёт.
 _RADAR_TOPIC_SQL = (
@@ -1546,12 +1553,10 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
             "LOWER(concat_ws(' ', s.title, s.title_ru, s.theme, s.summary, s.thesis, s.transferability,"
             " corr.corrected_title, corr.corrected_thesis)) LIKE %s"
         )
-        evidence_sql = (
-            f"EXISTS (SELECT 1 FROM signal_evidence e WHERE {_RADAR_OWN_EVIDENCE_SQL}"
-            " AND LOWER(concat_ws(' ', e.title, e.title_ru, e.publisher)) LIKE %s)"
-        )
+        # Ссылки — свои и склеенного дубля: условие входит в оба EXISTS, шаблон — дважды.
+        evidence_sql = _radar_card_evidence_exists("LOWER(concat_ws(' ', e.title, e.title_ru, e.publisher)) LIKE %s")
         alternatives = [text_sql, evidence_sql]
-        params.extend([pattern, pattern])
+        params.extend([pattern, pattern, pattern])
         # Только ASCII-цифры: str.isdigit() пропускает «²», и int() на нём падает.
         number = query.lstrip("#")
         if re.fullmatch(r"[0-9]{1,18}", number):
@@ -1674,7 +1679,12 @@ def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, l
     """Ссылки карточек страницы радара — одним запросом, а не list_signal_evidence на каждую:
     подключения к базе без пула, и на страницу в 100 карточек выходило ~100 подключений на
     каждую смену фильтра. Выборка та же: свои ссылки и ссылки склеенных дублей, тот же
-    порядок и предел на карточку."""
+    порядок и предел на карточку.
+
+    Участники карточки (она сама и её дубли) — отдельным списком и простым JOIN: с «OR
+    e.signal_id IN (подзапрос)» в условии JOIN база гоняла подзапрос по каждой паре
+    карточка × ссылка (ревью PR #83: 150 карточек — 1 118 → 4 мс; на синтетике 600 карточек /
+    1 651 ссылка: 342 → 15 мс, строки и порядок те же)."""
     ids = [int(signal_id) for signal_id in signal_ids]
     if not ids or limit <= 0:
         return {}
@@ -1682,23 +1692,26 @@ def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, l
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
+            WITH members AS (
+              SELECT s.id AS card_id, s.id AS member_id FROM signals s WHERE s.id = ANY(%s)
+              UNION ALL
+              SELECT m.merged_into_signal_id AS card_id, m.id AS member_id
+              FROM signals m WHERE m.merged_into_signal_id = ANY(%s)
+            )
             SELECT *
             FROM (
-              SELECT e.*, owner.id AS radar_card_id,
+              SELECT e.*, mb.card_id AS radar_card_id,
                      ROW_NUMBER() OVER (
-                       PARTITION BY owner.id
-                       ORDER BY e.strength DESC, e.published_at DESC NULLS LAST, e.created_at DESC
+                       PARTITION BY mb.card_id
+                       ORDER BY e.strength DESC, e.published_at DESC NULLS LAST, e.created_at DESC, e.id DESC
                      ) AS radar_card_rank
-              FROM signals owner
-              JOIN signal_evidence e
-                ON e.signal_id = owner.id
-                OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = owner.id)
-              WHERE owner.id = ANY(%s)
+              FROM members mb
+              JOIN signal_evidence e ON e.signal_id = mb.member_id
             ) ranked
             WHERE ranked.radar_card_rank <= %s
             ORDER BY ranked.radar_card_id, ranked.radar_card_rank
             """,
-            (ids, limit),
+            (ids, ids, limit),
         )
         evidence: dict[int, list[dict]] = {}
         for row in cur.fetchall():
