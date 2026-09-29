@@ -659,3 +659,32 @@ def test_issue_draft_takes_only_articles_of_its_own_month(issue, monkeypatch):
     assert analyst.save("2026-10", [october]).status_code == 200
     assert analyst.issue() == [("article", a["hi"])]
     assert analyst.issue("2026-10") == [("article", october)]
+
+
+# ---------------------------------------------------------------------------
+#  Дефект: робот перепечаток прятал копию, выбранную человеком в дайджест
+# ---------------------------------------------------------------------------
+
+def test_reprint_robot_does_not_hide_a_copy_chosen_for_the_issue(issue):
+    """Судья перепечаток (последние 14 дней) прячет копию в пользу главной. Если человек
+    выбрал в дайджест именно копию, а главную не отмечал, новость пропадала из его выпуска
+    целиком — и из ленты, откуда её не вернуть. Радар для карточек это уже соблюдает:
+    выбранную в дайджест не прячет даже решение человека (mark_signal_merged)."""
+    analyst, a = issue["analyst"], issue["a"]
+    with connection.get_connection() as conn:
+        copy = _article(conn, issue["source"], "copy", published=_utc(2026, 9, 10, 14), score=40)
+        conn.commit()
+    analyst.mark(copy)
+
+    with pytest.raises(ValueError, match="в дайджест"):
+        repository.mark_article_reprint(
+            article_id=copy, primary_id=a["mid"], similarity=0.8, reason="одно событие", model="judge",
+        )
+    assert analyst.issue() == [("article", copy)]
+
+    # Копию, которую никто не выбрал, робот прячет как раньше.
+    repository.mark_article_reprint(
+        article_id=a["low"], primary_id=a["mid"], similarity=0.8, reason="одно событие", model="judge",
+    )
+    feed = {row["id"] for row in analyst.get("/api/articles", params={"limit": 5000}).json()}
+    assert a["low"] not in feed and a["mid"] in feed and copy in feed

@@ -4528,6 +4528,15 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             raise ValueError(
                 f"главная копия {primary_id} не видна в ленте — пометка убрала бы новость целиком"
             )
+        # Копию, выбранную кем-то «в дайджест», не прячем (29.09): главную он не отмечал, и
+        # новость ушла бы из его выпуска и из ленты целиком. Так же радар не прячет карточку,
+        # выбранную в дайджест (mark_signal_merged).
+        chosen = conn.execute(
+            "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
+            (int(article_id),),
+        ).fetchone()
+        if chosen:
+            raise ValueError(f"статья {article_id} выбрана в дайджест — её не прячем как перепечатку")
         conn.execute(
             """
             INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)
