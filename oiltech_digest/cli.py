@@ -214,6 +214,42 @@ def cmd_seed_scoring(args: argparse.Namespace) -> None:
             print(f"Seed критериев скоринга, {profile}: не тронут — в профиле уже есть критерии")
 
 
+def cmd_apply_scoring_preset(args: argparse.Namespace) -> None:
+    """Поставить именованный набор критериев активным набором профиля (решение владельца 29.09).
+
+    Сид непустой профиль не трогает — на проде набор меняется только этой командой. По умолчанию
+    сухой прогон: «до» и «после»; --apply — одной транзакцией, критерии не удаляются."""
+    from oiltech_digest.db import repository
+    from oiltech_digest.scoring_profiles import SCORING_PRESETS
+
+    try:
+        result = repository.apply_scoring_preset(args.profile, SCORING_PRESETS[args.preset][args.profile],
+                                                 apply=args.apply)
+    except (ValueError, RuntimeError) as exc:
+        raise SystemExit(f"apply-scoring-preset: {exc}") from exc
+
+    def listed(pairs: list[tuple[str, float]]) -> str:
+        return "; ".join(f"{name} {weight:g}" for name, weight in pairs) or "—"
+
+    def total(pairs: list[tuple[str, float]]) -> str:
+        return f"{sum(weight for _, weight in pairs):g}"
+
+    mode = "запись" if args.apply else "сухой прогон (записать: --apply)"
+    print(f"apply-scoring-preset: профиль {result['profile']}, набор {args.preset} — {mode}")
+    print(f"  до (активны, сумма {total(result['before'])}): {listed(result['before'])}")
+    print(f"  после (сумма {total(result['after'])}): {listed(result['after'])}")
+    if not result["changed"]:
+        print("  изменений нет — набор уже применён")
+        return
+    plan = result["plan"]
+    for key, label in (("add", "заведутся"), ("enable", "включатся"), ("update", "изменятся вес, описание или порядок"),
+                       ("disable", "выключатся (не удаляются: подпункты старых баллов остаются целыми)")):
+        print(f"  {label}: {', '.join(plan[key]) or '—'}")
+    if result["applied"]:
+        print("  применено. Баллы статей, посчитанные прежним набором, не пересчитаны: "
+              f"enqueue-rescore --profile {result['profile']} --month ГГГГ-ММ (сначала сухой прогон)")
+
+
 def cmd_apply_source_overrides(args: argparse.Namespace) -> None:
     from oiltech_digest.ingestion.source_overrides import apply_overrides
 
@@ -2454,7 +2490,7 @@ def cmd_enqueue_agent_loop(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, SCORING_PROFILES
+    from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, SCORING_PRESETS, SCORING_PROFILES
 
     parser = argparse.ArgumentParser(prog="oiltech_digest.cli", description="OilTech Digest — сбор RSS")
     parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (INFO)")
@@ -2539,6 +2575,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "seed-scoring", help="завести критерии по умолчанию в пустые профили скоринга (непустые не трогает)"
     ).set_defaults(func=cmd_seed_scoring)
+    p_preset = sub.add_parser(
+        "apply-scoring-preset",
+        help="поставить именованный набор критериев активным набором профиля (по умолчанию — сухой прогон)")
+    p_preset.add_argument("--profile", choices=SCORING_PROFILES, default=ARTICLE_SCORING_PROFILE)
+    p_preset.add_argument("--preset", choices=sorted(SCORING_PRESETS), required=True)
+    p_preset.add_argument("--apply", action="store_true", help="записать одной транзакцией")
+    p_preset.set_defaults(func=cmd_apply_scoring_preset)
     sub.add_parser("apply-source-overrides", help="применить playwright/listing-оверрайды источников").set_defaults(func=cmd_apply_source_overrides)
 
     def add_ai_args(p):

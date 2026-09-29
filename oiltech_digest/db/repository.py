@@ -5562,6 +5562,105 @@ def seed_scoring_profile(profile: str, records: list[dict]) -> int:
     return len(records)
 
 
+def apply_scoring_preset(profile: str, records: list[dict], *, apply: bool = False) -> dict:
+    """Сделать набор records единственным активным набором профиля — одной транзакцией.
+
+    Решение владельца 29.09: сид непустой профиль не трогает, поэтому набор на проде меняется
+    только так — явно, после сухого прогона. Критерии не удаляются: прежние активные
+    выключаются (на них ссылаются подпункты старых баллов), совпавшие по имени включаются,
+    недостающие заводятся. Вес, описание и порядок — из набора; ключевые слова уже заведённого
+    критерия не трогаются (их правят на экране). Перед записью — сумма набора 100 и имена без
+    повторов; перед коммитом — активны ровно критерии набора с суммой 100, иначе откат.
+    Другой профиль не затрагивается; повторный прогон ничего не пишет.
+
+    Возвращает «до» и «после» (активные: имя и вес), план по именам и признак записи."""
+    profile = check_profile(profile)
+    names = [str(rec["name"]) for rec in records]
+    if len(set(names)) != len(names):
+        raise ValueError("в наборе повторяются имена критериев")
+    total = round(sum(float(rec["weight"]) for rec in records), 2)
+    if total != 100:
+        raise ValueError(f"сумма весов набора — {total}, а нужна 100")
+    try:
+        with get_connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SEED_SCORING_LOCK,))
+            cur = conn.cursor(row_factory=dict_row)
+            rows = cur.execute(
+                "SELECT id, name, description, weight, enabled, sort_order FROM scoring_criteria "
+                "WHERE profile = %s ORDER BY sort_order, id FOR UPDATE",
+                (profile,),
+            ).fetchall()
+            by_name = {row["name"]: row for row in rows}
+            plan: dict[str, list[str]] = {"add": [], "enable": [], "update": [], "disable": []}
+            for rec in records:
+                row = by_name.get(rec["name"])
+                if row is None:
+                    plan["add"].append(rec["name"])
+                elif not row["enabled"]:
+                    plan["enable"].append(rec["name"])
+                elif (float(row["weight"]), row["description"] or "", int(row["sort_order"] or 0)) != (
+                    float(rec["weight"]), rec.get("description") or "", int(rec.get("sort_order") or 0)
+                ):
+                    plan["update"].append(rec["name"])
+            wanted = set(names)
+            plan["disable"] = [row["name"] for row in rows if row["enabled"] and row["name"] not in wanted]
+            result = {
+                "profile": profile,
+                "before": [(row["name"], float(row["weight"])) for row in rows if row["enabled"]],
+                "after": [(rec["name"], float(rec["weight"])) for rec in records],
+                "plan": plan,
+                "changed": any(plan.values()),
+                "applied": False,
+            }
+            if not apply or not result["changed"]:
+                return result
+            touched = set(plan["add"]) | set(plan["enable"]) | set(plan["update"])
+            for rec in records:
+                if rec["name"] not in touched:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO scoring_criteria (profile, name, description, weight, keywords_json,
+                                                  keywords_en_json, enabled, sort_order)
+                    VALUES (%(profile)s, %(name)s, %(description)s, %(weight)s, %(keywords_json)s,
+                            %(keywords_en_json)s, TRUE, %(sort_order)s)
+                    ON CONFLICT (profile, name) DO UPDATE SET
+                        description = EXCLUDED.description, weight = EXCLUDED.weight,
+                        sort_order = EXCLUDED.sort_order, enabled = TRUE, updated_at = now()
+                    """,
+                    {
+                        "profile": profile, "name": rec["name"], "description": rec.get("description"),
+                        "weight": rec["weight"], "sort_order": rec.get("sort_order") or 0,
+                        "keywords_json": Json(rec.get("keywords_json") or []),
+                        "keywords_en_json": Json(rec.get("keywords_en_json") or []),
+                    },
+                )
+            conn.execute(
+                "UPDATE scoring_criteria SET enabled = FALSE, updated_at = now() "
+                "WHERE profile = %s AND enabled AND name <> ALL(%s)",
+                (profile, names),
+            )
+            active_sum, active_names = conn.execute(
+                "SELECT COALESCE(SUM(weight), 0), COALESCE(array_agg(name), '{}') FROM scoring_criteria "
+                "WHERE profile = %s AND enabled",
+                (profile,),
+            ).fetchone()
+            if round(float(active_sum), 2) != 100 or sorted(active_names) != sorted(names):
+                raise RuntimeError(
+                    f"после применения активны {sorted(active_names)} с суммой {active_sum} — откат, ничего не записано"
+                )
+            conn.commit()
+    except pg_errors.UniqueViolation as exc:
+        if _violated_index(exc) == "idx_scoring_criteria_name":
+            raise ValueError(
+                "имя критерия набора уже занято в другом профиле, а в базе ещё глобальный индекс имён "
+                "idx_scoring_criteria_name — сначала шаг 3 выката (scripts/g/scoring-profiles-after-deploy.sql)"
+            ) from exc
+        raise
+    result["applied"] = True
+    return result
+
+
 def _violated_index(exc: pg_errors.UniqueViolation) -> str | None:
     diag = getattr(exc, "diag", None)
     return getattr(diag, "constraint_name", None)
