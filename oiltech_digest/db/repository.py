@@ -5752,20 +5752,24 @@ def save_scoring_criteria(items: list[dict], profile: str = ARTICLE_SCORING_PROF
                     "sort_order": it.get("sort_order") or 0,
                 }
                 if it.get("id"):
+                    # Только активный критерий: экран показывает лишь активные, и выключенный id
+                    # приходит только из устаревшей вкладки. Без этого условия вкладка, открытая
+                    # до apply-scoring-preset, включала прежний набор обратно, а «выключить
+                    # лишнее» ниже гасило новый — с ответом 200 (ревью PR #82).
                     cur = conn.execute(
                         """
                         UPDATE scoring_criteria SET name=%(name)s, description=%(description)s,
                             weight=%(weight)s, keywords_json=%(keywords_json)s,
                             keywords_en_json=%(keywords_en_json)s, sort_order=%(sort_order)s,
-                            enabled=TRUE, updated_at=now()
-                        WHERE id=%(id)s AND profile=%(profile)s
+                            updated_at=now()
+                        WHERE id=%(id)s AND profile=%(profile)s AND enabled
                         """,
                         {**payload, "id": int(it["id"])},
                     )
                     if cur.rowcount != 1:
                         raise ValueError(
-                            f"Критерия id={int(it['id'])} нет в профиле «{profile}» — "
-                            "обновите страницу: список устарел или открыт на другой вкладке."
+                            f"Критерий id={int(it['id'])} не найден среди активных в профиле «{profile}»: "
+                            "список на экране устарел (набор меняли после его открытия) — обновите страницу."
                         )
                     keep_ids.append(int(it["id"]))
                 else:

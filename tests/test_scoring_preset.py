@@ -142,6 +142,35 @@ def test_radar_profile_seeded_with_the_same_preset_is_already_applied(isolated_d
     assert _rows("tech_radar") == tech
 
 
+def test_stale_scoring_tab_cannot_revert_the_applied_set(isolated_db):
+    """Экран «Скоринг» открыт до apply-scoring-preset, «Сохранить» — после (ревью PR #82). Прежний
+    UPDATE по id включал выключенные командой критерии обратно, а «выключить лишнее» гасило набор
+    заказчика: ответ 200 и молчаливый откат. Теперь — отказ «список устарел», ничего не записано."""
+    _business_before_the_decision()
+    with connection.get_connection() as conn:
+        user_id = conn.execute("INSERT INTO users (email, password_salt, password_hash, role) "
+                               "VALUES ('stale@example.com', 's', 'h', 'admin') RETURNING id").fetchone()[0]
+        conn.commit()
+    user = {"id": user_id, "email": "stale@example.com", "role": "admin"}
+    api.app.dependency_overrides[api.require_admin] = lambda: user
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        from fastapi.testclient import TestClient
+
+        client = TestClient(api.app)
+        stale = client.get("/api/scoring-criteria").json()   # вкладка открыта до смены набора
+        _cli("apply-scoring-preset", "--profile", "business", "--preset", "viktor", "--apply")
+        applied = _rows("business")
+        stale[0]["keywords_json"] = ["правка заказчика"]
+        saved = client.put("/api/scoring-criteria", json=stale)
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert saved.status_code == 400 and "устарел" in saved.json()["detail"]
+    assert _rows("business") == applied
+    assert _active("business") == VIKTOR_BUSINESS
+
+
 def test_broken_preset_is_refused_before_any_write(isolated_db):
     _business_before_the_decision()
     business = _rows("business")
