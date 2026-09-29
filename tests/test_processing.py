@@ -1,3 +1,5 @@
+import pytest
+
 from oiltech_digest.processing import pipeline
 from oiltech_digest.processing.domain_glossary import (
     enforce_glossary_text,
@@ -97,6 +99,50 @@ def test_scheduler_batch_does_not_rescore_scored_article(monkeypatch):
     item = result["articles"][0]
     assert set(item) == {"article_id", "errors", "translation"}  # недостающее — только перевод
     assert item["translation"]["title_ru"] == payload["articles"][0]["title"]  # русский — без модели
+
+
+_READY = {"relevant": True, "summary": "готовая суть", "title_ru": "готовый заголовок"}
+
+
+@pytest.mark.parametrize(
+    ("extra", "stop_word", "fail_on", "calls", "written"),
+    [
+        # Гейт статью ещё не судил, суть есть: гейт, тег и балл — суть не перегенерируется.
+        pytest.param({"summary": "готовая суть", "title_ru": "готовый заголовок"}, None, None,
+                     ["article_relevance", "article_tag", "article_score"], {"relevance", "tagging", "scoring"},
+                     id="E1-gate-not-judged"),
+        # Не хватает только балла — одна оценка.
+        pytest.param({**_READY, "existing_tag_id": 10}, None, None, ["article_score"], {"scoring"},
+                     id="E2-only-score-missing"),
+        # Стоп-слово у релевантной: модель не зовётся, статью снимают стоп-слова, как раньше.
+        pytest.param(_READY, "жертвы", None, [], {"relevance"}, id="E3-stop-word"),
+        # Упал тег — в этом проходе балла нет, статья придёт в следующий пакет.
+        pytest.param(_READY, None, "article_tag", ["article_tag"], set(), id="E4-tag-failed"),
+    ],
+)
+def test_scheduler_batch_stage_edges(monkeypatch, extra, stop_word, fail_on, calls, written):
+    """Граничные случаи цикла стадий пакета планировщика (#53, ревью #79) — страж цикла."""
+
+    class _Client(_RecordingClient):
+        def complete_json(self, instructions, user_input, schema, **kwargs):
+            response = super().complete_json(instructions, user_input, schema, **kwargs)
+            if schema["name"] == fail_on:
+                raise RuntimeError("сбой модели")
+            return response
+
+    client = _Client(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    payload = _external_payload(extra)
+    if stop_word:
+        payload["tags"][0]["negative_keywords_json"] = [stop_word]
+
+    item = external_ai.process_payload(payload)["articles"][0]
+
+    assert [c["name"] for c in client.calls] == calls
+    assert set(item) - {"article_id", "errors"} == written
+    assert bool(item["errors"]) is (fail_on is not None)
+    if stop_word:
+        assert item["relevance"]["model"] == "negative-keyword"
 
 
 def test_explicit_article_list_and_only_recompute_what_is_asked(monkeypatch):
@@ -265,10 +311,16 @@ def test_incident_without_solution_is_capped_by_code():
 
     assert result["total_score"] <= pipeline.INCIDENT_CRITERION_CAP  # старый код: 70.0
     assert result["score_label"] == "Низкая"
+    # Ревью #79: признак и оценка модели до потолка не теряются — по ним находится ложное «да».
+    assert result["incident_without_solution"] is True
+    assert [item["ai_score_raw"] for item in result["items"]] == [60, 85]
     # Страж: признак false или его нет (воркер NL старой сборки) — потолка нет, 60·0,6 + 85·0,4.
     for flag in ({"incident_without_solution": False}, {}):
         plain = {"explanation": answer["explanation"], "items": answer["items"], **flag}
-        assert pipeline.normalize_score_payload(article, criteria, plain)["total_score"] == 70.0
+        unflagged = pipeline.normalize_score_payload(article, criteria, plain)
+        assert unflagged["total_score"] == 70.0
+        assert unflagged["incident_without_solution"] is False
+        assert [item["ai_score_raw"] for item in unflagged["items"]] == [60, 85]
 
 
 def test_incident_cap_survives_rescore_without_ai():
@@ -305,6 +357,54 @@ def test_scoring_prompt_states_the_incident_band():
 
     assert "incident_without_solution" in SCORING_INSTRUCTIONS
     assert f"0–{pipeline.INCIDENT_CRITERION_CAP}" in SCORING_INSTRUCTIONS
+
+
+def test_incident_flag_without_items_caps_the_keyword_fallback():
+    """E5 (ревью #79): признак без подпунктов — критерий падает на ключевой балл, и потолок
+    ложится на него: 30/30/30, исходные 100 — в ai_score_raw."""
+    criteria = [{"id": 1, "name": "Значимость", "weight": 100,
+                 "keywords_json": ["удар", "гсм", "пожар"], "keywords_en_json": []}]
+    article = {"title": "Удар по складу ГСМ", "raw_text": "После удара начался пожар."}
+
+    result = pipeline.normalize_score_payload(article, criteria, {"incident_without_solution": True, "items": []})
+
+    item = result["items"][0]
+    assert (item["keyword_score"], item["ai_score"], item["final_score"]) == (30, 30, 30)
+    assert item["ai_score_raw"] == 100
+    assert result["incident_without_solution"] is True and result["total_score"] == 30
+
+
+def test_incident_flag_stays_in_job_result_while_db_gets_the_capped_score(monkeypatch):
+    """Ревью #79: ложное «инцидент без решения» уводит статью из ленты (фильтр от 50), из доводов
+    радара и из «высоких» у кандидата — и найти её потом не по чему. Схема не меняется: признак и
+    ai_score_raw едут в итоге задачи (ядро пишет его в background_jobs.result_json целиком), а в
+    статью ядро пишет урезанный балл, как и без этих полей."""
+
+    class _IncidentClient(_RecordingClient):
+        def complete_json(self, instructions, user_input, schema, **kwargs):
+            response = super().complete_json(instructions, user_input, schema, **kwargs)
+            if schema["name"] != "article_score":
+                return response
+            return AIResponse(data={"incident_without_solution": True, "explanation": ".",
+                                    "items": [{"criterion_id": 20, "ai_score": 85, "rationale": "."}]}, model="fake")
+
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: _IncidentClient())
+    result = external_ai.process_payload(_external_payload({**_READY, "existing_tag_id": 10}))
+
+    scoring = result["articles"][0]["scoring"]
+    assert scoring["incident_without_solution"] is True
+    assert [(i["ai_score_raw"], i["ai_score"], i["final_score"]) for i in scoring["items"]] == [(85, 30, 30)]
+
+    written = []
+    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
+    monkeypatch.setattr(external_ai.repository, "replace_article_score",
+                        lambda *args, **kwargs: written.append(args))
+    monkeypatch.setattr(external_ai, "_insert_run", lambda *args, **kwargs: None)
+    external_ai.apply_process_result(result)
+
+    _article_id, total, label, _explanation, items, _model = written[0]
+    assert (total, label) == (30.0, "Низкая")
+    assert [item["ai_score"] for item in items] == [30]  # в колонку ai_score — урезанное, как было
 
 
 def test_glossary_prompt_selects_relevant_oilfield_terms():
