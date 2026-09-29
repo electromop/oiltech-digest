@@ -528,6 +528,12 @@ def keyword_tag(article: dict, tags: list[dict]) -> dict:
 SCORE_KEYWORD_WEIGHT = 0.2
 SCORE_AI_WEIGHT = 0.8
 
+# #54: потолок подпункта статьи-инцидента без решения. Правило «инциденты — низко» жило только
+# в промпте, без числа, рядом с якорем «40-64: косвенно» — и удар по складу ГСМ взял ровно 60.
+# Модель теперь только классифицирует (incident_without_solution в ответе), а
+# потолок ставит код; число в SCORING_INSTRUCTIONS — то же.
+INCIDENT_CRITERION_CAP = 30
+
 
 def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[str, Any]) -> dict:
     by_id = {int(c["id"]): c for c in criteria}
@@ -545,6 +551,12 @@ def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[s
             ai_score = _clamp(float(ai_item["ai_score"]), 0, 100)
         else:
             ai_score = keyword_score
+        ai_score_raw = ai_score
+        if payload.get("incident_without_solution") is True:
+            # Потолок — на оба слагаемых, а не на итог: rescore-recompute пересчитывает final из
+            # сохранённых ai_score и keyword_score, а признака инцидента в базе нет.
+            keyword_score = min(keyword_score, INCIDENT_CRITERION_CAP)
+            ai_score = min(ai_score, INCIDENT_CRITERION_CAP)
         blended = (keyword_score * SCORE_KEYWORD_WEIGHT) + (ai_score * SCORE_AI_WEIGHT)
         final_score = round(max(ai_score, blended), 2)
         weighted_total += final_score * weight / 100
@@ -553,12 +565,17 @@ def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[s
                 "criterion_id": criterion_id,
                 "keyword_score": keyword_score,
                 "ai_score": ai_score,
+                # Оценка до потолка инцидента (#54). В базу не пишется (схема прежняя), а в итоге
+                # задачи остаётся (background_jobs.result_json): по ней видно, что срезал потолок.
+                "ai_score_raw": ai_score_raw,
                 "final_score": final_score,
                 "rationale": (ai_items.get(criterion_id) or {}).get("rationale") or "Keyword/AI blended score",
             }
         )
     total_score = round(_clamp(weighted_total, 0, 100), 2)
     return {
+        # Признак модели (#54) — тоже только в итоге задачи: ложное «да» уводит статью из ленты.
+        "incident_without_solution": payload.get("incident_without_solution") is True,
         "total_score": total_score,
         "score_label": score_label(total_score),
         "explanation": payload.get("explanation") or "",
