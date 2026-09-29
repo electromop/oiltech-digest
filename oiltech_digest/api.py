@@ -277,7 +277,9 @@ class ManualArticleImportRequest(BaseModel):
 class DigestRequest(BaseModel):
     month: str
     limit: int = 20
-    min_score: float = 60
+    # Без порога (решение владельца 29.09): отметка человека — членство в выпуске, балл —
+    # только порядок. С полом 60 черновик после пересчёта баллов терял бы отмеченное.
+    min_score: float = 0
     max_score: float | None = None
     search: str = ""
     top_tag: str = ""

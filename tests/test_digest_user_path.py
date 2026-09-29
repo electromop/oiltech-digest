@@ -467,3 +467,44 @@ def test_radar_card_belongs_to_the_issue_of_the_month_it_arrived_in(issue):
     assert ("signal", october) not in september
     assert analyst.issue("2026-10") == [("signal", october)]
     assert analyst.issue("2026-08") == []
+
+
+# ---------------------------------------------------------------------------
+#  Балл (п. 3): владелец 29.09 меняет критерии и пересчитывает сентябрь
+# ---------------------------------------------------------------------------
+
+def test_new_scores_do_not_take_marked_items_out_of_the_issue(issue):
+    """Отметка человека не должна пропадать из выпуска из-за нового балла: ни в превью и
+    выгрузке, ни в черновике, сохранённом любым путём API. До 29.09 POST /api/monthly-digests
+    по умолчанию сохранял черновик с полом 60 — после пересчёта из него выпадало бы всё,
+    что опустилось ниже."""
+    analyst, a, s = issue["analyst"], issue["a"], issue["s"]
+    marked = [a["hi"], a["mid"], a["low"], a["unscored"]]
+    for article_id in marked:
+        analyst.mark(article_id)
+    analyst.mark_signal(s["sep"])
+    expected = {("article", article_id) for article_id in marked} | {("signal", s["sep"])}
+    assert set(analyst.issue()) == expected
+
+    # Пересчёт: баллы сентября упали до нуля, у одной статьи строки балла пока нет,
+    # сигнал при повторной находке получил 3.
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE article_scores SET total_score = 0, score_label = 'Низкая'")
+        conn.execute("DELETE FROM article_scores WHERE article_id = %s", (a["hi"],))
+        conn.commit()
+    repository.upsert_signal({
+        "signal_key": "sep", "title": "Сигнал sep", "title_ru": "Сигнал sep", "theme": THEME,
+        "summary": "Суть сигнала sep.", "maturity": "watch", "score": 3,
+    })
+
+    assert set(analyst.issue()) == expected
+    html = analyst.export("html").decode("utf-8")
+    for title in ("Материал hi", "Материал mid", "Материал low", "Материал unscored", "Сигнал sep"):
+        assert title in html
+
+    # Черновик через POST с умолчаниями API — без «Оценки от».
+    response = analyst.post("/api/monthly-digests", json={"month": SEPT})
+    assert response.status_code == 200, response.text
+    saved = analyst.get(f"/api/monthly-digests/{SEPT}").json()
+    assert {item["article_id"] for item in saved["items"]} == set(marked)
+    assert set(analyst.issue()) == expected
