@@ -1654,6 +1654,9 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
 
     Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
     (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
+
+    Явный `"reason": null` снимает причину — так фронт шлёт повторный клик по чипу. Не
+    присланное поле, как и раньше, не трогается: частичное сохранение не стирает остальное.
     """
     try:
         entry = repository.save_feedback_entry(
@@ -1661,6 +1664,7 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
             article_id=payload.article_id,
             source_id=payload.source_id,
             reason=payload.reason,
+            clear_reason="reason" in payload.model_fields_set and payload.reason is None,
             usefulness=payload.usefulness,
             translation=payload.translation,
             source_quality=payload.source_quality,

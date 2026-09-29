@@ -822,6 +822,48 @@ def test_feedback_wrong_block_saved_for_signal_rejected_for_source(isolated_db):
         app.dependency_overrides.clear()
 
 
+def test_feedback_second_click_clears_reason_and_keeps_the_rest(isolated_db):
+    """Повторный клик по чипу снимает причину — и только её.
+
+    Фронт на повторный клик шлёт `"reason": null`, а сохранение сливало поля через
+    COALESCE: причина оставалась прежней, и ошибочный «Не тот блок» (как и любой чип)
+    было не снять. Теперь явный null снимает причину. Не присланное поле по-прежнему не
+    трогается: комментарий и оценки, которые защищает COALESCE, целы.
+    """
+    from oiltech_digest.db import repository
+
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, _source_id, article_id = _feedback_fixture(conn, "fb-clear@example.com")
+    who = {"id": user_id, "email": "fb-clear@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_user] = lambda: who
+    try:
+        client = TestClient(app)
+        first = client.post("/api/feedback", json={
+            "article_id": article_id, "reason": "wrong_block", "usefulness": 4,
+            "translation": 3, "source_quality": 5, "comment": "это техника, а не бизнес",
+        })
+        assert first.status_code == 200, first.text
+
+        cleared = client.post("/api/feedback", json={"article_id": article_id, "reason": None})
+        assert cleared.status_code == 200, cleared.text
+        entry = cleared.json()["entry"]
+        assert entry["reason"] is None, "повторный клик обязан снять причину"
+        assert (entry["usefulness"], entry["translation"], entry["source_quality"]) == (4, 3, 5)
+        assert entry["comment"] == "это техника, а не бизнес", "снятие причины не трогает комментарий"
+        assert client.get("/api/feedback", params={"article_id": article_id}).json()["entry"]["reason"] is None
+
+        # Не прислано — не трогаем: оценка без ключа reason причину не снимает.
+        assert client.post("/api/feedback", json={"article_id": article_id, "reason": "good"}).status_code == 200
+        kept = client.post("/api/feedback", json={"article_id": article_id, "usefulness": 2}).json()["entry"]
+        assert (kept["reason"], kept["usefulness"]) == ("good", 2)
+    finally:
+        app.dependency_overrides.clear()
+
+    with pytest.raises(ValueError, match="одним запросом"):
+        repository.save_feedback_entry(user_id, article_id=article_id, reason="good", clear_reason=True)
+
+
 def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
     """Ответ на вопрос заказчика «я всё что выделил как шум — он на этом обучился?».
 

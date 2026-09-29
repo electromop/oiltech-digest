@@ -72,6 +72,28 @@ describe("ОС: «Не тот блок» в ленте бизнес-сигнал
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain("/api/feedback/reasons?target=article");
   });
 
+  it("повторный клик по чипу снимает причину явным null", async () => {
+    // Сервер снимает причину только по явному "reason": null, а не присланное поле оставляет
+    // как было. Если ключ потеряется (например, undefined вместо null), чип снова не снять.
+    const user = userEvent.setup();
+    render(<FeedbackPanel articleId={42} />);
+
+    const chip = await screen.findByRole("button", { name: WRONG_BLOCK });
+    await user.click(chip);
+    await waitFor(() => expect(chip).toHaveClass("active"));
+    await waitFor(() => expect(chip).toBeEnabled());
+    await user.click(chip);
+    await waitFor(() => expect(chip).not.toHaveClass("active"));
+
+    const posts = fetchMock.mock.calls
+      .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(posts).toEqual([
+      { article_id: 42, reason: "wrong_block" },
+      { article_id: 42, reason: null },
+    ]);
+  });
+
   it("в ОС по источнику чипа нет: панель просит набор для источника", async () => {
     render(<FeedbackPanel sourceId={7} withTranslation={false} />);
 
