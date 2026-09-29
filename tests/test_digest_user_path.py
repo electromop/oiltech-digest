@@ -437,3 +437,33 @@ def test_radar_card_rated_reject_by_the_model_stays_in_the_issue_it_was_chosen_f
     })
 
     assert analyst.issue() == [("signal", weak), ("signal", s["sep"])]
+
+
+# ---------------------------------------------------------------------------
+#  Дефект: месяц карточки радара в выпуске «плыл» с каждой повторной находкой
+# ---------------------------------------------------------------------------
+
+def test_radar_card_belongs_to_the_issue_of_the_month_it_arrived_in(issue):
+    """Месяц сигнала в выпуске считался по дате лучшей ссылки, а без даты — по last_seen_at,
+    который сдвигает каждая повторная находка (touch_signal, upsert_signal). Ежедневный
+    радар 1–4 октября уносил выбранную в сентябре карточку в октябрьский выпуск, а карточку
+    со старой ссылкой (найдена в сентябре, статья августовская) сентябрьский выпуск не
+    видел вовсе. Месяц карточки — месяц поступления на радар по Москве: эту дату и
+    показывает экран радара («дата поступления»)."""
+    analyst = issue["analyst"]
+    undated = _signal("undated", first_seen=_msk(2026, 9, 20, 0, 15))
+    old_link = _signal("old-link", first_seen=_msk(2026, 9, 3, 0, 15), evidence_published=_utc(2026, 8, 28, 9))
+    # Прогон радара 01.10 в 00:15 МСК — по UTC это ещё 30.09, а экран показывает 01.10.2026.
+    october = _signal("october", first_seen=_msk(2026, 10, 1, 0, 15))
+    for signal_id in (undated, old_link, october):
+        analyst.mark_signal(signal_id)
+    # Радар 02.10 снова нашёл сентябрьскую карточку.
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE signals SET last_seen_at = %s WHERE id = %s", (_msk(2026, 10, 2, 0, 15), undated))
+        conn.commit()
+
+    september = set(analyst.issue(SEPT))
+    assert {("signal", undated), ("signal", old_link)} <= september
+    assert ("signal", october) not in september
+    assert analyst.issue("2026-10") == [("signal", october)]
+    assert analyst.issue("2026-08") == []

@@ -5864,7 +5864,14 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         signal_search_clause = ""
         signal_tag_clause = ""
         if month:
-            signal_month_clause = "AND to_char(COALESCE(best_evidence.published_at, sig.last_seen_at, sig.created_at), 'YYYY-MM') = %(month)s"
+            # Месяц карточки — месяц её поступления на радар по Москве: эту дату показывает
+            # экран радара, и она не меняется. До 29.09 месяц брался по дате лучшей ссылки, а
+            # без неё — по last_seen_at, который сдвигает каждая повторная находка: радар
+            # 1–4 числа уносил выбранную карточку в выпуск следующего месяца, а карточку со
+            # старой ссылкой выпуск месяца, когда её нашли, не видел вовсе.
+            signal_month_clause = (
+                "AND to_char(sig.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM') = %(month)s"
+            )
         if search:
             signal_search_clause = """
               AND (
