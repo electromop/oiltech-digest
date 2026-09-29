@@ -2895,6 +2895,32 @@ def test_feedback_reasons_use_official_wording():
     assert labels["good"] == "Ценный сигнал"
 
 
+def test_feedback_reasons_wrong_block_only_for_signal_feedback():
+    """«Не тот блок» в ленте бизнес-сигналов — решение 5 встречи с заказчиком 21.09.
+
+    Метка про сам сигнал («это технологический сигнал»), поэтому в ОС по источнику её
+    нет: у издания блока не бывает. Набор решает сервер, фронт только говорит, чья ОС.
+    """
+    app = api.app
+    app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "u@e.ru", "role": "user"}
+    try:
+        client = TestClient(app)
+        for_signal = client.get("/api/feedback/reasons").json()
+        for_signal_explicit = client.get("/api/feedback/reasons", params={"target": "article"}).json()
+        for_source = client.get("/api/feedback/reasons", params={"target": "source"}).json()
+        bogus = client.get("/api/feedback/reasons", params={"target": "tag"})
+    finally:
+        app.dependency_overrides.clear()
+
+    labels = {row["value"]: row["label"] for row in for_signal}
+    assert labels["wrong_block"] == "Не тот блок — это технологический сигнал"
+    assert for_signal_explicit == for_signal
+    source_values = [row["value"] for row in for_source]
+    assert "wrong_block" not in source_values, "в ОС по источнику метки «Не тот блок» быть не должно"
+    assert source_values == [v for v in labels if v != "wrong_block"], "остальные причины источника — как были"
+    assert bogus.status_code == 422
+
+
 def test_external_worker_claim_hydrates_signal_discovery_payload(monkeypatch):
     from oiltech_digest import signal_discovery
 

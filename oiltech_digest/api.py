@@ -1614,9 +1614,13 @@ class FeedbackIn(BaseModel):
 
 
 @app.get("/api/feedback/reasons")
-def feedback_reasons(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
+def feedback_reasons(target: str = Query("article", pattern="^(article|source)$"),
+                     user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
     """Словарь быстрых причин. Фронт не хранит свою копию — иначе списки разойдутся,
-    как уже разошлись четыре независимых списка статусов статьи."""
+    как уже разошлись четыре независимых списка статусов статьи.
+
+    `target=source` — для ОС по источнику: без причин про сам сигнал («Не тот блок»).
+    Какая причина к чему применима, решает сервер — он же отбивает её при сохранении."""
     # Формулировки заказчика (13.09): «пару моментов, чтобы придать более официальный
     # статус платформы». Платформа выходит на корпоративный портал ГПН, и разговорный
     # тон («Уже было», «Годный сигнал») там неуместен.
@@ -1627,9 +1631,12 @@ def feedback_reasons(user: dict[str, Any] = Depends(require_user)) -> list[dict[
         "bad_translation": "Некорректный перевод",
         "bad_source": "Низкое качество источника",
         "good": "Ценный сигнал",
+        # Встреча с заказчиком 21.09, решение 5: зеркало «Не тот блок» в радаре.
+        "wrong_block": "Не тот блок — это технологический сигнал",
         "other": "Другое",
     }
-    return [{"value": value, "label": labels[value]} for value in repository.FEEDBACK_REASONS]
+    return [{"value": value, "label": labels[value]} for value in repository.FEEDBACK_REASONS
+            if target == "article" or value not in repository.ARTICLE_ONLY_FEEDBACK_REASONS]
 
 
 @app.get("/api/feedback")
@@ -1647,6 +1654,9 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
 
     Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
     (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
+
+    Явный `"reason": null` снимает причину — так фронт шлёт повторный клик по чипу. Не
+    присланное поле, как и раньше, не трогается: частичное сохранение не стирает остальное.
     """
     try:
         entry = repository.save_feedback_entry(
@@ -1654,6 +1664,7 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
             article_id=payload.article_id,
             source_id=payload.source_id,
             reason=payload.reason,
+            clear_reason="reason" in payload.model_fields_set and payload.reason is None,
             usefulness=payload.usefulness,
             translation=payload.translation,
             source_quality=payload.source_quality,

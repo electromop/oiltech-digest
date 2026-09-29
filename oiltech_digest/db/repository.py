@@ -6120,8 +6120,13 @@ FEEDBACK_REASONS = (
     "bad_translation",  # смысл искажён переводом
     "bad_source",       # дело не в статье, а в источнике
     "good",             # годный сигнал — положительный пример тоже обучает
+    "wrong_block",      # не тот блок: это технологический сигнал, а не бизнес
     "other",
 )
+# Причины про сам сигнал, а не про издание. «Не тот блок» (встреча с заказчиком 21.09,
+# решение 5) — разметка на будущий маршрут «бизнес / технология»: сейчас она только
+# копится, как «Не тот блок» в радаре. У ОС по источнику блока нет — там её не бывает.
+ARTICLE_ONLY_FEEDBACK_REASONS = frozenset({"wrong_block"})
 
 
 def get_user_article_status(user_id: int, article_id: int) -> str | None:
@@ -6142,7 +6147,7 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
                         source_id: int | None = None, reason: str | None = None,
                         usefulness: int | None = None, translation: int | None = None,
                         source_quality: int | None = None,
-                        comment: str | None = None) -> dict:
+                        comment: str | None = None, clear_reason: bool = False) -> dict:
     """Сохранить или обновить карточку обратной связи.
 
     Одна карточка на пару «человек × сигнал»: повторное сохранение ПРАВИТ её, а не
@@ -6151,11 +6156,17 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
 
     `source_id` при ОС о сигнале подставляется из статьи, даже если не передан: так
     накопленное сворачивается по источнику без прохода по всей ленте.
+
+    `clear_reason` снимает причину (повторный клик по чипу) и больше ничего не трогает.
     """
     if article_id is None and source_id is None:
         raise ValueError("Обратная связь должна быть привязана к сигналу или к источнику")
+    if clear_reason and reason is not None:
+        raise ValueError("Снять причину и задать новую одним запросом нельзя")
     if reason is not None and reason not in FEEDBACK_REASONS:
         raise ValueError(f"Неизвестная причина: {reason}")
+    if reason in ARTICLE_ONLY_FEEDBACK_REASONS and article_id is None:
+        raise ValueError(f"Причина «{reason}» относится к сигналу, а не к источнику")
     for name, value in (("usefulness", usefulness), ("translation", translation),
                         ("source_quality", source_quality)):
         if value is not None and not 1 <= int(value) <= 5:
@@ -6169,7 +6180,9 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
             source_id = int(row[0])
 
         # COALESCE на UPDATE: частичное сохранение (поставил только оценку) не должно
-        # стирать уже написанный комментарий — правка карточки идёт по кусочкам.
+        # стирать уже написанный комментарий — правка карточки идёт по кусочкам. Причину
+        # снимают явно (clear_reason): через COALESCE её было не снять вовсе, и ошибочный
+        # чип — в том числе «Не тот блок» — оставался навсегда.
         conflict = ("(user_id, article_id) WHERE article_id IS NOT NULL" if article_id is not None
                     else "(user_id, source_id) WHERE article_id IS NULL AND source_id IS NOT NULL")
         cur = conn.cursor(row_factory=dict_row)
@@ -6181,7 +6194,8 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
                     %(usefulness)s, %(translation)s, %(source_quality)s, %(comment)s)
             ON CONFLICT {conflict} DO UPDATE SET
               source_id      = COALESCE(EXCLUDED.source_id, feedback_entries.source_id),
-              reason         = COALESCE(EXCLUDED.reason, feedback_entries.reason),
+              reason         = CASE WHEN %(clear_reason)s THEN NULL
+                                    ELSE COALESCE(EXCLUDED.reason, feedback_entries.reason) END,
               usefulness     = COALESCE(EXCLUDED.usefulness, feedback_entries.usefulness),
               translation    = COALESCE(EXCLUDED.translation, feedback_entries.translation),
               source_quality = COALESCE(EXCLUDED.source_quality, feedback_entries.source_quality),
@@ -6191,7 +6205,8 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
             """,
             {"user_id": user_id, "article_id": article_id, "source_id": source_id,
              "reason": reason, "usefulness": usefulness, "translation": translation,
-             "source_quality": source_quality, "comment": comment},
+             "source_quality": source_quality, "comment": comment,
+             "clear_reason": bool(clear_reason)},
         )
         saved = cur.fetchone()
         conn.commit()

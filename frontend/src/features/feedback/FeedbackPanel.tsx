@@ -48,7 +48,8 @@ export function FeedbackPanel(props: Props) {
     async function load() {
       try {
         const [reasonList, current] = await Promise.all([
-          listFeedbackReasons(),
+          // У ОС по источнику свой набор: «Не тот блок» — про сигнал, у издания блока нет.
+          listFeedbackReasons(articleId ? "article" : "source"),
           getFeedback({ articleId, sourceId }),
         ]);
         if (cancelled) return;
