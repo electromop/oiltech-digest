@@ -2746,13 +2746,23 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
 
     Вес — из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
     после правки на экране дал бы разбивку, которая в итог не складывается. У балла до
-    профилей снимка нет — вес текущий, как раньше."""
+    профилей снимка нет (или он битый) — вес текущий, как раньше. Вес достаётся из снимка
+    в запросе: сам снимок в каждой строке разбивки — ~0,7 КБ × пять подпунктов × до 2000
+    статей ленты, мегабайты на каждое открытие ленты (ревью PR #82)."""
     if not article_ids:
         return {}
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         """
-        SELECT s.article_id, asi.criterion_id, sc.name, sc.weight, s.criteria_snapshot,
+        SELECT s.article_id, sc.name,
+               COALESCE(
+                   (SELECT (entry->>'weight')::numeric
+                    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.criteria_snapshot) = 'array'
+                                                   THEN s.criteria_snapshot ELSE '[]'::jsonb END) AS entry
+                    WHERE entry->>'id' = asi.criterion_id::text
+                      AND jsonb_typeof(entry->'weight') = 'number'
+                    LIMIT 1),
+                   sc.weight) AS weight,
                asi.final_score, asi.ai_score, asi.keyword_score, asi.rationale
         FROM article_score_items asi
         JOIN article_scores s ON s.id = asi.article_score_id
@@ -2764,12 +2774,10 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
     )
     grouped: dict[int, list[dict[str, Any]]] = {}
     for row in cur.fetchall():
-        scored_weight = _snapshot_weight(row["criteria_snapshot"], int(row["criterion_id"]))
-        weight = scored_weight if scored_weight is not None else row["weight"]
         grouped.setdefault(int(row["article_id"]), []).append(
             {
                 "name": row["name"],
-                "weight": float(weight) if weight is not None else 0.0,
+                "weight": float(row["weight"]) if row["weight"] is not None else 0.0,
                 "final_score": float(row["final_score"]) if row["final_score"] is not None else 0.0,
                 "ai_score": float(row["ai_score"]) if row["ai_score"] is not None else None,
                 "keyword_score": float(row["keyword_score"]) if row["keyword_score"] is not None else None,
@@ -2777,13 +2785,6 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
             }
         )
     return grouped
-
-
-def _snapshot_weight(snapshot: Any, criterion_id: int) -> float | None:
-    for entry in snapshot if isinstance(snapshot, list) else []:
-        if isinstance(entry, dict) and entry.get("id") == criterion_id and entry.get("weight") is not None:
-            return float(entry["weight"])
-    return None
 
 
 def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
