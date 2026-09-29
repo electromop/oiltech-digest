@@ -344,6 +344,8 @@ def test_human_duplicate_verdict_does_not_take_a_chosen_card_out_of_the_issue(is
     })
     assert response.status_code == 200, response.text
     assert response.json()["merged"] is False
+    # Судья дедупа радара тоже не прячет карточку, которую кто-то выбрал в дайджест.
+    assert repository.mark_signal_merged(s["sep"], main, "судья дедупа", respect_review=True) is False
 
     assert analyst.issue() == [("signal", s["sep"])]
 
