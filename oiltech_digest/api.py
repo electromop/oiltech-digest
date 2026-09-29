@@ -1765,12 +1765,20 @@ def list_signals(
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"]))
     # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
+    # Месяц выпуска карточки закрыт — «В дайджест» и «Убрать» на экране неактивны. Правило то
+    # же, что у отказа в PATCH /api/signals/{id}: экран своей формулы не держит.
+    window = feed_window.current()
     rows = []
     for row in cards:
         # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
         # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте.
         label = score_label(float(row.get("score") or 0))
-        rows.append(_clean({**row, "score_label": label, "evidence": evidence.get(int(row["id"]), [])}))
+        rows.append(_clean({
+            **row,
+            "score_label": label,
+            "digest_locked": not window.is_open(row["digest_month"]),
+            "evidence": evidence.get(int(row["id"]), []),
+        }))
     return rows
 
 
@@ -1783,6 +1791,35 @@ def signal_radar_summary(
     return _clean(repository.signal_radar_summary(user_id=int(user["id"]), **filters))
 
 
+def _guard_signal_digest_month(user_id: int, signal_id: int, target_status: str | None) -> None:
+    """«В дайджест» и «Убрать» у карточки радара закрытого месяца — отказ (решение владельца
+    29.09), как статус статьи из архива ленты: выпуск прошлого месяца — только просмотр.
+
+    Месяц карточки — месяц её поступления на радар по Москве (feed_window.signal_month_sql):
+    по нему сборщик кладёт её в выпуск. Открытые месяцы — окно ленты: текущий, а до
+    FEED_ROLLOVER_DAY ещё и прошлый, пока собирается его выпуск. Отказ — только если запрос
+    ставит или снимает «в дайджест»: другой статус у выбранной карточки тоже вывел бы её из
+    выпуска закрытого месяца. Статус мимо выпуска, комментарий и отзыв окно не трогает.
+    """
+    if target_status is None:
+        return
+    state = repository.signal_digest_state(user_id, signal_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    month, current_status = state
+    if "digest" not in (target_status, current_status) or feed_window.current().is_open(month):
+        return
+    closed = feed_window.month_label(feed_window.parse_month(month))
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Карточка радара относится к архиву за {closed} (по дате поступления на радар). "
+            "Архив открыт только для просмотра: отметку «в дайджест» у карточек прошлых месяцев "
+            "ставить и снимать нельзя."
+        ),
+    )
+
+
 @app.patch("/api/signals/{signal_id}")
 def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     target_status = patch.status
@@ -1790,6 +1827,7 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
         target_status = "digest" if patch.selected_for_digest else "watch"
     if target_status is not None and target_status not in {"watch", "digest", "archive", "noise", "duplicate"}:
         raise HTTPException(status_code=400, detail="Unknown signal status")
+    _guard_signal_digest_month(int(user["id"]), signal_id, target_status)
     try:
         repository.set_user_signal_status(
             int(user["id"]),

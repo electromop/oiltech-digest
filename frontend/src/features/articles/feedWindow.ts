@@ -63,3 +63,9 @@ export function windowPeriodText(feedWindow: FeedWindowInfo | null | undefined):
 export function archiveNoticeText(month: string): string {
   return `Архив за ${monthLabel(month)} — только просмотр: статус и отметку «в дайджест» здесь не поменять.`;
 }
+
+// Подсказка у неактивной «В дайджест» / «Убрать» карточки радара закрытого месяца (решение
+// владельца 29.09). Месяц карточки — по дате поступления на радар; закрыт ли он, решает сервер.
+export function radarDigestLockedText(month: string): string {
+  return `Карточка в архиве за ${monthLabel(month)} (по дате поступления): отметку «в дайджест» не поменять — архив только для просмотра.`;
+}
