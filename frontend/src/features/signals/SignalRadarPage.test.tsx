@@ -76,23 +76,47 @@ function ordered(cards: Signal[], sort: SignalQuery["sort"]) {
 type Tiles = Omit<SignalSummary, "matching" | "themes">;
 
 function serve(cards: Signal[], tiles: Partial<Tiles> = {}) {
+  // Своя копия: «В дайджест» и отзывы меняют её, а не общие заготовки карточек; ответы —
+  // снимки на момент ответа, как у настоящего сервера.
+  const state = cards.map((card) => ({ ...card }));
   vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => {
     const offset = query.offset ?? 0;
-    return ordered(cards.filter((card) => matches(card, query)), query.sort).slice(offset, offset + (query.limit ?? 100));
+    return ordered(state.filter((card) => matches(card, query)), query.sort)
+      .slice(offset, offset + (query.limit ?? 100))
+      .map((card) => ({ ...card }));
   });
   vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => {
-    const topics = cards.filter((card) => card.theme_is_topic !== false).map((card) => card.theme);
+    const topics = state.filter((card) => card.theme_is_topic !== false).map((card) => card.theme);
     return {
-      total: cards.length,
+      total: state.length,
       new_7d: 0,
-      in_digest: cards.filter((card) => card.selected_for_digest).length,
-      with_feedback: cards.filter((card) => Number(card.feedback_count || 0) > 0).length,
-      merged: cards.reduce((sum, card) => sum + Number(card.merged_count || 0), 0),
+      in_digest: state.filter((card) => card.selected_for_digest).length,
+      with_feedback: state.filter((card) => Number(card.feedback_count || 0) > 0).length,
+      merged: state.reduce((sum, card) => sum + Number(card.merged_count || 0), 0),
       ...tiles,
-      matching: cards.filter((card) => matches(card, query)).length,
+      matching: state.filter((card) => matches(card, query)).length,
       themes: [...new Set(topics)].sort().map((theme) => ({ theme, count: topics.filter((item) => item === theme).length })),
     };
   });
+  vi.mocked(updateSignal).mockImplementation(async (signalId, patch) => {
+    const card = state.find((item) => item.id === signalId);
+    if (card && patch.selected_for_digest != null) card.selected_for_digest = patch.selected_for_digest;
+    return { ok: true };
+  });
+  vi.mocked(createSignalFeedback).mockImplementation(async (payload) => {
+    const card = state.find((item) => item.id === payload.signal_id);
+    if (card) card.feedback_count = Number(card.feedback_count || 0) + 1;
+    return { ok: true, event_id: 1, memory_ids: [], memories: 0 };
+  });
+}
+
+// Ответ, который придёт, когда тест скажет: выборка «в пути».
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 function tileValue(label: string) {
@@ -196,6 +220,7 @@ describe("SignalRadarPage", () => {
     vi.mocked(listSignals).mockReset();
     vi.mocked(getSignalSummary).mockReset();
     vi.mocked(createSignalFeedback).mockReset();
+    vi.mocked(updateSignal).mockReset();
     serve(DEFAULT_CARDS);
   });
 
@@ -346,6 +371,8 @@ describe("SignalRadarPage", () => {
       renderRadar(false);
       await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
 
+      // Не длиннее, чем принимает API (q ≤ 200): иначе 422 с сырым текстом ошибки.
+      expect(screen.getByRole("textbox", { name: /^Поиск/ })).toHaveAttribute("maxlength", "200");
       fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "дронов" } });
 
       expect(await screen.findByText("Сейсморазведка с дронов")).toBeInTheDocument();
@@ -416,13 +443,13 @@ describe("SignalRadarPage", () => {
     });
 
     it("после склейки дубля догруженное «Показать ещё» не пропадает", async () => {
-      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
       serve(Array.from({ length: RADAR_PAGE_SIZE + 1 }, (_, index) => ({
         ...drilling,
         id: 1000 + index,
         signal_key: `k${1000 + index}`,
         title_ru: `Сигнал номер ${index + 1}`,
       })));
+      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Показать ещё 1 (осталось 1)" }));
       await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`);
@@ -480,6 +507,64 @@ describe("SignalRadarPage", () => {
       expect(await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`)).toBeInTheDocument();
       expect(lastListQuery()).toMatchObject({ offset: RADAR_PAGE_SIZE });
       expect(screen.queryByRole("button", { name: /Показать ещё/ })).not.toBeInTheDocument();
+    });
+
+    it("во время новой выборки «Показать ещё» недоступна и не догружает к старому списку", async () => {
+      serve(Array.from({ length: RADAR_PAGE_SIZE + 1 }, (_, index) => ({
+        ...drilling,
+        id: 1000 + index,
+        signal_key: `k${1000 + index}`,
+        title_ru: `Сигнал номер ${index + 1}`,
+      })));
+      renderRadar(false);
+      const more = await screen.findByRole("button", { name: "Показать ещё 1 (осталось 1)" });
+
+      fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "номер 10" } });
+
+      expect(more).toBeDisabled();
+      fireEvent.click(more);
+      expect(vi.mocked(listSignals).mock.calls.some(([query]) => query?.offset === RADAR_PAGE_SIZE)).toBe(false);
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ q: "номер 10", offset: 0 }));
+    });
+
+    it("«В дайджест», нажатое во время новой выборки, не откатывается её ответом", async () => {
+      serve([drilling]);
+      renderRadar(false);
+      await screen.findByRole("button", { name: "В дайджест" });
+      const stale = deferred<Signal[]>();
+      vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
+      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "watch" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "В дайджест" }));
+      expect(await screen.findByRole("button", { name: "Убрать" })).toBeInTheDocument();
+      // Ответ выборки, собранный до отметки, приходит последним.
+      await act(async () => {
+        stale.resolve([{ ...drilling }]);
+      });
+
+      expect(screen.getByRole("button", { name: "Убрать" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
+    });
+
+    it("отзыв, сохранённый во время новой выборки, не откатывается её ответом", async () => {
+      serve([drilling]);
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      fireEvent.change(screen.getByLabelText("Оценка сигнала"), { target: { value: "approved" } });
+      const stale = deferred<Signal[]>();
+      vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
+      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "watch" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+      expect(await screen.findByText("Обратная связь: 1")).toBeInTheDocument();
+      await act(async () => {
+        stale.resolve([{ ...drilling }]);
+      });
+
+      expect(screen.getByText("Обратная связь: 1")).toBeInTheDocument();
     });
 
     it("«Сначала новые» — сортировка с сервера, блоки идут в её порядке", async () => {

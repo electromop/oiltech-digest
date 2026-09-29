@@ -217,6 +217,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const requestSeq = useRef(0);
   const pendingTimer = useRef<number | undefined>(undefined);
   const firstRequest = useRef(true);
+  // Новая выборка поставлена или в пути: её ответ заменит список целиком. Ref, а не только
+  // searching: читается после await, где состояние из замыкания уже устарело.
+  const selectionPending = useRef(false);
   // Текущая выборка — для продолжений после await (отзыв, «В дайджест»): замыкание того
   // рендера, где нажали кнопку, помнит фильтры на момент нажатия, а не нынешние.
   const latestQuery = useRef({ filters, sort, loaded: 0 });
@@ -227,6 +230,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   function load(query: SignalFilters, order: SignalSort, delay: number, size = RADAR_PAGE_SIZE) {
     window.clearTimeout(pendingTimer.current);
     const seq = ++requestSeq.current;
+    selectionPending.current = true;
     setSearching(true);
     pendingTimer.current = window.setTimeout(() => {
       Promise.all([
@@ -243,6 +247,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         })
         .finally(() => {
           if (seq !== requestSeq.current) return;
+          selectionPending.current = false;
           setSearching(false);
           setLoaded(true);
         });
@@ -296,6 +301,14 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       .catch(() => undefined);
   }
 
+  // «В дайджест» или отзыв легли, пока в пути новая выборка: её ответ собран до отметки и
+  // откатил бы её на экране (ревью PR #83) — перечитываем выборку заново, на той же глубине.
+  // Иначе хватает плиток.
+  function afterListChange() {
+    if (selectionPending.current) reload({ keepLoaded: true });
+    else refreshSummary();
+  }
+
   function resetFilters() {
     setSearch("");
     setTheme("");
@@ -308,6 +321,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   }
 
   async function showMore() {
+    // Пока идёт новая выборка, догружать нечего: страница легла бы к старому списку по
+    // смещению нового (ревью PR #83). Кнопка в это время и так недоступна.
+    if (searching || selectionPending.current) return;
     const seq = requestSeq.current;
     try {
       setLoadingMore(true);
@@ -381,7 +397,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         ),
       );
       showToast(selected ? "Сигнал добавлен в дайджест" : "Сигнал убран из дайджеста");
-      refreshSummary();
+      afterListChange();
     } catch (error) {
       handleError(error, "Не удалось обновить статус сигнала");
     } finally {
@@ -438,7 +454,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       if (result.merged || result.merge_skipped) {
         reload({ keepLoaded: true });
       } else {
-        refreshSummary();
+        afterListChange();
       }
     } catch (error) {
       handleError(error, "Не удалось сохранить обратную связь по сигналу");
@@ -571,6 +587,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Поиск по радару: название, суть, источник, #номер"
+              // Не длиннее, чем принимает API (q ≤ 200): иначе 422 с сырым текстом ошибки.
+              maxLength={200}
             />
           </label>
           <label className="field">
@@ -877,7 +895,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           })}
           {remaining > 0 ? (
             <div className="showMoreWrap">
-              <button type="button" className="ghostButton" disabled={loadingMore} onClick={() => void showMore()}>
+              <button type="button" className="ghostButton" disabled={loadingMore || searching} onClick={() => void showMore()}>
                 {loadingMore
                   ? "Загружаем…"
                   : `Показать ещё ${Math.min(RADAR_PAGE_SIZE, remaining)} (осталось ${remaining})`}
