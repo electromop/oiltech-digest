@@ -49,7 +49,7 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
     if payload.get("only") and "summary" in stages:
         # Перегенерация сути: старая суть с браком («электроэнergyю») ушла бы в промпт
         # (_article_prompt кладёт summary), и модель повторила бы её слово в слово. Без
-        # перегенерации сути записанная остаётся: теги и балл считаются по ней.
+        # перегенерации сути записанная остаётся: по ней считаются теги (балл — по тексту, #53).
         articles = [{**article, "summary": None} for article in articles]
     worker_payload = {
         "kind": "process_articles",

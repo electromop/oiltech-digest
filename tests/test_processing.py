@@ -161,6 +161,39 @@ def test_explicit_article_list_and_only_recompute_what_is_asked(monkeypatch):
     assert [c["name"] for c in client.calls] == ["article_score"]
 
 
+def test_score_input_is_identical_for_twin_copies():
+    """#53: копии одного текста (другие адрес, ИИ-суть, перевод заголовка, время публикации)
+    дают модели один и тот же вход оценки. Глоссарий — тоже по тексту: термин словаря в одной
+    сути добавлял блок только одной копии."""
+    client = _RecordingClient()
+    base = {"title": "Новая установка УПЛД", "source_name": "АНИ", "language": "ru",
+            "raw_text": "Текст статьи. " * 40}
+    one = {**base, "id": 1, "url": "https://ani.example/news/1", "published_at": "2026-08-07T10:00:00+00:00",
+           "summary": "Суть в одной редакции", "title_ru": "Новая установка УПЛД"}
+    two = {**base, "id": 2, "url": "https://ani.example/news/1-copy", "published_at": "2026-08-07T12:30:00+00:00",
+           "summary": "Суть в другой редакции: hydraulic fracturing", "title_ru": "Другой перевод"}
+    criteria = [{"id": 20, "name": "Значимость", "weight": 100, "description": "",
+                 "keywords_json": [], "keywords_en_json": []}]
+
+    pipeline.score_article(one, criteria, client)
+    pipeline.score_article(two, criteria, client)
+
+    first, second = [c["input"] for c in client.calls if c["name"] == "article_score"]
+    assert first == second  # старый код: различаются строки url:, published_at:, summary: и глоссарий
+    assert "published_at: 2026-08-07" in first  # дата остаётся — без времени
+    assert "weight=" not in first  # правка одних весов пересчитывается без ИИ
+
+
+def test_score_keywords_ignore_ai_summary():
+    """#53: ключевой балл считается по тексту статьи, а не по ИИ-сути."""
+    criterion = {"id": 1, "keywords_json": ["пилот", "внедрение", "контракт"], "keywords_en_json": []}
+    article = {"title": "Заголовок", "raw_text": "Текст без ключевых слов."}
+    with_summary = {**article, "summary": "пилот, внедрение и контракт"}
+
+    assert (pipeline.keyword_score_for_criterion(with_summary, criterion)
+            == pipeline.keyword_score_for_criterion(article, criterion))  # старый код: 100 против 0
+
+
 def test_external_ai_relevance_runs_first_and_ignores_summary(monkeypatch):
     """Гейт идёт ПЕРВЫМ и судит по сырому тексту — AI-суть не попадает ему на вход."""
     client = _RecordingClient(relevant=True)
