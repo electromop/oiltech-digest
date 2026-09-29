@@ -6120,8 +6120,13 @@ FEEDBACK_REASONS = (
     "bad_translation",  # смысл искажён переводом
     "bad_source",       # дело не в статье, а в источнике
     "good",             # годный сигнал — положительный пример тоже обучает
+    "wrong_block",      # не тот блок: это технологический сигнал, а не бизнес
     "other",
 )
+# Причины про сам сигнал, а не про издание. «Не тот блок» (встреча с заказчиком 21.09,
+# решение 5) — разметка на будущий маршрут «бизнес / технология»: сейчас она только
+# копится, как «Не тот блок» в радаре. У ОС по источнику блока нет — там её не бывает.
+ARTICLE_ONLY_FEEDBACK_REASONS = frozenset({"wrong_block"})
 
 
 def get_user_article_status(user_id: int, article_id: int) -> str | None:
@@ -6156,6 +6161,8 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
         raise ValueError("Обратная связь должна быть привязана к сигналу или к источнику")
     if reason is not None and reason not in FEEDBACK_REASONS:
         raise ValueError(f"Неизвестная причина: {reason}")
+    if reason in ARTICLE_ONLY_FEEDBACK_REASONS and article_id is None:
+        raise ValueError(f"Причина «{reason}» относится к сигналу, а не к источнику")
     for name, value in (("usefulness", usefulness), ("translation", translation),
                         ("source_quality", source_quality)):
         if value is not None and not 1 <= int(value) <= 5:

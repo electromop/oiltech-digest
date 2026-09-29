@@ -794,6 +794,34 @@ def test_feedback_rejects_bad_scores_and_empty_target(isolated_db):
         app.dependency_overrides.clear()
 
 
+def test_feedback_wrong_block_saved_for_signal_rejected_for_source(isolated_db):
+    """«Не тот блок — это технологический сигнал» (встреча с заказчиком 21.09, решение 5).
+
+    Маршрута метка не делает: она копится разметкой и доезжает до выгрузки для обучения,
+    как «Не тот блок» в радаре. К источнику её не приложить — у издания блока нет.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, source_id, article_id = _feedback_fixture(conn, "fb-block@example.com")
+    who = {"id": user_id, "email": "fb-block@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_user] = lambda: who
+    app.dependency_overrides[api.require_admin] = lambda: who
+    try:
+        client = TestClient(app)
+        saved = client.post("/api/feedback", json={"article_id": article_id, "reason": "wrong_block"})
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["entry"]["reason"] == "wrong_block"
+
+        training = client.get("/api/feedback/training-set", params={"reason": "wrong_block"}).json()
+        assert [row["article_id"] for row in training] == [article_id], "разметка обязана доезжать до выгрузки"
+
+        rejected = client.post("/api/feedback", json={"source_id": source_id, "reason": "wrong_block"})
+        assert rejected.status_code == 400, rejected.text
+        assert client.get("/api/feedback", params={"source_id": source_id}).json()["entry"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
     """Ответ на вопрос заказчика «я всё что выделил как шум — он на этом обучился?».
 
