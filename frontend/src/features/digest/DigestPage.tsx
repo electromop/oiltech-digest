@@ -51,6 +51,15 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   // черновик не меняются, сервер такие правки отклоняет.
   const feedWindow = useFeedWindow();
   const firstOpenMonth = feedWindow?.months?.[0] ?? "";
+  // Выпуск по умолчанию — тот, что сейчас собирается: первый открытый месяц окна (1–4 числа —
+  // прошлый месяц, дальше — текущий). На «Все месяцы» превью и выгрузка брали отметки за всё
+  // время вместе с архивом, а черновик уходил в месяц по часам браузера (29.09).
+  const defaultMonthApplied = useRef(false);
+  useEffect(() => {
+    if (defaultMonthApplied.current || !firstOpenMonth) return;
+    defaultMonthApplied.current = true;
+    setMonth((current) => current || firstOpenMonth);
+  }, [firstOpenMonth]);
   const archiveIssueMonths = useMemo(
     () => (feedWindow?.archive ?? []).filter((item) => item.digest > 0).map((item) => item.month),
     [feedWindow],
@@ -264,12 +273,12 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     });
   }, [sourceArticles, month, scoreMax, scoreMin, search, tag]);
 
-  // Месяцы выпуска: открытые (по выбранным статьям ленты) плюс прошлые выпуски, в которых
-  // у этого человека есть выбранные статьи.
+  // Месяцы выпуска: открытые месяцы окна (даже без отметок — выпуск из одних сигналов радара),
+  // месяцы выбранных статей ленты и прошлые выпуски, в которых у этого человека есть выбранные.
   const months = useMemo(() => {
     const open = articles.filter((article) => article.digest).map((article) => String(article.date || "").slice(0, 7));
-    return [...new Set([...open, ...archiveIssueMonths].filter(Boolean))].sort().reverse();
-  }, [articles, archiveIssueMonths]);
+    return [...new Set([...(feedWindow?.months ?? []), ...open, ...archiveIssueMonths].filter(Boolean))].sort().reverse();
+  }, [articles, archiveIssueMonths, feedWindow]);
 
   const topTags = useMemo(() => {
     const names = [...new Set(sourceArticles.map((article) => article.tag).filter(Boolean))].sort();

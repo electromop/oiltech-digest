@@ -34,6 +34,7 @@ from oiltech_digest.processing.pipeline import (
     score_label,
 )
 from oiltech_digest.readiness import readiness_check
+from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.documents import external as documents_external
@@ -278,7 +279,9 @@ class ManualArticleImportRequest(BaseModel):
 class DigestRequest(BaseModel):
     month: str
     limit: int = 20
-    min_score: float = 60
+    # Без порога (решение владельца 29.09): отметка человека — членство в выпуске, балл —
+    # только порядок. С полом 60 черновик после пересчёта баллов терял бы отмеченное.
+    min_score: float = 0
     max_score: float | None = None
     search: str = ""
     top_tag: str = ""
@@ -1581,14 +1584,27 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
 
 
 @app.get("/api/scoring-criteria")
-def list_scoring_criteria(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
-    return [_clean(row) for row in repository.list_enabled_scoring_criteria()]
+def list_scoring_criteria(
+    profile: str = Query(ARTICLE_SCORING_PROFILE),
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Критерии профиля — вкладки экрана «Скоринг» (сессия G). Без параметра — business:
+    старый бандл фронта профилей не знает и работает с набором ленты, как раньше."""
+    try:
+        rows = repository.list_enabled_scoring_criteria(profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return [_clean(row) for row in rows]
 
 
 @app.put("/api/scoring-criteria")
-def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def save_scoring_criteria(
+    items: list[ScoringCriterionIn],
+    profile: str = Query(ARTICLE_SCORING_PROFILE),
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
     try:
-        result = repository.save_scoring_criteria([i.model_dump() for i in items])
+        result = repository.save_scoring_criteria([i.model_dump() for i in items], profile=profile)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **result}
@@ -1615,9 +1631,13 @@ class FeedbackIn(BaseModel):
 
 
 @app.get("/api/feedback/reasons")
-def feedback_reasons(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
+def feedback_reasons(target: str = Query("article", pattern="^(article|source)$"),
+                     user: dict[str, Any] = Depends(require_user)) -> list[dict[str, str]]:
     """Словарь быстрых причин. Фронт не хранит свою копию — иначе списки разойдутся,
-    как уже разошлись четыре независимых списка статусов статьи."""
+    как уже разошлись четыре независимых списка статусов статьи.
+
+    `target=source` — для ОС по источнику: без причин про сам сигнал («Не тот блок»).
+    Какая причина к чему применима, решает сервер — он же отбивает её при сохранении."""
     # Формулировки заказчика (13.09): «пару моментов, чтобы придать более официальный
     # статус платформы». Платформа выходит на корпоративный портал ГПН, и разговорный
     # тон («Уже было», «Годный сигнал») там неуместен.
@@ -1628,9 +1648,12 @@ def feedback_reasons(user: dict[str, Any] = Depends(require_user)) -> list[dict[
         "bad_translation": "Некорректный перевод",
         "bad_source": "Низкое качество источника",
         "good": "Ценный сигнал",
+        # Встреча с заказчиком 21.09, решение 5: зеркало «Не тот блок» в радаре.
+        "wrong_block": "Не тот блок — это технологический сигнал",
         "other": "Другое",
     }
-    return [{"value": value, "label": labels[value]} for value in repository.FEEDBACK_REASONS]
+    return [{"value": value, "label": labels[value]} for value in repository.FEEDBACK_REASONS
+            if target == "article" or value not in repository.ARTICLE_ONLY_FEEDBACK_REASONS]
 
 
 @app.get("/api/feedback")
@@ -1648,6 +1671,9 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
 
     Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
     (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
+
+    Явный `"reason": null` снимает причину — так фронт шлёт повторный клик по чипу. Не
+    присланное поле, как и раньше, не трогается: частичное сохранение не стирает остальное.
     """
     try:
         entry = repository.save_feedback_entry(
@@ -1655,6 +1681,7 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
             article_id=payload.article_id,
             source_id=payload.source_id,
             reason=payload.reason,
+            clear_reason="reason" in payload.model_fields_set and payload.reason is None,
             usefulness=payload.usefulness,
             translation=payload.translation,
             source_quality=payload.source_quality,
@@ -1942,12 +1969,25 @@ def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
                 "его можно смотреть и выгружать, но не менять."
             ),
         )
-    closed = sorted(m for m in repository.article_period_months(article_ids) if not window.is_open(m))
+    periods = repository.article_period_months(article_ids)
+    closed = sorted(m for m in periods if not window.is_open(m))
     if closed:
         labels = ", ".join(feed_window.month_label(feed_window.parse_month(m)) for m in closed)
         raise HTTPException(
             status_code=409,
             detail=f"В выпуск нельзя добавить статьи из архива ({labels}): архив открыт только для просмотра.",
+        )
+    # У каждого месяца свой выпуск (29.09). 1–4 числа открыты два месяца, и «Все месяцы» +
+    # «Сохранить draft» клали в черновик следующего месяца статьи предыдущего: тот их терял.
+    foreign = sorted(m for m in periods if m != feed_window.month_key(issue_month))
+    if foreign:
+        labels = ", ".join(feed_window.month_label(feed_window.parse_month(m)) for m in foreign)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"В выпуск за {feed_window.month_label(issue_month)} нельзя добавить статьи другого "
+                f"месяца ({labels}): у каждого месяца свой выпуск — выберите месяц выпуска."
+            ),
         )
 
 
@@ -2766,14 +2806,28 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    """Per-criterion scoring breakdown grouped by article id."""
+    """Per-criterion scoring breakdown grouped by article id.
+
+    Вес — из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
+    после правки на экране дал бы разбивку, которая в итог не складывается. У балла до
+    профилей снимка нет (или он битый) — вес текущий, как раньше. Вес достаётся из снимка
+    в запросе: сам снимок в каждой строке разбивки — ~0,7 КБ × пять подпунктов × до 2000
+    статей ленты, мегабайты на каждое открытие ленты (ревью PR #82)."""
     if not article_ids:
         return {}
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         """
-        SELECT s.article_id, sc.name, sc.weight, asi.final_score, asi.ai_score,
-               asi.keyword_score, asi.rationale
+        SELECT s.article_id, sc.name,
+               COALESCE(
+                   (SELECT (entry->>'weight')::numeric
+                    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.criteria_snapshot) = 'array'
+                                                   THEN s.criteria_snapshot ELSE '[]'::jsonb END) AS entry
+                    WHERE entry->>'id' = asi.criterion_id::text
+                      AND jsonb_typeof(entry->'weight') = 'number'
+                    LIMIT 1),
+                   sc.weight) AS weight,
+               asi.final_score, asi.ai_score, asi.keyword_score, asi.rationale
         FROM article_score_items asi
         JOIN article_scores s ON s.id = asi.article_score_id
         JOIN scoring_criteria sc ON sc.id = asi.criterion_id

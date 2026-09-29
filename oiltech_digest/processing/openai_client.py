@@ -128,6 +128,7 @@ class OfflineAIClient:
             data = {"tag_id": 0, "confidence": 0.35, "rationale": "offline fallback"}
         elif name == "article_score":
             data = {
+                "incident_without_solution": False,
                 "total_score": 50,
                 "score_label": "Средняя",
                 "explanation": "offline fallback",

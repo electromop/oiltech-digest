@@ -360,6 +360,14 @@ def test_saved_issue_export_follows_the_same_visibility(feed):
     from oiltech_digest.processing import digest as digest_module
 
     ids = feed["ids"]
+    with connection.get_connection() as conn:
+        # Черновик — из отмеченного «в дайджест»: снятую отметку выгрузка не берёт (29.09).
+        for key in ("aug", "aug_late", "aug_nopub"):
+            conn.execute(
+                "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+                (feed["user"], ids[key]),
+            )
+        conn.commit()
     repository.save_monthly_digest(
         month="2026-08", title="Август", status="draft", user_id=feed["user"],
         items=[{"article_id": ids["aug"]}, {"article_id": ids["aug_late"]}, {"article_id": ids["aug_nopub"]}],

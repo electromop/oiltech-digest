@@ -19,6 +19,8 @@ from oiltech_digest import auth, config, contract, feed_window, lanes
 from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
+from oiltech_digest import scoring_profiles
+from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profile
 
 logger = logging.getLogger(__name__)
 
@@ -4691,6 +4693,15 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             raise ValueError(
                 f"главная копия {primary_id} не видна в ленте — пометка убрала бы новость целиком"
             )
+        # Копию, выбранную кем-то «в дайджест», не прячем (29.09): главную он не отмечал, и
+        # новость ушла бы из его выпуска и из ленты целиком. Так же радар не прячет карточку,
+        # выбранную в дайджест (mark_signal_merged).
+        chosen = conn.execute(
+            "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
+            (int(article_id),),
+        ).fetchone()
+        if chosen:
+            raise ValueError(f"статья {article_id} выбрана в дайджест — её не прячем как перепечатку")
         conn.execute(
             """
             INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)
@@ -5630,62 +5641,222 @@ def upsert_article_tag(article_id: int, tag_id: int, confidence: float,
         conn.commit()
 
 
-def upsert_scoring_criterion(rec: dict) -> int:
+def _upsert_scoring_criterion(conn, rec: dict, profile: str) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO scoring_criteria (profile, name, description, weight, keywords_json,
+                                      keywords_en_json, enabled, sort_order)
+        VALUES (%(profile)s, %(name)s, %(description)s, %(weight)s, %(keywords_json)s,
+                %(keywords_en_json)s, TRUE, %(sort_order)s)
+        -- Сид ГАРАНТИРУЕТ СУЩЕСТВОВАНИЕ критериев по умолчанию, но НЕ переопределяет
+        -- решения человека. Раньше здесь стояло `enabled = TRUE`, и каждый деплой
+        -- воскрешал критерии, которые заказчик выключил в UI. Это не теория: 11.09
+        -- заказчик утром перестроил профиль (5 критериев, сумма ровно 100), в 11:40
+        -- прошёл деплой брендинга, bootstrap поднял обратно три старых — и через две
+        -- минуты он написал «а что случилось со скорингом? там сейчас 9 параметров».
+        -- Хуже того, сумма весов стала бы 175 вместо 100, и стадия скоринга падает
+        -- целиком на первой же статье (_validate_weights).
+        -- Вес и флаг — территория человека (экран «Скоринг»), сид их не трогает.
+        -- Ключевые слова дополняем, а не заменяем: их там тоже правят руками.
+        ON CONFLICT (profile, name) DO UPDATE SET
+            description = COALESCE(scoring_criteria.description, EXCLUDED.description),
+            keywords_json = (
+                SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                FROM jsonb_array_elements(
+                    COALESCE(scoring_criteria.keywords_json, '[]'::jsonb) || EXCLUDED.keywords_json
+                ) AS w
+            ),
+            keywords_en_json = (
+                SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
+                FROM jsonb_array_elements(
+                    COALESCE(scoring_criteria.keywords_en_json, '[]'::jsonb) || EXCLUDED.keywords_en_json
+                ) AS w
+            ),
+            updated_at = now()
+        RETURNING id
+        """,
+        {
+            "description": None,
+            "sort_order": 0,
+            **rec,
+            "profile": profile,
+            "keywords_json": Json(rec.get("keywords_json") or []),
+            "keywords_en_json": Json(rec.get("keywords_en_json") or []),
+        },
+    )
+    return int(cur.fetchone()[0])
+
+
+def upsert_scoring_criterion(rec: dict, profile: str = ARTICLE_SCORING_PROFILE) -> int:
+    """Критерий по имени в профиле: нет — завести включённым; есть — дополнить, не переписывая."""
+    profile = check_profile(profile)
     with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO scoring_criteria (name, description, weight, keywords_json,
-                                          keywords_en_json, enabled, sort_order)
-            VALUES (%(name)s, %(description)s, %(weight)s, %(keywords_json)s,
-                    %(keywords_en_json)s, TRUE, %(sort_order)s)
-            -- Сид ГАРАНТИРУЕТ СУЩЕСТВОВАНИЕ критериев по умолчанию, но НЕ переопределяет
-            -- решения человека. Раньше здесь стояло `enabled = TRUE`, и каждый деплой
-            -- воскрешал критерии, которые заказчик выключил в UI. Это не теория: 11.09
-            -- заказчик утром перестроил профиль (5 критериев, сумма ровно 100), в 11:40
-            -- прошёл деплой брендинга, bootstrap поднял обратно три старых — и через две
-            -- минуты он написал «а что случилось со скорингом? там сейчас 9 параметров».
-            -- Хуже того, сумма весов стала бы 175 вместо 100, и стадия скоринга падает
-            -- целиком на первой же статье (_validate_weights).
-            -- Вес и флаг — территория человека (экран «Скоринг»), сид их не трогает.
-            -- Ключевые слова дополняем, а не заменяем: их там тоже правят руками.
-            ON CONFLICT (name) DO UPDATE SET
-                description = COALESCE(scoring_criteria.description, EXCLUDED.description),
-                keywords_json = (
-                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
-                    FROM jsonb_array_elements(
-                        COALESCE(scoring_criteria.keywords_json, '[]'::jsonb) || EXCLUDED.keywords_json
-                    ) AS w
-                ),
-                keywords_en_json = (
-                    SELECT COALESCE(jsonb_agg(DISTINCT w), '[]'::jsonb)
-                    FROM jsonb_array_elements(
-                        COALESCE(scoring_criteria.keywords_en_json, '[]'::jsonb) || EXCLUDED.keywords_en_json
-                    ) AS w
-                ),
-                updated_at = now()
-            RETURNING id
-            """,
-            {
-                **rec,
-                "keywords_json": Json(rec.get("keywords_json") or []),
-                "keywords_en_json": Json(rec.get("keywords_en_json") or []),
-            },
-        )
-        criterion_id = cur.fetchone()[0]
+        criterion_id = _upsert_scoring_criterion(conn, rec, profile)
         conn.commit()
         return criterion_id
 
 
-def list_enabled_scoring_criteria() -> list[dict]:
+# Сид профилей скоринга — по одному за раз (bootstrap и ручной seed-scoring разом). Ключ свой:
+# 7_290_922 всю жизнь держит планировщик (singleton.SCHEDULER_LOCK_KEY), а seed-scoring он
+# запускает дочерним процессом в bootstrap — на общем ключе сид ждал бы его вечно.
+_SEED_SCORING_LOCK = 7_290_923
+
+
+def seed_scoring_profile(profile: str, records: list[dict]) -> int:
+    """Набор критериев по умолчанию — только в ПУСТОЙ профиль и одной транзакцией.
+
+    Пустой — без единой строки, включённой или выключенной. В непустой профиль сид не
+    добавляет ничего (сессия G): у профиля business на проде свой набор с суммой 100, и сид
+    со своим набором сделал бы 200 — оценка встала бы на локальных путях и раздулась бы на
+    NL. Прежний сид по имени к тому же воскрешал переименованное: заказчик сменил имя —
+    следующий bootstrap заводил старое заново, включённым.
+
+    Одна транзакция: при сбое на середине не останется профиль из пары критериев с суммой
+    55, который следующий сид счёл бы уже заведённым. Возвращает число заведённых
+    критериев; 0 — профиль не пуст."""
+    profile = check_profile(profile)
+    try:
+        with get_connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SEED_SCORING_LOCK,))
+            if conn.execute("SELECT 1 FROM scoring_criteria WHERE profile = %s LIMIT 1", (profile,)).fetchone():
+                return 0
+            for rec in records:
+                _upsert_scoring_criterion(conn, rec, profile)
+            conn.commit()
+    except pg_errors.UniqueViolation as exc:
+        if _violated_index(exc) == "idx_scoring_criteria_name":
+            raise RuntimeError(
+                f"профиль {profile} не заведён: имя критерия уже занято в другом профиле, а в базе "
+                "ещё глобальный индекс имён idx_scoring_criteria_name. Снимите его (шаг 3 выката, "
+                "scripts/g/scoring-profiles-after-deploy.sql) и повторите seed-scoring."
+            ) from exc
+        raise
+    return len(records)
+
+
+def apply_scoring_preset(profile: str, records: list[dict], *, apply: bool = False) -> dict:
+    """Сделать набор records единственным активным набором профиля — одной транзакцией.
+
+    Решение владельца 29.09: сид непустой профиль не трогает, поэтому набор на проде меняется
+    только так — явно, после сухого прогона. Критерии не удаляются: прежние активные
+    выключаются (на них ссылаются подпункты старых баллов), совпавшие по имени включаются,
+    недостающие заводятся. Вес, описание и порядок — из набора; ключевые слова уже заведённого
+    критерия не трогаются (их правят на экране). Перед записью — сумма набора 100 и имена без
+    повторов; перед коммитом — активны ровно критерии набора с суммой 100, иначе откат.
+    Другой профиль не затрагивается; повторный прогон ничего не пишет.
+
+    Возвращает «до» и «после» (активные: имя и вес), план по именам и признак записи."""
+    profile = check_profile(profile)
+    names = [str(rec["name"]) for rec in records]
+    if len(set(names)) != len(names):
+        raise ValueError("в наборе повторяются имена критериев")
+    total = round(sum(float(rec["weight"]) for rec in records), 2)
+    if total != 100:
+        raise ValueError(f"сумма весов набора — {total}, а нужна 100")
+    try:
+        with get_connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SEED_SCORING_LOCK,))
+            cur = conn.cursor(row_factory=dict_row)
+            rows = cur.execute(
+                "SELECT id, name, description, weight, enabled, sort_order FROM scoring_criteria "
+                "WHERE profile = %s ORDER BY sort_order, id FOR UPDATE",
+                (profile,),
+            ).fetchall()
+            by_name = {row["name"]: row for row in rows}
+            plan: dict[str, list[str]] = {"add": [], "enable": [], "update": [], "disable": []}
+            for rec in records:
+                row = by_name.get(rec["name"])
+                if row is None:
+                    plan["add"].append(rec["name"])
+                elif not row["enabled"]:
+                    plan["enable"].append(rec["name"])
+                elif (float(row["weight"]), row["description"] or "", int(row["sort_order"] or 0)) != (
+                    float(rec["weight"]), rec.get("description") or "", int(rec.get("sort_order") or 0)
+                ):
+                    plan["update"].append(rec["name"])
+            wanted = set(names)
+            plan["disable"] = [row["name"] for row in rows if row["enabled"] and row["name"] not in wanted]
+            result = {
+                "profile": profile,
+                "before": [(row["name"], float(row["weight"])) for row in rows if row["enabled"]],
+                # Для отката после записи: этот набор включается обратно одним UPDATE по id.
+                "before_ids": [int(row["id"]) for row in rows if row["enabled"]],
+                "after": [(rec["name"], float(rec["weight"])) for rec in records],
+                "plan": plan,
+                "changed": any(plan.values()),
+                "applied": False,
+            }
+            if not apply or not result["changed"]:
+                return result
+            touched = set(plan["add"]) | set(plan["enable"]) | set(plan["update"])
+            for rec in records:
+                if rec["name"] not in touched:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO scoring_criteria (profile, name, description, weight, keywords_json,
+                                                  keywords_en_json, enabled, sort_order)
+                    VALUES (%(profile)s, %(name)s, %(description)s, %(weight)s, %(keywords_json)s,
+                            %(keywords_en_json)s, TRUE, %(sort_order)s)
+                    ON CONFLICT (profile, name) DO UPDATE SET
+                        description = EXCLUDED.description, weight = EXCLUDED.weight,
+                        sort_order = EXCLUDED.sort_order, enabled = TRUE, updated_at = now()
+                    """,
+                    {
+                        "profile": profile, "name": rec["name"], "description": rec.get("description"),
+                        "weight": rec["weight"], "sort_order": rec.get("sort_order") or 0,
+                        "keywords_json": Json(rec.get("keywords_json") or []),
+                        "keywords_en_json": Json(rec.get("keywords_en_json") or []),
+                    },
+                )
+            conn.execute(
+                "UPDATE scoring_criteria SET enabled = FALSE, updated_at = now() "
+                "WHERE profile = %s AND enabled AND name <> ALL(%s)",
+                (profile, names),
+            )
+            active_sum, active_names = conn.execute(
+                "SELECT COALESCE(SUM(weight), 0), COALESCE(array_agg(name), '{}') FROM scoring_criteria "
+                "WHERE profile = %s AND enabled",
+                (profile,),
+            ).fetchone()
+            if round(float(active_sum), 2) != 100 or sorted(active_names) != sorted(names):
+                raise RuntimeError(
+                    f"после применения активны {sorted(active_names)} с суммой {active_sum} — откат, ничего не записано"
+                )
+            conn.commit()
+    except pg_errors.UniqueViolation as exc:
+        if _violated_index(exc) == "idx_scoring_criteria_name":
+            raise ValueError(
+                "имя критерия набора уже занято в другом профиле, а в базе ещё глобальный индекс имён "
+                "idx_scoring_criteria_name — сначала шаг 3 выката (scripts/g/scoring-profiles-after-deploy.sql)"
+            ) from exc
+        raise
+    result["applied"] = True
+    return result
+
+
+def _violated_index(exc: pg_errors.UniqueViolation) -> str | None:
+    diag = getattr(exc, "diag", None)
+    return getattr(diag, "constraint_name", None)
+
+
+def list_enabled_scoring_criteria(profile: str = ARTICLE_SCORING_PROFILE) -> list[dict]:
+    """Активные критерии профиля, в порядке экрана.
+
+    Умолчание — business: им оценивается статья ленты. Так его получают все читатели, не
+    знающие профилей, — конвейер, пакет для NL, песочница агента источников, — и видят ровно
+    прежний набор ленты, а не оба профиля с суммой 200 (ADR 0002)."""
+    profile = check_profile(profile)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
             SELECT *
             FROM scoring_criteria
-            WHERE enabled = TRUE
+            WHERE enabled = TRUE AND profile = %s
             ORDER BY sort_order, id
-            """
+            """,
+            (profile,),
         )
         return cur.fetchall()
 
@@ -5700,12 +5871,18 @@ def delete_scoring_criterion(criterion_id: int) -> None:
     «убрать старые, не актуальные» критерии — по одному это гарантированно ломало бы
     скоринг на каждом шаге. Теперь удаление отклоняется с понятным текстом, а привести
     профиль в порядок можно одним «Сохранить» (bulk), где веса пересчитываются вместе.
+
+    Сумма — в профиле удаляемого критерия (сессия G): по всей таблице с двумя профилями
+    она 200, и отказ получало бы любое удаление, а сломать сумму можно было бы соседу.
     """
     with get_connection() as conn:
+        found = conn.execute("SELECT profile FROM scoring_criteria WHERE id = %s", (criterion_id,)).fetchone()
+        if found is None:
+            return  # нечего удалять — как и раньше, без ошибки
         row = conn.execute(
             "SELECT COALESCE(SUM(weight), 0) FROM scoring_criteria "
-            "WHERE enabled = TRUE AND id <> %s",
-            (criterion_id,),
+            "WHERE enabled = TRUE AND profile = %s AND id <> %s",
+            (found[0], criterion_id),
         ).fetchone()
         remaining = round(float(row[0]), 2)
         if remaining != 100:
@@ -5720,80 +5897,123 @@ def delete_scoring_criterion(criterion_id: int) -> None:
         conn.commit()
 
 
-def save_scoring_criteria(items: list[dict]) -> dict:
+def save_scoring_criteria(items: list[dict], profile: str = ARTICLE_SCORING_PROFILE) -> dict:
     """Bulk-сохранение профиля критериев (как кнопка «Сохранить» в мокапе).
 
     Валидирует сумму весов = 100. Существующие обновляются по id, новые вставляются,
     отсутствующие в списке — отключаются (soft delete, чтобы не рвать FK).
+
+    Всё — в пределах профиля (сессия G): «Сохранить» вкладки «Бизнес-сигналы» раньше
+    выключило бы весь «Технологический радар», которого нет в её списке. Критерий другого
+    профиля по id не правится и в этот не переезжает — отказ, ничего не записано.
     """
+    profile = check_profile(profile)
     total = round(sum(float(i.get("weight") or 0) for i in items), 2)
     if total != 100:
         raise ValueError(f"Сумма весов критериев должна быть 100, сейчас {total}")
 
     keep_ids: list[int] = []
-    with get_connection() as conn:
-        for it in items:
-            payload = {
-                "name": it["name"],
-                "description": it.get("description"),
-                "weight": it["weight"],
-                "keywords_json": Json(it.get("keywords_json") or []),
-                "keywords_en_json": Json(it.get("keywords_en_json") or []),
-                "sort_order": it.get("sort_order") or 0,
-            }
-            if it.get("id"):
-                conn.execute(
-                    """
-                    UPDATE scoring_criteria SET name=%(name)s, description=%(description)s,
-                        weight=%(weight)s, keywords_json=%(keywords_json)s,
-                        keywords_en_json=%(keywords_en_json)s, sort_order=%(sort_order)s,
-                        enabled=TRUE, updated_at=now()
-                    WHERE id=%(id)s
-                    """,
-                    {**payload, "id": int(it["id"])},
-                )
-                keep_ids.append(int(it["id"]))
-            else:
-                cur = conn.execute(
-                    """
-                    INSERT INTO scoring_criteria (name, description, weight, keywords_json,
-                                                  keywords_en_json, enabled, sort_order)
-                    VALUES (%(name)s, %(description)s, %(weight)s, %(keywords_json)s,
-                            %(keywords_en_json)s, TRUE, %(sort_order)s)
-                    ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description,
-                        weight=EXCLUDED.weight, keywords_json=EXCLUDED.keywords_json,
-                        keywords_en_json=EXCLUDED.keywords_en_json, enabled=TRUE, updated_at=now()
-                    RETURNING id
-                    """,
-                    payload,
-                )
-                keep_ids.append(int(cur.fetchone()[0]))
-        if keep_ids:
+    try:
+        with get_connection() as conn:
+            for it in items:
+                payload = {
+                    "profile": profile,
+                    "name": it["name"],
+                    "description": it.get("description"),
+                    "weight": it["weight"],
+                    "keywords_json": Json(it.get("keywords_json") or []),
+                    "keywords_en_json": Json(it.get("keywords_en_json") or []),
+                    "sort_order": it.get("sort_order") or 0,
+                }
+                if it.get("id"):
+                    # Только активный критерий: экран показывает лишь активные, и выключенный id
+                    # приходит только из устаревшей вкладки. Без этого условия вкладка, открытая
+                    # до apply-scoring-preset, включала прежний набор обратно, а «выключить
+                    # лишнее» ниже гасило новый — с ответом 200 (ревью PR #82).
+                    cur = conn.execute(
+                        """
+                        UPDATE scoring_criteria SET name=%(name)s, description=%(description)s,
+                            weight=%(weight)s, keywords_json=%(keywords_json)s,
+                            keywords_en_json=%(keywords_en_json)s, sort_order=%(sort_order)s,
+                            updated_at=now()
+                        WHERE id=%(id)s AND profile=%(profile)s AND enabled
+                        """,
+                        {**payload, "id": int(it["id"])},
+                    )
+                    if cur.rowcount != 1:
+                        raise ValueError(
+                            f"Критерий id={int(it['id'])} не найден среди активных в профиле «{profile}»: "
+                            "список на экране устарел (набор меняли после его открытия) — обновите страницу."
+                        )
+                    keep_ids.append(int(it["id"]))
+                else:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO scoring_criteria (profile, name, description, weight, keywords_json,
+                                                      keywords_en_json, enabled, sort_order)
+                        VALUES (%(profile)s, %(name)s, %(description)s, %(weight)s, %(keywords_json)s,
+                                %(keywords_en_json)s, TRUE, %(sort_order)s)
+                        ON CONFLICT (profile, name) DO UPDATE SET description=EXCLUDED.description,
+                            weight=EXCLUDED.weight, keywords_json=EXCLUDED.keywords_json,
+                            keywords_en_json=EXCLUDED.keywords_en_json, enabled=TRUE, updated_at=now()
+                        RETURNING id
+                        """,
+                        payload,
+                    )
+                    keep_ids.append(int(cur.fetchone()[0]))
             conn.execute(
-                "UPDATE scoring_criteria SET enabled=FALSE, updated_at=now() WHERE id <> ALL(%s)",
-                (keep_ids,),
+                "UPDATE scoring_criteria SET enabled=FALSE, updated_at=now() "
+                "WHERE profile = %s AND id <> ALL(%s)",
+                (profile, keep_ids),
             )
-        conn.commit()
-    return {"saved": len(items), "weight_sum": total}
+            conn.commit()
+    except pg_errors.UniqueViolation as exc:
+        if _violated_index(exc) == "idx_scoring_criteria_name":
+            raise ValueError(
+                "Такое имя уже есть у критерия другого профиля, а в базе ещё глобальный индекс имён "
+                "(шаг 3 выката ADR 0002 не сделан). Переименуйте критерий или снимите индекс."
+            ) from exc
+        raise ValueError("Два критерия профиля с одним именем: имена в профиле должны различаться.") from exc
+    return {"saved": len(items), "weight_sum": total, "profile": profile}
 
 
 def replace_article_score(article_id: int, total_score: float, score_label: str,
                           explanation: str, items: list[dict],
-                          model: str | None = None) -> None:
+                          model: str | None = None, *, profile: str | None = None,
+                          criteria_snapshot: list[dict] | None = None) -> None:
+    """Балл статьи с подпунктами и происхождением: профиль и снимок критериев (сессия G).
+
+    Снимок присылает тот, кто считал балл. Нет его (итог сборки NL до сессии G) — строим
+    здесь по id подпунктов из текущих критериев: пакет выдан минуты назад, и расхождение
+    возможно, только если веса правили именно в эти минуты."""
     with get_connection() as conn:
+        if criteria_snapshot is None or profile is None:
+            ids = [int(item["criterion_id"]) for item in items]
+            cur = conn.cursor(row_factory=dict_row)
+            rows = cur.execute(
+                "SELECT * FROM scoring_criteria WHERE id = ANY(%s) ORDER BY sort_order, id", (ids,)
+            ).fetchall() if ids else []
+            if criteria_snapshot is None and rows:
+                criteria_snapshot = scoring_profiles.criteria_snapshot(rows)
+            if profile is None:
+                profile = scoring_profiles.profile_of(rows)
         cur = conn.execute(
             """
-            INSERT INTO article_scores (article_id, model, total_score, score_label, explanation)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO article_scores (article_id, model, total_score, score_label, explanation,
+                                        profile, criteria_snapshot)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (article_id) DO UPDATE SET
                 model = EXCLUDED.model,
                 total_score = EXCLUDED.total_score,
                 score_label = EXCLUDED.score_label,
                 explanation = EXCLUDED.explanation,
+                profile = EXCLUDED.profile,
+                criteria_snapshot = EXCLUDED.criteria_snapshot,
                 updated_at = now()
             RETURNING id
             """,
-            (article_id, model, total_score, score_label, explanation),
+            (article_id, model, total_score, score_label, explanation, profile,
+             Json(criteria_snapshot) if criteria_snapshot is not None else None),
         )
         score_id = cur.fetchone()[0]
         conn.execute("DELETE FROM article_score_items WHERE article_score_id = %s", (score_id,))
@@ -5816,7 +6036,9 @@ def replace_article_score(article_id: int, total_score: float, score_label: str,
         conn.commit()
 
 
-def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -> int:
+def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float, *,
+                                      profile: str = ARTICLE_SCORING_PROFILE,
+                                      include_legacy: bool = False, dry_run: bool = False) -> dict:
     """Пересчитать total_score/score_label/final_score из УЖЕ сохранённых ai_score/keyword_score
     (article_score_items) по текущему блендингу — БЕЗ повторного вызова OpenAI и без воркера.
 
@@ -5825,35 +6047,77 @@ def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -
     pipeline.normalize_score_payload: final = max(ai, kw*keyword_weight + ai*ai_weight);
     total = Σ final*weight/100 (вес критерия из scoring_criteria). Пороги score_label синхронны
     pipeline.score_label (80/65/40). ai_score/keyword_score не трогаются → можно гонять повторно
-    или поверх сделать полный AI-перепрогон. Возвращает число обновлённых статей."""
+    или поверх сделать полный AI-перепрогон.
+
+    Сессия G: только в пределах профиля и только там, где пересчёт без ИИ верен.
+    - Балл со снимком — если набор id и хэши текстов снимка совпадают с текущими активными
+      критериями профиля. Отличаться могут только веса: итог — с новыми весами, снимок получает
+      их же. Набор или тексты другие — пропуск (skipped_changed): подпункты отвечали на другие
+      вопросы, нужен пересчёт с ИИ (enqueue-rescore).
+    - Балл без снимка (до профилей) — пропуск (skipped_no_snapshot). С include_legacy —
+      пересчёт, если набор id подпунктов совпадает с текущим; тексты сверить не с чем, решение
+      за владельцем, снимок такому баллу не пишется.
+    Прежний пересчёт брал все активные критерии без сверки: статья, оценённая пятью старыми
+    критериями, из которых активным остался один, получала итог по одному подпункту.
+    Сумма весов профиля ≠ 100 — отказ: пересчёт исказил бы баллы. dry_run — только счёт."""
+    profile = check_profile(profile)
+    current = list_enabled_scoring_criteria(profile)
+    weight_sum = round(sum(float(row["weight"]) for row in current), 2)
+    if weight_sum != 100:
+        raise ValueError(f"Сумма весов профиля {profile} — {weight_sum}, а нужна 100: пересчёт исказил бы баллы")
+    snapshot = scoring_profiles.criteria_snapshot(current)
+    current_texts = scoring_profiles.snapshot_texts(snapshot)
+    stats = {"profile": profile, "recomputed": 0, "legacy_recomputed": 0,
+             "skipped_changed": 0, "skipped_no_snapshot": 0, "dry_run": dry_run}
     with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.criteria_snapshot, array_agg(i.criterion_id)
+            FROM article_scores s
+            JOIN article_score_items i ON i.article_score_id = s.id
+            WHERE COALESCE(s.profile, %s) = %s
+            GROUP BY s.id
+            ORDER BY s.id
+            """,
+            (ARTICLE_SCORING_PROFILE, profile),
+        ).fetchall()
+        matched: list[int] = []
+        legacy: list[int] = []
+        for score_id, stored, item_ids in rows:
+            same_set = {int(item) for item in item_ids} == set(current_texts)
+            if stored is None:
+                if include_legacy and same_set:
+                    legacy.append(int(score_id))
+                else:
+                    stats["skipped_no_snapshot"] += 1
+            elif same_set and scoring_profiles.snapshot_texts(stored) == current_texts:
+                matched.append(int(score_id))
+            else:
+                stats["skipped_changed"] += 1
+        stats["recomputed"], stats["legacy_recomputed"] = len(matched), len(legacy)
+        eligible = matched + legacy
+        if dry_run or not eligible:
+            return stats
         conn.execute(
             """
             UPDATE article_score_items
             SET final_score = ROUND(
                 GREATEST(COALESCE(ai_score, 0),
                          COALESCE(keyword_score, 0) * %s + COALESCE(ai_score, 0) * %s)::numeric, 2)
+            WHERE article_score_id = ANY(%s)
             """,
-            (keyword_weight, ai_weight),
+            (keyword_weight, ai_weight, eligible),
         )
-        cur = conn.execute(
+        conn.execute(
             """
-            -- ТОЛЬКО активные критерии. Без фильтра выключенные продолжали вносить вклад:
-            -- на проде 12.09 три выключенных критерия несут вес 35+30+10 = 75, и сумма
-            -- весов у старой статьи становилась 175 вместо 100 — баллы уезжали вверх без
-            -- всякой причины. Заказчик 11.09 как раз сменил профиль критериев, так что
-            -- «старые items + новые веса» — это не теория, а текущее состояние базы.
+            -- Подпункты каждого балла здесь — ровно активный набор профиля (проверено выше):
+            -- выключенный критерий вклада не вносит, недостающий не обнуляет итог.
             WITH recomputed AS (
-                SELECT i.article_score_id,
-                       SUM(i.final_score * c.weight / 100.0) AS total,
-                       SUM(c.weight) AS weight_sum
+                SELECT i.article_score_id, SUM(i.final_score * c.weight / 100.0) AS total
                 FROM article_score_items i
-                JOIN scoring_criteria c ON c.id = i.criterion_id AND c.enabled
+                JOIN scoring_criteria c ON c.id = i.criterion_id
+                WHERE i.article_score_id = ANY(%s)
                 GROUP BY i.article_score_id
-                -- Статьи, оценённые ТОЛЬКО по ныне выключенным критериям, пропускаем:
-                -- их «пересчёт» дал бы 0 и молча обнулил ленту. Им нужен полноценный
-                -- перепрогон скоринга, а не пересчёт блендинга.
-                HAVING SUM(c.weight) > 0
             )
             UPDATE article_scores s
             SET total_score = ROUND(LEAST(GREATEST(r.total, 0), 100)::numeric, 2),
@@ -5865,10 +6129,16 @@ def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float) -
                 updated_at = now()
             FROM recomputed r
             WHERE s.id = r.article_score_id
-            """
+            """,
+            (eligible,),
         )
+        if matched:
+            conn.execute(
+                "UPDATE article_scores SET criteria_snapshot = %s, profile = %s WHERE id = ANY(%s)",
+                (Json(snapshot), profile, matched),
+            )
         conn.commit()
-        return cur.rowcount or 0
+    return stats
 
 
 def insert_ai_run(rec: dict) -> None:
@@ -6027,7 +6297,14 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         signal_search_clause = ""
         signal_tag_clause = ""
         if month:
-            signal_month_clause = "AND to_char(COALESCE(best_evidence.published_at, sig.last_seen_at, sig.created_at), 'YYYY-MM') = %(month)s"
+            # Месяц карточки — месяц её поступления на радар по Москве: эту дату показывает
+            # экран радара, и она не меняется. До 29.09 месяц брался по дате лучшей ссылки, а
+            # без неё — по last_seen_at, который сдвигает каждая повторная находка: радар
+            # 1–4 числа уносил выбранную карточку в выпуск следующего месяца, а карточку со
+            # старой ссылкой выпуск месяца, когда её нашли, не видел вовсе.
+            signal_month_clause = (
+                "AND to_char(sig.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM') = %(month)s"
+            )
         if search:
             signal_search_clause = """
               AND (
@@ -6067,7 +6344,9 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             {_SIGNAL_CORRECTIONS_LATERAL.format(alias="sig")}
             WHERE uss.status = 'digest'
               AND sig.merged_into_signal_id IS NULL
-              AND sig.maturity <> 'reject'
+              -- Зрелости «Отклонено» здесь нет (29.09): это оценка модели, а экран радара
+              -- показывает такие карточки с кнопкой «В дайджест», и повторная находка
+              -- перезаписывает зрелость выбранной карточки. Выбор человека — членство.
               AND sig.score >= %(min_score)s
               {max_score_clause.replace('COALESCE(sc.total_score, 0)', 'sig.score')}
               {signal_month_clause}
@@ -6198,17 +6477,28 @@ def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
         return {**digest, "items": cur.fetchall()}
 
 
-def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
+def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | None = None) -> list[dict]:
     """Детали статей сохранённого дайджеста по списку id (порядок сохраняется).
 
-    ПЕР-ЮЗЕРНОГО СКОУПА ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО: выбираются только глобальные поля
-    статьи (заголовок, ссылка, суть, скор, теги). Раньше функция принимала `user_id`
-    и НИГДЕ его не использовала — это создавало ложное ощущение фильтрации по владельцу.
-    За принадлежность отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из get_monthly_digest,
-    который скоупит дайджест по user_id.
+    За принадлежность черновика отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из
+    get_monthly_digest, который скоупит дайджест по user_id. Выбираются только глобальные
+    поля статьи (заголовок, ссылка, суть, скор, теги).
+
+    `selected_by` — оставить только статьи, которые этот пользователь ДО СИХ ПОР держит
+    «в дайджест». Черновик задаёт порядок, но не членство: до 29.09 статья, снятая после
+    сохранения («Из дайджеста» на экране выпуска или другой статус в ленте), пропадала из
+    очереди на экране, а превью и выгрузка брали её из черновика, пока его не пересохранят.
     """
     if not article_ids:
         return []
+    selected_clause = ""
+    selected_params: list = []
+    if selected_by is not None:
+        selected_clause = (
+            "AND EXISTS (SELECT 1 FROM user_article_states uas WHERE uas.article_id = a.id"
+            " AND uas.user_id = %s AND uas.status = 'digest')"
+        )
+        selected_params = [selected_by]
     order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -6233,9 +6523,10 @@ def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
               -- сохранённого выпуска (на тот день — 1 из 7 в августе, 2 из 5 в июле).
               AND {visible_sql()}
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
+              {selected_clause}
             ORDER BY {order_case}
             """,
-            [article_ids, *article_ids],
+            [article_ids, *selected_params, *article_ids],
         )
         return cur.fetchall()
 
@@ -6283,8 +6574,13 @@ FEEDBACK_REASONS = (
     "bad_translation",  # смысл искажён переводом
     "bad_source",       # дело не в статье, а в источнике
     "good",             # годный сигнал — положительный пример тоже обучает
+    "wrong_block",      # не тот блок: это технологический сигнал, а не бизнес
     "other",
 )
+# Причины про сам сигнал, а не про издание. «Не тот блок» (встреча с заказчиком 21.09,
+# решение 5) — разметка на будущий маршрут «бизнес / технология»: сейчас она только
+# копится, как «Не тот блок» в радаре. У ОС по источнику блока нет — там её не бывает.
+ARTICLE_ONLY_FEEDBACK_REASONS = frozenset({"wrong_block"})
 
 
 def get_user_article_status(user_id: int, article_id: int) -> str | None:
@@ -6305,7 +6601,7 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
                         source_id: int | None = None, reason: str | None = None,
                         usefulness: int | None = None, translation: int | None = None,
                         source_quality: int | None = None,
-                        comment: str | None = None) -> dict:
+                        comment: str | None = None, clear_reason: bool = False) -> dict:
     """Сохранить или обновить карточку обратной связи.
 
     Одна карточка на пару «человек × сигнал»: повторное сохранение ПРАВИТ её, а не
@@ -6314,11 +6610,17 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
 
     `source_id` при ОС о сигнале подставляется из статьи, даже если не передан: так
     накопленное сворачивается по источнику без прохода по всей ленте.
+
+    `clear_reason` снимает причину (повторный клик по чипу) и больше ничего не трогает.
     """
     if article_id is None and source_id is None:
         raise ValueError("Обратная связь должна быть привязана к сигналу или к источнику")
+    if clear_reason and reason is not None:
+        raise ValueError("Снять причину и задать новую одним запросом нельзя")
     if reason is not None and reason not in FEEDBACK_REASONS:
         raise ValueError(f"Неизвестная причина: {reason}")
+    if reason in ARTICLE_ONLY_FEEDBACK_REASONS and article_id is None:
+        raise ValueError(f"Причина «{reason}» относится к сигналу, а не к источнику")
     for name, value in (("usefulness", usefulness), ("translation", translation),
                         ("source_quality", source_quality)):
         if value is not None and not 1 <= int(value) <= 5:
@@ -6332,7 +6634,9 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
             source_id = int(row[0])
 
         # COALESCE на UPDATE: частичное сохранение (поставил только оценку) не должно
-        # стирать уже написанный комментарий — правка карточки идёт по кусочкам.
+        # стирать уже написанный комментарий — правка карточки идёт по кусочкам. Причину
+        # снимают явно (clear_reason): через COALESCE её было не снять вовсе, и ошибочный
+        # чип — в том числе «Не тот блок» — оставался навсегда.
         conflict = ("(user_id, article_id) WHERE article_id IS NOT NULL" if article_id is not None
                     else "(user_id, source_id) WHERE article_id IS NULL AND source_id IS NOT NULL")
         cur = conn.cursor(row_factory=dict_row)
@@ -6344,7 +6648,8 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
                     %(usefulness)s, %(translation)s, %(source_quality)s, %(comment)s)
             ON CONFLICT {conflict} DO UPDATE SET
               source_id      = COALESCE(EXCLUDED.source_id, feedback_entries.source_id),
-              reason         = COALESCE(EXCLUDED.reason, feedback_entries.reason),
+              reason         = CASE WHEN %(clear_reason)s THEN NULL
+                                    ELSE COALESCE(EXCLUDED.reason, feedback_entries.reason) END,
               usefulness     = COALESCE(EXCLUDED.usefulness, feedback_entries.usefulness),
               translation    = COALESCE(EXCLUDED.translation, feedback_entries.translation),
               source_quality = COALESCE(EXCLUDED.source_quality, feedback_entries.source_quality),
@@ -6354,7 +6659,8 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
             """,
             {"user_id": user_id, "article_id": article_id, "source_id": source_id,
              "reason": reason, "usefulness": usefulness, "translation": translation,
-             "source_quality": source_quality, "comment": comment},
+             "source_quality": source_quality, "comment": comment,
+             "clear_reason": bool(clear_reason)},
         )
         saved = cur.fetchone()
         conn.commit()

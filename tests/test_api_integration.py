@@ -794,6 +794,76 @@ def test_feedback_rejects_bad_scores_and_empty_target(isolated_db):
         app.dependency_overrides.clear()
 
 
+def test_feedback_wrong_block_saved_for_signal_rejected_for_source(isolated_db):
+    """«Не тот блок — это технологический сигнал» (встреча с заказчиком 21.09, решение 5).
+
+    Маршрута метка не делает: она копится разметкой и доезжает до выгрузки для обучения,
+    как «Не тот блок» в радаре. К источнику её не приложить — у издания блока нет.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, source_id, article_id = _feedback_fixture(conn, "fb-block@example.com")
+    who = {"id": user_id, "email": "fb-block@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_user] = lambda: who
+    app.dependency_overrides[api.require_admin] = lambda: who
+    try:
+        client = TestClient(app)
+        saved = client.post("/api/feedback", json={"article_id": article_id, "reason": "wrong_block"})
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["entry"]["reason"] == "wrong_block"
+
+        training = client.get("/api/feedback/training-set", params={"reason": "wrong_block"}).json()
+        assert [row["article_id"] for row in training] == [article_id], "разметка обязана доезжать до выгрузки"
+
+        rejected = client.post("/api/feedback", json={"source_id": source_id, "reason": "wrong_block"})
+        assert rejected.status_code == 400, rejected.text
+        assert client.get("/api/feedback", params={"source_id": source_id}).json()["entry"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_feedback_second_click_clears_reason_and_keeps_the_rest(isolated_db):
+    """Повторный клик по чипу снимает причину — и только её.
+
+    Фронт на повторный клик шлёт `"reason": null`, а сохранение сливало поля через
+    COALESCE: причина оставалась прежней, и ошибочный «Не тот блок» (как и любой чип)
+    было не снять. Теперь явный null снимает причину. Не присланное поле по-прежнему не
+    трогается: комментарий и оценки, которые защищает COALESCE, целы.
+    """
+    from oiltech_digest.db import repository
+
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, _source_id, article_id = _feedback_fixture(conn, "fb-clear@example.com")
+    who = {"id": user_id, "email": "fb-clear@example.com", "role": "admin"}
+    app.dependency_overrides[api.require_user] = lambda: who
+    try:
+        client = TestClient(app)
+        first = client.post("/api/feedback", json={
+            "article_id": article_id, "reason": "wrong_block", "usefulness": 4,
+            "translation": 3, "source_quality": 5, "comment": "это техника, а не бизнес",
+        })
+        assert first.status_code == 200, first.text
+
+        cleared = client.post("/api/feedback", json={"article_id": article_id, "reason": None})
+        assert cleared.status_code == 200, cleared.text
+        entry = cleared.json()["entry"]
+        assert entry["reason"] is None, "повторный клик обязан снять причину"
+        assert (entry["usefulness"], entry["translation"], entry["source_quality"]) == (4, 3, 5)
+        assert entry["comment"] == "это техника, а не бизнес", "снятие причины не трогает комментарий"
+        assert client.get("/api/feedback", params={"article_id": article_id}).json()["entry"]["reason"] is None
+
+        # Не прислано — не трогаем: оценка без ключа reason причину не снимает.
+        assert client.post("/api/feedback", json={"article_id": article_id, "reason": "good"}).status_code == 200
+        kept = client.post("/api/feedback", json={"article_id": article_id, "usefulness": 2}).json()["entry"]
+        assert (kept["reason"], kept["usefulness"]) == ("good", 2)
+    finally:
+        app.dependency_overrides.clear()
+
+    with pytest.raises(ValueError, match="одним запросом"):
+        repository.save_feedback_entry(user_id, article_id=article_id, reason="good", clear_reason=True)
+
+
 def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
     """Ответ на вопрос заказчика «я всё что выделил как шум — он на этом обучился?».
 
@@ -922,6 +992,13 @@ def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
     несут ещё 75. Без фильтра сумма весов у старой статьи становилась 175 вместо 100 —
     баллы уезжали вверх без причины. И отдельно: статью, оценённую только по ныне
     выключенным критериям, пересчёт обнулил бы молча.
+
+    С сессии G условие строже: пересчёт без ИИ трогает только балл, чьи подпункты — ровно
+    текущий активный набор профиля (а у балла со снимком — ещё и те же тексты). Статья с
+    выключенным критерием среди подпунктов посчитана другим набором: не 140 (с ним) и не 80
+    (по одному живому подпункту, как считал прежний пересчёт), а пропуск — ей нужен
+    пересчёт с ИИ. Баллы здесь — до профилей (без снимка): пересчитываются только явно,
+    с include_legacy.
     """
     from oiltech_digest.db import repository
 
@@ -957,22 +1034,23 @@ def test_rescore_recompute_ignores_disabled_criteria(isolated_db):
 
         mixed = add_article("https://s.example/mixed", [live, dead])
         orphan = add_article("https://s.example/orphan", [dead])
+        same_set = add_article("https://s.example/same", [live])
         conn.commit()
 
-    repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8)
+    def totals() -> dict[int, float]:
+        with connection.get_connection() as conn:
+            return {row[0]: float(row[1]) for row in conn.execute("SELECT article_id, total_score FROM article_scores")}
 
-    with connection.get_connection() as conn:
-        mixed_total = conn.execute(
-            "SELECT total_score FROM article_scores WHERE article_id = %s", (mixed,)
-        ).fetchone()[0]
-        orphan_total = conn.execute(
-            "SELECT total_score FROM article_scores WHERE article_id = %s", (orphan,)
-        ).fetchone()[0]
+    strict = repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8)
+    assert strict["recomputed"] == 0 and strict["skipped_no_snapshot"] == 3
+    assert totals() == {mixed: 50, orphan: 50, same_set: 50}, "без снимка тексты не сверить — не трогаем"
 
-    # 80 * 100/100 = 80. С выключенным критерием было бы 80*175/100 = 140 → клампилось в 100.
-    assert float(mixed_total) == 80, f"выключенный критерий всё ещё считается: {mixed_total}"
-    # Статью без единого активного критерия не трогаем, а не обнуляем.
-    assert float(orphan_total) == 50, "статью без активных критериев нельзя обнулять молча"
+    legacy = repository.recompute_total_scores_from_items(keyword_weight=0.2, ai_weight=0.8, include_legacy=True)
+
+    assert legacy["legacy_recomputed"] == 1 and legacy["skipped_no_snapshot"] == 2
+    # 80 * 100/100 = 80 — только у статьи, чьи подпункты ровно текущий набор.
+    # С выключенным критерием было бы 80*175/100 = 140 → клампилось в 100.
+    assert totals() == {mixed: 50, orphan: 50, same_set: 80}, "выключенный критерий всё ещё считается"
 
 
 def test_seed_scoring_does_not_resurrect_disabled_criteria(isolated_db):
@@ -1536,6 +1614,52 @@ def test_reprint_candidates_skip_invisible_articles(isolated_db):
     pairs = repository.reprint_candidates(days=7, min_overlap=0.3, limit=50)
     titles = {str(p["a_title"]) for p in pairs} | {str(p["b_title"]) for p in pairs}
     assert title_b not in titles, "статья из архивного источника не должна попадать в кандидаты"
+
+
+def test_reprint_candidates_catch_wood_mackenzie_case_0921(isolated_db):
+    """Жалоба заказчика 21.09: одна новость Wood Mackenzie трижды в ленте бизнес-сигналов.
+
+    На скрине — Oilfield Technology и World Pipelines (собраны 17.09) и сам Wood Mackenzie
+    (18.09). Заголовки — с публичных страниц изданий (og:title и h1): текст у трёх один,
+    разница только в регистре. С параметрами планировщика (окно 7 дней, LIMIT 200) правило
+    обязано отдать судье все три пары — и отдаёт. Значит, промах 21.09 не в правиле пар, а
+    в прогоне или в ответе судьи; это меряется на проде. Соседняя новость того же дня из
+    другого издания (Neftegaz.ru, тот же скрин) в пары не попадает.
+    """
+    from oiltech_digest.processing import reprints
+
+    same_news = "Wood Mackenzie: strong balance sheets set 2027 up for oil and gas portfolio renewal"
+    rows = (
+        ("Oilfield Technology", same_news, "2026-09-17T11:35:00+01:00"),
+        ("World Pipelines", same_news, "2026-09-17T11:32:00+01:00"),
+        ("Wood Mackenzie", "Wood Mackenzie: Strong Balance Sheets Set 2027 Up for Oil and Gas Portfolio Renewal",
+         "2026-09-17T08:19:25+00:00"),
+        ("Neftegaz.ru", "Итальянская Eni продала азербайджанской SOCAR 10% акций проекта Baleine в Кот-д'Ивуаре",
+         "2026-09-17T10:00:00+03:00"),
+    )
+    ids = []
+    with connection.get_connection() as conn:
+        for n, (source, title, published) in enumerate(rows):
+            source_id = conn.execute(
+                "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+                "VALUES (%s, 'Media', %s, TRUE, 'rss') RETURNING id",
+                (source, f"https://src{n}.example"),
+            ).fetchone()[0]
+            ids.append(conn.execute(
+                "INSERT INTO articles (source_id, title, url, raw_text, language, published_at) "
+                "VALUES (%s, %s, %s, 'текст', 'en', %s) RETURNING id",
+                (source_id, title, f"https://src{n}.example/news", published),
+            ).fetchone()[0])
+        conn.commit()
+    copies = ids[:3]
+
+    # Как в scripts/docker-scheduler.sh: --days 7 --limit 200, порог и разрыв дат — умолчания.
+    pairs = reprints.find_candidates(days=7, limit=200)
+
+    found = {(int(p["a_id"]), int(p["b_id"])): float(p["overlap"]) for p in pairs}
+    assert set(found) == {(copies[0], copies[1]), (copies[0], copies[2]), (copies[1], copies[2])}, \
+        "три копии — три пары судье, соседняя новость в пары не попадает"
+    assert set(found.values()) == {1.0}, "основы слов у трёх заголовков совпадают целиком"
 
 
 def test_marking_article_as_its_own_reprint_is_rejected(isolated_db):
