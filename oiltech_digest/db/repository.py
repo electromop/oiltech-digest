@@ -4530,6 +4530,15 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             raise ValueError(
                 f"главная копия {primary_id} не видна в ленте — пометка убрала бы новость целиком"
             )
+        # Копию, выбранную кем-то «в дайджест», не прячем (29.09): главную он не отмечал, и
+        # новость ушла бы из его выпуска и из ленты целиком. Так же радар не прячет карточку,
+        # выбранную в дайджест (mark_signal_merged).
+        chosen = conn.execute(
+            "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
+            (int(article_id),),
+        ).fetchone()
+        if chosen:
+            raise ValueError(f"статья {article_id} выбрана в дайджест — её не прячем как перепечатку")
         conn.execute(
             """
             INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)
@@ -6125,7 +6134,14 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         signal_search_clause = ""
         signal_tag_clause = ""
         if month:
-            signal_month_clause = "AND to_char(COALESCE(best_evidence.published_at, sig.last_seen_at, sig.created_at), 'YYYY-MM') = %(month)s"
+            # Месяц карточки — месяц её поступления на радар по Москве: эту дату показывает
+            # экран радара, и она не меняется. До 29.09 месяц брался по дате лучшей ссылки, а
+            # без неё — по last_seen_at, который сдвигает каждая повторная находка: радар
+            # 1–4 числа уносил выбранную карточку в выпуск следующего месяца, а карточку со
+            # старой ссылкой выпуск месяца, когда её нашли, не видел вовсе.
+            signal_month_clause = (
+                "AND to_char(sig.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM') = %(month)s"
+            )
         if search:
             signal_search_clause = """
               AND (
@@ -6165,7 +6181,9 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             {_SIGNAL_CORRECTIONS_LATERAL.format(alias="sig")}
             WHERE uss.status = 'digest'
               AND sig.merged_into_signal_id IS NULL
-              AND sig.maturity <> 'reject'
+              -- Зрелости «Отклонено» здесь нет (29.09): это оценка модели, а экран радара
+              -- показывает такие карточки с кнопкой «В дайджест», и повторная находка
+              -- перезаписывает зрелость выбранной карточки. Выбор человека — членство.
               AND sig.score >= %(min_score)s
               {max_score_clause.replace('COALESCE(sc.total_score, 0)', 'sig.score')}
               {signal_month_clause}
@@ -6296,17 +6314,28 @@ def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
         return {**digest, "items": cur.fetchall()}
 
 
-def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
+def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | None = None) -> list[dict]:
     """Детали статей сохранённого дайджеста по списку id (порядок сохраняется).
 
-    ПЕР-ЮЗЕРНОГО СКОУПА ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО: выбираются только глобальные поля
-    статьи (заголовок, ссылка, суть, скор, теги). Раньше функция принимала `user_id`
-    и НИГДЕ его не использовала — это создавало ложное ощущение фильтрации по владельцу.
-    За принадлежность отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из get_monthly_digest,
-    который скоупит дайджест по user_id.
+    За принадлежность черновика отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из
+    get_monthly_digest, который скоупит дайджест по user_id. Выбираются только глобальные
+    поля статьи (заголовок, ссылка, суть, скор, теги).
+
+    `selected_by` — оставить только статьи, которые этот пользователь ДО СИХ ПОР держит
+    «в дайджест». Черновик задаёт порядок, но не членство: до 29.09 статья, снятая после
+    сохранения («Из дайджеста» на экране выпуска или другой статус в ленте), пропадала из
+    очереди на экране, а превью и выгрузка брали её из черновика, пока его не пересохранят.
     """
     if not article_ids:
         return []
+    selected_clause = ""
+    selected_params: list = []
+    if selected_by is not None:
+        selected_clause = (
+            "AND EXISTS (SELECT 1 FROM user_article_states uas WHERE uas.article_id = a.id"
+            " AND uas.user_id = %s AND uas.status = 'digest')"
+        )
+        selected_params = [selected_by]
     order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -6331,9 +6360,10 @@ def digest_items_by_article_ids(article_ids: list[int]) -> list[dict]:
               -- сохранённого выпуска (на тот день — 1 из 7 в августе, 2 из 5 в июле).
               AND {visible_sql()}
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
+              {selected_clause}
             ORDER BY {order_case}
             """,
-            [article_ids, *article_ids],
+            [article_ids, *selected_params, *article_ids],
         )
         return cur.fetchall()
 

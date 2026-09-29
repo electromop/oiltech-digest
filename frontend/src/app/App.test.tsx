@@ -930,7 +930,8 @@ describe("App smoke", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
-    const monthSelect = await screen.findByDisplayValue("Все месяцы");
+    // Открыт выпуск, который собирается сейчас, — первый открытый месяц окна (29.09).
+    const monthSelect = await screen.findByDisplayValue("2026-09");
     // Прошлый выпуск есть в списке месяцев, с пометкой архива.
     expect(within(monthSelect).getByRole("option", { name: "2026-08 · архив" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Сохранить draft" })).toBeInTheDocument();
@@ -960,7 +961,7 @@ describe("App smoke", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
-    await screen.findByDisplayValue("Все месяцы");
+    await screen.findByDisplayValue("2026-09");
     const digestListCalls = () =>
       fetchMock.mock.calls.filter(([input]) => String(input) === "/api/articles?limit=5000&status=digest").length;
     await waitFor(() => expect(digestListCalls()).toBe(1));

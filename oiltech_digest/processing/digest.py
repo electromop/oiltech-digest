@@ -5,7 +5,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import re
+import secrets
+import time
 from html import escape
 from pathlib import Path
 from datetime import UTC, datetime
@@ -13,11 +16,13 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from oiltech_digest import config
+from oiltech_digest import config, feed_window
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = Path(__file__).resolve().parent
 EMAIL_TEMPLATE = "digest_email_template.html"
@@ -43,6 +48,26 @@ _PDF_FOOTER_TEMPLATE = (
     '<span class="pageNumber"></span> / <span class="totalPages"></span>'
     "</div>"
 )
+
+# Сколько PDF ждёт картинки карточек. Их Chromium грузит сам, с сайтов-источников; хост,
+# который принял соединение и молчит (или режет пакеты), держал set_content(wait_until=
+# "load") до потолка Playwright в 30 с, и выгрузка падала TimeoutError на каждой попытке
+# (замер 29.09: две такие картинки из сорока). Не дождались или сайт отказал (403/404) —
+# плашка рубрики, как у статьи без картинки. Возвращает, сколько картинок заменено.
+_PDF_IMAGES_WAIT_MS = 15_000
+_PDF_SWAP_UNLOADED_IMAGES_JS = """
+async (fallbacks) => {
+  window.stop();
+  const swapped = [];
+  document.querySelectorAll("img.news-card-image").forEach((img, index) => {
+    if (img.complete && img.naturalWidth > 0) return;
+    img.src = fallbacks[index] || "";
+    swapped.push(img.decode().catch(() => undefined));
+  });
+  await Promise.all(swapped);
+  return swapped.length;
+}
+"""
 
 
 def _asset_bytes(name: str) -> bytes | None:
@@ -271,7 +296,9 @@ def build_digest_content(
         saved_digest = repository.get_monthly_digest(month, user_id=user_id)
         saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
         if saved_ids:
-            rows = repository.digest_items_by_article_ids(saved_ids[:limit])
+            # Черновик задаёт порядок, но в выпуск идёт только то, что человек держит «в
+            # дайджест» сейчас: снятая после сохранения статья уходит и из выгрузки.
+            rows = repository.digest_items_by_article_ids(saved_ids[:limit], selected_by=user_id)
             # В черновике хранятся только статьи (monthly_digest_items.article_id → articles).
             # Сигналы радара, выбранные в дайджест, добавляются заново — иначе после
             # «Сохранить черновик» они из выпуска пропадали. Если все статьи черновика с тех
@@ -333,14 +360,15 @@ def build_digest_content(
         )
     title_template = issue_cfg["title_template_with_month"] if month else issue_cfg["title_template"]
     intro_template = issue_cfg["intro_template_with_month"] if month else issue_cfg["intro_template"]
-    title = title_template.format(month=month or "")
-    intro = intro_template.format(month=month or "")
+    month_text = _issue_month_text(month)
+    title = title_template.format(month=month_text)
+    intro = intro_template.format(month=month_text)
     return {
         "month": month,
         "title": title,
         "issue": {
             "title": title,
-            "period": month or issue_cfg["period_label_all"],
+            "period": month_text or issue_cfg["period_label_all"],
             "preheader": issue_cfg["preheader"],
             "intro": intro,
             "highlights_title": issue_cfg["highlights_title"],
@@ -367,6 +395,19 @@ def build_digest_content(
         "branding": branding,
     }
 
+
+
+def _issue_month_text(month: str | None) -> str:
+    """Месяц в шапке выпуска словами: «2026-09» → «сентябрь 2026 г».
+
+    Правка заказчика 24.08 (#428915) к выпуску за август: «за 2026-08» → «за август
+    2026 г», и в заголовке выпуска. Незнакомая строка месяца остаётся как есть."""
+    if not month:
+        return ""
+    try:
+        return f"{feed_window.month_label(feed_window.parse_month(month))} г"
+    except ValueError:
+        return month
 
 
 def _render_footer_contact(footer: dict) -> str:
@@ -952,6 +993,7 @@ def render_digest_pdf(content: dict) -> bytes:
     if font_style:
         html_str = html_str.replace("</head>", font_style + "</head>", 1)
     try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - depends on optional dep
         raise RuntimeError(
@@ -963,7 +1005,20 @@ def render_digest_pdf(content: dict) -> bytes:
         browser = pw.chromium.launch(args=["--no-sandbox"])
         try:
             page = browser.new_page()
-            page.set_content(html_str, wait_until="load")
+            page.set_content(html_str, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("load", timeout=_PDF_IMAGES_WAIT_MS)
+            except PlaywrightTimeoutError:
+                pass  # недогрузившиеся картинки заменит плашка ниже
+            # Сайт, закрытый для РФ-адресов, отвечает на картинку сразу 403: загрузка кончается
+            # вовремя, а в карточке выходил значок «битой» картинки с повтором заголовка.
+            # Порядок картинок карточек = порядок новостей: у каждой карточки одна.
+            replaced = page.evaluate(
+                _PDF_SWAP_UNLOADED_IMAGES_JS,
+                [_news_placeholder_data_uri(item.get("category")) for item in content.get("news", [])],
+            )
+            if replaced:
+                logger.warning("digest_pdf_images_replaced count=%s", replaced)
             pdf_bytes = page.pdf(
                 format="A4",
                 print_background=True,
@@ -982,14 +1037,14 @@ def render_digest_pdf(content: dict) -> bytes:
     return pdf_bytes
 
 
-def _fetch_docx_image(url: str | None) -> bytes | None:
+def _fetch_docx_image(url: str | None, timeout: float = 8) -> bytes | None:
     """Скачать картинку статьи для вставки в Word. Любая ошибка/неподходящий тип → None (пропуск)."""
     if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return None
     try:
         import requests
 
-        resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 OilTechDigest"})
+        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 OilTechDigest"})
         content_type = resp.headers.get("content-type", "")
         if resp.ok and content_type.startswith("image/") and "svg" not in content_type:
             data = resp.content
@@ -998,6 +1053,12 @@ def _fetch_docx_image(url: str | None) -> bytes | None:
     except Exception:
         return None
     return None
+
+
+#: Сколько DOCX тратит на картинки статей в сумме. Их тянет сам сервер, по одной, с таймаутом
+#: 8 с на запрос: молчащий хост стоил 8 с на картинку (замер 29.09: две из сорока — 16,2 с),
+#: а экран ждёт документ не дольше 160 с. Бюджет вышел — остальные карточки без картинки.
+_DOCX_IMAGES_BUDGET_SECONDS = 30.0
 
 
 def _docx_hero_bytes(hero: dict | None = None) -> bytes | None:
@@ -1131,13 +1192,15 @@ def render_digest_docx(content: dict) -> bytes:
     # --- Новости ---
     read_more = issue.get("read_more_label") or "Читать далее"
     news_chunks = _chunk_news_items(news_items, size=3)
+    images_deadline = time.monotonic() + _DOCX_IMAGES_BUDGET_SECONDS
     for chunk_index, chunk in enumerate(news_chunks):
         if chunk_index:
             doc.add_page_break()
         doc.add_heading(issue.get("news_title") or "Новости", level=1)
         for index, item in enumerate(chunk, start=1 + chunk_index * 3):
             doc.add_heading(item.get("title") or f"Материал {index}", level=2)
-            image = _fetch_docx_image(item.get("image_url"))
+            remaining = images_deadline - time.monotonic()
+            image = _fetch_docx_image(item.get("image_url"), timeout=min(8.0, remaining)) if remaining > 0 else None
             if image:
                 try:
                     doc.add_picture(BytesIO(image), width=Inches(2.8))
@@ -1210,7 +1273,9 @@ def write_digest_export(
     )
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    base_name = f"digest-{month or 'all'}-{stamp}"
+    # Выпуск у каждого свой, а каталог выгрузок общий: без случайного хвоста две выгрузки
+    # одного месяца в одну секунду писали один файл, и первый скачивал выпуск второго.
+    base_name = f"digest-{month or 'all'}-{stamp}-{secrets.token_hex(3)}"
     normalized_format = "docx" if export_format == "doc" else export_format
 
     if normalized_format == "pdf":
