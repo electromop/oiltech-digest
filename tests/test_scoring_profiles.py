@@ -298,6 +298,44 @@ def test_old_screen_without_profile_reads_and_saves_business(isolated_db):
     assert _rows("tech_radar") == tech_before
 
 
+def test_api_reads_and_saves_the_profile_of_the_tab(isolated_db):
+    seed_default_scoring_criteria()
+    business_before = _rows("business")
+    with connection.get_connection() as conn:
+        client = _admin_client(conn)
+    try:
+        listed = client.get("/api/scoring-criteria", params={"profile": "tech_radar"}).json()
+        assert [item["name"] for item in listed] == [r["name"] for r in DEFAULT_SCORING_PROFILES["tech_radar"]]
+        assert {item["profile"] for item in listed} == {"tech_radar"}
+
+        edited = [{**item, "weight": 20} for item in listed]
+        saved = client.put("/api/scoring-criteria", params={"profile": "tech_radar"}, json=edited)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["profile"] == "tech_radar"
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert [row[1] for row in _rows("tech_radar")] == [20.0] * 5
+    assert _rows("business") == business_before
+
+
+def test_api_refuses_unknown_profile_with_400(isolated_db):
+    seed_default_scoring_criteria()
+    before = _rows("business") + _rows("tech_radar")
+    with connection.get_connection() as conn:
+        client = _admin_client(conn)
+    try:
+        read = client.get("/api/scoring-criteria", params={"profile": "digest"})
+        write = client.put("/api/scoring-criteria", params={"profile": "digest"},
+                           json=[{"name": "Один", "weight": 100}])
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert read.status_code == 400 and "профиль" in read.json()["detail"]
+    assert write.status_code == 400 and "профиль" in write.json()["detail"]
+    assert _rows("business") + _rows("tech_radar") == before
+
+
 # --- Снимок критериев в балле ------------------------------------------------------------------
 
 

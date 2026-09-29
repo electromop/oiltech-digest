@@ -33,6 +33,7 @@ from oiltech_digest.processing.pipeline import (
     process_pipeline_articles,
 )
 from oiltech_digest.readiness import readiness_check
+from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.documents import external as documents_external
@@ -1580,14 +1581,27 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
 
 
 @app.get("/api/scoring-criteria")
-def list_scoring_criteria(user: dict[str, Any] = Depends(require_user)) -> list[dict[str, Any]]:
-    return [_clean(row) for row in repository.list_enabled_scoring_criteria()]
+def list_scoring_criteria(
+    profile: str = Query(ARTICLE_SCORING_PROFILE),
+    user: dict[str, Any] = Depends(require_user),
+) -> list[dict[str, Any]]:
+    """Критерии профиля — вкладки экрана «Скоринг» (сессия G). Без параметра — business:
+    старый бандл фронта профилей не знает и работает с набором ленты, как раньше."""
+    try:
+        rows = repository.list_enabled_scoring_criteria(profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return [_clean(row) for row in rows]
 
 
 @app.put("/api/scoring-criteria")
-def save_scoring_criteria(items: list[ScoringCriterionIn], user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def save_scoring_criteria(
+    items: list[ScoringCriterionIn],
+    profile: str = Query(ARTICLE_SCORING_PROFILE),
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
     try:
-        result = repository.save_scoring_criteria([i.model_dump() for i in items])
+        result = repository.save_scoring_criteria([i.model_dump() for i in items], profile=profile)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **result}
