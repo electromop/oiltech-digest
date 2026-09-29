@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSignalFeedback,
@@ -339,7 +339,7 @@ describe("SignalRadarPage", () => {
       expect(screen.queryByText("Роботизированная буровая установка")).not.toBeInTheDocument();
     });
 
-    it("поиск — на сервере по всему радару, с задержкой как у ленты", async () => {
+    it("поиск — на сервере по всему радару", async () => {
       const deep = { ...drilling, id: 151, signal_key: "k151", title_ru: "Сейсморазведка с дронов", score: 12 };
       serve([drilling, ecology, deep]);
       vi.mocked(listSignals).mockImplementationOnce(async () => [drilling, ecology]);
@@ -347,12 +347,93 @@ describe("SignalRadarPage", () => {
       await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
 
       fireEvent.change(screen.getByRole("textbox", { name: /^Поиск/ }), { target: { value: "дронов" } });
-      // Запрос уходит не на каждую букву: сразу после ввода нового запроса ещё нет.
-      expect(listSignals).toHaveBeenCalledTimes(1);
 
       expect(await screen.findByText("Сейсморазведка с дронов")).toBeInTheDocument();
       expect(lastListQuery()).toMatchObject({ q: "дронов", offset: 0 });
       expect(screen.queryByText("Роботизированная буровая установка")).not.toBeInTheDocument();
+    });
+
+    it("запрос уходит через 400 мс после последней буквы — как у ленты", async () => {
+      vi.useFakeTimers();
+      try {
+        renderRadar(false);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(listSignals).toHaveBeenCalledTimes(1);
+        const input = screen.getByRole("textbox", { name: /^Поиск/ });
+
+        fireEvent.change(input, { target: { value: "бур" } });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(300);
+        });
+        fireEvent.change(input, { target: { value: "буровая" } });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(399);
+        });
+        expect(listSignals).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        // Одна выборка на всё слово, а не на каждую букву.
+        expect(listSignals).toHaveBeenCalledTimes(2);
+        expect(lastListQuery()).toMatchObject({ q: "буровая" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("фильтр сменили, пока сохранялся отзыв «дубль», — список перечитан по новому фильтру", async () => {
+      type SaveResult = Awaited<ReturnType<typeof createSignalFeedback>>;
+      let finishSave: (result: SaveResult) => void = () => undefined;
+      vi.mocked(createSignalFeedback).mockImplementation(
+        () => new Promise<SaveResult>((resolve) => {
+          finishSave = resolve;
+        }),
+      );
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      fireEvent.change(screen.getByLabelText("ID дубля"), { target: { value: "22" } });
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      fireEvent.change(screen.getByRole("combobox", { name: /^Тема/ }), { target: { value: "Экология" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ theme: "Экология" }));
+      const callsBefore = vi.mocked(listSignals).mock.calls.length;
+
+      await act(async () => {
+        finishSave({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
+      });
+
+      await waitFor(() => expect(vi.mocked(listSignals).mock.calls.length).toBeGreaterThan(callsBefore));
+      expect(lastListQuery()).toMatchObject({ theme: "Экология" });
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /группу Бурение/ })).not.toBeInTheDocument(),
+      );
+      expect(screen.getByRole("combobox", { name: /^Тема/ })).toHaveValue("Экология");
+    });
+
+    it("после склейки дубля догруженное «Показать ещё» не пропадает", async () => {
+      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, memory_ids: [], memories: 0, merged: true });
+      serve(Array.from({ length: RADAR_PAGE_SIZE + 1 }, (_, index) => ({
+        ...drilling,
+        id: 1000 + index,
+        signal_key: `k${1000 + index}`,
+        title_ru: `Сигнал номер ${index + 1}`,
+      })));
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Показать ещё 1 (осталось 1)" }));
+      await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`);
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Раскрыть сигнал" })[0]);
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+      fireEvent.change(screen.getByLabelText("ID дубля"), { target: { value: "1001" } });
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ offset: 0, limit: RADAR_PAGE_SIZE + 1 }));
+      expect(await screen.findByText(`Сигнал номер ${RADAR_PAGE_SIZE + 1}`)).toBeInTheDocument();
     });
 
     it("выбрал тему — видны только её карточки, без «Обновить»", async () => {

@@ -15,6 +15,8 @@ import { ratingClass, scoreClass } from "../shared/scoreScale";
 // Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему
 // радару, а не экран по загруженным карточкам (замечание заказчика 19.09).
 export const RADAR_PAGE_SIZE = 100;
+// Больше за один запрос сервер не отдаёт (/api/signals, limit ≤ 200).
+const RADAR_MAX_PAGE = 200;
 // Задержка серверного поиска — как у ленты бизнес-сигналов: запрос не на каждую букву.
 const SEARCH_DELAY_MS = 400;
 const EVIDENCE_PER_CARD = 5;
@@ -215,14 +217,20 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const requestSeq = useRef(0);
   const pendingTimer = useRef<number | undefined>(undefined);
   const firstRequest = useRef(true);
+  // Текущая выборка — для продолжений после await (отзыв, «В дайджест»): замыкание того
+  // рендера, где нажали кнопку, помнит фильтры на момент нажатия, а не нынешние.
+  const latestQuery = useRef({ filters, sort, loaded: 0 });
+  useEffect(() => {
+    latestQuery.current = { filters, sort, loaded: signals.length };
+  });
 
-  function load(query: SignalFilters, order: SignalSort, delay: number) {
+  function load(query: SignalFilters, order: SignalSort, delay: number, size = RADAR_PAGE_SIZE) {
     window.clearTimeout(pendingTimer.current);
     const seq = ++requestSeq.current;
     setSearching(true);
     pendingTimer.current = window.setTimeout(() => {
       Promise.all([
-        listSignals({ ...query, sort: order, limit: RADAR_PAGE_SIZE, offset: 0, evidenceLimit: EVIDENCE_PER_CARD }),
+        listSignals({ ...query, sort: order, limit: size, offset: 0, evidenceLimit: EVIDENCE_PER_CARD }),
         getSignalSummary(query),
       ])
         .then(([rows, counts]) => {
@@ -269,15 +277,19 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
     showToast(message || fallback, "error");
   }
 
-  function reload() {
-    load(filters, sort, 0);
+  // keepLoaded — перечитать столько, сколько уже догружено «Показать ещё» (не больше, чем
+  // сервер отдаёт за раз): после склейки дубля человек не теряет место в списке.
+  function reload(options: { keepLoaded?: boolean } = {}) {
+    const { filters: query, sort: order, loaded } = latestQuery.current;
+    const size = options.keepLoaded ? Math.min(RADAR_MAX_PAGE, Math.max(RADAR_PAGE_SIZE, loaded)) : RADAR_PAGE_SIZE;
+    load(query, order, 0, size);
   }
 
   // Плитки после «В дайджест» и отзыва: числа — с сервера, по всему радару. Ответ для
   // устаревшей выборки не применяется; сбой тихий — плитки просто остаются прежними.
   function refreshSummary() {
     const seq = requestSeq.current;
-    getSignalSummary(filters)
+    getSignalSummary(latestQuery.current.filters)
       .then((counts) => {
         if (seq === requestSeq.current) setSummary(counts);
       })
@@ -424,7 +436,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         setSignals((current) => current.filter((item) => item.id !== signal.id));
       }
       if (result.merged || result.merge_skipped) {
-        reload();
+        reload({ keepLoaded: true });
       } else {
         refreshSummary();
       }
@@ -546,7 +558,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                 </button>
               </>
             ) : null}
-            <button type="button" className="ghostButton signalRadarRefresh" disabled={searching} onClick={reload}>
+            <button type="button" className="ghostButton signalRadarRefresh" disabled={searching} onClick={() => reload()}>
               Обновить
             </button>
           </div>

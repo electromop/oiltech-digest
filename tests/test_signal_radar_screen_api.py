@@ -74,6 +74,38 @@ def test_search_finds_the_card_below_the_loaded_page_by_its_link(user):
     assert _ids(_get("/api/signals", user, q=f"#{target}", limit=2)) == [target]
     # Символы шаблона LIKE — обычные символы: «%» не находит всё подряд.
     assert _ids(_get("/api/signals", user, q="%")) == []
+    # «²» — цифра для str.isdigit(), но не номер карточки: поиск, а не 500 (ревью ветки).
+    assert _ids(_get("/api/signals", user, q="²")) == []
+    assert _get("/api/signals/summary", user, q="#²").json()["matching"] == 0
+
+
+def test_links_of_the_page_come_in_one_query_the_same_as_card_by_card(user, monkeypatch):
+    # Ссылки страницы — одним запросом, а не подключением к базе на каждую карточку: без
+    # пула это ~100 подключений на каждую смену фильтра (ревью ветки).
+    main = _card("main", "Главная карточка", score=90)
+    repository.upsert_signal_evidence(
+        main, {"source_url": "https://example.com/strong", "title": "Сильная ссылка", "strength": 0.9},
+    )
+    dup = _card("dup", "Дубль главной", score=10)
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (main, dup))
+        conn.commit()
+    other = _card("other", "Другая карточка", score=50)
+    expected = {card: repository.list_signal_evidence(card, limit=2) for card in (main, other)}
+    connect = repository.get_connection
+    opened = []
+    monkeypatch.setattr(repository, "get_connection", lambda: opened.append(1) or connect())
+
+    rows = _get("/api/signals", user, evidence_limit=2).json()
+
+    assert len(opened) == 2  # карточки и все их ссылки
+    assert [row["id"] for row in rows] == [main, other]
+    for row in rows:
+        # Та же выборка, что у list_signal_evidence: свои ссылки и ссылки склеенного дубля,
+        # тот же порядок и предел на карточку, те же поля.
+        assert [item["id"] for item in row["evidence"]] == [item["id"] for item in expected[row["id"]]]
+        assert all(set(item) == set(expected[row["id"]][0]) for item in row["evidence"])
+    assert len(rows[0]["evidence"]) == 2
 
 
 def test_search_finds_the_title_people_corrected(user):

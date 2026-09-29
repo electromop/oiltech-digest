@@ -1735,13 +1735,15 @@ def list_signals(
     evidence_limit: int = Query(3, ge=0, le=20),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
+    cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"]))
+    # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
+    evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
     rows = []
-    for row in repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"])):
-        evidence = repository.list_signal_evidence(int(row["id"]), limit=evidence_limit) if evidence_limit else []
+    for row in cards:
         # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
         # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте.
         label = score_label(float(row.get("score") or 0))
-        rows.append(_clean({**row, "score_label": label, "evidence": evidence}))
+        rows.append(_clean({**row, "score_label": label, "evidence": evidence.get(int(row["id"]), [])}))
     return rows
 
 

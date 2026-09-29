@@ -1550,8 +1550,9 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
         )
         alternatives = [text_sql, evidence_sql]
         params.extend([pattern, pattern])
+        # Только ASCII-цифры: str.isdigit() пропускает «²», и int() на нём падает.
         number = query.lstrip("#")
-        if number.isdigit() and len(number) <= 18:
+        if re.fullmatch(r"[0-9]{1,18}", number):
             alternatives.append("s.id = %s")
             params.append(int(number))
         clauses.append(f"({' OR '.join(alternatives)})")
@@ -1665,6 +1666,44 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
         )
         themes = [{"theme": row["theme"], "count": int(row["count"])} for row in cur.fetchall()]
     return {**tiles, "matching": matching, "themes": themes}
+
+
+def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, list[dict]]:
+    """Ссылки карточек страницы радара — одним запросом, а не list_signal_evidence на каждую:
+    подключения к базе без пула, и на страницу в 100 карточек выходило ~100 подключений на
+    каждую смену фильтра. Выборка та же: свои ссылки и ссылки склеенных дублей, тот же
+    порядок и предел на карточку."""
+    ids = [int(signal_id) for signal_id in signal_ids]
+    if not ids or limit <= 0:
+        return {}
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT *
+            FROM (
+              SELECT e.*, owner.id AS radar_card_id,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY owner.id
+                       ORDER BY e.strength DESC, e.published_at DESC NULLS LAST, e.created_at DESC
+                     ) AS radar_card_rank
+              FROM signals owner
+              JOIN signal_evidence e
+                ON e.signal_id = owner.id
+                OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = owner.id)
+              WHERE owner.id = ANY(%s)
+            ) ranked
+            WHERE ranked.radar_card_rank <= %s
+            ORDER BY ranked.radar_card_id, ranked.radar_card_rank
+            """,
+            (ids, limit),
+        )
+        evidence: dict[int, list[dict]] = {}
+        for row in cur.fetchall():
+            card_id = int(row.pop("radar_card_id"))
+            row.pop("radar_card_rank")
+            evidence.setdefault(card_id, []).append(row)
+    return evidence
 
 
 def set_user_signal_status(
