@@ -1906,12 +1906,25 @@ def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
                 "его можно смотреть и выгружать, но не менять."
             ),
         )
-    closed = sorted(m for m in repository.article_period_months(article_ids) if not window.is_open(m))
+    periods = repository.article_period_months(article_ids)
+    closed = sorted(m for m in periods if not window.is_open(m))
     if closed:
         labels = ", ".join(feed_window.month_label(feed_window.parse_month(m)) for m in closed)
         raise HTTPException(
             status_code=409,
             detail=f"В выпуск нельзя добавить статьи из архива ({labels}): архив открыт только для просмотра.",
+        )
+    # У каждого месяца свой выпуск (29.09). 1–4 числа открыты два месяца, и «Все месяцы» +
+    # «Сохранить draft» клали в черновик следующего месяца статьи предыдущего: тот их терял.
+    foreign = sorted(m for m in periods if m != feed_window.month_key(issue_month))
+    if foreign:
+        labels = ", ".join(feed_window.month_label(feed_window.parse_month(m)) for m in foreign)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"В выпуск за {feed_window.month_label(issue_month)} нельзя добавить статьи другого "
+                f"месяца ({labels}): у каждого месяца свой выпуск — выберите месяц выпуска."
+            ),
         )
 
 

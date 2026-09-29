@@ -628,3 +628,34 @@ def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(chro
 
     assert pdf.startswith(b"%PDF")
     assert elapsed < 20, f"PDF печатался {elapsed:.1f} с"
+
+
+# ---------------------------------------------------------------------------
+#  Дефект: в черновик месяца попадали статьи другого открытого месяца
+# ---------------------------------------------------------------------------
+
+def test_issue_draft_takes_only_articles_of_its_own_month(issue, monkeypatch):
+    """1–4 октября открыты сентябрь и октябрь. Черновик проверял только «не из архива»:
+    «Все месяцы» + «Сохранить draft» клали в октябрьский черновик сентябрьские статьи
+    (месяц черновика экран брал по часам браузера) — сентябрьский выпуск их не получал,
+    а октябрьский выходил с чужими."""
+    monkeypatch.setattr(feed_window, "_now", lambda: _msk(2026, 10, 2, 12, 0))
+    analyst, a = issue["analyst"], issue["a"]
+    with connection.get_connection() as conn:
+        october = _article(conn, issue["source"], "oct", published=None, collected=_utc(2026, 10, 2, 9))
+        conn.commit()
+    analyst.mark(a["hi"])
+    analyst.mark(october)
+
+    refused = analyst.save("2026-10", [october, a["hi"]])
+    assert refused.status_code == 409
+    assert "статьи другого месяца (сентябрь 2026)" in refused.json()["detail"]
+    refused = analyst.save(SEPT, [a["hi"], october])
+    assert refused.status_code == 409
+    assert "статьи другого месяца (октябрь 2026)" in refused.json()["detail"]
+    assert analyst.get("/api/monthly-digests/2026-10").status_code == 404
+
+    assert analyst.save(SEPT, [a["hi"]]).status_code == 200
+    assert analyst.save("2026-10", [october]).status_code == 200
+    assert analyst.issue() == [("article", a["hi"])]
+    assert analyst.issue("2026-10") == [("article", october)]
