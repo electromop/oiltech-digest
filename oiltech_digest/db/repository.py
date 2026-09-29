@@ -18,7 +18,7 @@ from psycopg.types.json import Json
 from oiltech_digest import auth, config, contract, feed_window, lanes
 from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.feed_window import FeedWindow, period_month_sql, visible_sql
+from oiltech_digest.feed_window import FeedWindow, period_month_sql, signal_month_sql, visible_sql
 from oiltech_digest import scoring_profiles
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profile
 
@@ -1598,6 +1598,9 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             f"""
             SELECT s.*,
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
+                   -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
+                   -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска.
+                   {signal_month_sql('s')} AS digest_month,
                    COALESCE(uss.status, 'watch') AS user_status,
                    (COALESCE(uss.status, 'watch') = 'digest') AS selected_for_digest,
                    uss.analyst_comment AS user_comment,
@@ -1719,6 +1722,26 @@ def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, l
             row.pop("radar_card_rank")
             evidence.setdefault(card_id, []).append(row)
     return evidence
+
+
+def signal_digest_state(user_id: int, signal_id: int) -> tuple[str, str | None] | None:
+    """Месяц выпуска карточки радара («ГГГГ-ММ», feed_window.signal_month_sql) и её статус у
+    этого человека (None — не отмечал); None — карточки нет.
+
+    Для отказа отметке «в дайджест» у карточки закрытого месяца (PATCH /api/signals/{id}):
+    отказ зависит и от месяца, и от того, выбрана ли карточка сейчас — снятие отметки другим
+    статусом тоже вывело бы её из выпуска закрытого месяца."""
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT {signal_month_sql('s')}, uss.status
+            FROM signals s
+            LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
+            WHERE s.id = %s
+            """,
+            (user_id, signal_id),
+        ).fetchone()
+    return (row[0], row[1]) if row else None
 
 
 def set_user_signal_status(
@@ -6314,10 +6337,9 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             # экран радара, и она не меняется. До 29.09 месяц брался по дате лучшей ссылки, а
             # без неё — по last_seen_at, который сдвигает каждая повторная находка: радар
             # 1–4 числа уносил выбранную карточку в выпуск следующего месяца, а карточку со
-            # старой ссылкой выпуск месяца, когда её нашли, не видел вовсе.
-            signal_month_clause = (
-                "AND to_char(sig.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM') = %(month)s"
-            )
+            # старой ссылкой выпуск месяца, когда её нашли, не видел вовсе. Выражение — общее с
+            # окном отметки «в дайджест» на радаре (feed_window.signal_month_sql).
+            signal_month_clause = f"AND {signal_month_sql('sig')} = %(month)s"
         if search:
             signal_search_clause = """
               AND (

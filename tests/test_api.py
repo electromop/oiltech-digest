@@ -14,6 +14,14 @@ def _freeze_inside_month(monkeypatch, month: str) -> None:
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(year, number, 15, 12, 0, tzinfo=feed_window.MSK))
 
 
+def _signal_of_the_current_month(user_id: int, signal_id: int) -> tuple[str, None]:
+    """Карточка радара поступила в текущем месяце и ещё не отмечена: «В дайджест» открыт.
+
+    С 29.09 PATCH /api/signals/{id} читает из базы месяц и статус карточки: в закрытом
+    месяце отметку «в дайджест» не ставят и не снимают. Тесты ниже проверяют саму отметку."""
+    return feed_window.current().open_months[-1], None
+
+
 class FakeCursor:
     def __init__(self, connection):
         self.connection = connection
@@ -187,6 +195,7 @@ def test_signal_feedback_endpoint_accepts_structured_feedback_without_comment(mo
 def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "admin"}
+    monkeypatch.setattr(api.repository, "signal_digest_state", _signal_of_the_current_month)
 
     captured = {}
     events = []
@@ -225,6 +234,7 @@ def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
 def test_signal_patch_unselect_retracts_digest_example(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
+    monkeypatch.setattr(api.repository, "signal_digest_state", _signal_of_the_current_month)
     monkeypatch.setattr(api.repository, "set_user_signal_status", lambda *args, **kwargs: None)
     learned = []
     from oiltech_digest import signal_feedback
@@ -246,6 +256,7 @@ def test_signal_patch_unselect_retracts_digest_example(monkeypatch):
 def test_signal_patch_keeps_status_when_learning_fails(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
+    monkeypatch.setattr(api.repository, "signal_digest_state", _signal_of_the_current_month)
     saved = []
     monkeypatch.setattr(api.repository, "set_user_signal_status", lambda *args, **kwargs: saved.append(kwargs))
     monkeypatch.setattr(api.repository, "record_signal_feedback_event", lambda *args, **kwargs: 5)
