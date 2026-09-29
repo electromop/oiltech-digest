@@ -273,8 +273,8 @@ def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
 
     assert regular["articles"][0]["summary"] == article["summary"]
     assert regen["articles"][0]["summary"] is None
-    # Пометку исполняет воркер (28.09): балл без перегенерации сути считается по записанной сути —
-    # новой, как раньше, у него уже не будет.
+    # Пометку исполняет воркер (28.09): пересчёт балла суть не перегенерирует — записанная остаётся
+    # в пакете (сам балл с #53 считается по тексту статьи, без сути).
     assert rescore["articles"][0]["summary"] == article["summary"]
     assert (regular.get("only"), regen["only"], rescore["only"]) == (None, ["summary", "translation"], ["scoring"])
 

@@ -470,14 +470,16 @@ def tag_article(article: dict, tags: list[dict], client) -> AIResponse:
 def score_article(article: dict, criteria: list[dict], client) -> AIResponse:
     criterion_lines = []
     for criterion in criteria:
+        # Без веса (#53): на оценку отдельного критерия он не влияет, а правка одних весов
+        # пересчитывается без ИИ, только если вход модели от них не зависит.
         criterion_lines.append(
-            f"{criterion['id']}: {criterion['name']} | weight={criterion['weight']} | "
+            f"{criterion['id']}: {criterion['name']} | "
             f"description={criterion.get('description') or ''} | "
             f"keywords={', '.join((criterion.get('keywords_en_json') or [])[:12])}"
         )
     return client.complete_json(
         SCORING_INSTRUCTIONS,
-        _article_prompt(article) + "\n\ncriteria:\n" + "\n".join(criterion_lines),
+        _score_prompt(article) + "\n\ncriteria:\n" + "\n".join(criterion_lines),
         SCORE_SCHEMA,
         max_output_tokens=1800,
         model=config.OPENAI_SCORE_MODEL,
@@ -584,7 +586,7 @@ def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[s
 
 
 def keyword_score_for_criterion(article: dict, criterion: dict) -> float:
-    text = _search_text(article)
+    text = _score_keyword_text(article)
     keywords = (criterion.get("keywords_json") or []) + (criterion.get("keywords_en_json") or [])
     if not keywords:
         return 0
@@ -616,6 +618,36 @@ def _article_prompt(article: dict) -> str:
     )
     glossary = glossary_prompt_block(article)
     return f"{base}\n\n{glossary}" if glossary else base
+
+
+# Поля статьи, которые у копий одного текста совпадают: без ИИ-сути и перевода заголовка.
+_SCORE_TEXT_FIELDS = ("title", "raw_text", "source_category")
+
+
+def _score_prompt(article: dict) -> str:
+    """Вход оценки (#53): только то, что у копий одного текста совпадает.
+
+    Без url — у копии свой адрес — и без ИИ-сути: суть у каждой копии своя (отдельный вызов
+    модели), новой информации не несёт — она сделана из того же текста, — зато несёт рамку
+    суммаризатора («как это влияет на поставки и цены», #54). Дата — без времени. Глоссарий —
+    по тексту: термин словаря в сути одной копии добавлял блок только ей."""
+    base = "\n".join(
+        [
+            f"title: {article.get('title') or ''}",
+            f"source: {article.get('source_name') or ''}",
+            f"language: {article.get('language') or 'unknown'}",
+            f"published_at: {str(article.get('published_at') or '')[:10]}",
+            f"text: {_compact(article.get('raw_text') or '', 6000)}",
+        ]
+    )
+    glossary = glossary_prompt_block({field: article.get(field) for field in _SCORE_TEXT_FIELDS})
+    return f"{base}\n\n{glossary}" if glossary else base
+
+
+def _score_keyword_text(article: dict) -> str:
+    """Текст ключевого балла (#53) — без ИИ-сути, как и вход модели. _search_text не трогаем:
+    на нём тег по ключам и стоп-слова."""
+    return " ".join(str(article.get(field) or "") for field in _SCORE_TEXT_FIELDS).lower()
 
 
 _TAGS_SCOPE_CACHE: dict[str, Any] = {"block": None, "at": 0.0}
