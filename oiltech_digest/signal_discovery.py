@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from oiltech_digest import config as app_config
-from oiltech_digest import signal_dedup
+from oiltech_digest import signal_dedup, signal_research
 from oiltech_digest.db import repository
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, output_budget
@@ -577,6 +577,9 @@ class SignalDiscoveryConfig:
     web_fulltext_limit: int = 20
     background_job_id: int | None = None
     persist_training_examples: bool = True
+    # brave / openai_web / both; пусто — SIGNAL_SEARCH_MODE ядра (config_from_payload кладёт
+    # решение ядра в задачу, чтобы NL не решал по своему .env).
+    search_mode: str = ""
 
 
 def seed_default_radar_topics() -> int:
@@ -738,7 +741,7 @@ def run_discovery(
             evidence = list(db_evidence)
             web_search = None
             if config.web_search or config.web_only:
-                web_search = _search_web_evidence(topic, config, heartbeat=beat)
+                web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat)
                 evidence.extend(web_search["evidence"])
                 # Дальше блок нужен только счётчиками: сами тексты уже в кандидатах. Без
                 # этого результат воркера вёз каждую докачанную страницу лишний раз.
@@ -1214,7 +1217,16 @@ def config_from_payload(payload: dict[str, Any], *, background_job_id: int | Non
             payload, "web_fulltext_limit", app_config.SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT, int
         ),
         background_job_id=background_job_id,
+        search_mode=_search_mode(payload.get("search_mode")),
     )
+
+
+SEARCH_MODES = ("brave", "openai_web", "both")
+
+
+def _search_mode(value: Any) -> str:
+    mode = str(value or app_config.SIGNAL_SEARCH_MODE or "brave").strip().lower()
+    return mode if mode in SEARCH_MODES else "brave"
 
 
 def build_external_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
@@ -2290,6 +2302,38 @@ def _contains_cyrillic(text: str) -> bool:
     return bool(re.search(r"[а-яё]", text or "", re.IGNORECASE))
 
 
+def _topic_web_evidence(
+    topic: dict[str, Any],
+    topic_name: str,
+    config: SignalDiscoveryConfig,
+    *,
+    heartbeat: Callable[[], None],
+) -> dict[str, Any]:
+    """Находки темы из веба по режиму прогона: Brave, «режим ChatGPT» или оба."""
+    mode = _search_mode(config.search_mode)
+    if mode == "brave":
+        return _search_web_evidence(topic, config, heartbeat=heartbeat)
+    heartbeat()
+    context = _topic_tag_context(topic_name)
+    topic_context = "\n".join(part for part in (
+        "; ".join(context.get("descriptions") or []),
+        "Ключевые слова: " + ", ".join((context.get("keywords_ru") or [])[:12] + (context.get("keywords_en") or [])[:12]),
+    ) if part.strip() and not part.endswith(": "))
+    research = signal_research.research_topic(topic_name, days=max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS),
+                                              topic_context=topic_context)
+    heartbeat()
+    # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье.
+    events = research.pop("evidence")
+    found, fulltext = _enrich_web_evidence_with_full_text(events, topic_name, limit=len(events), heartbeat=heartbeat)
+    verified, unverified = signal_research.verify_research_evidence(found)
+    research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))
+    if mode == "openai_web":
+        return {"status": research["status"], "provider": "openai_web_search", "queries": [], "research": research,
+                "evidence": verified}
+    brave = _search_web_evidence(topic, config, heartbeat=heartbeat)
+    return {**brave, "research": research, "evidence": verified + list(brave.get("evidence") or [])}
+
+
 def _choose_theme(
     signal: dict[str, Any],
     raw_output: dict[str, Any],
@@ -2816,6 +2860,10 @@ def _cluster_family(cluster: list[dict[str, Any]]) -> str:
 
 
 def _cluster_key(evidence: dict[str, Any], topic: str) -> str:
+    if signal_research.is_research_evidence(evidence):
+        # Модель исследования уже разложила находки по событиям: одно событие — один кластер,
+        # склейка по первым словам смешала бы разные события одной компании (сигнал 71).
+        return "research-" + _normalize_url_for_key(str(evidence.get("source_url") or ""))
     text = f"{evidence.get('title') or ''} {evidence.get('extracted_fact') or ''}".lower()
     patterns = [
         ("physical-ai-robotics", r"robot|robotic|autonomous|physical ai|drill floor|inspection"),

@@ -2014,6 +2014,7 @@ def cmd_discover_signals(args: argparse.Namespace) -> None:
         web_query_limit=args.web_query_limit,
         research_rounds=args.research_rounds,
         web_fulltext_limit=args.web_fulltext_limit,
+        search_mode=args.search_mode or "",
     ))
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
@@ -2053,6 +2054,7 @@ def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
         "web_query_limit": args.web_query_limit,
         "research_rounds": args.research_rounds,
         "web_fulltext_limit": args.web_fulltext_limit,
+        **({"search_mode": args.search_mode} if args.search_mode else {}),
     }
     # См. background_jobs.enqueue_daily_signal_discovery: маршрут решает политика,
     # иначе задача уезжает на РФ-адрес и OpenAI отвечает 403 по географии.
@@ -2998,6 +3000,8 @@ def build_parser() -> argparse.ArgumentParser:
                                     help="сколько поисковых запросов сделать на тему в --web режиме")
     p_discover_signals.add_argument("--research-rounds", type=int, default=2,
                                     help="сколько раундов research-loop: 1=только широкий поиск, 2=поиск+follow-up")
+    p_discover_signals.add_argument("--search-mode", choices=["brave", "openai_web", "both"], default=None,
+                        help="откуда находки: brave, openai_web («режим ChatGPT»), both; по умолчанию SIGNAL_SEARCH_MODE")
     p_discover_signals.add_argument("--web-fulltext-limit", type=int, default=20,
                                     help="сколько web-результатов докачивать целиком вместо сниппета поиска; 0 отключает")
     p_discover_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
@@ -3019,6 +3023,8 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="использовать только web evidence и не брать статьи из локальных sources")
     p_enqueue_signals.add_argument("--web-query-limit", type=int, default=8)
     p_enqueue_signals.add_argument("--research-rounds", type=int, default=2)
+    p_enqueue_signals.add_argument("--search-mode", choices=["brave", "openai_web", "both"], default=None,
+                        help="откуда находки: brave, openai_web («режим ChatGPT»), both; по умолчанию SIGNAL_SEARCH_MODE")
     p_enqueue_signals.add_argument("--web-fulltext-limit", type=int, default=20)
     p_enqueue_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True)
     p_enqueue_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)

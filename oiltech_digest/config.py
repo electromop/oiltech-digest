@@ -301,6 +301,8 @@ SIGNAL_SEARCH_MODE = os.environ.get("SIGNAL_SEARCH_MODE", "brave").strip().lower
 SIGNAL_RESEARCH_MODEL = os.environ.get("SIGNAL_RESEARCH_MODEL", "gpt-5").strip()
 SIGNAL_RESEARCH_REASONING = os.environ.get("SIGNAL_RESEARCH_REASONING", "low").strip()
 SIGNAL_RESEARCH_EVENTS_PER_TOPIC = int(os.environ.get("SIGNAL_RESEARCH_EVENTS_PER_TOPIC", "8"))
+# За какой период искать события (дней до сегодня): режим рассчитан на еженедельный прогон.
+SIGNAL_RESEARCH_DAYS = int(os.environ.get("SIGNAL_RESEARCH_DAYS", "30"))
 SIGNAL_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_RESEARCH_TIMEOUT_SECONDS", "480"))
 
 # Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
