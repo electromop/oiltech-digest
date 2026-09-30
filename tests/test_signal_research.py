@@ -218,3 +218,31 @@ def test_two_failures_are_an_error():
     result = _research(_Sequence(AIClientError("503"), AIClientError("503")))
 
     assert result["status"] == "error" and result["evidence"] == []
+
+
+def test_research_client_collects_search_sources_as_grounding(monkeypatch):
+    # При строгом JSON сносок нет (30.09: 0 из 18) — подтверждение ссылки даёт список
+    # источников, которые поиск реально вернул (include web_search_call.action.sources).
+    from oiltech_digest.processing import openai_client
+
+    sent = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"model": "gpt-5", "usage": {"input_tokens": 1, "output_tokens": 1}, "output": [
+                {"type": "web_search_call", "action": {"type": "search", "sources": [
+                    {"type": "url", "url": "https://investors.bakerhughes.com/news/bp-award"}]}},
+                {"type": "message", "content": [{"type": "output_text", "text": '{"events": []}'}]},
+            ]}
+
+    monkeypatch.setattr(openai_client.requests, "post", lambda url, **kwargs: sent.update(kwargs["json"]) or Response())
+    client = openai_client.OpenAIResponsesClient(api_key="test")
+
+    response = client.research_json("i", "u", signal_research.RESEARCH_SCHEMA, model="gpt-5",
+                                     reasoning_effort="low", max_output_tokens=100, timeout=5)
+
+    assert sent["include"] == ["web_search_call.action.sources"]
+    assert response.data["_cited_urls"] == ["https://investors.bakerhughes.com/news/bp-award"]
+    assert response.data["_web_search_calls"] == 1

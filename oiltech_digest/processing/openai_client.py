@@ -122,6 +122,9 @@ class OpenAIResponsesClient:
             "store": False,
             "max_output_tokens": max_output_tokens,
             "tools": [{"type": "web_search", "search_context_size": search_context_size}],
+            # Адреса, которые поиск реально вернул. Сносок (url_citation) при строгом JSON
+            # модель не ставит — прогон 30.09: 0 из 18, — и проверять ссылку было не по чему.
+            "include": ["web_search_call.action.sources"],
             "text": {"format": {"type": "json_schema", "name": schema["name"], "strict": True,
                                 "schema": schema["schema"]}},
         }
@@ -143,6 +146,9 @@ class OpenAIResponsesClient:
         for item in raw.get("output") or []:
             if item.get("type") == "web_search_call":
                 searches += 1
+                for source in (item.get("action") or {}).get("sources") or []:
+                    if isinstance(source, dict) and source.get("url"):
+                        cited.append(str(source["url"]))
             for content in item.get("content") or []:
                 for note in content.get("annotations") or []:
                     if note.get("type") == "url_citation" and note.get("url"):
