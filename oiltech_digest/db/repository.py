@@ -952,9 +952,12 @@ def upsert_signal(signal: dict) -> int:
             INSERT INTO signals (
               signal_key, title, title_ru, theme, summary, thesis, transferability, maturity, confidence, score,
               why_now, why_not_noise, companies_json, industries_json, evidence_count,
-              interest_score, why_interesting
+              interest_score, why_interesting,
+              signal_category, event_date, mixed_events, mixed_events_reason,
+              score_profile, score_items_json, criteria_snapshot
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = EXCLUDED.title,
               title_ru = EXCLUDED.title_ru,
@@ -974,6 +977,15 @@ def upsert_signal(signal: dict) -> int:
               -- не получает, и прошлый балл не должен стираться NULL'ом.
               interest_score = COALESCE(EXCLUDED.interest_score, signals.interest_score),
               why_interesting = COALESCE(NULLIF(EXCLUDED.why_interesting, ''), signals.why_interesting),
+              -- Поля судьи (29.09): результат старой сборки NL их не несёт — прежние не стираем.
+              signal_category = COALESCE(EXCLUDED.signal_category, signals.signal_category),
+              event_date = COALESCE(EXCLUDED.event_date, signals.event_date),
+              mixed_events = COALESCE(EXCLUDED.mixed_events, signals.mixed_events),
+              mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
+              -- Балл и его происхождение — всегда вместе: score выше уже новый.
+              score_profile = EXCLUDED.score_profile,
+              score_items_json = EXCLUDED.score_items_json,
+              criteria_snapshot = EXCLUDED.criteria_snapshot,
               last_seen_at = now(),
               updated_at = now()
             RETURNING id
@@ -996,6 +1008,13 @@ def upsert_signal(signal: dict) -> int:
                 int(signal.get("evidence_count") or 0),
                 float(signal["interest_score"]) if signal.get("interest_score") is not None else None,
                 (signal.get("why_interesting") or None),
+                signal.get("signal_category"),
+                signal.get("event_date") or None,
+                signal.get("mixed_events") if isinstance(signal.get("mixed_events"), bool) else None,
+                (signal.get("mixed_events_reason") or None),
+                signal.get("score_profile"),
+                Json(_jsonable(signal["score_items"])) if signal.get("score_items") else None,
+                Json(_jsonable(signal["criteria_snapshot"])) if signal.get("criteria_snapshot") else None,
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -1222,6 +1241,81 @@ def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
             (list(urls),),
         )
         return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
+
+
+def archive_signal_candidates(*, created_before: date | str | None = None, free_theme_only: bool = True,
+                              ids: Sequence[int] | None = None) -> list[dict]:
+    """Какие видимые на радаре карточки уйдут в архив — для сухого прогона и для записи.
+
+    Ранние карточки 13.09 писали тему свободным текстом (не одна из 13 тематик) и считались
+    прежним судьёй: баллы 20–40, почти половина экрана (замечание Виктора 29.09). Отбор —
+    по дате поступления, свободной теме или списку номеров. Разобранные не исключаются, но
+    помечены: решение за человеком, архив обратим."""
+    clauses = ["s.archived_at IS NULL", "s.merged_into_signal_id IS NULL"]
+    params: list = []
+    if created_before:
+        clauses.append("s.first_seen_at < %s::date")
+        params.append(str(created_before))
+    if free_theme_only:
+        clauses.append(f"NOT {_RADAR_TOPIC_SQL}")
+        params.append(SYSTEM_TAG_UNCLASSIFIED)
+    if ids:
+        clauses.append("s.id = ANY(%s)")
+        params.append([int(value) for value in ids])
+    if len(clauses) == 2:
+        raise ValueError("Нужно условие отбора: дата, свободная тема или номера карточек")
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT s.id, s.theme, COALESCE(s.title_ru, s.title) AS title, s.score, s.first_seen_at,
+                   {_SIGNAL_REVIEWED_SQL.format(alias="s")} AS reviewed
+            FROM signals s
+            WHERE {' AND '.join(clauses)}
+            ORDER BY s.id
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def archive_signals(signal_ids: Sequence[int], *, reason: str) -> int:
+    """Убрать карточки с радара в архив. Не удаляет: вернуть — unarchive_signals."""
+    ids = [int(value) for value in signal_ids]
+    if not ids:
+        return 0
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE signals
+            SET archived_at = now(), archive_reason = %s, updated_at = now()
+            WHERE id = ANY(%s) AND archived_at IS NULL
+            """,
+            (reason, ids),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
+def unarchive_signals(*, signal_ids: Sequence[int] | None = None, reason: str | None = None) -> int:
+    """Вернуть карточки из архива: по номерам или по причине архивации (одной командой)."""
+    if not signal_ids and not reason:
+        raise ValueError("Нужны номера карточек или причина архивации")
+    clauses = ["archived_at IS NOT NULL"]
+    params: list = []
+    if signal_ids:
+        clauses.append("id = ANY(%s)")
+        params.append([int(value) for value in signal_ids])
+    if reason:
+        clauses.append("archive_reason = %s")
+        params.append(reason)
+    with get_connection() as conn:
+        cur = conn.execute(
+            f"UPDATE signals SET archived_at = NULL, archive_reason = NULL, updated_at = now() WHERE {' AND '.join(clauses)}",
+            params,
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
 
 
 def refresh_all_signal_evidence_counts() -> int:
@@ -1503,7 +1597,28 @@ def _radar_card_evidence_exists(condition: str = "TRUE") -> str:
 # Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
 # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
 # (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09).
-_RADAR_VISIBLE_SQL = f"s.merged_into_signal_id IS NULL AND {_radar_card_evidence_exists()}"
+def _radar_quality_sql() -> str:
+    """Что радар не показывает по качеству (замечания Виктора 29.09). Карточка хранится:
+    правило — показа, срок и категории меняются без пересчёта. NULL — карточка до правки.
+
+    - архив (ранние карточки со свободной темой) — обратимо, `unarchive-signals`;
+    - бизнес и «другое» — не техрадар, сохраняются для будущей бизнес-вкладки;
+    - ссылки о разных событиях — одна карточка смешала бы две истории (сигнал 71);
+    - событие старше срока — «нашёл очень старый сигнал»."""
+    parts = [
+        "s.archived_at IS NULL",
+        "COALESCE(s.signal_category, 'technology') = 'technology'",
+        "s.mixed_events IS NOT TRUE",
+    ]
+    age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
+    if age_days > 0:
+        parts.append(f"(s.event_date IS NULL OR s.event_date >= CURRENT_DATE - {age_days})")
+    return " AND ".join(parts)
+
+
+_RADAR_VISIBLE_SQL = (
+    f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_radar_card_evidence_exists()}"
+)
 # Тема — одна из тематик заказчика (корневые теги). Первая партия радара (13.09) писала
 # тему свободным текстом: экран собирает такие в отдельный блок и в фильтр тем не берёт.
 _RADAR_TOPIC_SQL = (

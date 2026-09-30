@@ -2168,6 +2168,32 @@ def cmd_refresh_signal_evidence_counts(args: argparse.Namespace) -> None:
     print(f"refresh-signal-evidence-counts: исправлено карточек {changed}")
 
 
+def cmd_archive_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    ids = [int(value) for value in (args.ids or "").split(",") if value.strip()]
+    rows = repository.archive_signal_candidates(
+        created_before=args.created_before, free_theme_only=args.free_theme_only, ids=ids or None,
+    )
+    reviewed = sum(1 for row in rows if row["reviewed"])
+    print(f"archive-signals: карточек {len(rows)}, из них разобранных {reviewed}, "
+          f"причина «{args.reason}», dry_run={not args.apply}")
+    for row in rows:
+        mark = " [разобрана]" if row["reviewed"] else ""
+        print(f"  #{row['id']} {float(row['score'] or 0):>5.1f} {str(row['theme'])[:30]!r}: {str(row['title'])[:70]}{mark}")
+    if args.apply:
+        changed = repository.archive_signals([row["id"] for row in rows], reason=args.reason)
+        print(f"В архиве: {changed}. Вернуть: unarchive-signals --reason {args.reason!r}")
+
+
+def cmd_unarchive_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    ids = [int(value) for value in (args.ids or "").split(",") if value.strip()]
+    changed = repository.unarchive_signals(signal_ids=ids or None, reason=args.reason)
+    print(f"unarchive-signals: возвращено карточек {changed}")
+
+
 def cmd_unmerge_signal(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -3070,6 +3096,23 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-signal-evidence-counts",
         help="пересчитать число ссылок у карточек радара (у тех, чьи ссылки переехали в другие)",
     ).set_defaults(func=cmd_refresh_signal_evidence_counts)
+
+    p_archive_signals = sub.add_parser(
+        "archive-signals",
+        help="убрать карточки радара в архив (обратимо); по умолчанию — сухой прогон со списком",
+    )
+    p_archive_signals.add_argument("--created-before", default=None, help="поступили раньше даты ГГГГ-ММ-ДД")
+    p_archive_signals.add_argument("--free-theme-only", action=argparse.BooleanOptionalAction, default=True,
+                                   help="только с темой не из 13 тематик (ранние карточки 13.09)")
+    p_archive_signals.add_argument("--ids", default="", help="номера карточек через запятую")
+    p_archive_signals.add_argument("--reason", default="early-free-theme-2026-09")
+    p_archive_signals.add_argument("--apply", action="store_true", help="записать; без флага — только список")
+    p_archive_signals.set_defaults(func=cmd_archive_signals)
+
+    p_unarchive_signals = sub.add_parser("unarchive-signals", help="вернуть карточки радара из архива")
+    p_unarchive_signals.add_argument("--ids", default="")
+    p_unarchive_signals.add_argument("--reason", default=None)
+    p_unarchive_signals.set_defaults(func=cmd_unarchive_signals)
 
     p_export_signal_training = sub.add_parser(
         "export-signal-training-jsonl",
