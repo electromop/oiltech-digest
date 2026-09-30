@@ -1466,13 +1466,26 @@ _SIGNAL_CORRECTIONS_LATERAL = """
 LEFT JOIN LATERAL (
   SELECT
     (SELECT e.corrected_title FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_title, '')) <> ''
+     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_title, '')) <> ''{until}
      ORDER BY e.id DESC LIMIT 1) AS corrected_title,
     (SELECT e.corrected_thesis FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_thesis, '')) <> ''
+     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_thesis, '')) <> ''{until}
      ORDER BY e.id DESC LIMIT 1) AS corrected_thesis
 ) corr ON TRUE
 """
+
+
+def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = None) -> str:
+    """LEFT JOIN LATERAL corr: последние правки заголовка и сути у карточки `alias`.
+
+    Экран радара — все правки. Выпуск (`issue_window` — окно ленты на сейчас) у карточки
+    закрытого месяца берёт только правки, поданные до закрытия (решение владельца 30.09:
+    «архив только на просмотр» — и текст закрытого выпуска). Отзыв после закрытия принимается
+    как раньше и виден на радаре — он нужен агенту для обучения, — но выпуск не меняет."""
+    until = ""
+    if issue_window is not None:
+        until = " AND " + issue_window.before_close_sql(signal_month_sql(alias), "e.created_at")
+    return _SIGNAL_CORRECTIONS_LATERAL.format(alias=alias, until=until)
 
 
 def apply_signal_corrections(row: dict) -> dict:
@@ -1611,7 +1624,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    corr.corrected_thesis
             FROM signals s
             LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
-            {_SIGNAL_CORRECTIONS_LATERAL.format(alias="s")}
+            {_signal_corrections_lateral("s")}
             {where}
             ORDER BY {order_by}
             LIMIT %s OFFSET %s
@@ -1658,7 +1671,7 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
                 f"""
                 SELECT COUNT(*) AS matching
                 FROM signals s
-                {_SIGNAL_CORRECTIONS_LATERAL.format(alias="s")}
+                {_signal_corrections_lateral("s")}
                 WHERE {' AND '.join(clauses)}
                 """,
                 filter_params,
@@ -6351,6 +6364,10 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             """
         if top_tag:
             signal_tag_clause = "AND sig.theme = %(top_tag)s"
+        # Правки коллег у карточки закрытого месяца — только поданные до его закрытия: текст
+        # закрытого выпуска не меняется (решение владельца 30.09). Окно — то же, что у отказа
+        # отметке «в дайджест» (api._guard_signal_digest_month).
+        issue_window = feed_window.current()
         cur.execute(
             f"""
             SELECT sig.id,
@@ -6376,7 +6393,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               ORDER BY strength DESC, published_at DESC NULLS LAST, created_at DESC
               LIMIT 1
             ) best_evidence ON TRUE
-            {_SIGNAL_CORRECTIONS_LATERAL.format(alias="sig")}
+            {_signal_corrections_lateral("sig", issue_window)}
             WHERE uss.status = 'digest'
               AND sig.merged_into_signal_id IS NULL
               -- Зрелости «Отклонено» здесь нет (29.09): это оценка модели, а экран радара

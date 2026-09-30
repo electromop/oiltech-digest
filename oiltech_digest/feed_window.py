@@ -15,7 +15,9 @@ ADR 0001, п. 6 — репозиторий lowbrains/oiltech-agents, docs/adr/00
 в правке архива (PATCH /api/articles/{id}) берут условие отсюда. Для всех ролей
 одинаково: исключения для админа нет (решение владельца 23.09). Тем же окном закрыта
 отметка «в дайджест» у карточки технологического радара (PATCH /api/signals/{id},
-решение владельца 29.09); месяц карточки — signal_month_sql.
+решение владельца 29.09); месяц карточки — signal_month_sql. И текст закрытого выпуска
+(решение владельца 30.09): правки коллег, поданные после закрытия месяца (month_close_sql),
+в него не идут (repository.digest_candidates).
 """
 
 from __future__ import annotations
@@ -64,6 +66,18 @@ def signal_month_sql(alias: str = "s") -> str:
     ещё 30.09, а экран показывает 01.10.
     """
     return f"to_char({alias}.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM')"
+
+
+def month_close_sql(month_sql: str) -> str:
+    """Момент закрытия месяца в SQL (timestamptz): FEED_ROLLOVER_DAY-е число следующего месяца,
+    00:00 по Москве. `month_sql` — SQL-выражение месяца строкой «ГГГГ-ММ» (signal_month_sql и др.).
+
+    Та же граница, что у current(): с этого момента окно прошлый месяц не показывает, и выпуск
+    за него только на просмотр. Числом дня — литерал из config (1…28), а не параметр."""
+    return (
+        f"((to_date({month_sql}, 'YYYY-MM') + interval '1 month'"
+        f" + interval '{int(config.FEED_ROLLOVER_DAY) - 1} days') AT TIME ZONE 'Europe/Moscow')"
+    )
 
 
 def visible_sql(article: str = "a", card: str = "c", source: str = "s") -> str:
@@ -150,6 +164,17 @@ class FeedWindow:
     def is_open(self, period_month: str) -> bool:
         """Можно ли править статью с таким месяцем периода (строка «ГГГГ-ММ»): не архив."""
         return period_month >= month_key(self.start)
+
+    def closed_sql(self, month_sql: str) -> str:
+        """SQL-условие «месяц закрыт» — то же, что `not is_open`, для SQL-выражения месяца
+        `month_sql` строкой «ГГГГ-ММ» (period_month_sql, signal_month_sql)."""
+        return f"({month_sql} < '{month_key(self.start)}')"
+
+    def before_close_sql(self, month_sql: str, moment_sql: str) -> str:
+        """SQL-условие: событие в момент `moment_sql` (timestamptz) меняет текст материала месяца
+        `month_sql`. Открытый месяц — любое; закрытый — только случившееся до его закрытия
+        (month_close_sql): выпуск закрытого месяца — только просмотр, и его текст тоже."""
+        return f"(NOT {self.closed_sql(month_sql)} OR {moment_sql} < {month_close_sql(month_sql)})"
 
     def sql(self, alias: str = "a") -> str:
         """SQL-условие окна для WHERE.
