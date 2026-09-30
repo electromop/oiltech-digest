@@ -38,7 +38,7 @@ class _Judge:
         self.fail_on = fail_on
         self.prompts = []
 
-    def complete_json(self, instructions, prompt, schema, max_output_tokens=900):
+    def complete_json(self, instructions, prompt, schema, max_output_tokens=900, **kwargs):
         assert schema["name"] == "signal_duplicate_verdict"
         self.prompts.append(prompt)
         if self.fail_on and self.fail_on in prompt:

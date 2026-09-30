@@ -220,6 +220,9 @@ OPENAI_MODEL_PRICES: dict[str, tuple[float, float]] = {
     "gpt-5.4": (2.5, 15.0),
     "gpt-5-mini": (0.25, 2.0),
     "gpt-5-nano": (0.05, 0.40),
+    # Без своей строки gpt-5 считался по ставке по умолчанию (nano) — занижение в ~25 раз.
+    # Ставка — публикуемая цена gpt-5; сверить с прайс-листом при следующей сверке.
+    "gpt-5": (1.25, 10.0),
 }
 
 # --- Source discovery ---
@@ -280,6 +283,25 @@ SIGNAL_RADAR_EXCLUDED_TOPICS = tuple(
 # Карточка, чьё событие (дата от судьи) старше этого срока, на экран не выходит. Хранится —
 # срок можно поменять без пересчёта. 0 — не скрывать по возрасту.
 SIGNAL_RADAR_MAX_EVENT_AGE_DAYS = int(os.environ.get("SIGNAL_RADAR_MAX_EVENT_AGE_DAYS", "180"))
+# Модели радара — свои, а не OPENAI_MODEL: одна переменная правит все стадии ленты (суть,
+# теги, скоринг), и сильная модель для судьи удорожила бы всю ленту. Пусто — откат на
+# OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть поведение до правки.
+SIGNAL_JUDGE_MODEL = os.environ.get("SIGNAL_JUDGE_MODEL", "").strip() or OPENAI_MODEL
+SIGNAL_JUDGE_REASONING = os.environ.get("SIGNAL_JUDGE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+SIGNAL_REVIEW_MODEL = os.environ.get("SIGNAL_REVIEW_MODEL", "").strip() or SIGNAL_JUDGE_MODEL
+SIGNAL_REVIEW_REASONING = os.environ.get("SIGNAL_REVIEW_REASONING", "").strip() or SIGNAL_JUDGE_REASONING
+SIGNAL_DEDUP_MODEL = os.environ.get("SIGNAL_DEDUP_MODEL", "").strip() or OPENAI_MODEL
+SIGNAL_DEDUP_REASONING = os.environ.get("SIGNAL_DEDUP_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+# Таймаут вызовов модели радара: сильная модель с рассуждением думает дольше 60 с ленты.
+SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))
+# Откуда радар берёт находки: brave — поиск Brave и докачка страниц (как раньше);
+# openai_web — «режим ChatGPT»: на тему один вызов модели со встроенным поиском OpenAI
+# (signal_research.py); both — обе выдачи вместе.
+SIGNAL_SEARCH_MODE = os.environ.get("SIGNAL_SEARCH_MODE", "brave").strip().lower()
+SIGNAL_RESEARCH_MODEL = os.environ.get("SIGNAL_RESEARCH_MODEL", "gpt-5").strip()
+SIGNAL_RESEARCH_REASONING = os.environ.get("SIGNAL_RESEARCH_REASONING", "low").strip()
+SIGNAL_RESEARCH_EVENTS_PER_TOPIC = int(os.environ.get("SIGNAL_RESEARCH_EVENTS_PER_TOPIC", "8"))
+SIGNAL_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_RESEARCH_TIMEOUT_SECONDS", "480"))
 
 # Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
 # (июль 2026): >120 источников (слайды 4–5); бюджет ИИ ≈10 000 ₽/мес при потоке

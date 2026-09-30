@@ -25,7 +25,7 @@ from oiltech_digest import config as app_config
 from oiltech_digest import signal_dedup
 from oiltech_digest.db import repository
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
-from oiltech_digest.processing.openai_client import AIClientError, AIResponse
+from oiltech_digest.processing.openai_client import AIClientError, AIResponse, output_budget
 from oiltech_digest import scoring_profiles
 from oiltech_digest.processing.pipeline import make_client, normalize_score_payload
 from oiltech_digest.signal_feedback import (
@@ -891,7 +891,7 @@ def _dedupe_run(
             })
     result = signal_dedup.dedupe(
         nodes,
-        client_factory=lambda: make_client(False),
+        client_factory=_radar_client,
         heartbeat=beat,
         max_pairs=int(snapshot.get("dedup_max_pairs") or signal_dedup.MAX_JUDGED_PAIRS),
     )
@@ -1468,15 +1468,25 @@ def judge_signal_snapshot(evidence: list[dict[str, Any]], topic: str, *, offline
         signal = _offline_signal_judgement(evidence, topic)
         return signal, signal
     context = _JUDGE_CONTEXT.get() or {}
-    client = make_client(False)
+    client = _radar_client()
     response: AIResponse = client.complete_json(
         SIGNAL_JUDGE_INSTRUCTIONS,
         _judge_prompt(evidence, topic),
         _judge_schema(context.get("themes") or [], context.get("criteria") or []),
-        # Пять обоснований по критериям сверх прежнего ответа.
-        max_output_tokens=2600,
+        # Пять обоснований по критериям сверх прежнего ответа; запас — на рассуждение.
+        max_output_tokens=output_budget(2600, app_config.SIGNAL_JUDGE_REASONING),
+        model=app_config.SIGNAL_JUDGE_MODEL,
+        reasoning_effort=app_config.SIGNAL_JUDGE_REASONING,
     )
     return _normalize_signal_payload(response.data, topic, context=_glossary_context(evidence, topic)), response.data
+
+
+def _radar_client():
+    """Клиент модели для радара: свой таймаут — сильная модель думает дольше ленты."""
+    client = make_client(False)
+    if hasattr(client, "timeout"):
+        client.timeout = app_config.SIGNAL_AI_TIMEOUT_SECONDS
+    return client
 
 
 def _batch_review_candidates(
@@ -1519,7 +1529,7 @@ def _batch_review_candidates(
             "interest_scores": interest_scores,
         }
 
-    client = make_client(False)
+    client = _radar_client()
     payload = {
         "topic": topic,
         "candidates": [_batch_review_candidate_payload(item) for item in reviewable],
@@ -1529,7 +1539,9 @@ def _batch_review_candidates(
             BATCH_REVIEW_INSTRUCTIONS,
             json.dumps(payload, ensure_ascii=False),
             BATCH_REVIEW_SCHEMA,
-            max_output_tokens=900,
+            max_output_tokens=output_budget(900 + 250 * len(reviewable), app_config.SIGNAL_REVIEW_REASONING),
+            model=app_config.SIGNAL_REVIEW_MODEL,
+            reasoning_effort=app_config.SIGNAL_REVIEW_REASONING,
         )
     except Exception as exc:  # noqa: BLE001 - батч-ревью не должно ронять прогон темы
         return {"status": "error", "error": str(exc)[:500], "reviewed": len(reviewable), "dropped": 0,

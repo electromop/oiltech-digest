@@ -332,3 +332,41 @@ def test_archive_selects_early_free_theme_cards_and_is_reversible(isolated_db):
 def test_archive_needs_a_selection_rule(isolated_db):
     with pytest.raises(ValueError):
         repository.archive_signal_candidates(free_theme_only=False)
+
+
+# --- Модели радара отдельно от ленты --------------------------------------------------------
+
+
+def test_judge_uses_radar_model_reasoning_and_budget(monkeypatch):
+    from oiltech_digest.processing import openai_client
+
+    seen = {}
+
+    class Client(openai_client.OpenAIResponsesClient):
+        def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None,
+                          reasoning_effort=None):
+            seen.update(model=model, effort=reasoning_effort, budget=max_output_tokens, timeout=self.timeout)
+            return AIResponse(data=_judge_answer(), model=model)
+
+    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Client(api_key="test"))
+    monkeypatch.setattr(config, "SIGNAL_JUDGE_MODEL", "gpt-5")
+    monkeypatch.setattr(config, "SIGNAL_JUDGE_REASONING", "medium")
+    monkeypatch.setattr(config, "SIGNAL_AI_TIMEOUT_SECONDS", 240.0)
+
+    signal_discovery.judge_signal_snapshot([{"source_url": "https://a.example/1", "title": "t"}], DRILLING, offline=False)
+
+    # Лимиты подбирались под minimal: на medium без запаса ответ приходил без текста.
+    assert seen == {"model": "gpt-5", "effort": "medium", "budget": 8600, "timeout": 240.0}
+
+
+@pytest.mark.parametrize("effort, expected", [("minimal", 900), ("low", 2900), ("medium", 6900), ("", 900)])
+def test_output_budget_grows_with_reasoning(effort, expected):
+    from oiltech_digest.processing.openai_client import output_budget
+
+    assert output_budget(900, effort) == expected
+
+
+def test_gpt5_has_its_own_price():
+    # Без строки gpt-5 считался бы по ставке nano — в ~25 раз дешевле.
+    assert config.price_for_model("gpt-5-2025-08-07") == (1.25, 10.0)
+    assert config.price_for_model("gpt-5-mini-2025-08-07") == (0.25, 2.0)

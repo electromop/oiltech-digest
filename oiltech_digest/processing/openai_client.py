@@ -46,6 +46,8 @@ class OpenAIResponsesClient:
     def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
         self.api_key = api_key if api_key is not None else config.OPENAI_API_KEY
         self.model = model or config.OPENAI_MODEL
+        # Радар ставит свой: сильная модель с рассуждением думает дольше OPENAI_TIMEOUT ленты.
+        self.timeout = config.OPENAI_TIMEOUT
 
     def complete_json(self, instructions: str, user_input: str,
                       schema: dict[str, Any], max_output_tokens: int = 900,
@@ -81,7 +83,7 @@ class OpenAIResponsesClient:
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=config.OPENAI_TIMEOUT,
+            timeout=self.timeout,
         )
         if response.status_code >= 400:
             raise AIClientError(f"OpenAI API error {response.status_code}: {response.text[:500]}")
@@ -100,6 +102,73 @@ class OpenAIResponsesClient:
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
         )
+
+
+    def research_json(self, instructions: str, user_input: str, schema: dict[str, Any], *,
+                      model: str, reasoning_effort: str | None, max_output_tokens: int,
+                      timeout: float, search_context_size: str = "medium") -> AIResponse:
+        """Вызов с встроенным поиском OpenAI (инструмент web_search) и строгим JSON на выходе.
+
+        Отдельный метод, а не параметр complete_json: его подменяют десятки тестов, а лента
+        поиском не пользуется. Кроме данных, возвращает адреса, на которые модель сослалась
+        (аннотации url_citation), и число поисковых вызовов — по ним видно, что ответ
+        опирается на найденное, а не на память модели."""
+        if not self.api_key:
+            raise AIClientError("OPENAI_API_KEY is empty")
+        payload: dict[str, Any] = {
+            "model": model,
+            "instructions": instructions,
+            "input": user_input,
+            "store": False,
+            "max_output_tokens": max_output_tokens,
+            "tools": [{"type": "web_search", "search_context_size": search_context_size}],
+            "text": {"format": {"type": "json_schema", "name": schema["name"], "strict": True,
+                                "schema": schema["schema"]}},
+        }
+        effort = _reasoning_effort(model, reasoning_effort)
+        if effort:
+            payload["reasoning"] = {"effort": effort}
+        response = requests.post(
+            f"{config.OPENAI_BASE_URL.rstrip('/')}/responses",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=timeout,
+        )
+        if response.status_code >= 400:
+            raise AIClientError(f"OpenAI API error {response.status_code}: {response.text[:500]}")
+        raw = response.json()
+        text = _extract_output_text(raw)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise AIClientError(f"OpenAI returned non-JSON output: {text[:500]}") from exc
+        cited: list[str] = []
+        searches = 0
+        for item in raw.get("output") or []:
+            if item.get("type") == "web_search_call":
+                searches += 1
+            for content in item.get("content") or []:
+                for note in content.get("annotations") or []:
+                    if note.get("type") == "url_citation" and note.get("url"):
+                        cited.append(str(note["url"]))
+        usage = raw.get("usage") or {}
+        return AIResponse(
+            data={**data, "_cited_urls": cited, "_web_search_calls": searches},
+            model=raw.get("model") or model,
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+        )
+
+
+# Сколько токенов ответа добавить на рассуждение: лимиты вызовов подбирались под minimal, и на
+# medium модель тратила весь лимит на рассуждение — «ответ без текста» (прогон 28.09).
+_REASONING_OUTPUT_EXTRA = {"none": 0, "minimal": 0, "low": 2000, "medium": 6000, "high": 14000, "xhigh": 20000}
+
+
+def output_budget(base: int, reasoning_effort: str | None) -> int:
+    """Лимит ответа с запасом на рассуждение; неизвестный уровень — как medium."""
+    effort = (reasoning_effort or "").strip().lower()
+    return int(base) + _REASONING_OUTPUT_EXTRA.get(effort, _REASONING_OUTPUT_EXTRA["medium"] if effort else 0)
 
 
 class OfflineAIClient:
