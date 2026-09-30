@@ -833,7 +833,8 @@ def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
         f"{selection['weights_only']}, им хватит rescore-recompute), набор или тексты другие {selection['changed']}, "
         f"без снимка (до профилей) {selection['no_snapshot']}"
     )
-    print(f"  к пересчёту с ИИ: N={len(ids)} (из них выбраны в дайджест: {selection['in_digest']}); "
+    in_digest = sum(1 for article_id in ids if article_id in selection.get("digest_ids", ()))
+    print(f"  к пересчёту с ИИ: N={len(ids)} (из них выбраны в дайджест: {in_digest}); "
           f"уже в задачах пересчёта, повторно не ставятся: {selection['queued']}")
     if estimate["model"] is None:
         print(f"  стоимость не оценить: вызовов scoring за {estimate['days']} дней нет")

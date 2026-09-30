@@ -250,7 +250,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                           <input value={parent.name} onChange={(event) => updateTag(parentIndex, "name", event.target.value)} />
                         </label>
                         <label className="field">
-                          <span>Описание для AI</span>
+                          <span>Описание для ИИ</span>
                           <input
                             value={parent.description || ""}
                             onChange={(event) => updateTag(parentIndex, "description", event.target.value)}
@@ -297,7 +297,7 @@ export function TagsPage({ onUnauthorized, showToast }: Props) {
                                     <input value={child.name} onChange={(event) => updateTag(childIndex, "name", event.target.value)} />
                                   </label>
                                   <label className="field">
-                                    <span>Описание для AI</span>
+                                    <span>Описание для ИИ</span>
                                     <input
                                       value={child.description || ""}
                                       onChange={(event) => updateTag(childIndex, "description", event.target.value)}

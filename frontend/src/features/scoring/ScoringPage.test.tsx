@@ -95,7 +95,7 @@ describe("экран «Скоринг»: вкладки наборов крит�
     renderPage();
     await screen.findByDisplayValue("Стратегическая значимость для нефтесервиса");
     const [ru] = screen.getAllByLabelText("Ключевые слова RU / любые");
-    const [en] = screen.getAllByLabelText("EN-нормализация");
+    const [en] = screen.getAllByLabelText("Ключевые слова EN");
 
     // Набор столбиком: перевод строки в конце не съедается, пока поле в фокусе.
     await user.type(ru, "ГРП{Enter}гидроразрыв,{Enter}грп");

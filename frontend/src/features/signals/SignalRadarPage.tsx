@@ -66,8 +66,8 @@ const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> 
   { value: "", label: "Не оценено" },
   { value: "strong_signal", label: "Сильный сигнал — вынести в дайджест / обсуждать" },
   { value: "approved", label: "Полезный сигнал — релевантно, сохранить в базе" },
-  { value: "watch_later", label: "Наблюдать — рано, нужен следующий milestone" },
-  { value: "background_material", label: "Фоновый материал — benchmark или контекст" },
+  { value: "watch_later", label: "Наблюдать — рано, нужен следующий этап" },
+  { value: "background_material", label: "Фоновый материал — ориентир или контекст" },
   { value: "reject", label: "Низкая ценность / шум — по теме, но без новой ценности" },
   { value: "wrong_domain", label: "Не релевантно — вне интересов Компании" },
   // Встреча с заказчиком 21.09, решение 5: находка годная, но это бизнес-сигнал.

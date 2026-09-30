@@ -767,7 +767,7 @@ export function ArticlesPage(props: Props) {
                             <div className="articleDetailGrid">
                               <div className="articleSummaryBox">
                                 <strong>Суть</strong>
-                                <p>{article.summary || "AI-суть ещё не сформирована."}</p>
+                                <p>{article.summary || "Суть ещё не сформирована."}</p>
                                 <div className="metaText">
                                   {article.relevant === false
                                     ? `Отклонено фильтром релевантности: ${article.relevance_reason || ""}`
