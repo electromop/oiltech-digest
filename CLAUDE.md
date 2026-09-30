@@ -45,6 +45,19 @@
 - Проверка — только через очередь: `enqueue-signal-discovery --topic … --no-offline --dry-run`.
   Без `--no-offline` задача встаёт в `default` на РФ, а `discover-signals` на РФ получает 403 от OpenAI.
 
+## Качество отбора радара (замечания Виктора 29.09)
+
+Судья в том же вызове: `signal_category` (technology / business / other), `event_date` (дата
+самого события), `mixed_events` (ссылки о разных событиях), `theme` — одна из 13 тематик из
+списка (код проверяет; иначе — ключи тематик), `criteria_scores` по профилю tech_radar — итог
+`score` считает `normalize_score_payload`, как у статей (ADR 0002, Б3). Общий балл судьи —
+`raw_output.judge_score`. Темы и критерии — в снимке (`radar_themes`, `radar_criteria`).
+
+Экран не показывает (карточка хранится; `_RADAR_VISIBLE_SQL`): архив, бизнес и «другое»,
+смешанные, событие старше `SIGNAL_RADAR_MAX_EVENT_AGE_DAYS` (180). NULL — карточка до правки,
+видна. Тему рынка радар не ищет (`SIGNAL_RADAR_EXCLUDED_TOPICS`). Архив — `archive-signals`
+(сухой прогон по умолчанию) / `unarchive-signals`. Выкат — `scripts/radar/radar-quality-runbook.md`.
+
 ## Дедуп радара
 
 Одно событие — одна карточка (`signal_dedup.py`): правило пар (основы заголовка от 0,25, общая
