@@ -990,8 +990,13 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
 
     По умолчанию сухой прогон. С --apply тела заменяются, а по заменённым ставится
     перерасчёт ИИ (суть, релевантность, тег, баллы посчитаны по старому тексту) —
-    пакетами через тот же маршрут, что и обычная обработка."""
-    from oiltech_digest import network_policy
+    пакетами через тот же маршрут, что и обычная обработка.
+
+    Перерасчёт — только статьям открытых месяцев окна ленты, как у пересчёта балла
+    (rescore_selection): у статьи закрытого месяца новая суть, тег или вердикт гейта
+    переписали бы закрытый выпуск, а он только на просмотр (решение владельца 30.09). Тело
+    такой статьи меняется (выпуск его не показывает); пропущенные — в отчёте."""
+    from oiltech_digest import feed_window, network_policy
     from oiltech_digest.db import repository
     from oiltech_digest.ingestion import body_repair
 
@@ -1006,9 +1011,11 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
         articles = articles[: args.limit]
     result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause)
     jobs = []
+    archive: list[int] = []
     if args.apply and args.reprocess and result["replaced_ids"]:
         decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
-        replaced = result["replaced_ids"]
+        archive = repository.closed_month_article_ids(result["replaced_ids"], feed_window.current())
+        replaced = [article_id for article_id in result["replaced_ids"] if article_id not in archive]
         for start in range(0, len(replaced), args.batch):
             chunk = replaced[start:start + args.batch]
             job = repository.create_background_job(
@@ -1020,6 +1027,7 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
             )
             jobs.append(int(job["id"]))
     result["reprocess_jobs"] = jobs
+    result["reprocess_skipped_archive"] = archive
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return
@@ -1029,6 +1037,9 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     )
     for key, count in result["stats"].items():
         print(f"  {key}: {count}")
+    if archive:
+        print(f"  без перерасчёта ИИ — закрытый месяц, архив только на просмотр: {len(archive)} "
+              f"(id: {', '.join(str(article_id) for article_id in archive)})")
 
 
 def cmd_repair_url_keys(args: argparse.Namespace) -> None:

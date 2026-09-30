@@ -3,7 +3,8 @@
 Окно ленты (feed_window): текущий месяц, а 1–4 числа по Москве ещё и прошлый; с 5-го 00:00 МСК
 прошлый месяц закрыт. Отметки «в дайджест» в закрытом месяце уже запрещены (статьи — 23.09,
 карточки радара — #85). Здесь — текст закрытого выпуска: его не меняют ни отзывы коллег, поданные
-после закрытия, ни повторная находка карточки радаром.
+после закрытия, ни повторная находка карточки радаром (текст, ссылка, дата), ни пересчёт ИИ после
+починки тел статей.
 
 Выпуск строится при каждом открытии заново из живых таблиц, снимка нет: заморозка — правило
 чтения и записи, а не копия. Часы окна замораживаются подменой feed_window._now; время события
@@ -12,13 +13,15 @@
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime
+import json
 
 from psycopg.rows import dict_row
 
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection, repository
-from tests.digest_user_path_support import SEPT, THEME, Person, add_signal, msk, utc
+from tests.digest_user_path_support import SEPT, THEME, Person, add_article, add_signal, msk, utc
 from tests.digest_user_path_support import issue  # noqa: F401 — фикстура выпуска
 
 
@@ -221,3 +224,42 @@ def test_open_month_issue_takes_the_best_link_found_so_far(issue, monkeypatch):
 
     [item] = analyst.issue_items(SEPT)
     assert _link(item) == ("https://worldoil.example/sep", "worldoil.example", "2026-10-03")
+
+
+# ---------------------------------------------------------------------------
+#  4. Пересчёт ИИ после починки тел статей
+# ---------------------------------------------------------------------------
+
+def test_body_repair_does_not_recount_ai_for_articles_of_a_closed_month(issue, monkeypatch, capsys):
+    """repair-article-bodies --apply меняет тела статей и по умолчанию ставит пересчёт ИИ заменённых:
+    суть, релевантность, тег и балл заново. У статьи закрытого месяца это переписало бы закрытый
+    выпуск. Тело меняется (выпуск его не показывает), а пересчёт — только в окне ленты, как у
+    пересчёта балла (rescore_selection): архив — только просмотр. Кого пропустили — в отчёте."""
+    from oiltech_digest import cli, network_policy
+    from oiltech_digest.ingestion import body_repair
+
+    september = issue["a"]["hi"]
+    with connection.get_connection() as conn:
+        october = add_article(conn, issue["source"], "oct", published=utc(2026, 10, 6, 9))
+        conn.commit()
+    replaced = [september, october]
+    monkeypatch.setattr(body_repair, "candidate_articles", lambda **kwargs: [{"id": i} for i in replaced])
+    monkeypatch.setattr(body_repair, "repair_bodies", lambda articles, **kwargs: {
+        "apply": True, "checked": 2, "replaced": 2, "replaced_ids": replaced, "stats": {}, "sample": [],
+    })
+    monkeypatch.setattr(network_policy, "route_ai_bulk",
+                        lambda: network_policy.ExecutionDecision("external-ai-bulk", "external", "openai", "test"))
+    _freeze(monkeypatch, msk(2026, 10, 10, 12, 0))
+
+    cli.cmd_repair_article_bodies(argparse.Namespace(
+        ids=f"{september},{october}", source_id=None, statuses="", days=60, limit=0, pause=0,
+        apply=True, reprocess=True, batch=25, json=True,
+    ))
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["reprocess_skipped_archive"] == [september]
+    with connection.get_connection() as conn:
+        queued = [row[0]["article_ids"] for row in conn.execute(
+            "SELECT payload_json FROM background_jobs WHERE kind = 'process_articles' ORDER BY id"
+        ).fetchall()]
+    assert queued == [[october]]

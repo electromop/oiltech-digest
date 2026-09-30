@@ -4301,6 +4301,19 @@ def article_period_months(article_ids: list[int]) -> set[str]:
     return {row[0] for row in rows}
 
 
+def closed_month_article_ids(article_ids: list[int], window: FeedWindow) -> list[int]:
+    """Статьи из списка, чей месяц периода окно ленты уже закрыло (архив — только просмотр)."""
+    if not article_ids:
+        return []
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT a.id FROM articles a WHERE a.id = ANY(%s)"
+            f" AND {window.closed_sql(period_month_sql('a'))} ORDER BY a.id",
+            (list(article_ids),),
+        ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
 def feed_archive_months(window: FeedWindow, user_id: int | None = None) -> list[dict]:
     """Прошлые месяцы для переключателя «Архив»: сколько в месяце статей и сколько из них
     этот пользователь выбрал «в дайджест» (по второму числу конструктор выпуска строит
