@@ -126,9 +126,9 @@ def _text(row: dict) -> tuple:
 
 
 def test_refind_after_the_close_adds_the_link_but_keeps_the_card_text(issue, monkeypatch):
-    """Ежедневный радар 10.10 снова нашёл сентябрьскую карточку с другим текстом и темой. Сентябрь
-    закрыт: заголовок, суть, тезис и тема — прежние, их показывают и выпуск, и радар. Ссылка,
-    число ссылок, балл и время последней находки обновляются, как раньше."""
+    """Ежедневный радар 10.10 снова нашёл сентябрьскую карточку, выбранную в сентябрьский выпуск, с
+    другим текстом и темой. Сентябрь закрыт: заголовок, суть, тезис и тема — прежние, их показывают
+    и выпуск, и радар. Ссылка, число ссылок, балл и время последней находки обновляются, как раньше."""
     analyst, card = issue["analyst"], issue["s"]["sep"]
     analyst.mark_signal(card)
     _freeze(monkeypatch, msk(2026, 10, 10, 0, 20))
@@ -145,6 +145,21 @@ def test_refind_after_the_close_adds_the_link_but_keeps_the_card_text(issue, mon
     }
     [item] = analyst.issue_items(SEPT)
     assert (item["title"], item["summary"], item["category"]) == ("Сигнал sep", "Суть сигнала sep.", THEME)
+
+
+def test_refind_after_the_close_rewrites_a_card_nobody_chose_as_before(issue, monkeypatch):
+    """Заморозка — только у текста, который есть в закрытом выпуске: карточку закрытого месяца, которую
+    никто не выбирал «в дайджест», повторная находка обновляет, как раньше (ревью #88: меньше следа в
+    радаре)."""
+    card = issue["s"]["sep"]
+    issue["colleague"].mark_signal(card, selected=False)  # смотрел и убрал: не в выпуске
+    _freeze(monkeypatch, msk(2026, 10, 10, 0, 20))
+
+    assert _refind("sep", "Новый текст модели", link="https://radar.example.org/sep-2") == card
+    assert _text(_stored(card)) == (
+        "Новый текст модели (en)", "Новый текст модели", "Суть: Новый текст модели.",
+        "Тезис: Новый текст модели.", "Цифровизация",
+    )
 
 
 def test_refind_in_an_open_month_rewrites_the_card_text_as_before(issue, monkeypatch):
