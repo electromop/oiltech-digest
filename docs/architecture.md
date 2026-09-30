@@ -267,7 +267,7 @@ fetch-full-text           → дозагрузка + страж принадле
 process | enqueue-process → AI локально ИЛИ задача во внешнюю очередь
 enqueue-external-scrape   → если FETCH_EXTERNAL_ENABLED=1 (на проде включено с 17.09)
 enqueue-external-refetch  → то же условие: тело обрывков у зарубежных источников
-find-reprints --apply     → раз в REPRINTS_EVERY_CYCLES (24) циклов, не на нулевом
+find-reprints --apply     → раз в REPRINTS_INTERVAL_HOURS (12) ч по времени прошлого прогона, 0 — выкл.
 stats
 ```
 
@@ -318,7 +318,7 @@ stats
 | `OPENAI_RELEVANCE_MODEL` / `_SCORE_MODEL` / `_TRANSLATE_MODEL` | пер-стадийные модели |
 | `CYCLE_INTERVAL_SECONDS` | период цикла scheduler (прод — 1800) |
 | `REQUEST_ARTICLE_LIMIT` | сколько кандидатов брать с листинга (6) — см. §11.3 |
-| `REPRINTS_EVERY_CYCLES` / `_DAYS` / `_LIMIT` | шаг перепечаток: период в циклах, окно, потолок пар |
+| `REPRINTS_INTERVAL_HOURS` / `_DAYS` / `_LIMIT` | шаг перепечаток: период в часах (0 — выключен), окно, потолок пар |
 | `AUTH_COOKIE_SECURE` | `0` только для локальной разработки по http |
 
 Секреты в git не попадают. Отдельного хранилища секретов нет.
