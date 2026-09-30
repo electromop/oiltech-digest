@@ -230,7 +230,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
         setDraftDirty(false);
         return;
       }
-      handleError(error, "Не удалось загрузить сохранённый draft");
+      handleError(error, "Не удалось загрузить сохранённый черновик");
     }
   }
 
@@ -467,7 +467,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
       await loadDigestPreview();
       showToast(`Draft сохранён: ${saved.month}`);
     } catch (error) {
-      handleError(error, "Не удалось сохранить draft дайджеста");
+      handleError(error, "Не удалось сохранить черновик дайджеста");
     } finally {
       setDraftBusy(false);
     }
@@ -519,7 +519,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   const filterSummary = [
     tag ? `тег: ${tag}` : "",
     search.trim() ? `поиск: ${search.trim()}` : "",
-    scoreMin > 0 || scoreMax < 100 ? `score ${scoreMin}-${scoreMax}` : "",
+    scoreMin > 0 || scoreMax < 100 ? `балл ${scoreMin}–${scoreMax}` : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -644,7 +644,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
                 <div>
                   <strong>Очередь выпуска</strong>
                   <div className="metaText">
-                    {savedDraft?.month === activeMonth ? "Порядок можно менять вручную и сохранять в draft" : "Стартовый порядок синхронизирован с preview от backend"}
+                    {savedDraft?.month === activeMonth ? "Порядок можно менять вручную и сохранять в черновик" : "Стартовый порядок совпадает с предпросмотром сервера"}
                   </div>
                 </div>
                 <div className="digestQueueHeaderMeta">
@@ -742,7 +742,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
               <div className="digestActionGroup">
                 <span className="digestGroupLabel">Сохранение</span>
                 <button type="button" className="ghostButton" disabled={draftBusy} onClick={() => void handleSaveDraft()}>
-                  {draftBusy ? "Сохраняем draft…" : "Сохранить draft"}
+                  {draftBusy ? "Сохраняем черновик…" : "Сохранить черновик"}
                 </button>
                 <button type="button" className="ghostButton" disabled={!hasManualChanges} onClick={resetDraftQueue}>
                   Сбросить изменения
@@ -767,11 +767,11 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
             <div className="metaText">Месяц выпуска</div>
             <div><strong>{exportPreviewItems.length}</strong></div>
             <div className="metaText">Карточек в итоговом предпросмотре</div>
-            <div><strong>{hasManualChanges ? "локальные правки" : "backend preview"}</strong></div>
+            <div><strong>{hasManualChanges ? "локальные правки" : "предпросмотр сервера"}</strong></div>
             <div className="metaText">
               {hasManualChanges
-                ? "Порядок/состав уже изменён на экране, но preview обновится после сохранения draft"
-                : "Preview уже соответствует сохранённому draft или текущей backend-выборке"}
+                ? "Порядок или состав уже изменён на экране, предпросмотр обновится после сохранения черновика"
+                : "Предпросмотр совпадает с сохранённым черновиком или текущей выборкой"}
             </div>
           </div>
         </section>

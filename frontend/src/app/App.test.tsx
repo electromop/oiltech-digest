@@ -934,12 +934,12 @@ describe("App smoke", () => {
     const monthSelect = await screen.findByDisplayValue("2026-09");
     // Прошлый выпуск есть в списке месяцев, с пометкой архива.
     expect(within(monthSelect).getByRole("option", { name: "2026-08 · архив" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Сохранить draft" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeInTheDocument();
 
     await user.selectOptions(monthSelect, "2026-08");
 
     expect(await screen.findByText(/Выпуск за август 2026 в архиве/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Сохранить draft" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Сохранить черновик" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Из дайджеста" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
     const requested = fetchMock.mock.calls.map(([input]) => String(input));
