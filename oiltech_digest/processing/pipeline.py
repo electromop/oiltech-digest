@@ -141,7 +141,8 @@ def process_recheck(limit: int = 100, offline: bool = False, force: bool = False
 
 def recheck_relevance_articles(articles: list[dict], client, *, force: bool = False) -> dict:
     """Прогнать гейт релевантности по сырому тексту; релевантные — персист,
-    нерелевантные — УДАЛИТЬ физически (delete_article защищает сохранённые дайджесты)."""
+    нерелевантные — УДАЛИТЬ физически (delete_article защищает статьи из выпусков: сохранённый
+    черновик или отметка «в дайджест»)."""
     tags = repository.list_enabled_tags()
     stats = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
     for article in articles:

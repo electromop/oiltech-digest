@@ -651,7 +651,8 @@ def cmd_enqueue_recheck(args: argparse.Namespace) -> None:
     """Поставить в очередь перепрогон релевантности по всей базе батчами.
 
     Нерелевантные статьи будут УДАЛЕНЫ физически при применении результата на core
-    (статьи из сохранённых дайджестов пропускаются, если не задан --force). На проде
+    (статьи из выпусков — сохранённый черновик или отметка «в дайджест» — пропускаются, если не
+    задан --force). На проде
     задачи разбирает внешний NL-воркер (OpenAI). limit — опциональный потолок числа статей."""
     from oiltech_digest import network_policy
     from oiltech_digest.db import repository
@@ -712,7 +713,7 @@ def cmd_recheck_marked(args: argparse.Namespace) -> None:
 
 def cmd_recheck_purge(args: argparse.Namespace) -> None:
     """РАЗОВО физически удалить все помеченные (pending_deletion) статьи. Необратимо.
-    Статьи из сохранённых дайджестов пропускаются (без --force)."""
+    Статьи из выпусков (сохранённый черновик или отметка «в дайджест») пропускаются (без --force)."""
     from oiltech_digest.db import repository
 
     total = repository.count_pending_deletion()
@@ -996,8 +997,13 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
 
     По умолчанию сухой прогон. С --apply тела заменяются, а по заменённым ставится
     перерасчёт ИИ (суть, релевантность, тег, баллы посчитаны по старому тексту) —
-    пакетами через тот же маршрут, что и обычная обработка."""
-    from oiltech_digest import network_policy
+    пакетами через тот же маршрут, что и обычная обработка.
+
+    Перерасчёт — только статьям открытых месяцев окна ленты, как у пересчёта балла
+    (rescore_selection): у статьи закрытого месяца новая суть, тег или вердикт гейта
+    переписали бы закрытый выпуск, а он только на просмотр (решение владельца 30.09). Тело
+    такой статьи меняется (выпуск его не показывает); пропущенные — в отчёте."""
+    from oiltech_digest import feed_window, network_policy
     from oiltech_digest.db import repository
     from oiltech_digest.ingestion import body_repair
 
@@ -1012,9 +1018,11 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
         articles = articles[: args.limit]
     result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause)
     jobs = []
+    archive: list[int] = []
     if args.apply and args.reprocess and result["replaced_ids"]:
         decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
-        replaced = result["replaced_ids"]
+        archive = repository.closed_month_article_ids(result["replaced_ids"], feed_window.current())
+        replaced = [article_id for article_id in result["replaced_ids"] if article_id not in archive]
         for start in range(0, len(replaced), args.batch):
             chunk = replaced[start:start + args.batch]
             job = repository.create_background_job(
@@ -1026,6 +1034,7 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
             )
             jobs.append(int(job["id"]))
     result["reprocess_jobs"] = jobs
+    result["reprocess_skipped_archive"] = archive
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return
@@ -1035,6 +1044,9 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     )
     for key, count in result["stats"].items():
         print(f"  {key}: {count}")
+    if archive:
+        print(f"  без перерасчёта ИИ — закрытый месяц, архив только на просмотр: {len(archive)} "
+              f"(id: {', '.join(str(article_id) for article_id in archive)})")
 
 
 def cmd_repair_url_keys(args: argparse.Namespace) -> None:
@@ -2724,7 +2736,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_recheck = sub.add_parser("enqueue-recheck", help="перепрогон релевантности по всей базе батчами через воркер (нерелевантные удаляются)")
     p_enqueue_recheck.add_argument("--batch-size", type=int, default=100, help="статей в одной задаче")
     p_enqueue_recheck.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = вся база)")
-    p_enqueue_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из сохранённых дайджестов")
+    p_enqueue_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из выпусков (черновик или отметка «в дайджест»)")
     p_enqueue_recheck.add_argument("--dry-run", action="store_true", help="НЕ удалять — только посчитать и собрать превью отклонённого (recheck-dry-show)")
     p_enqueue_recheck.add_argument("--mark", action="store_true", help="нерелевантные ПОМЕЧАТЬ на удаление (pending_deletion), не удалять; потом recheck-purge")
     p_enqueue_recheck.set_defaults(func=cmd_enqueue_recheck)
@@ -2740,7 +2752,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_purge = sub.add_parser("recheck-purge", help="РАЗОВО физически удалить все помеченные (pending_deletion) статьи")
     p_purge.add_argument("--yes", action="store_true", help="подтвердить необратимое удаление")
-    p_purge.add_argument("--force", action="store_true", help="удалять даже статьи из сохранённых дайджестов")
+    p_purge.add_argument("--force", action="store_true", help="удалять даже статьи из выпусков (черновик или отметка «в дайджест»)")
     p_purge.set_defaults(func=cmd_recheck_purge)
 
     p_unmark = sub.add_parser("recheck-unmark", help="снять пометку «на удаление» со всех статей (вернуть в ленту)")
@@ -2879,7 +2891,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_recheck = sub.add_parser("recheck-relevance", help="локальный перепрогон релевантности (тесты/дамп; на проде — enqueue-recheck)")
     add_ai_args(p_recheck)
-    p_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из сохранённых дайджестов")
+    p_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из выпусков (черновик или отметка «в дайджест»)")
     p_recheck.add_argument("--max-articles", type=int, default=None, help="ограничить число проверенных статей")
     p_recheck.set_defaults(func=cmd_recheck_relevance)
 

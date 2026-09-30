@@ -946,9 +946,23 @@ def list_signal_article_evidence(
 
 
 def upsert_signal(signal: dict) -> int:
+    """Карточка радара по ключу: новая — вставка, найденная снова — обновление.
+
+    Текст карточки закрытого месяца, которую кто-то выбрал «в дайджест» (заголовки, суть, тезис,
+    тема), повторная находка не переписывает: это текст закрытого выпуска, а он только на просмотр
+    (решение владельца 30.09). Месяц карточки — месяц поступления на радар
+    (feed_window.signal_month_sql), окно — то же, что у отказа отметке «в дайджест». Карточку,
+    которой нет ни в одном выпуске, радар обновляет, как раньше (ревью #88: меньше следа в радаре).
+    Остальное — балл, зрелость, число ссылок, время находки — обновляется всегда; ссылки пишет
+    upsert_signal_evidence."""
+    closed = (
+        f"({feed_window.current().closed_sql(signal_month_sql('signals'))}"
+        " AND EXISTS (SELECT 1 FROM user_signal_states uss_f"
+        " WHERE uss_f.signal_id = signals.id AND uss_f.status = 'digest'))"
+    )
     with get_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             INSERT INTO signals (
               signal_key, title, title_ru, theme, summary, thesis, transferability, maturity, confidence, score,
               why_now, why_not_noise, companies_json, industries_json, evidence_count,
@@ -956,11 +970,11 @@ def upsert_signal(signal: dict) -> int:
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
-              title = EXCLUDED.title,
-              title_ru = EXCLUDED.title_ru,
-              theme = EXCLUDED.theme,
-              summary = EXCLUDED.summary,
-              thesis = EXCLUDED.thesis,
+              title = CASE WHEN {closed} THEN signals.title ELSE EXCLUDED.title END,
+              title_ru = CASE WHEN {closed} THEN signals.title_ru ELSE EXCLUDED.title_ru END,
+              theme = CASE WHEN {closed} THEN signals.theme ELSE EXCLUDED.theme END,
+              summary = CASE WHEN {closed} THEN signals.summary ELSE EXCLUDED.summary END,
+              thesis = CASE WHEN {closed} THEN signals.thesis ELSE EXCLUDED.thesis END,
               transferability = EXCLUDED.transferability,
               maturity = EXCLUDED.maturity,
               confidence = EXCLUDED.confidence,
@@ -1466,13 +1480,26 @@ _SIGNAL_CORRECTIONS_LATERAL = """
 LEFT JOIN LATERAL (
   SELECT
     (SELECT e.corrected_title FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_title, '')) <> ''
+     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_title, '')) <> ''{until}
      ORDER BY e.id DESC LIMIT 1) AS corrected_title,
     (SELECT e.corrected_thesis FROM signal_feedback_events e
-     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_thesis, '')) <> ''
+     WHERE e.signal_id = {alias}.id AND btrim(COALESCE(e.corrected_thesis, '')) <> ''{until}
      ORDER BY e.id DESC LIMIT 1) AS corrected_thesis
 ) corr ON TRUE
 """
+
+
+def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = None) -> str:
+    """LEFT JOIN LATERAL corr: последние правки заголовка и сути у карточки `alias`.
+
+    Экран радара — все правки. Выпуск (`issue_window` — окно ленты на сейчас) у карточки
+    закрытого месяца берёт только правки, поданные до закрытия (решение владельца 30.09:
+    «архив только на просмотр» — и текст закрытого выпуска). Отзыв после закрытия принимается
+    как раньше и виден на радаре — он нужен агенту для обучения, — но выпуск не меняет."""
+    until = ""
+    if issue_window is not None:
+        until = " AND " + issue_window.before_close_sql(signal_month_sql(alias), "e.created_at")
+    return _SIGNAL_CORRECTIONS_LATERAL.format(alias=alias, until=until)
 
 
 def apply_signal_corrections(row: dict) -> dict:
@@ -1611,7 +1638,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    corr.corrected_thesis
             FROM signals s
             LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
-            {_SIGNAL_CORRECTIONS_LATERAL.format(alias="s")}
+            {_signal_corrections_lateral("s")}
             {where}
             ORDER BY {order_by}
             LIMIT %s OFFSET %s
@@ -1658,7 +1685,7 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
                 f"""
                 SELECT COUNT(*) AS matching
                 FROM signals s
-                {_SIGNAL_CORRECTIONS_LATERAL.format(alias="s")}
+                {_signal_corrections_lateral("s")}
                 WHERE {' AND '.join(clauses)}
                 """,
                 filter_params,
@@ -4280,6 +4307,23 @@ def article_period_months(article_ids: list[int]) -> set[str]:
     return {row[0] for row in rows}
 
 
+def closed_month_article_ids(article_ids: list[int], window: FeedWindow) -> list[int]:
+    """Статьи из списка, чей месяц периода окно ленты уже закрыло (архив — только просмотр)."""
+    if not article_ids:
+        return []
+    with get_connection() as conn:
+        return _closed_month_article_ids(conn, article_ids, window)
+
+
+def _closed_month_article_ids(conn, article_ids: list[int], window: FeedWindow) -> list[int]:
+    rows = conn.execute(
+        f"SELECT a.id FROM articles a WHERE a.id = ANY(%s)"
+        f" AND {window.closed_sql(period_month_sql('a'))} ORDER BY a.id",
+        ([int(article_id) for article_id in article_ids],),
+    ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
 def feed_archive_months(window: FeedWindow, user_id: int | None = None) -> list[dict]:
     """Прошлые месяцы для переключателя «Архив»: сколько в месяце статей и сколько из них
     этот пользователь выбрал «в дайджест» (по второму числу конструктор выпуска строит
@@ -4712,32 +4756,65 @@ def article_visible_in_feed(conn, article_id: int) -> bool:
     return row is not None
 
 
+def _chosen_for_digest(conn, article_id: int) -> bool:
+    """Держит ли статью «в дайджест» хоть один пользователь."""
+    return conn.execute(
+        "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
+        (int(article_id),),
+    ).fetchone() is not None
+
+
 def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float | None,
                          reason: str | None, decided_by: str = "ai",
                          model: str | None = None) -> None:
-    """Пометить статью перепечаткой. Запись обратима: удаления нет намеренно."""
+    """Пометить статью перепечаткой. Запись обратима: удаления нет намеренно.
+
+    Выбор людей важнее выбора судьи. Копию, выбранную кем-то «в дайджест», не прячем: главную он
+    не отмечал, и новость ушла бы из его выпуска и из ленты целиком (29.09; так же радар не прячет
+    карточку, выбранную в дайджест, — mark_signal_merged). Если главную при этом не выбирал
+    никто, главной становится выбранная копия, а прячется прежняя главная вместе со своей группой
+    (ревью #84: отказ оставлял в ленте у всех обе копии). Выбраны обе — не прячем ни одну."""
     if int(article_id) == int(primary_id):
         raise ValueError("статья не может быть перепечаткой самой себя")
+    duplicate_id = int(article_id)
     with get_connection() as conn:
         # Главной назначаем КОРЕНЬ группы, а не соседа по паре: иначе цепочка
         # C→A→D спрячет из ленты и оригинал.
         primary_id = resolve_reprint_root(conn, int(primary_id))
-        if int(article_id) == int(primary_id):
+        if duplicate_id == primary_id:
             raise ValueError("статья уже является корнем своей группы перепечаток")
-        # Прятать копию можно только в пользу той, которую читатель увидит.
-        if not article_visible_in_feed(conn, primary_id):
+        if _chosen_for_digest(conn, duplicate_id):
+            if _chosen_for_digest(conn, primary_id):
+                raise ValueError(
+                    f"обе копии ({duplicate_id} и {primary_id}) выбраны в дайджест — не прячем ни одну"
+                )
+            # Выбранная копия становится главной, если может ею быть: сама не спрятана и видна в
+            # ленте. Иначе — отказ: прятать видимую ради невидимой значит убрать новость целиком.
+            if (resolve_reprint_root(conn, duplicate_id) != duplicate_id
+                    or not article_visible_in_feed(conn, duplicate_id)):
+                raise ValueError(f"статья {duplicate_id} выбрана в дайджест — её не прячем как перепечатку")
+            # Выбранная копия из закрытого месяца, а прежняя главная — из открытого: главной стала бы
+            # архивная, и новость пропала бы из ленты открытого месяца у всех (ревью #88: копия
+            # 30.09 в сентябрьском выпуске, копия 01.10 — главная после 05.10). Не переставляем,
+            # пара отбивается: обе копии видны, каждая в своём месяце.
+            closed = _closed_month_article_ids(conn, [duplicate_id, primary_id], feed_window.current())
+            if duplicate_id in closed and primary_id not in closed:
+                raise ValueError(
+                    f"статья {duplicate_id} выбрана в дайджест закрытого месяца, а копия {primary_id} — "
+                    "из открытого: главную не переставляем"
+                )
+            logger.info("reprint_primary_swapped: главная %s, спрятана %s — копию выбрали в дайджест",
+                        duplicate_id, primary_id)
+            duplicate_id, primary_id = primary_id, duplicate_id
+            # Перестановку видно в базе (ревью #88): главная — не та, что выбрал судья, и его довод о
+            # главной к этой пометке не относится; что это одно событие — его слова, после «судья:».
+            # decided_by — как у вызывающего: иных значений, кроме «ai», в базе нет.
+            reason = ("главная — выбранная в дайджест" + (f"; судья: {reason}" if reason else ""))[:500]
+        elif not article_visible_in_feed(conn, primary_id):
+            # Прятать копию можно только в пользу той, которую читатель увидит.
             raise ValueError(
                 f"главная копия {primary_id} не видна в ленте — пометка убрала бы новость целиком"
             )
-        # Копию, выбранную кем-то «в дайджест», не прячем (29.09): главную он не отмечал, и
-        # новость ушла бы из его выпуска и из ленты целиком. Так же радар не прячет карточку,
-        # выбранную в дайджест (mark_signal_merged).
-        chosen = conn.execute(
-            "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
-            (int(article_id),),
-        ).fetchone()
-        if chosen:
-            raise ValueError(f"статья {article_id} выбрана в дайджест — её не прячем как перепечатку")
         conn.execute(
             """
             INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)
@@ -4749,7 +4826,12 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
                    decided_by = EXCLUDED.decided_by,
                    model = EXCLUDED.model
             """,
-            (int(article_id), int(primary_id), similarity, reason, decided_by, model),
+            (duplicate_id, primary_id, similarity, reason, decided_by, model),
+        )
+        # Группа всегда в один шаг: копии спрятанной статьи — к её главной (как mark_signal_merged).
+        conn.execute(
+            "UPDATE article_reprints SET primary_id = %s WHERE primary_id = %s",
+            (primary_id, duplicate_id),
         )
         conn.commit()
 
@@ -4852,21 +4934,27 @@ def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -
         return cur.fetchall()
 
 
+def _in_some_issue(conn, article_id: int) -> bool:
+    """Статья в чьём-то выпуске: в сохранённом черновике или отмечена «в дайджест» хоть одним
+    пользователем. С #84 выпуск строится по отметкам, а черновик задаёт только порядок: защита
+    одних черновиков пропускала выбранную, но не сохранённую статью (ревью #88)."""
+    return bool(conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM monthly_digest_items WHERE article_id = %s)"
+        " OR EXISTS (SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest')",
+        (int(article_id), int(article_id)),
+    ).fetchone()[0])
+
+
 def delete_article(article_id: int, *, force: bool = False) -> bool:
     """Физически удалить статью и все её зависимые строки. Возвращает True, если удалена.
 
     FK на articles в основном БЕЗ ON DELETE CASCADE, поэтому удаляем детей вручную
     в правильном порядке (user_article_states каскадится сам). По умолчанию НЕ удаляем
-    статью, входящую в сохранённый месячный дайджест (monthly_digest_items) — чтобы не
-    рвать историю; force=True снимает защиту (удалит и ссылки дайджеста)."""
+    статью из чьего-то выпуска (сохранённый черновик или отметка «в дайджест») — чтобы не
+    рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста)."""
     with get_connection() as conn:
-        if not force:
-            in_digest = conn.execute(
-                "SELECT 1 FROM monthly_digest_items WHERE article_id = %s LIMIT 1",
-                (article_id,),
-            ).fetchone()
-            if in_digest:
-                return False
+        if not force and _in_some_issue(conn, article_id):
+            return False
         conn.execute(
             """
             DELETE FROM article_score_items
@@ -4888,14 +4976,11 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
 
 def mark_article_for_deletion(article_id: int, reason: str | None, *, force: bool = False) -> str:
     """Пометить статью на удаление (мягко, без физического DELETE). Возвращает
-    'marked' либо 'skipped_in_digest' (статья в сохранённом дайджесте, force=False)."""
+    'marked' либо 'skipped_in_digest' (статья в чьём-то выпуске — сохранённый черновик или
+    отметка «в дайджест», force=False)."""
     with get_connection() as conn:
-        if not force:
-            in_digest = conn.execute(
-                "SELECT 1 FROM monthly_digest_items WHERE article_id = %s LIMIT 1", (article_id,)
-            ).fetchone()
-            if in_digest:
-                return "skipped_in_digest"
+        if not force and _in_some_issue(conn, article_id):
+            return "skipped_in_digest"
         conn.execute(
             "UPDATE articles SET pending_deletion = TRUE, deletion_reason = %s, "
             "marked_for_deletion_at = now(), updated_at = now() WHERE id = %s",
@@ -6360,12 +6445,25 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             """
         if top_tag:
             signal_tag_clause = "AND sig.theme = %(top_tag)s"
+        # Текст закрытого выпуска не меняется (решение владельца 30.09): у карточки закрытого
+        # месяца правки коллег — только поданные до его закрытия, ссылка — лучшая из найденных
+        # до закрытия (пока такие есть). Окно — то же, что у отказа отметке «в дайджест»
+        # (api._guard_signal_digest_month).
+        issue_window = feed_window.current()
+        link_before_close = issue_window.before_close_sql(signal_month_sql("sig"), "e.created_at")
         cur.execute(
             f"""
             SELECT sig.id,
                    COALESCE(corr.corrected_title, sig.title_ru, sig.title) AS title,
                    COALESCE(best_evidence.source_url, '') AS url,
-                   COALESCE(best_evidence.published_at, sig.last_seen_at) AS published_at,
+                   -- Без даты ссылки — поступление на радар («Поступил» на экране), а не время
+                   -- последней находки: его сдвигает каждый прогон радара (30.09).
+                   COALESCE(best_evidence.published_at, sig.first_seen_at) AS published_at,
+                   -- День в карточке выпуска. Поступление — по Москве, как на экране и как месяц
+                   -- выпуска (signal_month_sql); сессия базы в UTC, и 20.09 в 00:15 МСК там ещё
+                   -- 19.09 (ревью #88). Дата ссылки — как раньше, днём по поясу сессии.
+                   CASE WHEN best_evidence.published_at IS NOT NULL THEN best_evidence.published_at::date
+                        ELSE (sig.first_seen_at AT TIME ZONE 'Europe/Moscow')::date END AS published_on,
                    'mixed' AS language,
                    '' AS image_url,
                    COALESCE(best_evidence.publisher, 'Технологический радар') AS source_name,
@@ -6379,13 +6477,14 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             FROM signals sig
             JOIN user_signal_states uss ON uss.signal_id = sig.id AND uss.user_id = %(user_id)s
             LEFT JOIN LATERAL (
-              SELECT source_url, publisher, published_at
-              FROM signal_evidence
-              WHERE signal_id = sig.id
-              ORDER BY strength DESC, published_at DESC NULLS LAST, created_at DESC
+              SELECT e.source_url, e.publisher, e.published_at
+              FROM signal_evidence e
+              WHERE e.signal_id = sig.id
+              ORDER BY {link_before_close} DESC,
+                       e.strength DESC, e.published_at DESC NULLS LAST, e.created_at DESC
               LIMIT 1
             ) best_evidence ON TRUE
-            {_SIGNAL_CORRECTIONS_LATERAL.format(alias="sig")}
+            {_signal_corrections_lateral("sig", issue_window)}
             WHERE uss.status = 'digest'
               AND sig.merged_into_signal_id IS NULL
               -- Зрелости «Отклонено» здесь нет (29.09): это оценка модели, а экран радара
@@ -6397,7 +6496,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               {signal_search_clause}
               {signal_tag_clause}
             ORDER BY sig.score DESC NULLS LAST,
-                     COALESCE(best_evidence.published_at, sig.last_seen_at) DESC NULLS LAST
+                     COALESCE(best_evidence.published_at, sig.first_seen_at) DESC NULLS LAST
             LIMIT %(limit)s
             """,
             signal_params,
@@ -6521,7 +6620,8 @@ def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
         return {**digest, "items": cur.fetchall()}
 
 
-def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | None = None) -> list[dict]:
+def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | None = None,
+                                month: str | None = None) -> list[dict]:
     """Детали статей сохранённого дайджеста по списку id (порядок сохраняется).
 
     За принадлежность черновика отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из
@@ -6532,17 +6632,24 @@ def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | No
     «в дайджест». Черновик задаёт порядок, но не членство: до 29.09 статья, снятая после
     сохранения («Из дайджеста» на экране выпуска или другой статус в ленте), пропадала из
     очереди на экране, а превью и выгрузка брали её из черновика, пока его не пересохранят.
+
+    `month` («ГГГГ-ММ») — только статьи этого месяца, тем же выражением, что у сборщика
+    (digest_candidates) и окна ленты. Проверка месяца стоит на сохранении черновика (с 29.09),
+    а черновик, сохранённый до неё через «Все месяцы», хранит и статьи других месяцев (ревью #84).
     """
     if not article_ids:
         return []
-    selected_clause = ""
-    selected_params: list = []
+    member_clause = ""
+    member_params: list = []
     if selected_by is not None:
-        selected_clause = (
-            "AND EXISTS (SELECT 1 FROM user_article_states uas WHERE uas.article_id = a.id"
+        member_clause += (
+            " AND EXISTS (SELECT 1 FROM user_article_states uas WHERE uas.article_id = a.id"
             " AND uas.user_id = %s AND uas.status = 'digest')"
         )
-        selected_params = [selected_by]
+        member_params.append(selected_by)
+    if month:
+        member_clause += f" AND {period_month_sql('a')} = %s"
+        member_params.append(month)
     order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -6567,10 +6674,10 @@ def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | No
               -- сохранённого выпуска (на тот день — 1 из 7 в августе, 2 из 5 в июле).
               AND {visible_sql()}
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
-              {selected_clause}
+              {member_clause}
             ORDER BY {order_case}
             """,
-            [article_ids, *selected_params, *article_ids],
+            [article_ids, *member_params, *article_ids],
         )
         return cur.fetchall()
 

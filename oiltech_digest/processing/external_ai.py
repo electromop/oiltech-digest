@@ -479,7 +479,8 @@ def process_recheck_payload(payload: dict[str, Any], heartbeat: Callable[..., No
 def apply_recheck_result(result: dict[str, Any], *, force: bool = False, dry_run: bool = False,
                          mark: bool = False, job_id: int | None = None) -> dict[str, Any]:
     """Применить вердикты к core: релевантные — персист, нерелевантные — УДАЛИТЬ.
-    Статьи в сохранённом дайджесте по умолчанию пропускаются (force=False).
+    Статьи из выпусков (сохранённый черновик или отметка «в дайджест») по умолчанию
+    пропускаются (force=False).
 
     dry_run=True — НИЧЕГО не менять/не удалять: только посчитать и собрать превью.
     mark=True — нерелевантные НЕ удалять физически, а ПОМЕТИТЬ на удаление
