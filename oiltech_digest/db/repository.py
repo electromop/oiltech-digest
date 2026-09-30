@@ -4733,32 +4733,51 @@ def article_visible_in_feed(conn, article_id: int) -> bool:
     return row is not None
 
 
+def _chosen_for_digest(conn, article_id: int) -> bool:
+    """Держит ли статью «в дайджест» хоть один пользователь."""
+    return conn.execute(
+        "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
+        (int(article_id),),
+    ).fetchone() is not None
+
+
 def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float | None,
                          reason: str | None, decided_by: str = "ai",
                          model: str | None = None) -> None:
-    """Пометить статью перепечаткой. Запись обратима: удаления нет намеренно."""
+    """Пометить статью перепечаткой. Запись обратима: удаления нет намеренно.
+
+    Выбор людей важнее выбора судьи. Копию, выбранную кем-то «в дайджест», не прячем: главную он
+    не отмечал, и новость ушла бы из его выпуска и из ленты целиком (29.09; так же радар не прячет
+    карточку, выбранную в дайджест, — mark_signal_merged). Если главную при этом не выбирал
+    никто, главной становится выбранная копия, а прячется прежняя главная вместе со своей группой
+    (ревью #84: отказ оставлял в ленте у всех обе копии). Выбраны обе — не прячем ни одну."""
     if int(article_id) == int(primary_id):
         raise ValueError("статья не может быть перепечаткой самой себя")
+    duplicate_id = int(article_id)
     with get_connection() as conn:
         # Главной назначаем КОРЕНЬ группы, а не соседа по паре: иначе цепочка
         # C→A→D спрячет из ленты и оригинал.
         primary_id = resolve_reprint_root(conn, int(primary_id))
-        if int(article_id) == int(primary_id):
+        if duplicate_id == primary_id:
             raise ValueError("статья уже является корнем своей группы перепечаток")
-        # Прятать копию можно только в пользу той, которую читатель увидит.
-        if not article_visible_in_feed(conn, primary_id):
+        if _chosen_for_digest(conn, duplicate_id):
+            if _chosen_for_digest(conn, primary_id):
+                raise ValueError(
+                    f"обе копии ({duplicate_id} и {primary_id}) выбраны в дайджест — не прячем ни одну"
+                )
+            # Выбранная копия становится главной, если может ею быть: сама не спрятана и видна в
+            # ленте. Иначе — отказ: прятать видимую ради невидимой значит убрать новость целиком.
+            if (resolve_reprint_root(conn, duplicate_id) != duplicate_id
+                    or not article_visible_in_feed(conn, duplicate_id)):
+                raise ValueError(f"статья {duplicate_id} выбрана в дайджест — её не прячем как перепечатку")
+            logger.info("reprint_primary_swapped: главная %s, спрятана %s — копию выбрали в дайджест",
+                        duplicate_id, primary_id)
+            duplicate_id, primary_id = primary_id, duplicate_id
+        elif not article_visible_in_feed(conn, primary_id):
+            # Прятать копию можно только в пользу той, которую читатель увидит.
             raise ValueError(
                 f"главная копия {primary_id} не видна в ленте — пометка убрала бы новость целиком"
             )
-        # Копию, выбранную кем-то «в дайджест», не прячем (29.09): главную он не отмечал, и
-        # новость ушла бы из его выпуска и из ленты целиком. Так же радар не прячет карточку,
-        # выбранную в дайджест (mark_signal_merged).
-        chosen = conn.execute(
-            "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
-            (int(article_id),),
-        ).fetchone()
-        if chosen:
-            raise ValueError(f"статья {article_id} выбрана в дайджест — её не прячем как перепечатку")
         conn.execute(
             """
             INSERT INTO article_reprints (article_id, primary_id, similarity, reason, decided_by, model)
@@ -4770,7 +4789,12 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
                    decided_by = EXCLUDED.decided_by,
                    model = EXCLUDED.model
             """,
-            (int(article_id), int(primary_id), similarity, reason, decided_by, model),
+            (duplicate_id, primary_id, similarity, reason, decided_by, model),
+        )
+        # Группа всегда в один шаг: копии спрятанной статьи — к её главной (как mark_signal_merged).
+        conn.execute(
+            "UPDATE article_reprints SET primary_id = %s WHERE primary_id = %s",
+            (primary_id, duplicate_id),
         )
         conn.commit()
 

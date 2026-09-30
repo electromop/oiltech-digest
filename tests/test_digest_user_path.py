@@ -324,26 +324,75 @@ def test_new_scores_do_not_take_marked_items_out_of_the_issue(issue):
     assert set(analyst.issue()) == expected
 
 
-def test_reprint_robot_does_not_hide_a_copy_chosen_for_the_issue(issue):
-    """Дефект до 29.09. Судья перепечаток (последние 14 дней) прячет копию в пользу главной.
-    Если человек выбрал в дайджест именно копию, а главную не отмечал, новость пропадала из
-    его выпуска целиком — и из ленты, откуда её не вернуть. Радар для карточек это уже
-    соблюдает: выбранную в дайджест не прячет даже решение человека (mark_signal_merged)."""
-    analyst, a = issue["analyst"], issue["a"]
+def _feed(person) -> set[int]:
+    return {row["id"] for row in person.get("/api/articles", params={"limit": 5000}).json()}
+
+
+def _reprints() -> dict[int, int]:
+    """Пометки перепечаток: {спрятанная копия: главная}."""
+    with connection.get_connection() as conn:
+        return dict(conn.execute("SELECT article_id, primary_id FROM article_reprints").fetchall())
+
+
+def _judge_says(duplicate: int, primary: int) -> None:
+    """Вердикт судьи перепечаток: `duplicate` — перепечатка `primary` (reprints.review_candidates)."""
+    repository.mark_article_reprint(
+        article_id=duplicate, primary_id=primary, similarity=0.8, reason="одно событие", model="judge",
+    )
+
+
+def test_reprint_robot_makes_the_chosen_copy_primary_and_hides_the_other(issue):
+    """Дефект до 29.09: судья перепечаток (последние 14 дней) прятал копию, выбранную в дайджест, —
+    новость пропадала из выпуска и из ленты целиком. Правка 29.09 (отказ прятать выбранную)
+    оставляла в ленте у всех обе копии (ревью #84). Выбор человека важнее выбора судьи: главной
+    становится выбранная копия, а копию, которую не выбирал никто, робот прячет — вместе с её
+    группой (группа всегда в один шаг, как у карточек радара)."""
+    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
     with connection.get_connection() as conn:
         copy = add_article(conn, issue["source"], "copy", published=utc(2026, 9, 10, 14), score=40)
         conn.commit()
+    _judge_says(a["low"], a["mid"])  # у mid уже есть спрятанная копия
     analyst.mark(copy)
 
-    with pytest.raises(ValueError, match="в дайджест"):
-        repository.mark_article_reprint(
-            article_id=copy, primary_id=a["mid"], similarity=0.8, reason="одно событие", model="judge",
-        )
-    assert analyst.issue() == [("article", copy)]
+    _judge_says(copy, a["mid"])
 
-    # Копию, которую никто не выбрал, робот прячет как раньше.
-    repository.mark_article_reprint(
-        article_id=a["low"], primary_id=a["mid"], similarity=0.8, reason="одно событие", model="judge",
-    )
-    feed = {row["id"] for row in analyst.get("/api/articles", params={"limit": 5000}).json()}
-    assert a["low"] not in feed and a["mid"] in feed and copy in feed
+    assert _reprints() == {a["mid"]: copy, a["low"]: copy}
+    assert analyst.issue() == [("article", copy)]
+    feed = _feed(colleague)
+    assert copy in feed and a["mid"] not in feed and a["low"] not in feed
+
+
+def test_reprint_robot_hides_neither_copy_when_different_people_chose_them(issue):
+    """Разные люди выбрали в дайджест разные копии одной новости — робот не прячет ни одну: иначе
+    выпуск одного из них потерял бы новость. Копию, которую не выбирал никто, он прячет, как
+    раньше, — и в пользу главной, выбранной кем-то."""
+    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
+    analyst.mark(a["hi"])
+    colleague.mark(a["mid"])
+
+    with pytest.raises(ValueError, match="обе копии"):
+        _judge_says(a["hi"], a["mid"])
+    assert _reprints() == {}
+    assert analyst.issue() == [("article", a["hi"])]
+    assert colleague.issue() == [("article", a["mid"])]
+
+    _judge_says(a["low"], a["mid"])
+    assert _reprints() == {a["low"]: a["mid"]}
+    feed = _feed(analyst)
+    assert {a["hi"], a["mid"]} <= feed and a["low"] not in feed
+
+
+def test_chosen_copy_that_the_feed_no_longer_shows_does_not_become_primary(issue):
+    """Выбранная копия, которую лента уже не показывает (перепроверка пометила её на удаление),
+    главной не становится: спрятать ради неё видимую — убрать новость из ленты целиком. Отказ,
+    как было с 29.09."""
+    analyst, a = issue["analyst"], issue["a"]
+    analyst.mark(a["hi"])
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (a["hi"],))
+        conn.commit()
+
+    with pytest.raises(ValueError, match="в дайджест"):
+        _judge_says(a["hi"], a["mid"])
+    assert _reprints() == {}
+    assert a["mid"] in _feed(analyst)
