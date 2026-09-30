@@ -864,6 +864,41 @@ def test_feedback_second_click_clears_reason_and_keeps_the_rest(isolated_db):
         repository.save_feedback_entry(user_id, article_id=article_id, reason="good", clear_reason=True)
 
 
+def test_feedback_empty_comment_clears_it_and_keeps_the_rest(isolated_db):
+    """Стёртый в поле комментарий стирается и в базе.
+
+    Фронт при уходе из поля шлёт `"comment": ""`, а сохранение превращало пустую строку в
+    None и сливало через COALESCE: после перезагрузки прежний текст возвращался. Явно
+    присланный пустой комментарий теперь стирает его; не присланный — не трогается.
+    """
+    app = api.app
+    with connection.get_connection() as conn:
+        user_id, _source_id, article_id = _feedback_fixture(conn, "fb-comment@example.com")
+    app.dependency_overrides[api.require_user] = lambda: {
+        "id": user_id, "email": "fb-comment@example.com", "role": "admin"}
+    try:
+        client = TestClient(app)
+        assert client.post("/api/feedback", json={
+            "article_id": article_id, "reason": "good", "usefulness": 4, "comment": "старый текст",
+        }).status_code == 200
+
+        entry = client.post("/api/feedback", json={"article_id": article_id, "comment": ""}).json()["entry"]
+        assert entry["comment"] is None, "пустой комментарий обязан стереть прежний"
+        assert (entry["reason"], entry["usefulness"]) == ("good", 4), "стирание не трогает остальное"
+        assert client.get("/api/feedback", params={"article_id": article_id}).json()["entry"]["comment"] is None
+
+        client.post("/api/feedback", json={"article_id": article_id, "comment": "новый текст"})
+        spaces = client.post("/api/feedback", json={"article_id": article_id, "comment": "   "}).json()["entry"]
+        assert spaces["comment"] is None, "одни пробелы — тоже пусто"
+
+        # Не прислано — не трогаем: оценка без ключа comment текст не стирает.
+        client.post("/api/feedback", json={"article_id": article_id, "comment": "итоговый"})
+        kept = client.post("/api/feedback", json={"article_id": article_id, "usefulness": 2}).json()["entry"]
+        assert (kept["comment"], kept["usefulness"]) == ("итоговый", 2)
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_marking_status_writes_feedback_event_with_old_value(isolated_db):
     """Ответ на вопрос заказчика «я всё что выделил как шум — он на этом обучился?».
 

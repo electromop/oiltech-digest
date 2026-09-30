@@ -6711,7 +6711,8 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
                         source_id: int | None = None, reason: str | None = None,
                         usefulness: int | None = None, translation: int | None = None,
                         source_quality: int | None = None,
-                        comment: str | None = None, clear_reason: bool = False) -> dict:
+                        comment: str | None = None, clear_reason: bool = False,
+                        clear_comment: bool = False) -> dict:
     """Сохранить или обновить карточку обратной связи.
 
     Одна карточка на пару «человек × сигнал»: повторное сохранение ПРАВИТ её, а не
@@ -6721,7 +6722,8 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
     `source_id` при ОС о сигнале подставляется из статьи, даже если не передан: так
     накопленное сворачивается по источнику без прохода по всей ленте.
 
-    `clear_reason` снимает причину (повторный клик по чипу) и больше ничего не трогает.
+    `clear_reason` снимает причину (повторный клик по чипу) и больше ничего не трогает;
+    `clear_comment` так же стирает комментарий (очищенное поле).
     """
     if article_id is None and source_id is None:
         raise ValueError("Обратная связь должна быть привязана к сигналу или к источнику")
@@ -6744,9 +6746,9 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
             source_id = int(row[0])
 
         # COALESCE на UPDATE: частичное сохранение (поставил только оценку) не должно
-        # стирать уже написанный комментарий — правка карточки идёт по кусочкам. Причину
-        # снимают явно (clear_reason): через COALESCE её было не снять вовсе, и ошибочный
-        # чип — в том числе «Не тот блок» — оставался навсегда.
+        # стирать уже написанный комментарий — правка карточки идёт по кусочкам. Причину и
+        # комментарий снимают явно (clear_reason, clear_comment): через COALESCE их было не
+        # снять вовсе — ошибочный чип, в том числе «Не тот блок», и стёртый текст возвращались.
         conflict = ("(user_id, article_id) WHERE article_id IS NOT NULL" if article_id is not None
                     else "(user_id, source_id) WHERE article_id IS NULL AND source_id IS NOT NULL")
         cur = conn.cursor(row_factory=dict_row)
@@ -6763,14 +6765,15 @@ def save_feedback_entry(user_id: int, *, article_id: int | None = None,
               usefulness     = COALESCE(EXCLUDED.usefulness, feedback_entries.usefulness),
               translation    = COALESCE(EXCLUDED.translation, feedback_entries.translation),
               source_quality = COALESCE(EXCLUDED.source_quality, feedback_entries.source_quality),
-              comment        = COALESCE(EXCLUDED.comment, feedback_entries.comment),
+              comment        = CASE WHEN %(clear_comment)s THEN NULL
+                                    ELSE COALESCE(EXCLUDED.comment, feedback_entries.comment) END,
               updated_at     = now()
             RETURNING *
             """,
             {"user_id": user_id, "article_id": article_id, "source_id": source_id,
              "reason": reason, "usefulness": usefulness, "translation": translation,
              "source_quality": source_quality, "comment": comment,
-             "clear_reason": bool(clear_reason)},
+             "clear_reason": bool(clear_reason), "clear_comment": bool(clear_comment)},
         )
         saved = cur.fetchone()
         conn.commit()

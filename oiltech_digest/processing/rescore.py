@@ -62,7 +62,7 @@ def rescore_selection(profile: str, month: str) -> dict[str, Any]:
     selection: dict[str, Any] = {
         "profile": profile, "month": period, "scored": len(rows),
         "up_to_date": 0, "weights_only": 0, "changed": 0, "no_snapshot": 0,
-        "queued": 0, "article_ids": [], "in_digest": 0,
+        "queued": 0, "article_ids": [], "in_digest": 0, "digest_ids": set(),
     }
     for article_id, stored, in_digest in rows:
         if stored is None:
@@ -79,7 +79,11 @@ def rescore_selection(profile: str, month: str) -> dict[str, Any]:
             selection["queued"] += 1
             continue
         selection["article_ids"].append(int(article_id))
-        selection["in_digest"] += int(bool(in_digest))
+        if in_digest:
+            # Id, а не только число: с --limit в пересчёт уходит часть выборки, и «из них выбраны
+            # в дайджест» считается по ней.
+            selection["digest_ids"].add(int(article_id))
+            selection["in_digest"] += 1
     return selection
 
 
