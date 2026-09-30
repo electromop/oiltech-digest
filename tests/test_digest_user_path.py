@@ -424,3 +424,39 @@ def test_chosen_copy_of_a_closed_month_does_not_take_the_news_out_of_the_open_mo
     assert _reprints() == {}
     assert october in _feed(colleague)
     assert analyst.issue(SEPT) == [("article", september)]
+
+
+def _rejected_by_the_gate(*article_ids: int) -> dict:
+    """Ответ воркера перепроверки релевантности: гейт отклонил эти статьи."""
+    return {"recheck_relevance": True, "articles": [
+        {"article_id": article_id, "errors": [],
+         "relevance": {"relevant": False, "reason": "не нефтесервис", "model": "negative-keyword"}}
+        for article_id in article_ids
+    ]}
+
+
+def test_relevance_recheck_keeps_articles_marked_for_the_issue(issue):
+    """Ревью #88. Перепроверка релевантности (enqueue-recheck) удаляет отклонённые гейтом статьи, а с
+    --mark помечает их на удаление. Защищены были только статьи из сохранённых черновиков, а с #84
+    выпуск строится по отметкам: выбранная, но не сохранённая в черновик статья удалялась вместе с
+    отметкой — и уходила из выпуска. Отметка «в дайджест» теперь защищает, как черновик: статья
+    пропускается и учитывается в отчёте (skipped_in_digest). --force — как раньше, без защиты."""
+    from oiltech_digest.processing import external_ai
+
+    analyst, a = issue["analyst"], issue["a"]
+    analyst.mark(a["hi"])
+
+    deleted = external_ai.apply_recheck_result(_rejected_by_the_gate(a["hi"], a["low"]))
+    assert (deleted["deleted"], deleted["skipped_in_digest"]) == (1, 1)
+    marked = external_ai.apply_recheck_result(_rejected_by_the_gate(a["hi"], a["mid"]), mark=True)
+    assert (marked["marked"], marked["skipped_in_digest"]) == (1, 1)
+    with connection.get_connection() as conn:
+        left = dict(conn.execute(
+            "SELECT id, pending_deletion FROM articles WHERE id = ANY(%s)", ([a["hi"], a["mid"], a["low"]],)
+        ).fetchall())
+    assert left == {a["hi"]: False, a["mid"]: True}
+    assert analyst.issue() == [("article", a["hi"])]
+
+    forced = external_ai.apply_recheck_result(_rejected_by_the_gate(a["hi"]), force=True)
+    assert forced["deleted"] == 1
+    assert analyst.issue() == []

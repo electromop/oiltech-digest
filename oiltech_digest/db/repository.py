@@ -4934,21 +4934,27 @@ def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -
         return cur.fetchall()
 
 
+def _in_some_issue(conn, article_id: int) -> bool:
+    """Статья в чьём-то выпуске: в сохранённом черновике или отмечена «в дайджест» хоть одним
+    пользователем. С #84 выпуск строится по отметкам, а черновик задаёт только порядок: защита
+    одних черновиков пропускала выбранную, но не сохранённую статью (ревью #88)."""
+    return bool(conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM monthly_digest_items WHERE article_id = %s)"
+        " OR EXISTS (SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest')",
+        (int(article_id), int(article_id)),
+    ).fetchone()[0])
+
+
 def delete_article(article_id: int, *, force: bool = False) -> bool:
     """Физически удалить статью и все её зависимые строки. Возвращает True, если удалена.
 
     FK на articles в основном БЕЗ ON DELETE CASCADE, поэтому удаляем детей вручную
     в правильном порядке (user_article_states каскадится сам). По умолчанию НЕ удаляем
-    статью, входящую в сохранённый месячный дайджест (monthly_digest_items) — чтобы не
-    рвать историю; force=True снимает защиту (удалит и ссылки дайджеста)."""
+    статью из чьего-то выпуска (сохранённый черновик или отметка «в дайджест») — чтобы не
+    рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста)."""
     with get_connection() as conn:
-        if not force:
-            in_digest = conn.execute(
-                "SELECT 1 FROM monthly_digest_items WHERE article_id = %s LIMIT 1",
-                (article_id,),
-            ).fetchone()
-            if in_digest:
-                return False
+        if not force and _in_some_issue(conn, article_id):
+            return False
         conn.execute(
             """
             DELETE FROM article_score_items
@@ -4970,14 +4976,11 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
 
 def mark_article_for_deletion(article_id: int, reason: str | None, *, force: bool = False) -> str:
     """Пометить статью на удаление (мягко, без физического DELETE). Возвращает
-    'marked' либо 'skipped_in_digest' (статья в сохранённом дайджесте, force=False)."""
+    'marked' либо 'skipped_in_digest' (статья в чьём-то выпуске — сохранённый черновик или
+    отметка «в дайджест», force=False)."""
     with get_connection() as conn:
-        if not force:
-            in_digest = conn.execute(
-                "SELECT 1 FROM monthly_digest_items WHERE article_id = %s LIMIT 1", (article_id,)
-            ).fetchone()
-            if in_digest:
-                return "skipped_in_digest"
+        if not force and _in_some_issue(conn, article_id):
+            return "skipped_in_digest"
         conn.execute(
             "UPDATE articles SET pending_deletion = TRUE, deletion_reason = %s, "
             "marked_for_deletion_at = now(), updated_at = now() WHERE id = %s",
