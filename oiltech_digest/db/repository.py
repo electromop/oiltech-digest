@@ -4800,6 +4800,10 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             logger.info("reprint_primary_swapped: главная %s, спрятана %s — копию выбрали в дайджест",
                         duplicate_id, primary_id)
             duplicate_id, primary_id = primary_id, duplicate_id
+            # Перестановку видно в базе (ревью #88): главная — не та, что выбрал судья, и его довод о
+            # главной к этой пометке не относится; что это одно событие — его слова, после «судья:».
+            # decided_by — как у вызывающего: иных значений, кроме «ai», в базе нет.
+            reason = ("главная — выбранная в дайджест" + (f"; судья: {reason}" if reason else ""))[:500]
         elif not article_visible_in_feed(conn, primary_id):
             # Прятать копию можно только в пользу той, которую читатель увидит.
             raise ValueError(

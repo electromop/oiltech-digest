@@ -360,6 +360,13 @@ def test_reprint_robot_makes_the_chosen_copy_primary_and_hides_the_other(issue):
     assert analyst.issue() == [("article", copy)]
     feed = _feed(colleague)
     assert copy in feed and a["mid"] not in feed and a["low"] not in feed
+    # Перестановку видно в базе: причина — выбор в дайджест, а не довод судьи о главной.
+    with connection.get_connection() as conn:
+        reason, decided_by = conn.execute(
+            "SELECT reason, decided_by FROM article_reprints WHERE article_id = %s", (a["mid"],)
+        ).fetchone()
+    assert reason == "главная — выбранная в дайджест; судья: одно событие"
+    assert decided_by == "ai"
 
 
 def test_reprint_robot_hides_neither_copy_when_different_people_chose_them(issue):
