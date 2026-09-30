@@ -142,3 +142,26 @@ def test_search_mode_travels_from_core_to_worker(monkeypatch):
     assert signal_discovery.config_from_payload({}).search_mode == "openai_web"
     assert signal_discovery.config_from_payload({"search_mode": "both"}).search_mode == "both"
     assert signal_discovery.config_from_payload({"search_mode": "gpt"}).search_mode == "brave"
+
+
+def test_research_answer_in_several_messages_or_with_trailing_text_is_parsed():
+    # Сравнительный прогон 30.09: две темы из трёх упали «non-JSON output» при нормальных событиях.
+    from oiltech_digest.processing.openai_client import _research_payload
+
+    raw = {"output": [
+        {"type": "web_search_call"},
+        {"type": "message", "content": [{"type": "output_text", "text": '{"events": [{"title": "a"}]}'}]},
+        {"type": "message", "content": [{"type": "output_text",
+                                         "text": '{"events": [{"title": "a"}, {"title": "b"}]}\n\nИсточники: [slb.com](x)'}]},
+    ]}
+
+    assert _research_payload(raw) == {"events": [{"title": "a"}, {"title": "b"}]}
+
+
+def test_research_answer_without_any_json_is_an_error():
+    from oiltech_digest.processing.openai_client import _research_payload
+
+    raw = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Не нашёл событий."}]}]}
+
+    with pytest.raises(AIClientError, match="non-JSON"):
+        _research_payload(raw)

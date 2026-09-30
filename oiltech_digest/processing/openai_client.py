@@ -137,11 +137,7 @@ class OpenAIResponsesClient:
         if response.status_code >= 400:
             raise AIClientError(f"OpenAI API error {response.status_code}: {response.text[:500]}")
         raw = response.json()
-        text = _extract_output_text(raw)
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise AIClientError(f"OpenAI returned non-JSON output: {text[:500]}") from exc
+        data = _research_payload(raw)
         cited: list[str] = []
         searches = 0
         for item in raw.get("output") or []:
@@ -158,6 +154,39 @@ class OpenAIResponsesClient:
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
         )
+
+
+def _research_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """JSON ответа с поиском. Модель между поисками пишет несколько сообщений и может дописать
+    текст после объекта (сравнительный прогон 30.09: две темы из трёх — «non-JSON output» при
+    нормальном списке событий внутри). Берём первый объект из каждой части и из них — тот, где
+    больше событий; json.loads целиком этого не умеет."""
+    chunks = [
+        str(content["text"])
+        for item in raw.get("output") or [] if item.get("type") == "message"
+        for content in item.get("content") or []
+        if content.get("type") in {"output_text", "text"} and content.get("text")
+    ]
+    if not chunks:
+        _extract_output_text(raw)  # поднимет «ответ без текста» с подробностями
+    decoder = json.JSONDecoder()
+    best: dict[str, Any] | None = None
+    for chunk in chunks:
+        start = chunk.find("{")
+        while start != -1:
+            try:
+                candidate, _ = decoder.raw_decode(chunk, start)
+            except json.JSONDecodeError:
+                start = chunk.find("{", start + 1)
+                continue
+            if isinstance(candidate, dict) and (
+                best is None or len(candidate.get("events") or []) > len(best.get("events") or [])
+            ):
+                best = candidate
+            break
+    if best is None:
+        raise AIClientError(f"OpenAI returned non-JSON output: {' | '.join(chunks)[:500]}")
+    return best
 
 
 # Сколько токенов ответа добавить на рассуждение: лимиты вызовов подбирались под minimal, и на
