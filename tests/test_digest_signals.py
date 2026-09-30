@@ -35,7 +35,7 @@ def _patch(monkeypatch, *, saved_items=None, candidates=None):
     monkeypatch.setattr(
         digest.repository,
         "digest_items_by_article_ids",
-        lambda ids, selected_by=None: [_row(article_id) for article_id in ids],
+        lambda ids, selected_by=None, month=None: [_row(article_id) for article_id in ids],
     )
     monkeypatch.setattr(
         digest.repository,
@@ -89,7 +89,7 @@ def test_hidden_draft_articles_fall_back_to_current_selection(monkeypatch):
     # Все статьи черновика с тех пор скрыты (перепечатка, удаление) — выпуск как раньше
     # берёт текущую подборку, а не одни сигналы.
     _patch(monkeypatch, saved_items=[{"article_id": 11}], candidates=[_row(12), _row(7, item_type="signal")])
-    monkeypatch.setattr(digest.repository, "digest_items_by_article_ids", lambda ids, selected_by=None: [])
+    monkeypatch.setattr(digest.repository, "digest_items_by_article_ids", lambda ids, selected_by=None, month=None: [])
 
     content = build_digest_content("2026-09", user_id=3)
 

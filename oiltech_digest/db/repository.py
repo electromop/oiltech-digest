@@ -6537,7 +6537,8 @@ def get_monthly_digest(month: str, user_id: int | None = None) -> dict | None:
         return {**digest, "items": cur.fetchall()}
 
 
-def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | None = None) -> list[dict]:
+def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | None = None,
+                                month: str | None = None) -> list[dict]:
     """Детали статей сохранённого дайджеста по списку id (порядок сохраняется).
 
     За принадлежность черновика отвечает ВЫЗЫВАЮЩИЙ: article_ids приходят из
@@ -6548,17 +6549,24 @@ def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | No
     «в дайджест». Черновик задаёт порядок, но не членство: до 29.09 статья, снятая после
     сохранения («Из дайджеста» на экране выпуска или другой статус в ленте), пропадала из
     очереди на экране, а превью и выгрузка брали её из черновика, пока его не пересохранят.
+
+    `month` («ГГГГ-ММ») — только статьи этого месяца, тем же выражением, что у сборщика
+    (digest_candidates) и окна ленты. Проверка месяца стоит на сохранении черновика (с 29.09),
+    а черновик, сохранённый до неё через «Все месяцы», хранит и статьи других месяцев (ревью #84).
     """
     if not article_ids:
         return []
-    selected_clause = ""
-    selected_params: list = []
+    member_clause = ""
+    member_params: list = []
     if selected_by is not None:
-        selected_clause = (
-            "AND EXISTS (SELECT 1 FROM user_article_states uas WHERE uas.article_id = a.id"
+        member_clause += (
+            " AND EXISTS (SELECT 1 FROM user_article_states uas WHERE uas.article_id = a.id"
             " AND uas.user_id = %s AND uas.status = 'digest')"
         )
-        selected_params = [selected_by]
+        member_params.append(selected_by)
+    if month:
+        member_clause += f" AND {period_month_sql('a')} = %s"
+        member_params.append(month)
     order_case = "CASE " + " ".join(f"WHEN a.id = %s THEN {index}" for index, _ in enumerate(article_ids, start=1)) + " END"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -6583,10 +6591,10 @@ def digest_items_by_article_ids(article_ids: list[int], *, selected_by: int | No
               -- сохранённого выпуска (на тот день — 1 из 7 в августе, 2 из 5 в июле).
               AND {visible_sql()}
               AND (a.published_at IS NULL OR a.published_at <= now() + interval '2 days')
-              {selected_clause}
+              {member_clause}
             ORDER BY {order_case}
             """,
-            [article_ids, *selected_params, *article_ids],
+            [article_ids, *member_params, *article_ids],
         )
         return cur.fetchall()
 

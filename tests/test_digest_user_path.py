@@ -135,6 +135,33 @@ def test_issue_draft_takes_only_articles_of_its_own_month(issue, monkeypatch):
     assert analyst.issue("2026-10") == [("article", october)]
 
 
+def test_issue_takes_only_its_own_month_even_from_a_draft_saved_before_the_check(issue, monkeypatch):
+    """Ревью #84. Проверка месяца стоит на сохранении черновика (с 29.09), а чтение черновика месяц
+    не проверяло: черновик, сохранённый до неё через «Все месяцы», отдал бы в превью и выгрузку
+    сентября октябрьскую статью — и занял бы ею место в лимите выпуска. Черновик задаёт порядок,
+    членство — отметка и месяц выпуска."""
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 2, 12, 0))
+    analyst, a = issue["analyst"], issue["a"]
+    with connection.get_connection() as conn:
+        october = add_article(conn, issue["source"], "oct", published=None, collected=utc(2026, 10, 2, 9))
+        conn.commit()
+    for article_id in (october, a["mid"], a["hi"]):
+        analyst.mark(article_id)
+    # Сохранён в обход проверки PUT — как черновик до 29.09.
+    repository.save_monthly_digest(
+        SEPT, "Нефтесервисный дайджест · 2026-09",
+        [{"article_id": october}, {"article_id": a["mid"]}, {"article_id": a["hi"]}],
+        user_id=analyst.id,
+    )
+
+    assert analyst.issue() == [("article", a["mid"]), ("article", a["hi"])]
+    two = analyst.get("/api/digest-content", params={"month": SEPT, "limit": 2, "min_score": 0, "max_score": 100})
+    assert [item["article_id"] for item in two.json()["news"]] == [a["mid"], a["hi"]]
+    html = analyst.export("html").decode("utf-8")
+    assert "Материал mid" in html and "Материал oct" not in html
+    assert analyst.issue("2026-10") == [("article", october)]
+
+
 # ---------------------------------------------------------------------------
 #  4. Смешанный выпуск, только сигналы, только статьи
 # ---------------------------------------------------------------------------
