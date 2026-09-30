@@ -255,7 +255,7 @@ def test_body_without_gain_is_written_but_not_recomputed(isolated_db, monkeypatc
     short = _article(source_id, 1, text="Aker BP Yggdrasil drilling " * 16)   # 432 знака
     _scored_on_teaser(short)
 
-    applied = _refetch(short, "Aker BP Yggdrasil drilling campaign North Sea " * 14)   # 630: меньше вдвое
+    applied = _refetch(short, "Aker BP Yggdrasil drilling campaign North Sea " * 14)   # 644: меньше вдвое
 
     assert applied == {"applied": 1, "skipped": 0, "mismatched": 0, "no_gain": 0, "recompute": 0}
     assert _jobs() == []
