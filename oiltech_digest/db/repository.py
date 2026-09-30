@@ -946,9 +946,17 @@ def list_signal_article_evidence(
 
 
 def upsert_signal(signal: dict) -> int:
+    """Карточка радара по ключу: новая — вставка, найденная снова — обновление.
+
+    Текст карточки закрытого месяца (заголовки, суть, тезис, тема) повторная находка не
+    переписывает: это текст закрытого выпуска, а он только на просмотр (решение владельца 30.09).
+    Месяц карточки — месяц поступления на радар (feed_window.signal_month_sql), окно — то же, что у
+    отказа отметке «в дайджест». Остальное — балл, зрелость, число ссылок, время находки —
+    обновляется, как раньше; ссылки пишет upsert_signal_evidence."""
+    closed = feed_window.current().closed_sql(signal_month_sql("signals"))
     with get_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             INSERT INTO signals (
               signal_key, title, title_ru, theme, summary, thesis, transferability, maturity, confidence, score,
               why_now, why_not_noise, companies_json, industries_json, evidence_count,
@@ -956,11 +964,11 @@ def upsert_signal(signal: dict) -> int:
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
-              title = EXCLUDED.title,
-              title_ru = EXCLUDED.title_ru,
-              theme = EXCLUDED.theme,
-              summary = EXCLUDED.summary,
-              thesis = EXCLUDED.thesis,
+              title = CASE WHEN {closed} THEN signals.title ELSE EXCLUDED.title END,
+              title_ru = CASE WHEN {closed} THEN signals.title_ru ELSE EXCLUDED.title_ru END,
+              theme = CASE WHEN {closed} THEN signals.theme ELSE EXCLUDED.theme END,
+              summary = CASE WHEN {closed} THEN signals.summary ELSE EXCLUDED.summary END,
+              thesis = CASE WHEN {closed} THEN signals.thesis ELSE EXCLUDED.thesis END,
               transferability = EXCLUDED.transferability,
               maturity = EXCLUDED.maturity,
               confidence = EXCLUDED.confidence,

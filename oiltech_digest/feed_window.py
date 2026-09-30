@@ -17,7 +17,8 @@ ADR 0001, п. 6 — репозиторий lowbrains/oiltech-agents, docs/adr/00
 отметка «в дайджест» у карточки технологического радара (PATCH /api/signals/{id},
 решение владельца 29.09); месяц карточки — signal_month_sql. И текст закрытого выпуска
 (решение владельца 30.09): правки коллег, поданные после закрытия месяца (month_close_sql),
-в него не идут (repository.digest_candidates).
+в него не идут (repository.digest_candidates), а повторная находка карточки закрытого месяца
+её текст не переписывает (repository.upsert_signal).
 """
 
 from __future__ import annotations

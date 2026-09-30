@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from psycopg.rows import dict_row
+
 from oiltech_digest import feed_window
-from oiltech_digest.db import connection
-from tests.digest_user_path_support import SEPT, Person, msk
+from oiltech_digest.db import connection, repository
+from tests.digest_user_path_support import SEPT, THEME, Person, add_signal, msk
 from tests.digest_user_path_support import issue  # noqa: F401 — фикстура выпуска
 
 
@@ -87,3 +89,72 @@ def test_closed_issue_keeps_the_last_correction_made_before_the_close(issue, mon
     [item] = analyst.issue_items(SEPT)
     assert (item["title"], item["summary"]) == ("Правка в последнюю минуту", "Суть в последнюю минуту.")
     assert _radar_card(analyst, card)["title_ru"] == "Правка в момент закрытия"
+
+
+# ---------------------------------------------------------------------------
+#  2. Повторная находка карточки радаром
+# ---------------------------------------------------------------------------
+
+def _refind(key: str, text: str, *, link: str, score: float = 81) -> int:
+    """Прогон радара снова нашёл карточку (signal_discovery._store_candidate): тот же ключ, новый
+    текст модели и тема, новая ссылка, пересчёт числа ссылок."""
+    signal_id = repository.upsert_signal({
+        "signal_key": key, "title": f"{text} (en)", "title_ru": text, "theme": "Цифровизация",
+        "summary": f"Суть: {text}.", "thesis": f"Тезис: {text}.", "maturity": "watch", "score": score,
+    })
+    repository.upsert_signal_evidence(signal_id, {
+        "source_url": link, "title": text, "publisher": "rigzone.example", "strength": 0.5,
+    })
+    repository.refresh_signal_evidence_count(signal_id)
+    return signal_id
+
+
+def _stored(signal_id: int) -> dict:
+    with connection.get_connection() as conn:
+        return conn.cursor(row_factory=dict_row).execute(
+            "SELECT title, title_ru, summary, thesis, theme, score, evidence_count, last_seen_at "
+            "FROM signals WHERE id = %s",
+            (signal_id,),
+        ).fetchone()
+
+
+def _text(row: dict) -> tuple:
+    return row["title"], row["title_ru"], row["summary"], row["thesis"], row["theme"]
+
+
+def test_refind_after_the_close_adds_the_link_but_keeps_the_card_text(issue, monkeypatch):
+    """Ежедневный радар 10.10 снова нашёл сентябрьскую карточку с другим текстом и темой. Сентябрь
+    закрыт: заголовок, суть, тезис и тема — прежние, их показывают и выпуск, и радар. Ссылка,
+    число ссылок, балл и время последней находки обновляются, как раньше."""
+    analyst, card = issue["analyst"], issue["s"]["sep"]
+    analyst.mark_signal(card)
+    _freeze(monkeypatch, msk(2026, 10, 10, 0, 20))
+
+    assert _refind("sep", "Новый текст модели", link="https://radar.example.org/sep-2") == card
+
+    stored = _stored(card)
+    assert _text(stored) == ("Сигнал sep", "Сигнал sep", "Суть сигнала sep.", None, THEME)
+    assert (float(stored["score"]), stored["evidence_count"]) == (81, 2)
+    assert stored["last_seen_at"] > msk(2026, 9, 12, 0, 20)
+    shown = _radar_card(analyst, card)
+    assert {link["source_url"] for link in shown["evidence"]} == {
+        "https://radar.example.org/sep", "https://radar.example.org/sep-2",
+    }
+    [item] = analyst.issue_items(SEPT)
+    assert (item["title"], item["summary"], item["category"]) == ("Сигнал sep", "Суть сигнала sep.", THEME)
+
+
+def test_refind_in_an_open_month_rewrites_the_card_text_as_before(issue, monkeypatch):
+    """Открытый месяц — как раньше: текст карточки — последний ответ модели. 1–4 октября сентябрь
+    ещё открыт, как и октябрь."""
+    _freeze(monkeypatch, msk(2026, 10, 4, 0, 20))
+    october = add_signal("oct", first_seen=msk(2026, 10, 2, 0, 15))
+
+    for key, card in (("sep", issue["s"]["sep"]), ("oct", october)):
+        assert _refind(key, f"Новый текст {key}", link=f"https://radar.example.org/{key}-2") == card
+        stored = _stored(card)
+        assert _text(stored) == (
+            f"Новый текст {key} (en)", f"Новый текст {key}", f"Суть: Новый текст {key}.",
+            f"Тезис: Новый текст {key}.", "Цифровизация",
+        )
+        assert stored["evidence_count"] == 2
