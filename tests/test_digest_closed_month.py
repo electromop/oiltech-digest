@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection, repository
-from tests.digest_user_path_support import SEPT, THEME, Person, add_signal, msk
+from tests.digest_user_path_support import SEPT, THEME, Person, add_signal, msk, utc
 from tests.digest_user_path_support import issue  # noqa: F401 — фикстура выпуска
 
 
@@ -158,3 +158,66 @@ def test_refind_in_an_open_month_rewrites_the_card_text_as_before(issue, monkeyp
             f"Тезис: Новый текст {key}.", "Цифровизация",
         )
         assert stored["evidence_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+#  3. Ссылка и дата карточки радара в выпуске
+# ---------------------------------------------------------------------------
+
+def _new_link(signal_id: int, url: str, *, strength: float, published: datetime | None, found: datetime) -> None:
+    """Повторная находка в момент `found` принесла карточке ещё одну ссылку (upsert_signal_evidence)
+    и сдвинула время последней находки. Время записи ставим сами: часы базы не заморожены."""
+    repository.upsert_signal_evidence(signal_id, {
+        "source_url": url, "title": "Та же новость в другом издании", "publisher": "worldoil.example",
+        "published_at": published, "strength": strength,
+    })
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE signal_evidence SET created_at = %s WHERE source_url = %s", (found, url))
+        conn.execute("UPDATE signals SET last_seen_at = %s WHERE id = %s", (found, signal_id))
+        conn.commit()
+
+
+def _link(item: dict) -> tuple:
+    """Что выпуск показывает о ссылке карточки: «Читать далее», издатель, дата."""
+    return item["url"], item["source"], item["published_at"]
+
+
+def test_closed_issue_keeps_the_link_and_date_the_card_had_at_the_close(issue, monkeypatch):
+    """«Читать далее», издатель и дата карточки в выпуске — от её лучшей (самой сильной) ссылки. 10.10
+    радар принёс сентябрьским карточкам ссылки сильнее прежних: экран радара показывает все, а
+    сентябрьский выпуск — ссылку, лучшую на момент закрытия. Дата карточки, у ссылки которой даты
+    нет, — день поступления на радар («Поступил» на экране). До этой правки выпуск брал время
+    последней находки, и каждый прогон радара сдвигал дату, в том числе в закрытом выпуске."""
+    analyst, dated = issue["analyst"], issue["s"]["sep"]
+    undated = add_signal("undated", first_seen=msk(2026, 9, 20, 12, 0))
+    analyst.mark_signal(dated)
+    analyst.mark_signal(undated)
+    at_close = {
+        dated: ("https://radar.example.org/sep", "radar.example.org", "2026-09-11"),
+        undated: ("https://radar.example.org/undated", "radar.example.org", "2026-09-20"),
+    }
+    assert {item["signal_id"]: _link(item) for item in analyst.issue_items(SEPT)} == at_close
+
+    _freeze(monkeypatch, msk(2026, 10, 10, 0, 20))
+    _new_link(dated, "https://worldoil.example/sep", strength=0.95, published=utc(2026, 10, 9, 9),
+              found=msk(2026, 10, 10, 0, 20))
+    _new_link(undated, "https://worldoil.example/undated", strength=0.95, published=None,
+              found=msk(2026, 10, 10, 0, 20))
+
+    assert {item["signal_id"]: _link(item) for item in analyst.issue_items(SEPT)} == at_close
+    assert {link["source_url"] for link in _radar_card(analyst, dated)["evidence"]} == {
+        "https://radar.example.org/sep", "https://worldoil.example/sep",
+    }
+
+
+def test_open_month_issue_takes_the_best_link_found_so_far(issue, monkeypatch):
+    """Открытый месяц — как раньше: ссылка карточки в выпуске — самая сильная из найденных. 1–4
+    октября сентябрь ещё открыт."""
+    analyst, card = issue["analyst"], issue["s"]["sep"]
+    analyst.mark_signal(card)
+    _freeze(monkeypatch, msk(2026, 10, 4, 0, 20))
+    _new_link(card, "https://worldoil.example/sep", strength=0.95, published=utc(2026, 10, 3, 9),
+              found=msk(2026, 10, 4, 0, 20))
+
+    [item] = analyst.issue_items(SEPT)
+    assert _link(item) == ("https://worldoil.example/sep", "worldoil.example", "2026-10-03")

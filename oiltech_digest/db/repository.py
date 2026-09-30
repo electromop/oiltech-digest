@@ -6396,16 +6396,20 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             """
         if top_tag:
             signal_tag_clause = "AND sig.theme = %(top_tag)s"
-        # Правки коллег у карточки закрытого месяца — только поданные до его закрытия: текст
-        # закрытого выпуска не меняется (решение владельца 30.09). Окно — то же, что у отказа
-        # отметке «в дайджест» (api._guard_signal_digest_month).
+        # Текст закрытого выпуска не меняется (решение владельца 30.09): у карточки закрытого
+        # месяца правки коллег — только поданные до его закрытия, ссылка — лучшая из найденных
+        # до закрытия (пока такие есть). Окно — то же, что у отказа отметке «в дайджест»
+        # (api._guard_signal_digest_month).
         issue_window = feed_window.current()
+        link_before_close = issue_window.before_close_sql(signal_month_sql("sig"), "e.created_at")
         cur.execute(
             f"""
             SELECT sig.id,
                    COALESCE(corr.corrected_title, sig.title_ru, sig.title) AS title,
                    COALESCE(best_evidence.source_url, '') AS url,
-                   COALESCE(best_evidence.published_at, sig.last_seen_at) AS published_at,
+                   -- Без даты ссылки — день поступления на радар («Поступил» на экране), а не
+                   -- время последней находки: его сдвигает каждый прогон радара (30.09).
+                   COALESCE(best_evidence.published_at, sig.first_seen_at) AS published_at,
                    'mixed' AS language,
                    '' AS image_url,
                    COALESCE(best_evidence.publisher, 'Технологический радар') AS source_name,
@@ -6419,10 +6423,11 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             FROM signals sig
             JOIN user_signal_states uss ON uss.signal_id = sig.id AND uss.user_id = %(user_id)s
             LEFT JOIN LATERAL (
-              SELECT source_url, publisher, published_at
-              FROM signal_evidence
-              WHERE signal_id = sig.id
-              ORDER BY strength DESC, published_at DESC NULLS LAST, created_at DESC
+              SELECT e.source_url, e.publisher, e.published_at
+              FROM signal_evidence e
+              WHERE e.signal_id = sig.id
+              ORDER BY {link_before_close} DESC,
+                       e.strength DESC, e.published_at DESC NULLS LAST, e.created_at DESC
               LIMIT 1
             ) best_evidence ON TRUE
             {_signal_corrections_lateral("sig", issue_window)}
@@ -6437,7 +6442,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               {signal_search_clause}
               {signal_tag_clause}
             ORDER BY sig.score DESC NULLS LAST,
-                     COALESCE(best_evidence.published_at, sig.last_seen_at) DESC NULLS LAST
+                     COALESCE(best_evidence.published_at, sig.first_seen_at) DESC NULLS LAST
             LIMIT %(limit)s
             """,
             signal_params,
