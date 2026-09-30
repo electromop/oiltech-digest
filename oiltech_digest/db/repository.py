@@ -5073,6 +5073,34 @@ class ArticlesBusy(RuntimeError):
     """Статьи явного списка сейчас в работе у другой задачи — выдачу надо отложить."""
 
 
+def process_articles_in_work(conn, *, exclude_job_id: int | None = None) -> list[int]:
+    """Статьи ИИ-пакетов, уже выданных воркеру (в работе или в записи итога).
+
+    Их payload собран при выдаче: итог ляжет по тексту на тот момент. Этим списком выдача не
+    даёт двум пакетам одни статьи (reserve_process_articles), а замена тела полным текстом
+    ставит пересчёт статьям, чей пакет ушёл с обрывком (fulltext_recompute)."""
+    # Только настоящий массив: payload с "article_ids": null (так его пишет
+    # /api/jobs/process) — это jsonb null, а не SQL NULL, COALESCE его не пропускает,
+    # и выдача падала бы для всех ИИ-задач, пока такая задача выполняется.
+    rows = conn.execute(
+        """
+        SELECT DISTINCT (jsonb_array_elements_text(CASE
+                   WHEN jsonb_typeof(payload_json->'reserved_article_ids') = 'array'
+                       THEN payload_json->'reserved_article_ids'
+                   WHEN jsonb_typeof(payload_json->'article_ids') = 'array'
+                       THEN payload_json->'article_ids'
+                   ELSE '[]'::jsonb
+               END))::bigint
+        FROM background_jobs
+        WHERE kind = 'process_articles'
+          AND status IN ('running', 'finalizing')
+          AND (%s::bigint IS NULL OR id <> %s::bigint)
+        """,
+        (exclude_job_id, exclude_job_id),
+    ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
 def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] | None = None) -> list[int]:
     """Статьи ИИ-пакета при выдаче — за вычетом тех, что уже в работе у других задач.
 
@@ -5087,26 +5115,7 @@ def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] 
     не закончит."""
     with get_connection() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (_PROCESS_RESERVE_LOCK,))
-        # Только настоящий массив: payload с "article_ids": null (так его пишет
-        # /api/jobs/process) — это jsonb null, а не SQL NULL, COALESCE его не пропускает,
-        # и выдача падала бы для всех ИИ-задач, пока такая задача выполняется.
-        busy_rows = conn.execute(
-            """
-            SELECT DISTINCT (jsonb_array_elements_text(CASE
-                       WHEN jsonb_typeof(payload_json->'reserved_article_ids') = 'array'
-                           THEN payload_json->'reserved_article_ids'
-                       WHEN jsonb_typeof(payload_json->'article_ids') = 'array'
-                           THEN payload_json->'article_ids'
-                       ELSE '[]'::jsonb
-                   END))::bigint
-            FROM background_jobs
-            WHERE kind = 'process_articles'
-              AND status IN ('running', 'finalizing')
-              AND id <> %s
-            """,
-            (job_id,),
-        ).fetchall()
-        busy = [int(row[0]) for row in busy_rows]
+        busy = process_articles_in_work(conn, exclude_job_id=job_id)
         if article_ids:
             overlap = sorted(set(int(item) for item in article_ids) & set(busy))
             if overlap:
