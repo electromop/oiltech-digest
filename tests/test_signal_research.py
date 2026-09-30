@@ -165,3 +165,51 @@ def test_research_answer_without_any_json_is_an_error():
 
     with pytest.raises(AIClientError, match="non-JSON"):
         _research_payload(raw)
+
+
+class _Sequence:
+    """Клиент, отвечающий по очереди: ответ — список событий или исключение."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.prompts = []
+
+    def research_json(self, instructions, user_input, schema, **kwargs):
+        self.prompts.append(user_input)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return AIResponse(data={"events": answer, "_cited_urls": [e["source_url"] for e in answer],
+                                "_web_search_calls": 5}, model="gpt-5-test", input_tokens=100, output_tokens=10)
+
+
+def test_empty_answer_is_retried_with_a_hint_and_usage_is_summed():
+    client = _Sequence([], [_event()])
+
+    result = _research(client)
+
+    assert result["events"] == 1
+    assert result["attempts"] == 2
+    assert result["retries"] == ["пустой список событий"]
+    assert "Предыдущая попытка не нашла" in client.prompts[1]
+    assert (result["web_search_calls"], result["input_tokens"]) == (10, 200)
+
+
+def test_transient_failure_is_retried():
+    client = _Sequence(AIClientError("OpenAI returned non-JSON output: ..."), [_event()])
+
+    result = _research(client)
+
+    assert result["status"] == "ok" and result["events"] == 1
+
+
+def test_two_empty_answers_are_ok_with_no_events():
+    result = _research(_Sequence([], []))
+
+    assert result["status"] == "ok" and result["events"] == 0 and result["attempts"] == 2
+
+
+def test_two_failures_are_an_error():
+    result = _research(_Sequence(AIClientError("503"), AIClientError("503")))
+
+    assert result["status"] == "error" and result["evidence"] == []

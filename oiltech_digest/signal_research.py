@@ -77,6 +77,17 @@ RESEARCH_SCHEMA = {
 }
 
 _STRENGTH = {"primary": 0.9, "trade_press": 0.82, "secondary": 0.6}
+RESEARCH_ATTEMPTS = 2
+RETRY_HINT = ("\n\nПредыдущая попытка не нашла ни одного события. Поищи шире: на английском и на русском, "
+              "по крупным сервисным компаниям и операторам, по отраслевым изданиям темы.\n")
+
+
+def _add_usage(stats: dict[str, Any], response: Any) -> None:
+    """Расход — за все попытки: платим и за пустую."""
+    data = response.data or {}
+    stats["web_search_calls"] += int(data.get("_web_search_calls") or 0)
+    stats["input_tokens"] += int(getattr(response, "input_tokens", 0) or 0)
+    stats["output_tokens"] += int(getattr(response, "output_tokens", 0) or 0)
 
 
 def research_topic(
@@ -103,27 +114,42 @@ def research_topic(
         + (f"\nЧто входит в тему:\n{topic_context.strip()}\n" if topic_context.strip() else "")
     )
     client = (client_factory or (lambda: make_client(False)))()
-    try:
-        response = client.research_json(
-            RESEARCH_INSTRUCTIONS,
-            prompt,
-            RESEARCH_SCHEMA,
-            model=app_config.SIGNAL_RESEARCH_MODEL,
-            reasoning_effort=app_config.SIGNAL_RESEARCH_REASONING,
-            # Ответ — до count событий по ~150 токенов плюс рассуждение между поисками.
-            max_output_tokens=output_budget(1500 + 250 * count, app_config.SIGNAL_RESEARCH_REASONING),
-            timeout=app_config.SIGNAL_RESEARCH_TIMEOUT_SECONDS,
-        )
-    except (AIClientError, requests.RequestException, AttributeError) as exc:
-        return {**stats, "status": "error", "error": f"{type(exc).__name__}: {str(exc)[:300]}", "evidence": []}
+    response = None
+    errors: list[str] = []
+    # Модель с поиском отвечает по-разному от вызова к вызову: сравнительный прогон 30.09 —
+    # на теме автоматизации первая попытка дала события, повтор — пустой список после 15
+    # поисков. Пустой ответ и временный сбой — ещё одна попытка с подсказкой искать шире.
+    for attempt in range(1, RESEARCH_ATTEMPTS + 1):
+        attempt_prompt = prompt if attempt == 1 else prompt + RETRY_HINT
+        try:
+            response = client.research_json(
+                RESEARCH_INSTRUCTIONS,
+                attempt_prompt,
+                RESEARCH_SCHEMA,
+                model=app_config.SIGNAL_RESEARCH_MODEL,
+                reasoning_effort=app_config.SIGNAL_RESEARCH_REASONING,
+                # Ответ — до count событий по ~150 токенов плюс рассуждение между поисками.
+                max_output_tokens=output_budget(1500 + 250 * count, app_config.SIGNAL_RESEARCH_REASONING),
+                timeout=app_config.SIGNAL_RESEARCH_TIMEOUT_SECONDS,
+            )
+        except AttributeError as exc:  # клиент без поиска (офлайн) — повтор не поможет
+            return {**stats, "status": "error", "error": f"{type(exc).__name__}: {str(exc)[:300]}", "evidence": []}
+        except (AIClientError, requests.RequestException) as exc:
+            errors.append(f"{type(exc).__name__}: {str(exc)[:300]}")
+            response = None
+            continue
+        _add_usage(stats, response)
+        if (response.data or {}).get("events"):
+            break
+        errors.append("пустой список событий")
+    stats["attempts"] = attempt
+    if errors:
+        stats["retries"] = errors
+    if response is None:
+        return {**stats, "status": "error", "error": errors[-1] if errors else "no response", "evidence": []}
     data = response.data or {}
     cited = {_url_key(url) for url in data.get("_cited_urls") or []}
-    stats.update(
-        web_search_calls=int(data.get("_web_search_calls") or 0),
-        input_tokens=int(getattr(response, "input_tokens", 0) or 0),
-        output_tokens=int(getattr(response, "output_tokens", 0) or 0),
-        model=getattr(response, "model", None) or stats["model"],
-    )
+    stats["model"] = getattr(response, "model", None) or stats["model"]
     evidence = []
     for event in (data.get("events") or [])[:count]:
         item, reason = _event_to_evidence(event, topic, start=start, end=end, cited=cited)
