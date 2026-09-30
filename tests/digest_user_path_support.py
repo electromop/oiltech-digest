@@ -163,6 +163,10 @@ def add_signal(key: str, *, first_seen: datetime, score: float = 75, maturity: s
             "UPDATE signals SET first_seen_at = %s, last_seen_at = %s, created_at = %s WHERE id = %s",
             (first_seen, first_seen, first_seen, signal_id),
         )
+        # Ссылка найдена вместе с карточкой. Часы базы не заморожены: без этого у сентябрьской
+        # карточки ссылка числилась бы найденной в день прогона тестов (после 05.10 — после
+        # закрытия сентября), и выбор ссылки закрытого выпуска зависел бы от даты прогона.
+        conn.execute("UPDATE signal_evidence SET created_at = %s WHERE signal_id = %s", (first_seen, signal_id))
         conn.commit()
     return signal_id
 
