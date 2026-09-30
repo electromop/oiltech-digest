@@ -4306,11 +4306,15 @@ def closed_month_article_ids(article_ids: list[int], window: FeedWindow) -> list
     if not article_ids:
         return []
     with get_connection() as conn:
-        rows = conn.execute(
-            f"SELECT a.id FROM articles a WHERE a.id = ANY(%s)"
-            f" AND {window.closed_sql(period_month_sql('a'))} ORDER BY a.id",
-            (list(article_ids),),
-        ).fetchall()
+        return _closed_month_article_ids(conn, article_ids, window)
+
+
+def _closed_month_article_ids(conn, article_ids: list[int], window: FeedWindow) -> list[int]:
+    rows = conn.execute(
+        f"SELECT a.id FROM articles a WHERE a.id = ANY(%s)"
+        f" AND {window.closed_sql(period_month_sql('a'))} ORDER BY a.id",
+        ([int(article_id) for article_id in article_ids],),
+    ).fetchall()
     return [int(row[0]) for row in rows]
 
 
@@ -4783,6 +4787,16 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             if (resolve_reprint_root(conn, duplicate_id) != duplicate_id
                     or not article_visible_in_feed(conn, duplicate_id)):
                 raise ValueError(f"статья {duplicate_id} выбрана в дайджест — её не прячем как перепечатку")
+            # Выбранная копия из закрытого месяца, а прежняя главная — из открытого: главной стала бы
+            # архивная, и новость пропала бы из ленты открытого месяца у всех (ревью #88: копия
+            # 30.09 в сентябрьском выпуске, копия 01.10 — главная после 05.10). Не переставляем,
+            # пара отбивается: обе копии видны, каждая в своём месяце.
+            closed = _closed_month_article_ids(conn, [duplicate_id, primary_id], feed_window.current())
+            if duplicate_id in closed and primary_id not in closed:
+                raise ValueError(
+                    f"статья {duplicate_id} выбрана в дайджест закрытого месяца, а копия {primary_id} — "
+                    "из открытого: главную не переставляем"
+                )
             logger.info("reprint_primary_swapped: главная %s, спрятана %s — копию выбрали в дайджест",
                         duplicate_id, primary_id)
             duplicate_id, primary_id = primary_id, duplicate_id

@@ -396,3 +396,24 @@ def test_chosen_copy_that_the_feed_no_longer_shows_does_not_become_primary(issue
         _judge_says(a["hi"], a["mid"])
     assert _reprints() == {}
     assert a["mid"] in _feed(analyst)
+
+
+def test_chosen_copy_of_a_closed_month_does_not_take_the_news_out_of_the_open_month_feed(issue, monkeypatch):
+    """Ревью #88. Копия от 30.09 выбрана в сентябрьский выпуск до 05.10, копия от 01.10 не выбрана.
+    После 05.10 судья считает главной октябрьскую. Перестановка сделала бы главной сентябрьскую, а
+    сентябрь уже архив: новость пропала бы из октябрьской ленты у всех. Главную не переставляем —
+    пара отбивается, как до перестановки: обе копии видны, каждая в своём месяце."""
+    analyst, colleague = issue["analyst"], issue["colleague"]
+    with connection.get_connection() as conn:
+        september = add_article(conn, issue["source"], "sep-copy", published=utc(2026, 9, 30, 12))
+        october = add_article(conn, issue["source"], "oct-copy", published=utc(2026, 10, 1, 9))
+        conn.commit()
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 3, 12, 0))
+    analyst.mark(september)
+
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 6, 12, 0))
+    with pytest.raises(ValueError, match="закрытого месяца"):
+        _judge_says(september, october)
+    assert _reprints() == {}
+    assert october in _feed(colleague)
+    assert analyst.issue(SEPT) == [("article", september)]
