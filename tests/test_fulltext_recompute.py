@@ -25,7 +25,7 @@ from oiltech_digest.processing.seed import seed_default_scoring_criteria
 AUTH = {"Authorization": "Bearer secret"}
 STAGES = ["summary", "tagging", "scoring"]
 TITLE = "Aker BP starts drilling campaign at Yggdrasil field in the North Sea"
-# Анонс ленты: 183 знака, как средний обрывок Oil & Gas Journal (замер 17.09).
+# Анонс ленты: 167 знаков (средний обрывок Oil & Gas Journal по замеру 17.09 — 183).
 TEASER = ("Aker BP has started a drilling campaign at the Yggdrasil field. The operator plans "
           "several wells this year, the company said in a statement on Monday, without details.")
 FULL = (
@@ -92,6 +92,23 @@ def _scored_on_teaser(article_id: int, *, relevant: bool = True) -> None:
     items = [{"criterion_id": int(c["id"]), "ai_score": 84, "keyword_score": 0, "final_score": 84} for c in criteria]
     repository.replace_article_score(article_id, 84.0, "Высокая", "по анонсу", items, "old-model",
                                      profile="business", criteria_snapshot=scoring_profiles.criteria_snapshot(criteria))
+
+
+def _mark_for_digest(article_id: int) -> None:
+    """Кто-то из пользователей отметил статью «В дайджест»."""
+    with connection.get_connection() as conn:
+        row = conn.execute("SELECT id FROM users WHERE email = 'd@example.com'").fetchone()
+        user_id = row[0] if row else conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash) VALUES ('d@example.com', 's', 'h') RETURNING id"
+        ).fetchone()[0]
+        conn.execute("INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+                     (user_id, article_id))
+        conn.commit()
+
+
+def _full(article_id: int) -> str:
+    """Своё полное тело для каждой статьи источника: одинаковое страж №24 счёл бы подменой."""
+    return FULL.replace("ПОЛНЫЙ", f"ПОЛНЫЙ-{article_id}")
 
 
 def _refetch(article_id: int, text: str = FULL, status: str = "ok") -> dict:
@@ -161,7 +178,7 @@ def _core(monkeypatch) -> TestClient:
 @pytest.mark.parametrize(
     ("old", "new", "gain"),
     [
-        pytest.param(TEASER, FULL, True, id="анонс-183-в-полный-текст"),
+        pytest.param(TEASER, FULL, True, id="анонс-167-в-полный-текст"),
         pytest.param("", "т" * 600, True, id="пустое-тело"),
         pytest.param("т" * 450, "т" * 850, False, id="меньше-чем-вдвое"),
         pytest.param(FULL, FULL, False, id="то-же-тело"),
@@ -240,8 +257,51 @@ def test_body_without_gain_is_written_but_not_recomputed(isolated_db, monkeypatc
 
     applied = _refetch(short, "Aker BP Yggdrasil drilling campaign North Sea " * 14)   # 630: меньше вдвое
 
-    assert applied == {"applied": 1, "skipped": 0, "mismatched": 0, "recompute": 0}
+    assert applied == {"applied": 1, "skipped": 0, "mismatched": 0, "no_gain": 0, "recompute": 0}
     assert _jobs() == []
+
+
+def test_intermediate_too_short_body_counts_once_from_the_teaser(isolated_db, monkeypatch):
+    """Ревью PR #87: путь NL пишет тело и при too_short, а в пересчёт брал только ok и мерил прирост
+    от уже промежуточного тела. Анонс 167 → too_short 440 → too_short 440 → ok 850 давало ноль
+    пересчётов, и суть оставалась по анонсу. Теперь прирост к анонсу срабатывает один раз, а
+    следующий — только если тело снова вдвое длиннее (850 от 440 — нет)."""
+    _freeze_window(monkeypatch)
+    _external_ai(monkeypatch)
+    seed_default_scoring_criteria()
+    article_id = _article(_source(), 0)
+    _scored_on_teaser(article_id)
+    middle, final = FULL[:440], FULL[:850]
+
+    steps = [_refetch(article_id, middle, "too_short"), _refetch(article_id, middle, "too_short"),
+             _refetch(article_id, final, "ok")]
+
+    assert [step["recompute"] for step in steps] == [1, 0, 0]
+    assert len(_recompute_jobs()) == 1
+    with connection.get_connection() as conn:
+        stored = conn.execute("SELECT raw_text, full_text_status FROM articles WHERE id = %s", (article_id,)).fetchone()
+    assert stored == (final, "ok")
+
+
+def test_shorter_refetch_never_overwrites_the_stored_body(isolated_db, monkeypatch):
+    """Как _is_better_text у локальной дозагрузки: текст с NL короче сохранённого тело не
+    затирает и пересчёт не ставит — ни полное тело, ни анонс."""
+    _freeze_window(monkeypatch)
+    _external_ai(monkeypatch)
+    seed_default_scoring_criteria()
+    source_id = _source()
+    full_id, teaser_id = _article(source_id, 1), _article(source_id, 2, text=FULL[:400])
+    _scored_on_teaser(full_id)
+    assert _refetch(full_id)["recompute"] == 1
+
+    outcomes = [_refetch(full_id, FULL[:900], "ok"), _refetch(full_id, FULL[:300], "too_short"),
+                _refetch(teaser_id, FULL[:150], "too_short")]
+
+    assert [(o["applied"], o["no_gain"], o["recompute"]) for o in outcomes] == [(0, 1, 0)] * 3
+    with connection.get_connection() as conn:
+        bodies = dict(conn.execute("SELECT id, raw_text FROM articles WHERE id = ANY(%s)", ([full_id, teaser_id],)))
+    assert bodies == {full_id: FULL, teaser_id: FULL[:400]}
+    assert len(_recompute_jobs()) == 1
 
 
 def test_archive_rejected_hidden_and_unprocessed_articles_are_not_recomputed(isolated_db, monkeypatch):
@@ -259,11 +319,8 @@ def test_archive_rejected_hidden_and_unprocessed_articles_are_not_recomputed(iso
     for article_id in (august, hidden):
         _scored_on_teaser(article_id)
     _scored_on_teaser(rejected, relevant=False)
+    _mark_for_digest(august)
     with connection.get_connection() as conn:
-        user_id = conn.execute("INSERT INTO users (email, password_salt, password_hash) "
-                               "VALUES ('d@example.com', 's', 'h') RETURNING id").fetchone()[0]
-        conn.execute("INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
-                     (user_id, august))
         conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (hidden,))
         conn.commit()
 
@@ -317,21 +374,42 @@ def test_article_in_flight_on_teaser_is_recomputed_after_that_batch_unless_gate_
     assert job["payload"]["articles"][0]["summary"] is None
 
 
-def test_digest_article_of_month_closed_while_recompute_waited_is_left_as_is(isolated_db, monkeypatch):
-    """04.10 сентябрь ещё открыт (зазор до 5-го), и пересчёт ставится. Если задача дождалась
-    закрытия месяца — статья, выбранная людьми в сентябрьский дайджест, не меняется: архив —
-    только просмотр, и модель за неё не зовётся."""
+def test_articles_marked_for_digest_are_not_recomputed_at_enqueue_or_claim(isolated_db, monkeypatch):
+    """Решение координатора (ревью PR #87): статью, которую кто-либо отметил «В дайджест», не
+    пересчитываем ни при постановке, ни при выдаче. 04.10 сентябрь ещё открыт, выпуск за него
+    собирается, и суть с баллом не должны меняться под редактором. Так же — статья сохранённого
+    черновика выпуска: его состав приходит и списком из черновика, без отметки."""
+    monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 10, 4, 12, 0, tzinfo=feed_window.MSK))
+    _external_ai(monkeypatch)
+    seed_default_scoring_criteria()
+    source_id = _source()
+    marked, drafted, marked_later, plain = (_article(source_id, n) for n in range(1, 5))
+    for article_id in (marked, drafted, marked_later, plain):
+        _scored_on_teaser(article_id)
+    _mark_for_digest(marked)
+    repository.save_monthly_digest("2026-09", "Сентябрь", [{"article_id": drafted}])
+
+    for article_id in (marked, drafted):
+        assert _refetch(article_id, _full(article_id))["recompute"] == 0
+    applied = external_fetch.apply_refetch_text_result({"kind": "refetch_text", "results": [
+        {"id": marked_later, "status": "ok", "text": _full(marked_later)},
+        {"id": plain, "status": "ok", "text": _full(plain)},
+    ]})
+    assert applied["recompute"] == 2
+    _mark_for_digest(marked_later)   # отметили, пока задача ждала выдачи
+
+    job = _claim(_core(monkeypatch))
+    assert job is not None and [a["id"] for a in job["payload"]["articles"]] == [plain]
+
+
+def test_month_closed_while_recompute_waited_drops_article_at_claim(isolated_db, monkeypatch):
+    """04.10 сентябрь ещё открыт (зазор до 5-го), и пересчёт ставится. Выдали задачу 05.10 —
+    сентябрь уже архив, только просмотр: статья отброшена, модель за неё не зовётся."""
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 10, 4, 12, 0, tzinfo=feed_window.MSK))
     _external_ai(monkeypatch)
     seed_default_scoring_criteria()
     article_id = _article(_source(), 0)
     _scored_on_teaser(article_id)
-    with connection.get_connection() as conn:
-        user_id = conn.execute("INSERT INTO users (email, password_salt, password_hash) "
-                               "VALUES ('d@example.com', 's', 'h') RETURNING id").fetchone()[0]
-        conn.execute("INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
-                     (user_id, article_id))
-        conn.commit()
 
     assert _refetch(article_id)["recompute"] == 1
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 10, 5, 12, 0, tzinfo=feed_window.MSK))

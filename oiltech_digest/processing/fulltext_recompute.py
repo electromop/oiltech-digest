@@ -12,11 +12,16 @@ enqueue-external-refetch стоит в цикле планировщика ПО�
 явный пересчёт, один раз на замену тела:
 
 - только настоящий прирост: то, что читает модель (первые ARTICLE_PROMPT_TEXT_CHARS знаков),
-  выросло минимум вдвое (MIN_GAIN_RATIO дозагрузки). То же тело при ретрае — не прирост;
+  выросло минимум вдвое (MIN_GAIN_RATIO дозагрузки) против тела, лежавшего до записи. То же
+  тело при ретрае — не прирост. Промежуточное тело (too_short с NL) тоже в счёт: прирост к
+  анонсу срабатывает один раз, следующий — только если тело снова вдвое длиннее;
 - только то, что посчитано по прежнему тексту: у статьи есть суть, тег или балл — или она в
   пакете, выданном до замены (его итог ляжет по анонсу);
 - только видимое в окне ленты: архив — только просмотр (feed_window), отвергнутое гейтом и
   скрытое не пересчитывается;
+- только не выбранное в выпуск: отмеченное кем-либо «В дайджест» или стоящее в сохранённом
+  черновике выпуска не меняется — с 1-го по 4-е выпуск за прошлый месяц ещё собирается, и суть
+  с баллом не должны меняться под редактором (решение координатора, ревью PR #87);
 - стадии — суть, тег и балл (набор business, как у любого пакета). Гейт не зовётся: это самая
   дорогая стадия, а передумав, он убрал бы статью из ленты. Перевод заголовка тоже: заголовок
   тот же, тело ему — только 900 знаков контекста, а русский заголовок — копия без модели.
@@ -24,7 +29,8 @@ enqueue-external-refetch стоит в цикле планировщика ПО�
 Задачи — process_articles с явным списком и пометкой only (как enqueue-rescore) в полосе
 пересчётов, а без неё — в потоке дня: пачки малые. Выдача откладывает задачу, пока статью
 держит пакет, выданный до замены (repository.ArticlesBusy), и отбрасывает тех, кого за это время
-отверг гейт, скрыли или унесло в архив (still_applicable): за них модель не платится.
+отверг гейт, скрыли, отметили в выпуск или унесло в архив (still_applicable): за них модель не
+платится.
 """
 
 from __future__ import annotations
@@ -78,9 +84,15 @@ def after_bodies(replaced: Iterable[tuple[int, str | None, str | None]]) -> int:
         return 0
 
 
-def _in_window_visible_sql() -> str:
-    """Статья видна в ленте и её месяц открыт: архив — только просмотр (feed_window)."""
-    return f"{feed_window.visible_sql('a', 'c', 's')} AND {feed_window.current().sql('a')}"
+def _allowed_sql() -> str:
+    """Пересчитывать можно: статья видна в ленте, её месяц открыт (архив — только просмотр,
+    feed_window) и её никто не выбрал в выпуск — ни отметкой «В дайджест», ни в черновике."""
+    return (
+        f"{feed_window.visible_sql('a', 'c', 's')} AND {feed_window.current().sql('a')}"
+        " AND NOT EXISTS (SELECT 1 FROM user_article_states u"
+        "                 WHERE u.article_id = a.id AND u.status = 'digest')"
+        " AND NOT EXISTS (SELECT 1 FROM monthly_digest_items di WHERE di.article_id = a.id)"
+    )
 
 
 def enqueue_after_body(article_ids: Iterable[int], *, batch_size: int = BATCH_SIZE) -> dict[str, Any]:
@@ -108,7 +120,7 @@ def enqueue_after_body(article_ids: Iterable[int], *, batch_size: int = BATCH_SI
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE a.id = ANY(%s)
-              AND {_in_window_visible_sql()}
+              AND {_allowed_sql()}
               AND (
                     (c.relevant IS TRUE AND (
                         c.summary IS NOT NULL
@@ -163,8 +175,9 @@ def _queued_recompute(conn) -> set[int]:
 def still_applicable(article_ids: list[int]) -> set[int]:
     """При выдаче задачи пересчёта: кому он ещё нужен.
 
-    Пока задача ждала пакет, выданный с анонсом, его гейт мог статью отвергнуть, её могли скрыть,
-    а месяц — закрыться. Оставляем релевантные по гейту, видимые и в открытом месяце."""
+    Пока задача ждала пакет, выданный с анонсом, его гейт мог статью отвергнуть, её могли скрыть
+    или отметить в выпуск, а месяц — закрыться. Оставляем релевантные по гейту, видимые, в
+    открытом месяце и никем не выбранные в выпуск."""
     if not article_ids:
         return set()
     with connection.get_connection() as conn:
@@ -174,7 +187,7 @@ def still_applicable(article_ids: list[int]) -> set[int]:
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
-            WHERE a.id = ANY(%s) AND c.relevant IS TRUE AND {_in_window_visible_sql()}
+            WHERE a.id = ANY(%s) AND c.relevant IS TRUE AND {_allowed_sql()}
             """,
             (list(article_ids),),
         ).fetchall()

@@ -346,15 +346,18 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
     выдал сайт, а сайт умеет отдавать пейвол или листинг на любой адрес. Без этой
     проверки мы бы аккуратно разложили чужой текст по статьям.
 
+    Тело не лучше сохранённого не пишется (_refetch_improves): повторная дозагрузка не
+    затирает полное тело обрывком, а анонс — обрывком короче его.
+
     Суть, тег и балл статьи к этому моменту часто уже посчитаны по анонсу: пакет ИИ
-    ставится в том же цикле раньше. Полное тело с приростом отправляет их в пересчёт
-    один раз (fulltext_recompute).
+    ставится в том же цикле раньше. Записанное тело с приростом отправляет их в
+    пересчёт один раз (fulltext_recompute).
     """
     from oiltech_digest.ingestion.article_fetcher import _ownership_rejection
     from oiltech_digest.ingestion import normalize
     from oiltech_digest.processing import fulltext_recompute
 
-    applied = skipped = mismatched = 0
+    applied = skipped = mismatched = no_gain = 0
     replaced: list[tuple[int, str | None, str]] = []
     for row in result.get("results") or []:
         article_id = int(row.get("id") or 0)
@@ -377,12 +380,35 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
                 article_id, None, True, "mismatch", "external", error=rejection)
             mismatched += 1
             continue
+        stored = str(article.get("raw_text") or "")
+        if not _refetch_improves(stored, text, status):
+            # Тело на месте; попытку отмечаем — от неё считаются сутки до следующей
+            # (external_refetch_candidates). Та же страница, что уже лежит, — прежний статус.
+            same = text == stored
+            repository.update_article_full_text(
+                article_id, None, bool(article.get("text_truncated")),
+                "no_gain" if status == "ok" and not same else status, "external",
+                error=None if same else f"extracted={len(text)} chars, current={len(stored)} chars")
+            no_gain += 1
+            continue
         repository.update_article_full_text(
             article_id, text, normalize.is_truncated(text), status, "external")
         applied += 1
-        if status == "ok":
-            # too_short не в счёт: такую статью дозагрузка возьмёт снова через сутки, и
-            # пересчёт по промежуточному телу оплачивался бы дважды.
-            replaced.append((article_id, article.get("raw_text"), text))
-    return {"applied": applied, "skipped": skipped, "mismatched": mismatched,
+        # too_short тоже в счёт: промежуточное тело иначе становилось точкой отсчёта, и полное
+        # после него пересчёта не давало (ревью PR #87: 167 → 440 → 440 → 850 — ноль пересчётов).
+        replaced.append((article_id, stored, text))
+    return {"applied": applied, "skipped": skipped, "mismatched": mismatched, "no_gain": no_gain,
             "recompute": fulltext_recompute.after_bodies(replaced)}
+
+
+def _refetch_improves(stored: str, text: str, status: str) -> bool:
+    """Тело с NL лучше сохранённого — короче сохранённого не пишем никогда.
+
+    ok — по правилу локальной дозагрузки (article_fetcher._is_better_text): сохранённое короче
+    порога — любое полное лучше, полное — только вдвое длиннее. too_short — если длиннее
+    сохранённого: промежуточное тело всё же лучше анонса."""
+    from oiltech_digest.ingestion.article_fetcher import _is_better_text
+
+    if status == "ok":
+        return _is_better_text(text, stored, config.MIN_FULL_TEXT_CHARS)
+    return len(text) > len(stored)
