@@ -169,6 +169,26 @@ def test_enqueue_rescore_dry_run_prints_n_and_cost_and_enqueues_nothing(isolated
         assert conn.execute("SELECT count(*) FROM background_jobs").fetchone()[0] == 0
 
 
+def test_enqueue_rescore_counts_digest_selected_within_the_limit(isolated_db, monkeypatch, capsys):
+    """«Из них выбраны в дайджест» — среди N, которые реально уйдут в пересчёт с --limit, а не по
+    всей выборке: иначе сухой прогон с лимитом обещал бы тронуть выбранные людьми статьи зря."""
+    from oiltech_digest.processing import rescore
+
+    monkeypatch.setattr(rescore, "rescore_selection", lambda profile, month: {
+        "profile": profile, "month": month, "scored": 3, "up_to_date": 0, "weights_only": 0,
+        "changed": 3, "no_snapshot": 0, "queued": 0, "article_ids": [11, 12, 13],
+        "in_digest": 1, "digest_ids": {13},
+    })
+
+    _cli("enqueue-rescore", "--month", "2026-09", "--limit", "2")
+    out = capsys.readouterr().out
+    assert "N=2" in out and "выбраны в дайджест: 0" in out
+
+    _cli("enqueue-rescore", "--month", "2026-09")
+    out = capsys.readouterr().out
+    assert "N=3" in out and "выбраны в дайджест: 1" in out
+
+
 def test_enqueue_rescore_puts_scoring_only_batches_into_the_bulk_lane(isolated_db, monkeypatch, capsys):
     """Задачи — process_articles с only=["scoring"]: воркер зовёт одну оценку текущим набором
     business, ядро пишет балл со снимком — пересчитанная статья больше в выборку не попадает."""
