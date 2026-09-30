@@ -9,6 +9,7 @@ from typing import Any, Callable
 from oiltech_digest import contract
 from oiltech_digest.db import repository
 from oiltech_digest.scoring_profiles import SCORING_PROFILES
+from oiltech_digest.processing import fulltext_recompute
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.pipeline import (
@@ -51,6 +52,11 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         articles = repository.get_articles_by_ids(article_ids, include_summary=True)
     else:
         articles = repository.get_articles_needing_pipeline(limit)
+    if payload.get(fulltext_recompute.PAYLOAD_FLAG) and articles:
+        # Пересчёт после полного текста ждал пакет, выданный с обрывком: его гейт мог статью
+        # отвергнуть, а месяц — закрыться. За таких модель не платится.
+        keep = fulltext_recompute.still_applicable([int(article["id"]) for article in articles])
+        articles = [article for article in articles if int(article["id"]) in keep]
     if payload.get("only") and "summary" in stages:
         # Перегенерация сути: старая суть с браком («электроэнergyю») ушла бы в промпт
         # (_article_prompt кладёт summary), и модель повторила бы её слово в слово. Без

@@ -143,12 +143,16 @@ def cmd_parse(args: argparse.Namespace) -> None:
 
 def cmd_fetch_full_text(args: argparse.Namespace) -> None:
     from oiltech_digest.ingestion.article_fetcher import fetch_full_text
+    from oiltech_digest.processing import fulltext_recompute
 
     stats = fetch_full_text(
         limit=args.limit,
         min_chars=args.min_chars,
         retry_too_short=args.retry_too_short,
     )
+    # Суть, тег и балл, посчитанные по обрывку до дозагрузки, — в пересчёт один раз, если тело
+    # дало модели заметно больше текста (как перерасчёт у repair-article-bodies).
+    recompute = fulltext_recompute.after_bodies(stats.pop("replaced", []))
     print(
         f"fetch-full-text: проверено={stats['processed']}, обновлено={stats['updated']}, "
         f"слишком коротких={stats['too_short']}, "
@@ -157,7 +161,8 @@ def cmd_fetch_full_text(args: argparse.Namespace) -> None:
         f"без прироста={stats.get('no_gain', 0)}, "
         # Отдельной строкой: это не сбой, а сработавшая защита от подмены текста (№24).
         # Без своего счётчика она была невидима и терялась в общей арифметике.
-        f"отклонено стражем={stats.get('mismatch', 0)}, ошибок={stats['failed']}"
+        f"отклонено стражем={stats.get('mismatch', 0)}, ошибок={stats['failed']}, "
+        f"пересчёт ИИ={recompute}"
     )
 
 

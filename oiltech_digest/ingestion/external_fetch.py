@@ -345,11 +345,17 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
     Страж принадлежности (задача №24) обязателен и здесь: воркер отдаёт то, что
     выдал сайт, а сайт умеет отдавать пейвол или листинг на любой адрес. Без этой
     проверки мы бы аккуратно разложили чужой текст по статьям.
+
+    Суть, тег и балл статьи к этому моменту часто уже посчитаны по анонсу: пакет ИИ
+    ставится в том же цикле раньше. Полное тело с приростом отправляет их в пересчёт
+    один раз (fulltext_recompute).
     """
     from oiltech_digest.ingestion.article_fetcher import _ownership_rejection
     from oiltech_digest.ingestion import normalize
+    from oiltech_digest.processing import fulltext_recompute
 
     applied = skipped = mismatched = 0
+    replaced: list[tuple[int, str | None, str]] = []
     for row in result.get("results") or []:
         article_id = int(row.get("id") or 0)
         text = row.get("text")
@@ -374,4 +380,9 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
         repository.update_article_full_text(
             article_id, text, normalize.is_truncated(text), status, "external")
         applied += 1
-    return {"applied": applied, "skipped": skipped, "mismatched": mismatched}
+        if status == "ok":
+            # too_short не в счёт: такую статью дозагрузка возьмёт снова через сутки, и
+            # пересчёт по промежуточному телу оплачивался бы дважды.
+            replaced.append((article_id, article.get("raw_text"), text))
+    return {"applied": applied, "skipped": skipped, "mismatched": mismatched,
+            "recompute": fulltext_recompute.after_bodies(replaced)}

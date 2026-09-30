@@ -86,8 +86,8 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
     """
     # mismatch — отдельно от failed: это не сбой сети, а сработавшая защита от подмены
     # текста (№24). Смешивать их нельзя, иначе не видно, работает ли страж.
-    stats = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0,
-             "no_gain": 0, "mismatch": 0}
+    stats: dict = {"processed": 0, "updated": 0, "failed": 0, "too_short": 0,
+                   "no_gain": 0, "mismatch": 0, "replaced": []}  # (id, прежнее тело, новое) — для пересчёта ИИ
     articles = repository.get_articles_needing_full_text(limit=limit, retry_too_short=retry_too_short)
     for article in articles:
         stats["processed"] += 1
@@ -104,6 +104,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
                     image_url=result.image_url,
                 )
                 stats["updated"] += 1
+                stats["replaced"].append((int(article["id"]), article.get("raw_text"), result.text))
             else:
                 repository.update_article_full_text(
                     int(article["id"]),
