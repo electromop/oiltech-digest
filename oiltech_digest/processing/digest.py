@@ -332,7 +332,10 @@ def build_digest_content(
         tag = row.get("tag_name") or "Без тега"
         if row.get("parent_tag_name"):
             tag = f"{row['parent_tag_name']} / {tag}"
-        published = row["published_at"].date().isoformat() if row.get("published_at") else None
+        # День в карточке. У карточки радара его считает сборщик (published_on: поступление на
+        # радар — по Москве), у статьи — день даты публикации, как раньше.
+        published_on = row.get("published_on") or (row["published_at"].date() if row.get("published_at") else None)
+        published = published_on.isoformat() if published_on else None
         glossary_context = _digest_glossary_context(row, tag)
         # Эмодзи — после глоссария и до вёрстки: из этой одной структуры `news`
         # растут все три формата (HTML, DOCX, PDF), поэтому шов здесь единственный.

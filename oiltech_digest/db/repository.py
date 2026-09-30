@@ -6438,9 +6438,14 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             SELECT sig.id,
                    COALESCE(corr.corrected_title, sig.title_ru, sig.title) AS title,
                    COALESCE(best_evidence.source_url, '') AS url,
-                   -- Без даты ссылки — день поступления на радар («Поступил» на экране), а не
-                   -- время последней находки: его сдвигает каждый прогон радара (30.09).
+                   -- Без даты ссылки — поступление на радар («Поступил» на экране), а не время
+                   -- последней находки: его сдвигает каждый прогон радара (30.09).
                    COALESCE(best_evidence.published_at, sig.first_seen_at) AS published_at,
+                   -- День в карточке выпуска. Поступление — по Москве, как на экране и как месяц
+                   -- выпуска (signal_month_sql); сессия базы в UTC, и 20.09 в 00:15 МСК там ещё
+                   -- 19.09 (ревью #88). Дата ссылки — как раньше, днём по поясу сессии.
+                   CASE WHEN best_evidence.published_at IS NOT NULL THEN best_evidence.published_at::date
+                        ELSE (sig.first_seen_at AT TIME ZONE 'Europe/Moscow')::date END AS published_on,
                    'mixed' AS language,
                    '' AS image_url,
                    COALESCE(best_evidence.publisher, 'Технологический радар') AS source_name,

@@ -226,6 +226,18 @@ def test_open_month_issue_takes_the_best_link_found_so_far(issue, monkeypatch):
     assert _link(item) == ("https://worldoil.example/sep", "worldoil.example", "2026-10-03")
 
 
+def test_card_without_a_link_date_is_dated_by_its_moscow_arrival_day(issue):
+    """Ревью #88. Карточка без даты ссылки датируется днём поступления на радар — по Москве, как
+    «Поступил» на экране и как месяц её выпуска. Сессия базы — в UTC: поступление 20.09 в 00:15 МСК
+    там ещё 19.09, и выпуск датировал карточку 19.09."""
+    analyst = issue["analyst"]
+    night = add_signal("night", first_seen=msk(2026, 9, 20, 0, 15))
+    analyst.mark_signal(night)
+
+    [item] = analyst.issue_items(SEPT)
+    assert (item["signal_id"], item["published_at"]) == (night, "2026-09-20")
+
+
 # ---------------------------------------------------------------------------
 #  4. Пересчёт ИИ после починки тел статей
 # ---------------------------------------------------------------------------
