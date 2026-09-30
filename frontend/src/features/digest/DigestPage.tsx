@@ -529,7 +529,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
       <section className="digestBuilderMain">
         <div className="panelHeader">
           <h2>Выборка дайджеста</h2>
-          {previewLoading ? <span className="metaText">Обновляем preview выпуска…</span> : null}
+          {previewLoading ? <span className="metaText">Обновляем предпросмотр выпуска…</span> : null}
         </div>
 
         {isArchiveMonth ? (
@@ -545,12 +545,12 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
             <span className="metaText">{digestCandidates.length} статей в подборке</span>
           </div>
           <div className="digestRunCard">
-            <div className="metaText">Preview / экспорт</div>
+            <div className="metaText">Предпросмотр и выгрузка</div>
             <strong>{exportPreviewItems.length}</strong>
-            <span className="metaText">материалов реально вернёт backend</span>
+            <span className="metaText">материалов вернёт сервер</span>
           </div>
           <div className="digestRunCard">
-            <div className="metaText">Последний draft</div>
+            <div className="metaText">Последний черновик</div>
             <strong>{lastSavedDraft ? lastSavedDraft.month : "ещё не сохранён"}</strong>
             <span className="metaText">
               {lastSavedDraft ? `${lastSavedDraft.items} материалов · статус ${lastSavedDraft.status}` : "Можно сохранить текущую выборку как выпуск"}
@@ -735,7 +735,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
         <section className="digestControlCard">
           <div className="panelHeader">
             <h3>Действия по выпуску</h3>
-            <span className="metaText">Draft и экспорт работают по текущей выборке</span>
+            <span className="metaText">Черновик и выгрузка работают по текущей выборке</span>
           </div>
           <div className="digestToolbar digestToolbarStack">
             {isArchiveMonth ? null : (
@@ -766,7 +766,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
             <div><strong>{activeMonth}</strong></div>
             <div className="metaText">Месяц выпуска</div>
             <div><strong>{exportPreviewItems.length}</strong></div>
-            <div className="metaText">Карточек в финальном preview</div>
+            <div className="metaText">Карточек в итоговом предпросмотре</div>
             <div><strong>{hasManualChanges ? "локальные правки" : "backend preview"}</strong></div>
             <div className="metaText">
               {hasManualChanges
@@ -1004,7 +1004,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
       <header className="screenHeader">
         <div>
           <h1>Месячный дайджест</h1>
-          <p>Сборка выпуска, сохранение draft и финальный экспорт теперь живут в одном рабочем экране.</p>
+          <p>Сборка выпуска, сохранение черновика и выгрузка — на одном экране.</p>
         </div>
         <div className="statusPill">{digestCandidates.length} статей</div>
       </header>
