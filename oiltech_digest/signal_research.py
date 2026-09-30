@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import re
+import time
 from typing import Any, Callable
 
 import requests
@@ -78,6 +79,7 @@ RESEARCH_SCHEMA = {
 
 _STRENGTH = {"primary": 0.9, "trade_press": 0.82, "secondary": 0.6}
 RESEARCH_ATTEMPTS = 2
+RESEARCH_RETRY_PAUSE_SECONDS = 20.0
 RETRY_HINT = ("\n\nПредыдущая попытка не нашла ни одного события. Поищи шире: на английском и на русском, "
               "по крупным сервисным компаниям и операторам, по отраслевым изданиям темы.\n")
 
@@ -137,6 +139,10 @@ def research_topic(
         except (AIClientError, requests.RequestException) as exc:
             errors.append(f"{type(exc).__name__}: {str(exc)[:300]}")
             response = None
+            if attempt < RESEARCH_ATTEMPTS:
+                # Короткий обрыв сети (прогон 30.09: DNS на 9 темах подряд) без паузы съедал
+                # обе попытки за секунду.
+                time.sleep(RESEARCH_RETRY_PAUSE_SECONDS * attempt)
             continue
         _add_usage(stats, response)
         if (response.data or {}).get("events"):

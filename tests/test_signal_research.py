@@ -12,6 +12,11 @@ from oiltech_digest.processing.openai_client import AIClientError, AIResponse
 TOPIC = "Бурение, направленное бурение, буровые растворы и буровое оборудование"
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_pause(monkeypatch):
+    monkeypatch.setattr(signal_research, "RESEARCH_RETRY_PAUSE_SECONDS", 0)
+
+
 def _event(**overrides):
     event = {
         "title": "SLB wins Aramco integrated well construction contracts",
