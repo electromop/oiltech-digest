@@ -602,6 +602,32 @@ _TAGS_SNAPSHOT: ContextVar[list[dict[str, Any]] | None] = ContextVar("signal_dis
 # базы нет. Контекст, а не аргумент judge_signal_snapshot: её подменяют десятки тестов.
 _JUDGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar("signal_discovery_judge", default=None)
 _CRITERION_SNAPSHOT_FIELDS = ("id", "name", "description", "weight", "keywords_json", "keywords_en_json", "profile")
+# Расход ИИ прогона по стадиям (радар — с 01.10 ежедневно на gpt-5): копится на NL, едет ядру в
+# итоге (run.ai_usage), ядро пишет в ai_processing_runs — экран «Статистика» видит радар отдельно
+# от ленты. Раньше расход радара был виден только в result_json задачи.
+_USAGE: ContextVar[dict[tuple[str, str], dict[str, Any]] | None] = ContextVar("signal_discovery_usage", default=None)
+RADAR_STAGES = ("radar_research", "radar_judge", "radar_review", "radar_dedup")
+
+
+def _record_usage(stage: str, model: str | None, *, input_tokens: int = 0, output_tokens: int = 0,
+                  calls: int = 1, web_search_calls: int = 0) -> None:
+    usage = _USAGE.get()
+    if usage is None or not calls:
+        return
+    row = usage.setdefault((stage, str(model or "")), {
+        "stage": stage, "model": str(model or ""), "calls": 0, "input_tokens": 0, "output_tokens": 0,
+        "web_search_calls": 0,
+    })
+    row["calls"] += int(calls)
+    row["input_tokens"] += int(input_tokens or 0)
+    row["output_tokens"] += int(output_tokens or 0)
+    row["web_search_calls"] += int(web_search_calls or 0)
+
+
+def _record_response(stage: str, response: Any) -> None:
+    _record_usage(stage, getattr(response, "model", None),
+                  input_tokens=int(getattr(response, "input_tokens", 0) or 0),
+                  output_tokens=int(getattr(response, "output_tokens", 0) or 0))
 
 _TOPIC_SNAPSHOT_FIELDS = ("name", "description", "query_seeds_json", "query_seeds", "industry_scope_json", "tag_id")
 _TAG_SNAPSHOT_FIELDS = (
@@ -728,6 +754,20 @@ def run_discovery(
     beat = heartbeat or (lambda: None)
     known_urls = set(snapshot.get("known_urls") or [])
     topics_out = []
+    usage_token = _USAGE.set({})
+    try:
+        return _run_discovery_topics(config, snapshot, beat, known_urls, topics_out)
+    finally:
+        _USAGE.reset(usage_token)
+
+
+def _run_discovery_topics(
+    config: SignalDiscoveryConfig,
+    snapshot: dict[str, Any],
+    beat: Callable[[], None],
+    known_urls: set[str],
+    topics_out: list[dict[str, Any]],
+) -> dict[str, Any]:
     with use_discovery_snapshot(snapshot):
         tag_topic_names = [
             _topic_name(topic, config)
@@ -804,7 +844,8 @@ def run_discovery(
         # модели от пустого дня было нельзя. Задача падает — видно на экране задач.
         first = next(error for topic in topics_out for error in topic.get("judge_errors") or [])
         raise JudgeUnavailable(f"Судья не ответил ни на один из {errors_total} кластеров: {first}")
-    return {"topics": topics_out, "dedup": _dedupe_run(config, snapshot, topics_out, beat)}
+    dedup = _dedupe_run(config, snapshot, topics_out, beat)
+    return {"topics": topics_out, "dedup": dedup, "ai_usage": list((_USAGE.get() or {}).values())}
 
 
 # Судья зовётся на каждый кластер, до 78 раз за прогон. Без повтора один таймаут или
@@ -904,6 +945,9 @@ def _dedupe_run(
         heartbeat=beat,
         max_pairs=int(snapshot.get("dedup_max_pairs") or signal_dedup.MAX_JUDGED_PAIRS),
     )
+    stats = result["stats"]
+    _record_usage("radar_dedup", app_config.SIGNAL_DEDUP_MODEL, calls=int(stats.get("judged") or 0),
+                  input_tokens=int(stats.get("input_tokens") or 0), output_tokens=int(stats.get("output_tokens") or 0))
     existing_merges = []
     for index, (primary_index, reason) in result["assigned"].items():
         primary = nodes[primary_index]
@@ -935,6 +979,8 @@ def apply_discovery(
     generation_run_id: int | None = None,
 ) -> dict[str, Any]:
     """Ядро: записать сигналы из результата run_discovery и собрать итог."""
+    if not config.dry_run and run.get("ai_usage"):
+        repository.record_radar_ai_usage(config.background_job_id, run["ai_usage"])
     all_signals: list[dict[str, Any]] = []
     topic_results = []
     duplicates: list[tuple[str, dict[str, Any]]] = []
@@ -1496,6 +1542,7 @@ def judge_signal_snapshot(evidence: list[dict[str, Any]], topic: str, *, offline
         model=app_config.SIGNAL_JUDGE_MODEL,
         reasoning_effort=app_config.SIGNAL_JUDGE_REASONING,
     )
+    _record_response("radar_judge", response)
     return _normalize_signal_payload(response.data, topic, context=_glossary_context(evidence, topic)), response.data
 
 
@@ -1561,6 +1608,7 @@ def _batch_review_candidates(
             model=app_config.SIGNAL_REVIEW_MODEL,
             reasoning_effort=app_config.SIGNAL_REVIEW_REASONING,
         )
+        _record_response("radar_review", response)
     except Exception as exc:  # noqa: BLE001 - батч-ревью не должно ронять прогон темы
         return {"status": "error", "error": str(exc)[:500], "reviewed": len(reviewable), "dropped": 0,
                 "duplicates": 0}
@@ -2335,6 +2383,10 @@ def _topic_web_evidence(
     found, fulltext = _enrich_web_evidence_with_full_text(events, topic_name, limit=len(events), heartbeat=heartbeat)
     verified, unverified = signal_research.verify_research_evidence(found)
     research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))
+    _record_usage("radar_research", research.get("model"), calls=int(research.get("attempts") or 0),
+                  input_tokens=int(research.get("input_tokens") or 0),
+                  output_tokens=int(research.get("output_tokens") or 0),
+                  web_search_calls=int(research.get("web_search_calls") or 0))
     if mode == "openai_web":
         return {"status": research["status"], "provider": "openai_web_search", "queries": [], "research": research,
                 "evidence": verified}

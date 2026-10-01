@@ -4508,12 +4508,14 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             """
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
+                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*).
+                   CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar' ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs
             WHERE created_at >= date_trunc('month', now()) - make_interval(months => %s)
-            GROUP BY 1, 2
-            ORDER BY 1, 4 DESC
+            GROUP BY 1, 2, 3
+            ORDER BY 1, 5 DESC
             """,
             (months,),
         )
@@ -6343,6 +6345,37 @@ def insert_ai_run(rec: dict) -> None:
             rec,
         )
         conn.commit()
+
+
+def record_radar_ai_usage(job_id: int | None, usage: list[dict] | None) -> int:
+    """Расход ИИ прогона радара — в ai_processing_runs, строка на (стадия, модель).
+
+    Статьи у строки нет (article_id NULL), поэтому уникальный ключ (job_id, article_id, stage)
+    повтор не ловит: повторное применение итога той же задачи сначала снимает её прежние строки
+    радара — одной транзакцией. Стоимость — по ставке модели плюс плата за вызовы web_search."""
+    rows = [row for row in usage or [] if int(row.get("calls") or 0) > 0]
+    with get_connection() as conn:
+        if job_id is not None:
+            conn.execute("DELETE FROM ai_processing_runs WHERE job_id = %s AND stage LIKE 'radar\\_%%'", (job_id,))
+        for row in rows:
+            price_in, price_out = config.price_for_model(row.get("model"))
+            input_tokens = int(row.get("input_tokens") or 0)
+            output_tokens = int(row.get("output_tokens") or 0)
+            cost = (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+            cost += int(row.get("web_search_calls") or 0) * config.SIGNAL_WEB_SEARCH_USD_PER_CALL
+            conn.execute(
+                """
+                INSERT INTO ai_processing_runs
+                  (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
+                   total_tokens, cost_usd, status, error_message)
+                VALUES (%s, NULL, %s, 'openai', %s, NULL, %s, %s, %s, %s, 'ok', %s)
+                """,
+                (job_id, row["stage"], row.get("model") or None, input_tokens, output_tokens,
+                 input_tokens + output_tokens, round(cost, 6),
+                 f"calls={int(row.get('calls') or 0)} web_search={int(row.get('web_search_calls') or 0)}"),
+            )
+        conn.commit()
+    return len(rows)
 
 
 def ai_cost_report() -> list[dict]:

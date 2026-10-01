@@ -1089,6 +1089,8 @@ export type MonthlyPlatformRow = {
 export type MonthlyAiCostRow = {
   month: string;
   model: string;
+  // feed — лента (суть, теги, скоринг…), radar — технологический радар (стадии radar_*).
+  area?: "feed" | "radar" | string;
   runs: number;
   cost_usd: number;
 };
@@ -1138,6 +1140,9 @@ export type AnalyticsCost = {
   calls: number;
   articles: number;
   cost_usd: number;
+  // Из cost_usd — технологический радар (стадии radar_*): у него нет статей, и в «₽ за статью»
+  // ленты он не входит.
+  radar_cost_usd?: number;
   // Курс ЦБ РФ на последний день месяца (у текущего — на сегодня); «допущение» — ЦБ недоступен.
   usd_rub: number;
   usd_rub_date: string | null;

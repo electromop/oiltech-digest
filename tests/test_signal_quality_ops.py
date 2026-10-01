@@ -178,3 +178,83 @@ def test_excluded_topics_setting_parses_several_prefixes(monkeypatch):
                         lambda: [{"name": "Бурение"}, {"name": "Рынок, M&A"}, {"name": "Логистика, транспорт"}])
 
     assert [row["name"] for row in signal_discovery._selected_topics(None)] == ["Бурение"]
+
+
+# --- Расход радара — на экран «Статистика» ---------------------------------------------------
+
+
+def test_run_collects_ai_usage_by_stage(monkeypatch):
+    from oiltech_digest import signal_research
+    from tests.test_signal_research import _Research, _event
+
+    judge_answer = {"title": "t", "title_ru": "t", "theme": "Бурение", "summary": "s", "thesis": "", "transferability": "",
+                    "maturity": "watch", "confidence": 0.5, "score": 60, "why_now": "", "why_not_noise": "",
+                    "companies": [], "industries": [], "signal_category": "technology", "event_date": "2026-09-24",
+                    "mixed_events": False, "mixed_events_reason": ""}
+
+    class Judge:
+        def complete_json(self, *args, **kwargs):
+            return AIResponse(data=dict(judge_answer), model="gpt-5-judge", input_tokens=2500, output_tokens=900)
+
+    research = _Research([_event()])
+    monkeypatch.setattr(signal_research, "make_client", lambda offline: research)
+    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Judge())
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
+                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True, search_mode="openai_web")
+
+    run = signal_discovery.run_discovery(run_config, {"topics": [{"name": "Бурение"}], "tags": []})
+
+    usage = {row["stage"]: row for row in run["ai_usage"]}
+    assert usage["radar_research"] == {"stage": "radar_research", "model": "gpt-5-test", "calls": 1,
+                                       "input_tokens": 17000, "output_tokens": 1300, "web_search_calls": 7}
+    assert usage["radar_judge"]["calls"] == 1 and usage["radar_judge"]["input_tokens"] == 2500
+
+
+def test_radar_usage_is_stored_with_cost_and_not_doubled_on_reapply(isolated_db):
+    usage = [
+        {"stage": "radar_research", "model": "gpt-5-2025-08-07", "calls": 1, "input_tokens": 1_000_000,
+         "output_tokens": 100_000, "web_search_calls": 20},
+        {"stage": "radar_judge", "model": "gpt-5-2025-08-07", "calls": 8, "input_tokens": 20_000, "output_tokens": 0,
+         "web_search_calls": 0},
+        {"stage": "radar_dedup", "model": "gpt-5-mini", "calls": 0, "input_tokens": 0, "output_tokens": 0,
+         "web_search_calls": 0},
+    ]
+
+    assert repository.record_radar_ai_usage(77, usage) == 2  # стадия без вызовов не пишется
+    repository.record_radar_ai_usage(77, usage)  # повторное применение итога той же задачи
+
+    with connection.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT stage, cost_usd, error_message FROM ai_processing_runs WHERE job_id = 77 ORDER BY stage"
+        ).fetchall()
+    # 1 млн входных × $1,25 + 100 тыс. выходных × $10 + 20 поисков × $0,01 = 1,25 + 1 + 0,2.
+    assert [(stage, float(cost)) for stage, cost, _ in rows] == [("radar_judge", 0.025), ("radar_research", 2.45)]
+    assert rows[1][2] == "calls=1 web_search=20"
+
+
+def test_apply_writes_radar_usage_only_for_a_real_run(isolated_db, monkeypatch):
+    written = []
+    monkeypatch.setattr(repository, "record_radar_ai_usage", lambda job_id, usage: written.append((job_id, usage)))
+    usage = [{"stage": "radar_judge", "model": "gpt-5", "calls": 1, "input_tokens": 1, "output_tokens": 1,
+              "web_search_calls": 0}]
+
+    signal_discovery.apply_discovery(signal_discovery.SignalDiscoveryConfig(dry_run=True), {"topics": [], "ai_usage": usage})
+    signal_discovery.apply_discovery(signal_discovery.SignalDiscoveryConfig(dry_run=False, background_job_id=5),
+                                     {"topics": [], "ai_usage": usage})
+
+    assert written == [(5, usage)]
+
+
+def test_statistics_split_radar_from_the_feed(isolated_db):
+    from oiltech_digest.db import analytics
+
+    with connection.get_connection() as conn:
+        conn.execute("""INSERT INTO ai_processing_runs (stage, model, cost_usd) VALUES
+                        ('scoring', 'gpt-5-mini', 1.5), ('radar_judge', 'gpt-5', 2.0), ('radar_research', 'gpt-5', 0.5)""")
+        conn.commit()
+
+    month = analytics.monthly_analytics(1, include_cost=True)["ai_cost"][-1]
+    assert (float(month["cost_usd"]), float(month["radar_cost_usd"])) == (4.0, 2.5)
+    areas = {(row["model"], row["area"]): float(row["cost_usd"]) for row in repository.monthly_ai_cost(1)}
+    assert areas == {("gpt-5-mini", "feed"): 1.5, ("gpt-5", "radar"): 2.5}

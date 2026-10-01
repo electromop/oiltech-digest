@@ -64,7 +64,9 @@ export function StatisticsPage({ onUnauthorized, showToast }: Props) {
       const cur = acc.get(row.month) ?? { runs: 0, cost: 0, models: [] };
       cur.runs += row.runs;
       cur.cost += Number(row.cost_usd ?? 0);
-      if (row.model) cur.models.push(`${row.model.split("-2")[0]} · $${Number(row.cost_usd ?? 0).toFixed(2)}`);
+      // Радар — с пометкой: та же модель у ленты и у радара — разные строки расхода.
+      const area = row.area === "radar" ? "радар · " : "";
+      if (row.model) cur.models.push(`${area}${row.model.split("-2")[0]} · $${Number(row.cost_usd ?? 0).toFixed(2)}`);
       acc.set(row.month, cur);
     }
     return acc;

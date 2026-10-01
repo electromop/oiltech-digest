@@ -80,7 +80,10 @@ _COST_SQL = f"""
     SELECT to_char(r.created_at AT TIME ZONE '{TZ}', 'YYYY-MM') AS month,
            count(*) AS calls,
            count(DISTINCT r.article_id) AS articles,
-           COALESCE(sum(r.cost_usd), 0) AS cost_usd
+           COALESCE(sum(r.cost_usd), 0) AS cost_usd,
+           -- Радар (стадии radar_*) — отдельно: статей у него нет, и «₽ за статью» ленты он
+           -- раздувал бы; на экране — своей частью столбца.
+           COALESCE(sum(r.cost_usd) FILTER (WHERE r.stage LIKE 'radar\\_%%'), 0) AS radar_cost_usd
     FROM ai_processing_runs r
     WHERE r.created_at >= {_SINCE}
       {{extra}}

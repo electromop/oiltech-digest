@@ -304,6 +304,9 @@ SIGNAL_RESEARCH_EVENTS_PER_TOPIC = int(os.environ.get("SIGNAL_RESEARCH_EVENTS_PE
 # За какой период искать события (дней до сегодня): режим рассчитан на еженедельный прогон.
 SIGNAL_RESEARCH_DAYS = int(os.environ.get("SIGNAL_RESEARCH_DAYS", "30"))
 SIGNAL_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_RESEARCH_TIMEOUT_SECONDS", "480"))
+# Плата OpenAI за один вызов встроенного поиска (web_search), USD — сверх токенов. Сверить с
+# прайс-листом: по умолчанию $10 за 1 000 вызовов.
+SIGNAL_WEB_SEARCH_USD_PER_CALL = float(os.environ.get("SIGNAL_WEB_SEARCH_USD_PER_CALL", "0.01"))
 
 # Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
 # (июль 2026): >120 источников (слайды 4–5); бюджет ИИ ≈10 000 ₽/мес при потоке
