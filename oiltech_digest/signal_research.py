@@ -25,6 +25,10 @@ from oiltech_digest.processing.openai_client import AIClientError, output_budget
 from oiltech_digest.processing.pipeline import make_client
 
 EVIDENCE_SOURCE = "openai_web_search"
+# Тип события от модели поиска. other — не технологический сигнал: отбрасывается до судьи, чтобы
+# бизнес-новости не тратили вызовы судьи (прогон 01.10: 29 бизнес-карточек из 62).
+TECH_EVENT_KINDS = ("deployment", "field_test", "pilot", "product_launch", "technology_contract", "first_purchase")
+EVENT_KINDS = (*TECH_EVENT_KINDS, "other")
 
 RESEARCH_INSTRUCTIONS = """Ты — аналитик технологического радара нефтесервисной компании
 (бурение, заканчивание, ГРП, КРС, добыча, промысловая инфраструктура, HSE, цифровизация).
@@ -46,6 +50,13 @@ RESEARCH_INSTRUCTIONS = """Ты — аналитик технологическ�
 Перенос из горнодобычи, производства, транспорта и энергетики — да, если применение на операции
 нефтесервиса очевидно (защита от столкновений техники, автономный буровой станок, ИИ-контроль
 качества на edge).
+
+Нужны ТЕХНОЛОГИЧЕСКИЕ сигналы, не бизнес-новости. Не приноси: контракт или тендер без новой
+технологии («получила контракт на бурение 20 скважин»), слияния и поглощения, финансирование и
+инвестиции, FID, финансовые итоги, назначения, расширение мощностей и логистических хабов без
+новой технологии. Контракт — только если он про внедрение конкретной технологии, и тогда в
+technology опиши её. Для каждого события назови technology — что за технология (продукт,
+метод, система) — и event_kind; если технологию назвать нельзя, это не наш сигнал.
 
 Правила:
 - дата события — внутри периода; событие вне периода не включай;
@@ -77,7 +88,7 @@ RESEARCH_SCHEMA = {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["title", "company", "event_date", "summary", "why_important",
-                                 "source_url", "publisher", "source_kind"],
+                                 "source_url", "publisher", "source_kind", "technology", "event_kind"],
                     "properties": {
                         "title": {"type": "string"},
                         "company": {"type": "string"},
@@ -87,6 +98,8 @@ RESEARCH_SCHEMA = {
                         "source_url": {"type": "string"},
                         "publisher": {"type": "string"},
                         "source_kind": {"type": "string", "enum": ["primary", "trade_press", "secondary"]},
+                        "technology": {"type": "string"},
+                        "event_kind": {"type": "string", "enum": list(EVENT_KINDS)},
                     },
                 },
             },
@@ -212,6 +225,12 @@ def _event_to_evidence(
     # Дата вне периода — модель нарушила условие; без даты оставляем: судья найдёт её сам.
     if event_date and not (start - timedelta(days=3) <= event_date <= end + timedelta(days=1)):
         return None, f"дата события {event_date.isoformat()} вне периода"
+    technology = re.sub(r"\s+", " ", str(event.get("technology") or "")).strip()
+    event_kind = str(event.get("event_kind") or "").strip()
+    # Нужны технологические сигналы: без названной технологии или с типом «другое» — бизнес-
+    # новость, до судьи не доходит. Старый ответ без полей (схема до 02.10) — не отбрасываем.
+    if "event_kind" in event and (event_kind not in TECH_EVENT_KINDS or not technology):
+        return None, "не технологическое событие (нет технологии)"
     summary = str(event.get("summary") or "").strip()
     why = str(event.get("why_important") or "").strip()
     kind = str(event.get("source_kind") or "secondary")
@@ -223,7 +242,7 @@ def _event_to_evidence(
         "publisher": str(event.get("publisher") or "").strip() or _domain(url),
         "published_at": event_date.isoformat() if event_date else None,
         "evidence_type": "news",
-        "extracted_fact": " ".join(part for part in (summary, why) if part),
+        "extracted_fact": " ".join(part for part in (summary, f"Технология: {technology}." if technology else "", why) if part),
         "summary_ru": summary,
         "strength": _STRENGTH.get(kind, 0.6),
         "topic": topic,
@@ -231,6 +250,8 @@ def _event_to_evidence(
             "evidence_source": EVIDENCE_SOURCE,
             "company": str(event.get("company") or "").strip(),
             "source_kind": kind,
+            "technology": technology,
+            "event_kind": event_kind or None,
             "why_important": why,
             "research_summary": summary,
             # Сослалась ли модель на этот адрес в найденном — признак, что он из поиска, а

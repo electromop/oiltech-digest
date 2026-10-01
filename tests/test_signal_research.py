@@ -329,3 +329,37 @@ def test_research_prompt_gets_feedback_and_cards_already_on_the_radar(monkeypatc
     assert "Вебинар по бурению — нет события" in prompt
     assert "- Nabors встроила MPD в SmartROS" in prompt
     assert "Старая карточка" not in prompt and "Чужая тема" not in prompt
+
+
+# --- Только технологические сигналы: бизнес отсекается до судьи (02.10) ------------------------
+
+
+@pytest.mark.parametrize("event", [
+    _event(event_kind="other", technology="", title="ProPetro получила контракт на генерацию 230 МВт"),
+    _event(event_kind="deployment", technology="  ", title="Внедрение без названной технологии"),
+    _event(event_kind="merger", technology="ИИ", title="Неизвестный тип события"),
+])
+def test_business_or_unnamed_technology_events_never_reach_the_judge(event):
+    result = _research(_Research([event]))
+
+    assert result["evidence"] == []
+    assert result["dropped"][0]["reason"] == "не технологическое событие (нет технологии)"
+
+
+def test_technology_contract_is_kept_and_names_the_technology():
+    event = _event(event_kind="technology_contract", technology="Автоматизированное строительство скважин SLB")
+
+    item = _research(_Research([event]))["evidence"][0]
+
+    assert "Технология: Автоматизированное строительство скважин SLB." in item["extracted_fact"]
+    assert (item["raw_payload"]["event_kind"], item["raw_payload"]["technology"]) == (
+        "technology_contract", "Автоматизированное строительство скважин SLB")
+
+
+def test_research_asks_for_technology_and_event_kind_and_excludes_business():
+    item = signal_research.RESEARCH_SCHEMA["schema"]["properties"]["events"]["items"]
+    assert {"technology", "event_kind"} <= set(item["required"])
+    assert item["properties"]["event_kind"]["enum"][-1] == "other"
+    text = signal_research.RESEARCH_INSTRUCTIONS
+    assert "Нужны ТЕХНОЛОГИЧЕСКИЕ сигналы, не бизнес-новости" in text
+    assert "FID" in text and "слияния и поглощения" in text
