@@ -42,7 +42,19 @@
    помечены `[разобрана]` — решает владелец. Записать — тот же вызов с `--apply`.
    Вернуть: `unarchive-signals --reason early-free-theme-2026-09` (или `--ids 1,2,3`).
 
-6. **Новый прогон радара** через очередь:
+6. **Эталон заказчика — в память радара** (файл ТОП-сигналов у владельца, в репозиторий не кладём):
+
+   ```bash
+   docker cp Сигналы_база_2026_ТОП20_сентябрь.xlsx oiltech_app:/tmp/top.xlsx
+   docker exec oiltech_app python -m oiltech_digest.cli import-reference-signals /tmp/top.xlsx
+   ```
+
+   Сухой прогон — список строк; записать — с `--apply`. Строки идут вердиктом «сильный сигнал»:
+   их видят судья и поиск «режима ChatGPT». Полнота после прогона —
+   `radar-recall /tmp/top.xlsx --sheet Сентябрь_2026` («найдено N из M»). Честный замер — по листу,
+   которого нет среди загруженных примеров.
+
+7. **Новый прогон радара** через очередь:
 
    ```bash
    docker exec oiltech_app python -m oiltech_digest.cli enqueue-signal-discovery --no-offline

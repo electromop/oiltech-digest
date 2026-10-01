@@ -2170,6 +2170,37 @@ def cmd_refresh_signal_evidence_counts(args: argparse.Namespace) -> None:
     print(f"refresh-signal-evidence-counts: исправлено карточек {changed}")
 
 
+def cmd_import_reference_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest import signal_reference
+
+    rows = signal_reference.read_reference(args.path, sheets=args.sheet or None)
+    result = signal_reference.import_reference(rows, apply=args.apply)
+    print(f"import-reference-signals: строк {result['rows']}, листы {', '.join(result['sheets'])}, "
+          f"applied={result['applied']}")
+    for row in rows[:50]:
+        print(f"  [{row['sheet']}] {row['title'][:90]}")
+    if not args.apply:
+        print("Сухой прогон: записать в память радара — тот же вызов с --apply.")
+
+
+def cmd_radar_recall(args: argparse.Namespace) -> None:
+    from oiltech_digest import signal_reference
+    from oiltech_digest.db import repository
+
+    rows = signal_reference.read_reference(args.path, sheets=args.sheet or None)
+    result = signal_reference.recall(rows, repository.radar_cards_for_recall())
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    print(f"radar-recall: найдено {result['found']} из {result['total']} ({result['share']:.0%}), "
+          f"из них на экране {result['found_visible']}")
+    for item in result["found_items"]:
+        mark = "" if item["visible"] else " [скрыта]"
+        print(f"  + #{item['signal_id']}{mark} {item['title'][:90]}")
+    for item in result["missing_items"]:
+        print(f"  - {item['title'][:90]}")
+
+
 def cmd_archive_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -3102,6 +3133,23 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-signal-evidence-counts",
         help="пересчитать число ссылок у карточек радара (у тех, чьи ссылки переехали в другие)",
     ).set_defaults(func=cmd_refresh_signal_evidence_counts)
+
+    p_import_reference = sub.add_parser(
+        "import-reference-signals",
+        help="эталон заказчика (xlsx ТОП-сигналов) — в память радара как одобренные; сухой прогон по умолчанию",
+    )
+    p_import_reference.add_argument("path")
+    p_import_reference.add_argument("--sheet", action="append", help="лист; можно несколько, по умолчанию все")
+    p_import_reference.add_argument("--apply", action="store_true")
+    p_import_reference.set_defaults(func=cmd_import_reference_signals)
+
+    p_radar_recall = sub.add_parser(
+        "radar-recall", help="сколько событий эталона заказчика (xlsx) нашёл радар — замер полноты",
+    )
+    p_radar_recall.add_argument("path")
+    p_radar_recall.add_argument("--sheet", action="append")
+    p_radar_recall.add_argument("--json", action="store_true")
+    p_radar_recall.set_defaults(func=cmd_radar_recall)
 
     p_archive_signals = sub.add_parser(
         "archive-signals",

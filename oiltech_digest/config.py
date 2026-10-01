@@ -300,7 +300,9 @@ SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "2
 SIGNAL_SEARCH_MODE = os.environ.get("SIGNAL_SEARCH_MODE", "brave").strip().lower()
 SIGNAL_RESEARCH_MODEL = os.environ.get("SIGNAL_RESEARCH_MODEL", "gpt-5").strip()
 SIGNAL_RESEARCH_REASONING = os.environ.get("SIGNAL_RESEARCH_REASONING", "low").strip()
-SIGNAL_RESEARCH_EVENTS_PER_TOPIC = int(os.environ.get("SIGNAL_RESEARCH_EVENTS_PER_TOPIC", "8"))
+# 8 давали полноту 6 из 20 по сентябрьскому эталону заказчика (01.10): модель брала только
+# громкие новости, а пресс-релизы производителей и российские события не доходили.
+SIGNAL_RESEARCH_EVENTS_PER_TOPIC = int(os.environ.get("SIGNAL_RESEARCH_EVENTS_PER_TOPIC", "12"))
 # За какой период искать события (дней до сегодня): режим рассчитан на еженедельный прогон.
 SIGNAL_RESEARCH_DAYS = int(os.environ.get("SIGNAL_RESEARCH_DAYS", "30"))
 SIGNAL_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_RESEARCH_TIMEOUT_SECONDS", "480"))

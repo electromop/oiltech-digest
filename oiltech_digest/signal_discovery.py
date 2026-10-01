@@ -390,8 +390,10 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
 
 Дополнительно по каждому кандидату (замечания заказчика 29.09):
 - signal_category — technology, если суть в технологии: новый принцип, продукт, внедрение,
-  испытание, измеримый технический эффект; business — сделка, M&A, контракт или тендер без
-  новой технологии, финансовые итоги, рынок, инвестиции, гранты, назначения; other — ни то ни
+  испытание, измеримый технический эффект; партнёрство ради разработки или внедрения конкретной
+  технологии (ИИ для геонаук, цифровой двойник месторождения) — тоже technology; business —
+  сделка, M&A, контракт или тендер без новой технологии, финансовые итоги, рынок, инвестиции,
+  гранты, назначения; other — ни то ни
   другое (регулирование, статистика, мероприятия). Технологический радар показывает только
   technology; бизнес-сигналы сохраняются для отдельной вкладки, их не надо браковать.
 - event_date — дата САМОГО события в формате ГГГГ-ММ-ДД (объявление, подписание, запуск,
@@ -814,7 +816,10 @@ def _run_discovery_topics(
             clusters = _cluster_evidence(fresh, topic_name)
             candidates = []
             judge_errors: list[str] = []
-            for cluster in _clusters_for_judging(clusters, config.max_signals):
+            # «Режим ChatGPT»: событие — свой кластер, и модель уже отобрала главное. Лимит
+            # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
+            research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
+            for cluster in _clusters_for_judging(clusters, max(config.max_signals, research_events)):
                 beat()
                 judged = _judge_with_retry(cluster, topic_name, offline=config.offline, beat=beat, errors=judge_errors)
                 if judged is None:

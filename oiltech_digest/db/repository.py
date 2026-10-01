@@ -1323,6 +1323,26 @@ def unarchive_signals(*, signal_ids: Sequence[int] | None = None, reason: str | 
         return int(cur.rowcount or 0)
 
 
+def radar_cards_for_recall() -> list[dict]:
+    """Все карточки радара (кроме скрытых дублей) со ссылками и признаком «видна на экране» —
+    для замера полноты по эталону заказчика (signal_reference.recall)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT s.id, s.title, s.title_ru, s.summary, s.companies_json AS companies,
+                   ({_RADAR_VISIBLE_SQL}) AS visible,
+                   ARRAY(SELECT e.source_url FROM signal_evidence e
+                         WHERE e.signal_id = s.id
+                            OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id)
+                        ) AS urls
+            FROM signals s
+            WHERE s.merged_into_signal_id IS NULL
+            """
+        )
+        return cur.fetchall()
+
+
 def refresh_all_signal_evidence_counts() -> int:
     """Пересчитать evidence_count у всех карточек; вернуть, у скольких он был неверен.
 

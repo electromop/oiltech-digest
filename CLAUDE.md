@@ -68,6 +68,13 @@ OpenAI (`signal_research.py`): события периода с первоист
 `SIGNAL_RESEARCH_*`), `OPENAI_MODEL` ленты не трогать. Настройки и цена —
 `scripts/radar/radar-quality-runbook.md`.
 
+## Релевантность и эталон заказчика (02.10)
+
+Судья ставит `oilfield_relevance` (direct / transferable / none) и `oilfield_application`; none
+(«не про нефтесервис») экран не показывает. Перенос из горнодобычи, производства, транспорта —
+transferable: заказчик такие берёт в свой ТОП. Эталон — его xlsx ТОП-сигналов:
+`import-reference-signals` (в память как «сильный сигнал»), `radar-recall` (полнота).
+
 ## Дедуп радара
 
 Одно событие — одна карточка (`signal_dedup.py`): правило пар (основы заголовка от 0,25, общая
