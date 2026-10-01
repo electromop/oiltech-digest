@@ -412,8 +412,12 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
   мало: нужна операция нефтесервиса. oilfield_application — одной фразой по-русски, где именно это
   применить в нефтесервисе (для none — пустая строка). Карточки none радар не показывает.
 - theme — выбери ОДНУ тематику из списка во входе (строка «themes»), по сути события, а не по
-  запросу, которым материал нашли: ИИ и дроны — это автоматизация и цифровизация, даже если
-  в тексте мелькнуло бурение.
+  запросу, которым материал нашли. Тематика — по ОПЕРАЦИИ нефтесервиса, к которой относится
+  событие: автоматизированное MPD и автономное направленное бурение — бурение; цифровая
+  платформа барьеров скважины — КРС и целостность скважин; ИИ для пластового давления —
+  геология и разработка. «Автоматизация, цифровизация» — только для технологий, не привязанных
+  к одной операции (промышленный edge, общая платформа данных, автономные операции объекта).
+  ИИ и дроны для осмотра объектов — не бурение, даже если в тексте мелькнуло бурение.
 - criteria_scores — если во входе есть блок «criteria», поставь по КАЖДОМУ критерию оценку
   0-100 (ai_score) с коротким обоснованием по-русски (rationale). Итоговый балл карточки посчитает
   код по весам критериев; score оставь своей общей оценкой. Оценка завышена хуже, чем занижена:
@@ -621,7 +625,7 @@ _CRITERION_SNAPSHOT_FIELDS = ("id", "name", "description", "weight", "keywords_j
 # итоге (run.ai_usage), ядро пишет в ai_processing_runs — экран «Статистика» видит радар отдельно
 # от ленты. Раньше расход радара был виден только в result_json задачи.
 _USAGE: ContextVar[dict[tuple[str, str], dict[str, Any]] | None] = ContextVar("signal_discovery_usage", default=None)
-RADAR_STAGES = ("radar_research", "radar_judge", "radar_review", "radar_dedup")
+RADAR_STAGES = ("radar_research", "radar_judge", "radar_review", "radar_dedup", "radar_theme")
 
 
 def _record_usage(stage: str, model: str | None, *, input_tokens: int = 0, output_tokens: int = 0,
@@ -2423,11 +2427,89 @@ def _choose_theme(
     themes = (_JUDGE_CONTEXT.get() or {}).get("themes") or []
     judged = str(raw_output.get("theme") or "").strip()
     if themes and judged in themes:
-        return judged, {"search_topic": search_topic, "theme": judged, "reason": "judge"}
+        return _check_judged_theme(signal, cluster, judged, search_topic, themes)
     theme, choice = _content_theme(signal, cluster, search_topic, topic_names)
     if judged and themes:
         choice = {**choice, "judge_theme_rejected": judged}
     return theme, choice
+
+
+# Расхождение судьи с ключами: у его тематики ключей нет, у другой — не меньше стольких.
+THEME_CHECK_MIN_HITS = 2
+
+THEME_CHECK_INSTRUCTIONS = """Ты проверяешь тематику карточки технологического радара нефтесервиса.
+Даны карточка и две тематики заказчика с описаниями. Выбери ту, к которой событие относится по
+ОПЕРАЦИИ нефтесервиса (бурение, заканчивание, ГРП, КРС и целостность скважин, добыча,
+промысловая инфраструктура…). «Автоматизация, цифровизация» — только если технология не
+привязана к одной операции. Отвечай одной из двух тематик дословно; reason — коротко по-русски."""
+
+
+def _check_judged_theme(
+    signal: dict[str, Any],
+    cluster: list[dict[str, Any]],
+    judged: str,
+    search_topic: str,
+    themes: list[str],
+) -> tuple[str, dict[str, Any]]:
+    """Выбор судьи — проверкой по ключам тематик; при расхождении — второе мнение.
+
+    Замер 01–02.10: 3 карточки из 58 судья отнёс к «Автоматизации, цифровизации» за слово
+    «цифровой», а по операции это бурение и КРС (MPD Nabors, барьеры SafeWells, Kantori). Ключи
+    тематик это видят: у выбранной — ни одного, у другой — два и больше. Тогда короткий вызов
+    выбирает из двух по их описаниям. Без расхождения вызова нет."""
+    _, keyword = _content_theme(signal, cluster, judged, themes)
+    hits = keyword["hits"]
+    rival = max((name for name in hits if name != judged), key=lambda name: hits[name], default=None)
+    choice = {"search_topic": search_topic, "theme": judged, "reason": "judge"}
+    if rival is None or hits.get(judged, 0) or hits[rival] < THEME_CHECK_MIN_HITS:
+        return judged, choice
+    checked = _second_opinion_theme(signal, judged, rival)
+    if checked is None:
+        return judged, {**choice, "theme_check": {"rival": rival, "hits": hits, "result": "error"}}
+    theme, reason = checked
+    return theme, {
+        **choice,
+        "theme": theme,
+        "reason": "theme_check" if theme != judged else "judge_confirmed",
+        "theme_check": {"judge_theme": judged, "rival": rival, "hits": hits, "reason": reason},
+    }
+
+
+def _second_opinion_theme(signal: dict[str, Any], judged: str, rival: str) -> tuple[str, str] | None:
+    def describe(name: str) -> str:
+        descriptions = "; ".join(_topic_tag_context(name).get("descriptions") or [])
+        return f"- {name}" + (f": {descriptions[:600]}" if descriptions else "")
+
+    prompt = "\n".join([
+        f"title: {signal.get('title_ru') or signal.get('title') or ''}",
+        f"summary: {signal.get('summary') or ''}",
+        f"thesis: {signal.get('thesis') or ''}",
+        "",
+        "themes:",
+        describe(judged),
+        describe(rival),
+    ])
+    schema = {
+        "name": "radar_theme_check",
+        "schema": {
+            "type": "object", "additionalProperties": False, "required": ["theme", "reason"],
+            "properties": {"theme": {"type": "string", "enum": [judged, rival]}, "reason": {"type": "string"}},
+        },
+    }
+    try:
+        response = _radar_client().complete_json(
+            THEME_CHECK_INSTRUCTIONS, prompt, schema,
+            max_output_tokens=output_budget(300, app_config.SIGNAL_THEME_CHECK_REASONING),
+            model=app_config.SIGNAL_THEME_CHECK_MODEL,
+            reasoning_effort=app_config.SIGNAL_THEME_CHECK_REASONING,
+        )
+    except Exception:  # noqa: BLE001 - проверка — улучшение: не вышло — остаётся выбор судьи
+        return None
+    _record_response("radar_theme", response)
+    theme = str((response.data or {}).get("theme") or "")
+    if theme not in (judged, rival):
+        return None
+    return theme, str((response.data or {}).get("reason") or "")[:300]
 
 
 def _apply_profile_score(signal: dict[str, Any], raw_output: dict[str, Any], cluster: list[dict[str, Any]]) -> dict[str, Any]:

@@ -292,6 +292,10 @@ SIGNAL_REVIEW_MODEL = os.environ.get("SIGNAL_REVIEW_MODEL", "").strip() or SIGNA
 SIGNAL_REVIEW_REASONING = os.environ.get("SIGNAL_REVIEW_REASONING", "").strip() or SIGNAL_JUDGE_REASONING
 SIGNAL_DEDUP_MODEL = os.environ.get("SIGNAL_DEDUP_MODEL", "").strip() or OPENAI_MODEL
 SIGNAL_DEDUP_REASONING = os.environ.get("SIGNAL_DEDUP_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+# Второе мнение о тематике карточки — только при расхождении судьи с ключами тематик; вызов
+# короткий, хватает модели дедупа.
+SIGNAL_THEME_CHECK_MODEL = os.environ.get("SIGNAL_THEME_CHECK_MODEL", "").strip() or SIGNAL_DEDUP_MODEL
+SIGNAL_THEME_CHECK_REASONING = os.environ.get("SIGNAL_THEME_CHECK_REASONING", "").strip() or SIGNAL_DEDUP_REASONING
 # Таймаут вызовов модели радара: сильная модель с рассуждением думает дольше 60 с ленты.
 SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))
 # Откуда радар берёт находки: brave — поиск Brave и докачка страниц (как раньше);
