@@ -255,3 +255,77 @@ def test_heartbeat_before_each_attempt_keeps_the_job_alive_on_the_worker():
                                    heartbeat=lambda: beats.append(1))
 
     assert len(beats) == 2
+
+
+# --- Обратная связь заказчика — во вход поиска ------------------------------------------------
+
+
+def _memory(**types):
+    base = {name: [] for name in ("signal_verdict", "signal_quality_rule", "signal_source_preference",
+                                  "signal_glossary", "signal_query_hint", "signal_title_correction", "signal_duplicate")}
+    base.update(types)
+    return base
+
+
+def _verdict(subject, title, reason="", topic=""):
+    return {"memory_type": "signal_verdict", "subject": subject, "score": 0,
+            "facts_json": {"signal_title": title, "reason": reason, "topic": topic}}
+
+
+def test_feedback_block_carries_verdicts_rules_sources_and_known_cards():
+    from oiltech_digest import signal_feedback
+
+    memory = _memory(
+        signal_verdict=[
+            _verdict("approved", "Роботизированная буровая на Ямале", "первое внедрение в РФ", topic=TOPIC),
+            _verdict("wrong_block", "SLB купила стартап", "сделка без технологии"),
+            _verdict("too_generic", "Обзор рынка бурения 2026", "нет события"),
+            _verdict("merge_duplicate", "Повтор карточки 12"),
+        ],
+        signal_quality_rule=[{"subject": "Не приносить вебинары", "facts_json": {}},
+                             {"subject": "Для сигнала 'X' использовать исправленную суть: Y", "facts_json": {}}],
+        signal_source_preference=[{"subject": "jpt.spe.org", "facts_json": {}}],
+    )
+
+    with signal_feedback.use_memory_snapshot(memory):
+        block = signal_feedback.research_feedback_block(TOPIC, known_titles=["SLB: 4 контракта Aramco"])
+
+    assert "одобрил" in block and "- Роботизированная буровая на Ямале — первое внедрение в РФ" in block
+    assert "- SLB купила стартап — это бизнес-сигнал, а не технология. сделка без технологии" in block
+    assert "Обзор рынка бурения 2026" in block
+    # Дубль — не урок для поиска; правка сути конкретной карточки — тоже.
+    assert "Повтор карточки 12" not in block and "исправленную суть" not in block
+    assert "- Не приносить вебинары" in block
+    assert "в первую очередь: jpt.spe.org" in block
+    assert "не повторяй, ищи новое:\n- SLB: 4 контракта Aramco" in block
+
+
+def test_feedback_block_is_empty_without_memory():
+    from oiltech_digest import signal_feedback
+
+    with signal_feedback.use_memory_snapshot(_memory()):
+        assert signal_feedback.research_feedback_block(TOPIC) == ""
+
+
+def test_research_prompt_gets_feedback_and_cards_already_on_the_radar(monkeypatch):
+    client = _Research([_event()])
+    monkeypatch.setattr(signal_research, "make_client", lambda offline: client)
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
+                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+    snapshot = {
+        "topics": [{"name": TOPIC}], "tags": [],
+        "memory": _memory(signal_verdict=[_verdict("reject", "Вебинар по бурению", "нет события")]),
+        "existing_signals": [
+            {"id": 1, "title_ru": "Nabors встроила MPD в SmartROS", "theme": TOPIC, "fresh": True},
+            {"id": 2, "title_ru": "Старая карточка", "theme": TOPIC, "fresh": False},
+            {"id": 3, "title_ru": "Чужая тема", "theme": "HSE", "fresh": True},
+        ],
+    }
+
+    signal_discovery.run_discovery(run_config, snapshot)
+
+    prompt = client.calls[0]["input"]
+    assert "Вебинар по бурению — нет события" in prompt
+    assert "- Nabors встроила MPD в SmartROS" in prompt
+    assert "Старая карточка" not in prompt and "Чужая тема" not in prompt

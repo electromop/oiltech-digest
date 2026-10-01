@@ -32,6 +32,7 @@ from oiltech_digest.signal_feedback import (
     apply_feedback_glossary,
     feedback_prompt_block,
     feedback_query_hints,
+    research_feedback_block,
     memory_snapshot_rows,
     topic_term_stems,
     use_memory_snapshot,
@@ -741,7 +742,12 @@ def run_discovery(
             evidence = list(db_evidence)
             web_search = None
             if config.web_search or config.web_only:
-                web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat)
+                known_titles = [
+                    str(row.get("title_ru") or row.get("title") or "")
+                    for row in snapshot.get("existing_signals") or []
+                    if row.get("fresh") and str(row.get("theme") or "") == topic_name
+                ]
+                web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat, known_titles=known_titles)
                 evidence.extend(web_search["evidence"])
                 # Дальше блок нужен только счётчиками: сами тексты уже в кандидатах. Без
                 # этого результат воркера вёз каждую докачанную страницу лишний раз.
@@ -2308,6 +2314,7 @@ def _topic_web_evidence(
     config: SignalDiscoveryConfig,
     *,
     heartbeat: Callable[[], None],
+    known_titles: list[str] | None = None,
 ) -> dict[str, Any]:
     """Находки темы из веба по режиму прогона: Brave, «режим ChatGPT» или оба."""
     mode = _search_mode(config.search_mode)
@@ -2320,7 +2327,8 @@ def _topic_web_evidence(
         "Ключевые слова: " + ", ".join((context.get("keywords_ru") or [])[:12] + (context.get("keywords_en") or [])[:12]),
     ) if part.strip() and not part.endswith(": "))
     research = signal_research.research_topic(topic_name, days=max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS),
-                                              topic_context=topic_context, heartbeat=heartbeat)
+                                              topic_context=topic_context, heartbeat=heartbeat,
+                                              feedback=research_feedback_block(topic_name, known_titles=known_titles))
     heartbeat()
     # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье.
     events = research.pop("evidence")

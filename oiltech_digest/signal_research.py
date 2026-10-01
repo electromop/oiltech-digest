@@ -101,6 +101,7 @@ def research_topic(
     topic_context: str = "",
     client_factory: Callable[[], Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
+    feedback: str = "",
 ) -> dict[str, Any]:
     """События темы за период с первоисточниками. Ошибка модели — пустой итог со статусом,
     а не падение прогона: у темы остаётся поиск Brave, если он включён."""
@@ -109,12 +110,15 @@ def research_topic(
     count = int(limit or app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC)
     stats: dict[str, Any] = {"status": "ok", "provider": "openai_web_search", "model": app_config.SIGNAL_RESEARCH_MODEL,
                              "period": [start.isoformat(), end.isoformat()], "events": 0, "dropped": [],
+                             "feedback_chars": len(feedback.strip()),
                              "web_search_calls": 0, "input_tokens": 0, "output_tokens": 0}
     prompt = (
         f"Тема: {topic}\n"
         f"Период: с {start.isoformat()} по {end.isoformat()}\n"
         f"Сколько событий: до {count}\n"
         + (f"\nЧто входит в тему:\n{topic_context.strip()}\n" if topic_context.strip() else "")
+        # Обратная связь заказчика: что одобрено, что отклонено, кому доверяет, что уже есть.
+        + (f"\n{feedback.strip()}\n" if feedback.strip() else "")
     )
     client = (client_factory or (lambda: make_client(False)))()
     response = None
