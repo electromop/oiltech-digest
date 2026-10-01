@@ -89,9 +89,13 @@
   SIGNAL_REVIEW_REASONING=medium
   # по умолчанию уже так, задавать не нужно:
   # SIGNAL_RESEARCH_MODEL=gpt-5  SIGNAL_RESEARCH_REASONING=low  SIGNAL_RESEARCH_DAYS=30
+  # SIGNAL_RESEARCH_EVENTS_PER_TOPIC=12  SIGNAL_RESEARCH_TIMEOUT_SECONDS=480  SIGNAL_AI_TIMEOUT_SECONDS=240
+  # SIGNAL_THEME_CHECK_MODEL — второе мнение о тематике, по умолчанию модель дедупа
   ```
 
-  `OPENAI_MODEL` воркера не трогать: им идут суть, теги и скоринг всей ленты.
+  `OPENAI_MODEL` воркера не трогать: им идут суть, теги и скоринг всей ленты. Ключ `OPENAI_API_KEY`
+  воркера обязан пускать в web_search. Полная таблица переменных (ядро / NL) —
+  `docs/handoff_2026-10-02_radar-chatgpt-mode.md`, раздел 1.
 
 **Время и деньги (замер локально, 13 тем).** Чистый прогон — около 2 ч, в основном судья на
 `gpt-5 medium`; поиск — ~$2,4 за прогон (по нашей ставке gpt-5) плюс плата OpenAI за вызовы
