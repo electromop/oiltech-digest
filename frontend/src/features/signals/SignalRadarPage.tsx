@@ -833,6 +833,16 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                           <span>Почему сейчас</span>
                           <p>{signal.why_now || "Нет объяснения"}</p>
                         </div>
+                        {/* «Релевантности мало» (Виктор 29.09): судья называет, где это применить. */}
+                        {signal.oilfield_application ? (
+                          <div>
+                            <span>
+                              Применение в нефтесервисе
+                              {signal.oilfield_relevance === "transferable" ? " · перенос из другой отрасли" : ""}
+                            </span>
+                            <p>{signal.oilfield_application}</p>
+                          </div>
+                        ) : null}
                         <div>
                           <span>Переносимость</span>
                           <p>{signal.transferability || "Нет оценки"}</p>

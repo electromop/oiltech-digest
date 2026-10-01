@@ -954,10 +954,11 @@ def upsert_signal(signal: dict) -> int:
               why_now, why_not_noise, companies_json, industries_json, evidence_count,
               interest_score, why_interesting,
               signal_category, event_date, mixed_events, mixed_events_reason,
-              score_profile, score_items_json, criteria_snapshot
+              score_profile, score_items_json, criteria_snapshot,
+              oilfield_relevance, oilfield_application
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = EXCLUDED.title,
               title_ru = EXCLUDED.title_ru,
@@ -982,6 +983,8 @@ def upsert_signal(signal: dict) -> int:
               event_date = COALESCE(EXCLUDED.event_date, signals.event_date),
               mixed_events = COALESCE(EXCLUDED.mixed_events, signals.mixed_events),
               mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
+              oilfield_relevance = COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance),
+              oilfield_application = COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application),
               -- Балл и его происхождение — всегда вместе: score выше уже новый.
               score_profile = EXCLUDED.score_profile,
               score_items_json = EXCLUDED.score_items_json,
@@ -1015,6 +1018,8 @@ def upsert_signal(signal: dict) -> int:
                 signal.get("score_profile"),
                 Json(_jsonable(signal["score_items"])) if signal.get("score_items") else None,
                 Json(_jsonable(signal["criteria_snapshot"])) if signal.get("criteria_snapshot") else None,
+                signal.get("oilfield_relevance"),
+                (signal.get("oilfield_application") or None),
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -1604,11 +1609,14 @@ def _radar_quality_sql() -> str:
     - архив (ранние карточки со свободной темой) — обратимо, `unarchive-signals`;
     - бизнес и «другое» — не техрадар, сохраняются для будущей бизнес-вкладки;
     - ссылки о разных событиях — одна карточка смешала бы две истории (сигнал 71);
+    - нет связи с нефтесервисом — «релевантности мало» (Виктор 29.09);
     - событие старше срока — «нашёл очень старый сигнал»."""
     parts = [
         "s.archived_at IS NULL",
         "COALESCE(s.signal_category, 'technology') = 'technology'",
         "s.mixed_events IS NOT TRUE",
+        # «Релевантности мало» (Виктор 29.09): общепромышленное без связи с нефтесервисом.
+        "COALESCE(s.oilfield_relevance, 'direct') <> 'none'",
     ]
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     if age_days > 0:
@@ -1639,6 +1647,7 @@ def _radar_hidden_reason_sql() -> str:
         " CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве' END,"
         " CASE s.signal_category WHEN 'business' THEN 'бизнес-сигнал, не технология'"
         "   WHEN 'other' THEN 'не технологическое событие' END,"
+        " CASE WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис' END,"
         " CASE WHEN s.mixed_events THEN 'ссылки о разных событиях'"
         "   || COALESCE(': ' || NULLIF(s.mixed_events_reason, ''), '') END,"
         f" {age}), '')"

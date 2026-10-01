@@ -418,3 +418,66 @@ def test_hidden_radar_cards_are_for_admin_only(monkeypatch):
         assert client.get("/api/signals/summary").json()["hidden"] == 3
     finally:
         api.app.dependency_overrides.pop(api.require_user, None)
+
+
+# --- Релевантность нефтесервису («релевантности мало», Виктор 29.09) --------------------------
+
+
+def test_judge_schema_asks_for_oilfield_relevance_and_application():
+    schema = signal_discovery._judge_schema(THEMES, CRITERIA)["schema"]
+
+    assert schema["properties"]["oilfield_relevance"]["enum"] == ["direct", "transferable", "none"]
+    assert {"oilfield_relevance", "oilfield_application"} <= set(schema["required"])
+    assert "коммунальная и сетевая энергетика" in signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
+
+
+@pytest.mark.parametrize("relevance, application, expected", [
+    # Глоссарий делает первую букву заглавной, как во всех текстах карточки.
+    ("direct", "мониторинг парафина в промысловых трубопроводах", "Мониторинг парафина в промысловых трубопроводах"),
+    ("transferable", "автономная доставка проппанта на кустовые площадки", "Автономная доставка проппанта на кустовые площадки"),
+    # Для «нет связи» применения нет, даже если модель что-то написала.
+    ("none", "можно было бы где-нибудь", ""),
+])
+def test_normalize_keeps_application_only_for_relevant(relevance, application, expected):
+    signal = signal_discovery._normalize_signal_payload(
+        _judge_answer(oilfield_relevance=relevance, oilfield_application=application), DRILLING,
+    )
+
+    assert signal["oilfield_relevance"] == relevance
+    assert signal["oilfield_application"] == expected
+
+
+def test_unknown_relevance_is_none_and_card_stays_visible_by_default():
+    signal = signal_discovery._normalize_signal_payload(_judge_answer(oilfield_relevance="maybe"), DRILLING)
+
+    assert signal["oilfield_relevance"] is None
+
+
+def test_radar_hides_cards_without_oilfield_relevance(isolated_db):
+    direct = _store("chevron", signal_category="technology", oilfield_relevance="direct",
+                    oilfield_application="мониторинг парафина")
+    transferable = _store("aurora", signal_category="technology", oilfield_relevance="transferable")
+    legacy = _store("old")
+    resort = _store("acwa", signal_category="technology", oilfield_relevance="none")
+
+    assert _visible_ids() == {direct, transferable, legacy}
+    hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=20, hidden=True)}
+    assert hidden == {resort: "не про нефтесервис"}
+
+
+def test_relevance_is_kept_when_an_old_worker_refinds_the_card(isolated_db):
+    signal_id = _store("card", oilfield_relevance="direct", oilfield_application="ГРП на кустах")
+    repository.upsert_signal({"signal_key": "card", "title": "card", "theme": DRILLING, "score": 50})
+
+    with repository.get_connection() as conn:
+        row = conn.execute("SELECT oilfield_relevance, oilfield_application FROM signals WHERE id = %s",
+                           (signal_id,)).fetchone()
+    assert row == ("direct", "ГРП на кустах")
+
+
+def test_research_prompt_requires_oilfield_relevance():
+    from oiltech_digest import signal_research
+
+    text = signal_research.RESEARCH_INSTRUCTIONS
+    assert "важны\nНЕФТЕСЕРВИСУ" in text
+    assert "грузоперевозки по общим трассам" in text

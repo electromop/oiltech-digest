@@ -973,3 +973,33 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(lastListQuery().hidden).toBeUndefined();
   });
 });
+
+describe("применение в нефтесервисе на карточке", () => {
+  beforeEach(() => {
+    vi.mocked(listSignals).mockReset();
+    vi.mocked(getSignalSummary).mockReset();
+  });
+
+  it("показывает, где применить, и помечает перенос из другой отрасли", async () => {
+    serve([
+      { ...baseSignal, id: 701, signal_key: "k701", title_ru: "Aurora: автономная логистика фрак-песка",
+        oilfield_relevance: "transferable", oilfield_application: "Доставка проппанта на кустовые площадки" },
+      { ...baseSignal, id: 702, signal_key: "k702", title_ru: "Сенсор Chevron для парафина",
+        oilfield_relevance: "direct", oilfield_application: "Мониторинг парафина в промысловых трубопроводах" },
+      { ...baseSignal, id: 703, signal_key: "k703", title_ru: "Карточка до правки" },
+    ]);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    for (const title of ["Aurora: автономная логистика фрак-песка", "Сенсор Chevron для парафина", "Карточка до правки"]) {
+      const card = (await screen.findByText(title)).closest("article") as HTMLElement;
+      fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    }
+
+    const aurora = screen.getByText("Aurora: автономная логистика фрак-песка").closest("article") as HTMLElement;
+    expect(within(aurora).getByText("Применение в нефтесервисе · перенос из другой отрасли")).toBeInTheDocument();
+    expect(within(aurora).getByText("Доставка проппанта на кустовые площадки")).toBeInTheDocument();
+    const chevron = screen.getByText("Сенсор Chevron для парафина").closest("article") as HTMLElement;
+    expect(within(chevron).getByText("Применение в нефтесервисе")).toBeInTheDocument();
+    const legacy = screen.getByText("Карточка до правки").closest("article") as HTMLElement;
+    expect(within(legacy).queryByText(/Применение в нефтесервисе/)).not.toBeInTheDocument();
+  });
+});

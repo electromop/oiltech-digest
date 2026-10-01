@@ -267,6 +267,10 @@ export type Signal = {
   signal_category?: "technology" | "business" | "other" | string | null;
   mixed_events?: boolean | null;
   mixed_events_reason?: string | null;
+  // Применимость для нефтесервиса (судья): direct — событие в нефтегазе, transferable — перенос из
+  // другой отрасли, none — связи нет (на радар не выходит). oilfield_application — где применить.
+  oilfield_relevance?: "direct" | "transferable" | "none" | string | null;
+  oilfield_application?: string | null;
   // Балл по профилю «Технологический радар»: подпункты ссылаются на критерии снимка (имя и вес
   // на момент оценки). Нет профиля — балл общий, судьи.
   score_profile?: string | null;

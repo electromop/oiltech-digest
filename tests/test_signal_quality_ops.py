@@ -15,6 +15,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "radar" / "radar-qual
 NEW_COLUMNS = {
     "signal_category", "event_date", "mixed_events", "mixed_events_reason", "score_profile",
     "score_items_json", "criteria_snapshot", "archived_at", "archive_reason",
+    "oilfield_relevance", "oilfield_application",
 }
 
 

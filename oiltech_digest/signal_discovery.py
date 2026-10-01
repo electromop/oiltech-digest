@@ -400,6 +400,15 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
 - mixed_events — true, если evidence пачки описывают РАЗНЫЕ события (разные компании, продукты,
   сделки или объекты), и одна карточка смешала бы их. mixed_events_reason — какие события смешаны;
   при false — пустая строка.
+- oilfield_relevance — применимость для нефтесервиса (бурение, заканчивание, ГРП, КРС, добыча,
+  промысловая инфраструктура и трубопроводы промысла, сервис скважин, HSE и логистика промысла):
+  direct — событие в нефтегазе или нефтесервисе (оператор, сервисная компания, промысел, скважина);
+  transferable — другая отрасль, но перенос на конкретную операцию нефтесервиса очевиден и назван;
+  none — связи нет: коммунальная и сетевая энергетика, солнечные и ветровые станции для городов и
+  курортов, грузоперевозки по общим трассам, потребительская электроника, общие SaaS и ИИ-сервисы
+  без промышленного применения, судоходство и авиация без связи с промыслом. Слова «промышленный»
+  мало: нужна операция нефтесервиса. oilfield_application — одной фразой по-русски, где именно это
+  применить в нефтесервисе (для none — пустая строка). Карточки none радар не показывает.
 - theme — выбери ОДНУ тематику из списка во входе (строка «themes»), по сути события, а не по
   запросу, которым материал нашли: ИИ и дроны — это автоматизация и цифровизация, даже если
   в тексте мелькнуло бурение.
@@ -409,7 +418,7 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
   vendor-reported без независимого подтверждения — не выше 60 по зрелости.
 
 Все пользовательские текстовые поля возвращай на русском: title, theme, summary,
-thesis, transferability, why_now, why_not_noise, mixed_events_reason. Не копируй англоязычный или китайский
+thesis, transferability, why_now, why_not_noise, mixed_events_reason, oilfield_application. Не копируй англоязычный или китайский
 заголовок как title; переведи его нормальным нефтегазовым русским языком.
 Названия компаний, продуктов, месторождений, стандартов и устоявшиеся аббревиатуры
 HSE/PTW/AI оставляй в оригинальном написании."""
@@ -454,6 +463,7 @@ SIGNAL_JUDGE_SCHEMA = {
 
 
 SIGNAL_CATEGORIES = ("technology", "business", "other")
+OILFIELD_RELEVANCE = ("direct", "transferable", "none")
 
 
 def _judge_schema(themes: list[str], criteria: list[dict[str, Any]]) -> dict[str, Any]:
@@ -472,7 +482,10 @@ def _judge_schema(themes: list[str], criteria: list[dict[str, Any]]) -> dict[str
     properties["event_date"] = {"type": "string"}
     properties["mixed_events"] = {"type": "boolean"}
     properties["mixed_events_reason"] = {"type": "string"}
-    required += ["signal_category", "event_date", "mixed_events", "mixed_events_reason"]
+    properties["oilfield_relevance"] = {"type": "string", "enum": list(OILFIELD_RELEVANCE)}
+    properties["oilfield_application"] = {"type": "string"}
+    required += ["signal_category", "event_date", "mixed_events", "mixed_events_reason",
+                 "oilfield_relevance", "oilfield_application"]
     if criteria:
         properties["criteria_scores"] = {
             "type": "array",
@@ -3019,7 +3032,17 @@ def _normalize_signal_payload(payload: dict[str, Any], topic: str, *, context: d
         "event_date": _normalize_event_date(payload.get("event_date")),
         "mixed_events": payload.get("mixed_events") is True,
         "mixed_events_reason": _trim(str(payload.get("mixed_events_reason") or ""), 500) if payload.get("mixed_events") is True else "",
+        "oilfield_relevance": _normalize_relevance(payload.get("oilfield_relevance")),
+        "oilfield_application": (
+            _enforce_glossary(_trim(str(payload.get("oilfield_application") or ""), 400), context, topic)
+            if _normalize_relevance(payload.get("oilfield_relevance")) in ("direct", "transferable") else ""
+        ),
     }
+
+
+def _normalize_relevance(value: Any) -> str | None:
+    relevance = str(value or "").strip().lower()
+    return relevance if relevance in OILFIELD_RELEVANCE else None
 
 
 def _normalize_category(value: Any) -> str | None:

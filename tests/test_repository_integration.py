@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from oiltech_digest.db import connection
 from oiltech_digest.db import repository
@@ -175,9 +174,10 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
     assert repository.source_health_report(stale_days=3, verdict="stale")[0]["name"] == "Stale Source"
 
     # digest_candidates тоже пер-юзерная (#12): без user_id выбор в дайджест не виден.
-    # Месяц выпуска — месяц статьи по Москве (feed_window), а не «сейчас»: кандидат датирован
-    # «вчера», и первого числа месяца это уже прошлый месяц (тест падал 1.10).
-    candidate_month = (now - timedelta(days=1)).astimezone(ZoneInfo("Europe/Moscow")).strftime("%Y-%m")
+    # Месяц выпуска — месяц статьи (feed_window.period_month_sql: пояс сессии БД, UTC), а не
+    # «сейчас»: кандидат датирован «вчера», и первого числа месяца это уже прошлый месяц (тест
+    # падал 1.10). По Москве нельзя: 02.10 00:23 МСК — по UTC ещё 1.10, месяцы расходятся.
+    candidate_month = (now - timedelta(days=1)).astimezone(timezone.utc).strftime("%Y-%m")
     digest_rows = repository.digest_candidates(month=candidate_month, min_score=60, user_id=analyst_id)
     assert len(digest_rows) == 1
     assert digest_rows[0]["id"] == article_ids["Digest candidate"]
