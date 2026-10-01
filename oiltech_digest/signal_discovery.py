@@ -2320,7 +2320,7 @@ def _topic_web_evidence(
         "Ключевые слова: " + ", ".join((context.get("keywords_ru") or [])[:12] + (context.get("keywords_en") or [])[:12]),
     ) if part.strip() and not part.endswith(": "))
     research = signal_research.research_topic(topic_name, days=max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS),
-                                              topic_context=topic_context)
+                                              topic_context=topic_context, heartbeat=heartbeat)
     heartbeat()
     # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье.
     events = research.pop("evidence")

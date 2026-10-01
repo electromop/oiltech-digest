@@ -100,6 +100,7 @@ def research_topic(
     limit: int | None = None,
     topic_context: str = "",
     client_factory: Callable[[], Any] | None = None,
+    heartbeat: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """События темы за период с первоисточниками. Ошибка модели — пустой итог со статусом,
     а не падение прогона: у темы остаётся поиск Brave, если он включён."""
@@ -121,7 +122,13 @@ def research_topic(
     # Модель с поиском отвечает по-разному от вызова к вызову: сравнительный прогон 30.09 —
     # на теме автоматизации первая попытка дала события, повтор — пустой список после 15
     # поисков. Пустой ответ и временный сбой — ещё одна попытка с подсказкой искать шире.
+    beat = heartbeat or (lambda: None)
     for attempt in range(1, RESEARCH_ATTEMPTS + 1):
+        # Признак продвижения перед каждой попыткой: вызов с поиском молчит до
+        # SIGNAL_RESEARCH_TIMEOUT_SECONDS, а воркер NL снимает задачу как зависшую после
+        # 1200 с без признаков (external_worker._JOB_STALL_SECONDS) — две попытки подряд
+        # без beat подходили к порогу вплотную.
+        beat()
         attempt_prompt = prompt if attempt == 1 else prompt + RETRY_HINT
         try:
             response = client.research_json(

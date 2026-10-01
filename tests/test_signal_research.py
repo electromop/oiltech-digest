@@ -246,3 +246,12 @@ def test_research_client_collects_search_sources_as_grounding(monkeypatch):
     assert sent["include"] == ["web_search_call.action.sources"]
     assert response.data["_cited_urls"] == ["https://investors.bakerhughes.com/news/bp-award"]
     assert response.data["_web_search_calls"] == 1
+
+
+def test_heartbeat_before_each_attempt_keeps_the_job_alive_on_the_worker():
+    beats = []
+    signal_research.research_topic(TOPIC, period_end=date(2026, 9, 30), days=30,
+                                   client_factory=lambda: _Sequence([], [_event()]),
+                                   heartbeat=lambda: beats.append(1))
+
+    assert len(beats) == 2

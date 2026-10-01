@@ -51,6 +51,52 @@
    (сначала `--dry-run` на одну тему, если нужно). Итог задачи: у кандидатов
    `raw_output.theme_choice.reason = judge`, `raw_output.judge_score` против `profile_score`.
 
+## Режим поиска «ChatGPT» (решение 01.10: в прод идёт он)
+
+Находки темы — один вызов `gpt-5` со встроенным поиском OpenAI на тему (`signal_research.py`),
+дальше наш судья, ревью, дедуп. Сравнение 30.09–01.10 на 13 темах: 28 технологических карточек
+на радаре (Brave 28.09 — 23, сильных две), почти все — события сентября, первоисточники,
+много российских. Файл для Виктора — `radar_chatgpt_mode_2026-10-01.xlsx`.
+
+**Где что задаётся.** Режим решает ядро и кладёт в задачу; модели читает NL.
+
+- Ядро, `/root/oiltech-digest/.env`:
+
+  ```
+  SIGNAL_SEARCH_MODE=openai_web
+  ```
+
+  затем `sh scripts/deploy-core.sh --no-schema app scheduler` (переменная читается при старте).
+
+- NL, `.env.external-worker` (владелец), затем `sh scripts/deploy-nl.sh`:
+
+  ```
+  SIGNAL_JUDGE_MODEL=gpt-5
+  SIGNAL_JUDGE_REASONING=medium
+  SIGNAL_REVIEW_MODEL=gpt-5
+  SIGNAL_REVIEW_REASONING=medium
+  # по умолчанию уже так, задавать не нужно:
+  # SIGNAL_RESEARCH_MODEL=gpt-5  SIGNAL_RESEARCH_REASONING=low  SIGNAL_RESEARCH_DAYS=30
+  ```
+
+  `OPENAI_MODEL` воркера не трогать: им идут суть, теги и скоринг всей ленты.
+
+**Время и деньги (замер локально, 13 тем).** Чистый прогон — около 2 ч, в основном судья на
+`gpt-5 medium`; поиск — ~$2,4 за прогон (по нашей ставке gpt-5) плюс плата OpenAI за вызовы
+web_search (~290 вызовов); судья на gpt-5 — сверх этого, отдельно не замерян. Ежедневный прогон
+в этом режиме — десятки долларов в месяц: если дорого — `SIGNAL_JUDGE_MODEL=gpt-5-mini`,
+`SIGNAL_JUDGE_REASONING=low` (быстрее и дешевле, качество не сравнивали) или перевод радара на
+еженедельный запуск (в планировщике сейчас его нет — отдельная правка).
+
+**Аренда на NL.** Порог зависания радара — 1200 с без признака продвижения; поиск подаёт его
+перед каждой попыткой, судья — на каждый кластер. Таймауты: поиск 480 с, судья 240 с.
+
+**Проверка первым прогоном:** в итоге задачи у тем `web_search.provider = openai_web_search`,
+`research.status = ok`, `research.events` > 0, `research.unverified` — единицы. `status = error` с
+403 — ключ OpenAI NL не пускает в web_search (проверено локально: наш ключ пускает).
+
+**Откат на Brave:** `SIGNAL_SEARCH_MODE=brave` в `.env` ядра и перезапуск `app scheduler`.
+
 ## Проверка на проде (только чтение)
 
 ```sql

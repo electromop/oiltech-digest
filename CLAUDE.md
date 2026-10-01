@@ -58,6 +58,16 @@
 видна. Тему рынка радар не ищет (`SIGNAL_RADAR_EXCLUDED_TOPICS`). Архив — `archive-signals`
 (сухой прогон по умолчанию) / `unarchive-signals`. Выкат — `scripts/radar/radar-quality-runbook.md`.
 
+## Поиск радара — «режим ChatGPT» (с 01.10 — основной)
+
+`SIGNAL_SEARCH_MODE` в `.env` ядра: `openai_web` — на тему один вызов `gpt-5` со встроенным поиском
+OpenAI (`signal_research.py`): события периода с первоисточниками → докачка страницы → наш судья,
+ревью, дедуп; `brave` — прежний поиск; `both` — оба. Ссылка подтверждена, если страница
+открылась или адрес — среди источников, которые вернул поиск (`web_search_call.action.sources`);
+иначе отбрасывается. Модели радара — свои (`SIGNAL_JUDGE_*`, `SIGNAL_REVIEW_*`, `SIGNAL_DEDUP_*`,
+`SIGNAL_RESEARCH_*`), `OPENAI_MODEL` ленты не трогать. Настройки и цена —
+`scripts/radar/radar-quality-runbook.md`.
+
 ## Дедуп радара
 
 Одно событие — одна карточка (`signal_dedup.py`): правило пар (основы заголовка от 0,25, общая
