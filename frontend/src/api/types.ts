@@ -261,7 +261,27 @@ export type Signal = {
   // Ревью пачки: насколько сигнал интересен на фоне соседей по прогону и почему.
   interest_score?: number | null;
   why_interesting?: string | null;
+  // Поля судьи (замечания Виктора 29.09). event_date — дата самого события (ГГГГ-ММ-ДД), а не
+  // поступления на радар; null — у карточки до правки или судья даты не нашёл.
+  event_date?: string | null;
+  signal_category?: "technology" | "business" | "other" | string | null;
+  mixed_events?: boolean | null;
+  mixed_events_reason?: string | null;
+  // Балл по профилю «Технологический радар»: подпункты ссылаются на критерии снимка (имя и вес
+  // на момент оценки). Нет профиля — балл общий, судьи.
+  score_profile?: string | null;
+  score_items_json?: SignalScoreItem[] | null;
+  criteria_snapshot?: Array<{ id: number; name: string; weight: number }> | null;
+  // Почему карточка не на радаре — только в выборке «Скрытые» (админ).
+  hidden_reason?: string | null;
   evidence?: SignalEvidence[];
+};
+
+export type SignalScoreItem = {
+  criterion_id: number;
+  final_score: number;
+  ai_score?: number;
+  rationale?: string;
 };
 
 export type SignalPatch = {

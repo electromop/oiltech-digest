@@ -370,3 +370,51 @@ def test_gpt5_has_its_own_price():
     # Без строки gpt-5 считался бы по ставке nano — в ~25 раз дешевле.
     assert config.price_for_model("gpt-5-2025-08-07") == (1.25, 10.0)
     assert config.price_for_model("gpt-5-mini-2025-08-07") == (0.25, 2.0)
+
+
+# --- Экран: скрытые карточки для админа ------------------------------------------------------
+
+
+def test_hidden_view_lists_only_hidden_cards_with_a_reason(isolated_db):
+    recent = (date.today() - timedelta(days=5)).isoformat()
+    _store("tech", signal_category="technology", event_date=recent)
+    business = _store("deal", signal_category="business", event_date=recent)
+    mixed = _store("mixed", signal_category="technology", mixed_events=True, mixed_events_reason="две сделки SLB")
+    archived = _store("old13", signal_category="technology")
+    repository.archive_signals([archived], reason="early")
+
+    rows = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
+
+    assert rows == {
+        business: "бизнес-сигнал, не технология",
+        mixed: "ссылки о разных событиях: две сделки SLB",
+        archived: "в архиве",
+    }
+    assert all(row["hidden_reason"] is None for row in repository.list_signals(limit=50))
+    summary = repository.signal_radar_summary(hidden=True)
+    assert (summary["total"], summary["hidden"], summary["matching"]) == (1, 3, 3)
+
+
+def test_hidden_radar_cards_are_for_admin_only(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from oiltech_digest import api
+
+    seen = {}
+    monkeypatch.setattr(api.repository, "list_signals", lambda **kwargs: seen.update(kwargs) or [])
+    monkeypatch.setattr(api.repository, "signal_radar_summary",
+                        lambda **kwargs: {"total": 1, "hidden": 3, "matching": 1, "themes": []})
+    client = TestClient(api.app)
+    try:
+        api.app.dependency_overrides[api.require_user] = lambda: {"id": 2, "email": "u@example.com", "role": "user"}
+        assert client.get("/api/signals?hidden=true").status_code == 403
+        assert client.get("/api/signals/summary?hidden=true").status_code == 403
+        # Обычному пользователю и число скрытых не показываем.
+        assert "hidden" not in client.get("/api/signals/summary").json()
+
+        api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@example.com", "role": "admin"}
+        assert client.get("/api/signals?hidden=true").status_code == 200
+        assert seen["hidden"] is True
+        assert client.get("/api/signals/summary").json()["hidden"] == 3
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)

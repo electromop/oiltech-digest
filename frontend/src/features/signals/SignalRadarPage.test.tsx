@@ -869,3 +869,107 @@ describe("SignalRadarPage", () => {
     });
   });
 });
+
+describe("качество радара на экране (Виктор 29.09)", () => {
+  const scored: Signal = {
+    ...baseSignal,
+    id: 501,
+    signal_key: "k501",
+    title_ru: "Энергоавтономный сенсор Chevron для мониторинга парафина",
+    event_date: "2026-09-10",
+    score: 68.5,
+    score_profile: "tech_radar",
+    score_items_json: [
+      { criterion_id: 101, final_score: 80 },
+      { criterion_id: 105, final_score: 90.4 },
+    ],
+    criteria_snapshot: [
+      { id: 101, name: "Ценность для нефтесервиса", weight: 30 },
+      { id: 105, name: "Свежесть", weight: 10 },
+    ],
+  };
+  const legacy: Signal = { ...baseSignal, id: 502, signal_key: "k502", title_ru: "Карточка до правки", event_date: null };
+  const hiddenCard: Signal = {
+    ...baseSignal,
+    id: 601,
+    signal_key: "k601",
+    title_ru: "SLB получила контракты Aramco",
+    signal_category: "business",
+    hidden_reason: "бизнес-сигнал, не технология",
+  };
+
+  function serveWithHidden(visible: Signal[], hidden: Signal[]) {
+    vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => (query.hidden ? hidden : visible).map((card) => ({ ...card })));
+    vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => ({
+      total: visible.length,
+      new_7d: 0,
+      in_digest: 0,
+      with_feedback: 0,
+      merged: 0,
+      hidden: hidden.length,
+      matching: query.hidden ? hidden.length : visible.length,
+      themes: [],
+    }));
+  }
+
+  beforeEach(() => {
+    vi.mocked(listSignals).mockReset();
+    vi.mocked(getSignalSummary).mockReset();
+    vi.mocked(getSignalSearchHealth).mockReset();
+    vi.mocked(getSignalSearchHealth).mockResolvedValue({ search_health: null } as never);
+    serveWithHidden([scored, legacy], [hiddenCard]);
+  });
+
+  it("строка карточки показывает дату самого события, если судья её поставил", async () => {
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    expect(within(card).getByText("Событие: 10.09.2026")).toBeInTheDocument();
+    const old = screen.getByText("Карточка до правки").closest("article") as HTMLElement;
+    expect(within(old).queryByText(/Событие:/)).not.toBeInTheDocument();
+  });
+
+  it("раскрытая карточка показывает разбивку балла по критериям с весами из снимка", async () => {
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    expect(within(card).getByTitle("Балл по профилю «Технологический радар»")).toHaveTextContent("69");
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    const breakdown = within(card).getByText("Балл по критериям").closest(".signalScoreBreakdown") as HTMLElement;
+    const rows = within(breakdown).getAllByRole("listitem").map((row) => row.textContent);
+    expect(rows).toEqual(["Ценность для нефтесервиса · вес 3080", "Свежесть · вес 1090"]);
+  });
+
+  it("у карточки без профиля разбивки нет, балл — судьи", async () => {
+    renderRadar(false);
+    const card = (await screen.findByText("Карточка до правки")).closest("article") as HTMLElement;
+    expect(within(card).getByTitle("Балл судьи радара")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    expect(within(card).queryByText("Балл по критериям")).not.toBeInTheDocument();
+  });
+
+  it("админ открывает скрытые карточки с причиной и возвращается к радару", async () => {
+    renderRadar(true);
+    await screen.findByText(scored.title_ru as string);
+    expect(tileValue("Скрыто")).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Скрытые (1)" }));
+
+    expect(await screen.findByText("SLB получила контракты Aramco")).toBeInTheDocument();
+    expect(lastListQuery().hidden).toBe(true);
+    expect(screen.getByRole("heading", { name: "Скрытые карточки радара" })).toBeInTheDocument();
+    expect(screen.getByText("Скрыта: бизнес-сигнал, не технология")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("на радар их не пускают правила качества");
+
+    fireEvent.click(screen.getByRole("button", { name: "К радару" }));
+
+    expect(await screen.findByText(scored.title_ru as string)).toBeInTheDocument();
+    expect(lastListQuery().hidden).toBeUndefined();
+  });
+
+  it("обычный пользователь не видит ни переключателя, ни плитки «Скрыто»", async () => {
+    renderRadar(false);
+    await screen.findByText(scored.title_ru as string);
+    expect(screen.queryByRole("button", { name: /^Скрытые/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Скрыто")).not.toBeInTheDocument();
+    expect(lastListQuery().hidden).toBeUndefined();
+  });
+});

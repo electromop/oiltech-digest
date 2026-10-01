@@ -51,7 +51,7 @@ describe("экран «Скоринг»: вкладки наборов крит�
     vi.restoreAllMocks();
   });
 
-  it("вкладка «Технологический радар» грузит свой набор, свою сумму и говорит, что в оценку радара он пока не входит", async () => {
+  it("вкладка «Технологический радар» грузит свой набор, свою сумму и говорит, что им оцениваются карточки радара", async () => {
     const user = userEvent.setup();
     const confirm = vi.spyOn(window, "confirm");
     renderPage();
@@ -69,7 +69,10 @@ describe("экран «Скоринг»: вкладки наборов крит�
     expect(screen.getByRole("tab", { name: "Технологический радар" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Сумма весов: 65%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("в оценку сигналов радара пока не входит");
+    // Профиль подключён к радару (ADR 0002, Б3): плашка больше не говорит «пока не входит».
+    expect(screen.getByRole("status")).toHaveTextContent("Этим набором оцениваются карточки технологического радара");
+    expect(screen.getByRole("status")).toHaveTextContent("со следующего прогона радара");
+    expect(screen.getByRole("status")).not.toHaveTextContent("пока не");
     expect(confirm).not.toHaveBeenCalled(); // правок не было — и спрашивать не о чем
   });
 

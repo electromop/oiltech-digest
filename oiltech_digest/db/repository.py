@@ -1619,6 +1619,30 @@ def _radar_quality_sql() -> str:
 _RADAR_VISIBLE_SQL = (
     f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_radar_card_evidence_exists()}"
 )
+# Скрытые по качеству — для админа (экран, переключатель «Скрытые»): проверить, не отсеяно ли
+# лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут — их
+# ссылки и так в главной карточке.
+_RADAR_HIDDEN_SQL = (
+    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()}) AND {_radar_card_evidence_exists()}"
+)
+
+
+def _radar_hidden_reason_sql() -> str:
+    """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql."""
+    age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
+    age = (
+        f"CASE WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней' END"
+        if age_days > 0 else "NULL"
+    )
+    return (
+        "NULLIF(concat_ws('; ',"
+        " CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве' END,"
+        " CASE s.signal_category WHEN 'business' THEN 'бизнес-сигнал, не технология'"
+        "   WHEN 'other' THEN 'не технологическое событие' END,"
+        " CASE WHEN s.mixed_events THEN 'ссылки о разных событиях'"
+        "   || COALESCE(': ' || NULLIF(s.mixed_events_reason, ''), '') END,"
+        f" {age}), '')"
+    )
 # Тема — одна из тематик заказчика (корневые теги). Первая партия радара (13.09) писала
 # тему свободным текстом: экран собирает такие в отдельный блок и в фильтр тем не берёт.
 _RADAR_TOPIC_SQL = (
@@ -1649,11 +1673,12 @@ def _like_contains(text: str) -> str:
 
 def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: str | None = None,
                    since: date | str | None = None, until: date | str | None = None,
-                   min_score: float | None = None, max_score: float | None = None) -> tuple[list[str], list]:
+                   min_score: float | None = None, max_score: float | None = None,
+                   hidden: bool = False) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля»."""
-    clauses = [_RADAR_VISIBLE_SQL]
+    clauses = [_RADAR_HIDDEN_SQL if hidden else _RADAR_VISIBLE_SQL]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -1696,11 +1721,14 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
 def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50,
                  user_id: int | None = None, q: str | None = None, since: date | str | None = None,
                  until: date | str | None = None, min_score: float | None = None,
-                 max_score: float | None = None, sort: str = "score_desc", offset: int = 0) -> list[dict]:
+                 max_score: float | None = None, sort: str = "score_desc", offset: int = 0,
+                 hidden: bool = False) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
-    (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу)."""
+    (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
+    hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
+        hidden=hidden,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
@@ -1713,6 +1741,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             f"""
             SELECT s.*,
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
+                   {_radar_hidden_reason_sql()} AS hidden_reason,
                    -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
                    -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска.
                    {signal_month_sql('s')} AS digest_month,
@@ -1766,9 +1795,12 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
             """
         )
         tiles["merged"] = int(cur.fetchone()["merged"])
+        cur.execute(f"SELECT COUNT(*) AS hidden FROM signals s WHERE {_RADAR_HIDDEN_SQL}")
+        tiles["hidden"] = int(cur.fetchone()["hidden"])
         total = tiles["total"]
         matching = total
-        if len(clauses) > 1:
+        # Скрытые — своя выборка: «N из M» считается по ним даже без других фильтров.
+        if len(clauses) > 1 or filters.get("hidden"):
             cur.execute(
                 f"""
                 SELECT COUNT(*) AS matching

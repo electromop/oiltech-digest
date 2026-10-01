@@ -5226,6 +5226,39 @@ button {
   gap: 8px;
 }
 
+/* Разбивка балла по критериям профиля «Технологический радар»: строка «критерий · вес — балл».
+   Подписи критериев — обычным текстом, а не заглавными, как заголовки блока (.signalRadarFacts span). */
+.signalScoreBreakdown ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.signalScoreBreakdown li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.86rem;
+}
+
+.signalScoreBreakdown li span {
+  font-size: inherit;
+  font-weight: 400;
+  color: inherit;
+  text-transform: none;
+}
+
+.signalScoreBreakdown li strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Причина скрытия — только в выборке «Скрытые» (админ). */
+.signalHiddenReason {
+  color: #b45309;
+}
+
 .signalRadarFacts > div {
   min-width: 0;
   padding-left: 10px;
