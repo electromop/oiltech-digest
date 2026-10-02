@@ -767,6 +767,8 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS archive_reason TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS oilfield_relevance TEXT;  -- direct / transferable / none
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS oilfield_application TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_stage TEXT;   -- search / judge / review / judge_error
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_reason TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;

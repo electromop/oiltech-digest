@@ -946,18 +946,18 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(within(card).queryByText("Балл по критериям")).not.toBeInTheDocument();
   });
 
-  it("админ открывает скрытые карточки с причиной и возвращается к радару", async () => {
-    renderRadar(true);
+  it("отсеянные и скрытые открываются с причиной и возвращаются к радару", async () => {
+    renderRadar(false);
     await screen.findByText(scored.title_ru as string);
-    expect(tileValue("Скрыто")).toBe("1");
+    expect(tileValue("Отсеяно и скрыто")).toBe("1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Скрытые (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Отсеянные и скрытые (1)" }));
 
     expect(await screen.findByText("SLB получила контракты Aramco")).toBeInTheDocument();
     expect(lastListQuery().hidden).toBe(true);
-    expect(screen.getByRole("heading", { name: "Скрытые карточки радара" })).toBeInTheDocument();
-    expect(screen.getByText("Скрыта: бизнес-сигнал, не технология")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("на радар их не пускают правила качества");
+    expect(screen.getByRole("heading", { name: "Отсеянные и скрытые карточки" })).toBeInTheDocument();
+    expect(screen.getByText("Не на радаре: бизнес-сигнал, не технология")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("отсеянное поиском и судьёй");
 
     fireEvent.click(screen.getByRole("button", { name: "К радару" }));
 
@@ -965,11 +965,11 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(lastListQuery().hidden).toBeUndefined();
   });
 
-  it("обычный пользователь не видит ни переключателя, ни плитки «Скрыто»", async () => {
+  it("раздел виден не только админу: Виктор разбирает всё отсеянное (решение 02.10)", async () => {
     renderRadar(false);
     await screen.findByText(scored.title_ru as string);
-    expect(screen.queryByRole("button", { name: /^Скрытые/ })).not.toBeInTheDocument();
-    expect(screen.queryByText("Скрыто")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Отсеянные и скрытые (1)" })).toBeInTheDocument();
+    // По умолчанию — радар, не отсеянное.
     expect(lastListQuery().hidden).toBeUndefined();
   });
 });

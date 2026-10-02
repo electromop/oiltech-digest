@@ -955,10 +955,10 @@ def upsert_signal(signal: dict) -> int:
               interest_score, why_interesting,
               signal_category, event_date, mixed_events, mixed_events_reason,
               score_profile, score_items_json, criteria_snapshot,
-              oilfield_relevance, oilfield_application
+              oilfield_relevance, oilfield_application, filter_stage, filter_reason
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = EXCLUDED.title,
               title_ru = EXCLUDED.title_ru,
@@ -985,6 +985,9 @@ def upsert_signal(signal: dict) -> int:
               mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
               oilfield_relevance = COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance),
               oilfield_application = COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application),
+              -- Отсев — решение этого прогона: принятая снова карточка выходит на радар.
+              filter_stage = EXCLUDED.filter_stage,
+              filter_reason = EXCLUDED.filter_reason,
               -- Балл и его происхождение — всегда вместе: score выше уже новый.
               score_profile = EXCLUDED.score_profile,
               score_items_json = EXCLUDED.score_items_json,
@@ -1020,6 +1023,8 @@ def upsert_signal(signal: dict) -> int:
                 Json(_jsonable(signal["criteria_snapshot"])) if signal.get("criteria_snapshot") else None,
                 signal.get("oilfield_relevance"),
                 (signal.get("oilfield_application") or None),
+                signal.get("filter_stage") or None,
+                (signal.get("filter_reason") or None),
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -1045,6 +1050,8 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
                   SELECT 1 FROM signals owner
                   WHERE owner.id = signal_evidence.signal_id
                     AND owner.merged_into_signal_id IS NULL
+                    -- Отсеянная карточка ссылку не держит: найденное снова и принятое забирает её.
+                    AND owner.filter_stage IS NULL
                     AND owner.id <> EXCLUDED.signal_id
                 ) THEN signal_evidence.signal_id
                 ELSE EXCLUDED.signal_id
@@ -1153,6 +1160,8 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
               ) top
             ) ev ON TRUE
             WHERE s.merged_into_signal_id IS NULL
+              -- Отсеянное в дедуп не идёт: новое событие не склеится с браком.
+              AND s.filter_stage IS NULL
               AND ({reviewed} OR s.last_seen_at >= now() - make_interval(days => %s))
             ORDER BY {reviewed} DESC, s.last_seen_at DESC, s.id DESC
             LIMIT %s
@@ -1242,6 +1251,7 @@ def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
             JOIN signals s ON s.id = e.signal_id
             WHERE e.source_url = ANY(%s)
               AND s.merged_into_signal_id IS NULL
+              AND s.filter_stage IS NULL
             """,
             (list(urls),),
         )
@@ -1376,7 +1386,7 @@ def signal_key_owners(keys: list[str]) -> dict[str, dict]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            SELECT s.signal_key, s.id, s.merged_into_signal_id, {reviewed} AS reviewed
+            SELECT s.signal_key, s.id, s.merged_into_signal_id, s.filter_stage, {reviewed} AS reviewed
             FROM signals s
             WHERE s.signal_key = ANY(%s)
             """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s")),
@@ -1637,6 +1647,8 @@ def _radar_quality_sql() -> str:
         "s.mixed_events IS NOT TRUE",
         # «Релевантности мало» (Виктор 29.09): общепромышленное без связи с нефтесервисом.
         "COALESCE(s.oilfield_relevance, 'direct') <> 'none'",
+        # Отсеяно поиском, судьёй, ревью пачки или сбоем судьи — хранится для разбора заказчиком.
+        "s.filter_stage IS NULL",
     ]
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     if age_days > 0:
@@ -1651,8 +1663,16 @@ _RADAR_VISIBLE_SQL = (
 # лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут — их
 # ссылки и так в главной карточке.
 _RADAR_HIDDEN_SQL = (
-    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()}) AND {_radar_card_evidence_exists()}"
+    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()})"
+    # Отсеянная находка без ссылки (поиск дал битый адрес) — тоже видна в разборе.
+    f" AND ({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
 )
+RADAR_FILTER_STAGES = {
+    "search": "поиск",
+    "judge": "судья",
+    "review": "ревью пачки",
+    "judge_error": "судья не ответил",
+}
 
 
 def _radar_hidden_reason_sql() -> str:
@@ -1664,6 +1684,9 @@ def _radar_hidden_reason_sql() -> str:
     )
     return (
         "NULLIF(concat_ws('; ',"
+        " CASE s.filter_stage"
+        + "".join(f" WHEN '{stage}' THEN 'отсеяно ({label})'" for stage, label in RADAR_FILTER_STAGES.items())
+        + " END || COALESCE(': ' || NULLIF(s.filter_reason, ''), ''),"
         " CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве' END,"
         " CASE s.signal_category WHEN 'business' THEN 'бизнес-сигнал, не технология'"
         "   WHEN 'other' THEN 'не технологическое событие' END,"

@@ -395,7 +395,8 @@ def test_hidden_view_lists_only_hidden_cards_with_a_reason(isolated_db):
     assert (summary["total"], summary["hidden"], summary["matching"]) == (1, 3, 3)
 
 
-def test_hidden_radar_cards_are_for_admin_only(monkeypatch):
+def test_filtered_and_hidden_cards_are_open_to_every_user(monkeypatch):
+    # Решение 02.10: Виктор разбирает всё, что радар не пустил, — не только админ.
     from fastapi.testclient import TestClient
 
     from oiltech_digest import api
@@ -407,12 +408,6 @@ def test_hidden_radar_cards_are_for_admin_only(monkeypatch):
     client = TestClient(api.app)
     try:
         api.app.dependency_overrides[api.require_user] = lambda: {"id": 2, "email": "u@example.com", "role": "user"}
-        assert client.get("/api/signals?hidden=true").status_code == 403
-        assert client.get("/api/signals/summary?hidden=true").status_code == 403
-        # Обычному пользователю и число скрытых не показываем.
-        assert "hidden" not in client.get("/api/signals/summary").json()
-
-        api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@example.com", "role": "admin"}
         assert client.get("/api/signals?hidden=true").status_code == 200
         assert seen["hidden"] is True
         assert client.get("/api/signals/summary").json()["hidden"] == 3
@@ -481,3 +476,114 @@ def test_research_prompt_requires_oilfield_relevance():
     text = signal_research.RESEARCH_INSTRUCTIONS
     assert "важны\nНЕФТЕСЕРВИСУ" in text
     assert "грузоперевозки по общим трассам" in text
+
+
+# --- Отсеянное — карточкой «Отсеяно», чтобы заказчик просмотрел всё (02.10) ---------------------
+
+
+def _apply_run(topics):
+    config_ = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False, persist_training_examples=False)
+    return signal_discovery.apply_discovery(config_, {"topics": topics})
+
+
+def _rejected(key, title, **fields):
+    signal = signal_discovery._normalize_signal_payload(_judge_answer(title_ru=title, maturity="reject"), DRILLING)
+    signal.update({"signal_key": key, "evidence": [{"source_url": f"https://example.com/{key}", "title": title}],
+                   "why_not_noise": "обзор без события", **fields})
+    return {"signal": signal, "rejected": True}
+
+
+def _filtered():
+    return {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
+
+
+def test_judge_and_batch_rejects_are_kept_as_filtered_cards(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("judge-no", "Обзор рынка бурения"),
+        _rejected("review-no", "Реклама вендора", batch_review_reason="реклама без факта применения"),
+    ]}])
+
+    owners = repository.signal_key_owners(["judge-no", "review-no"])
+    reasons = _filtered()
+    assert reasons[owners["judge-no"]["id"]] == "отсеяно (судья): обзор без события"
+    assert reasons[owners["review-no"]["id"]] == "отсеяно (ревью пачки): реклама без факта применения"
+    assert _visible_ids() == set()
+
+
+def test_reject_does_not_overwrite_a_card_already_on_the_radar(isolated_db):
+    visible = _store("same-key", signal_category="technology")
+
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("same-key", "Тот же материал")]}])
+
+    assert visible in _visible_ids()
+
+
+def test_search_drops_and_judge_failures_are_kept_with_reason(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
+        {"stage": "search", "title": "ProPetro: контракт на 230 МВт", "reason": "не технологическое событие (нет технологии)",
+         "url": "https://example.com/propetro", "summary": "контракт", "event_date": "2026-09-20"},
+        {"stage": "search", "title": "Событие с битой ссылкой", "reason": "нет ссылки или заголовка", "url": ""},
+        {"stage": "judge_error", "title": "Кластер без ответа", "reason": "ReadTimeout", "url": "https://example.com/t"},
+    ]}])
+
+    reasons = sorted(_filtered().values())
+    assert reasons == [
+        "отсеяно (поиск): не технологическое событие (нет технологии)",
+        "отсеяно (поиск): нет ссылки или заголовка",  # без ссылки — тоже видна в разборе
+        "отсеяно (судья не ответил): ReadTimeout",
+    ]
+
+
+def test_filtered_card_does_not_hold_its_link_and_stays_out_of_dedup(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
+        {"stage": "search", "title": "Рано отсеяно", "reason": "дата события вне периода", "url": "https://example.com/x"},
+    ]}])
+    assert repository.visible_evidence_owners(["https://example.com/x"]) == {}
+    assert repository.list_signals_for_dedup() == []
+
+    # Найдено снова и принято судьёй — ссылка переходит к принятой карточке.
+    accepted = repository.upsert_signal({"signal_key": "accepted", "title": "Принято", "theme": DRILLING,
+                                         "signal_category": "technology"})
+    repository.upsert_signal_evidence(accepted, {"source_url": "https://example.com/x", "title": "x"})
+
+    assert set(repository.visible_evidence_owners(["https://example.com/x"])) == {"https://example.com/x"}
+    assert accepted in _visible_ids()
+
+
+def test_refiltered_finding_updates_the_same_card(isolated_db):
+    finding = {"stage": "search", "title": "Повтор", "reason": "дата вне периода", "url": "https://example.com/r"}
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [finding]}])
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [finding]}])
+
+    assert len(_filtered()) == 1
+
+
+def test_run_collects_search_drops_and_judge_failures(monkeypatch):
+    from oiltech_digest import signal_research
+    from tests.test_signal_research import _Research, _event
+
+    monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
+        _event(title="Бизнес", event_kind="other", technology="", source_url="https://example.com/biz"),
+        _event(title="Технология А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
+        _event(title="Технология Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
+    ]))
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
+                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
+
+    def judge(cluster, topic, offline=True):
+        if cluster[0]["source_url"].endswith("/a"):
+            raise AIClientError("OpenAI API error 503: busy")
+        return {"title": "Б", "theme": DRILLING, "score": 60, "maturity": "watch"}, {}
+
+    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+
+    run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING}], "tags": []})
+
+    findings = run["topics"][0]["filtered_findings"]
+    assert [(item["stage"], item["title"], item["url"]) for item in findings] == [
+        ("search", "Бизнес", "https://example.com/biz"),
+        ("judge_error", "Технология А", "https://example.com/a"),
+    ]
+    assert findings[1]["reason"].startswith("AIClientError: OpenAI API error 503")

@@ -224,8 +224,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
-  // «Скрытые» (админ): карточки, которые правила качества не пускают на радар, — бизнес,
-  // смешанные события, старые, архив. Проверить, не отсеяно ли лишнее.
+  // «Отсеянные и скрытые» — всем (решение 02.10: Виктор разбирает всё): бизнес, смешанные
+  // события, старые, не про нефтесервис, брак судьи, отсеянное поиском, архив.
   const [showHidden, setShowHidden] = useState(false);
 
   const filters: SignalFilters = useMemo(
@@ -237,9 +237,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       maxScore: scoreMax !== SCORE_MAX ? scoreMax : undefined,
       since: dateFrom || undefined,
       until: dateTo || undefined,
-      hidden: (isAdmin && showHidden) || undefined,
+      hidden: showHidden || undefined,
     }),
-    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo, isAdmin, showHidden],
+    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo, showHidden],
   );
   // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
   // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
@@ -558,8 +558,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       {showHidden ? (
         <div className="archiveNotice" role="status">
           <span>
-            Скрытые карточки: на радар их не пускают правила качества — бизнес-сигнал, не технологическое
-            событие, ссылки о разных событиях, событие старше срока или архив. Причина — в строке карточки.
+            Отсеянные и скрытые: всё, что радар не пустил на экран, — отсеянное поиском и судьёй, бизнес-сигналы,
+            не технологические события, не про нефтесервис, ссылки о разных событиях, старше срока, архив.
+            Причина — в строке карточки.
           </span>
         </div>
       ) : null}
@@ -580,7 +581,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           <StatCard label="В дайджесте" value={summary.in_digest} />
           <StatCard label="С обратной связью" value={summary.with_feedback} />
           <StatCard label="Объединено дублей" value={summary.merged} />
-          {isAdmin && summary.hidden != null ? <StatCard label="Скрыто" value={summary.hidden} /> : null}
+          {summary.hidden != null ? <StatCard label="Отсеяно и скрыто" value={summary.hidden} /> : null}
         </section>
       ) : null}
 
@@ -589,19 +590,17 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           в «Расширенных фильтрах». */}
       <section className="panel">
         <div className="panelHeader">
-          <h2>{showHidden ? "Скрытые карточки радара" : "Каталог технологических сигналов"}</h2>
+          <h2>{showHidden ? "Отсеянные и скрытые карточки" : "Каталог технологических сигналов"}</h2>
           <div className="settingsActions signalRadarPanelActions">
             {countBadge ? <span className="badge">{countBadge}</span> : null}
-            {isAdmin ? (
-              <button
-                type="button"
-                className={showHidden ? "primaryButton" : "ghostButton"}
-                aria-pressed={showHidden}
-                onClick={() => setShowHidden((current) => !current)}
-              >
-                {showHidden ? "К радару" : `Скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className={showHidden ? "primaryButton" : "ghostButton"}
+              aria-pressed={showHidden}
+              onClick={() => setShowHidden((current) => !current)}
+            >
+              {showHidden ? "К радару" : `Отсеянные и скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
+            </button>
             {groups.length ? (
               <>
                 <button
@@ -796,7 +795,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                       {Number(signal.merged_count || 0) > 0 ? ` · объединено дублей: ${signal.merged_count}` : ""}
                     </div>
                     {signal.hidden_reason ? (
-                      <div className="metaText signalHiddenReason">Скрыта: {signal.hidden_reason}</div>
+                      <div className="metaText signalHiddenReason">Не на радаре: {signal.hidden_reason}</div>
                     ) : null}
                   </div>
                   <div className="articleCardMetrics">

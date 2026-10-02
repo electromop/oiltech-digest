@@ -11,7 +11,7 @@ export type SignalFilters = {
   until?: string;
   minScore?: number;
   maxScore?: number;
-  // Скрытые правилами качества (бизнес, смешанные, старые, архив) — только админу.
+  // Отсеянные и скрытые (не на радаре) — всем: заказчик разбирает всё отсеянное.
   hidden?: boolean;
 };
 
@@ -56,7 +56,7 @@ export type SignalSummary = {
   in_digest: number;
   with_feedback: number;
   merged: number;
-  // Скрыто правилами качества — приходит только админу.
+  // Отсеяно и скрыто — не на радаре.
   hidden?: number;
   matching: number;
   themes: Array<{ theme: string; count: number }>;

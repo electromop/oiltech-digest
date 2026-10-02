@@ -820,6 +820,15 @@ def _run_discovery_topics(
             clusters = _cluster_evidence(fresh, topic_name)
             candidates = []
             judge_errors: list[str] = []
+            # Что не дошло до карточки: отсеяно поиском или судья не ответил. Ядро сохранит
+            # их карточками «Отсеяно» — заказчик просматривает всё, а не только принятое.
+            filtered_findings: list[dict[str, Any]] = [
+                {"stage": "search", **item}
+                for item in ((web_search or {}).get("research") or {}).get("dropped") or []
+            ] + [
+                {"stage": "search", **item}
+                for item in ((web_search or {}).get("research") or {}).get("unverified") or []
+            ]
             # «Режим ChatGPT»: событие — свой кластер, и модель уже отобрала главное. Лимит
             # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
             research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
@@ -827,6 +836,13 @@ def _run_discovery_topics(
                 beat()
                 judged = _judge_with_retry(cluster, topic_name, offline=config.offline, beat=beat, errors=judge_errors)
                 if judged is None:
+                    first = cluster[0] if cluster else {}
+                    filtered_findings.append({
+                        "stage": "judge_error", "reason": judge_errors[-1] if judge_errors else "",
+                        "title": first.get("title_ru") or first.get("title") or "", "url": first.get("source_url") or "",
+                        "summary": first.get("summary_ru") or first.get("extracted_fact") or "",
+                        "publisher": first.get("publisher"), "event_date": first.get("published_at"),
+                    })
                     continue
                 signal, raw_output = judged
                 if topic.get("tag_id") is not None:
@@ -857,6 +873,7 @@ def _run_discovery_topics(
                 "clusters": len(clusters),
                 "candidates": candidates,
                 "judge_errors": judge_errors,
+                "filtered_findings": filtered_findings,
                 "batch_review": batch_review,
             })
     judged_total = sum(len(topic.get("candidates") or []) for topic in topics_out)
@@ -1010,6 +1027,9 @@ def apply_discovery(
     owners = _key_owners(config, run)
     for topic in run.get("topics") or []:
         topic_name = str(topic.get("topic") or "")
+        filtered_stored = 0
+        if not config.dry_run and topic.get("filtered_findings"):
+            filtered_stored = _store_filtered_findings(topic_name, topic["filtered_findings"])
         judged = []
         topic_duplicates = 0
         for candidate in topic.get("candidates") or []:
@@ -1040,6 +1060,7 @@ def apply_discovery(
             "clusters": topic.get("clusters", 0),
             "signals": judged,
             "duplicates": topic_duplicates,
+            "filtered_stored": filtered_stored,
             "batch_review": topic.get("batch_review"),
         })
     dedup = dict(run.get("dedup") or {})
@@ -1154,6 +1175,8 @@ def _store_candidate(
         for item in cluster:
             repository.upsert_signal_evidence(signal_id, item)
         signal["evidence_count"] = repository.refresh_signal_evidence_count(signal_id)
+    if rejected and not config.dry_run:
+        signal_id = _store_filtered_candidate(signal, cluster)
     if generation_run_id is not None:
         repository.create_signal_training_example(
             generation_run_id=generation_run_id,
@@ -1166,6 +1189,63 @@ def _store_candidate(
             normalized_output=signal,
         )
     return signal_id
+
+
+def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, Any]]) -> int | None:
+    """Брак судьи или ревью пачки — карточкой «Отсеяно»: заказчик просматривает всё отсеянное.
+
+    Принятую ранее карточку с тем же ключом брак этого прогона не трогает: уже видимая
+    карточка не исчезает из-за того, что судья в другой раз решил иначе."""
+    owner = repository.signal_key_owners([signal["signal_key"]]).get(signal["signal_key"])
+    if owner and owner.get("filter_stage") is None:
+        return int(owner["id"])
+    stage = "review" if signal.get("batch_review_reason") else "judge"
+    reason = signal.get("batch_review_reason") or signal.get("why_not_noise") or signal.get("summary") or ""
+    stored = {**signal, "filter_stage": stage, "filter_reason": _trim(str(reason), 500)}
+    signal_id = repository.upsert_signal(stored)
+    for item in cluster:
+        repository.upsert_signal_evidence(signal_id, item)
+    repository.refresh_signal_evidence_count(signal_id)
+    return signal_id
+
+
+def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) -> int:
+    """Находки, не дошедшие до судьи или без его ответа, — карточками «Отсеяно».
+
+    Ключ — по ссылке (или заголовку): повторно отсеянное обновляет ту же карточку, а
+    найденное снова и принятое судьёй получит свой ключ и выйдет на радар."""
+    stored = 0
+    for item in findings:
+        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
+        url = str(item.get("url") or "").strip()
+        if not title and not url:
+            continue
+        key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
+        owner = repository.signal_key_owners([key]).get(key)
+        if owner and owner.get("filter_stage") is None:
+            continue
+        signal_id = repository.upsert_signal({
+            "signal_key": key,
+            "title": _trim(title or url, 220),
+            "title_ru": _trim(title or url, 220),
+            "theme": topic_name,
+            "summary": _trim(str(item.get("summary") or ""), 600),
+            "maturity": "reject",
+            "score": 0,
+            "event_date": _normalize_event_date(item.get("event_date")),
+            "filter_stage": item.get("stage") or "search",
+            "filter_reason": _trim(str(item.get("reason") or ""), 500),
+        })
+        if url.startswith("http"):
+            repository.upsert_signal_evidence(signal_id, {
+                "source_url": url, "title": title or url, "publisher": item.get("publisher"),
+                "published_at": _normalize_event_date(item.get("event_date")),
+                "evidence_type": "news", "extracted_fact": item.get("summary") or "",
+                "raw_payload": {"evidence_source": "filtered", "stage": item.get("stage")},
+            })
+            repository.refresh_signal_evidence_count(signal_id)
+        stored += 1
+    return stored
 
 
 def _repeat_of_existing_card(signal: dict[str, Any], cluster: list[dict[str, Any]]) -> int | None:
