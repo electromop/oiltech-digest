@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -81,6 +81,26 @@ def test_parse_month_rejects_anything_but_yyyy_mm(bad):
 
 def test_month_label_is_russian():
     assert feed_window.month_label(date(2026, 8, 1)) == "август 2026"
+
+
+@pytest.mark.parametrize(
+    ("rollover", "month", "closes"),
+    [
+        (5, "2026-09", _msk(2026, 10, 5)),
+        (5, "2026-12", _msk(2027, 1, 5)),
+        (1, "2026-09", _msk(2026, 10, 1)),
+        (10, "2026-02", _msk(2026, 3, 10)),
+    ],
+)
+def test_month_closes_in_sql_exactly_when_the_window_closes_it(isolated_db, monkeypatch, rollover, month, closes):
+    """Момент закрытия месяца в SQL (по нему текст закрытого выпуска перестаёт меняться) — та же
+    граница, что у окна ленты: за миг до неё месяц открыт, в неё — уже архив."""
+    monkeypatch.setattr(config, "FEED_ROLLOVER_DAY", rollover)
+    with connection.get_connection() as conn:
+        moment = conn.execute(f"SELECT {feed_window.month_close_sql('%s')}", (month,)).fetchone()[0]
+    assert moment == closes
+    assert feed_window.current(now=closes - timedelta(microseconds=1)).is_open(month)
+    assert not feed_window.current(now=closes).is_open(month)
 
 
 # ---------------------------------------------------------------------------

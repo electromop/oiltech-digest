@@ -141,7 +141,8 @@ def process_recheck(limit: int = 100, offline: bool = False, force: bool = False
 
 def recheck_relevance_articles(articles: list[dict], client, *, force: bool = False) -> dict:
     """Прогнать гейт релевантности по сырому тексту; релевантные — персист,
-    нерелевантные — УДАЛИТЬ физически (delete_article защищает сохранённые дайджесты)."""
+    нерелевантные — УДАЛИТЬ физически (delete_article защищает статьи из выпусков: сохранённый
+    черновик или отметка «в дайджест»)."""
     tags = repository.list_enabled_tags()
     stats = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
     for article in articles:
@@ -609,6 +610,11 @@ def score_label(score: float) -> str:
     return "Низкая"
 
 
+# Сколько знаков текста статьи видят суть, тег и балл. По нему же fulltext_recompute решает,
+# стоит ли пересчитывать их после замены обрывка полным текстом.
+ARTICLE_PROMPT_TEXT_CHARS = 6000
+
+
 def _article_prompt(article: dict) -> str:
     base = "\n".join(
         [
@@ -618,7 +624,7 @@ def _article_prompt(article: dict) -> str:
             f"language: {article.get('language') or 'unknown'}",
             f"published_at: {article.get('published_at') or ''}",
             f"summary: {article.get('summary') or ''}",
-            f"text: {_compact(article.get('raw_text') or '', 6000)}",
+            f"text: {_compact(article.get('raw_text') or '', ARTICLE_PROMPT_TEXT_CHARS)}",
         ]
     )
     glossary = glossary_prompt_block(article)

@@ -222,7 +222,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
                       />
                     </label>
                     <label className="field fieldWide">
-                      <span>Описание для AI</span>
+                      <span>Описание для ИИ</span>
                       <textarea
                         value={criterion.description || ""}
                         onChange={(event) => updateCriterion(index, "description", event.target.value)}
@@ -236,7 +236,7 @@ export function ScoringPage({ onUnauthorized, showToast }: Props) {
                       onChange={(values) => updateCriterion(index, "keywords_json", values)}
                     />
                     <KeywordsField
-                      label="EN-нормализация"
+                      label="Ключевые слова EN"
                       values={criterion.keywords_en_json}
                       onChange={(values) => updateCriterion(index, "keywords_en_json", values)}
                     />

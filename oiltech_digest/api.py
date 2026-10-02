@@ -1672,9 +1672,11 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
     Пер-юзерная: это мнение конкретного человека, а не общий факт. Свод по источникам
     (`/api/feedback/sources`) собирает их вместе — там и появляется общая картина.
 
-    Явный `"reason": null` снимает причину — так фронт шлёт повторный клик по чипу. Не
+    Явный `"reason": null` снимает причину — так фронт шлёт повторный клик по чипу. Явно
+    присланный пустой комментарий стирает его — так фронт шлёт очищенное поле. Не
     присланное поле, как и раньше, не трогается: частичное сохранение не стирает остальное.
     """
+    comment = (payload.comment or "").strip() or None
     try:
         entry = repository.save_feedback_entry(
             int(user["id"]),
@@ -1685,7 +1687,8 @@ def save_feedback(payload: FeedbackIn, user: dict[str, Any] = Depends(require_us
             usefulness=payload.usefulness,
             translation=payload.translation,
             source_quality=payload.source_quality,
-            comment=(payload.comment or "").strip() or None,
+            comment=comment,
+            clear_comment="comment" in payload.model_fields_set and comment is None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
