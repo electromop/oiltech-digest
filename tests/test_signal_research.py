@@ -363,3 +363,32 @@ def test_research_asks_for_technology_and_event_kind_and_excludes_business():
     text = signal_research.RESEARCH_INSTRUCTIONS
     assert "Нужны ТЕХНОЛОГИЧЕСКИЕ сигналы, не бизнес-новости" in text
     assert "FID" in text and "слияния и поглощения" in text
+
+
+# --- Ревью #89 (02.10): итог задачи показывает, чем искали и почему поиск не ответил -------------
+
+
+def test_research_failure_reaches_the_job_result_with_its_text():
+    web = {"status": "error", "provider": "openai_web_search", "queries": [],
+           "research": {"status": "error", "events": 0, "feedback_chars": 812, "web_search_calls": 0, "attempts": 2,
+                        "error": "AIClientError: OpenAI HTTP 403: tool web_search is not supported", "dropped": []}}
+
+    assert signal_discovery._search_error_summary(web) == "AIClientError: OpenAI HTTP 403: tool web_search is not supported"
+    assert signal_discovery._research_summary(web["research"]) == {
+        "status": "error", "events": 0, "feedback_chars": 812, "web_search_calls": 0, "attempts": 2,
+        "unverified": 0, "dropped": 0, "error": "AIClientError: OpenAI HTTP 403: tool web_search is not supported",
+    }
+
+
+def test_research_summary_counts_without_events_and_brave_errors_keep_priority():
+    research = {"status": "ok", "events": 7, "evidence_count": 5, "feedback_chars": 900, "web_search_calls": 23,
+                "attempts": 1, "unverified": [{"url": "x"}, {"url": "y"}], "dropped": [{"title": "t", "reason": "r"}]}
+
+    assert signal_discovery._research_summary(research) == {
+        "status": "ok", "events": 7, "evidence_count": 5, "feedback_chars": 900, "web_search_calls": 23,
+        "attempts": 1, "unverified": 2, "dropped": 1,
+    }
+    assert signal_discovery._research_summary(None) is None
+    both = {"status": "ok", "errors": ["q: HTTP 402 Usage limit exceeded"], "queries": ["q"],
+            "research": {"status": "error", "error": "timeout"}}
+    assert "402" in signal_discovery._search_error_summary(both)

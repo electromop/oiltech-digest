@@ -2085,6 +2085,9 @@ def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
         queue_name=decision.queue_name if not args.offline else "default",
         execution_region=decision.execution_region if not args.offline else "ru",
         capability=decision.capability if not args.offline else None,
+        # Одна попытка, как у ежедневной: прогон «режима ChatGPT» оплачивается целиком
+        # (≈$7,6), а упавший или зависший повтор оплатил бы его ещё дважды.
+        max_attempts=1,
     )
     print(f"enqueue-signal-discovery: job id={job['id']} queue={job['queue_name']}")
 

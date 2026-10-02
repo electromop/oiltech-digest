@@ -481,3 +481,102 @@ def test_research_prompt_requires_oilfield_relevance():
     text = signal_research.RESEARCH_INSTRUCTIONS
     assert "важны\nНЕФТЕСЕРВИСУ" in text
     assert "грузоперевозки по общим трассам" in text
+
+
+# --- Ревью #89 (02.10): одобренную карточку решение судьи не прячет, выбранную «в дайджест» — ничто
+
+
+def _choose_for_digest(signal_id):
+    user = repository.create_user(f"editor-{signal_id}@example.test", "long-enough-password", "admin")
+    repository.set_user_signal_status(int(user["id"]), signal_id, status="digest")
+
+
+def test_card_in_digest_stays_on_radar_when_refound_with_a_hiding_verdict(isolated_db):
+    chosen = _store("chosen", signal_category="technology")
+    _choose_for_digest(chosen)
+    # Повторная находка: судья передумал по всем правилам сразу — карточка в выпуске всё равно видна,
+    # иначе её не снять с выпуска (отметку снимают только с экрана радара).
+    old = (date.today() - timedelta(days=config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS + 5)).isoformat()
+    repository.upsert_signal({"signal_key": "chosen", "title": "chosen", "theme": DRILLING, "score": 60,
+                              "signal_category": "business", "oilfield_relevance": "none",
+                              "mixed_events": True, "event_date": old})
+
+    assert chosen in _visible_ids()
+    assert chosen not in {int(row["id"]) for row in repository.list_signals(limit=50, hidden=True)}
+    assert repository.signal_radar_summary()["total"] == 1
+    # Экран подписывает «Скрыта: …» любую карточку с причиной — у видимой её нет.
+    assert {row["hidden_reason"] for row in repository.list_signals(limit=50)} == {None}
+
+
+def test_card_archived_then_chosen_for_digest_is_visible_without_hidden_label(isolated_db):
+    early = _store("early", signal_category="technology")
+    repository.archive_signals([early], reason="early-free-theme-2026-09")
+    _choose_for_digest(early)  # админ отметил её из «Скрытых»
+
+    rows = {int(row["id"]): row for row in repository.list_signals(limit=50)}
+
+    assert early in rows and rows[early]["hidden_reason"] is None
+
+
+def test_archive_never_takes_a_card_in_digest(isolated_db):
+    chosen = _store("chosen", signal_category="technology")
+    _choose_for_digest(chosen)
+
+    assert repository.archive_signal_candidates(ids=[chosen], free_theme_only=False) == []
+    assert repository.archive_signals([chosen], reason="test") == 0
+    assert chosen in _visible_ids()
+
+
+def _feedback(signal_id, event_type, verdict=None):
+    with repository.get_connection() as conn:
+        conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict) VALUES (%s, %s, %s)",
+                     (signal_id, event_type, verdict))
+        conn.commit()
+
+
+def test_judge_does_not_hide_an_approved_card_but_archive_and_age_do(isolated_db):
+    old = (date.today() - timedelta(days=config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS + 5)).isoformat()
+    approved = _store("approved", signal_category="business", oilfield_relevance="none")
+    archived = _store("archived", signal_category="business")
+    stale = _store("stale", signal_category="business", event_date=old)
+    plain = _store("plain", signal_category="business")
+    for signal_id in (approved, archived, stale):
+        _feedback(signal_id, "verdict", "approved")
+    repository.archive_signals([archived], reason="test")
+
+    assert _visible_ids() == {approved}
+    hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
+    # Причина — только то, что прячет на самом деле: у одобренной решение судьи не в счёт.
+    assert hidden == {
+        archived: "в архиве",
+        stale: f"событие старше {config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS} дней",
+        plain: "бизнес-сигнал, не технология",
+    }
+
+
+@pytest.mark.parametrize("event_type, verdict", [
+    ("comment_added", "wrong_block"),  # «Не тот блок — бизнес-сигнал»: админ учит агента на «Скрытых»
+    ("comment_added", "reject"),
+    ("comment_added", None),           # комментарий без вердикта
+])
+def test_rejected_or_commented_hidden_card_stays_off_the_radar(isolated_db, event_type, verdict):
+    business = _store("business", signal_category="business")
+    _feedback(business, event_type, verdict)
+
+    assert business not in _visible_ids()
+    hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
+    assert hidden == {business: "бизнес-сигнал, не технология"}
+
+
+def test_later_rejection_overrides_an_earlier_approval(isolated_db):
+    card = _store("card", signal_category="business")
+    _feedback(card, "verdict", "approved")
+    _feedback(card, "verdict", "reject")
+
+    assert card not in _visible_ids()
+
+
+def test_positive_verdicts_match_the_dedup_ones():
+    from oiltech_digest import signal_dedup
+
+    assert set(repository.SIGNAL_POSITIVE_VERDICTS) == signal_dedup._POSITIVE_VERDICTS

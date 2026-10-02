@@ -5,6 +5,8 @@ ZenaTech, две — про завод сорбентов «Татнефти», 
 
 import json
 
+import pytest
+
 from oiltech_digest import signal_dedup, signal_discovery
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse
@@ -412,3 +414,124 @@ def test_company_written_as_list_pairs_with_single_company():
 
     assert signal_dedup.company_keys(nodes[1]["signal"]) == {"edf", "methanesat"}
     assert [(i, j) for i, j, _ in signal_dedup.find_pairs(nodes)] == [(0, 1)]
+
+
+# --- Ревью #89 (02.10): скрытая качеством или архивом карточка не забирает новую находку ---------
+
+
+def _hidden(node):
+    return {**node, "hidden": True}
+
+
+def test_hidden_card_does_not_absorb_a_fresh_finding_unless_it_was_rejected():
+    nodes = [
+        _hidden(_existing(5, "A", ["ZenaTech"], fresh=False, score=80)),
+        _new("A2", ["ZenaTech"], key="a2", order=1),
+        _hidden(_existing(6, "B", ["Татнефть"], verdict="reject", fresh=False)),
+        _new("B2", ["Татнефть"], key="b2", order=2),
+        _hidden(_existing(7, "C", ["Shell"], verdict="approved", fresh=False)),
+        _new("C2", ["Shell"], key="c2", order=3),
+    ]
+    edges = [(0, 1, "та же сделка"), (2, 3, "тот же завод"), (4, 5, "тот же пилот")]
+
+    assigned = signal_dedup.assign_duplicates(nodes, edges)
+
+    # Скрытая без отказа — не главная: свежая находка останется своей карточкой на экране. Сама
+    # скрытая числится дублем новой, но склейку «сохранённая → новая» ядро не пишет (_dedupe_run).
+    assert 1 not in assigned
+    assert assigned[0] == (1, "та же сделка")
+    # Отклонённая Виктором — главная, хоть и скрыта: её повтор не возвращается.
+    assert assigned[3] == (2, "тот же завод")
+    # Одобренная, но убранная в архив, свежую не поглощает и сама дублем не становится.
+    assert 4 not in assigned and 5 not in assigned
+
+
+def test_hidden_unreviewed_card_does_not_stay_main_over_a_visible_one():
+    nodes = [
+        _hidden(_existing(3, "A", ["ZenaTech"], fresh=False)),  # раньше по дате — была бы главной
+        _existing(9, "A2", ["ZenaTech"]),
+    ]
+    nodes[0]["signal"]["first_seen_day"] = "2026-09-13"
+    nodes[1]["signal"]["first_seen_day"] = "2026-09-30"
+
+    assert signal_dedup.assign_duplicates(nodes, [(0, 1, "та же сделка")]) == {0: (1, "та же сделка")}
+
+
+def test_dedup_snapshot_marks_cards_hidden_by_quality_or_archive(isolated_db):
+    visible = repository.upsert_signal(_signal_row("visible", "Покупка Velocity Geomatics"))
+    business = repository.upsert_signal({**_signal_row("business", "Сделка ZenaTech"), "signal_category": "business"})
+    archived = repository.upsert_signal(_signal_row("archived", "ZenaTech и Velocity"))
+    for signal_id in (visible, business, archived):
+        repository.upsert_signal_evidence(signal_id, {"source_url": f"https://a.example/{signal_id}", "title": "t"})
+    repository.archive_signals([archived], reason="test")
+
+    snapshot = {row["id"]: row["hidden"] for row in repository.list_signals_for_dedup()}
+
+    assert snapshot == {visible: False, business: True, archived: True}
+
+
+def test_worker_takes_hidden_flag_from_the_core_snapshot(monkeypatch):
+    seen = {}
+
+    def _dedupe(nodes, **kwargs):
+        seen["nodes"] = nodes
+        return {"assigned": {}, "stats": {"judged": 0, "input_tokens": 0, "output_tokens": 0}}
+
+    monkeypatch.setattr(signal_dedup, "dedupe", _dedupe)
+    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True)
+    rows = [{"id": 1, "signal_key": "a", "hidden": True}, {"id": 2, "signal_key": "b"}]
+
+    signal_discovery._dedupe_run(config, {"existing_signals": rows}, [], lambda: None)
+
+    assert [node["hidden"] for node in seen["nodes"]] == [True, False]
+
+
+@pytest.mark.parametrize("hide", ["archive", "business"])
+def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_visible_card(isolated_db, hide):
+    hidden = repository.upsert_signal(_signal_row("hidden", "Velocity Geomatics: первые данные"))
+    repository.upsert_signal_evidence(hidden, {"source_url": "https://a.example/1", "title": "t"})
+    assert repository.refresh_signal_evidence_count(hidden) == 1
+    if hide == "archive":
+        repository.archive_signals([hidden], reason="early-free-theme-2026-09")
+    else:
+        repository.upsert_signal({**_signal_row("hidden", "Velocity Geomatics: первые данные"),
+                                  "signal_category": "business"})
+    again = _candidate("ZenaTech купила Velocity Geomatics", ["ZenaTech"], key="fresh", url="https://a.example/1")
+
+    result = _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again, "rejected": False}]}]})
+
+    visible = {row["id"] for row in repository.list_signals(limit=10)}
+    assert hidden not in visible and len(visible) == 1
+    (fresh,) = visible
+    assert _urls(fresh) == {"https://a.example/1"} and _urls(hidden) == set()
+    assert result["all_signals"] == 1
+    # Счётчик отдавшей ссылку пересчитан — в «Скрытых» не висит прежнее число.
+    with repository.get_connection() as conn:
+        assert conn.execute("SELECT evidence_count FROM signals WHERE id = %s", (hidden,)).fetchone()[0] == 0
+
+
+def test_refound_archived_card_with_its_own_key_stays_archived(isolated_db):
+    # Тот же ключ (у одной ссылки ключ — от адреса) — это она же: архив — решение человека о
+    # карточке, повторная находка его не отменяет. Другой ключ — новая карточка (тест выше).
+    archived = repository.upsert_signal(_signal_row("same", "Velocity Geomatics: первые данные"))
+    repository.upsert_signal_evidence(archived, {"source_url": "https://a.example/1", "title": "t"})
+    repository.archive_signals([archived], reason="test")
+    again = _candidate("ZenaTech купила Velocity Geomatics", ["ZenaTech"], key="same", url="https://a.example/1")
+
+    _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again, "rejected": False}]}]})
+
+    assert repository.list_signals(limit=10) == []
+    assert _urls(archived) == {"https://a.example/1"}
+
+
+def test_hidden_reviewed_card_keeps_its_links(isolated_db):
+    rejected = repository.upsert_signal(_signal_row("rejected", "Velocity Geomatics: первые данные"))
+    repository.upsert_signal_evidence(rejected, {"source_url": "https://a.example/1", "title": "t"})
+    _verdict(rejected, "reject")
+    repository.archive_signals([rejected], reason="test")
+    other = repository.upsert_signal(_signal_row("other", "ZenaTech купила Velocity Geomatics"))
+
+    repository.upsert_signal_evidence(other, {"source_url": "https://a.example/1", "title": "t"})
+
+    assert _urls(rejected) == {"https://a.example/1"} and _urls(other) == set()
+    assert repository.visible_evidence_owners(["https://a.example/1"])["https://a.example/1"]["id"] == rejected
