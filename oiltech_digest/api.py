@@ -1744,8 +1744,11 @@ def _radar_screen_filters(
     until: date | None = None,
     min_score: float | None = Query(None, ge=0, le=100),
     max_score: float | None = Query(None, ge=0, le=100),
+    # Скрытые правилами качества (бизнес, смешанные, старые, архив) — только админу.
+    hidden: bool = False,
 ) -> dict[str, Any]:
     return {
+        "hidden": hidden,
         "maturity": maturity,
         "theme": theme,
         "q": (q or "").strip() or None,
@@ -1765,6 +1768,7 @@ def list_signals(
     evidence_limit: int = Query(3, ge=0, le=20),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
+    _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"]))
     # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
@@ -1791,7 +1795,17 @@ def signal_radar_summary(
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра."""
-    return _clean(repository.signal_radar_summary(user_id=int(user["id"]), **filters))
+    _guard_hidden_radar(filters, user)
+    summary = repository.signal_radar_summary(user_id=int(user["id"]), **filters)
+    if user.get("role") != "admin":
+        # Число скрытых — служебное, как и сами скрытые карточки.
+        summary.pop("hidden", None)
+    return _clean(summary)
+
+
+def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
+    if filters.get("hidden") and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Скрытые карточки радара доступны только администратору")
 
 
 def _guard_signal_digest_month(user_id: int, signal_id: int, target_status: str | None) -> None:

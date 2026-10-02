@@ -23,7 +23,7 @@ from oiltech_digest.db import repository
 from oiltech_digest.ingestion import request_parser
 from oiltech_digest.ingestion.relevance_filter import should_keep_article
 from oiltech_digest.ingestion.source_diagnostics import probe_url
-from oiltech_digest.processing.openai_client import AIClientError
+from oiltech_digest.processing.openai_client import AIClientError, output_budget
 from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.source_discovery.prompts import (
     SEARCH_QUERY_INSTRUCTIONS,
@@ -298,7 +298,9 @@ def generate_search_queries(
             SEARCH_QUERY_INSTRUCTIONS,
             f"topic: {topic}\nstrategy: {strategy}\nlimit: {limit}\n{_topic_search_context(topic)}",
             SEARCH_QUERY_SCHEMA,
-            max_output_tokens=600,
+            # 600 не хватало: рассуждение съедало лимит, ответ приходил без текста, и запросы
+            # тихо подменялись запасными по правилам (хвост ревью 29.09). Запас — по уровню.
+            max_output_tokens=output_budget(1200, app_config.OPENAI_REASONING_EFFORT),
         )
         queries = [str(item).strip() for item in response.data.get("queries") or [] if str(item).strip()]
     except (AIClientError, requests.RequestException) as exc:

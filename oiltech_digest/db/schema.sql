@@ -754,6 +754,19 @@ CREATE INDEX IF NOT EXISTS idx_signals_merged_into ON signals(merged_into_signal
 -- Ревью пачки (21.09): насколько сигнал интересен НА ФОНЕ своей пачки и почему.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS interest_score NUMERIC;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS why_interesting TEXT;
+-- Качество радара (замечания Виктора 29.09): поля судьи и архив. Скрытие — в видимости карточки
+-- (repository._RADAR_VISIBLE_SQL), карточка при этом хранится. NULL — карточка до правки.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS signal_category TEXT;     -- technology / business / other
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date DATE;          -- дата самого события
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS mixed_events BOOLEAN;     -- ссылки о разных событиях
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS mixed_events_reason TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS score_profile TEXT;       -- чем посчитан score (tech_radar)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS score_items_json JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS criteria_snapshot JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS archive_reason TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS oilfield_relevance TEXT;  -- direct / transferable / none
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS oilfield_application TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;

@@ -31,7 +31,10 @@ export function AnalyticsOverview({ data, months, month }: Props) {
   const costBase = partial ? data.ai_cost_previous_same_period : data.ai_cost?.find((c) => c.month === base?.row.month);
   // Рубли — по курсу ЦБ своего месяца (приходит с сервера у каждой строки затрат).
   const rubOf = (c?: AnalyticsCost) => (c ? c.cost_usd * c.usd_rub : null);
-  const rubPerArticleOf = (c?: AnalyticsCost) => (c && c.articles ? (c.cost_usd * c.usd_rub) / c.articles : null);
+  // Радар — без статей: его расход в «₽ за статью» ленты не входит.
+  const feedUsd = (c: AnalyticsCost) => c.cost_usd - Number(c.radar_cost_usd ?? 0);
+  const radarRubOf = (c?: AnalyticsCost) => (c ? Number(c.radar_cost_usd ?? 0) * c.usd_rub : 0);
+  const rubPerArticleOf = (c?: AnalyticsCost) => (c && c.articles ? (feedUsd(c) * c.usd_rub) / c.articles : null);
   const costOf = (key: string) => data.ai_cost?.find((c) => c.month === key);
   const rub = rubOf(cost);
   const rubPerArticle = rubPerArticleOf(cost);
@@ -179,8 +182,12 @@ export function AnalyticsOverview({ data, months, month }: Props) {
               format={formatRub}
               axisFormat={(v) => formatInt(v)}
               reference={{ value: data.targets.ai_rub_month, label: `бюджет ${formatInt(data.targets.ai_rub_month)} ₽/мес` }}
-              series={[{ key: "cost", label: "ИИ-обработка", color: "var(--viz-s1)",
-                values: months.map((m) => rubOf(costOf(m.month)) ?? 0) }]}
+              series={[
+                { key: "cost", label: "Лента", color: "var(--viz-s1)",
+                  values: months.map((m) => (rubOf(costOf(m.month)) ?? 0) - radarRubOf(costOf(m.month))) },
+                { key: "radar", label: "Технологический радар", color: "var(--viz-s2)",
+                  values: months.map((m) => radarRubOf(costOf(m.month))) },
+              ]}
               footnote={<>
                 Затраты в долларах пересчитаны по курсу ЦБ РФ на последний день каждого месяца
                 {lastRate?.usd_rub_date ? `, текущий — ${formatDecimal(lastRate.usd_rub, 2)} ₽/$ на ${lastRate.usd_rub_date.split("-").reverse().join(".")}` : ""}.

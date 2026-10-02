@@ -94,6 +94,30 @@ function formatDay(value: string | null | undefined): string {
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: RADAR_TIME_ZONE });
 }
 
+// Дата самого события от судьи (ГГГГ-ММ-ДД, без времени) — «нашёл очень старый сигнал»
+// (Виктор 29.09): «Поступил» говорит, когда нашли, а не когда случилось. Строкой, без Date:
+// дата без часового пояса в Date сдвинулась бы на сутки.
+function formatEventDate(value: string | null | undefined): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || "");
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : "";
+}
+
+// Разбивка балла по критериям профиля «Технологический радар»: имя и вес — из снимка набора
+// на момент оценки, а не из нынешнего экрана «Скоринг» (там их могли поменять).
+function scoreBreakdown(signal: Signal): Array<{ id: number; name: string; weight: number; score: number }> {
+  if (signal.score_profile !== "tech_radar") return [];
+  const byId = new Map((signal.criteria_snapshot || []).map((item) => [Number(item.id), item]));
+  return (signal.score_items_json || []).map((item) => {
+    const criterion = byId.get(Number(item.criterion_id));
+    return {
+      id: Number(item.criterion_id),
+      name: criterion?.name || `Критерий ${item.criterion_id}`,
+      weight: Number(criterion?.weight || 0),
+      score: Math.round(Number(item.final_score || 0)),
+    };
+  });
+}
+
 // Дата поступления карточки (встреча 21.09): первая находка радаром, по Москве.
 function formatArrival(signal: Signal): string {
   return formatDay(signal.first_seen_at || signal.created_at);
@@ -200,6 +224,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
+  // «Скрытые» (админ): карточки, которые правила качества не пускают на радар, — бизнес,
+  // смешанные события, старые, архив. Проверить, не отсеяно ли лишнее.
+  const [showHidden, setShowHidden] = useState(false);
 
   const filters: SignalFilters = useMemo(
     () => ({
@@ -210,8 +237,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       maxScore: scoreMax !== SCORE_MAX ? scoreMax : undefined,
       since: dateFrom || undefined,
       until: dateTo || undefined,
+      hidden: (isAdmin && showHidden) || undefined,
     }),
-    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo],
+    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo, isAdmin, showHidden],
   );
   // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
   // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
@@ -527,6 +555,15 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         </div>
       </header>
 
+      {showHidden ? (
+        <div className="archiveNotice" role="status">
+          <span>
+            Скрытые карточки: на радар их не пускают правила качества — бизнес-сигнал, не технологическое
+            событие, ссылки о разных событиях, событие старше срока или архив. Причина — в строке карточки.
+          </span>
+        </div>
+      ) : null}
+
       {searchNotice ? (
         // Стиль спокойного уведомления экранов ленты и выпуска (не красный).
         <div className="archiveNotice" role="status">
@@ -543,6 +580,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           <StatCard label="В дайджесте" value={summary.in_digest} />
           <StatCard label="С обратной связью" value={summary.with_feedback} />
           <StatCard label="Объединено дублей" value={summary.merged} />
+          {isAdmin && summary.hidden != null ? <StatCard label="Скрыто" value={summary.hidden} /> : null}
         </section>
       ) : null}
 
@@ -551,9 +589,19 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           в «Расширенных фильтрах». */}
       <section className="panel">
         <div className="panelHeader">
-          <h2>Каталог технологических сигналов</h2>
+          <h2>{showHidden ? "Скрытые карточки радара" : "Каталог технологических сигналов"}</h2>
           <div className="settingsActions signalRadarPanelActions">
             {countBadge ? <span className="badge">{countBadge}</span> : null}
+            {isAdmin ? (
+              <button
+                type="button"
+                className={showHidden ? "primaryButton" : "ghostButton"}
+                aria-pressed={showHidden}
+                onClick={() => setShowHidden((current) => !current)}
+              >
+                {showHidden ? "К радару" : `Скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
+              </button>
+            ) : null}
             {groups.length ? (
               <>
                 <button
@@ -711,6 +759,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
             const title = signal.title_ru || signal.title;
             const primaryUrl = signal.evidence?.[0]?.source_url;
             const arrival = formatArrival(signal);
+            const eventDate = formatEventDate(signal.event_date);
+            const breakdown = scoreBreakdown(signal);
             const tone = scoreTone(signal);
             // Месяц карточки закрыт (признак сервера): отметку «в дайджест» не ставят и не снимают.
             const digestLocked = Boolean(signal.digest_locked);
@@ -745,10 +795,17 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                       {/* Дубли того же события скрыты, их ссылки — в этой карточке. */}
                       {Number(signal.merged_count || 0) > 0 ? ` · объединено дублей: ${signal.merged_count}` : ""}
                     </div>
+                    {signal.hidden_reason ? (
+                      <div className="metaText signalHiddenReason">Скрыта: {signal.hidden_reason}</div>
+                    ) : null}
                   </div>
                   <div className="articleCardMetrics">
+                    {eventDate ? <div className="articleMetric">Событие: {eventDate}</div> : null}
                     {arrival ? <div className="articleMetric">Поступил: {arrival}</div> : null}
-                    <div className={`miniPill ${tone}`} title="Балл судьи радара">
+                    <div
+                      className={`miniPill ${tone}`}
+                      title={breakdown.length ? "Балл по профилю «Технологический радар»" : "Балл судьи радара"}
+                    >
                       {Math.round(Number(signal.score || 0))}
                     </div>
                     <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
@@ -776,12 +833,37 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                           <span>Почему сейчас</span>
                           <p>{signal.why_now || "Нет объяснения"}</p>
                         </div>
+                        {/* «Релевантности мало» (Виктор 29.09): судья называет, где это применить. */}
+                        {signal.oilfield_application ? (
+                          <div>
+                            <span>
+                              Применение в нефтесервисе
+                              {signal.oilfield_relevance === "transferable" ? " · перенос из другой отрасли" : ""}
+                            </span>
+                            <p>{signal.oilfield_application}</p>
+                          </div>
+                        ) : null}
                         <div>
                           <span>Переносимость</span>
                           <p>{signal.transferability || "Нет оценки"}</p>
                         </div>
                         {/* Сравнение внутри пачки прогона, а не абсолютная оценка судьи:
                             поэтому рядом с баллом, но порядок списка — по баллу. */}
+                        {/* Ответ на «оценки завышены» (Виктор 29.09): видно, за что балл. Итог —
+                            сумма «балл × вес / 100», как у статей ленты. */}
+                        {breakdown.length ? (
+                          <div className="signalScoreBreakdown">
+                            <span>Балл по критериям</span>
+                            <ul>
+                              {breakdown.map((item) => (
+                                <li key={item.id}>
+                                  <span>{item.name}{item.weight ? ` · вес ${item.weight}` : ""}</span>
+                                  <strong>{item.score}</strong>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
                         {signal.why_interesting ? (
                           <div>
                             <span>

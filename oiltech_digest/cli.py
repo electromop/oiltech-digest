@@ -2032,6 +2032,7 @@ def cmd_discover_signals(args: argparse.Namespace) -> None:
         web_query_limit=args.web_query_limit,
         research_rounds=args.research_rounds,
         web_fulltext_limit=args.web_fulltext_limit,
+        search_mode=args.search_mode or "",
     ))
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
@@ -2071,6 +2072,7 @@ def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
         "web_query_limit": args.web_query_limit,
         "research_rounds": args.research_rounds,
         "web_fulltext_limit": args.web_fulltext_limit,
+        **({"search_mode": args.search_mode} if args.search_mode else {}),
     }
     # См. background_jobs.enqueue_daily_signal_discovery: маршрут решает политика,
     # иначе задача уезжает на РФ-адрес и OpenAI отвечает 403 по географии.
@@ -2184,6 +2186,63 @@ def cmd_refresh_signal_evidence_counts(args: argparse.Namespace) -> None:
 
     changed = repository.refresh_all_signal_evidence_counts()
     print(f"refresh-signal-evidence-counts: исправлено карточек {changed}")
+
+
+def cmd_import_reference_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest import signal_reference
+
+    rows = signal_reference.read_reference(args.path, sheets=args.sheet or None)
+    result = signal_reference.import_reference(rows, apply=args.apply)
+    print(f"import-reference-signals: строк {result['rows']}, листы {', '.join(result['sheets'])}, "
+          f"applied={result['applied']}")
+    for row in rows[:50]:
+        print(f"  [{row['sheet']}] {row['title'][:90]}")
+    if not args.apply:
+        print("Сухой прогон: записать в память радара — тот же вызов с --apply.")
+
+
+def cmd_radar_recall(args: argparse.Namespace) -> None:
+    from oiltech_digest import signal_reference
+    from oiltech_digest.db import repository
+
+    rows = signal_reference.read_reference(args.path, sheets=args.sheet or None)
+    result = signal_reference.recall(rows, repository.radar_cards_for_recall())
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    print(f"radar-recall: найдено {result['found']} из {result['total']} ({result['share']:.0%}), "
+          f"из них на экране {result['found_visible']}")
+    for item in result["found_items"]:
+        mark = "" if item["visible"] else " [скрыта]"
+        print(f"  + #{item['signal_id']}{mark} {item['title'][:90]}")
+    for item in result["missing_items"]:
+        print(f"  - {item['title'][:90]}")
+
+
+def cmd_archive_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    ids = [int(value) for value in (args.ids or "").split(",") if value.strip()]
+    rows = repository.archive_signal_candidates(
+        created_before=args.created_before, free_theme_only=args.free_theme_only, ids=ids or None,
+    )
+    reviewed = sum(1 for row in rows if row["reviewed"])
+    print(f"archive-signals: карточек {len(rows)}, из них разобранных {reviewed}, "
+          f"причина «{args.reason}», dry_run={not args.apply}")
+    for row in rows:
+        mark = " [разобрана]" if row["reviewed"] else ""
+        print(f"  #{row['id']} {float(row['score'] or 0):>5.1f} {str(row['theme'])[:30]!r}: {str(row['title'])[:70]}{mark}")
+    if args.apply:
+        changed = repository.archive_signals([row["id"] for row in rows], reason=args.reason)
+        print(f"В архиве: {changed}. Вернуть: unarchive-signals --reason {args.reason!r}")
+
+
+def cmd_unarchive_signals(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    ids = [int(value) for value in (args.ids or "").split(",") if value.strip()]
+    changed = repository.unarchive_signals(signal_ids=ids or None, reason=args.reason)
+    print(f"unarchive-signals: возвращено карточек {changed}")
 
 
 def cmd_unmerge_signal(args: argparse.Namespace) -> None:
@@ -2990,6 +3049,8 @@ def build_parser() -> argparse.ArgumentParser:
                                     help="сколько поисковых запросов сделать на тему в --web режиме")
     p_discover_signals.add_argument("--research-rounds", type=int, default=2,
                                     help="сколько раундов research-loop: 1=только широкий поиск, 2=поиск+follow-up")
+    p_discover_signals.add_argument("--search-mode", choices=["brave", "openai_web", "both"], default=None,
+                        help="откуда находки: brave, openai_web («режим ChatGPT»), both; по умолчанию SIGNAL_SEARCH_MODE")
     p_discover_signals.add_argument("--web-fulltext-limit", type=int, default=20,
                                     help="сколько web-результатов докачивать целиком вместо сниппета поиска; 0 отключает")
     p_discover_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
@@ -3011,6 +3072,8 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="использовать только web evidence и не брать статьи из локальных sources")
     p_enqueue_signals.add_argument("--web-query-limit", type=int, default=8)
     p_enqueue_signals.add_argument("--research-rounds", type=int, default=2)
+    p_enqueue_signals.add_argument("--search-mode", choices=["brave", "openai_web", "both"], default=None,
+                        help="откуда находки: brave, openai_web («режим ChatGPT»), both; по умолчанию SIGNAL_SEARCH_MODE")
     p_enqueue_signals.add_argument("--web-fulltext-limit", type=int, default=20)
     p_enqueue_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True)
     p_enqueue_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
@@ -3088,6 +3151,40 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-signal-evidence-counts",
         help="пересчитать число ссылок у карточек радара (у тех, чьи ссылки переехали в другие)",
     ).set_defaults(func=cmd_refresh_signal_evidence_counts)
+
+    p_import_reference = sub.add_parser(
+        "import-reference-signals",
+        help="эталон заказчика (xlsx ТОП-сигналов) — в память радара как одобренные; сухой прогон по умолчанию",
+    )
+    p_import_reference.add_argument("path")
+    p_import_reference.add_argument("--sheet", action="append", help="лист; можно несколько, по умолчанию все")
+    p_import_reference.add_argument("--apply", action="store_true")
+    p_import_reference.set_defaults(func=cmd_import_reference_signals)
+
+    p_radar_recall = sub.add_parser(
+        "radar-recall", help="сколько событий эталона заказчика (xlsx) нашёл радар — замер полноты",
+    )
+    p_radar_recall.add_argument("path")
+    p_radar_recall.add_argument("--sheet", action="append")
+    p_radar_recall.add_argument("--json", action="store_true")
+    p_radar_recall.set_defaults(func=cmd_radar_recall)
+
+    p_archive_signals = sub.add_parser(
+        "archive-signals",
+        help="убрать карточки радара в архив (обратимо); по умолчанию — сухой прогон со списком",
+    )
+    p_archive_signals.add_argument("--created-before", default=None, help="поступили раньше даты ГГГГ-ММ-ДД")
+    p_archive_signals.add_argument("--free-theme-only", action=argparse.BooleanOptionalAction, default=True,
+                                   help="только с темой не из 13 тематик (ранние карточки 13.09)")
+    p_archive_signals.add_argument("--ids", default="", help="номера карточек через запятую")
+    p_archive_signals.add_argument("--reason", default="early-free-theme-2026-09")
+    p_archive_signals.add_argument("--apply", action="store_true", help="записать; без флага — только список")
+    p_archive_signals.set_defaults(func=cmd_archive_signals)
+
+    p_unarchive_signals = sub.add_parser("unarchive-signals", help="вернуть карточки радара из архива")
+    p_unarchive_signals.add_argument("--ids", default="")
+    p_unarchive_signals.add_argument("--reason", default=None)
+    p_unarchive_signals.set_defaults(func=cmd_unarchive_signals)
 
     p_export_signal_training = sub.add_parser(
         "export-signal-training-jsonl",

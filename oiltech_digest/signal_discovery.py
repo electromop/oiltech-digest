@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, fields, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import re
@@ -22,15 +22,17 @@ from zoneinfo import ZoneInfo
 import requests
 
 from oiltech_digest import config as app_config
-from oiltech_digest import signal_dedup
+from oiltech_digest import signal_dedup, signal_research
 from oiltech_digest.db import repository
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
-from oiltech_digest.processing.openai_client import AIClientError, AIResponse
-from oiltech_digest.processing.pipeline import make_client
+from oiltech_digest.processing.openai_client import AIClientError, AIResponse, output_budget
+from oiltech_digest import scoring_profiles
+from oiltech_digest.processing.pipeline import make_client, normalize_score_payload
 from oiltech_digest.signal_feedback import (
     apply_feedback_glossary,
     feedback_prompt_block,
     feedback_query_hints,
+    research_feedback_block,
     memory_snapshot_rows,
     topic_term_stems,
     use_memory_snapshot,
@@ -386,8 +388,43 @@ SIGNAL_JUDGE_INSTRUCTIONS = """Ты аналитик технологическ�
 score возвращай по шкале 0-100, где 40 = слабый watch, 70 = хороший shortlist,
 85+ = proven.
 
+Дополнительно по каждому кандидату (замечания заказчика 29.09):
+- signal_category — technology, если суть в технологии: новый принцип, продукт, внедрение,
+  испытание, измеримый технический эффект; партнёрство ради разработки или внедрения конкретной
+  технологии (ИИ для геонаук, цифровой двойник месторождения) — тоже technology; business —
+  сделка, M&A, контракт или тендер без новой технологии, финансовые итоги, рынок, инвестиции,
+  гранты, назначения; other — ни то ни
+  другое (регулирование, статистика, мероприятия). Технологический радар показывает только
+  technology; бизнес-сигналы сохраняются для отдельной вкладки, их не надо браковать.
+- event_date — дата САМОГО события в формате ГГГГ-ММ-ДД (объявление, подписание, запуск,
+  испытание), а не дата публикации или находки. Если в материалах известен только месяц —
+  первое число месяца; если даты события нет вовсе — пустая строка. Не выдумывай дату.
+- mixed_events — true, если evidence пачки описывают РАЗНЫЕ события (разные компании, продукты,
+  сделки или объекты), и одна карточка смешала бы их. mixed_events_reason — какие события смешаны;
+  при false — пустая строка.
+- oilfield_relevance — применимость для нефтесервиса (бурение, заканчивание, ГРП, КРС, добыча,
+  промысловая инфраструктура и трубопроводы промысла, сервис скважин, HSE и логистика промысла):
+  direct — событие в нефтегазе или нефтесервисе (оператор, сервисная компания, промысел, скважина);
+  transferable — другая отрасль, но перенос на конкретную операцию нефтесервиса очевиден и назван;
+  none — связи нет: коммунальная и сетевая энергетика, солнечные и ветровые станции для городов и
+  курортов, грузоперевозки по общим трассам, потребительская электроника, общие SaaS и ИИ-сервисы
+  без промышленного применения, судоходство и авиация без связи с промыслом. Слова «промышленный»
+  мало: нужна операция нефтесервиса. oilfield_application — одной фразой по-русски, где именно это
+  применить в нефтесервисе (для none — пустая строка). Карточки none радар не показывает.
+- theme — выбери ОДНУ тематику из списка во входе (строка «themes»), по сути события, а не по
+  запросу, которым материал нашли. Тематика — по ОПЕРАЦИИ нефтесервиса, к которой относится
+  событие: автоматизированное MPD и автономное направленное бурение — бурение; цифровая
+  платформа барьеров скважины — КРС и целостность скважин; ИИ для пластового давления —
+  геология и разработка. «Автоматизация, цифровизация» — только для технологий, не привязанных
+  к одной операции (промышленный edge, общая платформа данных, автономные операции объекта).
+  ИИ и дроны для осмотра объектов — не бурение, даже если в тексте мелькнуло бурение.
+- criteria_scores — если во входе есть блок «criteria», поставь по КАЖДОМУ критерию оценку
+  0-100 (ai_score) с коротким обоснованием по-русски (rationale). Итоговый балл карточки посчитает
+  код по весам критериев; score оставь своей общей оценкой. Оценка завышена хуже, чем занижена:
+  vendor-reported без независимого подтверждения — не выше 60 по зрелости.
+
 Все пользовательские текстовые поля возвращай на русском: title, theme, summary,
-thesis, transferability, why_now, why_not_noise. Не копируй англоязычный или китайский
+thesis, transferability, why_now, why_not_noise, mixed_events_reason, oilfield_application. Не копируй англоязычный или китайский
 заголовок как title; переведи его нормальным нефтегазовым русским языком.
 Названия компаний, продуктов, месторождений, стандартов и устоявшиеся аббревиатуры
 HSE/PTW/AI оставляй в оригинальном написании."""
@@ -429,6 +466,48 @@ SIGNAL_JUDGE_SCHEMA = {
         },
     },
 }
+
+
+SIGNAL_CATEGORIES = ("technology", "business", "other")
+OILFIELD_RELEVANCE = ("direct", "transferable", "none")
+
+
+def _judge_schema(themes: list[str], criteria: list[dict[str, Any]]) -> dict[str, Any]:
+    """Схема ответа судьи под список тем и критериев прогона.
+
+    Поля качества (29.09) — в строгой схеме обязательны все, поэтому набор собирается здесь:
+    тема — перечислением из 13 тематик, баллы — по id критериев tech_radar. Без списка тем тема
+    — свободная строка (её потом выберет код по ключам), без критериев блока баллов нет."""
+    schema = json.loads(json.dumps(SIGNAL_JUDGE_SCHEMA))
+    body = schema["schema"]
+    properties = body["properties"]
+    required = body["required"]
+    if themes:
+        properties["theme"] = {"type": "string", "enum": list(themes)}
+    properties["signal_category"] = {"type": "string", "enum": list(SIGNAL_CATEGORIES)}
+    properties["event_date"] = {"type": "string"}
+    properties["mixed_events"] = {"type": "boolean"}
+    properties["mixed_events_reason"] = {"type": "string"}
+    properties["oilfield_relevance"] = {"type": "string", "enum": list(OILFIELD_RELEVANCE)}
+    properties["oilfield_application"] = {"type": "string"}
+    required += ["signal_category", "event_date", "mixed_events", "mixed_events_reason",
+                 "oilfield_relevance", "oilfield_application"]
+    if criteria:
+        properties["criteria_scores"] = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["criterion_id", "ai_score", "rationale"],
+                "properties": {
+                    "criterion_id": {"type": "integer", "enum": [int(item["id"]) for item in criteria]},
+                    "ai_score": {"type": "number"},
+                    "rationale": {"type": "string"},
+                },
+            },
+        }
+        required.append("criteria_scores")
+    return schema
 
 
 BATCH_REVIEW_INSTRUCTIONS = """Ты — финальный контроль качества radar'а технологических сигналов.
@@ -518,6 +597,9 @@ class SignalDiscoveryConfig:
     web_fulltext_limit: int = 20
     background_job_id: int | None = None
     persist_training_examples: bool = True
+    # brave / openai_web / both; пусто — SIGNAL_SEARCH_MODE ядра (config_from_payload кладёт
+    # решение ядра в задачу, чтобы NL не решал по своему .env).
+    search_mode: str = ""
 
 
 def seed_default_radar_topics() -> int:
@@ -534,6 +616,37 @@ def seed_default_radar_topics() -> int:
 
 # Теги для прогона без базы. None — читать из repository, как на ядре.
 _TAGS_SNAPSHOT: ContextVar[list[dict[str, Any]] | None] = ContextVar("signal_discovery_tags", default=None)
+# Что судья должен знать сверх кластера (качество радара, 29.09): список 13 тематик — тему он
+# выбирает из него — и критерии профиля tech_radar — по ним ставит баллы. Едет в снимке: у NL
+# базы нет. Контекст, а не аргумент judge_signal_snapshot: её подменяют десятки тестов.
+_JUDGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar("signal_discovery_judge", default=None)
+_CRITERION_SNAPSHOT_FIELDS = ("id", "name", "description", "weight", "keywords_json", "keywords_en_json", "profile")
+# Расход ИИ прогона по стадиям (радар — с 01.10 ежедневно на gpt-5): копится на NL, едет ядру в
+# итоге (run.ai_usage), ядро пишет в ai_processing_runs — экран «Статистика» видит радар отдельно
+# от ленты. Раньше расход радара был виден только в result_json задачи.
+_USAGE: ContextVar[dict[tuple[str, str], dict[str, Any]] | None] = ContextVar("signal_discovery_usage", default=None)
+RADAR_STAGES = ("radar_research", "radar_judge", "radar_review", "radar_dedup", "radar_theme")
+
+
+def _record_usage(stage: str, model: str | None, *, input_tokens: int = 0, output_tokens: int = 0,
+                  calls: int = 1, web_search_calls: int = 0) -> None:
+    usage = _USAGE.get()
+    if usage is None or not calls:
+        return
+    row = usage.setdefault((stage, str(model or "")), {
+        "stage": stage, "model": str(model or ""), "calls": 0, "input_tokens": 0, "output_tokens": 0,
+        "web_search_calls": 0,
+    })
+    row["calls"] += int(calls)
+    row["input_tokens"] += int(input_tokens or 0)
+    row["output_tokens"] += int(output_tokens or 0)
+    row["web_search_calls"] += int(web_search_calls or 0)
+
+
+def _record_response(stage: str, response: Any) -> None:
+    _record_usage(stage, getattr(response, "model", None),
+                  input_tokens=int(getattr(response, "input_tokens", 0) or 0),
+                  output_tokens=int(getattr(response, "output_tokens", 0) or 0))
 
 _TOPIC_SNAPSHOT_FIELDS = ("name", "description", "query_seeds_json", "query_seeds", "industry_scope_json", "tag_id")
 _TAG_SNAPSHOT_FIELDS = (
@@ -592,6 +705,8 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         "known_urls": sorted({_normalize_url_for_key(url) for url in known_urls if url}),
         "existing_signals": existing_signals,
         "dedup_max_pairs": app_config.SIGNAL_DEDUP_MAX_PAIRS,
+        "radar_themes": _radar_theme_names(),
+        "radar_criteria": _radar_criteria(),
     }
     if for_external:
         try:
@@ -603,10 +718,39 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
     return _jsonable(snapshot)
 
 
+def _radar_theme_names() -> list[str]:
+    """Все 13 тематик заказчика — из них судья выбирает тему карточки.
+
+    Список шире тем поиска: тему рынка радар не ищет, но карточку про сделку судья должен
+    честно назвать рынком (и пометить бизнесом), а не притянуть к бурению."""
+    try:
+        return [topic["name"] for topic in topics_from_tags(repository.list_enabled_tags())]
+    except Exception:  # noqa: BLE001 - без списка тема выбирается по ключам, как раньше
+        return []
+
+
+def _radar_criteria() -> list[dict[str, Any]]:
+    """Критерии профиля tech_radar для баллов судьи; сумма весов не 100 — пусто.
+
+    Пусто — судья ставит один общий балл, как до правки: неверная сумма молча исказила бы
+    итог (ADR 0002, п. 3), а падать всему прогону из-за правки весов на экране не за что."""
+    try:
+        criteria = repository.list_enabled_scoring_criteria(scoring_profiles.TECH_RADAR)
+    except Exception:  # noqa: BLE001 - профиль — улучшение оценки, а не условие прогона
+        return []
+    if not criteria or round(sum(float(item.get("weight") or 0) for item in criteria), 6) != 100:
+        return []
+    return [{key: item.get(key) for key in _CRITERION_SNAPSHOT_FIELDS} for item in criteria]
+
+
 @contextmanager
 def use_discovery_snapshot(snapshot: dict[str, Any]) -> Iterator[None]:
-    """Включить теги и память ОС из снимка, если они в нём есть."""
+    """Включить теги, память ОС и контекст судьи из снимка, если они в нём есть."""
     tags_token = _TAGS_SNAPSHOT.set(snapshot["tags"]) if snapshot.get("tags") is not None else None
+    judge_token = _JUDGE_CONTEXT.set({
+        "themes": [str(name) for name in snapshot.get("radar_themes") or [] if str(name).strip()],
+        "criteria": list(snapshot.get("radar_criteria") or []),
+    })
     try:
         if snapshot.get("memory") is not None:
             with use_memory_snapshot(snapshot["memory"]):
@@ -614,6 +758,7 @@ def use_discovery_snapshot(snapshot: dict[str, Any]) -> Iterator[None]:
         else:
             yield
     finally:
+        _JUDGE_CONTEXT.reset(judge_token)
         if tags_token is not None:
             _TAGS_SNAPSHOT.reset(tags_token)
 
@@ -628,6 +773,20 @@ def run_discovery(
     beat = heartbeat or (lambda: None)
     known_urls = set(snapshot.get("known_urls") or [])
     topics_out = []
+    usage_token = _USAGE.set({})
+    try:
+        return _run_discovery_topics(config, snapshot, beat, known_urls, topics_out)
+    finally:
+        _USAGE.reset(usage_token)
+
+
+def _run_discovery_topics(
+    config: SignalDiscoveryConfig,
+    snapshot: dict[str, Any],
+    beat: Callable[[], None],
+    known_urls: set[str],
+    topics_out: list[dict[str, Any]],
+) -> dict[str, Any]:
     with use_discovery_snapshot(snapshot):
         tag_topic_names = [
             _topic_name(topic, config)
@@ -642,7 +801,12 @@ def run_discovery(
             evidence = list(db_evidence)
             web_search = None
             if config.web_search or config.web_only:
-                web_search = _search_web_evidence(topic, config, heartbeat=beat)
+                known_titles = [
+                    str(row.get("title_ru") or row.get("title") or "")
+                    for row in snapshot.get("existing_signals") or []
+                    if row.get("fresh") and str(row.get("theme") or "") == topic_name
+                ]
+                web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat, known_titles=known_titles)
                 evidence.extend(web_search["evidence"])
                 # Дальше блок нужен только счётчиками: сами тексты уже в кандидатах. Без
                 # этого результат воркера вёз каждую докачанную страницу лишний раз.
@@ -656,7 +820,10 @@ def run_discovery(
             clusters = _cluster_evidence(fresh, topic_name)
             candidates = []
             judge_errors: list[str] = []
-            for cluster in _clusters_for_judging(clusters, config.max_signals):
+            # «Режим ChatGPT»: событие — свой кластер, и модель уже отобрала главное. Лимит
+            # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
+            research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
+            for cluster in _clusters_for_judging(clusters, max(config.max_signals, research_events)):
                 beat()
                 judged = _judge_with_retry(cluster, topic_name, offline=config.offline, beat=beat, errors=judge_errors)
                 if judged is None:
@@ -665,9 +832,11 @@ def run_discovery(
                 if topic.get("tag_id") is not None:
                     # Тема радара = тематика заказчика: фильтр «Тема» на экране — это его 13 тегов,
                     # а не свободный текст модели (было 34 разных «темы» на 38 сигналов).
-                    # Какая из 13 — по содержанию карточки, а не по запросу, которым её нашли.
-                    signal["theme"], theme_choice = _content_theme(signal, cluster, topic_name, tag_topic_names)
+                    # Какая из 13 — по содержанию: выбор судьи из списка, проверенный кодом;
+                    # нет выбора (офлайн, старая схема) — по ключам тематик.
+                    signal["theme"], theme_choice = _choose_theme(signal, raw_output, cluster, topic_name, tag_topic_names)
                     raw_output = {**raw_output, "theme_choice": theme_choice}
+                raw_output = _apply_profile_score(signal, raw_output, cluster)
                 signal["signal_key"] = _signal_key(signal, cluster)
                 signal["evidence_count"] = len({str(item.get("source_url") or "") for item in cluster if item.get("source_url")})
                 signal["evidence"] = cluster
@@ -690,7 +859,15 @@ def run_discovery(
                 "judge_errors": judge_errors,
                 "batch_review": batch_review,
             })
-    return {"topics": topics_out, "dedup": _dedupe_run(config, snapshot, topics_out, beat)}
+    judged_total = sum(len(topic.get("candidates") or []) for topic in topics_out)
+    errors_total = sum(len(topic.get("judge_errors") or []) for topic in topics_out)
+    if errors_total and not judged_total:
+        # «Тихий ноль» (хвост ревью 29.09): прогон шёл «ok» с нулём карточек, и отличить сбой
+        # модели от пустого дня было нельзя. Задача падает — видно на экране задач.
+        first = next(error for topic in topics_out for error in topic.get("judge_errors") or [])
+        raise JudgeUnavailable(f"Судья не ответил ни на один из {errors_total} кластеров: {first}")
+    dedup = _dedupe_run(config, snapshot, topics_out, beat)
+    return {"topics": topics_out, "dedup": dedup, "ai_usage": list((_USAGE.get() or {}).values())}
 
 
 # Судья зовётся на каждый кластер, до 78 раз за прогон. Без повтора один таймаут или
@@ -728,7 +905,17 @@ def _judge_with_retry(
 
 def _is_transient_ai_error(exc: Exception) -> bool:
     text = str(exc)
-    return bool(re.search(r"API error (429|5\d\d)\b", text)) or "non-JSON output" in text
+    # «Ответ без текста» — модель потратила лимит на рассуждение или ответ оборвался: повтор
+    # помогает так же, как при не-JSON (хвост ревью 29.09).
+    return (
+        bool(re.search(r"API error (429|5\d\d)\b", text))
+        or "non-JSON output" in text
+        or "does not contain output text" in text
+    )
+
+
+class JudgeUnavailable(RuntimeError):
+    """Судья не ответил ни на один кластер прогона — это сбой, а не «ok, 0 карточек»."""
 
 
 def _dedupe_run(
@@ -776,10 +963,13 @@ def _dedupe_run(
             })
     result = signal_dedup.dedupe(
         nodes,
-        client_factory=lambda: make_client(False),
+        client_factory=_radar_client,
         heartbeat=beat,
         max_pairs=int(snapshot.get("dedup_max_pairs") or signal_dedup.MAX_JUDGED_PAIRS),
     )
+    stats = result["stats"]
+    _record_usage("radar_dedup", app_config.SIGNAL_DEDUP_MODEL, calls=int(stats.get("judged") or 0),
+                  input_tokens=int(stats.get("input_tokens") or 0), output_tokens=int(stats.get("output_tokens") or 0))
     existing_merges = []
     for index, (primary_index, reason) in result["assigned"].items():
         primary = nodes[primary_index]
@@ -811,6 +1001,8 @@ def apply_discovery(
     generation_run_id: int | None = None,
 ) -> dict[str, Any]:
     """Ядро: записать сигналы из результата run_discovery и собрать итог."""
+    if not config.dry_run and run.get("ai_usage"):
+        repository.record_radar_ai_usage(config.background_job_id, run["ai_usage"])
     all_signals: list[dict[str, Any]] = []
     topic_results = []
     duplicates: list[tuple[str, dict[str, Any]]] = []
@@ -1099,7 +1291,16 @@ def config_from_payload(payload: dict[str, Any], *, background_job_id: int | Non
             payload, "web_fulltext_limit", app_config.SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT, int
         ),
         background_job_id=background_job_id,
+        search_mode=_search_mode(payload.get("search_mode")),
     )
+
+
+SEARCH_MODES = ("brave", "openai_web", "both")
+
+
+def _search_mode(value: Any) -> str:
+    mode = str(value or app_config.SIGNAL_SEARCH_MODE or "brave").strip().lower()
+    return mode if mode in SEARCH_MODES else "brave"
 
 
 def build_external_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
@@ -1352,14 +1553,27 @@ def judge_signal_snapshot(evidence: list[dict[str, Any]], topic: str, *, offline
     if offline:
         signal = _offline_signal_judgement(evidence, topic)
         return signal, signal
-    client = make_client(False)
+    context = _JUDGE_CONTEXT.get() or {}
+    client = _radar_client()
     response: AIResponse = client.complete_json(
         SIGNAL_JUDGE_INSTRUCTIONS,
         _judge_prompt(evidence, topic),
-        SIGNAL_JUDGE_SCHEMA,
-        max_output_tokens=1800,
+        _judge_schema(context.get("themes") or [], context.get("criteria") or []),
+        # Пять обоснований по критериям сверх прежнего ответа; запас — на рассуждение.
+        max_output_tokens=output_budget(2600, app_config.SIGNAL_JUDGE_REASONING),
+        model=app_config.SIGNAL_JUDGE_MODEL,
+        reasoning_effort=app_config.SIGNAL_JUDGE_REASONING,
     )
+    _record_response("radar_judge", response)
     return _normalize_signal_payload(response.data, topic, context=_glossary_context(evidence, topic)), response.data
+
+
+def _radar_client():
+    """Клиент модели для радара: свой таймаут — сильная модель думает дольше ленты."""
+    client = make_client(False)
+    if hasattr(client, "timeout"):
+        client.timeout = app_config.SIGNAL_AI_TIMEOUT_SECONDS
+    return client
 
 
 def _batch_review_candidates(
@@ -1402,7 +1616,7 @@ def _batch_review_candidates(
             "interest_scores": interest_scores,
         }
 
-    client = make_client(False)
+    client = _radar_client()
     payload = {
         "topic": topic,
         "candidates": [_batch_review_candidate_payload(item) for item in reviewable],
@@ -1412,8 +1626,11 @@ def _batch_review_candidates(
             BATCH_REVIEW_INSTRUCTIONS,
             json.dumps(payload, ensure_ascii=False),
             BATCH_REVIEW_SCHEMA,
-            max_output_tokens=900,
+            max_output_tokens=output_budget(900 + 250 * len(reviewable), app_config.SIGNAL_REVIEW_REASONING),
+            model=app_config.SIGNAL_REVIEW_MODEL,
+            reasoning_effort=app_config.SIGNAL_REVIEW_REASONING,
         )
+        _record_response("radar_review", response)
     except Exception as exc:  # noqa: BLE001 - батч-ревью не должно ронять прогон темы
         return {"status": "error", "error": str(exc)[:500], "reviewed": len(reviewable), "dropped": 0,
                 "duplicates": 0}
@@ -1670,13 +1887,20 @@ def _radar_topics() -> list[dict]:
 def _selected_topics(topic: str | None) -> list[dict]:
     rows = _radar_topics()
     if not topic:
-        return rows or DEFAULT_RADAR_TOPICS
+        # Бизнес-темы радар не ищет (решение 21.09 №4); явный --topic — можно, для проверки.
+        searched = [row for row in rows if not _is_excluded_topic(str(row.get("name") or ""))]
+        return searched or rows or DEFAULT_RADAR_TOPICS
     topic_l = topic.lower()
     selected = [row for row in rows if topic_l in str(row.get("name") or "").lower()]
     if selected:
         return selected
     default_selected = [row for row in DEFAULT_RADAR_TOPICS if topic_l in row["name"].lower()]
     return default_selected or [{"name": topic, "query_seeds_json": []}]
+
+
+def _is_excluded_topic(name: str) -> bool:
+    name_l = name.strip().lower()
+    return any(name_l.startswith(prefix.lower()) for prefix in app_config.SIGNAL_RADAR_EXCLUDED_TOPICS)
 
 
 def _article_to_evidence(row: dict[str, Any], topic: str) -> dict[str, Any]:
@@ -2152,6 +2376,168 @@ def _query_dedupe_key(value: str) -> str:
 
 def _contains_cyrillic(text: str) -> bool:
     return bool(re.search(r"[а-яё]", text or "", re.IGNORECASE))
+
+
+def _topic_web_evidence(
+    topic: dict[str, Any],
+    topic_name: str,
+    config: SignalDiscoveryConfig,
+    *,
+    heartbeat: Callable[[], None],
+    known_titles: list[str] | None = None,
+) -> dict[str, Any]:
+    """Находки темы из веба по режиму прогона: Brave, «режим ChatGPT» или оба."""
+    mode = _search_mode(config.search_mode)
+    if mode == "brave":
+        return _search_web_evidence(topic, config, heartbeat=heartbeat)
+    heartbeat()
+    context = _topic_tag_context(topic_name)
+    topic_context = "\n".join(part for part in (
+        "; ".join(context.get("descriptions") or []),
+        "Ключевые слова: " + ", ".join((context.get("keywords_ru") or [])[:12] + (context.get("keywords_en") or [])[:12]),
+    ) if part.strip() and not part.endswith(": "))
+    research = signal_research.research_topic(topic_name, days=max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS),
+                                              topic_context=topic_context, heartbeat=heartbeat,
+                                              feedback=research_feedback_block(topic_name, known_titles=known_titles))
+    heartbeat()
+    # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье.
+    events = research.pop("evidence")
+    found, fulltext = _enrich_web_evidence_with_full_text(events, topic_name, limit=len(events), heartbeat=heartbeat)
+    verified, unverified = signal_research.verify_research_evidence(found)
+    research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))
+    _record_usage("radar_research", research.get("model"), calls=int(research.get("attempts") or 0),
+                  input_tokens=int(research.get("input_tokens") or 0),
+                  output_tokens=int(research.get("output_tokens") or 0),
+                  web_search_calls=int(research.get("web_search_calls") or 0))
+    if mode == "openai_web":
+        return {"status": research["status"], "provider": "openai_web_search", "queries": [], "research": research,
+                "evidence": verified}
+    brave = _search_web_evidence(topic, config, heartbeat=heartbeat)
+    return {**brave, "research": research, "evidence": verified + list(brave.get("evidence") or [])}
+
+
+def _choose_theme(
+    signal: dict[str, Any],
+    raw_output: dict[str, Any],
+    cluster: list[dict[str, Any]],
+    search_topic: str,
+    topic_names: list[str],
+) -> tuple[str, dict[str, Any]]:
+    """Тема карточки: выбор судьи, если он из списка тематик прогона; иначе — по ключам."""
+    themes = (_JUDGE_CONTEXT.get() or {}).get("themes") or []
+    judged = str(raw_output.get("theme") or "").strip()
+    if themes and judged in themes:
+        return _check_judged_theme(signal, cluster, judged, search_topic, themes)
+    theme, choice = _content_theme(signal, cluster, search_topic, topic_names)
+    if judged and themes:
+        choice = {**choice, "judge_theme_rejected": judged}
+    return theme, choice
+
+
+# Расхождение судьи с ключами: у его тематики ключей нет, у другой — не меньше стольких.
+THEME_CHECK_MIN_HITS = 2
+
+THEME_CHECK_INSTRUCTIONS = """Ты проверяешь тематику карточки технологического радара нефтесервиса.
+Даны карточка и две тематики заказчика с описаниями. Выбери ту, к которой событие относится по
+ОПЕРАЦИИ нефтесервиса (бурение, заканчивание, ГРП, КРС и целостность скважин, добыча,
+промысловая инфраструктура…). «Автоматизация, цифровизация» — только если технология не
+привязана к одной операции. Отвечай одной из двух тематик дословно; reason — коротко по-русски."""
+
+
+def _check_judged_theme(
+    signal: dict[str, Any],
+    cluster: list[dict[str, Any]],
+    judged: str,
+    search_topic: str,
+    themes: list[str],
+) -> tuple[str, dict[str, Any]]:
+    """Выбор судьи — проверкой по ключам тематик; при расхождении — второе мнение.
+
+    Замер 01–02.10: 3 карточки из 58 судья отнёс к «Автоматизации, цифровизации» за слово
+    «цифровой», а по операции это бурение и КРС (MPD Nabors, барьеры SafeWells, Kantori). Ключи
+    тематик это видят: у выбранной — ни одного, у другой — два и больше. Тогда короткий вызов
+    выбирает из двух по их описаниям. Без расхождения вызова нет."""
+    _, keyword = _content_theme(signal, cluster, judged, themes)
+    hits = keyword["hits"]
+    rival = max((name for name in hits if name != judged), key=lambda name: hits[name], default=None)
+    choice = {"search_topic": search_topic, "theme": judged, "reason": "judge"}
+    if rival is None or hits.get(judged, 0) or hits[rival] < THEME_CHECK_MIN_HITS:
+        return judged, choice
+    checked = _second_opinion_theme(signal, judged, rival)
+    if checked is None:
+        return judged, {**choice, "theme_check": {"rival": rival, "hits": hits, "result": "error"}}
+    theme, reason = checked
+    return theme, {
+        **choice,
+        "theme": theme,
+        "reason": "theme_check" if theme != judged else "judge_confirmed",
+        "theme_check": {"judge_theme": judged, "rival": rival, "hits": hits, "reason": reason},
+    }
+
+
+def _second_opinion_theme(signal: dict[str, Any], judged: str, rival: str) -> tuple[str, str] | None:
+    def describe(name: str) -> str:
+        descriptions = "; ".join(_topic_tag_context(name).get("descriptions") or [])
+        return f"- {name}" + (f": {descriptions[:600]}" if descriptions else "")
+
+    prompt = "\n".join([
+        f"title: {signal.get('title_ru') or signal.get('title') or ''}",
+        f"summary: {signal.get('summary') or ''}",
+        f"thesis: {signal.get('thesis') or ''}",
+        "",
+        "themes:",
+        describe(judged),
+        describe(rival),
+    ])
+    schema = {
+        "name": "radar_theme_check",
+        "schema": {
+            "type": "object", "additionalProperties": False, "required": ["theme", "reason"],
+            "properties": {"theme": {"type": "string", "enum": [judged, rival]}, "reason": {"type": "string"}},
+        },
+    }
+    try:
+        response = _radar_client().complete_json(
+            THEME_CHECK_INSTRUCTIONS, prompt, schema,
+            max_output_tokens=output_budget(300, app_config.SIGNAL_THEME_CHECK_REASONING),
+            model=app_config.SIGNAL_THEME_CHECK_MODEL,
+            reasoning_effort=app_config.SIGNAL_THEME_CHECK_REASONING,
+        )
+    except Exception:  # noqa: BLE001 - проверка — улучшение: не вышло — остаётся выбор судьи
+        return None
+    _record_response("radar_theme", response)
+    theme = str((response.data or {}).get("theme") or "")
+    if theme not in (judged, rival):
+        return None
+    return theme, str((response.data or {}).get("reason") or "")[:300]
+
+
+def _apply_profile_score(signal: dict[str, Any], raw_output: dict[str, Any], cluster: list[dict[str, Any]]) -> dict[str, Any]:
+    """Балл карточки — профилем tech_radar, как у статей: судья ставит оценку по каждому
+    критерию, итог Σ final·вес/100 считает код (pipeline.normalize_score_payload).
+
+    Замечание Виктора 29.09 «оценки завышены»: общий балл судьи шёл на экран как есть. Он
+    остаётся в raw_output.judge_score — для сравнения. Нет критериев в снимке или модель их не
+    вернула — балл прежний, профиль не пишется."""
+    criteria = (_JUDGE_CONTEXT.get() or {}).get("criteria") or []
+    items = [
+        {"criterion_id": item.get("criterion_id"), "ai_score": item.get("ai_score"), "rationale": item.get("rationale")}
+        for item in raw_output.get("criteria_scores") or []
+        if isinstance(item, dict)
+    ]
+    if not criteria or not items:
+        return raw_output
+    article = {
+        "title": signal.get("title_ru") or signal.get("title"),
+        "summary": signal.get("summary"),
+        "raw_text": " ".join(str(item.get("extracted_fact") or "") for item in cluster),
+    }
+    scored = normalize_score_payload(article, criteria, {"items": items})
+    signal["score"] = scored["total_score"]
+    signal["score_profile"] = scored.get("profile") or scoring_profiles.TECH_RADAR
+    signal["score_items"] = scored["items"]
+    signal["criteria_snapshot"] = scored["criteria_snapshot"]
+    return {**raw_output, "judge_score": raw_output.get("score"), "profile_score": scored["total_score"]}
 
 
 # Сколько ключей другой тематики должно найтись в карточке, чтобы тема ушла от запроса.
@@ -2634,6 +3020,10 @@ def _cluster_family(cluster: list[dict[str, Any]]) -> str:
 
 
 def _cluster_key(evidence: dict[str, Any], topic: str) -> str:
+    if signal_research.is_research_evidence(evidence):
+        # Модель исследования уже разложила находки по событиям: одно событие — один кластер,
+        # склейка по первым словам смешала бы разные события одной компании (сигнал 71).
+        return "research-" + _normalize_url_for_key(str(evidence.get("source_url") or ""))
     text = f"{evidence.get('title') or ''} {evidence.get('extracted_fact') or ''}".lower()
     patterns = [
         ("physical-ai-robotics", r"robot|robotic|autonomous|physical ai|drill floor|inspection"),
@@ -2725,7 +3115,38 @@ def _normalize_signal_payload(payload: dict[str, Any], topic: str, *, context: d
         "why_not_noise": _enforce_glossary(_trim(str(payload.get("why_not_noise") or ""), 800), context, topic),
         "companies": [str(x).strip() for x in payload.get("companies") or [] if str(x).strip()][:10],
         "industries": [str(x).strip() for x in payload.get("industries") or [] if str(x).strip()][:10],
+        "signal_category": _normalize_category(payload.get("signal_category")),
+        "event_date": _normalize_event_date(payload.get("event_date")),
+        "mixed_events": payload.get("mixed_events") is True,
+        "mixed_events_reason": _trim(str(payload.get("mixed_events_reason") or ""), 500) if payload.get("mixed_events") is True else "",
+        "oilfield_relevance": _normalize_relevance(payload.get("oilfield_relevance")),
+        "oilfield_application": (
+            _enforce_glossary(_trim(str(payload.get("oilfield_application") or ""), 400), context, topic)
+            if _normalize_relevance(payload.get("oilfield_relevance")) in ("direct", "transferable") else ""
+        ),
     }
+
+
+def _normalize_relevance(value: Any) -> str | None:
+    relevance = str(value or "").strip().lower()
+    return relevance if relevance in OILFIELD_RELEVANCE else None
+
+
+def _normalize_category(value: Any) -> str | None:
+    category = str(value or "").strip().lower()
+    return category if category in SIGNAL_CATEGORIES else None
+
+
+def _normalize_event_date(value: Any) -> str | None:
+    """ГГГГ-ММ-ДД или None. Дата из будущего (больше суток вперёд) — ошибка модели, не событие."""
+    text = str(value or "").strip()[:10]
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if parsed > datetime.now(RADAR_TZ).date() + timedelta(days=1):
+        return None
+    return parsed.isoformat()
 
 
 def _judge_prompt(evidence: list[dict[str, Any]], topic: str) -> str:
@@ -2754,7 +3175,24 @@ def _judge_prompt(evidence: list[dict[str, Any]], topic: str) -> str:
     feedback = feedback_prompt_block(topic)
     glossary_section = "\n\n".join(item for item in (glossary, feedback) if item)
     glossary_section = f"\n\n{glossary_section}" if glossary_section else ""
-    return f"topic: {topic}{glossary_section}\n\n" + "\n\n".join(rows)
+    return f"topic: {topic}{_judge_context_block()}{glossary_section}\n\n" + "\n\n".join(rows)
+
+
+def _judge_context_block() -> str:
+    """Список тематик и критерии tech_radar — во вход судьи (вес не показываем: итог считает код,
+    и правка весов не должна менять оценки модели — ADR 0002, п. 7)."""
+    context = _JUDGE_CONTEXT.get() or {}
+    parts = []
+    themes = context.get("themes") or []
+    if themes:
+        parts.append("themes:\n" + "\n".join(f"- {name}" for name in themes))
+    criteria = context.get("criteria") or []
+    if criteria:
+        parts.append("criteria:\n" + "\n".join(
+            f"- id {int(item['id'])}: {item.get('name')} — {item.get('description') or ''}".rstrip(" —")
+            for item in criteria
+        ))
+    return "".join(f"\n\n{part}" for part in parts)
 
 
 def _training_input_payload(

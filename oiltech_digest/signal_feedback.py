@@ -584,6 +584,69 @@ def feedback_prompt_block(topic: str | None = None, *, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
+RESEARCH_POSITIVE_EXAMPLES = 6
+RESEARCH_NEGATIVE_EXAMPLES = 8
+RESEARCH_KNOWN_TITLES = 25
+
+
+def research_feedback_block(topic: str | None = None, *, known_titles: list[str] | None = None) -> str:
+    """Обратная связь заказчика — во вход модели, которая ищет события («режим ChatGPT»).
+
+    До этого память доходила только до судьи (feedback_prompt_block) и до поиска Brave
+    (подсказки запросов, site: любимых источников). Модель исследования ничего не знала о
+    вердиктах: приносила то, что заказчик бракует, и тратила поиски, а отсеивал уже судья.
+    Здесь — что одобрено (тип события, а не тема: искать «такое же», а не «то же»), что
+    отклонено и почему, правила качества, источники, которым заказчик доверяет, и уже
+    найденное по теме — чтобы ежедневный прогон искал новое, а не повторы."""
+    verdicts = _memory_rows("signal_verdict", limit=120)
+    topic_l = (topic or "").lower()
+
+    def _on_topic(row: dict[str, Any]) -> bool:
+        facts = row.get("facts_json") or {}
+        return bool(topic_l) and topic_l in " ".join(
+            str(facts.get(key) or "") for key in ("topic", "theme", "signal_title")
+        ).lower()
+
+    def _line(row: dict[str, Any]) -> str:
+        facts = row.get("facts_json") or {}
+        title = re.sub(r"\s+", " ", str(facts.get("signal_title") or "")).strip()[:160]
+        reason = re.sub(r"\s+", " ", str(facts.get("reason") or "")).strip()
+        reason = reason[:PROMPT_REASON_CHARS].rstrip() + ("…" if len(reason) > PROMPT_REASON_CHARS else "")
+        if str(row.get("subject") or "") == "wrong_block":
+            reason = ("это бизнес-сигнал, а не технология. " + reason).strip()
+        return f"- {title}" + (f" — {reason}" if reason else "")
+
+    positives = [row for row in verdicts if str(row.get("subject") or "") not in NEGATIVE_VERDICTS]
+    negatives = [row for row in verdicts if str(row.get("subject") or "") in NEGATIVE_VERDICTS
+                 and str(row.get("subject") or "") != "merge_duplicate"]
+    # Своя тема — первой; сортировка устойчивая, внутри — порядок памяти (свежие первыми).
+    positives.sort(key=lambda row: not _on_topic(row))
+    negatives.sort(key=lambda row: not _on_topic(row))
+    sections = []
+    if positives:
+        sections.append("Такие находки заказчик одобрил — ищи события того же типа и уровня:\n"
+                        + "\n".join(_line(row) for row in positives[:RESEARCH_POSITIVE_EXAMPLES]))
+    if negatives:
+        sections.append("Такие находки заказчик отклонил — подобное не приноси:\n"
+                        + "\n".join(_line(row) for row in negatives[:RESEARCH_NEGATIVE_EXAMPLES]))
+    rules = [str(row.get("subject") or "").strip() for row in _memory_rows("signal_quality_rule", limit=40)]
+    rules = [rule[:240] for rule in rules if rule and not rule.startswith("Для сигнала '")][:8]
+    if rules:
+        sections.append("Правила заказчика:\n" + "\n".join(f"- {rule}" for rule in rules))
+    domains = _dedupe([
+        str(row.get("subject") or "").strip()
+        for row in _memory_rows("signal_source_preference", limit=40)
+        if str(row.get("subject") or "").strip()
+    ])[:10]
+    if domains:
+        sections.append("Источники, которым заказчик доверяет, — проверь их в первую очередь: " + ", ".join(domains))
+    known = _dedupe([re.sub(r"\s+", " ", str(title)).strip()[:140] for title in known_titles or [] if str(title).strip()])
+    if known:
+        sections.append("Уже есть на радаре по этой теме — не повторяй, ищи новое:\n"
+                        + "\n".join(f"- {title}" for title in known[:RESEARCH_KNOWN_TITLES]))
+    return "\n\n".join(sections)
+
+
 def apply_feedback_glossary(text: str, topic: str | None = None) -> str:
     result = text or ""
     memory = signal_feedback_memory_context(topic, limit=200)

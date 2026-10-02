@@ -19,6 +19,9 @@ import re
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from oiltech_digest import config as app_config
+from oiltech_digest.processing.openai_client import output_budget
+
 SIGNAL_DUPLICATE_INSTRUCTIONS = """Ты сверяешь две карточки технологического радара и отвечаешь на ОДИН вопрос:
 про одно ли они событие.
 
@@ -260,7 +263,9 @@ def dedupe(
                 SIGNAL_DUPLICATE_INSTRUCTIONS,
                 pair_prompt(nodes[i], nodes[j]),
                 SIGNAL_DUPLICATE_SCHEMA,
-                max_output_tokens=700,
+                max_output_tokens=output_budget(700, app_config.SIGNAL_DEDUP_REASONING),
+                model=app_config.SIGNAL_DEDUP_MODEL,
+                reasoning_effort=app_config.SIGNAL_DEDUP_REASONING,
             )
         except Exception:  # noqa: BLE001 - сбой одной пары не должен ронять прогон: пара остаётся «разные»
             stats["errors"] += 1

@@ -127,3 +127,107 @@ def test_free_text_topics_keep_model_theme(monkeypatch):
     candidate = run["topics"][0]["candidates"][0]
     assert candidate["signal"]["theme"] == "Своя тема модели"
     assert "theme_choice" not in candidate["raw_output"]
+
+
+# --- Второе мнение о тематике при расхождении судьи с ключами (02.10) ---------------------------
+
+from oiltech_digest.processing.openai_client import AIResponse  # noqa: E402
+
+CHECK_TAGS = [
+    {"id": 1, "name": DRILLING, "parent_id": None, "description": "Бурение скважин, MPD, буровые установки",
+     "keywords_json": ["бурение", "буровая"], "keywords_en_json": ["drilling", "mpd", "rig"]},
+    {"id": 2, "name": DIGITAL, "parent_id": None, "description": "Общие цифровые платформы и промышленный edge",
+     "keywords_json": ["цифровизация"], "keywords_en_json": ["edge"]},
+]
+
+
+class _Checker:
+    def __init__(self, answer=None, error=None):
+        self.answer, self.error, self.calls = answer, error, []
+
+    def complete_json(self, instructions, user_input, schema, **kwargs):
+        self.calls.append({"input": user_input, "enum": schema["schema"]["properties"]["theme"]["enum"], **kwargs})
+        if self.error:
+            raise self.error
+        return AIResponse(data=self.answer, model="gpt-5-mini-check", input_tokens=300, output_tokens=40)
+
+
+def _check(monkeypatch, signal, judged, checker):
+    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: checker)
+    snapshot = {"tags": CHECK_TAGS, "radar_themes": [DRILLING, DIGITAL], "radar_criteria": []}
+    with signal_discovery.use_discovery_snapshot(snapshot):
+        return signal_discovery._choose_theme(signal, {"theme": judged}, [], DRILLING, [DRILLING, DIGITAL])
+
+
+NABORS = {"title_ru": "Nabors встроила автоматизированное MPD в систему буровой", "summary": "MPD на rig, drilling"}
+
+
+def test_judge_theme_without_any_keyword_gets_a_second_opinion(monkeypatch):
+    checker = _Checker({"theme": DRILLING, "reason": "MPD — операция бурения"})
+
+    theme, choice = _check(monkeypatch, NABORS, DIGITAL, checker)
+
+    assert theme == DRILLING
+    assert choice["reason"] == "theme_check"
+    assert choice["theme_check"]["judge_theme"] == DIGITAL and choice["theme_check"]["reason"] == "MPD — операция бурения"
+    # Выбор — только из двух тематик, с их описаниями.
+    assert checker.calls[0]["enum"] == [DIGITAL, DRILLING]
+    assert "Бурение скважин, MPD" in checker.calls[0]["input"]
+
+
+def test_second_opinion_can_confirm_the_judge(monkeypatch):
+    theme, choice = _check(monkeypatch, NABORS, DIGITAL, _Checker({"theme": DIGITAL, "reason": "общая платформа"}))
+
+    assert theme == DIGITAL
+    assert choice["reason"] == "judge_confirmed"
+
+
+def test_no_check_when_keywords_support_the_judge(monkeypatch):
+    checker = _Checker({"theme": DIGITAL, "reason": "x"})
+
+    theme, choice = _check(monkeypatch, NABORS, DRILLING, checker)
+
+    assert theme == DRILLING and choice["reason"] == "judge"
+    assert checker.calls == []
+
+
+def test_no_check_on_a_single_passing_keyword(monkeypatch):
+    checker = _Checker({"theme": DRILLING, "reason": "x"})
+    signal = {"title_ru": "Платформа данных для объектов", "summary": "упоминается бурение"}
+
+    theme, _ = _check(monkeypatch, signal, DIGITAL, checker)
+
+    assert theme == DIGITAL
+    assert checker.calls == []
+
+
+def test_failed_check_keeps_the_judge_theme(monkeypatch):
+    theme, choice = _check(monkeypatch, NABORS, DIGITAL, _Checker(error=RuntimeError("503")))
+
+    assert theme == DIGITAL
+    assert choice["theme_check"]["result"] == "error"
+
+
+def test_check_answer_outside_the_two_themes_is_ignored(monkeypatch):
+    theme, choice = _check(monkeypatch, NABORS, DIGITAL, _Checker({"theme": "Чужая тема", "reason": "x"}))
+
+    assert theme == DIGITAL
+    assert choice["theme_check"]["result"] == "error"
+
+
+def test_theme_check_usage_is_counted(monkeypatch):
+    usage_token = signal_discovery._USAGE.set({})
+    try:
+        _check(monkeypatch, NABORS, DIGITAL, _Checker({"theme": DRILLING, "reason": "MPD"}))
+        rows = list(signal_discovery._USAGE.get().values())
+    finally:
+        signal_discovery._USAGE.reset(usage_token)
+
+    assert rows == [{"stage": "radar_theme", "model": "gpt-5-mini-check", "calls": 1, "input_tokens": 300,
+                     "output_tokens": 40, "web_search_calls": 0}]
+
+
+def test_judge_instruction_assigns_theme_by_operation():
+    text = signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
+    assert "по ОПЕРАЦИИ нефтесервиса" in text
+    assert "автоматизированное MPD и автономное направленное бурение — бурение" in text

@@ -27,3 +27,29 @@ describe("обзор статистики", () => {
     expect(screen.getAllByText(/с июлем 2026/).length).toBeGreaterThan(0);
   });
 });
+
+describe("расход технологического радара", () => {
+  // Сентябрь: $30 всего, из них $10 — радар (синтетика); статей ленты 4 000, курс 84,1975 ₽/$.
+  const withRadar = {
+    ...analyticsFixture,
+    ai_cost: analyticsFixture.ai_cost?.map((row) => (row.month === "2026-09" ? { ...row, radar_cost_usd: 10 } : row)),
+  };
+
+  it("столбец ИИ-обработки делится на ленту и радар", () => {
+    render(<AnalyticsOverview data={withRadar} months={withRadar.months} month="2026-09" />);
+    expect(screen.getAllByText("Лента").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Технологический радар").length).toBeGreaterThan(0);
+  });
+
+  it("«₽ за статью» — без радара: у него нет статей", () => {
+    render(<AnalyticsOverview data={withRadar} months={withRadar.months} month="2026-09" />);
+    // ($30 − $10) × 84,1975 / 4 000 = 0,42 ₽, а не 0,63 ₽ с радаром.
+    expect(screen.getByText(/0,42 ₽ за статью/)).toBeInTheDocument();
+    expect(screen.queryByText(/0,63 ₽ за статью/)).not.toBeInTheDocument();
+  });
+
+  it("без расхода радара экран прежний: за статью — весь расход", () => {
+    render(<AnalyticsOverview data={analyticsFixture} months={analyticsFixture.months} month="2026-09" />);
+    expect(screen.getByText(/0,63 ₽ за статью/)).toBeInTheDocument();
+  });
+});

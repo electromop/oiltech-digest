@@ -32,6 +32,10 @@ FOOTBALL = "Футбольный клуб выиграл матч чемпион
 WIDGET = "Чтобы сменить тему, очистите чат и задайте новый вопрос помощнику сайта. "
 
 
+# Ссылок на листинге в тестах больше шести: лимит — не из .env разработчика.
+ARTICLE_LIMIT = 12
+
+
 @pytest.fixture(autouse=True)
 def _static_prefilter(monkeypatch):
     """Предфильтр — на статическом словаре: тематики, прочитанные другими тестами (кэш
@@ -183,6 +187,11 @@ def test_request_probe_gives_every_verdict_and_matches_real_collection(isolated_
         f"{base}/11": _page("Виджет вместо статьи одиннадцать", WIDGET * 4),
     }
     monkeypatch.setattr(request_parser, "fetch", pages.get)
+    # Лимит ссылок — явно: умолчание (REQUEST_ARTICLE_LIMIT) вычисляется при импорте из .env, и
+    # с локальным REQUEST_ARTICLE_LIMIT=6 проба честно обрывалась на шестой из одиннадцати.
+    real_listing = request_parser.listing_candidates
+    monkeypatch.setattr(request_parser, "listing_candidates",
+                        lambda source_, article_limit=ARTICLE_LIMIT: real_listing(source_, article_limit))
     before = _snapshot()
 
     report = source_probe.probe_source(source)
@@ -212,7 +221,7 @@ def test_request_probe_gives_every_verdict_and_matches_real_collection(isolated_
     assert report["counts"][verdicts.WOULD_INSERT] == 2
 
     urls_before = _urls()
-    stats = request_parser.parse_source(repository.get_source(source["id"]))
+    stats = request_parser.parse_source(repository.get_source(source["id"]), article_limit=ARTICLE_LIMIT)
 
     assert _urls() - urls_before == _would_insert(report)
     assert stats["added"] == 2

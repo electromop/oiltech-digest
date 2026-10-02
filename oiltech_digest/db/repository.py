@@ -966,9 +966,13 @@ def upsert_signal(signal: dict) -> int:
             INSERT INTO signals (
               signal_key, title, title_ru, theme, summary, thesis, transferability, maturity, confidence, score,
               why_now, why_not_noise, companies_json, industries_json, evidence_count,
-              interest_score, why_interesting
+              interest_score, why_interesting,
+              signal_category, event_date, mixed_events, mixed_events_reason,
+              score_profile, score_items_json, criteria_snapshot,
+              oilfield_relevance, oilfield_application
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = CASE WHEN {closed} THEN signals.title ELSE EXCLUDED.title END,
               title_ru = CASE WHEN {closed} THEN signals.title_ru ELSE EXCLUDED.title_ru END,
@@ -988,6 +992,17 @@ def upsert_signal(signal: dict) -> int:
               -- не получает, и прошлый балл не должен стираться NULL'ом.
               interest_score = COALESCE(EXCLUDED.interest_score, signals.interest_score),
               why_interesting = COALESCE(NULLIF(EXCLUDED.why_interesting, ''), signals.why_interesting),
+              -- Поля судьи (29.09): результат старой сборки NL их не несёт — прежние не стираем.
+              signal_category = COALESCE(EXCLUDED.signal_category, signals.signal_category),
+              event_date = COALESCE(EXCLUDED.event_date, signals.event_date),
+              mixed_events = COALESCE(EXCLUDED.mixed_events, signals.mixed_events),
+              mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
+              oilfield_relevance = COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance),
+              oilfield_application = COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application),
+              -- Балл и его происхождение — всегда вместе: score выше уже новый.
+              score_profile = EXCLUDED.score_profile,
+              score_items_json = EXCLUDED.score_items_json,
+              criteria_snapshot = EXCLUDED.criteria_snapshot,
               last_seen_at = now(),
               updated_at = now()
             RETURNING id
@@ -1010,6 +1025,15 @@ def upsert_signal(signal: dict) -> int:
                 int(signal.get("evidence_count") or 0),
                 float(signal["interest_score"]) if signal.get("interest_score") is not None else None,
                 (signal.get("why_interesting") or None),
+                signal.get("signal_category"),
+                signal.get("event_date") or None,
+                signal.get("mixed_events") if isinstance(signal.get("mixed_events"), bool) else None,
+                (signal.get("mixed_events_reason") or None),
+                signal.get("score_profile"),
+                Json(_jsonable(signal["score_items"])) if signal.get("score_items") else None,
+                Json(_jsonable(signal["criteria_snapshot"])) if signal.get("criteria_snapshot") else None,
+                signal.get("oilfield_relevance"),
+                (signal.get("oilfield_application") or None),
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -1236,6 +1260,101 @@ def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
             (list(urls),),
         )
         return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
+
+
+def archive_signal_candidates(*, created_before: date | str | None = None, free_theme_only: bool = True,
+                              ids: Sequence[int] | None = None) -> list[dict]:
+    """Какие видимые на радаре карточки уйдут в архив — для сухого прогона и для записи.
+
+    Ранние карточки 13.09 писали тему свободным текстом (не одна из 13 тематик) и считались
+    прежним судьёй: баллы 20–40, почти половина экрана (замечание Виктора 29.09). Отбор —
+    по дате поступления, свободной теме или списку номеров. Разобранные не исключаются, но
+    помечены: решение за человеком, архив обратим."""
+    clauses = ["s.archived_at IS NULL", "s.merged_into_signal_id IS NULL"]
+    params: list = []
+    if created_before:
+        clauses.append("s.first_seen_at < %s::date")
+        params.append(str(created_before))
+    if free_theme_only:
+        clauses.append(f"NOT {_RADAR_TOPIC_SQL}")
+        params.append(SYSTEM_TAG_UNCLASSIFIED)
+    if ids:
+        clauses.append("s.id = ANY(%s)")
+        params.append([int(value) for value in ids])
+    if len(clauses) == 2:
+        raise ValueError("Нужно условие отбора: дата, свободная тема или номера карточек")
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT s.id, s.theme, COALESCE(s.title_ru, s.title) AS title, s.score, s.first_seen_at,
+                   {_SIGNAL_REVIEWED_SQL.format(alias="s")} AS reviewed
+            FROM signals s
+            WHERE {' AND '.join(clauses)}
+            ORDER BY s.id
+            """,
+            params,
+        )
+        return cur.fetchall()
+
+
+def archive_signals(signal_ids: Sequence[int], *, reason: str) -> int:
+    """Убрать карточки с радара в архив. Не удаляет: вернуть — unarchive_signals."""
+    ids = [int(value) for value in signal_ids]
+    if not ids:
+        return 0
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE signals
+            SET archived_at = now(), archive_reason = %s, updated_at = now()
+            WHERE id = ANY(%s) AND archived_at IS NULL
+            """,
+            (reason, ids),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
+def unarchive_signals(*, signal_ids: Sequence[int] | None = None, reason: str | None = None) -> int:
+    """Вернуть карточки из архива: по номерам или по причине архивации (одной командой)."""
+    if not signal_ids and not reason:
+        raise ValueError("Нужны номера карточек или причина архивации")
+    clauses = ["archived_at IS NOT NULL"]
+    params: list = []
+    if signal_ids:
+        clauses.append("id = ANY(%s)")
+        params.append([int(value) for value in signal_ids])
+    if reason:
+        clauses.append("archive_reason = %s")
+        params.append(reason)
+    with get_connection() as conn:
+        cur = conn.execute(
+            f"UPDATE signals SET archived_at = NULL, archive_reason = NULL, updated_at = now() WHERE {' AND '.join(clauses)}",
+            params,
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
+def radar_cards_for_recall() -> list[dict]:
+    """Все карточки радара (кроме скрытых дублей) со ссылками и признаком «видна на экране» —
+    для замера полноты по эталону заказчика (signal_reference.recall)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT s.id, s.title, s.title_ru, s.summary, s.companies_json AS companies,
+                   ({_RADAR_VISIBLE_SQL}) AS visible,
+                   ARRAY(SELECT e.source_url FROM signal_evidence e
+                         WHERE e.signal_id = s.id
+                            OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id)
+                        ) AS urls
+            FROM signals s
+            WHERE s.merged_into_signal_id IS NULL
+            """
+        )
+        return cur.fetchall()
 
 
 def refresh_all_signal_evidence_counts() -> int:
@@ -1530,7 +1649,56 @@ def _radar_card_evidence_exists(condition: str = "TRUE") -> str:
 # Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
 # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
 # (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09).
-_RADAR_VISIBLE_SQL = f"s.merged_into_signal_id IS NULL AND {_radar_card_evidence_exists()}"
+def _radar_quality_sql() -> str:
+    """Что радар не показывает по качеству (замечания Виктора 29.09). Карточка хранится:
+    правило — показа, срок и категории меняются без пересчёта. NULL — карточка до правки.
+
+    - архив (ранние карточки со свободной темой) — обратимо, `unarchive-signals`;
+    - бизнес и «другое» — не техрадар, сохраняются для будущей бизнес-вкладки;
+    - ссылки о разных событиях — одна карточка смешала бы две истории (сигнал 71);
+    - нет связи с нефтесервисом — «релевантности мало» (Виктор 29.09);
+    - событие старше срока — «нашёл очень старый сигнал»."""
+    parts = [
+        "s.archived_at IS NULL",
+        "COALESCE(s.signal_category, 'technology') = 'technology'",
+        "s.mixed_events IS NOT TRUE",
+        # «Релевантности мало» (Виктор 29.09): общепромышленное без связи с нефтесервисом.
+        "COALESCE(s.oilfield_relevance, 'direct') <> 'none'",
+    ]
+    age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
+    if age_days > 0:
+        parts.append(f"(s.event_date IS NULL OR s.event_date >= CURRENT_DATE - {age_days})")
+    return " AND ".join(parts)
+
+
+_RADAR_VISIBLE_SQL = (
+    f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_radar_card_evidence_exists()}"
+)
+# Скрытые по качеству — для админа (экран, переключатель «Скрытые»): проверить, не отсеяно ли
+# лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут — их
+# ссылки и так в главной карточке.
+_RADAR_HIDDEN_SQL = (
+    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()}) AND {_radar_card_evidence_exists()}"
+)
+
+
+def _radar_hidden_reason_sql() -> str:
+    """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql."""
+    age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
+    age = (
+        f"CASE WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней' END"
+        if age_days > 0 else "NULL"
+    )
+    return (
+        "NULLIF(concat_ws('; ',"
+        " CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве' END,"
+        " CASE s.signal_category WHEN 'business' THEN 'бизнес-сигнал, не технология'"
+        "   WHEN 'other' THEN 'не технологическое событие' END,"
+        " CASE WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис' END,"
+        " CASE WHEN s.mixed_events THEN 'ссылки о разных событиях'"
+        "   || COALESCE(': ' || NULLIF(s.mixed_events_reason, ''), '') END,"
+        f" {age}), '')"
+    )
 # Тема — одна из тематик заказчика (корневые теги). Первая партия радара (13.09) писала
 # тему свободным текстом: экран собирает такие в отдельный блок и в фильтр тем не берёт.
 _RADAR_TOPIC_SQL = (
@@ -1561,11 +1729,12 @@ def _like_contains(text: str) -> str:
 
 def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: str | None = None,
                    since: date | str | None = None, until: date | str | None = None,
-                   min_score: float | None = None, max_score: float | None = None) -> tuple[list[str], list]:
+                   min_score: float | None = None, max_score: float | None = None,
+                   hidden: bool = False) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля»."""
-    clauses = [_RADAR_VISIBLE_SQL]
+    clauses = [_RADAR_HIDDEN_SQL if hidden else _RADAR_VISIBLE_SQL]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -1608,11 +1777,14 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
 def list_signals(*, maturity: str | None = None, theme: str | None = None, limit: int = 50,
                  user_id: int | None = None, q: str | None = None, since: date | str | None = None,
                  until: date | str | None = None, min_score: float | None = None,
-                 max_score: float | None = None, sort: str = "score_desc", offset: int = 0) -> list[dict]:
+                 max_score: float | None = None, sort: str = "score_desc", offset: int = 0,
+                 hidden: bool = False) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
-    (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу)."""
+    (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
+    hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
+        hidden=hidden,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
@@ -1625,6 +1797,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             f"""
             SELECT s.*,
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
+                   {_radar_hidden_reason_sql()} AS hidden_reason,
                    -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
                    -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска.
                    {signal_month_sql('s')} AS digest_month,
@@ -1678,9 +1851,12 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
             """
         )
         tiles["merged"] = int(cur.fetchone()["merged"])
+        cur.execute(f"SELECT COUNT(*) AS hidden FROM signals s WHERE {_RADAR_HIDDEN_SQL}")
+        tiles["hidden"] = int(cur.fetchone()["hidden"])
         total = tiles["total"]
         matching = total
-        if len(clauses) > 1:
+        # Скрытые — своя выборка: «N из M» считается по ним даже без других фильтров.
+        if len(clauses) > 1 or filters.get("hidden"):
             cur.execute(
                 f"""
                 SELECT COUNT(*) AS matching
@@ -4405,12 +4581,14 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             """
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
+                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*).
+                   CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar' ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs
             WHERE created_at >= date_trunc('month', now()) - make_interval(months => %s)
-            GROUP BY 1, 2
-            ORDER BY 1, 4 DESC
+            GROUP BY 1, 2, 3
+            ORDER BY 1, 5 DESC
             """,
             (months,),
         )
@@ -6290,6 +6468,37 @@ def insert_ai_run(rec: dict) -> None:
             rec,
         )
         conn.commit()
+
+
+def record_radar_ai_usage(job_id: int | None, usage: list[dict] | None) -> int:
+    """Расход ИИ прогона радара — в ai_processing_runs, строка на (стадия, модель).
+
+    Статьи у строки нет (article_id NULL), поэтому уникальный ключ (job_id, article_id, stage)
+    повтор не ловит: повторное применение итога той же задачи сначала снимает её прежние строки
+    радара — одной транзакцией. Стоимость — по ставке модели плюс плата за вызовы web_search."""
+    rows = [row for row in usage or [] if int(row.get("calls") or 0) > 0]
+    with get_connection() as conn:
+        if job_id is not None:
+            conn.execute("DELETE FROM ai_processing_runs WHERE job_id = %s AND stage LIKE 'radar\\_%%'", (job_id,))
+        for row in rows:
+            price_in, price_out = config.price_for_model(row.get("model"))
+            input_tokens = int(row.get("input_tokens") or 0)
+            output_tokens = int(row.get("output_tokens") or 0)
+            cost = (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+            cost += int(row.get("web_search_calls") or 0) * config.SIGNAL_WEB_SEARCH_USD_PER_CALL
+            conn.execute(
+                """
+                INSERT INTO ai_processing_runs
+                  (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
+                   total_tokens, cost_usd, status, error_message)
+                VALUES (%s, NULL, %s, 'openai', %s, NULL, %s, %s, %s, %s, 'ok', %s)
+                """,
+                (job_id, row["stage"], row.get("model") or None, input_tokens, output_tokens,
+                 input_tokens + output_tokens, round(cost, 6),
+                 f"calls={int(row.get('calls') or 0)} web_search={int(row.get('web_search_calls') or 0)}"),
+            )
+        conn.commit()
+    return len(rows)
 
 
 def ai_cost_report() -> list[dict]:

@@ -11,6 +11,8 @@ export type SignalFilters = {
   until?: string;
   minScore?: number;
   maxScore?: number;
+  // Скрытые правилами качества (бизнес, смешанные, старые, архив) — только админу.
+  hidden?: boolean;
 };
 
 // По баллу (как раньше), «сначала новые» — по дате «Поступил», по баллу по возрастанию.
@@ -32,6 +34,7 @@ function filterParams(filters: SignalFilters) {
   if (filters.until) params.set("until", filters.until);
   if (filters.minScore != null) params.set("min_score", String(filters.minScore));
   if (filters.maxScore != null) params.set("max_score", String(filters.maxScore));
+  if (filters.hidden) params.set("hidden", "true");
   return params;
 }
 
@@ -53,6 +56,8 @@ export type SignalSummary = {
   in_digest: number;
   with_feedback: number;
   merged: number;
+  // Скрыто правилами качества — приходит только админу.
+  hidden?: number;
   matching: number;
   themes: Array<{ theme: string; count: number }>;
 };

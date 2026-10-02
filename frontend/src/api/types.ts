@@ -261,7 +261,31 @@ export type Signal = {
   // Ревью пачки: насколько сигнал интересен на фоне соседей по прогону и почему.
   interest_score?: number | null;
   why_interesting?: string | null;
+  // Поля судьи (замечания Виктора 29.09). event_date — дата самого события (ГГГГ-ММ-ДД), а не
+  // поступления на радар; null — у карточки до правки или судья даты не нашёл.
+  event_date?: string | null;
+  signal_category?: "technology" | "business" | "other" | string | null;
+  mixed_events?: boolean | null;
+  mixed_events_reason?: string | null;
+  // Применимость для нефтесервиса (судья): direct — событие в нефтегазе, transferable — перенос из
+  // другой отрасли, none — связи нет (на радар не выходит). oilfield_application — где применить.
+  oilfield_relevance?: "direct" | "transferable" | "none" | string | null;
+  oilfield_application?: string | null;
+  // Балл по профилю «Технологический радар»: подпункты ссылаются на критерии снимка (имя и вес
+  // на момент оценки). Нет профиля — балл общий, судьи.
+  score_profile?: string | null;
+  score_items_json?: SignalScoreItem[] | null;
+  criteria_snapshot?: Array<{ id: number; name: string; weight: number }> | null;
+  // Почему карточка не на радаре — только в выборке «Скрытые» (админ).
+  hidden_reason?: string | null;
   evidence?: SignalEvidence[];
+};
+
+export type SignalScoreItem = {
+  criterion_id: number;
+  final_score: number;
+  ai_score?: number;
+  rationale?: string;
 };
 
 export type SignalPatch = {
@@ -1069,6 +1093,8 @@ export type MonthlyPlatformRow = {
 export type MonthlyAiCostRow = {
   month: string;
   model: string;
+  // feed — лента (суть, теги, скоринг…), radar — технологический радар (стадии radar_*).
+  area?: "feed" | "radar" | string;
   runs: number;
   cost_usd: number;
 };
@@ -1118,6 +1144,9 @@ export type AnalyticsCost = {
   calls: number;
   articles: number;
   cost_usd: number;
+  // Из cost_usd — технологический радар (стадии radar_*): у него нет статей, и в «₽ за статью»
+  // ленты он не входит.
+  radar_cost_usd?: number;
   // Курс ЦБ РФ на последний день месяца (у текущего — на сегодня); «допущение» — ЦБ недоступен.
   usd_rub: number;
   usd_rub_date: string | null;
