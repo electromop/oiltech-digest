@@ -270,3 +270,16 @@ def test_manual_radar_run_is_queued_with_a_single_attempt(monkeypatch):
     cli.main(["enqueue-signal-discovery", "--topic", "Бурение", "--no-offline", "--dry-run"])
 
     assert queued["max_attempts"] == 1
+
+
+def test_api_radar_run_is_queued_with_a_single_attempt(monkeypatch):
+    from oiltech_digest import api, background_jobs
+
+    queued = {}
+    monkeypatch.setattr(background_jobs, "enqueue",
+                        lambda kind, payload, **kwargs: queued.update(kwargs) or {"id": 10, "kind": kind})
+    monkeypatch.setattr(api, "_job_payload", lambda job: job)
+
+    api.enqueue_signal_discovery(api.SignalDiscoveryRequest(offline=False, dry_run=True), {"id": 1, "role": "admin"})
+
+    assert queued["max_attempts"] == 1

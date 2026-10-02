@@ -1043,6 +1043,9 @@ def upsert_signal(signal: dict) -> int:
 
 def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
     with get_connection() as conn:
+        previous = conn.execute(
+            "SELECT signal_id FROM signal_evidence WHERE source_url = %s", (evidence["source_url"],)
+        ).fetchone()
         cur = conn.execute(
             f"""
             INSERT INTO signal_evidence (
@@ -1075,7 +1078,7 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
               strength = EXCLUDED.strength,
               raw_payload_json = EXCLUDED.raw_payload_json,
               updated_at = now()
-            RETURNING id
+            RETURNING id, signal_id
             """,
             (
                 signal_id,
@@ -1092,9 +1095,12 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
                 Json(_jsonable(evidence.get("raw_payload") or evidence)),
             ),
         )
-        evidence_id = int(cur.fetchone()[0])
+        evidence_id, owner_id = cur.fetchone()
         conn.commit()
-        return evidence_id
+    if previous is not None and int(previous[0]) != int(owner_id):
+        # Ссылка переехала: у прежней карточки счётчик не должен показывать старое число.
+        refresh_signal_evidence_count(int(previous[0]))
+    return int(evidence_id)
 
 
 def refresh_signal_evidence_count(signal_id: int) -> int:
@@ -1133,6 +1139,17 @@ _SIGNAL_REVIEWED_SQL = """(
 _SIGNAL_IN_DIGEST_SQL = (
     "EXISTS (SELECT 1 FROM user_signal_states uss_d"
     " WHERE uss_d.signal_id = {alias}.id AND uss_d.status = 'digest')"
+)
+# Положительные вердикты — те же, что у дедупа (signal_dedup._POSITIVE_VERDICTS).
+SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation")
+# Одобрена человеком: последний вердикт — положительный. Отказ, «не тот блок», «шум» или
+# комментарий без вердикта карточку одобренной не делают.
+_SIGNAL_APPROVED_SQL = (
+    "COALESCE((SELECT sfe_a.verdict FROM signal_feedback_events sfe_a"
+    " WHERE sfe_a.signal_id = {alias}.id AND COALESCE(sfe_a.verdict, '') <> ''"
+    " ORDER BY sfe_a.created_at DESC, sfe_a.id DESC LIMIT 1), '') IN ("
+    + ", ".join(f"'{verdict}'" for verdict in SIGNAL_POSITIVE_VERDICTS)
+    + ")"
 )
 
 
@@ -1684,8 +1701,10 @@ def _radar_quality_sql(alias: str = "s") -> str:
     - событие старше срока — «нашёл очень старый сигнал».
 
     Категорию, смешанность и связь с нефтесервисом ставит судья, и повторная находка их
-    перезаписывает: решение машины разобранную карточку не прячет — как дедуп
-    (mark_signal_merged). Выбранную «в дайджест» не прячет ни одно правило, включая архив."""
+    перезаписывает: решение машины не прячет карточку, которую человек одобрил (последний
+    вердикт положительный). Отказ, «не тот блок», «шум» её не возвращают — так админ учит
+    агента на «Скрытых», не показывая их Виктору. Выбранную «в дайджест» не прячет ни одно
+    правило, включая архив: иначе её не снять с выпуска (mark_signal_merged)."""
     a = alias
     machine = " AND ".join([
         f"COALESCE({a}.signal_category, 'technology') = 'technology'",
@@ -1695,7 +1714,7 @@ def _radar_quality_sql(alias: str = "s") -> str:
     ])
     parts = [
         f"{a}.archived_at IS NULL",
-        f"({machine} OR {_SIGNAL_REVIEWED_SQL.format(alias=a)})",
+        f"({machine} OR {_SIGNAL_APPROVED_SQL.format(alias=a)})",
     ]
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     if age_days > 0:
@@ -1715,15 +1734,16 @@ _RADAR_HIDDEN_SQL = (
 
 
 def _radar_hidden_reason_sql() -> str:
-    """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql."""
+    """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql.
+    У видимой причины нет: экран подписывает «Скрыта: …» любую карточку с причиной."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     age = (
         f"CASE WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней' END"
         if age_days > 0 else "NULL"
     )
-    # Решения судьи у разобранной карточки её не прячут (_radar_quality_sql) — и в причине их нет.
+    # Решения судьи одобренную карточку не прячут (_radar_quality_sql) — и в причине их нет.
     machine = (
-        f"CASE WHEN NOT {_SIGNAL_REVIEWED_SQL.format(alias='s')} THEN NULLIF(concat_ws('; ',"
+        f"CASE WHEN NOT {_SIGNAL_APPROVED_SQL.format(alias='s')} THEN NULLIF(concat_ws('; ',"
         " CASE s.signal_category WHEN 'business' THEN 'бизнес-сигнал, не технология'"
         "   WHEN 'other' THEN 'не технологическое событие' END,"
         " CASE WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис' END,"
@@ -1732,10 +1752,10 @@ def _radar_hidden_reason_sql() -> str:
         "), '') END"
     )
     return (
-        "NULLIF(concat_ws('; ',"
+        f"CASE WHEN {_radar_quality_sql('s')} THEN NULL ELSE NULLIF(concat_ws('; ',"
         " CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве' END,"
         f" {machine},"
-        f" {age}), '')"
+        f" {age}), '') END"
     )
 # Тема — одна из тематик заказчика (корневые теги). Первая партия радара (13.09) писала
 # тему свободным текстом: экран собирает такие в отдельный блок и в фильтр тем не берёт.

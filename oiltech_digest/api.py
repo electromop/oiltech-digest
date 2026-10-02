@@ -1970,6 +1970,8 @@ def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, An
         queue_name=decision.queue_name if not payload.offline else "default",
         execution_region=decision.execution_region if not payload.offline else "ru",
         capability=decision.capability if not payload.offline else None,
+        # Одна попытка, как у ежедневной и CLI: прогон оплачивается целиком.
+        max_attempts=1,
     )
     return {"ok": True, "job": _job_payload(job)}
 
