@@ -481,3 +481,58 @@ def test_research_prompt_requires_oilfield_relevance():
     text = signal_research.RESEARCH_INSTRUCTIONS
     assert "важны\nНЕФТЕСЕРВИСУ" in text
     assert "грузоперевозки по общим трассам" in text
+
+
+# --- Ревью #89 (02.10): разобранную карточку решение судьи не прячет, выбранную «в дайджест» — ничто
+
+
+def _choose_for_digest(signal_id):
+    user = repository.create_user(f"editor-{signal_id}@example.test", "long-enough-password", "admin")
+    repository.set_user_signal_status(int(user["id"]), signal_id, status="digest")
+
+
+def test_card_in_digest_stays_on_radar_when_refound_with_a_hiding_verdict(isolated_db):
+    chosen = _store("chosen", signal_category="technology")
+    _choose_for_digest(chosen)
+    # Повторная находка: судья передумал по всем правилам сразу — карточка в выпуске всё равно видна,
+    # иначе её не снять с выпуска (отметку снимают только с экрана радара).
+    old = (date.today() - timedelta(days=config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS + 5)).isoformat()
+    repository.upsert_signal({"signal_key": "chosen", "title": "chosen", "theme": DRILLING, "score": 60,
+                              "signal_category": "business", "oilfield_relevance": "none",
+                              "mixed_events": True, "event_date": old})
+
+    assert chosen in _visible_ids()
+    assert chosen not in {int(row["id"]) for row in repository.list_signals(limit=50, hidden=True)}
+    assert repository.signal_radar_summary()["total"] == 1
+
+
+def test_archive_never_takes_a_card_in_digest(isolated_db):
+    chosen = _store("chosen", signal_category="technology")
+    _choose_for_digest(chosen)
+
+    assert repository.archive_signal_candidates(ids=[chosen], free_theme_only=False) == []
+    assert repository.archive_signals([chosen], reason="test") == 0
+    assert chosen in _visible_ids()
+
+
+def test_judge_does_not_hide_a_reviewed_card_but_archive_and_age_do(isolated_db):
+    old = (date.today() - timedelta(days=config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS + 5)).isoformat()
+    reviewed = _store("reviewed", signal_category="business", oilfield_relevance="none")
+    archived = _store("archived", signal_category="business")
+    stale = _store("stale", signal_category="business", event_date=old)
+    plain = _store("plain", signal_category="business")
+    with repository.get_connection() as conn:
+        for signal_id in (reviewed, archived, stale):
+            conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict) VALUES (%s, 'verdict', 'approved')",
+                         (signal_id,))
+        conn.commit()
+    repository.archive_signals([archived], reason="test")
+
+    assert _visible_ids() == {reviewed}
+    hidden = {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
+    # Причина — только то, что прячет на самом деле: у разобранной решение судьи не в счёт.
+    assert hidden == {
+        archived: "в архиве",
+        stale: f"событие старше {config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS} дней",
+        plain: "бизнес-сигнал, не технология",
+    }

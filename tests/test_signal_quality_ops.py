@@ -259,3 +259,14 @@ def test_statistics_split_radar_from_the_feed(isolated_db):
     assert (float(month["cost_usd"]), float(month["radar_cost_usd"])) == (4.0, 2.5)
     areas = {(row["model"], row["area"]): float(row["cost_usd"]) for row in repository.monthly_ai_cost(1)}
     assert areas == {("gpt-5-mini", "feed"): 1.5, ("gpt-5", "radar"): 2.5}
+
+
+def test_manual_radar_run_is_queued_with_a_single_attempt(monkeypatch):
+    # Прогон «режима ChatGPT» оплачивается целиком: упавший не повторяется сам (ревью #89, 02.10).
+    queued = {}
+    monkeypatch.setattr(repository, "create_background_job",
+                        lambda kind, payload, **kwargs: queued.update(kwargs) or {"id": 9, "queue_name": "external-agents"})
+
+    cli.main(["enqueue-signal-discovery", "--topic", "Бурение", "--no-offline", "--dry-run"])
+
+    assert queued["max_attempts"] == 1

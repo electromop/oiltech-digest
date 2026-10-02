@@ -937,6 +937,8 @@ def _dedupe_run(
             "reviewed": bool(row.get("reviewed") or row.get("verdict")),
             "verdict": row.get("verdict"),
             "fresh": bool(row.get("fresh")),
+            # Не на экране (качество, архив); снимок старого ядра поля не знает — видна.
+            "hidden": bool(row.get("hidden")),
             "urls": row.get("evidence_urls") or [],
             "signal": row,
         })
@@ -1357,6 +1359,9 @@ def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, A
             # Без этих трёх полей в задаче не видно, работают ли раунды поиска,
             # докачка страниц и ревью пачки — проверка выката смотрит сюда.
             "research_modes": [item.get("mode") for item in web.get("research_rounds") or []],
+            # «Режим ChatGPT»: чем искали и что вернул поиск — проверка первого прогона (ранбук).
+            "provider": web.get("provider"),
+            "research": _research_summary(web.get("research")),
             "fulltext": web.get("fulltext"),
             "batch_review": {
                 key: review.get(key)
@@ -1415,10 +1420,31 @@ def _search_error_summary(web_search: dict[str, Any] | None) -> str | None:
     errors = [str(item).strip() for item in web_search.get("errors") or [] if str(item).strip()]
     if errors:
         return _short_search_error(errors[0], [str(query) for query in web_search.get("queries") or []])
+    # «Режим ChatGPT» кладёт сбой в research.error (403 ключа без web_search, обрыв сети), а
+    # status у темы — просто «error».
+    research_error = str((web_search.get("research") or {}).get("error") or "").strip()
+    if research_error:
+        return _trim(research_error, 160)
     status = str(web_search.get("status") or "")
     if not status or status in _SEARCH_ANSWERED:
         return None
     return _trim(str(web_search.get("reason") or status), 160)
+
+
+def _research_summary(research: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Итог поиска «режима ChatGPT» по теме — коротко, для итога задачи: счётчики, не события."""
+    if not research:
+        return None
+    summary = {
+        key: research.get(key)
+        for key in ("status", "events", "evidence_count", "feedback_chars", "web_search_calls", "attempts")
+        if research.get(key) is not None
+    }
+    summary["unverified"] = len(research.get("unverified") or [])
+    summary["dropped"] = len(research.get("dropped") or [])
+    if research.get("error"):
+        summary["error"] = _trim(str(research["error"]), 160)
+    return summary
 
 
 def _strip_search_query(text: str, queries: list[str]) -> str:
