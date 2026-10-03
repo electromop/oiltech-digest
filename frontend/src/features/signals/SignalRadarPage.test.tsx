@@ -4,6 +4,7 @@ import {
   createSignalFeedback,
   getSignalSearchHealth,
   getSignalSummary,
+  getSignalWeekly,
   listSignals,
   updateSignal,
   type SignalQuery,
@@ -43,6 +44,8 @@ vi.mock("../../api/signals", () => ({
   updateSignal: vi.fn(),
   createSignalFeedback: vi.fn(),
   getSignalSearchHealth: vi.fn(),
+  // Итоги недели по умолчанию не пришли — блока нет, остальные тесты экрана его не видят.
+  getSignalWeekly: vi.fn(() => Promise.reject(new Error("нет итогов"))),
 }));
 
 const DEFAULT_CARDS: Signal[] = [
@@ -1035,5 +1038,32 @@ describe("ход решения на карточке (03.10)", () => {
     ]);
     const legacy = screen.getByText("Карточка до правки").closest("article") as HTMLElement;
     expect(within(legacy).queryByText("Ход решения")).not.toBeInTheDocument();
+  });
+});
+
+
+describe("итоги недели (03.10)", () => {
+  beforeEach(() => {
+    vi.mocked(listSignals).mockReset();
+    vi.mocked(getSignalSummary).mockReset();
+    serve(DEFAULT_CARDS);
+  });
+
+  it("строка-сводка, по клику — лучшие новые и причины отсева", async () => {
+    vi.mocked(getSignalWeekly).mockResolvedValueOnce({
+      days: 7, on_radar: 35, filtered: 17, awaiting_review: 35, feedback: 0, feedback_verdicts: [],
+      filtered_reasons: [{ reason: "бизнес-сигнал", count: 13 }, { reason: "ссылки о разных событиях", count: 2 }],
+      top: [{ id: 26, title: "STEP: рекордная досягаемость колтюбинга", theme: "КРС", score: 79, event_date: null }],
+    });
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+    const head = await screen.findByRole("button", { name: /Итоги за 7 дн\./ });
+    expect(head).toHaveTextContent("на радаре новых: 35 · отсеяно и скрыто: 17 · ждут разбора: 35 · отзывов: 0");
+    expect(screen.queryByText("Почему отсеяно")).not.toBeInTheDocument();
+
+    fireEvent.click(head);
+
+    expect(screen.getByText("бизнес-сигнал: 13")).toBeInTheDocument();
+    expect(screen.getByText(/STEP: рекордная досягаемость колтюбинга · 79/)).toBeInTheDocument();
   });
 });

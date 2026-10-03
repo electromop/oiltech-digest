@@ -1339,6 +1339,141 @@ def unarchive_signals(*, signal_ids: Sequence[int] | None = None, reason: str | 
         return int(cur.rowcount or 0)
 
 
+def _radar_hidden_group_sql() -> str:
+    """Одна причина на скрытую карточку — для сводки: первая по порядку правил качества."""
+    age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
+    stages = " ".join(f"WHEN '{stage}' THEN 'отсеяно ({label})'" for stage, label in RADAR_FILTER_STAGES.items())
+    age = f"WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней'" if age_days > 0 else ""
+    return (
+        f"CASE WHEN s.filter_stage IS NOT NULL THEN (CASE s.filter_stage {stages} ELSE 'отсеяно' END)"
+        " WHEN s.archived_at IS NOT NULL THEN 'в архиве'"
+        " WHEN s.signal_category = 'business' THEN 'бизнес-сигнал'"
+        " WHEN s.signal_category = 'other' THEN 'не технологическое событие'"
+        " WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис'"
+        " WHEN s.mixed_events THEN 'ссылки о разных событиях'"
+        f" {age} ELSE 'другое' END"
+    )
+
+
+def radar_weekly_summary(*, days: int = 7) -> dict:
+    """«Итоги недели» радара для заказчика (решение 03.10): что вышло на радар, что отсеяно и
+    почему, что ждёт разбора, сколько отзывов. Те же правила видимости, что у экрана."""
+    since_sql = "now() - make_interval(days => %(days)s)"
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT COUNT(*) FILTER (WHERE {_RADAR_VISIBLE_SQL}) AS on_radar,
+                   COUNT(*) FILTER (WHERE {_RADAR_HIDDEN_SQL}) AS filtered
+            FROM signals s
+            WHERE s.first_seen_at >= {since_sql}
+            """,
+            {"days": days},
+        )
+        totals = dict(cur.fetchone())
+        cur.execute(
+            f"""
+            SELECT {_radar_hidden_group_sql()} AS reason, COUNT(*) AS count
+            FROM signals s
+            WHERE s.first_seen_at >= {since_sql} AND {_RADAR_HIDDEN_SQL}
+            GROUP BY 1 ORDER BY 2 DESC, 1
+            """,
+            {"days": days},
+        )
+        reasons = [dict(row) for row in cur.fetchall()]
+        cur.execute(
+            f"""
+            SELECT s.id, COALESCE(s.title_ru, s.title) AS title, s.theme, s.score, s.event_date
+            FROM signals s
+            WHERE s.first_seen_at >= {since_sql} AND {_RADAR_VISIBLE_SQL}
+            ORDER BY s.score DESC, s.id DESC
+            LIMIT 5
+            """,
+            {"days": days},
+        )
+        top = [dict(row) for row in cur.fetchall()]
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS awaiting
+            FROM signals s
+            WHERE {_RADAR_VISIBLE_SQL}
+              AND NOT {_SIGNAL_REVIEWED_SQL.format(alias="s")}
+            """,
+            {"days": days},
+        )
+        awaiting = int(cur.fetchone()["awaiting"])
+        cur.execute(
+            f"""
+            SELECT verdict, COUNT(*) AS count
+            FROM signal_feedback_events
+            WHERE created_at >= {since_sql} AND COALESCE(verdict, '') <> ''
+            GROUP BY verdict ORDER BY 2 DESC, 1
+            """,
+            {"days": days},
+        )
+        verdicts = [dict(row) for row in cur.fetchall()]
+    return {
+        "days": days,
+        "on_radar": int(totals["on_radar"] or 0),
+        "filtered": int(totals["filtered"] or 0),
+        "filtered_reasons": [{"reason": row["reason"], "count": int(row["count"])} for row in reasons],
+        "top": top,
+        "awaiting_review": awaiting,
+        "feedback": sum(int(row["count"]) for row in verdicts),
+        "feedback_verdicts": [{"verdict": row["verdict"], "count": int(row["count"])} for row in verdicts],
+    }
+
+
+# Вердикты, которые говорят «балл выше, чем карточка стоит», и «так и надо».
+SCORE_TOO_HIGH_VERDICTS = ("overrated", "reject", "wrong_domain", "too_generic", "wrong_block")
+SCORE_FAIR_VERDICTS = ("strong_signal", "approved")
+
+
+def radar_score_calibration() -> list[dict]:
+    """Средний балл судьи по каждому критерию профиля tech_radar — у карточек, которые заказчик
+    счёл завышенными или отклонил, и у одобренных. Последний вердикт карточки решает.
+
+    «Оценки завышены» (Виктор 29.09) превращается в число на критерий: где у отклонённых балл
+    почти как у одобренных, судья по этому критерию не различает и должен ставить строже."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH latest AS (
+              SELECT DISTINCT ON (sfe.signal_id) sfe.signal_id, sfe.verdict
+              FROM signal_feedback_events sfe
+              WHERE sfe.signal_id IS NOT NULL AND COALESCE(sfe.verdict, '') <> ''
+              ORDER BY sfe.signal_id, sfe.created_at DESC, sfe.id DESC
+            ),
+            items AS (
+              SELECT l.verdict,
+                     (item->>'criterion_id')::bigint AS criterion_id,
+                     (item->>'final_score')::numeric AS score,
+                     (SELECT entry->>'name' FROM jsonb_array_elements(s.criteria_snapshot) entry
+                      WHERE (entry->>'id')::bigint = (item->>'criterion_id')::bigint LIMIT 1) AS name
+              FROM latest l
+              JOIN signals s ON s.id = l.signal_id
+              CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.score_items_json, '[]'::jsonb)) item
+              WHERE s.score_profile = 'tech_radar'
+            )
+            SELECT criterion_id, max(name) AS name,
+                   round(avg(score) FILTER (WHERE verdict = ANY(%s)), 1) AS too_high_avg,
+                   count(*) FILTER (WHERE verdict = ANY(%s)) AS too_high_n,
+                   round(avg(score) FILTER (WHERE verdict = ANY(%s)), 1) AS fair_avg,
+                   count(*) FILTER (WHERE verdict = ANY(%s)) AS fair_n
+            FROM items
+            GROUP BY criterion_id
+            ORDER BY criterion_id
+            """,
+            (list(SCORE_TOO_HIGH_VERDICTS), list(SCORE_TOO_HIGH_VERDICTS),
+             list(SCORE_FAIR_VERDICTS), list(SCORE_FAIR_VERDICTS)),
+        )
+        return [
+            {key: (float(value) if key.endswith("_avg") and value is not None else value) for key, value in row.items()}
+            for row in cur.fetchall()
+        ]
+
+
 def radar_cards_for_recall() -> list[dict]:
     """Все карточки радара (кроме скрытых дублей) со ссылками и признаком «видна на экране» —
     для замера полноты по эталону заказчика (signal_reference.recall)."""

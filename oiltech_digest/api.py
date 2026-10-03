@@ -1786,6 +1786,15 @@ def list_signals(
     return rows
 
 
+@app.get("/api/signals/weekly")
+def signal_radar_weekly(
+    days: int = Query(7, ge=1, le=31),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """«Итоги недели» радара: что вышло, что отсеяно и почему, что ждёт разбора, сколько отзывов."""
+    return _clean(repository.radar_weekly_summary(days=days))
+
+
 @app.get("/api/signals/summary")
 def signal_radar_summary(
     filters: dict[str, Any] = Depends(_radar_screen_filters),

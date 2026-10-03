@@ -559,6 +559,11 @@ BATCH_REVIEW_INSTRUCTIONS = """Ты — финальный контроль ка
 кандидатов пачки. why_interesting — коротко по-русски, почему такой балл именно на
 фоне остальных. Для keep=false interest_score и why_interesting можно оставить пустыми.
 
+Во входе может быть customer_feedback — что заказчик одобрял («так делать») и отклонял («так НЕ
+делать») с причинами. Учитывай его: кандидат, похожий на отклонённое по типу события, — keep=false
+как шум или низкий interest_score; похожий на одобренное — выше interest_score. Не копируй
+причины дословно в reason — объясни для этого кандидата.
+
 duplicate_of_signal_key заполняй ТОЛЬКО для дубля; для обзора, шума и для keep=true —
 пустая строка. Верни решение по КАЖДОМУ переданному signal_key. reason — коротко по-русски."""
 
@@ -727,6 +732,7 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         "dedup_max_pairs": app_config.SIGNAL_DEDUP_MAX_PAIRS,
         "radar_themes": _radar_theme_names(),
         "radar_criteria": _radar_criteria(),
+        "score_calibration": _score_calibration(),
     }
     if for_external:
         try:
@@ -747,6 +753,38 @@ def _radar_theme_names() -> list[str]:
         return [topic["name"] for topic in topics_from_tags(repository.list_enabled_tags())]
     except Exception:  # noqa: BLE001 - без списка тема выбирается по ключам, как раньше
         return []
+
+
+# Подсказка судье о завышении — только с достаточным числом вердиктов и заметным перекосом.
+CALIBRATION_MIN_VERDICTS = 3
+CALIBRATION_HIGH_SCORE = 50
+
+
+def _score_calibration() -> list[dict[str, Any]]:
+    try:
+        return repository.radar_score_calibration()
+    except Exception:  # noqa: BLE001 - калибровка — улучшение, без неё судья ставит как раньше
+        return []
+
+
+def _calibration_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """Где судья завышает: у отклонённых или «завышенных» заказчиком карточек балл по критерию
+    высокий и почти как у одобренных. Перекос считается кодом, модель получает вывод."""
+    lines = []
+    for row in rows:
+        too_high_n = int(row.get("too_high_n") or 0)
+        too_high = row.get("too_high_avg")
+        fair = row.get("fair_avg")
+        if too_high_n < CALIBRATION_MIN_VERDICTS or too_high is None or too_high < CALIBRATION_HIGH_SCORE:
+            continue
+        if fair is not None and int(row.get("fair_n") or 0) and too_high < fair - 10:
+            continue  # различает: у отклонённых заметно ниже
+        compare = f"; у одобренных — {fair:.0f}" if fair is not None and row.get("fair_n") else ""
+        lines.append(
+            f"- {row.get('name') or row.get('criterion_id')}: у карточек, которые заказчик отклонил или счёл "
+            f"завышенными ({too_high_n}), ты ставил в среднем {too_high:.0f}{compare}. Ставь по этому критерию строже."
+        )
+    return lines
 
 
 def _radar_criteria() -> list[dict[str, Any]]:
@@ -770,6 +808,7 @@ def use_discovery_snapshot(snapshot: dict[str, Any]) -> Iterator[None]:
     judge_token = _JUDGE_CONTEXT.set({
         "themes": [str(name) for name in snapshot.get("radar_themes") or [] if str(name).strip()],
         "criteria": list(snapshot.get("radar_criteria") or []),
+        "calibration": _calibration_lines(list(snapshot.get("score_calibration") or [])),
     })
     try:
         if snapshot.get("memory") is not None:
@@ -1806,6 +1845,9 @@ def _batch_review_candidates(
     payload = {
         "topic": topic,
         "candidates": [_batch_review_candidate_payload(item) for item in reviewable],
+        # Вкус заказчика (03.10): до этого ревью пачки сравнивало кандидатов без памяти ОС —
+        # её видели только судья и поиск.
+        "customer_feedback": feedback_prompt_block(topic),
     }
     try:
         response = client.complete_json(
@@ -3377,6 +3419,10 @@ def _judge_context_block() -> str:
     themes = context.get("themes") or []
     if themes:
         parts.append("themes:\n" + "\n".join(f"- {name}" for name in themes))
+    calibration = context.get("calibration") or []
+    if calibration and context.get("criteria"):
+        # «Оценки завышены» (Виктор 29.09): по вердиктам заказчика — где судья не различает.
+        parts.append("score_calibration (по вердиктам заказчика):\n" + "\n".join(calibration))
     criteria = context.get("criteria") or []
     if criteria:
         parts.append("criteria:\n" + "\n".join(

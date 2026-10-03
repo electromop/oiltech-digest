@@ -67,6 +67,22 @@ export function getSignalSummary(filters: SignalFilters = {}) {
   return apiFetch<SignalSummary>(params ? `/api/signals/summary?${params}` : "/api/signals/summary");
 }
 
+// «Итоги недели» радара (03.10): что вышло, что отсеяно и почему, что ждёт разбора, отзывы.
+export type SignalWeekly = {
+  days: number;
+  on_radar: number;
+  filtered: number;
+  filtered_reasons: Array<{ reason: string; count: number }>;
+  top: Array<{ id: number; title: string; theme: string; score: number; event_date: string | null }>;
+  awaiting_review: number;
+  feedback: number;
+  feedback_verdicts: Array<{ verdict: string; count: number }>;
+};
+
+export function getSignalWeekly(days = 7) {
+  return apiFetch<SignalWeekly>(`/api/signals/weekly?days=${days}`);
+}
+
 export function updateSignal(signalId: number, payload: SignalPatch) {
   return apiFetch<{ ok: boolean }>(`/api/signals/${signalId}`, {
     method: "PATCH",

@@ -4,10 +4,11 @@ import {
   createSignalFeedback,
   getSignalSearchHealth,
   getSignalSummary,
+  getSignalWeekly,
   listSignals,
   updateSignal,
 } from "../../api/signals";
-import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
+import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary, SignalWeekly } from "../../api/signals";
 import type { Signal, SignalEvidence, SignalFeedbackPayload } from "../../api/types";
 import { radarDigestLockedText } from "../articles/feedWindow";
 import { StatCard } from "../shared/StatCard";
@@ -73,6 +74,8 @@ const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> 
   // Встреча с заказчиком 21.09, решение 5: находка годная, но это бизнес-сигнал.
   { value: "wrong_block", label: "Не тот блок — бизнес-сигнал, а не технология" },
   { value: "merge_duplicate", label: "Дубль — тот же сигнал или технологический кластер" },
+  // 03.10: находка годная, но балл выше, чем она стоит — судья учится ставить строже.
+  { value: "overrated", label: "Оценка завышена — сигнал годный, балл слишком высокий" },
 ];
 
 const EARLY_THEME_GROUP = "Ранние карточки — тема вне 13 тематик";
@@ -224,6 +227,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
+  const [weekly, setWeekly] = useState<SignalWeekly | null>(null);
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
   // «Отсеянные и скрытые» — всем (решение 02.10: Виктор разбирает всё): бизнес, смешанные
   // события, старые, не про нефтесервис, брак судьи, отсеянное поиском, архив.
   const [showHidden, setShowHidden] = useState(false);
@@ -291,6 +296,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   }, [filters, sort]);
 
   useEffect(() => () => window.clearTimeout(pendingTimer.current), []);
+
+  useEffect(() => {
+    // Итоги недели — служебный блок: не загрузились — его просто нет.
+    getSignalWeekly()
+      .then(setWeekly)
+      .catch(() => setWeekly(null));
+  }, []);
 
   useEffect(() => {
     // Обычный пользователь здоровье поиска не запрашивает: эндпоинт только для админа.
@@ -570,6 +582,51 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         <div className="archiveNotice" role="status">
           <span>{searchNotice}</span>
         </div>
+      ) : null}
+
+      {/* «Итоги недели» (03.10): что вышло, что отсеяно и почему, что ждёт разбора — для
+          еженедельного разбора с заказчиком. */}
+      {weekly ? (
+        <section className="panel signalWeekly" aria-label="Итоги недели">
+          <button
+            type="button"
+            className="signalWeeklyHead"
+            aria-expanded={weeklyOpen}
+            onClick={() => setWeeklyOpen((current) => !current)}
+          >
+            <strong>Итоги за {weekly.days} дн.</strong>
+            <span>
+              на радаре новых: {weekly.on_radar} · отсеяно и скрыто: {weekly.filtered} · ждут разбора:{" "}
+              {weekly.awaiting_review} · отзывов: {weekly.feedback}
+            </span>
+          </button>
+          {weeklyOpen ? (
+            <div className="signalWeeklyBody">
+              {weekly.top.length ? (
+                <div>
+                  <div className="signalEvidenceHeading">Лучшие новые</div>
+                  <ol>
+                    {weekly.top.map((row) => (
+                      <li key={row.id}>
+                        <span className="signalIdText">#{row.id}</span> {row.title} · {Math.round(Number(row.score || 0))}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : null}
+              {weekly.filtered_reasons.length ? (
+                <div>
+                  <div className="signalEvidenceHeading">Почему отсеяно</div>
+                  <ul>
+                    {weekly.filtered_reasons.map((row) => (
+                      <li key={row.reason}>{row.reason}: {row.count}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {/* Плитки, как у «Бизнес-сигналов» (документ заказчика 19.09), — по всему радару:

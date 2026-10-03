@@ -2170,6 +2170,33 @@ def cmd_refresh_signal_evidence_counts(args: argparse.Namespace) -> None:
     print(f"refresh-signal-evidence-counts: исправлено карточек {changed}")
 
 
+VERDICT_RU = {
+    "strong_signal": "сильный сигнал", "approved": "полезный", "watch_later": "наблюдать",
+    "background_material": "фон", "reject": "шум", "wrong_domain": "не релевантно",
+    "wrong_block": "не тот блок", "merge_duplicate": "дубль", "overrated": "оценка завышена",
+}
+
+
+def cmd_radar_weekly_report(args: argparse.Namespace) -> None:
+    from oiltech_digest.db import repository
+
+    report = repository.radar_weekly_summary(days=args.days)
+    print(f"Технологический радар — итоги за {report['days']} дн.")
+    print(f"На радаре новых: {report['on_radar']}; отсеяно и скрыто: {report['filtered']}; "
+          f"ждут разбора: {report['awaiting_review']}; отзывов: {report['feedback']}")
+    if report["top"]:
+        print("Лучшие новые:")
+        for row in report["top"]:
+            print(f"  #{row['id']} {float(row['score'] or 0):.0f} — {row['title']} ({row['theme']})")
+    if report["filtered_reasons"]:
+        print("Почему отсеяно:")
+        for row in report["filtered_reasons"]:
+            print(f"  {row['reason']}: {row['count']}")
+    if report["feedback_verdicts"]:
+        print("Отзывы: " + ", ".join(f"{VERDICT_RU.get(row['verdict'], row['verdict'])} — {row['count']}"
+                                     for row in report["feedback_verdicts"]))
+
+
 def cmd_import_reference_signals(args: argparse.Namespace) -> None:
     from oiltech_digest import signal_reference
 
@@ -3133,6 +3160,10 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-signal-evidence-counts",
         help="пересчитать число ссылок у карточек радара (у тех, чьи ссылки переехали в другие)",
     ).set_defaults(func=cmd_refresh_signal_evidence_counts)
+
+    p_radar_weekly = sub.add_parser("radar-weekly-report", help="итоги недели радара: вышло, отсеяно и почему, отзывы")
+    p_radar_weekly.add_argument("--days", type=int, default=7)
+    p_radar_weekly.set_defaults(func=cmd_radar_weekly_report)
 
     p_import_reference = sub.add_parser(
         "import-reference-signals",
