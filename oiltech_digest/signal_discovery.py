@@ -7,8 +7,11 @@ can be fed later through the same evidence shape.
 
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
+import contextvars
 from contextvars import ContextVar
+import threading
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime, timedelta
 import hashlib
@@ -637,11 +640,19 @@ _USAGE: ContextVar[dict[tuple[str, str], dict[str, Any]] | None] = ContextVar("s
 RADAR_STAGES = ("radar_research", "radar_judge", "radar_review", "radar_dedup", "radar_theme")
 
 
+_USAGE_LOCK = threading.Lock()
+
+
 def _record_usage(stage: str, model: str | None, *, input_tokens: int = 0, output_tokens: int = 0,
                   calls: int = 1, web_search_calls: int = 0) -> None:
     usage = _USAGE.get()
     if usage is None or not calls:
         return
+    with _USAGE_LOCK:  # судья пишет расход из параллельных потоков
+        _record_usage_locked(usage, stage, model, input_tokens, output_tokens, calls, web_search_calls)
+
+
+def _record_usage_locked(usage, stage, model, input_tokens, output_tokens, calls, web_search_calls) -> None:
     row = usage.setdefault((stage, str(model or "")), {
         "stage": stage, "model": str(model or ""), "calls": 0, "input_tokens": 0, "output_tokens": 0,
         "web_search_calls": 0,
@@ -841,9 +852,9 @@ def _run_discovery_topics(
             # «Режим ChatGPT»: событие — свой кластер, и модель уже отобрала главное. Лимит
             # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
             research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
-            for cluster in _clusters_for_judging(clusters, max(config.max_signals, research_events)):
-                beat()
-                judged = _judge_with_retry(cluster, topic_name, offline=config.offline, beat=beat, errors=judge_errors)
+            selected = _clusters_for_judging(clusters, max(config.max_signals, research_events))
+            for cluster, judged in _judge_clusters(selected, topic_name, offline=config.offline, beat=beat,
+                                                  errors=judge_errors):
                 if judged is None:
                     first = cluster[0] if cluster else {}
                     filtered_findings.append({
@@ -894,6 +905,43 @@ def _run_discovery_topics(
         raise JudgeUnavailable(f"Судья не ответил ни на один из {errors_total} кластеров: {first}")
     dedup = _dedupe_run(config, snapshot, topics_out, beat)
     return {"topics": topics_out, "dedup": dedup, "ai_usage": list((_USAGE.get() or {}).values())}
+
+
+def _judge_clusters(
+    clusters: list[list[dict[str, Any]]],
+    topic_name: str,
+    *,
+    offline: bool,
+    beat: Callable[[], None],
+    errors: list[str],
+) -> list[tuple[list[dict[str, Any]], tuple[dict[str, Any], dict[str, Any]] | None]]:
+    """Судья по кластерам темы — параллельно (SIGNAL_JUDGE_CONCURRENCY), итог в исходном порядке.
+
+    Прогон 13 тем по одному кластеру шёл ~2 ч: gpt-5 medium думает 30–60 с. Каждый вызов — в
+    копии контекста прогона (снимок тегов, память ОС, учёт расхода живут в ContextVar).
+    Признак продвижения подаёт основной поток, пока ждёт: аренда NL — не из рабочих потоков.
+    Ошибки — в порядке кластеров, как при последовательном судье."""
+    workers = min(app_config.SIGNAL_JUDGE_CONCURRENCY, len(clusters)) or 1
+    if workers == 1:
+        results = []
+        for cluster in clusters:
+            beat()
+            results.append((cluster, _judge_with_retry(cluster, topic_name, offline=offline, beat=beat, errors=errors)))
+        return results
+    local_errors: list[list[str]] = [[] for _ in clusters]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="radar-judge") as pool:
+        futures = [
+            pool.submit(contextvars.copy_context().run, _judge_with_retry, cluster, topic_name,
+                        offline=offline, beat=lambda: None, errors=local_errors[index])
+            for index, cluster in enumerate(clusters)
+        ]
+        pending = set(futures)
+        while pending:
+            beat()
+            _, pending = wait(pending, timeout=20, return_when=FIRST_COMPLETED)
+    for collected in local_errors:
+        errors.extend(collected)
+    return [(cluster, future.result()) for cluster, future in zip(clusters, futures)]
 
 
 # Судья зовётся на каждый кластер, до 78 раз за прогон. Без повтора один таймаут или

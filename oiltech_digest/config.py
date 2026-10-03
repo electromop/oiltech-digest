@@ -298,6 +298,10 @@ SIGNAL_THEME_CHECK_MODEL = os.environ.get("SIGNAL_THEME_CHECK_MODEL", "").strip(
 SIGNAL_THEME_CHECK_REASONING = os.environ.get("SIGNAL_THEME_CHECK_REASONING", "").strip() or SIGNAL_DEDUP_REASONING
 # Таймаут вызовов модели радара: сильная модель с рассуждением думает дольше 60 с ленты.
 SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))
+# Сколько вызовов судьи (кластеров темы) и судьи дедупа (пар) идут одновременно. Прогон 13 тем
+# на gpt-5 medium по одному шёл ~2 ч: судья думал 30–60 с на кластер. 1 — по-старому.
+SIGNAL_JUDGE_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_JUDGE_CONCURRENCY", "4")))
+SIGNAL_DEDUP_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_DEDUP_CONCURRENCY", "4")))
 # Откуда радар берёт находки: brave — поиск Brave и докачка страниц (как раньше);
 # openai_web — «режим ChatGPT»: на тему один вызов модели со встроенным поиском OpenAI
 # (signal_research.py); both — обе выдачи вместе.
