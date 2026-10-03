@@ -955,10 +955,11 @@ def upsert_signal(signal: dict) -> int:
               interest_score, why_interesting,
               signal_category, event_date, mixed_events, mixed_events_reason,
               score_profile, score_items_json, criteria_snapshot,
-              oilfield_relevance, oilfield_application, filter_stage, filter_reason
+              oilfield_relevance, oilfield_application, filter_stage, filter_reason,
+              verdict_reason, decision_log
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = EXCLUDED.title,
               title_ru = EXCLUDED.title_ru,
@@ -988,6 +989,9 @@ def upsert_signal(signal: dict) -> int:
               -- Отсев — решение этого прогона: принятая снова карточка выходит на радар.
               filter_stage = EXCLUDED.filter_stage,
               filter_reason = EXCLUDED.filter_reason,
+              -- Ход решения — этого прогона; старая сборка NL его не несёт — прежний не стираем.
+              verdict_reason = COALESCE(EXCLUDED.verdict_reason, signals.verdict_reason),
+              decision_log = COALESCE(EXCLUDED.decision_log, signals.decision_log),
               -- Балл и его происхождение — всегда вместе: score выше уже новый.
               score_profile = EXCLUDED.score_profile,
               score_items_json = EXCLUDED.score_items_json,
@@ -1025,6 +1029,8 @@ def upsert_signal(signal: dict) -> int:
                 (signal.get("oilfield_application") or None),
                 signal.get("filter_stage") or None,
                 (signal.get("filter_reason") or None),
+                (signal.get("verdict_reason") or None),
+                Json(_jsonable(signal["decision_log"])) if signal.get("decision_log") else None,
             ),
         )
         signal_id = int(cur.fetchone()[0])

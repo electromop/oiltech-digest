@@ -1003,3 +1003,37 @@ describe("применение в нефтесервисе на карточке
     expect(within(legacy).queryByText(/Применение в нефтесервисе/)).not.toBeInTheDocument();
   });
 });
+
+describe("ход решения на карточке (03.10)", () => {
+  beforeEach(() => {
+    vi.mocked(listSignals).mockReset();
+    vi.mocked(getSignalSummary).mockReset();
+  });
+
+  it("показывает причину и шаги решения; у карточки без них блока нет", async () => {
+    serve([
+      { ...baseSignal, id: 801, signal_key: "k801", title_ru: "Отсеянный обзор рынка",
+        verdict_reason: "обзор рынка без конкретного события",
+        decision_log: [
+          { stage: "судья", text: "Событие: отчёт аналитиков о рынке бурения" },
+          { stage: "отсев", text: "Отсеяно (судья): обзор рынка без конкретного события" },
+        ] },
+      { ...baseSignal, id: 802, signal_key: "k802", title_ru: "Карточка до правки" },
+    ]);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    for (const title of ["Отсеянный обзор рынка", "Карточка до правки"]) {
+      const card = (await screen.findByText(title)).closest("article") as HTMLElement;
+      fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    }
+
+    const card = screen.getByText("Отсеянный обзор рынка").closest("article") as HTMLElement;
+    expect(within(card).getByText("Почему такое решение:")).toBeInTheDocument();
+    const steps = within(card).getAllByRole("listitem").map((item) => item.textContent);
+    expect(steps).toEqual([
+      "судьяСобытие: отчёт аналитиков о рынке бурения",
+      "отсевОтсеяно (судья): обзор рынка без конкретного события",
+    ]);
+    const legacy = screen.getByText("Карточка до правки").closest("article") as HTMLElement;
+    expect(within(legacy).queryByText("Ход решения")).not.toBeInTheDocument();
+  });
+});

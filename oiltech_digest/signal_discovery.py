@@ -411,6 +411,12 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
   без промышленного применения, судоходство и авиация без связи с промыслом. Слова «промышленный»
   мало: нужна операция нефтесервиса. oilfield_application — одной фразой по-русски, где именно это
   применить в нефтесервисе (для none — пустая строка). Карточки none радар не показывает.
+- reasoning_steps — ход решения, 3–6 коротких шагов по-русски, по порядку: что за событие и
+  кто участник; есть ли новая технология или это бизнес; применимость для нефтесервиса; дата
+  события и свежесть; одно ли это событие; итог — почему такой вердикт и балл. Заказчик читает
+  их, чтобы понять, почему карточка принята или отсеяна: пиши по фактам из evidence, без воды.
+- verdict_reason — одной фразой по-русски, почему такое решение; для reject — конкретная
+  причина отказа («обзор рынка без события», «событие 2024 года», «реклама без факта применения»).
 - theme — выбери ОДНУ тематику из списка во входе (строка «themes»), по сути события, а не по
   запросу, которым материал нашли. Тематика — по ОПЕРАЦИИ нефтесервиса, к которой относится
   событие: автоматизированное MPD и автономное направленное бурение — бурение; цифровая
@@ -424,7 +430,8 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
   vendor-reported без независимого подтверждения — не выше 60 по зрелости.
 
 Все пользовательские текстовые поля возвращай на русском: title, theme, summary,
-thesis, transferability, why_now, why_not_noise, mixed_events_reason, oilfield_application. Не копируй англоязычный или китайский
+thesis, transferability, why_now, why_not_noise, mixed_events_reason, oilfield_application,
+reasoning_steps, verdict_reason. Не копируй англоязычный или китайский
 заголовок как title; переведи его нормальным нефтегазовым русским языком.
 Названия компаний, продуктов, месторождений, стандартов и устоявшиеся аббревиатуры
 HSE/PTW/AI оставляй в оригинальном написании."""
@@ -490,8 +497,10 @@ def _judge_schema(themes: list[str], criteria: list[dict[str, Any]]) -> dict[str
     properties["mixed_events_reason"] = {"type": "string"}
     properties["oilfield_relevance"] = {"type": "string", "enum": list(OILFIELD_RELEVANCE)}
     properties["oilfield_application"] = {"type": "string"}
+    properties["reasoning_steps"] = {"type": "array", "items": {"type": "string"}}
+    properties["verdict_reason"] = {"type": "string"}
     required += ["signal_category", "event_date", "mixed_events", "mixed_events_reason",
-                 "oilfield_relevance", "oilfield_application"]
+                 "oilfield_relevance", "oilfield_application", "reasoning_steps", "verdict_reason"]
     if criteria:
         properties["criteria_scores"] = {
             "type": "array",
@@ -1170,13 +1179,14 @@ def _store_candidate(
                     normalized_output=signal,
                 )
             return repeat_of
+        signal["decision_log"] = _decision_log(candidate)
         signal_id = repository.upsert_signal(signal)
         signal["id"] = signal_id
         for item in cluster:
             repository.upsert_signal_evidence(signal_id, item)
         signal["evidence_count"] = repository.refresh_signal_evidence_count(signal_id)
     if rejected and not config.dry_run:
-        signal_id = _store_filtered_candidate(signal, cluster)
+        signal_id = _store_filtered_candidate(signal, cluster, _decision_log(candidate))
     if generation_run_id is not None:
         repository.create_signal_training_example(
             generation_run_id=generation_run_id,
@@ -1191,7 +1201,8 @@ def _store_candidate(
     return signal_id
 
 
-def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, Any]]) -> int | None:
+def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, Any]],
+                              decision_log: list[dict[str, str]] | None = None) -> int | None:
     """Брак судьи или ревью пачки — карточкой «Отсеяно»: заказчик просматривает всё отсеянное.
 
     Принятую ранее карточку с тем же ключом брак этого прогона не трогает: уже видимая
@@ -1200,8 +1211,10 @@ def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, An
     if owner and owner.get("filter_stage") is None:
         return int(owner["id"])
     stage = "review" if signal.get("batch_review_reason") else "judge"
-    reason = signal.get("batch_review_reason") or signal.get("why_not_noise") or signal.get("summary") or ""
-    stored = {**signal, "filter_stage": stage, "filter_reason": _trim(str(reason), 500)}
+    reason = (signal.get("batch_review_reason") or signal.get("verdict_reason") or signal.get("why_not_noise")
+              or signal.get("summary") or "")
+    stored = {**signal, "filter_stage": stage, "filter_reason": _trim(str(reason), 500),
+              "decision_log": decision_log or []}
     signal_id = repository.upsert_signal(stored)
     for item in cluster:
         repository.upsert_signal_evidence(signal_id, item)
@@ -1235,6 +1248,7 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
             "event_date": _normalize_event_date(item.get("event_date")),
             "filter_stage": item.get("stage") or "search",
             "filter_reason": _trim(str(item.get("reason") or ""), 500),
+            "decision_log": _finding_log(item),
         })
         if url.startswith("http"):
             repository.upsert_signal_evidence(signal_id, {
@@ -1246,6 +1260,50 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
             repository.refresh_signal_evidence_count(signal_id)
         stored += 1
     return stored
+
+
+_STAGE_LABELS = {"search": "поиск", "judge_error": "судья"}
+
+
+def _finding_log(item: dict[str, Any]) -> list[dict[str, str]]:
+    """Ход решения для находки, не дошедшей до карточки: что нашёл поиск и почему отсеяно."""
+    found = ", ".join(part for part in (str(item.get("publisher") or ""), str(item.get("event_date") or "")) if part)
+    log = [{"stage": "поиск", "text": f"Найдено: {item.get('title') or item.get('url') or ''}" + (f" ({found})" if found else "")}]
+    if item.get("technology"):
+        log.append({"stage": "поиск", "text": f"Технология по версии поиска: {item['technology']}"})
+    stage = _STAGE_LABELS.get(str(item.get("stage") or ""), "поиск")
+    log.append({"stage": "отсев", "text": f"Отсеяно ({stage}): {item.get('reason') or 'причина не указана'}"})
+    return log
+
+
+def _decision_log(candidate: dict[str, Any]) -> list[dict[str, str]]:
+    """Ход решения карточки по шагам — для заказчика: почему принята или отсеяна.
+
+    Шаги судьи (reasoning_steps) и его итог (verdict_reason), решение ревью пачки, как выбрана
+    тематика (судья, второе мнение, ключи), отказ — если отсеяна."""
+    signal = candidate.get("signal") or {}
+    raw = candidate.get("raw_output") or {}
+    log = [{"stage": "судья", "text": str(step)} for step in signal.get("reasoning_steps") or []]
+    if signal.get("verdict_reason"):
+        log.append({"stage": "судья", "text": f"Итог: {signal['verdict_reason']}"})
+    if signal.get("batch_review_reason"):
+        log.append({"stage": "ревью пачки", "text": str(signal["batch_review_reason"])})
+    elif signal.get("why_interesting"):
+        log.append({"stage": "ревью пачки", "text": f"Оставлен: {signal['why_interesting']}"})
+    choice = raw.get("theme_choice") or {}
+    if choice:
+        check = choice.get("theme_check") or {}
+        if choice.get("reason") in ("theme_check", "judge_confirmed") and check.get("reason"):
+            log.append({"stage": "тематика", "text": f"Второе мнение: {choice.get('theme')} — {check['reason']}"})
+        elif choice.get("reason") == "judge":
+            log.append({"stage": "тематика", "text": f"{choice.get('theme')} — выбор судьи"})
+        elif choice.get("reason"):
+            log.append({"stage": "тематика", "text": f"{choice.get('theme')} — по ключевым словам тематик"})
+    if candidate.get("rejected"):
+        reason = signal.get("batch_review_reason") or signal.get("verdict_reason") or signal.get("why_not_noise") or ""
+        stage = "ревью пачки" if signal.get("batch_review_reason") else "судья"
+        log.append({"stage": "отсев", "text": f"Отсеяно ({stage}): {reason}".rstrip(": ")})
+    return log
 
 
 def _repeat_of_existing_card(signal: dict[str, Any], cluster: list[dict[str, Any]]) -> int | None:
@@ -3200,6 +3258,11 @@ def _normalize_signal_payload(payload: dict[str, Any], topic: str, *, context: d
         "mixed_events": payload.get("mixed_events") is True,
         "mixed_events_reason": _trim(str(payload.get("mixed_events_reason") or ""), 500) if payload.get("mixed_events") is True else "",
         "oilfield_relevance": _normalize_relevance(payload.get("oilfield_relevance")),
+        "reasoning_steps": [
+            _enforce_glossary(_trim(str(step), 400), context, topic)
+            for step in [item for item in payload.get("reasoning_steps") or [] if str(item).strip()][:8]
+        ],
+        "verdict_reason": _enforce_glossary(_trim(str(payload.get("verdict_reason") or ""), 400), context, topic),
         "oilfield_application": (
             _enforce_glossary(_trim(str(payload.get("oilfield_application") or ""), 400), context, topic)
             if _normalize_relevance(payload.get("oilfield_relevance")) in ("direct", "transferable") else ""

@@ -276,8 +276,11 @@ export type Signal = {
   score_profile?: string | null;
   score_items_json?: SignalScoreItem[] | null;
   criteria_snapshot?: Array<{ id: number; name: string; weight: number }> | null;
-  // Почему карточка не на радаре — только в выборке «Скрытые» (админ).
+  // Почему карточка не на радаре — в выборке «Отсеянные и скрытые».
   hidden_reason?: string | null;
+  // Почему такое решение (судья) и ход решения по шагам: судья, ревью пачки, тематика, отсев.
+  verdict_reason?: string | null;
+  decision_log?: Array<{ stage: string; text: string }> | null;
   evidence?: SignalEvidence[];
 };
 

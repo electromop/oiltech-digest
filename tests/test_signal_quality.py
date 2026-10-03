@@ -587,3 +587,92 @@ def test_run_collects_search_drops_and_judge_failures(monkeypatch):
         ("judge_error", "Технология А", "https://example.com/a"),
     ]
     assert findings[1]["reason"].startswith("AIClientError: OpenAI API error 503")
+
+
+# --- Причина и ход решения (03.10) ------------------------------------------------------------
+
+
+def test_judge_is_asked_for_reasoning_steps_and_verdict_reason():
+    schema = signal_discovery._judge_schema(THEMES, CRITERIA)["schema"]
+
+    assert {"reasoning_steps", "verdict_reason"} <= set(schema["required"])
+    assert schema["properties"]["reasoning_steps"] == {"type": "array", "items": {"type": "string"}}
+    assert "reasoning_steps — ход решения" in signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
+
+
+def test_reasoning_steps_are_kept_trimmed_and_capped():
+    signal = signal_discovery._normalize_signal_payload(
+        _judge_answer(reasoning_steps=["Событие: SLB внедрила MPD", "", *[f"шаг {i}" for i in range(10)]],
+                      verdict_reason="Внедрение с цифрами"),
+        DRILLING,
+    )
+
+    assert signal["reasoning_steps"][0] == "Событие: SLB внедрила MPD"
+    assert len(signal["reasoning_steps"]) == 8
+    assert signal["verdict_reason"] == "Внедрение с цифрами"
+
+
+def test_decision_log_tells_why_a_card_was_accepted():
+    candidate = {
+        "signal": {"reasoning_steps": ["Событие: Nabors встроила MPD", "Технология: да"],
+                   "verdict_reason": "внедрение на действующих буровых", "why_interesting": "первое применение"},
+        "raw_output": {"theme_choice": {"theme": DRILLING, "reason": "judge"}},
+        "rejected": False,
+    }
+
+    assert signal_discovery._decision_log(candidate) == [
+        {"stage": "судья", "text": "Событие: Nabors встроила MPD"},
+        {"stage": "судья", "text": "Технология: да"},
+        {"stage": "судья", "text": "Итог: внедрение на действующих буровых"},
+        {"stage": "ревью пачки", "text": "Оставлен: первое применение"},
+        {"stage": "тематика", "text": f"{DRILLING} — выбор судьи"},
+    ]
+
+
+def test_decision_log_tells_why_a_card_was_filtered_and_by_whom():
+    candidate = {
+        "signal": {"reasoning_steps": ["Событие: вебинар"], "verdict_reason": "нет события",
+                   "batch_review_reason": "реклама вендора без факта применения"},
+        "raw_output": {"theme_choice": {"theme": DIGITAL, "reason": "theme_check",
+                                        "theme_check": {"reason": "общая платформа"}}},
+        "rejected": True,
+    }
+
+    log = signal_discovery._decision_log(candidate)
+
+    assert {"stage": "тематика", "text": f"Второе мнение: {DIGITAL} — общая платформа"} in log
+    assert log[-1] == {"stage": "отсев", "text": "Отсеяно (ревью пачки): реклама вендора без факта применения"}
+
+
+def test_stored_cards_carry_reason_and_decision_log(isolated_db):
+    accepted = _rejected("ok", "Принятая")
+    accepted["rejected"] = False
+    accepted["signal"].update(maturity="watch", reasoning_steps=["шаг"], verdict_reason="внедрение с цифрами")
+    filtered = _rejected("no", "Отсеянная")
+    filtered["signal"].update(reasoning_steps=["Событие: обзор"], verdict_reason="обзор рынка без события")
+
+    _apply_run([{"topic": DRILLING, "candidates": [accepted, filtered], "filtered_findings": [
+        {"stage": "search", "title": "Контракт ProPetro", "reason": "не технологическое событие",
+         "url": "https://example.com/p", "publisher": "ProPetro", "event_date": "2026-09-20", "technology": ""},
+    ]}])
+
+    with repository.get_connection() as conn:
+        rows = {key: (reason, log, filter_reason) for key, reason, log, filter_reason in conn.execute(
+            "SELECT signal_key, verdict_reason, decision_log, filter_reason FROM signals")}
+    assert rows["ok"][0] == "внедрение с цифрами" and rows["ok"][1][0] == {"stage": "судья", "text": "шаг"}
+    # У отсеянного судьёй причина отсева — его итог, а не общий why_not_noise.
+    assert rows["no"][2] == "обзор рынка без события"
+    search = next(value for key, value in rows.items() if key.startswith("filtered:"))
+    assert search[1] == [
+        {"stage": "поиск", "text": "Найдено: Контракт ProPetro (ProPetro, 2026-09-20)"},
+        {"stage": "отсев", "text": "Отсеяно (поиск): не технологическое событие"},
+    ]
+
+
+def test_decision_log_survives_a_refind_by_an_old_worker(isolated_db):
+    signal_id = _store("card", decision_log=[{"stage": "судья", "text": "шаг"}], verdict_reason="причина")
+    repository.upsert_signal({"signal_key": "card", "title": "card", "theme": DRILLING, "score": 50})
+
+    with repository.get_connection() as conn:
+        row = conn.execute("SELECT verdict_reason, decision_log FROM signals WHERE id = %s", (signal_id,)).fetchone()
+    assert row == ("причина", [{"stage": "судья", "text": "шаг"}])

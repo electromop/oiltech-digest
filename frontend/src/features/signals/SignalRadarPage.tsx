@@ -875,6 +875,30 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                       </div>
                     </div>
 
+                    {/* Почему принята или отсеяна (решение 03.10): заказчик видит причину и шаги. */}
+                    {signal.verdict_reason || signal.decision_log?.length ? (
+                      <div className="signalDecision">
+                        {signal.verdict_reason ? (
+                          <p className="signalDecisionReason">
+                            <strong>Почему такое решение:</strong> {signal.verdict_reason}
+                          </p>
+                        ) : null}
+                        {signal.decision_log?.length ? (
+                          <>
+                            <div className="signalEvidenceHeading">Ход решения</div>
+                            <ol className="signalDecisionLog">
+                              {signal.decision_log.map((step, index) => (
+                                <li key={index}>
+                                  <span className="signalDecisionStage">{step.stage}</span>
+                                  <span>{step.text}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     {signal.evidence?.length ? (
                       <div className="signalEvidenceList">
                         <div className="signalEvidenceHeading">Ссылки</div>

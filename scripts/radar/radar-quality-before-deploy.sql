@@ -22,4 +22,6 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS oilfield_relevance TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS oilfield_application TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_stage TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_reason TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS verdict_reason TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS decision_log JSONB;
 COMMIT;
