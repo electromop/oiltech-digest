@@ -681,6 +681,18 @@ def test_rejected_filtered_card_stays_filtered_but_is_known_to_dedup(isolated_db
     assert [(row["id"], row["hidden"]) for row in repository.list_signals_for_dedup()] == [(card, True)]
 
 
+def test_overrated_counts_as_approval(isolated_db):
+    from oiltech_digest import signal_dedup
+
+    # «Оценка завышена — сигнал годный, балл слишком высокий»: решение судьи такую не прячет.
+    assert "overrated" in repository.SIGNAL_POSITIVE_VERDICTS
+    assert "overrated" in signal_dedup._POSITIVE_VERDICTS
+    card = _store("card", signal_category="business")
+    _feedback(card, "verdict", "overrated")
+
+    assert card in _visible_ids()
+
+
 def test_run_collects_search_drops_and_judge_failures(monkeypatch):
     from oiltech_digest import signal_research
     from tests.test_signal_research import _Research, _event

@@ -1152,8 +1152,10 @@ _SIGNAL_IN_DIGEST_SQL = (
     "EXISTS (SELECT 1 FROM user_signal_states uss_d"
     " WHERE uss_d.signal_id = {alias}.id AND uss_d.status = 'digest')"
 )
-# Положительные вердикты — те же, что у дедупа (signal_dedup._POSITIVE_VERDICTS).
-SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation")
+# Положительные вердикты — те же, что у дедупа (signal_dedup._POSITIVE_VERDICTS). «Оценка
+# завышена» — тоже одобрение: сигнал годный, завышен только балл.
+SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation",
+                            "overrated")
 # Одобрена человеком: последний вердикт — положительный. Отказ, «не тот блок», «шум» или
 # комментарий без вердикта карточку одобренной не делают.
 _SIGNAL_APPROVED_SQL = (

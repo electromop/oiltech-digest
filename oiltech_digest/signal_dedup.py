@@ -74,8 +74,9 @@ PAIR_MIN_OVERLAP = 0.25
 # передать свой потолок в снимке (dedup_max_pairs) — без пересборки воркера.
 MAX_JUDGED_PAIRS = 400
 
-# Положительные вердикты Виктора — те же, что питают подсказки поиска (signal_feedback).
-_POSITIVE_VERDICTS = {"strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation"}
+# Положительные вердикты Виктора — те же, что питают подсказки поиска (signal_feedback), и
+# «Оценка завышена» (03.10): сигнал годный, завышен только балл — подсказкой поиска не служит.
+_POSITIVE_VERDICTS = {"strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation", "overrated"}
 
 _STEM_LEN = 4
 _STOP_WORDS = {
