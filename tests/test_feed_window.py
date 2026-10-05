@@ -53,6 +53,21 @@ def test_rollover_day_is_configurable(monkeypatch):
     assert feed_window.current(now=_msk(2026, 10, 9, 23, 0)).open_months == ["2026-09", "2026-10"]
 
 
+@pytest.mark.parametrize(
+    ("now", "months"),
+    [
+        (_msk(2026, 10, 10, 23, 59, 59), ["2026-09", "2026-10"]),
+        (_msk(2026, 10, 11, 0, 0), ["2026-10"]),
+        (_msk(2026, 11, 10, 12, 0), ["2026-10", "2026-11"]),
+    ],
+)
+def test_owner_rule_0510_previous_month_is_open_through_the_10th(monkeypatch, now, months):
+    # Решение владельца 05.10: сентябрь доступен по 10 октября включительно, октябрь — по 10 ноября.
+    assert config.FEED_ROLLOVER_DAY_DEFAULT == 11
+    monkeypatch.setattr(config, "FEED_ROLLOVER_DAY", config.FEED_ROLLOVER_DAY_DEFAULT)
+    assert feed_window.current(now=now).open_months == months
+
+
 def test_past_month_is_read_only_and_open_month_is_not():
     on_23_09 = _msk(2026, 9, 23, 12, 0)
     assert feed_window.current("2026-08", now=on_23_09).read_only is True

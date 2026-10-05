@@ -15,6 +15,9 @@ from oiltech_digest.ingestion import source_overrides
 # Тесты ходят через TestClient по http:// — браузерный cookie-jar не вернёт Secure-cookie
 # по незащищённому соединению, что ломает роундтрип логина. В проде (HTTPS) флаг остаётся True.
 config.AUTH_COOKIE_SECURE = False
+# Тесты окна месяца проверяют механизм на дне смены 5 (решение 21.09) и не зависят ни от
+# .env разработчика, ни от правила прода (config.FEED_ROLLOVER_DAY_DEFAULT, 05.10 — 11).
+config.FEED_ROLLOVER_DAY = 5
 
 
 @pytest.fixture()

@@ -70,7 +70,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   // выбранные статьи приходят отдельным запросом с `month`.
   const sourceArticles = isArchiveMonth ? archiveArticles ?? NO_ARTICLES : articles;
 
-  // Окно сменилось, пока вкладка была открыта (наступило 5-е): выбранное за закрывшийся
+  // Окно сменилось, пока вкладка была открыта (наступил день смены окна): выбранное за закрывшийся
   // месяц ушло в архив. Перечитываем список, иначе в очереди остались бы статьи, которые
   // уже нельзя сохранить в черновик (сервер ответит 409).
   const loadedOpenMonth = useRef("");

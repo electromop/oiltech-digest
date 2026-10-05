@@ -6,7 +6,7 @@ import type { FeedWindowInfo, FeedWindowPayload } from "../../api/types";
 // (oiltech_digest/feed_window.py; ADR 0001 — lowbrains/oiltech-agents, docs/adr/0001-single-contour.md).
 
 // Открытые и прошлые месяцы — при открытии экрана и при возврате на вкладку: вкладку,
-// оставленную на ночь, 5-е число застало бы со старым окном, и конструктор выпуска показал бы
+// оставленную на ночь, день смены окна застал бы со старым окном, и конструктор выпуска показал бы
 // кнопку сохранения у уже закрытого месяца (сервер всё равно ответит 409). Сбой не мешает
 // работе с текущим периодом: остаётся прежнее значение, без него переключатель не появится.
 export function useFeedWindow(): FeedWindowPayload | null {
@@ -57,7 +57,8 @@ export function windowPeriodText(feedWindow: FeedWindowInfo | null | undefined):
   if (first === last) return `Показан ${monthLabel(first)}. Прошлые месяцы — в архиве, только для просмотра.`;
   const firstName = MONTHS[Number(first.slice(5, 7)) - 1] ?? first;
   const lastGenitive = MONTHS_GENITIVE[Number(last.slice(5, 7)) - 1] ?? last;
-  return `Показаны ${monthLabel(first)} и ${monthLabel(last)}: ${firstName} виден до ${feedWindow.rollover_day} ${lastGenitive}, пока собирается его выпуск.`;
+  // Смена окна — в 00:00 МСК дня rollover_day: последний открытый день прошлого месяца — накануне.
+  return `Показаны ${monthLabel(first)} и ${monthLabel(last)}: ${firstName} виден по ${feedWindow.rollover_day - 1} ${lastGenitive} включительно, пока собирается его выпуск.`;
 }
 
 export function archiveNoticeText(month: string): string {
