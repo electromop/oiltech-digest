@@ -71,8 +71,9 @@ export function getSignalSummary(filters: SignalFilters = {}) {
 export type SignalWeekly = {
   days: number;
   on_radar: number;
-  filtered: number;
-  filtered_reasons: Array<{ reason: string; count: number }>;
+  // Отсеянное и скрытое — служебное: сервер отдаёт только админу (решение владельца 05.10).
+  filtered?: number;
+  filtered_reasons?: Array<{ reason: string; count: number }>;
   top: Array<{ id: number; title: string; theme: string; score: number; event_date: string | null }>;
   awaiting_review: number;
   feedback: number;

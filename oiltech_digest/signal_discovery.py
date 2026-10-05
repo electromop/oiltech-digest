@@ -1307,7 +1307,8 @@ def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, An
     Принятую ранее карточку с тем же ключом брак этого прогона не трогает: уже видимая
     карточка не исчезает из-за того, что судья в другой раз решил иначе."""
     owner = repository.signal_key_owners([signal["signal_key"]]).get(signal["signal_key"])
-    if owner and owner.get("filter_stage") is None:
+    if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
+        # Принятая — не трогаем; склеенная отсеянная — событие уже найдено снова и принято.
         return int(owner["id"])
     held = _links_held_elsewhere([str(item.get("source_url") or "") for item in cluster], signal["signal_key"])
     own = [item for item in cluster if str(item.get("source_url") or "") not in held]
@@ -1343,7 +1344,8 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
             continue
         key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
         owner = repository.signal_key_owners([key]).get(key)
-        if owner and owner.get("filter_stage") is None:
+        if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
+            # Склеенная отсеянная — событие уже найдено снова и принято: повтор отсева её не оживляет.
             continue
         if url and _links_held_elsewhere([url], key):
             # Ссылка уже у карточки на радаре или разобранной человеком: это повтор события

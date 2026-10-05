@@ -1118,9 +1118,13 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
 
 def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
     """Отсеянная карточка, у которой найденное снова и принятое забрало последнюю ссылку, —
-    дубль новой хозяйки: иначе в «Отсеянных» висела бы пустая копия события, которое уже на
+    дубль принявшей: иначе в «Отсеянных» висела бы пустая копия события, которое уже на
     радаре. Дубль не удаляется (merged_into_signal_id, как у дедупа). Разобранную человеком
-    это не касается: её ссылки не переезжают (_signal_holds_evidence_sql)."""
+    это не касается: её ссылки не переезжают (_signal_holds_evidence_sql).
+
+    Только к принятой (не отсеянной) и не склеенной: принятая отсеянной не становится, а
+    склеенная в снимок дедупа не идёт — кольца дублей не бывает (ревью 05.10: отсеянная
+    хозяйка давала A→B→C→A, и событие пропадало из обоих списков)."""
     with get_connection() as conn:
         conn.execute(
             """
@@ -1130,8 +1134,8 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
               AND filter_stage IS NOT NULL
               AND merged_into_signal_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM signal_evidence WHERE signal_id = %(id)s)
-              -- Без кольца: новая хозяйка сама не дубль этой карточки.
-              AND NOT EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s AND t.merged_into_signal_id = %(id)s)
+              AND EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s
+                          AND t.filter_stage IS NULL AND t.merged_into_signal_id IS NULL)
             """,
             {"id": signal_id, "taken_by": taken_by,
              "reason": f"найдено снова: ссылку забрала карточка {taken_by}"},
@@ -1577,7 +1581,8 @@ def radar_cards_for_recall() -> list[dict]:
                         ) AS urls
             FROM signals s
             WHERE s.merged_into_signal_id IS NULL
-              AND (s.filter_stage IS NULL OR {_SIGNAL_APPROVED_SQL.format(alias="s")})
+              AND (s.filter_stage IS NULL OR {_SIGNAL_APPROVED_SQL.format(alias="s")}
+                   OR {_SIGNAL_IN_DIGEST_SQL.format(alias="s")})
             """
         )
         return cur.fetchall()
@@ -1920,7 +1925,7 @@ _RADAR_CARD_SHOWN_SQL = f"({_radar_card_evidence_exists()} OR s.filter_stage IS 
 _RADAR_VISIBLE_SQL = (
     f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}"
 )
-# «Отсеянные и скрытые» (экран, переключатель; всем — решение 02.10): проверить, не отсеяно
+# «Отсеянные и скрытые» (экран, переключатель; только админу — решение 05.10): проверить, не отсеяно
 # ли лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут —
 # их ссылки и так в главной карточке.
 _RADAR_HIDDEN_SQL = (

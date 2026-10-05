@@ -1745,7 +1745,7 @@ def _radar_screen_filters(
     min_score: float | None = Query(None, ge=0, le=100),
     max_score: float | None = Query(None, ge=0, le=100),
     # Отсеянные и скрытые (бизнес, смешанные, старые, не про нефтесервис, брак судьи, отсеянное
-    # поиском, архив) — всем: заказчик разбирает всё, что радар не пустил (решение 02.10).
+    # поиском, архив) — только админу (решение владельца 05.10: заказчик Виктор — админ).
     hidden: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -1769,6 +1769,7 @@ def list_signals(
     evidence_limit: int = Query(3, ge=0, le=20),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
+    _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"]))
     # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
@@ -1795,7 +1796,12 @@ def signal_radar_weekly(
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """«Итоги недели» радара: что вышло, что отсеяно и почему, что ждёт разбора, сколько отзывов."""
-    return _clean(repository.radar_weekly_summary(days=days))
+    weekly = repository.radar_weekly_summary(days=days)
+    if user.get("role") != "admin":
+        # Отсеянное и скрытое — служебное, как и сам раздел: число и причины только админу.
+        weekly.pop("filtered", None)
+        weekly.pop("filtered_reasons", None)
+    return _clean(weekly)
 
 
 @app.get("/api/signals/summary")
@@ -1804,7 +1810,17 @@ def signal_radar_summary(
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра."""
-    return _clean(repository.signal_radar_summary(user_id=int(user["id"]), **filters))
+    _guard_hidden_radar(filters, user)
+    summary = repository.signal_radar_summary(user_id=int(user["id"]), **filters)
+    if user.get("role") != "admin":
+        # Число отсеянных и скрытых — служебное, как и сами карточки.
+        summary.pop("hidden", None)
+    return _clean(summary)
+
+
+def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
+    if filters.get("hidden") and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
 
 
 def _guard_signal_digest_month(user_id: int, signal_id: int, target_status: str | None) -> None:

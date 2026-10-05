@@ -949,8 +949,8 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(within(card).queryByText("Балл по критериям")).not.toBeInTheDocument();
   });
 
-  it("отсеянные и скрытые открываются с причиной и возвращаются к радару", async () => {
-    renderRadar(false);
+  it("админ открывает отсеянные и скрытые с причиной и возвращается к радару", async () => {
+    renderRadar(true);
     await screen.findByText(scored.title_ru as string);
     expect(tileValue("Отсеяно и скрыто")).toBe("1");
 
@@ -968,11 +968,11 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(lastListQuery().hidden).toBeUndefined();
   });
 
-  it("раздел виден не только админу: Виктор разбирает всё отсеянное (решение 02.10)", async () => {
+  it("обычный пользователь не видит ни переключателя, ни плитки «Отсеяно и скрыто» (решение 05.10)", async () => {
     renderRadar(false);
     await screen.findByText(scored.title_ru as string);
-    expect(screen.getByRole("button", { name: "Отсеянные и скрытые (1)" })).toBeInTheDocument();
-    // По умолчанию — радар, не отсеянное.
+    expect(screen.queryByRole("button", { name: /^Отсеянные и скрытые/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Отсеяно и скрыто")).not.toBeInTheDocument();
     expect(lastListQuery().hidden).toBeUndefined();
   });
 });
@@ -1065,5 +1065,18 @@ describe("итоги недели (03.10)", () => {
 
     expect(screen.getByText("бизнес-сигнал: 13")).toBeInTheDocument();
     expect(screen.getByText(/STEP: рекордная досягаемость колтюбинга · 79/)).toBeInTheDocument();
+  });
+
+  it("пользователю сервер отсеянное не отдаёт — в строке его нет, причин нет", async () => {
+    vi.mocked(getSignalWeekly).mockResolvedValueOnce({
+      days: 7, on_radar: 35, awaiting_review: 35, feedback: 0, feedback_verdicts: [],
+      top: [{ id: 26, title: "STEP: рекордная досягаемость колтюбинга", theme: "КРС", score: 79, event_date: null }],
+    });
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+    const head = await screen.findByRole("button", { name: /Итоги за 7 дн\./ });
+    expect(head).toHaveTextContent("на радаре новых: 35 · ждут разбора: 35 · отзывов: 0");
+    fireEvent.click(head);
+    expect(screen.queryByText("Почему отсеяно")).not.toBeInTheDocument();
   });
 });

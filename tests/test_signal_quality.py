@@ -395,8 +395,8 @@ def test_hidden_view_lists_only_hidden_cards_with_a_reason(isolated_db):
     assert (summary["total"], summary["hidden"], summary["matching"]) == (1, 3, 3)
 
 
-def test_filtered_and_hidden_cards_are_open_to_every_user(monkeypatch):
-    # Решение 02.10: Виктор разбирает всё, что радар не пустил, — не только админ.
+def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
+    # Решение владельца 05.10: просмотр отсеянного и скрытого — только админу (заказчик — админ).
     from fastapi.testclient import TestClient
 
     from oiltech_digest import api
@@ -405,12 +405,25 @@ def test_filtered_and_hidden_cards_are_open_to_every_user(monkeypatch):
     monkeypatch.setattr(api.repository, "list_signals", lambda **kwargs: seen.update(kwargs) or [])
     monkeypatch.setattr(api.repository, "signal_radar_summary",
                         lambda **kwargs: {"total": 1, "hidden": 3, "matching": 1, "themes": []})
+    monkeypatch.setattr(api.repository, "radar_weekly_summary", lambda **kwargs: {
+        "days": 7, "on_radar": 2, "filtered": 5, "filtered_reasons": [{"reason": "отсеяно (судья)", "count": 5}],
+        "top": [], "awaiting_review": 1, "feedback": 0, "feedback_verdicts": []})
     client = TestClient(api.app)
     try:
         api.app.dependency_overrides[api.require_user] = lambda: {"id": 2, "email": "u@example.com", "role": "user"}
+        assert client.get("/api/signals?hidden=true").status_code == 403
+        assert client.get("/api/signals/summary?hidden=true").status_code == 403
+        # Обычному пользователю и число отсеянных не показываем — ни над списком, ни в итогах недели.
+        assert "hidden" not in client.get("/api/signals/summary").json()
+        weekly = client.get("/api/signals/weekly").json()
+        assert "filtered" not in weekly and "filtered_reasons" not in weekly
+        assert weekly["on_radar"] == 2
+
+        api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@example.com", "role": "admin"}
         assert client.get("/api/signals?hidden=true").status_code == 200
         assert seen["hidden"] is True
         assert client.get("/api/signals/summary").json()["hidden"] == 3
+        assert client.get("/api/signals/weekly").json()["filtered"] == 5
     finally:
         api.app.dependency_overrides.pop(api.require_user, None)
 
@@ -768,6 +781,36 @@ def test_filtered_card_that_gave_its_last_link_to_an_accepted_one_becomes_its_du
     # Дубль не удаляется: найден по merged_into_signal_id, причина записана.
     assert (_column(filtered, "merged_into_signal_id"), _column(filtered, "merge_reason")) == (
         accepted, f"найдено снова: ссылку забрала карточка {accepted}")
+
+
+def test_filtered_cards_passing_a_link_around_never_form_a_merge_ring(isolated_db):
+    # Ревью 05.10: поиск отсеял u (A) → судья отклонил {u} (B) → судья отклонил {u, v}, v у
+    # карточки на радаре (C) → поиск снова отсеял u. Дублем отсеянная становится только для
+    # принятой, поэтому кольца A→B→C→A нет, а принятое потом событие выходит на радар.
+    url = "https://example.com/u"
+    _store_seen("seen-v", "https://example.com/v")
+    _apply_run([_search_drop("Событие", url)])
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("judge-u", "Событие", evidence=[{"source_url": url, "title": "u"}])]}])
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("judge-uv", "Событие и ещё", evidence=[{"source_url": url, "title": "u"},
+                                                         {"source_url": "https://example.com/v", "title": "v"}])]}])
+    _apply_run([_search_drop("Событие", url)])
+
+    with repository.get_connection() as conn:
+        merged = [row[0] for row in conn.execute("SELECT id FROM signals WHERE merged_into_signal_id IS NOT NULL")]
+    assert all(repository.resolve_signal_merge_root(signal_id) is not None for signal_id in merged)
+
+    accepted = repository.upsert_signal({"signal_key": "accepted-u", "title": "Принято", "theme": DRILLING,
+                                         "signal_category": "technology"})
+    repository.upsert_signal_evidence(accepted, {"source_url": url, "title": "u"})
+    assert accepted in _visible_ids()
+
+    # Повторный отсев той же ссылки склеенную отсеянную не оживляет.
+    _apply_run([_search_drop("Событие", url)])
+    assert accepted in _visible_ids()
+    assert all(_column(signal_id, "merged_into_signal_id") is None or repository.resolve_signal_merge_root(signal_id)
+               for signal_id in _filtered())
 
 
 def test_unknown_filter_stage_from_the_worker_is_stored_as_search(isolated_db):

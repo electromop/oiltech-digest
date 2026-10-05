@@ -229,8 +229,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
   const [weekly, setWeekly] = useState<SignalWeekly | null>(null);
   const [weeklyOpen, setWeeklyOpen] = useState(false);
-  // «Отсеянные и скрытые» — всем (решение 02.10: Виктор разбирает всё): бизнес, смешанные
-  // события, старые, не про нефтесервис, брак судьи, отсеянное поиском, архив.
+  // «Отсеянные и скрытые» — только админу (решение владельца 05.10; заказчик Виктор — админ):
+  // бизнес, смешанные события, старые, не про нефтесервис, брак судьи, отсеянное поиском, архив.
   const [showHidden, setShowHidden] = useState(false);
 
   const filters: SignalFilters = useMemo(
@@ -242,9 +242,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       maxScore: scoreMax !== SCORE_MAX ? scoreMax : undefined,
       since: dateFrom || undefined,
       until: dateTo || undefined,
-      hidden: showHidden || undefined,
+      hidden: (isAdmin && showHidden) || undefined,
     }),
-    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo, showHidden],
+    [search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo, isAdmin, showHidden],
   );
   // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
   // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
@@ -596,7 +596,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           >
             <strong>Итоги за {weekly.days} дн.</strong>
             <span>
-              на радаре новых: {weekly.on_radar} · отсеяно и скрыто: {weekly.filtered} · ждут разбора:{" "}
+              на радаре новых: {weekly.on_radar}
+              {weekly.filtered != null ? ` · отсеяно и скрыто: ${weekly.filtered}` : ""} · ждут разбора:{" "}
               {weekly.awaiting_review} · отзывов: {weekly.feedback}
             </span>
           </button>
@@ -614,7 +615,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                   </ol>
                 </div>
               ) : null}
-              {weekly.filtered_reasons.length ? (
+              {weekly.filtered_reasons?.length ? (
                 <div>
                   <div className="signalEvidenceHeading">Почему отсеяно</div>
                   <ul>
@@ -638,7 +639,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           <StatCard label="В дайджесте" value={summary.in_digest} />
           <StatCard label="С обратной связью" value={summary.with_feedback} />
           <StatCard label="Объединено дублей" value={summary.merged} />
-          {summary.hidden != null ? <StatCard label="Отсеяно и скрыто" value={summary.hidden} /> : null}
+          {isAdmin && summary.hidden != null ? <StatCard label="Отсеяно и скрыто" value={summary.hidden} /> : null}
         </section>
       ) : null}
 
@@ -650,14 +651,16 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           <h2>{showHidden ? "Отсеянные и скрытые карточки" : "Каталог технологических сигналов"}</h2>
           <div className="settingsActions signalRadarPanelActions">
             {countBadge ? <span className="badge">{countBadge}</span> : null}
-            <button
-              type="button"
-              className={showHidden ? "primaryButton" : "ghostButton"}
-              aria-pressed={showHidden}
-              onClick={() => setShowHidden((current) => !current)}
-            >
-              {showHidden ? "К радару" : `Отсеянные и скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
-            </button>
+            {isAdmin ? (
+              <button
+                type="button"
+                className={showHidden ? "primaryButton" : "ghostButton"}
+                aria-pressed={showHidden}
+                onClick={() => setShowHidden((current) => !current)}
+              >
+                {showHidden ? "К радару" : `Отсеянные и скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
+              </button>
+            ) : null}
             {groups.length ? (
               <>
                 <button
