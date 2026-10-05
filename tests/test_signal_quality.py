@@ -657,6 +657,53 @@ def test_refiltered_finding_updates_the_same_card(isolated_db):
     assert len(_filtered()) == 1
 
 
+def _store_seen(key, url):
+    """Карточка на радаре со ссылкой, у которой есть русский заголовок и суть."""
+    signal_id = repository.upsert_signal({"signal_key": key, "title": "Seen", "title_ru": "Видно",
+                                          "theme": DRILLING, "signal_category": "technology"})
+    repository.upsert_signal_evidence(signal_id, {"source_url": url, "title": "Seen", "title_ru": "Видно на радаре",
+                                                  "summary_ru": "суть на радаре"})
+    return signal_id
+
+
+def _link(signal_id, url):
+    return next(row for row in repository.list_signal_evidence(signal_id) if row["source_url"] == url)
+
+
+def test_search_drop_of_an_event_on_the_radar_leaves_its_link_alone(isolated_db):
+    # Вчера принято и на радаре; сегодня поиск отбросил то же событие (вышло за период) или судья
+    # не ответил. Ссылка карточки на радаре не теряет русский заголовок и суть, «Отсеяно» не появляется.
+    url = "https://example.com/seen"
+    seen = _store_seen("url:example.com/seen", url)
+
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
+        {"stage": "search", "title": "Seen again", "reason": "дата события вне периода", "url": url},
+        {"stage": "judge_error", "title": "Seen again", "reason": "ReadTimeout", "url": url},
+    ]}])
+
+    assert _filtered() == {}
+    link = _link(seen, url)
+    assert (link["title_ru"], link["summary_ru"]) == ("Видно на радаре", "суть на радаре")
+
+
+def test_judge_reject_of_a_known_event_keeps_others_links_and_stores_only_its_own(isolated_db):
+    url = "https://example.com/seen"
+    seen = _store_seen("seen", url)
+    known = {"source_url": url, "title": "Seen again"}
+    fresh = {"source_url": "https://example.com/fresh", "title": "Fresh"}
+
+    # Все ссылки уже у карточки на радаре — это повтор, а не новое отсеянное.
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("other-key", "То же событие", evidence=[known])]}])
+    assert _filtered() == {}
+
+    # Своя ссылка есть — карточка «Отсеяно» только с ней; чужая остаётся у хозяйки нетронутой.
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("mixed-key", "Часть известна", evidence=[known, fresh])]}])
+    filtered_id = repository.signal_key_owners(["mixed-key"])["mixed-key"]["id"]
+    assert {row["source_url"] for row in repository.list_signal_evidence(filtered_id)} == {fresh["source_url"]}
+    assert _link(seen, url)["title_ru"] == "Видно на радаре"
+    assert seen in _visible_ids()
+
+
 def test_approved_filtered_card_goes_on_the_radar_and_into_dedup(isolated_db):
     _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-no", "Судья ошибся")]}])
     card = repository.signal_key_owners(["judge-no"])["judge-no"]["id"]

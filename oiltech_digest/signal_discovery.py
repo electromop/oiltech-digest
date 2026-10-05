@@ -1290,6 +1290,15 @@ def _store_candidate(
     return signal_id
 
 
+def _links_held_elsewhere(urls: list[str], signal_key: str) -> dict[str, dict]:
+    """Какие из ссылок держит другая карточка — на радаре или разобранная человеком.
+
+    Отсеянное такую ссылку не пишет: signal_evidence уникальна по адресу, и запись
+    перезаписала бы заголовок и суть чужой ссылки, хотя сама ссылка осталась бы у хозяйки."""
+    owners = repository.visible_evidence_owners([url for url in urls if url])
+    return {url: owner for url, owner in owners.items() if owner.get("signal_key") != signal_key}
+
+
 def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, Any]],
                               decision_log: list[dict[str, str]] | None = None) -> int | None:
     """Брак судьи или ревью пачки — карточкой «Отсеяно»: заказчик просматривает всё отсеянное.
@@ -1299,13 +1308,18 @@ def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, An
     owner = repository.signal_key_owners([signal["signal_key"]]).get(signal["signal_key"])
     if owner and owner.get("filter_stage") is None:
         return int(owner["id"])
+    held = _links_held_elsewhere([str(item.get("source_url") or "") for item in cluster], signal["signal_key"])
+    own = [item for item in cluster if str(item.get("source_url") or "") not in held]
+    if cluster and not own:
+        # Все ссылки уже у карточек, которые их держат: это повтор события, а не новое отсеянное.
+        return int(next(iter(held.values()))["id"])
     stage = "review" if signal.get("batch_review_reason") else "judge"
     reason = (signal.get("batch_review_reason") or signal.get("verdict_reason") or signal.get("why_not_noise")
               or signal.get("summary") or "")
     stored = {**signal, "filter_stage": stage, "filter_reason": _trim(str(reason), 500),
               "decision_log": decision_log or []}
     signal_id = repository.upsert_signal(stored)
-    for item in cluster:
+    for item in own:
         repository.upsert_signal_evidence(signal_id, item)
     repository.refresh_signal_evidence_count(signal_id)
     return signal_id
@@ -1325,6 +1339,11 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
         key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
         owner = repository.signal_key_owners([key]).get(key)
         if owner and owner.get("filter_stage") is None:
+            continue
+        if url and _links_held_elsewhere([url], key):
+            # Ссылка уже у карточки на радаре или разобранной человеком: это повтор события
+            # (вчерашнее сегодня вышло за период поиска), а не новое отсеянное. Запись
+            # затёрла бы её ссылке русский заголовок и суть (ON CONFLICT source_url).
             continue
         signal_id = repository.upsert_signal({
             "signal_key": key,
