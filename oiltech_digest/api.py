@@ -1744,7 +1744,8 @@ def _radar_screen_filters(
     until: date | None = None,
     min_score: float | None = Query(None, ge=0, le=100),
     max_score: float | None = Query(None, ge=0, le=100),
-    # Скрытые правилами качества (бизнес, смешанные, старые, архив) — только админу.
+    # Отсеянные и скрытые (бизнес, смешанные, старые, не про нефтесервис, брак судьи, отсеянное
+    # поиском, архив) — только админу (решение владельца 05.10: заказчик Виктор — админ).
     hidden: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -1789,6 +1790,20 @@ def list_signals(
     return rows
 
 
+@app.get("/api/signals/weekly")
+def signal_radar_weekly(
+    days: int = Query(7, ge=1, le=31),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """«Итоги недели» радара: что вышло, что отсеяно и почему, что ждёт разбора, сколько отзывов."""
+    weekly = repository.radar_weekly_summary(days=days)
+    if user.get("role") != "admin":
+        # Отсеянное и скрытое — служебное, как и сам раздел: число и причины только админу.
+        weekly.pop("filtered", None)
+        weekly.pop("filtered_reasons", None)
+    return _clean(weekly)
+
+
 @app.get("/api/signals/summary")
 def signal_radar_summary(
     filters: dict[str, Any] = Depends(_radar_screen_filters),
@@ -1798,14 +1813,14 @@ def signal_radar_summary(
     _guard_hidden_radar(filters, user)
     summary = repository.signal_radar_summary(user_id=int(user["id"]), **filters)
     if user.get("role") != "admin":
-        # Число скрытых — служебное, как и сами скрытые карточки.
+        # Число отсеянных и скрытых — служебное, как и сами карточки.
         summary.pop("hidden", None)
     return _clean(summary)
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
     if filters.get("hidden") and user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Скрытые карточки радара доступны только администратору")
+        raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
 
 
 def _guard_signal_digest_month(user_id: int, signal_id: int, target_status: str | None) -> None:

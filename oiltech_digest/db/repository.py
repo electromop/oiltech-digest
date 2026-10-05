@@ -969,10 +969,11 @@ def upsert_signal(signal: dict) -> int:
               interest_score, why_interesting,
               signal_category, event_date, mixed_events, mixed_events_reason,
               score_profile, score_items_json, criteria_snapshot,
-              oilfield_relevance, oilfield_application
+              oilfield_relevance, oilfield_application, filter_stage, filter_reason,
+              verdict_reason, decision_log
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = CASE WHEN {closed} THEN signals.title ELSE EXCLUDED.title END,
               title_ru = CASE WHEN {closed} THEN signals.title_ru ELSE EXCLUDED.title_ru END,
@@ -999,6 +1000,12 @@ def upsert_signal(signal: dict) -> int:
               mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
               oilfield_relevance = COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance),
               oilfield_application = COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application),
+              -- Отсев — решение этого прогона: принятая снова карточка выходит на радар.
+              filter_stage = EXCLUDED.filter_stage,
+              filter_reason = EXCLUDED.filter_reason,
+              -- Ход решения — этого прогона; старая сборка NL его не несёт — прежний не стираем.
+              verdict_reason = COALESCE(EXCLUDED.verdict_reason, signals.verdict_reason),
+              decision_log = COALESCE(EXCLUDED.decision_log, signals.decision_log),
               -- Балл и его происхождение — всегда вместе: score выше уже новый.
               score_profile = EXCLUDED.score_profile,
               score_items_json = EXCLUDED.score_items_json,
@@ -1034,6 +1041,10 @@ def upsert_signal(signal: dict) -> int:
                 Json(_jsonable(signal["criteria_snapshot"])) if signal.get("criteria_snapshot") else None,
                 signal.get("oilfield_relevance"),
                 (signal.get("oilfield_application") or None),
+                signal.get("filter_stage") or None,
+                (signal.get("filter_reason") or None),
+                (signal.get("verdict_reason") or None),
+                Json(_jsonable(signal["decision_log"])) if signal.get("decision_log") else None,
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -1058,6 +1069,7 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
               -- оставалось источника, а счётчик показывал старое число (сигнал 97,
               -- замечание 22.09). Переезд — из скрытого дубля в главную и из карточки,
               -- скрытой качеством или архивом, если её не разбирал человек (02.10).
+              -- Отсеянная (filter_stage) — тоже скрытая качеством: принятое забирает её ссылку.
               signal_id = CASE
                 WHEN EXISTS (
                   SELECT 1 FROM signals owner
@@ -1100,7 +1112,35 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
     if previous is not None and int(previous[0]) != int(owner_id):
         # Ссылка переехала: у прежней карточки счётчик не должен показывать старое число.
         refresh_signal_evidence_count(int(previous[0]))
+        _retire_emptied_filtered_card(int(previous[0]), taken_by=int(owner_id))
     return int(evidence_id)
+
+
+def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
+    """Отсеянная карточка, у которой найденное снова и принятое забрало последнюю ссылку, —
+    дубль принявшей: иначе в «Отсеянных» висела бы пустая копия события, которое уже на
+    радаре. Дубль не удаляется (merged_into_signal_id, как у дедупа). Разобранную человеком
+    это не касается: её ссылки не переезжают (_signal_holds_evidence_sql).
+
+    Только к принятой (не отсеянной) и не склеенной: принятая отсеянной не становится, а
+    склеенная в снимок дедупа не идёт — кольца дублей не бывает (ревью 05.10: отсеянная
+    хозяйка давала A→B→C→A, и событие пропадало из обоих списков)."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE signals
+            SET merged_into_signal_id = %(taken_by)s, merge_reason = %(reason)s, updated_at = now()
+            WHERE id = %(id)s
+              AND filter_stage IS NOT NULL
+              AND merged_into_signal_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM signal_evidence WHERE signal_id = %(id)s)
+              AND EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s
+                          AND t.filter_stage IS NULL AND t.merged_into_signal_id IS NULL)
+            """,
+            {"id": signal_id, "taken_by": taken_by,
+             "reason": f"найдено снова: ссылку забрала карточка {taken_by}"},
+        )
+        conn.commit()
 
 
 def refresh_signal_evidence_count(signal_id: int) -> int:
@@ -1140,8 +1180,10 @@ _SIGNAL_IN_DIGEST_SQL = (
     "EXISTS (SELECT 1 FROM user_signal_states uss_d"
     " WHERE uss_d.signal_id = {alias}.id AND uss_d.status = 'digest')"
 )
-# Положительные вердикты — те же, что у дедупа (signal_dedup._POSITIVE_VERDICTS).
-SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation")
+# Положительные вердикты — те же, что у дедупа (signal_dedup._POSITIVE_VERDICTS). «Оценка
+# завышена» — тоже одобрение: сигнал годный, завышен только балл.
+SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation",
+                            "overrated")
 # Одобрена человеком: последний вердикт — положительный. Отказ, «не тот блок», «шум» или
 # комментарий без вердикта карточку одобренной не делают.
 _SIGNAL_APPROVED_SQL = (
@@ -1194,6 +1236,10 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
               ) top
             ) ev ON TRUE
             WHERE s.merged_into_signal_id IS NULL
+              -- Отсеянное в дедуп не идёт: новое событие не склеится с браком. Разобранное
+              -- человеком — идёт: одобренная отсеянная видна на радаре, и её повтор должен
+              -- стать её дублем; отклонённая — главной (_rank), повтор не вернётся.
+              AND (s.filter_stage IS NULL OR {reviewed})
               AND ({reviewed} OR s.last_seen_at >= now() - make_interval(days => %s))
             ORDER BY {reviewed} DESC, s.last_seen_at DESC, s.id DESC
             LIMIT %s
@@ -1378,9 +1424,151 @@ def unarchive_signals(*, signal_ids: Sequence[int] | None = None, reason: str | 
         return int(cur.rowcount or 0)
 
 
+def _radar_hidden_group_sql() -> str:
+    """Одна причина на скрытую карточку — для сводки: первая по порядку правил качества.
+    Одобренную решения машины не прячут (_radar_quality_sql): её причина — архив или срок."""
+    age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
+    stages = " ".join(f"WHEN '{stage}' THEN 'отсеяно ({label})'" for stage, label in RADAR_FILTER_STAGES.items())
+    age = f"WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней'" if age_days > 0 else ""
+    approved_reason = f"CASE {age} ELSE 'другое' END" if age else "'другое'"
+    return (
+        "CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве'"
+        f" WHEN {_SIGNAL_APPROVED_SQL.format(alias='s')} THEN {approved_reason}"
+        f" WHEN s.filter_stage IS NOT NULL THEN (CASE s.filter_stage {stages} ELSE 'отсеяно' END)"
+        " WHEN s.signal_category = 'business' THEN 'бизнес-сигнал'"
+        " WHEN s.signal_category = 'other' THEN 'не технологическое событие'"
+        " WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис'"
+        " WHEN s.mixed_events THEN 'ссылки о разных событиях'"
+        f" {age} ELSE 'другое' END"
+    )
+
+
+def radar_weekly_summary(*, days: int = 7) -> dict:
+    """«Итоги недели» радара для заказчика (решение 03.10): что вышло на радар, что отсеяно и
+    почему, что ждёт разбора, сколько отзывов. Те же правила видимости, что у экрана."""
+    since_sql = "now() - make_interval(days => %(days)s)"
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT COUNT(*) FILTER (WHERE {_RADAR_VISIBLE_SQL}) AS on_radar,
+                   COUNT(*) FILTER (WHERE {_RADAR_HIDDEN_SQL}) AS filtered
+            FROM signals s
+            WHERE s.first_seen_at >= {since_sql}
+            """,
+            {"days": days},
+        )
+        totals = dict(cur.fetchone())
+        cur.execute(
+            f"""
+            SELECT {_radar_hidden_group_sql()} AS reason, COUNT(*) AS count
+            FROM signals s
+            WHERE s.first_seen_at >= {since_sql} AND {_RADAR_HIDDEN_SQL}
+            GROUP BY 1 ORDER BY 2 DESC, 1
+            """,
+            {"days": days},
+        )
+        reasons = [dict(row) for row in cur.fetchall()]
+        cur.execute(
+            f"""
+            SELECT s.id, COALESCE(s.title_ru, s.title) AS title, s.theme, s.score, s.event_date
+            FROM signals s
+            WHERE s.first_seen_at >= {since_sql} AND {_RADAR_VISIBLE_SQL}
+            ORDER BY s.score DESC, s.id DESC
+            LIMIT 5
+            """,
+            {"days": days},
+        )
+        top = [dict(row) for row in cur.fetchall()]
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS awaiting
+            FROM signals s
+            WHERE {_RADAR_VISIBLE_SQL}
+              AND NOT {_SIGNAL_REVIEWED_SQL.format(alias="s")}
+            """,
+            {"days": days},
+        )
+        awaiting = int(cur.fetchone()["awaiting"])
+        cur.execute(
+            f"""
+            SELECT verdict, COUNT(*) AS count
+            FROM signal_feedback_events
+            WHERE created_at >= {since_sql} AND COALESCE(verdict, '') <> ''
+            GROUP BY verdict ORDER BY 2 DESC, 1
+            """,
+            {"days": days},
+        )
+        verdicts = [dict(row) for row in cur.fetchall()]
+    return {
+        "days": days,
+        "on_radar": int(totals["on_radar"] or 0),
+        "filtered": int(totals["filtered"] or 0),
+        "filtered_reasons": [{"reason": row["reason"], "count": int(row["count"])} for row in reasons],
+        "top": top,
+        "awaiting_review": awaiting,
+        "feedback": sum(int(row["count"]) for row in verdicts),
+        "feedback_verdicts": [{"verdict": row["verdict"], "count": int(row["count"])} for row in verdicts],
+    }
+
+
+# Вердикты, которые говорят «балл выше, чем карточка стоит», и «так и надо».
+SCORE_TOO_HIGH_VERDICTS = ("overrated", "reject", "wrong_domain", "too_generic", "wrong_block")
+SCORE_FAIR_VERDICTS = ("strong_signal", "approved")
+
+
+def radar_score_calibration() -> list[dict]:
+    """Средний балл судьи по каждому критерию профиля tech_radar — у карточек, которые заказчик
+    счёл завышенными или отклонил, и у одобренных. Последний вердикт карточки решает.
+
+    «Оценки завышены» (Виктор 29.09) превращается в число на критерий: где у отклонённых балл
+    почти как у одобренных, судья по этому критерию не различает и должен ставить строже."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH latest AS (
+              SELECT DISTINCT ON (sfe.signal_id) sfe.signal_id, sfe.verdict
+              FROM signal_feedback_events sfe
+              WHERE sfe.signal_id IS NOT NULL AND COALESCE(sfe.verdict, '') <> ''
+              ORDER BY sfe.signal_id, sfe.created_at DESC, sfe.id DESC
+            ),
+            items AS (
+              SELECT l.verdict,
+                     (item->>'criterion_id')::bigint AS criterion_id,
+                     (item->>'final_score')::numeric AS score,
+                     (SELECT entry->>'name' FROM jsonb_array_elements(s.criteria_snapshot) entry
+                      WHERE (entry->>'id')::bigint = (item->>'criterion_id')::bigint LIMIT 1) AS name
+              FROM latest l
+              JOIN signals s ON s.id = l.signal_id
+              CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.score_items_json, '[]'::jsonb)) item
+              WHERE s.score_profile = 'tech_radar'
+            )
+            SELECT criterion_id, max(name) AS name,
+                   round(avg(score) FILTER (WHERE verdict = ANY(%s)), 1) AS too_high_avg,
+                   count(*) FILTER (WHERE verdict = ANY(%s)) AS too_high_n,
+                   round(avg(score) FILTER (WHERE verdict = ANY(%s)), 1) AS fair_avg,
+                   count(*) FILTER (WHERE verdict = ANY(%s)) AS fair_n
+            FROM items
+            GROUP BY criterion_id
+            ORDER BY criterion_id
+            """,
+            (list(SCORE_TOO_HIGH_VERDICTS), list(SCORE_TOO_HIGH_VERDICTS),
+             list(SCORE_FAIR_VERDICTS), list(SCORE_FAIR_VERDICTS)),
+        )
+        return [
+            {key: (float(value) if key.endswith("_avg") and value is not None else value) for key, value in row.items()}
+            for row in cur.fetchall()
+        ]
+
+
 def radar_cards_for_recall() -> list[dict]:
-    """Все карточки радара (кроме скрытых дублей) со ссылками и признаком «видна на экране» —
-    для замера полноты по эталону заказчика (signal_reference.recall)."""
+    """Все карточки радара (кроме скрытых дублей и неодобренных отсеянных) со ссылками и
+    признаком «видна на экране» — для замера полноты по эталону заказчика (signal_reference.recall).
+
+    Отсеянное не «найдено»: до 02.10 брак судьи и поиска не сохранялся вовсе, и без этого
+    условия полнота выросла бы без единой новой карточки на экране — замер по октябрьскому
+    списку не сравнился бы с прежними. Одобренная отсеянная на радаре — найдена."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1393,6 +1581,8 @@ def radar_cards_for_recall() -> list[dict]:
                         ) AS urls
             FROM signals s
             WHERE s.merged_into_signal_id IS NULL
+              AND (s.filter_stage IS NULL OR {_SIGNAL_APPROVED_SQL.format(alias="s")}
+                   OR {_SIGNAL_IN_DIGEST_SQL.format(alias="s")})
             """
         )
         return cur.fetchall()
@@ -1431,7 +1621,7 @@ def signal_key_owners(keys: list[str]) -> dict[str, dict]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            SELECT s.signal_key, s.id, s.merged_into_signal_id, {reviewed} AS reviewed
+            SELECT s.signal_key, s.id, s.merged_into_signal_id, s.filter_stage, {reviewed} AS reviewed
             FROM signals s
             WHERE s.signal_key = ANY(%s)
             """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s")),
@@ -1702,15 +1892,20 @@ def _radar_quality_sql(alias: str = "s") -> str:
 
     Категорию, смешанность и связь с нефтесервисом ставит судья, и повторная находка их
     перезаписывает: решение машины не прячет карточку, которую человек одобрил (последний
-    вердикт положительный). Отказ, «не тот блок», «шум» её не возвращают — так админ учит
-    агента на «Скрытых», не показывая их Виктору. Выбранную «в дайджест» не прячет ни одно
-    правило, включая архив: иначе её не снять с выпуска (mark_signal_merged)."""
+    вердикт положительный). Отказ, «не тот блок», «шум» её не возвращают: разметка учит
+    агента, карточка остаётся в «Отсеянных и скрытых». Выбранную «в дайджест» не прячет ни одно
+    правило, включая архив: иначе её не снять с выпуска (mark_signal_merged).
+
+    Отсев (filter_stage) — тоже решение машины: одобренная в «Отсеянных» карточка выходит
+    на радар, иначе разбор отсеянного заказчиком ничего бы не менял."""
     a = alias
     machine = " AND ".join([
         f"COALESCE({a}.signal_category, 'technology') = 'technology'",
         f"{a}.mixed_events IS NOT TRUE",
         # «Релевантности мало» (Виктор 29.09): общепромышленное без связи с нефтесервисом.
         f"COALESCE({a}.oilfield_relevance, 'direct') <> 'none'",
+        # Отсеяно поиском, судьёй, ревью пачки или сбоем судьи — хранится для разбора заказчиком.
+        f"{a}.filter_stage IS NULL",
     ])
     parts = [
         f"{a}.archived_at IS NULL",
@@ -1722,28 +1917,43 @@ def _radar_quality_sql(alias: str = "s") -> str:
     return f"({_SIGNAL_IN_DIGEST_SQL.format(alias=a)} OR ({' AND '.join(parts)}))"
 
 
+# Какую карточку вообще показывать: со ссылкой (своей или склеенного дубля) — или отсеянную:
+# находка поиска без ссылки (битый адрес) тоже видна в разборе. Одно условие для радара и для
+# «Отсеянных и скрытых»: одобренная или выбранная «в дайджест» отсеянная без ссылки переходит
+# на радар, а не пропадает из обоих списков.
+_RADAR_CARD_SHOWN_SQL = f"({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
 _RADAR_VISIBLE_SQL = (
-    f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_radar_card_evidence_exists()}"
+    f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}"
 )
-# Скрытые по качеству — для админа (экран, переключатель «Скрытые»): проверить, не отсеяно ли
-# лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут — их
-# ссылки и так в главной карточке.
+# «Отсеянные и скрытые» (экран, переключатель; только админу — решение 05.10): проверить, не отсеяно
+# ли лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут —
+# их ссылки и так в главной карточке.
 _RADAR_HIDDEN_SQL = (
-    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()}) AND {_radar_card_evidence_exists()}"
+    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()}) AND {_RADAR_CARD_SHOWN_SQL}"
 )
+RADAR_FILTER_STAGES = {
+    "search": "поиск",
+    "judge": "судья",
+    "review": "ревью пачки",
+    "judge_error": "судья не ответил",
+}
 
 
 def _radar_hidden_reason_sql() -> str:
     """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql.
-    У видимой причины нет: экран подписывает «Скрыта: …» любую карточку с причиной."""
+    У видимой причины нет: экран подписывает «Не на радаре: …» любую карточку с причиной."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     age = (
         f"CASE WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней' END"
         if age_days > 0 else "NULL"
     )
-    # Решения судьи одобренную карточку не прячут (_radar_quality_sql) — и в причине их нет.
+    # Решения машины (судья, отсев) одобренную карточку не прячут (_radar_quality_sql) — и в
+    # причине их нет.
     machine = (
         f"CASE WHEN NOT {_SIGNAL_APPROVED_SQL.format(alias='s')} THEN NULLIF(concat_ws('; ',"
+        " CASE s.filter_stage"
+        + "".join(f" WHEN '{stage}' THEN 'отсеяно ({label})'" for stage, label in RADAR_FILTER_STAGES.items())
+        + " END || COALESCE(': ' || NULLIF(s.filter_reason, ''), ''),"
         " CASE s.signal_category WHEN 'business' THEN 'бизнес-сигнал, не технология'"
         "   WHEN 'other' THEN 'не технологическое событие' END,"
         " CASE WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис' END,"

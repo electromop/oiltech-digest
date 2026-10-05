@@ -11,7 +11,7 @@ export type SignalFilters = {
   until?: string;
   minScore?: number;
   maxScore?: number;
-  // Скрытые правилами качества (бизнес, смешанные, старые, архив) — только админу.
+  // Отсеянные и скрытые (не на радаре) — всем: заказчик разбирает всё отсеянное.
   hidden?: boolean;
 };
 
@@ -56,7 +56,7 @@ export type SignalSummary = {
   in_digest: number;
   with_feedback: number;
   merged: number;
-  // Скрыто правилами качества — приходит только админу.
+  // Отсеяно и скрыто — не на радаре.
   hidden?: number;
   matching: number;
   themes: Array<{ theme: string; count: number }>;
@@ -65,6 +65,23 @@ export type SignalSummary = {
 export function getSignalSummary(filters: SignalFilters = {}) {
   const params = filterParams(filters).toString();
   return apiFetch<SignalSummary>(params ? `/api/signals/summary?${params}` : "/api/signals/summary");
+}
+
+// «Итоги недели» радара (03.10): что вышло, что отсеяно и почему, что ждёт разбора, отзывы.
+export type SignalWeekly = {
+  days: number;
+  on_radar: number;
+  // Отсеянное и скрытое — служебное: сервер отдаёт только админу (решение владельца 05.10).
+  filtered?: number;
+  filtered_reasons?: Array<{ reason: string; count: number }>;
+  top: Array<{ id: number; title: string; theme: string; score: number; event_date: string | null }>;
+  awaiting_review: number;
+  feedback: number;
+  feedback_verdicts: Array<{ verdict: string; count: number }>;
+};
+
+export function getSignalWeekly(days = 7) {
+  return apiFetch<SignalWeekly>(`/api/signals/weekly?days=${days}`);
 }
 
 export function updateSignal(signalId: number, payload: SignalPatch) {

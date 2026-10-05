@@ -4,10 +4,11 @@ import {
   createSignalFeedback,
   getSignalSearchHealth,
   getSignalSummary,
+  getSignalWeekly,
   listSignals,
   updateSignal,
 } from "../../api/signals";
-import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary } from "../../api/signals";
+import type { SignalFilters, SignalSearchHealth, SignalSort, SignalSummary, SignalWeekly } from "../../api/signals";
 import type { Signal, SignalEvidence, SignalFeedbackPayload } from "../../api/types";
 import { radarDigestLockedText } from "../articles/feedWindow";
 import { StatCard } from "../shared/StatCard";
@@ -73,6 +74,8 @@ const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> 
   // Встреча с заказчиком 21.09, решение 5: находка годная, но это бизнес-сигнал.
   { value: "wrong_block", label: "Не тот блок — бизнес-сигнал, а не технология" },
   { value: "merge_duplicate", label: "Дубль — тот же сигнал или технологический кластер" },
+  // 03.10: находка годная, но балл выше, чем она стоит — судья учится ставить строже.
+  { value: "overrated", label: "Оценка завышена — сигнал годный, балл слишком высокий" },
 ];
 
 const EARLY_THEME_GROUP = "Ранние карточки — тема вне 13 тематик";
@@ -224,8 +227,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
-  // «Скрытые» (админ): карточки, которые правила качества не пускают на радар, — бизнес,
-  // смешанные события, старые, архив. Проверить, не отсеяно ли лишнее.
+  const [weekly, setWeekly] = useState<SignalWeekly | null>(null);
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
+  // «Отсеянные и скрытые» — только админу (решение владельца 05.10; заказчик Виктор — админ):
+  // бизнес, смешанные события, старые, не про нефтесервис, брак судьи, отсеянное поиском, архив.
   const [showHidden, setShowHidden] = useState(false);
 
   const filters: SignalFilters = useMemo(
@@ -291,6 +296,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
   }, [filters, sort]);
 
   useEffect(() => () => window.clearTimeout(pendingTimer.current), []);
+
+  useEffect(() => {
+    // Итоги недели — служебный блок: не загрузились — его просто нет.
+    getSignalWeekly()
+      .then(setWeekly)
+      .catch(() => setWeekly(null));
+  }, []);
 
   useEffect(() => {
     // Обычный пользователь здоровье поиска не запрашивает: эндпоинт только для админа.
@@ -429,7 +441,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       afterListChange();
     } catch (error) {
       handleError(error, "Не удалось обновить статус сигнала");
-      // 409 — месяц карточки закрылся, пока экран был открыт (5-е число): выборка заново,
+      // 409 — месяц карточки закрылся, пока экран был открыт (день смены окна): выборка заново,
       // чтобы кнопка погасла по признаку сервера, а не ждала «Обновить».
       if (error instanceof ApiError && error.status === 409) reload({ keepLoaded: true });
     } finally {
@@ -558,8 +570,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
       {showHidden ? (
         <div className="archiveNotice" role="status">
           <span>
-            Скрытые карточки: на радар их не пускают правила качества — бизнес-сигнал, не технологическое
-            событие, ссылки о разных событиях, событие старше срока или архив. Причина — в строке карточки.
+            Отсеянные и скрытые: всё, что радар не пустил на экран, — отсеянное поиском и судьёй, бизнес-сигналы,
+            не технологические события, не про нефтесервис, ссылки о разных событиях, старше срока, архив.
+            Причина — в строке карточки.
           </span>
         </div>
       ) : null}
@@ -571,6 +584,52 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
         </div>
       ) : null}
 
+      {/* «Итоги недели» (03.10): что вышло, что отсеяно и почему, что ждёт разбора — для
+          еженедельного разбора с заказчиком. */}
+      {weekly ? (
+        <section className="panel signalWeekly" aria-label="Итоги недели">
+          <button
+            type="button"
+            className="signalWeeklyHead"
+            aria-expanded={weeklyOpen}
+            onClick={() => setWeeklyOpen((current) => !current)}
+          >
+            <strong>Итоги за {weekly.days} дн.</strong>
+            <span>
+              на радаре новых: {weekly.on_radar}
+              {weekly.filtered != null ? ` · отсеяно и скрыто: ${weekly.filtered}` : ""} · ждут разбора:{" "}
+              {weekly.awaiting_review} · отзывов: {weekly.feedback}
+            </span>
+          </button>
+          {weeklyOpen ? (
+            <div className="signalWeeklyBody">
+              {weekly.top.length ? (
+                <div>
+                  <div className="signalEvidenceHeading">Лучшие новые</div>
+                  <ol>
+                    {weekly.top.map((row) => (
+                      <li key={row.id}>
+                        <span className="signalIdText">#{row.id}</span> {row.title} · {Math.round(Number(row.score || 0))}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : null}
+              {weekly.filtered_reasons?.length ? (
+                <div>
+                  <div className="signalEvidenceHeading">Почему отсеяно</div>
+                  <ul>
+                    {weekly.filtered_reasons.map((row) => (
+                      <li key={row.reason}>{row.reason}: {row.count}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       {/* Плитки, как у «Бизнес-сигналов» (документ заказчика 19.09), — по всему радару:
           поиск и фильтры сужают список, но не эти числа. */}
       {summary ? (
@@ -580,7 +639,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           <StatCard label="В дайджесте" value={summary.in_digest} />
           <StatCard label="С обратной связью" value={summary.with_feedback} />
           <StatCard label="Объединено дублей" value={summary.merged} />
-          {isAdmin && summary.hidden != null ? <StatCard label="Скрыто" value={summary.hidden} /> : null}
+          {isAdmin && summary.hidden != null ? <StatCard label="Отсеяно и скрыто" value={summary.hidden} /> : null}
         </section>
       ) : null}
 
@@ -589,7 +648,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
           в «Расширенных фильтрах». */}
       <section className="panel">
         <div className="panelHeader">
-          <h2>{showHidden ? "Скрытые карточки радара" : "Каталог технологических сигналов"}</h2>
+          <h2>{showHidden ? "Отсеянные и скрытые карточки" : "Каталог технологических сигналов"}</h2>
           <div className="settingsActions signalRadarPanelActions">
             {countBadge ? <span className="badge">{countBadge}</span> : null}
             {isAdmin ? (
@@ -599,7 +658,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                 aria-pressed={showHidden}
                 onClick={() => setShowHidden((current) => !current)}
               >
-                {showHidden ? "К радару" : `Скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
+                {showHidden ? "К радару" : `Отсеянные и скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
               </button>
             ) : null}
             {groups.length ? (
@@ -796,7 +855,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                       {Number(signal.merged_count || 0) > 0 ? ` · объединено дублей: ${signal.merged_count}` : ""}
                     </div>
                     {signal.hidden_reason ? (
-                      <div className="metaText signalHiddenReason">Скрыта: {signal.hidden_reason}</div>
+                      <div className="metaText signalHiddenReason">Не на радаре: {signal.hidden_reason}</div>
                     ) : null}
                   </div>
                   <div className="articleCardMetrics">
@@ -875,6 +934,30 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false }: 
                         ) : null}
                       </div>
                     </div>
+
+                    {/* Почему принята или отсеяна (решение 03.10): заказчик видит причину и шаги. */}
+                    {signal.verdict_reason || signal.decision_log?.length ? (
+                      <div className="signalDecision">
+                        {signal.verdict_reason ? (
+                          <p className="signalDecisionReason">
+                            <strong>Почему такое решение:</strong> {signal.verdict_reason}
+                          </p>
+                        ) : null}
+                        {signal.decision_log?.length ? (
+                          <>
+                            <div className="signalEvidenceHeading">Ход решения</div>
+                            <ol className="signalDecisionLog">
+                              {signal.decision_log.map((step, index) => (
+                                <li key={index}>
+                                  <span className="signalDecisionStage">{step.stage}</span>
+                                  <span>{step.text}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     {signal.evidence?.length ? (
                       <div className="signalEvidenceList">

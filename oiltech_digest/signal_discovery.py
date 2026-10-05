@@ -7,8 +7,11 @@ can be fed later through the same evidence shape.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+import contextvars
 from contextvars import ContextVar
+import threading
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime, timedelta
 import hashlib
@@ -411,6 +414,12 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
   без промышленного применения, судоходство и авиация без связи с промыслом. Слова «промышленный»
   мало: нужна операция нефтесервиса. oilfield_application — одной фразой по-русски, где именно это
   применить в нефтесервисе (для none — пустая строка). Карточки none радар не показывает.
+- reasoning_steps — ход решения, 3–6 коротких шагов по-русски, по порядку: что за событие и
+  кто участник; есть ли новая технология или это бизнес; применимость для нефтесервиса; дата
+  события и свежесть; одно ли это событие; итог — почему такой вердикт и балл. Заказчик читает
+  их, чтобы понять, почему карточка принята или отсеяна: пиши по фактам из evidence, без воды.
+- verdict_reason — одной фразой по-русски, почему такое решение; для reject — конкретная
+  причина отказа («обзор рынка без события», «событие 2024 года», «реклама без факта применения»).
 - theme — выбери ОДНУ тематику из списка во входе (строка «themes»), по сути события, а не по
   запросу, которым материал нашли. Тематика — по ОПЕРАЦИИ нефтесервиса, к которой относится
   событие: автоматизированное MPD и автономное направленное бурение — бурение; цифровая
@@ -424,7 +433,8 @@ score возвращай по шкале 0-100, где 40 = слабый watch, 
   vendor-reported без независимого подтверждения — не выше 60 по зрелости.
 
 Все пользовательские текстовые поля возвращай на русском: title, theme, summary,
-thesis, transferability, why_now, why_not_noise, mixed_events_reason, oilfield_application. Не копируй англоязычный или китайский
+thesis, transferability, why_now, why_not_noise, mixed_events_reason, oilfield_application,
+reasoning_steps, verdict_reason. Не копируй англоязычный или китайский
 заголовок как title; переведи его нормальным нефтегазовым русским языком.
 Названия компаний, продуктов, месторождений, стандартов и устоявшиеся аббревиатуры
 HSE/PTW/AI оставляй в оригинальном написании."""
@@ -490,8 +500,10 @@ def _judge_schema(themes: list[str], criteria: list[dict[str, Any]]) -> dict[str
     properties["mixed_events_reason"] = {"type": "string"}
     properties["oilfield_relevance"] = {"type": "string", "enum": list(OILFIELD_RELEVANCE)}
     properties["oilfield_application"] = {"type": "string"}
+    properties["reasoning_steps"] = {"type": "array", "items": {"type": "string"}}
+    properties["verdict_reason"] = {"type": "string"}
     required += ["signal_category", "event_date", "mixed_events", "mixed_events_reason",
-                 "oilfield_relevance", "oilfield_application"]
+                 "oilfield_relevance", "oilfield_application", "reasoning_steps", "verdict_reason"]
     if criteria:
         properties["criteria_scores"] = {
             "type": "array",
@@ -546,6 +558,11 @@ BATCH_REVIEW_INSTRUCTIONS = """Ты — финальный контроль ка
 рынок и так знает, или очередной анонс без нового факта на фоне уже более сильных
 кандидатов пачки. why_interesting — коротко по-русски, почему такой балл именно на
 фоне остальных. Для keep=false interest_score и why_interesting можно оставить пустыми.
+
+Во входе может быть customer_feedback — что заказчик одобрял («так делать») и отклонял («так НЕ
+делать») с причинами. Учитывай его: кандидат, похожий на отклонённое по типу события, — keep=false
+как шум или низкий interest_score; похожий на одобренное — выше interest_score. Не копируй
+причины дословно в reason — объясни для этого кандидата.
 
 duplicate_of_signal_key заполняй ТОЛЬКО для дубля; для обзора, шума и для keep=true —
 пустая строка. Верни решение по КАЖДОМУ переданному signal_key. reason — коротко по-русски."""
@@ -628,11 +645,19 @@ _USAGE: ContextVar[dict[tuple[str, str], dict[str, Any]] | None] = ContextVar("s
 RADAR_STAGES = ("radar_research", "radar_judge", "radar_review", "radar_dedup", "radar_theme")
 
 
+_USAGE_LOCK = threading.Lock()
+
+
 def _record_usage(stage: str, model: str | None, *, input_tokens: int = 0, output_tokens: int = 0,
                   calls: int = 1, web_search_calls: int = 0) -> None:
     usage = _USAGE.get()
     if usage is None or not calls:
         return
+    with _USAGE_LOCK:  # судья пишет расход из параллельных потоков
+        _record_usage_locked(usage, stage, model, input_tokens, output_tokens, calls, web_search_calls)
+
+
+def _record_usage_locked(usage, stage, model, input_tokens, output_tokens, calls, web_search_calls) -> None:
     row = usage.setdefault((stage, str(model or "")), {
         "stage": stage, "model": str(model or ""), "calls": 0, "input_tokens": 0, "output_tokens": 0,
         "web_search_calls": 0,
@@ -707,6 +732,7 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         "dedup_max_pairs": app_config.SIGNAL_DEDUP_MAX_PAIRS,
         "radar_themes": _radar_theme_names(),
         "radar_criteria": _radar_criteria(),
+        "score_calibration": _score_calibration(),
     }
     if for_external:
         try:
@@ -727,6 +753,38 @@ def _radar_theme_names() -> list[str]:
         return [topic["name"] for topic in topics_from_tags(repository.list_enabled_tags())]
     except Exception:  # noqa: BLE001 - без списка тема выбирается по ключам, как раньше
         return []
+
+
+# Подсказка судье о завышении — только с достаточным числом вердиктов и заметным перекосом.
+CALIBRATION_MIN_VERDICTS = 3
+CALIBRATION_HIGH_SCORE = 50
+
+
+def _score_calibration() -> list[dict[str, Any]]:
+    try:
+        return repository.radar_score_calibration()
+    except Exception:  # noqa: BLE001 - калибровка — улучшение, без неё судья ставит как раньше
+        return []
+
+
+def _calibration_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """Где судья завышает: у отклонённых или «завышенных» заказчиком карточек балл по критерию
+    высокий и почти как у одобренных. Перекос считается кодом, модель получает вывод."""
+    lines = []
+    for row in rows:
+        too_high_n = int(row.get("too_high_n") or 0)
+        too_high = row.get("too_high_avg")
+        fair = row.get("fair_avg")
+        if too_high_n < CALIBRATION_MIN_VERDICTS or too_high is None or too_high < CALIBRATION_HIGH_SCORE:
+            continue
+        if fair is not None and int(row.get("fair_n") or 0) and too_high < fair - 10:
+            continue  # различает: у отклонённых заметно ниже
+        compare = f"; у одобренных — {fair:.0f}" if fair is not None and row.get("fair_n") else ""
+        lines.append(
+            f"- {row.get('name') or row.get('criterion_id')}: у карточек, которые заказчик отклонил или счёл "
+            f"завышенными ({too_high_n}), ты ставил в среднем {too_high:.0f}{compare}. Ставь по этому критерию строже."
+        )
+    return lines
 
 
 def _radar_criteria() -> list[dict[str, Any]]:
@@ -750,6 +808,7 @@ def use_discovery_snapshot(snapshot: dict[str, Any]) -> Iterator[None]:
     judge_token = _JUDGE_CONTEXT.set({
         "themes": [str(name) for name in snapshot.get("radar_themes") or [] if str(name).strip()],
         "criteria": list(snapshot.get("radar_criteria") or []),
+        "calibration": _calibration_lines(list(snapshot.get("score_calibration") or [])),
     })
     try:
         if snapshot.get("memory") is not None:
@@ -820,13 +879,33 @@ def _run_discovery_topics(
             clusters = _cluster_evidence(fresh, topic_name)
             candidates = []
             judge_errors: list[str] = []
+            # Что не дошло до карточки: отсеяно поиском или судья не ответил. Ядро сохранит
+            # их карточками «Отсеяно» — заказчик просматривает всё, а не только принятое.
+            filtered_findings: list[dict[str, Any]] = [
+                {"stage": "search", **item}
+                for item in ((web_search or {}).get("research") or {}).get("dropped") or []
+            ] + [
+                {"stage": "search", **item}
+                for item in ((web_search or {}).get("research") or {}).get("unverified") or []
+            ]
             # «Режим ChatGPT»: событие — свой кластер, и модель уже отобрала главное. Лимит
             # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
             research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
-            for cluster in _clusters_for_judging(clusters, max(config.max_signals, research_events)):
-                beat()
-                judged = _judge_with_retry(cluster, topic_name, offline=config.offline, beat=beat, errors=judge_errors)
+            selected = _clusters_for_judging(clusters, max(config.max_signals, research_events))
+            judged_clusters = _judge_clusters(selected, topic_name, offline=config.offline, beat=beat,
+                                              errors=judge_errors)
+            # У каждого кластера без ответа — ровно одна ошибка, в порядке кластеров: своя причина,
+            # а не последняя на все (судьи идут параллельно и пишут ошибки до разбора итога).
+            cluster_errors = iter(judge_errors)
+            for cluster, judged in judged_clusters:
                 if judged is None:
+                    first = cluster[0] if cluster else {}
+                    filtered_findings.append({
+                        "stage": "judge_error", "reason": next(cluster_errors, ""),
+                        "title": first.get("title_ru") or first.get("title") or "", "url": first.get("source_url") or "",
+                        "summary": first.get("summary_ru") or first.get("extracted_fact") or "",
+                        "publisher": first.get("publisher"), "event_date": first.get("published_at"),
+                    })
                     continue
                 signal, raw_output = judged
                 if topic.get("tag_id") is not None:
@@ -857,6 +936,7 @@ def _run_discovery_topics(
                 "clusters": len(clusters),
                 "candidates": candidates,
                 "judge_errors": judge_errors,
+                "filtered_findings": filtered_findings,
                 "batch_review": batch_review,
             })
     judged_total = sum(len(topic.get("candidates") or []) for topic in topics_out)
@@ -868,6 +948,40 @@ def _run_discovery_topics(
         raise JudgeUnavailable(f"Судья не ответил ни на один из {errors_total} кластеров: {first}")
     dedup = _dedupe_run(config, snapshot, topics_out, beat)
     return {"topics": topics_out, "dedup": dedup, "ai_usage": list((_USAGE.get() or {}).values())}
+
+
+def _judge_clusters(
+    clusters: list[list[dict[str, Any]]],
+    topic_name: str,
+    *,
+    offline: bool,
+    beat: Callable[[], None],
+    errors: list[str],
+) -> list[tuple[list[dict[str, Any]], tuple[dict[str, Any], dict[str, Any]] | None]]:
+    """Судья по кластерам темы — параллельно (SIGNAL_JUDGE_CONCURRENCY), итог в исходном порядке.
+
+    Прогон 13 тем по одному кластеру шёл ~2 ч: gpt-5 medium думает 30–60 с. Каждый вызов — в
+    копии контекста прогона (снимок тегов, память ОС, учёт расхода живут в ContextVar).
+    Признак продвижения подаёт основной поток, пока ждёт: аренда NL — не из рабочих потоков.
+    Ошибки — в порядке кластеров, как при последовательном судье."""
+    workers = min(app_config.SIGNAL_JUDGE_CONCURRENCY, len(clusters)) or 1
+    if workers == 1:
+        results = []
+        for cluster in clusters:
+            beat()
+            results.append((cluster, _judge_with_retry(cluster, topic_name, offline=offline, beat=beat, errors=errors)))
+        return results
+    local_errors: list[list[str]] = [[] for _ in clusters]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="radar-judge") as pool:
+        futures = [
+            pool.submit(contextvars.copy_context().run, _judge_with_retry, cluster, topic_name,
+                        offline=offline, beat=lambda: None, errors=local_errors[index])
+            for index, cluster in enumerate(clusters)
+        ]
+        signal_dedup.wait_beating(pool, futures, beat)
+    for collected in local_errors:
+        errors.extend(collected)
+    return [(cluster, future.result()) for cluster, future in zip(clusters, futures)]
 
 
 # Судья зовётся на каждый кластер, до 78 раз за прогон. Без повтора один таймаут или
@@ -1012,6 +1126,9 @@ def apply_discovery(
     owners = _key_owners(config, run)
     for topic in run.get("topics") or []:
         topic_name = str(topic.get("topic") or "")
+        filtered_stored = 0
+        if not config.dry_run and topic.get("filtered_findings"):
+            filtered_stored = _store_filtered_findings(topic_name, topic["filtered_findings"])
         judged = []
         topic_duplicates = 0
         for candidate in topic.get("candidates") or []:
@@ -1042,6 +1159,7 @@ def apply_discovery(
             "clusters": topic.get("clusters", 0),
             "signals": judged,
             "duplicates": topic_duplicates,
+            "filtered_stored": filtered_stored,
             "batch_review": topic.get("batch_review"),
         })
     dedup = dict(run.get("dedup") or {})
@@ -1151,11 +1269,14 @@ def _store_candidate(
                     normalized_output=signal,
                 )
             return repeat_of
+        signal["decision_log"] = _decision_log(candidate)
         signal_id = repository.upsert_signal(signal)
         signal["id"] = signal_id
         for item in cluster:
             repository.upsert_signal_evidence(signal_id, item)
         signal["evidence_count"] = repository.refresh_signal_evidence_count(signal_id)
+    if rejected and not config.dry_run:
+        signal_id = _store_filtered_candidate(signal, cluster, _decision_log(candidate))
     if generation_run_id is not None:
         repository.create_signal_training_example(
             generation_run_id=generation_run_id,
@@ -1168,6 +1289,137 @@ def _store_candidate(
             normalized_output=signal,
         )
     return signal_id
+
+
+def _links_held_elsewhere(urls: list[str], signal_key: str) -> dict[str, dict]:
+    """Какие из ссылок держит другая карточка — на радаре или разобранная человеком.
+
+    Отсеянное такую ссылку не пишет: signal_evidence уникальна по адресу, и запись
+    перезаписала бы заголовок и суть чужой ссылки, хотя сама ссылка осталась бы у хозяйки."""
+    owners = repository.visible_evidence_owners([url for url in urls if url])
+    return {url: owner for url, owner in owners.items() if owner.get("signal_key") != signal_key}
+
+
+def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, Any]],
+                              decision_log: list[dict[str, str]] | None = None) -> int | None:
+    """Брак судьи или ревью пачки — карточкой «Отсеяно»: заказчик просматривает всё отсеянное.
+
+    Принятую ранее карточку с тем же ключом брак этого прогона не трогает: уже видимая
+    карточка не исчезает из-за того, что судья в другой раз решил иначе."""
+    owner = repository.signal_key_owners([signal["signal_key"]]).get(signal["signal_key"])
+    if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
+        # Принятая — не трогаем; склеенная отсеянная — событие уже найдено снова и принято.
+        return int(owner["id"])
+    held = _links_held_elsewhere([str(item.get("source_url") or "") for item in cluster], signal["signal_key"])
+    own = [item for item in cluster if str(item.get("source_url") or "") not in held]
+    if cluster and not own:
+        # Все ссылки уже у карточек, которые их держат: это повтор события, а не новое отсеянное.
+        return int(next(iter(held.values()))["id"])
+    stage = "review" if signal.get("batch_review_reason") else "judge"
+    reason = (signal.get("batch_review_reason") or signal.get("verdict_reason") or signal.get("why_not_noise")
+              or signal.get("summary") or "")
+    stored = {**signal, "filter_stage": stage, "filter_reason": _trim(str(reason), 500),
+              "decision_log": decision_log or []}
+    if stage == "review":
+        # Судья такую карточку принял, и его verdict_reason объясняет приём. «Почему такое
+        # решение» у отсеянной ревью — причина ревью (решение 03.10: «писать причину отсеивания»).
+        stored["verdict_reason"] = stored["filter_reason"]
+    signal_id = repository.upsert_signal(stored)
+    for item in own:
+        repository.upsert_signal_evidence(signal_id, item)
+    repository.refresh_signal_evidence_count(signal_id)
+    return signal_id
+
+
+def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) -> int:
+    """Находки, не дошедшие до судьи или без его ответа, — карточками «Отсеяно».
+
+    Ключ — по ссылке (или заголовку): повторно отсеянное обновляет ту же карточку, а
+    найденное снова и принятое судьёй получит свой ключ и выйдет на радар."""
+    stored = 0
+    for item in findings:
+        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
+        url = str(item.get("url") or "").strip()
+        if not title and not url:
+            continue
+        key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
+        owner = repository.signal_key_owners([key]).get(key)
+        if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
+            # Склеенная отсеянная — событие уже найдено снова и принято: повтор отсева её не оживляет.
+            continue
+        if url and _links_held_elsewhere([url], key):
+            # Ссылка уже у карточки на радаре или разобранной человеком: это повтор события
+            # (вчерашнее сегодня вышло за период поиска), а не новое отсеянное. Запись
+            # затёрла бы её ссылке русский заголовок и суть (ON CONFLICT source_url).
+            continue
+        signal_id = repository.upsert_signal({
+            "signal_key": key,
+            "title": _trim(title or url, 220),
+            "title_ru": _trim(title or url, 220),
+            "theme": topic_name,
+            "summary": _trim(str(item.get("summary") or ""), 600),
+            "maturity": "reject",
+            "score": 0,
+            "event_date": _normalize_event_date(item.get("event_date")),
+            # Стадия приходит из итога NL — неизвестная скрыла бы карточку без причины на экране.
+            "filter_stage": item.get("stage") if item.get("stage") in repository.RADAR_FILTER_STAGES else "search",
+            "filter_reason": _trim(str(item.get("reason") or ""), 500),
+            "decision_log": _finding_log(item),
+        })
+        if url.startswith("http"):
+            repository.upsert_signal_evidence(signal_id, {
+                "source_url": url, "title": title or url, "publisher": item.get("publisher"),
+                "published_at": _normalize_event_date(item.get("event_date")),
+                "evidence_type": "news", "extracted_fact": item.get("summary") or "",
+                "raw_payload": {"evidence_source": "filtered", "stage": item.get("stage")},
+            })
+            repository.refresh_signal_evidence_count(signal_id)
+        stored += 1
+    return stored
+
+
+_STAGE_LABELS = {"search": "поиск", "judge_error": "судья"}
+
+
+def _finding_log(item: dict[str, Any]) -> list[dict[str, str]]:
+    """Ход решения для находки, не дошедшей до карточки: что нашёл поиск и почему отсеяно."""
+    found = ", ".join(part for part in (str(item.get("publisher") or ""), str(item.get("event_date") or "")) if part)
+    log = [{"stage": "поиск", "text": f"Найдено: {item.get('title') or item.get('url') or ''}" + (f" ({found})" if found else "")}]
+    if item.get("technology"):
+        log.append({"stage": "поиск", "text": f"Технология по версии поиска: {item['technology']}"})
+    stage = _STAGE_LABELS.get(str(item.get("stage") or ""), "поиск")
+    log.append({"stage": "отсев", "text": f"Отсеяно ({stage}): {item.get('reason') or 'причина не указана'}"})
+    return log
+
+
+def _decision_log(candidate: dict[str, Any]) -> list[dict[str, str]]:
+    """Ход решения карточки по шагам — для заказчика: почему принята или отсеяна.
+
+    Шаги судьи (reasoning_steps) и его итог (verdict_reason), решение ревью пачки, как выбрана
+    тематика (судья, второе мнение, ключи), отказ — если отсеяна."""
+    signal = candidate.get("signal") or {}
+    raw = candidate.get("raw_output") or {}
+    log = [{"stage": "судья", "text": str(step)} for step in signal.get("reasoning_steps") or []]
+    if signal.get("verdict_reason"):
+        log.append({"stage": "судья", "text": f"Итог: {signal['verdict_reason']}"})
+    if signal.get("batch_review_reason"):
+        log.append({"stage": "ревью пачки", "text": str(signal["batch_review_reason"])})
+    elif signal.get("why_interesting"):
+        log.append({"stage": "ревью пачки", "text": f"Оставлен: {signal['why_interesting']}"})
+    choice = raw.get("theme_choice") or {}
+    if choice:
+        check = choice.get("theme_check") or {}
+        if choice.get("reason") in ("theme_check", "judge_confirmed") and check.get("reason"):
+            log.append({"stage": "тематика", "text": f"Второе мнение: {choice.get('theme')} — {check['reason']}"})
+        elif choice.get("reason") == "judge":
+            log.append({"stage": "тематика", "text": f"{choice.get('theme')} — выбор судьи"})
+        elif choice.get("reason"):
+            log.append({"stage": "тематика", "text": f"{choice.get('theme')} — по ключевым словам тематик"})
+    if candidate.get("rejected"):
+        reason = signal.get("batch_review_reason") or signal.get("verdict_reason") or signal.get("why_not_noise") or ""
+        stage = "ревью пачки" if signal.get("batch_review_reason") else "судья"
+        log.append({"stage": "отсев", "text": f"Отсеяно ({stage}): {reason}".rstrip(": ")})
+    return log
 
 
 def _repeat_of_existing_card(signal: dict[str, Any], cluster: list[dict[str, Any]]) -> int | None:
@@ -1646,6 +1898,9 @@ def _batch_review_candidates(
     payload = {
         "topic": topic,
         "candidates": [_batch_review_candidate_payload(item) for item in reviewable],
+        # Вкус заказчика (03.10): до этого ревью пачки сравнивало кандидатов без памяти ОС —
+        # её видели только судья и поиск.
+        "customer_feedback": feedback_prompt_block(topic),
     }
     try:
         response = client.complete_json(
@@ -3146,6 +3401,11 @@ def _normalize_signal_payload(payload: dict[str, Any], topic: str, *, context: d
         "mixed_events": payload.get("mixed_events") is True,
         "mixed_events_reason": _trim(str(payload.get("mixed_events_reason") or ""), 500) if payload.get("mixed_events") is True else "",
         "oilfield_relevance": _normalize_relevance(payload.get("oilfield_relevance")),
+        "reasoning_steps": [
+            _enforce_glossary(_trim(str(step), 400), context, topic)
+            for step in [item for item in payload.get("reasoning_steps") or [] if str(item).strip()][:8]
+        ],
+        "verdict_reason": _enforce_glossary(_trim(str(payload.get("verdict_reason") or ""), 400), context, topic),
         "oilfield_application": (
             _enforce_glossary(_trim(str(payload.get("oilfield_application") or ""), 400), context, topic)
             if _normalize_relevance(payload.get("oilfield_relevance")) in ("direct", "transferable") else ""
@@ -3212,6 +3472,10 @@ def _judge_context_block() -> str:
     themes = context.get("themes") or []
     if themes:
         parts.append("themes:\n" + "\n".join(f"- {name}" for name in themes))
+    calibration = context.get("calibration") or []
+    if calibration and context.get("criteria"):
+        # «Оценки завышены» (Виктор 29.09): по вердиктам заказчика — где судья не различает.
+        parts.append("score_calibration (по вердиктам заказчика):\n" + "\n".join(calibration))
     criteria = context.get("criteria") or []
     if criteria:
         parts.append("criteria:\n" + "\n".join(

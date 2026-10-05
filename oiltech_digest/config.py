@@ -298,6 +298,10 @@ SIGNAL_THEME_CHECK_MODEL = os.environ.get("SIGNAL_THEME_CHECK_MODEL", "").strip(
 SIGNAL_THEME_CHECK_REASONING = os.environ.get("SIGNAL_THEME_CHECK_REASONING", "").strip() or SIGNAL_DEDUP_REASONING
 # Таймаут вызовов модели радара: сильная модель с рассуждением думает дольше 60 с ленты.
 SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))
+# Сколько вызовов судьи (кластеров темы) и судьи дедупа (пар) идут одновременно. Прогон 13 тем
+# на gpt-5 medium по одному шёл ~2 ч: судья думал 30–60 с на кластер. 1 — по-старому.
+SIGNAL_JUDGE_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_JUDGE_CONCURRENCY", "4")))
+SIGNAL_DEDUP_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_DEDUP_CONCURRENCY", "4")))
 # Откуда радар берёт находки: brave — поиск Brave и докачка страниц (как раньше);
 # openai_web — «режим ChatGPT»: на тему один вызов модели со встроенным поиском OpenAI
 # (signal_research.py); both — обе выдачи вместе.
@@ -344,10 +348,12 @@ DIGEST_BRANDING_PATH = os.environ.get("DIGEST_BRANDING_PATH", "").strip()
 
 # --- Окно месяца ленты (ADR 0001, п. 6; oiltech_digest/feed_window.py) ---
 # Пока день месяца по МСК меньше этого числа, лента показывает ещё и прошлый месяц:
-# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09 — 5.
+# выпуск за месяц собирается в первые дни следующего. Решение владельца 21.09 — 5; 05.10 —
+# 11: прошлый месяц открыт по 10-е число включительно (сентябрь — по 10 октября).
 # Держим в пределах 1..28: 1 — прошлый месяц не виден никогда, больше 28 — виден
 # почти всегда, и окно перестаёт быть окном.
-FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", "5"))))
+FEED_ROLLOVER_DAY_DEFAULT = 11
+FEED_ROLLOVER_DAY = min(28, max(1, int(os.environ.get("FEED_ROLLOVER_DAY", str(FEED_ROLLOVER_DAY_DEFAULT)))))
 
 # --- Здоровье источников: «Требуют внимания» (вердикт stale) ---
 # Источник требует внимания, если последний материал собран столько и больше календарных
