@@ -7,7 +7,7 @@ can be fed later through the same evidence shape.
 
 from __future__ import annotations
 
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import contextvars
 from contextvars import ContextVar
@@ -892,12 +892,16 @@ def _run_discovery_topics(
             # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
             research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
             selected = _clusters_for_judging(clusters, max(config.max_signals, research_events))
-            for cluster, judged in _judge_clusters(selected, topic_name, offline=config.offline, beat=beat,
-                                                  errors=judge_errors):
+            judged_clusters = _judge_clusters(selected, topic_name, offline=config.offline, beat=beat,
+                                              errors=judge_errors)
+            # У каждого кластера без ответа — ровно одна ошибка, в порядке кластеров: своя причина,
+            # а не последняя на все (судьи идут параллельно и пишут ошибки до разбора итога).
+            cluster_errors = iter(judge_errors)
+            for cluster, judged in judged_clusters:
                 if judged is None:
                     first = cluster[0] if cluster else {}
                     filtered_findings.append({
-                        "stage": "judge_error", "reason": judge_errors[-1] if judge_errors else "",
+                        "stage": "judge_error", "reason": next(cluster_errors, ""),
                         "title": first.get("title_ru") or first.get("title") or "", "url": first.get("source_url") or "",
                         "summary": first.get("summary_ru") or first.get("extracted_fact") or "",
                         "publisher": first.get("publisher"), "event_date": first.get("published_at"),
@@ -974,10 +978,7 @@ def _judge_clusters(
                         offline=offline, beat=lambda: None, errors=local_errors[index])
             for index, cluster in enumerate(clusters)
         ]
-        pending = set(futures)
-        while pending:
-            beat()
-            _, pending = wait(pending, timeout=20, return_when=FIRST_COMPLETED)
+        signal_dedup.wait_beating(pool, futures, beat)
     for collected in local_errors:
         errors.extend(collected)
     return [(cluster, future.result()) for cluster, future in zip(clusters, futures)]
@@ -1318,6 +1319,10 @@ def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, An
               or signal.get("summary") or "")
     stored = {**signal, "filter_stage": stage, "filter_reason": _trim(str(reason), 500),
               "decision_log": decision_log or []}
+    if stage == "review":
+        # Судья такую карточку принял, и его verdict_reason объясняет приём. «Почему такое
+        # решение» у отсеянной ревью — причина ревью (решение 03.10: «писать причину отсеивания»).
+        stored["verdict_reason"] = stored["filter_reason"]
     signal_id = repository.upsert_signal(stored)
     for item in own:
         repository.upsert_signal_evidence(signal_id, item)
@@ -1354,7 +1359,8 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
             "maturity": "reject",
             "score": 0,
             "event_date": _normalize_event_date(item.get("event_date")),
-            "filter_stage": item.get("stage") or "search",
+            # Стадия приходит из итога NL — неизвестная скрыла бы карточку без причины на экране.
+            "filter_stage": item.get("stage") if item.get("stage") in repository.RADAR_FILTER_STAGES else "search",
             "filter_reason": _trim(str(item.get("reason") or ""), 500),
             "decision_log": _finding_log(item),
         })

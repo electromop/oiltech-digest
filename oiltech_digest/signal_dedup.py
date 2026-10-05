@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import contextvars
 import itertools
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
 
 from oiltech_digest import config as app_config
@@ -87,6 +87,23 @@ _STOP_WORDS = {
 # Модель пишет издателя или заглушку вместо компании: «не указаны в источниках»,
 # «bigchallenges.ru (источник)», «kissflow (publisher)». Общий издатель — не общий участник.
 _PLACEHOLDER_COMPANY = re.compile(r"не указ|упомин|источник|публикатор|publisher|публикует|публицист")
+
+
+def wait_beating(pool: ThreadPoolExecutor, futures: Iterable[Future], beat: Callable[[], None]) -> None:
+    """Ждать вызовы пула радара (судья, дедуп), подавая признак продвижения аренды NL из
+    основного потока — не из рабочих.
+
+    beat бросает StopRequested или LeaseLost — тогда ещё не начатые вызовы снимаются: выход
+    из `with` ждёт пул целиком (shutdown(wait=True)) и иначе оплатил бы всю очередь для
+    прогона, который уже отпущен. Начатые (не больше размера пула) доработают."""
+    pending = set(futures)
+    try:
+        while pending:
+            beat()
+            _, pending = wait(pending, timeout=20, return_when=FIRST_COMPLETED)
+    except BaseException:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
 
 
 def title_stems(signal: dict[str, Any]) -> set[str]:
@@ -293,15 +310,12 @@ def dedupe(
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="radar-dedup") as pool:
             futures = {pool.submit(contextvars.copy_context().run, ask, i, j): index
                        for index, (i, j, _overlap_value) in enumerate(judged)}
-            pending = set(futures)
-            while pending:
-                beat()
-                done, pending = wait(pending, timeout=20, return_when=FIRST_COMPLETED)
-                for future in done:
-                    try:
-                        responses[futures[future]] = future.result()
-                    except Exception:  # noqa: BLE001 - пара остаётся «разные»
-                        failed.add(futures[future])
+            wait_beating(pool, futures, beat)
+        for future, index in futures.items():
+            try:
+                responses[index] = future.result()
+            except Exception:  # noqa: BLE001 - пара остаётся «разные»
+                failed.add(index)
     for index, (i, j, _overlap_value) in enumerate(judged):
         if index in failed or responses[index] is None:
             stats["errors"] += 1

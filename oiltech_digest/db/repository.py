@@ -1112,7 +1112,31 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
     if previous is not None and int(previous[0]) != int(owner_id):
         # Ссылка переехала: у прежней карточки счётчик не должен показывать старое число.
         refresh_signal_evidence_count(int(previous[0]))
+        _retire_emptied_filtered_card(int(previous[0]), taken_by=int(owner_id))
     return int(evidence_id)
+
+
+def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
+    """Отсеянная карточка, у которой найденное снова и принятое забрало последнюю ссылку, —
+    дубль новой хозяйки: иначе в «Отсеянных» висела бы пустая копия события, которое уже на
+    радаре. Дубль не удаляется (merged_into_signal_id, как у дедупа). Разобранную человеком
+    это не касается: её ссылки не переезжают (_signal_holds_evidence_sql)."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE signals
+            SET merged_into_signal_id = %(taken_by)s, merge_reason = %(reason)s, updated_at = now()
+            WHERE id = %(id)s
+              AND filter_stage IS NOT NULL
+              AND merged_into_signal_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM signal_evidence WHERE signal_id = %(id)s)
+              -- Без кольца: новая хозяйка сама не дубль этой карточки.
+              AND NOT EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s AND t.merged_into_signal_id = %(id)s)
+            """,
+            {"id": signal_id, "taken_by": taken_by,
+             "reason": f"найдено снова: ссылку забрала карточка {taken_by}"},
+        )
+        conn.commit()
 
 
 def refresh_signal_evidence_count(signal_id: int) -> int:
@@ -1535,8 +1559,12 @@ def radar_score_calibration() -> list[dict]:
 
 
 def radar_cards_for_recall() -> list[dict]:
-    """Все карточки радара (кроме скрытых дублей) со ссылками и признаком «видна на экране» —
-    для замера полноты по эталону заказчика (signal_reference.recall)."""
+    """Все карточки радара (кроме скрытых дублей и неодобренных отсеянных) со ссылками и
+    признаком «видна на экране» — для замера полноты по эталону заказчика (signal_reference.recall).
+
+    Отсеянное не «найдено»: до 02.10 брак судьи и поиска не сохранялся вовсе, и без этого
+    условия полнота выросла бы без единой новой карточки на экране — замер по октябрьскому
+    списку не сравнился бы с прежними. Одобренная отсеянная на радаре — найдена."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1549,6 +1577,7 @@ def radar_cards_for_recall() -> list[dict]:
                         ) AS urls
             FROM signals s
             WHERE s.merged_into_signal_id IS NULL
+              AND (s.filter_stage IS NULL OR {_SIGNAL_APPROVED_SQL.format(alias="s")})
             """
         )
         return cur.fetchall()
@@ -1858,8 +1887,8 @@ def _radar_quality_sql(alias: str = "s") -> str:
 
     Категорию, смешанность и связь с нефтесервисом ставит судья, и повторная находка их
     перезаписывает: решение машины не прячет карточку, которую человек одобрил (последний
-    вердикт положительный). Отказ, «не тот блок», «шум» её не возвращают — так админ учит
-    агента на «Скрытых», не показывая их Виктору. Выбранную «в дайджест» не прячет ни одно
+    вердикт положительный). Отказ, «не тот блок», «шум» её не возвращают: разметка учит
+    агента, карточка остаётся в «Отсеянных и скрытых». Выбранную «в дайджест» не прячет ни одно
     правило, включая архив: иначе её не снять с выпуска (mark_signal_merged).
 
     Отсев (filter_stage) — тоже решение машины: одобренная в «Отсеянных» карточка выходит
@@ -1883,16 +1912,19 @@ def _radar_quality_sql(alias: str = "s") -> str:
     return f"({_SIGNAL_IN_DIGEST_SQL.format(alias=a)} OR ({' AND '.join(parts)}))"
 
 
+# Какую карточку вообще показывать: со ссылкой (своей или склеенного дубля) — или отсеянную:
+# находка поиска без ссылки (битый адрес) тоже видна в разборе. Одно условие для радара и для
+# «Отсеянных и скрытых»: одобренная или выбранная «в дайджест» отсеянная без ссылки переходит
+# на радар, а не пропадает из обоих списков.
+_RADAR_CARD_SHOWN_SQL = f"({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
 _RADAR_VISIBLE_SQL = (
-    f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_radar_card_evidence_exists()}"
+    f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}"
 )
-# Скрытые по качеству — для админа (экран, переключатель «Скрытые»): проверить, не отсеяно ли
-# лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут — их
-# ссылки и так в главной карточке.
+# «Отсеянные и скрытые» (экран, переключатель; всем — решение 02.10): проверить, не отсеяно
+# ли лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут —
+# их ссылки и так в главной карточке.
 _RADAR_HIDDEN_SQL = (
-    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()})"
-    # Отсеянная находка без ссылки (поиск дал битый адрес) — тоже видна в разборе.
-    f" AND ({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
+    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()}) AND {_RADAR_CARD_SHOWN_SQL}"
 )
 RADAR_FILTER_STAGES = {
     "search": "поиск",
@@ -1904,7 +1936,7 @@ RADAR_FILTER_STAGES = {
 
 def _radar_hidden_reason_sql() -> str:
     """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql.
-    У видимой причины нет: экран подписывает «Скрыта: …» любую карточку с причиной."""
+    У видимой причины нет: экран подписывает «Не на радаре: …» любую карточку с причиной."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     age = (
         f"CASE WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней' END"

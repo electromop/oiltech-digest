@@ -728,6 +728,107 @@ def test_rejected_filtered_card_stays_filtered_but_is_known_to_dedup(isolated_db
     assert [(row["id"], row["hidden"]) for row in repository.list_signals_for_dedup()] == [(card, True)]
 
 
+def _column(signal_id, column):
+    with repository.get_connection() as conn:
+        return conn.execute(f"SELECT {column} FROM signals WHERE id = %s", (signal_id,)).fetchone()[0]
+
+
+def _search_drop(title, url, reason="дата события вне периода"):
+    return {"topic": DRILLING, "candidates": [], "filtered_findings": [
+        {"stage": "search", "title": title, "reason": reason, "url": url}]}
+
+
+@pytest.mark.parametrize("rescue", ["approved", "digest"])
+def test_filtered_card_without_link_rescued_by_a_human_goes_on_the_radar(isolated_db, rescue):
+    # Находка поиска без ссылки, одобренная или выбранная «в дайджест», не пропадает из обоих
+    # списков: решение человека выводит её на радар (выбранную иначе не снять с выпуска).
+    _apply_run([_search_drop("Без ссылки", "", reason="нет ссылки или заголовка")])
+    (card,) = _filtered()
+    if rescue == "approved":
+        _feedback(card, "verdict", "approved")
+    else:
+        _choose_for_digest(card)
+
+    assert card in _visible_ids()
+    assert card not in _filtered()
+
+
+def test_filtered_card_that_gave_its_last_link_to_an_accepted_one_becomes_its_duplicate(isolated_db):
+    url = "https://example.com/x"
+    _apply_run([_search_drop("Рано отсеяно", url)])
+    (filtered,) = _filtered()
+
+    # Найдено снова и принято — ссылка у принятой, а пустая копия не висит в «Отсеянных».
+    accepted = repository.upsert_signal({"signal_key": "accepted", "title": "Принято", "theme": DRILLING,
+                                         "signal_category": "technology"})
+    repository.upsert_signal_evidence(accepted, {"source_url": url, "title": "x"})
+
+    assert _filtered() == {}
+    assert accepted in _visible_ids()
+    # Дубль не удаляется: найден по merged_into_signal_id, причина записана.
+    assert (_column(filtered, "merged_into_signal_id"), _column(filtered, "merge_reason")) == (
+        accepted, f"найдено снова: ссылку забрала карточка {accepted}")
+
+
+def test_unknown_filter_stage_from_the_worker_is_stored_as_search(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
+        {"stage": "weird", "title": "Странная стадия", "reason": "причина", "url": "https://example.com/w"}]}])
+
+    assert list(_filtered().values()) == ["отсеяно (поиск): причина"]
+
+
+def test_batch_review_reject_explains_itself_not_the_judge(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("review-no", "Реклама вендора", batch_review_reason="реклама без факта применения",
+                  verdict_reason="технологическое внедрение, событие есть"),
+    ]}])
+    card = repository.signal_key_owners(["review-no"])["review-no"]["id"]
+
+    # «Почему такое решение» — причина отсева ревью, а не приём судьи.
+    assert _column(card, "verdict_reason") == "реклама без факта применения"
+
+
+def test_recall_counts_only_filtered_cards_a_human_approved(isolated_db):
+    _apply_run([_search_drop("SLB MPD на Ямале", "https://example.com/slb")])
+    (card,) = _filtered()
+    assert repository.radar_cards_for_recall() == []
+
+    _feedback(card, "verdict", "approved")
+
+    assert [(row["id"], row["visible"]) for row in repository.radar_cards_for_recall()] == [(card, True)]
+
+
+def test_each_failed_cluster_gets_its_own_error(monkeypatch):
+    from oiltech_digest import signal_research
+    from tests.test_signal_research import _Research, _event
+
+    monkeypatch.setattr(config, "SIGNAL_JUDGE_CONCURRENCY", 4)
+    monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
+        _event(title="А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
+        _event(title="Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
+        _event(title="В", event_kind="deployment", technology="ESP", source_url="https://example.com/c"),
+    ]))
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
+                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
+
+    def judge(cluster, topic, offline=True):
+        letter = cluster[0]["source_url"][-1]
+        if letter in "ac":
+            raise AIClientError(f"OpenAI API error 503: busy {letter}")
+        return {"title": "Б", "theme": DRILLING, "score": 60, "maturity": "watch"}, {}
+
+    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+
+    run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING}], "tags": []})
+
+    reasons = {item["url"]: item["reason"] for item in run["topics"][0]["filtered_findings"]
+               if item["stage"] == "judge_error"}
+    assert {url: reason[-1] for url, reason in reasons.items()} == {
+        "https://example.com/a": "a", "https://example.com/c": "c"}
+
+
 def test_overrated_counts_as_approval(isolated_db):
     from oiltech_digest import signal_dedup
 

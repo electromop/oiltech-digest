@@ -72,6 +72,32 @@ def test_failed_clusters_and_errors_keep_cluster_order(monkeypatch):
     assert [error.split("cluster ")[1] for error in errors] == ["1", "5"]
 
 
+def test_stop_while_waiting_does_not_pay_for_judges_not_yet_started(monkeypatch):
+    # Остановка или потеря аренды посреди темы (beat бросает): очередь судей снимается, а не
+    # дорабатывает для уже отпущенного прогона. Начатые — не больше размера пула.
+    monkeypatch.setattr(config, "SIGNAL_JUDGE_CONCURRENCY", 2)
+    _judging(monkeypatch, delay=0.3)
+    judge = signal_discovery.judge_signal_snapshot
+    calls = []
+
+    def counting(cluster, topic, offline=True):
+        calls.append(cluster[0]["source_url"])
+        return judge(cluster, topic, offline=offline)
+
+    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", counting)
+    beats = []
+
+    def beat():
+        beats.append(1)
+        if len(beats) > 1:
+            raise RuntimeError("остановка")
+
+    with pytest.raises(RuntimeError):
+        signal_discovery._judge_clusters(_clusters(10), "Бурение", offline=False, beat=beat, errors=[])
+
+    assert len(calls) <= 4
+
+
 def test_usage_from_parallel_judges_is_not_lost(monkeypatch):
     monkeypatch.setattr(config, "SIGNAL_JUDGE_CONCURRENCY", 6)
     _judging(monkeypatch, delay=0.005)

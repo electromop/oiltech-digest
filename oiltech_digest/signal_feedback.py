@@ -447,7 +447,8 @@ def _normalize_verdict(value: Any) -> str | None:
         # «Не тот блок» — бизнес-сигнал в технологическом радаре (встреча 21.09, решение 5).
         "wrong_block",
         # «Оценка завышена» (03.10): находка годная, но балл выше, чем она стоит. Учит судью
-        # строже ставить баллы по критериям (signal_feedback.score_calibration_block).
+        # строже ставить баллы по критериям (repository.radar_score_calibration →
+        # signal_discovery._calibration_lines во входе судьи).
         "overrated",
         # Ниже — вердикты прежней шкалы. С экрана убраны (заказчик их не просил),
         # но приём оставлен: в signal_feedback_events уже лежат строки с ними,
