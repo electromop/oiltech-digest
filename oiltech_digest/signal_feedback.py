@@ -431,6 +431,8 @@ def _normalize_verdict(value: Any) -> str | None:
         "merge": "merge_duplicate",
         "не тот блок": "wrong_block",
         "бизнес": "wrong_block",
+        "завышено": "overrated",
+        "оценка завышена": "overrated",
     }
     verdict = aliases.get(verdict, verdict)
     allowed = {
@@ -444,6 +446,9 @@ def _normalize_verdict(value: Any) -> str | None:
         "merge_duplicate",
         # «Не тот блок» — бизнес-сигнал в технологическом радаре (встреча 21.09, решение 5).
         "wrong_block",
+        # «Оценка завышена» (03.10): находка годная, но балл выше, чем она стоит. Учит судью
+        # строже ставить баллы по критериям (signal_feedback.score_calibration_block).
+        "overrated",
         # Ниже — вердикты прежней шкалы. С экрана убраны (заказчик их не просил),
         # но приём оставлен: в signal_feedback_events уже лежат строки с ними,
         # и запрет сделал бы прошлую разметку невалидной задним числом.
@@ -479,6 +484,9 @@ def _verdict_score(verdict: str) -> float:
         return -80
     if verdict in {"bad_translation", "needs_better_source"}:
         return 45
+    if verdict == "overrated":
+        # Находка годная — не отказ, но и не образец «ищи такое»: слабый плюс.
+        return 30
     return 0
 
 

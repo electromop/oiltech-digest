@@ -395,7 +395,8 @@ def test_hidden_view_lists_only_hidden_cards_with_a_reason(isolated_db):
     assert (summary["total"], summary["hidden"], summary["matching"]) == (1, 3, 3)
 
 
-def test_hidden_radar_cards_are_for_admin_only(monkeypatch):
+def test_filtered_and_hidden_cards_are_open_to_every_user(monkeypatch):
+    # Решение 02.10: Виктор разбирает всё, что радар не пустил, — не только админ.
     from fastapi.testclient import TestClient
 
     from oiltech_digest import api
@@ -407,12 +408,6 @@ def test_hidden_radar_cards_are_for_admin_only(monkeypatch):
     client = TestClient(api.app)
     try:
         api.app.dependency_overrides[api.require_user] = lambda: {"id": 2, "email": "u@example.com", "role": "user"}
-        assert client.get("/api/signals?hidden=true").status_code == 403
-        assert client.get("/api/signals/summary?hidden=true").status_code == 403
-        # Обычному пользователю и число скрытых не показываем.
-        assert "hidden" not in client.get("/api/signals/summary").json()
-
-        api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@example.com", "role": "admin"}
         assert client.get("/api/signals?hidden=true").status_code == 200
         assert seen["hidden"] is True
         assert client.get("/api/signals/summary").json()["hidden"] == 3
@@ -580,3 +575,227 @@ def test_positive_verdicts_match_the_dedup_ones():
     from oiltech_digest import signal_dedup
 
     assert set(repository.SIGNAL_POSITIVE_VERDICTS) == signal_dedup._POSITIVE_VERDICTS
+
+
+# --- Отсеянное — карточкой «Отсеяно», чтобы заказчик просмотрел всё (02.10) ---------------------
+
+
+def _apply_run(topics):
+    config_ = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False, persist_training_examples=False)
+    return signal_discovery.apply_discovery(config_, {"topics": topics})
+
+
+def _rejected(key, title, **fields):
+    signal = signal_discovery._normalize_signal_payload(_judge_answer(title_ru=title, maturity="reject"), DRILLING)
+    signal.update({"signal_key": key, "evidence": [{"source_url": f"https://example.com/{key}", "title": title}],
+                   "why_not_noise": "обзор без события", **fields})
+    return {"signal": signal, "rejected": True}
+
+
+def _filtered():
+    return {int(row["id"]): row["hidden_reason"] for row in repository.list_signals(limit=50, hidden=True)}
+
+
+def test_judge_and_batch_rejects_are_kept_as_filtered_cards(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("judge-no", "Обзор рынка бурения"),
+        _rejected("review-no", "Реклама вендора", batch_review_reason="реклама без факта применения"),
+    ]}])
+
+    owners = repository.signal_key_owners(["judge-no", "review-no"])
+    reasons = _filtered()
+    assert reasons[owners["judge-no"]["id"]] == "отсеяно (судья): обзор без события"
+    assert reasons[owners["review-no"]["id"]] == "отсеяно (ревью пачки): реклама без факта применения"
+    assert _visible_ids() == set()
+
+
+def test_reject_does_not_overwrite_a_card_already_on_the_radar(isolated_db):
+    visible = _store("same-key", signal_category="technology")
+
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("same-key", "Тот же материал")]}])
+
+    assert visible in _visible_ids()
+
+
+def test_search_drops_and_judge_failures_are_kept_with_reason(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
+        {"stage": "search", "title": "ProPetro: контракт на 230 МВт", "reason": "не технологическое событие (нет технологии)",
+         "url": "https://example.com/propetro", "summary": "контракт", "event_date": "2026-09-20"},
+        {"stage": "search", "title": "Событие с битой ссылкой", "reason": "нет ссылки или заголовка", "url": ""},
+        {"stage": "judge_error", "title": "Кластер без ответа", "reason": "ReadTimeout", "url": "https://example.com/t"},
+    ]}])
+
+    reasons = sorted(_filtered().values())
+    assert reasons == [
+        "отсеяно (поиск): не технологическое событие (нет технологии)",
+        "отсеяно (поиск): нет ссылки или заголовка",  # без ссылки — тоже видна в разборе
+        "отсеяно (судья не ответил): ReadTimeout",
+    ]
+
+
+def test_filtered_card_does_not_hold_its_link_and_stays_out_of_dedup(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [
+        {"stage": "search", "title": "Рано отсеяно", "reason": "дата события вне периода", "url": "https://example.com/x"},
+    ]}])
+    assert repository.visible_evidence_owners(["https://example.com/x"]) == {}
+    assert repository.list_signals_for_dedup() == []
+
+    # Найдено снова и принято судьёй — ссылка переходит к принятой карточке.
+    accepted = repository.upsert_signal({"signal_key": "accepted", "title": "Принято", "theme": DRILLING,
+                                         "signal_category": "technology"})
+    repository.upsert_signal_evidence(accepted, {"source_url": "https://example.com/x", "title": "x"})
+
+    assert set(repository.visible_evidence_owners(["https://example.com/x"])) == {"https://example.com/x"}
+    assert accepted in _visible_ids()
+
+
+def test_refiltered_finding_updates_the_same_card(isolated_db):
+    finding = {"stage": "search", "title": "Повтор", "reason": "дата вне периода", "url": "https://example.com/r"}
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [finding]}])
+    _apply_run([{"topic": DRILLING, "candidates": [], "filtered_findings": [finding]}])
+
+    assert len(_filtered()) == 1
+
+
+def test_approved_filtered_card_goes_on_the_radar_and_into_dedup(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-no", "Судья ошибся")]}])
+    card = repository.signal_key_owners(["judge-no"])["judge-no"]["id"]
+    assert card not in _visible_ids() and repository.list_signals_for_dedup() == []
+
+    # Заказчик разобрал «Отсеянные» и одобрил: решение машины одобренную не прячет (ревью #89).
+    _feedback(card, "verdict", "approved")
+
+    assert card in _visible_ids()
+    assert card not in _filtered()
+    assert [row["id"] for row in repository.list_signals_for_dedup()] == [card]
+
+
+def test_rejected_filtered_card_stays_filtered_but_is_known_to_dedup(isolated_db):
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-no", "Судья прав")]}])
+    card = repository.signal_key_owners(["judge-no"])["judge-no"]["id"]
+
+    _feedback(card, "verdict", "reject")
+
+    assert _filtered() == {card: "отсеяно (судья): обзор без события"}
+    # Отклонённая — главная в своей группе (signal_dedup._rank): повтор события не вернётся.
+    assert [(row["id"], row["hidden"]) for row in repository.list_signals_for_dedup()] == [(card, True)]
+
+
+def test_run_collects_search_drops_and_judge_failures(monkeypatch):
+    from oiltech_digest import signal_research
+    from tests.test_signal_research import _Research, _event
+
+    monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
+        _event(title="Бизнес", event_kind="other", technology="", source_url="https://example.com/biz"),
+        _event(title="Технология А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
+        _event(title="Технология Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
+    ]))
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
+                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
+
+    def judge(cluster, topic, offline=True):
+        if cluster[0]["source_url"].endswith("/a"):
+            raise AIClientError("OpenAI API error 503: busy")
+        return {"title": "Б", "theme": DRILLING, "score": 60, "maturity": "watch"}, {}
+
+    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+
+    run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING}], "tags": []})
+
+    findings = run["topics"][0]["filtered_findings"]
+    assert [(item["stage"], item["title"], item["url"]) for item in findings] == [
+        ("search", "Бизнес", "https://example.com/biz"),
+        ("judge_error", "Технология А", "https://example.com/a"),
+    ]
+    assert findings[1]["reason"].startswith("AIClientError: OpenAI API error 503")
+
+
+# --- Причина и ход решения (03.10) ------------------------------------------------------------
+
+
+def test_judge_is_asked_for_reasoning_steps_and_verdict_reason():
+    schema = signal_discovery._judge_schema(THEMES, CRITERIA)["schema"]
+
+    assert {"reasoning_steps", "verdict_reason"} <= set(schema["required"])
+    assert schema["properties"]["reasoning_steps"] == {"type": "array", "items": {"type": "string"}}
+    assert "reasoning_steps — ход решения" in signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
+
+
+def test_reasoning_steps_are_kept_trimmed_and_capped():
+    signal = signal_discovery._normalize_signal_payload(
+        _judge_answer(reasoning_steps=["Событие: SLB внедрила MPD", "", *[f"шаг {i}" for i in range(10)]],
+                      verdict_reason="Внедрение с цифрами"),
+        DRILLING,
+    )
+
+    assert signal["reasoning_steps"][0] == "Событие: SLB внедрила MPD"
+    assert len(signal["reasoning_steps"]) == 8
+    assert signal["verdict_reason"] == "Внедрение с цифрами"
+
+
+def test_decision_log_tells_why_a_card_was_accepted():
+    candidate = {
+        "signal": {"reasoning_steps": ["Событие: Nabors встроила MPD", "Технология: да"],
+                   "verdict_reason": "внедрение на действующих буровых", "why_interesting": "первое применение"},
+        "raw_output": {"theme_choice": {"theme": DRILLING, "reason": "judge"}},
+        "rejected": False,
+    }
+
+    assert signal_discovery._decision_log(candidate) == [
+        {"stage": "судья", "text": "Событие: Nabors встроила MPD"},
+        {"stage": "судья", "text": "Технология: да"},
+        {"stage": "судья", "text": "Итог: внедрение на действующих буровых"},
+        {"stage": "ревью пачки", "text": "Оставлен: первое применение"},
+        {"stage": "тематика", "text": f"{DRILLING} — выбор судьи"},
+    ]
+
+
+def test_decision_log_tells_why_a_card_was_filtered_and_by_whom():
+    candidate = {
+        "signal": {"reasoning_steps": ["Событие: вебинар"], "verdict_reason": "нет события",
+                   "batch_review_reason": "реклама вендора без факта применения"},
+        "raw_output": {"theme_choice": {"theme": DIGITAL, "reason": "theme_check",
+                                        "theme_check": {"reason": "общая платформа"}}},
+        "rejected": True,
+    }
+
+    log = signal_discovery._decision_log(candidate)
+
+    assert {"stage": "тематика", "text": f"Второе мнение: {DIGITAL} — общая платформа"} in log
+    assert log[-1] == {"stage": "отсев", "text": "Отсеяно (ревью пачки): реклама вендора без факта применения"}
+
+
+def test_stored_cards_carry_reason_and_decision_log(isolated_db):
+    accepted = _rejected("ok", "Принятая")
+    accepted["rejected"] = False
+    accepted["signal"].update(maturity="watch", reasoning_steps=["шаг"], verdict_reason="внедрение с цифрами")
+    filtered = _rejected("no", "Отсеянная")
+    filtered["signal"].update(reasoning_steps=["Событие: обзор"], verdict_reason="обзор рынка без события")
+
+    _apply_run([{"topic": DRILLING, "candidates": [accepted, filtered], "filtered_findings": [
+        {"stage": "search", "title": "Контракт ProPetro", "reason": "не технологическое событие",
+         "url": "https://example.com/p", "publisher": "ProPetro", "event_date": "2026-09-20", "technology": ""},
+    ]}])
+
+    with repository.get_connection() as conn:
+        rows = {key: (reason, log, filter_reason) for key, reason, log, filter_reason in conn.execute(
+            "SELECT signal_key, verdict_reason, decision_log, filter_reason FROM signals")}
+    assert rows["ok"][0] == "внедрение с цифрами" and rows["ok"][1][0] == {"stage": "судья", "text": "шаг"}
+    # У отсеянного судьёй причина отсева — его итог, а не общий why_not_noise.
+    assert rows["no"][2] == "обзор рынка без события"
+    search = next(value for key, value in rows.items() if key.startswith("filtered:"))
+    assert search[1] == [
+        {"stage": "поиск", "text": "Найдено: Контракт ProPetro (ProPetro, 2026-09-20)"},
+        {"stage": "отсев", "text": "Отсеяно (поиск): не технологическое событие"},
+    ]
+
+
+def test_decision_log_survives_a_refind_by_an_old_worker(isolated_db):
+    signal_id = _store("card", decision_log=[{"stage": "судья", "text": "шаг"}], verdict_reason="причина")
+    repository.upsert_signal({"signal_key": "card", "title": "card", "theme": DRILLING, "score": 50})
+
+    with repository.get_connection() as conn:
+        row = conn.execute("SELECT verdict_reason, decision_log FROM signals WHERE id = %s", (signal_id,)).fetchone()
+    assert row == ("причина", [{"stage": "судья", "text": "шаг"}])

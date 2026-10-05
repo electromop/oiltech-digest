@@ -194,7 +194,9 @@ def test_core_applies_external_result_and_records_generation_run(monkeypatch):
     summary = signal_discovery.apply_external_result(result, job_id=55)
 
     assert created["background_job_id"] == 55
-    assert [signal["title"] for signal in upserted] == ["Accepted"]  # отказ судьи не пишется в радар
+    # Отказ судьи пишется карточкой «Отсеяно» (02.10): на радар не выходит, заказчик его разбирает.
+    assert [signal["title"] for signal in upserted] == ["Accepted", "Rejected"]
+    assert [signal.get("filter_stage") for signal in upserted] == [None, "judge"]
     assert len(examples) == 2  # но в обучающие примеры идут оба
     assert finished == [(77, {"status": "ok", "result": {
         "topics": 1, "signals": 1, "returned_signals": 1,

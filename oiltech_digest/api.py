@@ -1744,7 +1744,8 @@ def _radar_screen_filters(
     until: date | None = None,
     min_score: float | None = Query(None, ge=0, le=100),
     max_score: float | None = Query(None, ge=0, le=100),
-    # Скрытые правилами качества (бизнес, смешанные, старые, архив) — только админу.
+    # Отсеянные и скрытые (бизнес, смешанные, старые, не про нефтесервис, брак судьи, отсеянное
+    # поиском, архив) — всем: заказчик разбирает всё, что радар не пустил (решение 02.10).
     hidden: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -1768,7 +1769,6 @@ def list_signals(
     evidence_limit: int = Query(3, ge=0, le=20),
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    _guard_hidden_radar(filters, user)
     cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"]))
     # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
@@ -1789,23 +1789,22 @@ def list_signals(
     return rows
 
 
+@app.get("/api/signals/weekly")
+def signal_radar_weekly(
+    days: int = Query(7, ge=1, le=31),
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """«Итоги недели» радара: что вышло, что отсеяно и почему, что ждёт разбора, сколько отзывов."""
+    return _clean(repository.radar_weekly_summary(days=days))
+
+
 @app.get("/api/signals/summary")
 def signal_radar_summary(
     filters: dict[str, Any] = Depends(_radar_screen_filters),
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра."""
-    _guard_hidden_radar(filters, user)
-    summary = repository.signal_radar_summary(user_id=int(user["id"]), **filters)
-    if user.get("role") != "admin":
-        # Число скрытых — служебное, как и сами скрытые карточки.
-        summary.pop("hidden", None)
-    return _clean(summary)
-
-
-def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
-    if filters.get("hidden") and user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Скрытые карточки радара доступны только администратору")
+    return _clean(repository.signal_radar_summary(user_id=int(user["id"]), **filters))
 
 
 def _guard_signal_digest_month(user_id: int, signal_id: int, target_status: str | None) -> None:

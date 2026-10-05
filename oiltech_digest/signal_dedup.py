@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+import contextvars
 import itertools
 import re
 from typing import Any, Callable
@@ -263,20 +265,47 @@ def dedupe(
     stats = {"pairs": len(pairs), "judged": 0, "same": 0, "errors": 0,
              "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     client = client_factory() if judged else None
-    for i, j, _overlap_value in judged:
-        beat()
-        try:
-            response = client.complete_json(
-                SIGNAL_DUPLICATE_INSTRUCTIONS,
-                pair_prompt(nodes[i], nodes[j]),
-                SIGNAL_DUPLICATE_SCHEMA,
-                max_output_tokens=output_budget(700, app_config.SIGNAL_DEDUP_REASONING),
-                model=app_config.SIGNAL_DEDUP_MODEL,
-                reasoning_effort=app_config.SIGNAL_DEDUP_REASONING,
-            )
-        except Exception:  # noqa: BLE001 - сбой одной пары не должен ронять прогон: пара остаётся «разные»
+
+    def ask(i: int, j: int) -> Any:
+        return client.complete_json(
+            SIGNAL_DUPLICATE_INSTRUCTIONS,
+            pair_prompt(nodes[i], nodes[j]),
+            SIGNAL_DUPLICATE_SCHEMA,
+            max_output_tokens=output_budget(700, app_config.SIGNAL_DEDUP_REASONING),
+            model=app_config.SIGNAL_DEDUP_MODEL,
+            reasoning_effort=app_config.SIGNAL_DEDUP_REASONING,
+        )
+
+    # Пары — параллельно (SIGNAL_DEDUP_CONCURRENCY): до 400 вызовов за прогон по одному шли
+    # долго. Ответы разбираются в порядке пар, признак продвижения — из основного потока.
+    responses: list[Any] = [None] * len(judged)
+    failed: set[int] = set()
+    workers = min(app_config.SIGNAL_DEDUP_CONCURRENCY, len(judged)) or 1
+    if workers == 1:
+        for index, (i, j, _overlap_value) in enumerate(judged):
+            beat()
+            try:
+                responses[index] = ask(i, j)
+            except Exception:  # noqa: BLE001 - сбой одной пары не должен ронять прогон: пара остаётся «разные»
+                failed.add(index)
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="radar-dedup") as pool:
+            futures = {pool.submit(contextvars.copy_context().run, ask, i, j): index
+                       for index, (i, j, _overlap_value) in enumerate(judged)}
+            pending = set(futures)
+            while pending:
+                beat()
+                done, pending = wait(pending, timeout=20, return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        responses[futures[future]] = future.result()
+                    except Exception:  # noqa: BLE001 - пара остаётся «разные»
+                        failed.add(futures[future])
+    for index, (i, j, _overlap_value) in enumerate(judged):
+        if index in failed or responses[index] is None:
             stats["errors"] += 1
             continue
+        response = responses[index]
         stats["judged"] += 1
         stats["input_tokens"] += int(getattr(response, "input_tokens", 0) or 0)
         stats["output_tokens"] += int(getattr(response, "output_tokens", 0) or 0)

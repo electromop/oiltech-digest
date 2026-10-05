@@ -201,7 +201,15 @@ def research_topic(
     for event in (data.get("events") or [])[:count]:
         item, reason = _event_to_evidence(event, topic, start=start, end=end, cited=cited)
         if item is None:
-            stats["dropped"].append({"title": str(event.get("title") or "")[:120], "reason": reason})
+            # Отсеянное не пропадает: ядро сохранит его карточкой «Отсеяно» для разбора заказчиком.
+            stats["dropped"].append({
+                "title": str(event.get("title") or "")[:300], "reason": reason,
+                "url": _strip_tracking(str(event.get("source_url") or "").strip()),
+                "summary": str(event.get("summary") or "")[:900],
+                "publisher": str(event.get("publisher") or "")[:200],
+                "event_date": str(event.get("event_date") or "")[:10],
+                "technology": str(event.get("technology") or "")[:300],
+            })
             continue
         evidence.append(item)
     stats["events"] = len(evidence)
@@ -277,8 +285,10 @@ def verify_research_evidence(evidence: list[dict[str, Any]]) -> tuple[list[dict[
         if payload.get("full_text_fetched") or payload.get("cited_by_search"):
             kept.append({**item, "summary_ru": payload.get("research_summary") or item.get("summary_ru")})
         else:
-            dropped.append({"title": str(item.get("title") or "")[:120], "url": item.get("source_url"),
-                            "reason": "страница не открылась и адрес не из найденного"})
+            dropped.append({"title": str(item.get("title") or "")[:300], "url": item.get("source_url"),
+                            "reason": "страница не открылась и адрес не из найденного",
+                            "summary": str(payload.get("research_summary") or item.get("extracted_fact") or "")[:900],
+                            "publisher": item.get("publisher"), "event_date": item.get("published_at")})
     return kept, dropped
 
 
