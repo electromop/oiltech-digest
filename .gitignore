@@ -38,6 +38,10 @@ test_page_*.jpg
 /exports/*
 !/exports/.gitkeep
 
+# Рабочие данные и правки конвейеров выпусков (scripts/digest-*) не версионируем
+scripts/digest-*/data/
+scripts/digest-*/edits_*.py
+
 # Tooling / caches
 .pytest_cache/
 .claude-flow/
