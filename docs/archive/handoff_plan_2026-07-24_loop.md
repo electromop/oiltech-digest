@@ -25,13 +25,13 @@
 очередь опустеет, и выкатываем вчистую — вместо того чтобы убить активный батч ради спешки.
 
 ```bash
-ssh root@109.68.213.12 'cd /opt/oiltech-digest && git fetch && git reset --hard origin/main && docker compose down && docker compose up -d --build'
+ssh $RF_HOST 'cd /opt/oiltech-digest && git fetch && git reset --hard origin/main && docker compose down && docker compose up -d --build'
 ```
 
 Перед выкаткой проверить, что ничего не идёт:
 
 ```bash
-ssh root@109.68.213.12 "docker exec oiltech_pg psql -U oiltech -d oiltech_digest -c \"SELECT id,status FROM background_jobs WHERE status IN ('running','finalizing');\""
+ssh $RF_HOST "docker exec oiltech_pg psql -U oiltech -d oiltech_digest -c \"SELECT id,status FROM background_jobs WHERE status IN ('running','finalizing');\""
 ```
 
 ⚠️ Правки **только core-овые** — NL-воркер пересобирать не нужно.

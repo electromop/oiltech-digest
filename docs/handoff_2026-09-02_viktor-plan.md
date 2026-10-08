@@ -3,7 +3,7 @@
 Задача владельца: прочитать, что Виктор написал в личке утром 02.09, оценить состояние
 продукта и платформы, выдать план со спеками и тикетами.
 
-Прод с этой машины **недоступен** (маршрут до `109.68.213.12` уходит в `utun8`, VPN; SSH —
+Прод с этой машины **недоступен** (маршрут до `$RF_HOST` уходит в `utun8`, VPN; SSH —
 6 попыток, `curl /api/health` — таймаут). Всё про прод ниже помечено «не проверено» и
 закрывается одной командой из раздела «Проверка на проде».
 
@@ -506,7 +506,7 @@ article content")`. `processingmagazine.com` = Endeavor Business Media, тот �
 планировщика без ключей).
 
 ```bash
-ssh root@109.68.213.12 'bash -s' < "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe.sh"
+ssh $RF_HOST 'bash -s' < "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe.sh"
 ```
 
 **Первый прогон 03.09 оборвался на первом SQL по вине скрипта:** `docker compose exec -T`
@@ -522,7 +522,7 @@ ssh root@109.68.213.12 'bash -s' < "/private/tmp/claude-501/-Users-apple-Desktop
 Повторный прогон с записью в файл, который я прочитаю сам:
 
 ```bash
-ssh root@109.68.213.12 'bash -s' < "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe.sh" > "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe_out.txt"; wc -l "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe_out.txt"
+ssh $RF_HOST 'bash -s' < "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe.sh" > "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe_out.txt"; wc -l "/private/tmp/claude-501/-Users-apple-Desktop-oiltech-digest/69e8da10-4af8-4c17-8687-97082c24ab61/scratchpad/prod_probe_out.txt"
 ```
 
 ---

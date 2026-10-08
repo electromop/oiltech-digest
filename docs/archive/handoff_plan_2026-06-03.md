@@ -45,12 +45,12 @@ _Составлено 2026-06-03. Документ самодостаточны�
 
 ## 4. ⚠️ Критические особенности инфраструктуры (ОБЯЗАТЕЛЬНО учесть)
 
-1. **Сервер:** Timeweb, IP `85.234.107.233`, hostname `ams-1-vm-cga1` (Амстердам). **1.9 ГБ RAM — мало**, swap 2 ГБ. Каталог проекта: **`/root/oiltech-digest`**.
+1. **Сервер:** Timeweb, IP `$NL_HOST`, hostname `ams-1-vm-cga1` (Амстердам). **1.9 ГБ RAM — мало**, swap 2 ГБ. Каталог проекта: **`/root/oiltech-digest`**.
 2. **`docker compose` через ПРОБЕЛ на сервере** (V2-плагин). `docker-compose` (дефис) НЕ установлен. На локальном маке — наоборот (только дефисная V1). Учитывать при копипасте команд.
 3. **НЕ запускать `docker compose build` при работающем стеке** → почти гарантированный OOM. Только: `docker compose down && docker compose build && docker compose up -d`.
 4. **`.env` не в git.** На сервере прописывается отдельно. Легко забыть: `OPENAI_MODEL=gpt-5-mini` + тарифы (`OPENAI_INPUT/OUTPUT_USD_PER_MTOK`).
 5. **SSH капризит через VPN + мобильную сеть** — рвётся на обмене ключей (MTU/фрагментация: баннер проходит, KEXINIT теряется). Заходить с обычного Wi-Fi без VPN. **Веб-консоль Timeweb — надёжный fallback** (не зависит от sshd).
-6. **Приложение:** uvicorn на `:8000`, работает (`localhost/api/health → 200`), но порт 8000 **закрыт извне** (облачный firewall Timeweb). Доступ: SSH-туннель `ssh -L 8000:localhost:8000 root@85.234.107.233` → `http://localhost:8000` (безопасно) ИЛИ открыть порт в панели (⚠️ HTTP без шифрования + открытый порт под брутфорс).
+6. **Приложение:** uvicorn на `:8000`, работает (`localhost/api/health → 200`), но порт 8000 **закрыт извне** (облачный firewall Timeweb). Доступ: SSH-туннель `ssh -L 8000:localhost:8000 $NL_HOST` → `http://localhost:8000` (безопасно) ИЛИ открыть порт в панели (⚠️ HTTP без шифрования + открытый порт под брутфорс).
 7. **Тесты:** `pytest` есть только в системном python (`/opt/anaconda3`, без `psycopg`); runtime-deps — в `.venv` (без `pytest`); pypi заблокирован (нельзя `pip install`). Тесты без БД: `PYTHONPATH=. python3 -m pytest tests/test_http_client.py`. Тесты с БД — гонять в Docker. Сетевые тесты мокают `fetch`/`probe`.
 8. **Дата-центровый IP сервера НЕ тотально забанен** — 11/15 проверенных международных источников отдают `200` напрямую. Прокси нужен не «вообще», а точечно.
 
@@ -75,7 +75,7 @@ _Составлено 2026-06-03. Документ самодостаточны�
 **Зачем:** логи sshd показывают непрерывный перебор паролей (root/admin/test/bot с десятков IP). При слабом пароле — риск компрометации сервера.
 **Как:**
 1. Поставить fail2ban: `apt-get update && apt-get install -y fail2ban && systemctl enable --now fail2ban`. Jail `sshd` активен по умолчанию (банит после ~5 неудач). Проверить: `fail2ban-client status sshd`.
-2. Вход по ключу уже настроен (ключ в `/root/.ssh/authorized_keys`). Проверить с **нормальной сети без VPN**: `ssh root@85.234.107.233` должен пустить без пароля.
+2. Вход по ключу уже настроен (ключ в `/root/.ssh/authorized_keys`). Проверить с **нормальной сети без VPN**: `ssh $NL_HOST` должен пустить без пароля.
 3. После подтверждения входа по ключу — отключить пароль:
    `printf 'PasswordAuthentication no\nPermitRootLogin prohibit-password\n' > /etc/ssh/sshd_config.d/90-no-password.conf && systemctl reload ssh`
 **Особенности:** НЕ отключать пароль, пока вход по ключу не подтверждён (иначе можно отрезать доступ; веб-консоль остаётся как fallback). Откат: `rm /etc/ssh/sshd_config.d/90-no-password.conf && systemctl reload ssh`.
@@ -182,7 +182,7 @@ docker compose down && git pull origin main && docker compose build && docker co
 ## 8. Доступы и репозиторий
 
 - **Репозиторий:** `electromop/oiltech-digest`, ветка `main`.
-- **Сервер:** `ssh root@85.234.107.233` (с обычной сети без VPN) или веб-консоль в панели Timeweb.
+- **Сервер:** `ssh $NL_HOST` (с обычной сети без VPN) или веб-консоль в панели Timeweb.
 - **БД:** PostgreSQL в контейнере `oiltech_pg` (`oiltech` / `oiltech_digest`), порт проброшен на `127.0.0.1:5432`.
 - **Приложение:** контейнер `oiltech_app`, uvicorn `:8000` (доступ через SSH-туннель).
 - **OpenAI:** модель `gpt-5-mini`, ключ в серверном `.env` (не в git).

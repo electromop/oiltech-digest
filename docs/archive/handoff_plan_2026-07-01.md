@@ -7,7 +7,7 @@
 ## TL;DR — что делать
 
 1. **Демо-фикс баллов БЕЗ NL (можно прямо сейчас, на ядре РФ):** задеплоить ядро (если не сделано) и выполнить `rescore-recompute` — пересчитает «бизнес-эффект» из уже сохранённых AI-баллов по новой формуле. Хорошие статьи снова станут 70+. **NL для этого НЕ нужен.**
-2. **Когда NL поднимется** (`ping 85.234.107.233` отвечает): задеплоить воркер + пустить полный AI-перепрогон (новая модель+промпт, лучшее качество).
+2. **Когда NL поднимется** (`ping $NL_HOST` отвечает): задеплоить воркер + пустить полный AI-перепрогон (новая модель+промпт, лучшее качество).
 
 ---
 
@@ -56,12 +56,12 @@ SQL
 
 Сначала дождись, что сервер отвечает (монитор у себя на маке):
 ```bash
-until ping -c1 85.234.107.233 >/dev/null 2>&1; do echo "NL ещё лежит $(date +%H:%M)"; sleep 30; done; echo "NL ОТВЕЧАЕТ"
+until ping -c1 $NL_HOST >/dev/null 2>&1; do echo "NL ещё лежит $(date +%H:%M)"; sleep 30; done; echo "NL ОТВЕЧАЕТ"
 ```
 
 **Деплой воркера** (SSH на NL — команды по одной, без хвостов-комментариев):
 ```bash
-ssh root@85.234.107.233
+ssh $NL_HOST
 cd ~/oiltech-digest
 git fetch origin && git reset --hard origin/main
 grep OPENAI_SCORE .env.external-worker || printf 'OPENAI_SCORE_MODEL=gpt-5-mini\nOPENAI_SCORE_REASONING=medium\n' >> .env.external-worker
@@ -100,5 +100,5 @@ SQL
 - T7 (`/api/process` admin-only), T8 (cookie Secure) — мелочи.
 
 ## Прод-карта
-- Ядро РФ (СПб 109.68.213.12): БД (`oiltech_pg`) + app (`oiltech_app`) + UI + домен. Деплой: `git fetch && git reset --hard origin/main && docker compose up -d --build`.
-- Воркер NL (ams 85.234.107.233): OpenAI через task-API. Деплой: `docker compose -f docker-compose.external-worker.yml up -d --build`. **Сейчас НЕДОСТУПЕН (инцидент охлаждения ДЦ Timeweb).**
+- Ядро РФ (СПб $RF_HOST): БД (`oiltech_pg`) + app (`oiltech_app`) + UI + домен. Деплой: `git fetch && git reset --hard origin/main && docker compose up -d --build`.
+- Воркер NL (ams $NL_HOST): OpenAI через task-API. Деплой: `docker compose -f docker-compose.external-worker.yml up -d --build`. **Сейчас НЕДОСТУПЕН (инцидент охлаждения ДЦ Timeweb).**

@@ -4,7 +4,7 @@
 со спеками и тикетами, подключить рабочий чат Telegram.
 
 На сервер зайти не удалось — SSH не идёт ни до СПб, ни до Амстердама (маршрут до
-`109.68.213.12` уходит в `utun9`, VPN мака). Всё ниже добыто снаружи.
+`$RF_HOST` уходит в `utun9`, VPN мака). Всё ниже добыто снаружи.
 
 ---
 
@@ -93,7 +93,7 @@ GitHub Issues.
 **Проверить то, что мне не видно** — одной командой без VPN:
 
 ```bash
-ssh root@109.68.213.12 'docker ps --format "{{.Names}}\t{{.Status}}"; crontab -l; cd /root/oiltech-digest && git log --oneline -1'
+ssh $RF_HOST 'docker ps --format "{{.Names}}\t{{.Status}}"; crontab -l; cd /root/oiltech-digest && git log --oneline -1'
 ```
 
 ---

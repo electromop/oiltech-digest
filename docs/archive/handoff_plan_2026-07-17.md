@@ -152,10 +152,10 @@ docker exec oiltech_pg psql -U oiltech -d oiltech_digest -c \
 
 ## Прод-карта
 
-- **РФ core** `109.68.213.12` (spb-3-vm-3ob3): БД + UI + домен + Caddy + scheduler + парсинг.
+- **РФ core** `$RF_HOST` (spb-3-vm-3ob3): БД + UI + домен + Caddy + scheduler + парсинг.
   Контейнеры: `oiltech_pg`, `oiltech_app`, `oiltech_scheduler`, `oiltech_worker`,
   `oiltech_playwright_worker`, `oiltech_bootstrap`, `oiltech_caddy`.
-- **NL external worker** `85.234.107.233` (ams): только OpenAI через HTTPS task-API, без БД.
+- **NL external worker** `$NL_HOST` (ams): только OpenAI через HTTPS task-API, без БД.
   Контейнер `oiltech_external_worker`, compose-файл `docker-compose.external-worker.yml`.
 - Флаги РФ: `EXTERNAL_WORKERS_ENABLED=1`, `AI_EXECUTION_REGION=external`, `AI_PROCESS_LIMIT=50`,
   `OPENAI_API_KEY` пуст (ключ только на NL).
