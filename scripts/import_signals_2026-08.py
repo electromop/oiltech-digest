@@ -4,7 +4,7 @@
 Запускается на проде внутри контейнера app. Репозиторий в контейнер не
 смонтирован, поэтому скрипт подаётся в stdin:
 
-    ssh root@109.68.213.12 'cd /root/oiltech-digest && \
+    ssh $RF_HOST 'cd /root/oiltech-digest && \
       docker compose run --rm -T app python -' < scripts/import_signals_2026-08.py
 
 Флаги дописываются в конец команды до кавычки: --apply, --process.

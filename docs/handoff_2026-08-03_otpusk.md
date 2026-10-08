@@ -1,6 +1,6 @@
 # Хендоф 2026-08-03 — состояние перед отпуском владельца
 
-Прод: РФ-core СПб `109.68.213.12`, внешний воркер Амстердам `85.234.107.233`.
+Прод: РФ-core СПб `$RF_HOST`, внешний воркер Амстердам `$NL_HOST`.
 HEAD прода — `7488b56`. Все контейнеры healthy, `api/health` = 200.
 
 ---
@@ -15,7 +15,7 @@ HEAD прода — `7488b56`. Все контейнеры healthy, `api/health`
 Лечится одной строкой (задача №17):
 
 ```bash
-ssh root@109.68.213.12 'crontab -l 2>/dev/null; echo "0 3 * * * docker exec oiltech_pg pg_dump -U oiltech oiltech_digest | gzip > /root/oiltech-backups/oiltech_\$(date +\%F).sql.gz && find /root/oiltech-backups -name \"*.sql.gz\" -mtime +14 -delete"' | crontab -
+ssh $RF_HOST 'crontab -l 2>/dev/null; echo "0 3 * * * docker exec oiltech_pg pg_dump -U oiltech oiltech_digest | gzip > /root/oiltech-backups/oiltech_\$(date +\%F).sql.gz && find /root/oiltech-backups -name \"*.sql.gz\" -mtime +14 -delete"' | crontab -
 ```
 
 Выгрузка копии за пределы сервера — отдельно, кроном это не решается.
@@ -139,7 +139,7 @@ $150 в месяц. За месяц отпуска ждать примерно �
 
 **Проверить живость:**
 ```bash
-ssh root@109.68.213.12 'docker ps --format "{{.Names}}\t{{.Status}}"; curl -s -o /dev/null -w "health: %{http_code}\n" https://oiltech-digest.ru/api/health'
+ssh $RF_HOST 'docker ps --format "{{.Names}}\t{{.Status}}"; curl -s -o /dev/null -w "health: %{http_code}\n" https://oiltech-digest.ru/api/health'
 ```
 
 **Перезапустить контейнер:** `docker compose restart <имя>` в `/root/oiltech-digest`.

@@ -24,7 +24,7 @@
 ⚠️ Без явного «да» владельца не делать.
 
 ```bash
-ssh root@109.68.213.12 "docker exec oiltech_app python -c \"
+ssh $RF_HOST "docker exec oiltech_app python -c \"
 from oiltech_digest.db import connection
 from oiltech_digest.ingestion import normalize
 with connection.get_connection() as conn:

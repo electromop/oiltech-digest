@@ -115,13 +115,13 @@
 Сухой прогон (ничего не пишет, показывает «есть/добавить»):
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose run --rm -T app python -' < scripts/import_signals_2026-08.py
+ssh $RF_HOST 'cd /root/oiltech-digest && docker compose run --rm -T app python -' < scripts/import_signals_2026-08.py
 ```
 
 Запись + AI-обработка одной фоновой задачей на все добавленные:
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose run --rm -T app python - --apply --process' < scripts/import_signals_2026-08.py
+ssh $RF_HOST 'cd /root/oiltech-digest && docker compose run --rm -T app python - --apply --process' < scripts/import_signals_2026-08.py
 ```
 
 Почему именно так: репозиторий в контейнер `app` **не смонтирован** (в volumes
@@ -186,7 +186,7 @@ AI-обработку поверх живой не нужно (инцидент 
 честная плашка с рабочей ссылкой.
 
 Как закрыть: снять копию с сети, которая видит эти хосты — например с VPN
-выключенным, либо с РФ-сервера 109.68.213.12. После этого повторить
+выключенным, либо с РФ-сервера $RF_HOST. После этого повторить
 `capture_articles.py` → `build_offline.py`, остальное пересоберётся само.
 
 ## Проверено запуском после правок
@@ -420,7 +420,7 @@ Justify рвёт строку по пробелу — и «15 000 футов» �
 Правки не закоммичены. После коммита и пуша:
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && git fetch origin && git reset --hard origin/<ветка> && docker compose build app worker scheduler tasks && docker compose run --rm app python -m oiltech_digest.cli apply-source-overrides'
+ssh $RF_HOST 'cd /root/oiltech-digest && git fetch origin && git reset --hard origin/<ветка> && docker compose build app worker scheduler tasks && docker compose run --rm app python -m oiltech_digest.cli apply-source-overrides'
 ```
 
 `apply_overrides` при изменении сбрасывает `last_listing_hash`, `last_seen_article_url`

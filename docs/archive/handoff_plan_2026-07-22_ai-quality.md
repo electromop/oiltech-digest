@@ -70,4 +70,4 @@
 - Крон бэкапов БД (из cleanup-хендофа).
 
 ## Инфра-памятка
-- **РФ-core** (109.68.213.12) — деплою я (SSH с KZ-выхода VPN). **NL-воркер** (85.234.107.233) — трансгранично закрыт, деплоит владелец (любая AI-правка: промпты, cost). Деплой РФ: `git reset --hard origin/main` + `docker compose down && up -d --build` (RAM 1.9G — down перед build).
+- **РФ-core** ($RF_HOST) — деплою я (SSH с KZ-выхода VPN). **NL-воркер** ($NL_HOST) — трансгранично закрыт, деплоит владелец (любая AI-правка: промпты, cost). Деплой РФ: `git reset --hard origin/main` + `docker compose down && up -d --build` (RAM 1.9G — down перед build).

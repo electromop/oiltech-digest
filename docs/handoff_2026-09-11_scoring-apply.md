@@ -69,9 +69,9 @@
 ## Команды для самостоятельной проверки
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose logs --tail=60 scheduler | grep -E "Cycle|Sleeping" | tail -5'
+ssh $RF_HOST 'cd /root/oiltech-digest && docker compose logs --tail=60 scheduler | grep -E "Cycle|Sleeping" | tail -5'
 ```
 
 ```bash
-ssh root@109.68.213.12 'cd /root/oiltech-digest && docker compose exec -T db psql -U oiltech -d oiltech_digest -c "SELECT id, name, weight, enabled, updated_at FROM scoring_criteria ORDER BY sort_order, id;"'
+ssh $RF_HOST 'cd /root/oiltech-digest && docker compose exec -T db psql -U oiltech -d oiltech_digest -c "SELECT id, name, weight, enabled, updated_at FROM scoring_criteria ORDER BY sort_order, id;"'
 ```

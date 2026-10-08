@@ -11,7 +11,7 @@
 Она одна закрывает весь остаток «сигналов без сути» (было 719).
 
 ```bash
-ssh root@109.68.213.12 'docker exec oiltech_pg psql -U oiltech -d oiltech_digest -t -A -c "SELECT id, status, round(progress), to_char(finished_at,'"'"'HH24:MI'"'"') FROM background_jobs WHERE id>=1181 ORDER BY id;"'
+ssh $RF_HOST 'docker exec oiltech_pg psql -U oiltech -d oiltech_digest -t -A -c "SELECT id, status, round(progress), to_char(finished_at,'"'"'HH24:MI'"'"') FROM background_jobs WHERE id>=1181 ORDER BY id;"'
 ```
 
 ### Как померить реальный прогресс внешней задачи
@@ -22,7 +22,7 @@ ssh root@109.68.213.12 'docker exec oiltech_pg psql -U oiltech -d oiltech_digest
 в логах = число обработанных статей:
 
 ```bash
-ssh root@109.68.213.12 'for w in 10 20 30 40; do echo -n "за ${w} мин: "; docker logs --since ${w}m oiltech_app 2>&1 | grep -c "jobs/1181/heartbeat"; done'
+ssh $RF_HOST 'for w in 10 20 30 40; do echo -n "за ${w} мин: "; docker logs --since ${w}m oiltech_app 2>&1 | grep -c "jobs/1181/heartbeat"; done'
 ```
 
 ⚠️ Окно шире времени жизни текущей попытки захватит heartbeat **прошлых** попыток
@@ -52,7 +52,7 @@ ssh root@109.68.213.12 'for w in 10 20 30 40; do echo -n "за ${w} мин: "; d
 Порядок деплоя (обязательно `down` первым — RAM 1.9 ГБ, задокументированный OOM):
 
 ```bash
-ssh root@109.68.213.12 'cd /opt/oiltech-digest && git fetch && git reset --hard origin/main && docker compose down && docker compose up -d --build'
+ssh $RF_HOST 'cd /opt/oiltech-digest && git fetch && git reset --hard origin/main && docker compose down && docker compose up -d --build'
 ```
 
 ---
