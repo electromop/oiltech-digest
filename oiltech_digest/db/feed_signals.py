@@ -18,7 +18,7 @@ from datetime import date
 import logging
 
 from oiltech_digest.db import connection
-from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED
+from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED, signal_publication_count_sql
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ _REFRESH_COUNTS = f"""
 UPDATE signals s
 SET evidence_count = n.count, updated_at = now()
 FROM (
-  SELECT s2.id, (SELECT COUNT(*)::int FROM signal_evidence e WHERE e.signal_id = s2.id) AS count
+  SELECT s2.id, {signal_publication_count_sql('s2')} AS count
   FROM signals s2
   JOIN feed_scope f ON s2.signal_key = {_key_sql('f.id')}
 ) n

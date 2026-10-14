@@ -208,6 +208,8 @@ def test_radar_finding_with_the_address_of_a_feed_article_is_stored_as_without_t
     (feed_card,) = _business(user)
     assert feed_card["origin_article_id"] == article
     assert [item["source_url"] for item in feed_card["evidence"]] == ["https://feed.example/9"]
+    assert feed_card["evidence_count"] == 1  # число сходится со списком
+    assert repository.refresh_all_signal_evidence_counts() == 0  # и пересчёт его не «чинит»
 
 
 def test_business_showcase_has_radar_business_finds_and_its_own_summary(user, admin):
@@ -458,8 +460,14 @@ def test_feed_signals_stay_out_of_the_issue_and_the_radar_context_bundle(user):
     (feed_card,) = _business(user)
     for signal_id in (radar, feed_card["id"]):
         repository.set_user_signal_status(int(user["id"]), signal_id, status="digest")
+    # Отзыв о сигнале ленты с адресом публикации радара (форма берёт адрес первой ссылки).
+    with repository.get_connection() as conn:
+        conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict, source_url) "
+                     "VALUES (%s, 'verdict', 'approved', 'https://radar.example/tech')", (feed_card["id"],))
+        conn.commit()
 
     items = repository.digest_candidates(user_id=int(user["id"]), min_score=0)
     assert [row["id"] for row in items if row["item_type"] == "signal"] == [radar]
     bundle = signal_training._build_signal_context_bundle(include_rejected=True)
     assert [row["id"] for row in bundle["signals"]] == [radar]
+    assert bundle["signal_feedback_events"] == []

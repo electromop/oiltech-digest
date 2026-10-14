@@ -1143,21 +1143,31 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
         conn.commit()
 
 
+def signal_publication_count_sql(alias: str = "s") -> str:
+    """Число публикаций сигнала (evidence_count): его ссылки, а у сигнала ленты — и его статья,
+    когда её адрес держит карточка радара (ссылка на адрес одна — feed_signals): в списке
+    публикаций она показана и у него (list_radar_evidence), и число должно с ним сходиться."""
+    a = alias
+    return (
+        f"((SELECT COUNT(*) FROM signal_evidence ce WHERE ce.signal_id = {a}.id)"
+        f" + CASE WHEN {a}.origin = '{SIGNAL_ORIGIN_FEED}' AND EXISTS ("
+        "SELECT 1 FROM articles ca JOIN signal_evidence cb ON cb.source_url = ca.url"
+        f" WHERE ca.id = {a}.origin_article_id AND cb.signal_id IS DISTINCT FROM {a}.id)"
+        " THEN 1 ELSE 0 END)::int"
+    )
+
+
 def refresh_signal_evidence_count(signal_id: int) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            """
-            UPDATE signals
-            SET evidence_count = (
-                  SELECT COUNT(*)::int
-                  FROM signal_evidence
-                  WHERE signal_id = %s
-                ),
+            f"""
+            UPDATE signals s
+            SET evidence_count = {signal_publication_count_sql("s")},
                 updated_at = now()
-            WHERE id = %s
+            WHERE s.id = %s
             RETURNING evidence_count
             """,
-            (signal_id, signal_id),
+            (signal_id,),
         )
         row = cur.fetchone()
         conn.commit()
@@ -1646,12 +1656,10 @@ def refresh_all_signal_evidence_counts() -> int:
     получателя: у прежней оставалось старое число при пустом списке ссылок."""
     with get_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             WITH actual AS (
-              SELECT s.id, COUNT(e.id)::int AS n
-              FROM signals s
-              LEFT JOIN signal_evidence e ON e.signal_id = s.id
-              GROUP BY s.id
+              SELECT s2.id, {signal_publication_count_sql("s2")} AS n
+              FROM signals s2
             )
             UPDATE signals s
             SET evidence_count = actual.n, updated_at = now()

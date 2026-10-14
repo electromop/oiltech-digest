@@ -203,7 +203,10 @@ def _build_signal_context_bundle(*, include_rejected: bool) -> dict[str, Any]:
             LEFT JOIN signals s ON s.id = sfe.signal_id
             LEFT JOIN signals duplicate_signal ON duplicate_signal.id = sfe.duplicate_of_signal_id
             WHERE sfe.signal_id IN (SELECT id FROM exported_signals)
-               OR sfe.source_url IN (SELECT source_url FROM exported_urls)
+               OR (sfe.source_url IN (SELECT source_url FROM exported_urls)
+                   -- Отзыв о сигнале ленты с той же публикацией — не отзыв радара (#95).
+                   AND NOT EXISTS (SELECT 1 FROM signals fs
+                                   WHERE fs.id = sfe.signal_id AND NOT {repository.radar_origin_sql("fs")}))
             ORDER BY sfe.created_at DESC, sfe.id DESC
             """,
             (include_rejected,),
