@@ -11,7 +11,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -2249,6 +2249,14 @@ def cmd_radar_recall(args: argparse.Namespace) -> None:
         print(f"  - {item['title'][:90]}")
 
 
+def _iso_date(value: str) -> str:
+    """День ГГГГ-ММ-ДД из командной строки: опечатка — ошибка разбора, а не трассировка базы."""
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"нужна дата ГГГГ-ММ-ДД, получено {value!r}") from exc
+
+
 def cmd_signal_card_expert_pack(args: argparse.Namespace) -> None:
     from oiltech_digest import signal_card_pack
 
@@ -2259,9 +2267,12 @@ def cmd_signal_card_expert_pack(args: argparse.Namespace) -> None:
         raise SystemExit(f"signal-card-expert-pack: {exc}") from exc
     origin = result["composition"]["origin"]
     print(f"signal-card-expert-pack: сигналов {result['count']} — лента {origin.get('feed', 0)}, "
-          f"радар {origin.get('radar', 0)}; seed {args.seed}, статьи ленты {args.since} … {args.until}")
+          f"радар {origin.get('radar', 0)}")
     for key, title in (("category", "Категории"), ("theme", "Темы")):
         print(f"{title}: " + ", ".join(f"{name} — {count}" for name, count in result["composition"][key].items()))
+    if result["shortfall"]:
+        print("Для экзамена не хватает: " + "; ".join(result["shortfall"]))
+    print(f"Повторить ту же выборку: --seed {result['seed']} --since {result['since']} --until {result['until']}")
     if result["applied"]:
         print(f"Таблица: {result['workbook']}\nМанифест: {result['manifest']}")
     else:
@@ -3228,9 +3239,13 @@ def build_parser() -> argparse.ArgumentParser:
              "сухой прогон по умолчанию",
     )
     p_card_pack.add_argument("--out", default=None, help="папка вне репозитория (он публичный)")
-    p_card_pack.add_argument("--seed", type=int, default=20261014, help="зерно выборки: то же — те же сигналы")
-    p_card_pack.add_argument("--since", default="2026-08-01", help="статьи ленты собраны с ГГГГ-ММ-ДД")
-    p_card_pack.add_argument("--until", default="2026-11-01", help="… и до ГГГГ-ММ-ДД (не включая)")
+    p_card_pack.add_argument("--seed", type=int, default=None,
+                             help="зерно выборки: те же зерно и окно — те же сигналы (по умолчанию 20261014)")
+    p_card_pack.add_argument("--since", type=_iso_date, default=None,
+                             help="статьи ленты собраны с ГГГГ-ММ-ДД (по умолчанию 2026-08-01)")
+    p_card_pack.add_argument("--until", type=_iso_date, default=None,
+                             help="… и до ГГГГ-ММ-ДД, не включая; он же край поступления сигналов радара "
+                                  "(по умолчанию сегодня, не позже 2026-11-01)")
     p_card_pack.add_argument("--apply", action="store_true", help="записать; без флага — только состав")
     p_card_pack.set_defaults(func=cmd_signal_card_expert_pack)
 

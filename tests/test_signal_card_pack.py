@@ -1,6 +1,6 @@
 """Пакет эксперту для карточки сигнала (#94): справочники на утверждение и таблица разметки.
 
-Шов — команда `signal-card-expert-pack` на изолированной базе. Статьи и карточки здесь
+Шов — команда `signal-card-expert-pack` на изолированной базе. Статьи и сигналы здесь
 синтетические: настоящая таблица уходит эксперту вне репозитория (он публичный)."""
 
 from __future__ import annotations
@@ -23,20 +23,35 @@ MACHINE = [
     "JUDGE_TITLE", "JUDGE_SUMMARY", "JUDGE_WHY", "JUDGE_APPLICATION", "JudgeCo",
     "RESEARCH_SUMMARY", "JUDGE_VERDICT", "2026-07-03",
 ]
+# Издатель может прислать что угодно: «=» в начале заголовка Excel счёл бы формулой, а
+# управляющий символ openpyxl не пишет вовсе — выгрузка падала бы целиком.
+HOSTILE_TITLE = '=HYPERLINK("https://evil.example") '
+CONTROL = "\x0b"
 
 
 def _utc(month, day):
     return datetime(2026, month, day, 12, tzinfo=timezone.utc)
 
 
-def _seed_feed(conn, source_id, tag_ids, n, *, month=9, relevant=True, text=None, prefix="feed"):
+def _source_and_tags(conn):
+    source_id = conn.execute(
+        "INSERT INTO sources (name, source_type, url, enabled, parse_strategy)"
+        " VALUES ('World Oil', 'Media', 'https://news.example.org', TRUE, 'request') RETURNING id"
+    ).fetchone()[0]
+    roots = [conn.execute("INSERT INTO tags (name) VALUES (%s) RETURNING id", (name,)).fetchone()[0]
+             for name in THEMES]
+    return source_id, roots
+
+
+def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True, prefix="feed"):
     ids = []
     for i in range(n):
+        at = _utc(month, day or 1 + i % 27)
         article_id = conn.execute(
             "INSERT INTO articles (source_id, title, url, raw_text, published_at, collected_at)"
             " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (source_id, f"{prefix} article {i}", f"https://news.example.org/{prefix}/{i}",
-             text or f"Body of {prefix} {i}. " * 20, _utc(month, 1 + i % 27), _utc(month, 1 + i % 27)),
+            (source_id, f"{HOSTILE_TITLE}{prefix} article {i}", f"https://news.example.org/{prefix}/{i}",
+             f"Body of {prefix} {i}.{CONTROL} " * 400, at, at),
         ).fetchone()[0]
         conn.execute(
             "INSERT INTO article_cards (article_id, summary, title_ru, relevant, relevance_reason)"
@@ -51,7 +66,7 @@ def _seed_feed(conn, source_id, tag_ids, n, *, month=9, relevant=True, text=None
     return ids
 
 
-def _radar(key, category, theme, *, fetched=True, filtered=False):
+def _radar(key, category, theme, *, fetched=True, filtered=False, seen="2026-09-10"):
     signal_id = repository.upsert_signal({
         "signal_key": key, "title": f"JUDGE_TITLE {key}", "title_ru": f"JUDGE_TITLE {key}", "theme": theme,
         "summary": "JUDGE_SUMMARY", "maturity": "watch", "score": 70, "companies": ["JudgeCo"],
@@ -67,8 +82,8 @@ def _radar(key, category, theme, *, fetched=True, filtered=False):
         conn.execute(
             "UPDATE signals SET signal_category = %s, event_date = '2026-07-03', why_interesting = 'JUDGE_WHY',"
             " oilfield_relevance = 'direct', oilfield_application = 'JUDGE_APPLICATION',"
-            " verdict_reason = 'JUDGE_VERDICT', filter_stage = %s WHERE id = %s",
-            (category, "judge" if filtered else None, signal_id),
+            " verdict_reason = 'JUDGE_VERDICT', filter_stage = %s, first_seen_at = %s WHERE id = %s",
+            (category, "judge" if filtered else None, seen, signal_id),
         )
         conn.commit()
     return signal_id
@@ -77,17 +92,11 @@ def _radar(key, category, theme, *, fetched=True, filtered=False):
 @pytest.fixture()
 def corpus(isolated_db):
     with repository.get_connection() as conn:
-        source_id = conn.execute(
-            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy)"
-            " VALUES ('World Oil', 'Media', 'https://news.example.org', TRUE, 'request') RETURNING id"
-        ).fetchone()[0]
-        roots = [conn.execute("INSERT INTO tags (name) VALUES (%s) RETURNING id", (name,)).fetchone()[0]
-                 for name in THEMES]
+        source_id, roots = _source_and_tags(conn)
         # Часть статей помечена дочерним тегом: тема — корневой.
         child = conn.execute("INSERT INTO tags (name, parent_id) VALUES ('Бурение: долота', %s) RETURNING id",
                              (roots[0],)).fetchone()[0]
         accepted = _seed_feed(conn, source_id, roots + [child], 40)
-        long_text = _seed_feed(conn, source_id, roots, 1, text="x" * 9000, prefix="long")
         rejected = _seed_feed(conn, source_id, roots, 5, relevant=False, prefix="rejected")
         july = _seed_feed(conn, source_id, roots, 5, month=7, prefix="july")
         reprint = _seed_feed(conn, source_id, roots, 1, prefix="reprint")
@@ -105,7 +114,8 @@ def corpus(isolated_db):
         conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (business[0], merged))
         conn.commit()
     return {
-        "feed": set(accepted + long_text), "not_feed": set(rejected + july + reprint),
+        "source": source_id, "tags": roots,
+        "feed": set(accepted), "not_feed": set(rejected + july + reprint),
         "tech": set(tech), "business": set(business), "not_radar": set(excluded + [merged]),
     }
 
@@ -114,11 +124,15 @@ def _run(*args):
     cli.main(["signal-card-expert-pack", *args])
 
 
+def _manifest(out: Path):
+    return json.loads((out / signal_card_pack.MANIFEST_NAME).read_text(encoding="utf-8"))
+
+
 def _markup(out: Path):
     book = openpyxl.load_workbook(out / signal_card_pack.WORKBOOK_NAME)
     sheet = book[signal_card_pack.MARKUP_SHEET]
-    rows = list(sheet.iter_rows(values_only=True))
-    return book, sheet, rows[0], rows[1:]
+    rows = list(sheet.iter_rows())
+    return book, sheet, [cell.value for cell in rows[0]], rows[1:]
 
 
 def test_dictionaries_are_versioned_nonempty_and_unique():
@@ -142,13 +156,14 @@ def test_dictionaries_are_versioned_nonempty_and_unique():
 def test_dry_run_prints_the_sample_and_writes_nothing(corpus, tmp_path, capsys):
     out = tmp_path / "pack"
 
-    _run("--out", str(out))
+    _run("--out", str(out), "--until", "2026-10-01")
 
     printed = capsys.readouterr().out
     assert "лента 35" in printed and "радар 15" in printed
     assert "бизнес" in printed and "технология" in printed
     for theme in THEMES:
         assert theme in printed
+    assert "--until 2026-10-01" in printed  # чем повторить ту же выборку
     assert not out.exists()
 
 
@@ -157,8 +172,7 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
 
     _run("--out", str(out), "--apply")
 
-    manifest = json.loads((out / signal_card_pack.MANIFEST_NAME).read_text(encoding="utf-8"))
-    items = manifest["items"]
+    items = _manifest(out)["items"]
     feed = {item["article_id"] for item in items if item["origin"] == "feed"}
     radar = {item["signal_id"] for item in items if item["origin"] == "radar"}
     assert len(items) == 50 and len(feed) == 35 and len(radar) == 15
@@ -167,23 +181,28 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
     assert radar & corpus["tech"] and radar & corpus["business"]
     assert {item["category"] for item in items} == {"бизнес", "технология"}
     assert {item["theme"] for item in items if item["origin"] == "feed"} == set(THEMES)
-    assert manifest["dictionaries_version"] == signal_card_pack.load_dictionaries()["version"]
+    assert _manifest(out)["dictionaries_version"] == signal_card_pack.load_dictionaries()["version"]
 
     book, sheet, header, rows = _markup(out)
     assert len(rows) == 50
-    cells = " ".join(str(value) for row in rows for value in row if value is not None)
+    cells = " ".join(str(cell.value) for row in rows for cell in row if cell.value is not None)
     for value in MACHINE:
         assert value not in cells, value
+    assert CONTROL not in cells
+    assert all(cell.data_type != "f" for row in rows for cell in row)
     # Таблица и манифест — об одних и тех же входах: отпечаток — от текста в таблице.
     column = {name: index for index, name in enumerate(header)}
-    by_id = {row[column["ID"]]: row for row in rows}
+    by_id = {row[column["ID"]].value: row for row in rows}
     for item in items:
-        text = by_id[item["id"]][column["Текст публикации"]]
+        text = by_id[item["id"]][column["Текст публикации"]].value
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == item["text_sha256"]
+        if item["origin"] == "feed":
+            assert len(text) == signal_card_pack.TEXT_LIMIT == 6000
+            assert by_id[item["id"]][column["Заголовок"]].value.startswith("=HYPERLINK")
 
     # Разметка — вслепую: колонки атрибутов пусты; у справочных — выпадающий список.
     attributes = [name for name, _ in signal_card_pack.MARKUP_COLUMNS]
-    assert all(row[column[name]] is None for row in rows for name in attributes)
+    assert all(row[column[name]].value is None for row in rows for name in attributes)
     validated = {}
     for validation in sheet.data_validations.dataValidation:
         for cell_range in validation.sqref.ranges:
@@ -197,42 +216,49 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
     assert signal_card_pack.DICTIONARY_SHEET in book.sheetnames
 
 
-def test_text_is_cut_to_the_limit_in_the_table_and_the_fingerprint(isolated_db, tmp_path):
-    with repository.get_connection() as conn:
-        source_id = conn.execute(
-            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy)"
-            " VALUES ('World Oil', 'Media', 'https://news.example.org', TRUE, 'request') RETURNING id"
-        ).fetchone()[0]
-        tag = conn.execute("INSERT INTO tags (name) VALUES ('Бурение') RETURNING id").fetchone()[0]
-        _seed_feed(conn, source_id, [tag], 1, text="x" * 9000, prefix="long")
-        conn.commit()
-    out = tmp_path / "pack"
-
-    _run("--out", str(out), "--apply")
-
-    _, _, header, rows = _markup(out)
-    text = rows[0][header.index("Текст публикации")]
-    assert len(text) == signal_card_pack.TEXT_LIMIT == 6000
-
-
-def test_same_seed_gives_the_same_sample_and_never_overwrites(corpus, tmp_path):
+def test_same_seed_and_window_give_the_same_sample_and_never_overwrite(corpus, tmp_path):
     first, second = tmp_path / "a", tmp_path / "b"
+    window = ("--seed", "7", "--since", "2026-08-01", "--until", "2026-10-01")
 
-    _run("--out", str(first), "--apply", "--seed", "7")
-    _run("--out", str(second), "--apply", "--seed", "7")
+    _run("--out", str(first), "--apply", *window)
+    # Лента и радар живут дальше: новое за окном выборку не меняет.
+    with repository.get_connection() as conn:
+        _seed_feed(conn, corpus["source"], corpus["tags"], 12, month=10, day=5, prefix="later")
+        conn.commit()
+    _radar("later", "business", THEMES[3], seen="2026-10-05")
+    _run("--out", str(second), "--apply", *window)
 
     def ids(out):
-        return [item["id"] for item in json.loads((out / signal_card_pack.MANIFEST_NAME).read_text())["items"]]
+        return [item["id"] for item in _manifest(out)["items"]]
 
     assert ids(first) == ids(second)
     # Повтор в ту же папку не затирает таблицу, которую эксперт мог уже начать размечать.
     with pytest.raises(SystemExit):
-        _run("--out", str(first), "--apply", "--seed", "7")
+        _run("--out", str(first), "--apply", *window)
 
 
-def test_pack_is_never_written_inside_the_repository(corpus):
+def test_incomplete_sample_is_reported_and_not_written(isolated_db, tmp_path, capsys):
+    with repository.get_connection() as conn:
+        source_id, roots = _source_and_tags(conn)
+        _seed_feed(conn, source_id, roots, 3)
+        conn.commit()
+    _radar("only-tech", "technology", THEMES[0])
+    out = tmp_path / "pack"
+
+    _run("--out", str(out))
+    assert "не хватает" in capsys.readouterr().out
+
+    # 4 сигнала вместо 50 и радар одной категории — экзамен на таком наборе ничего не скажет.
+    with pytest.raises(SystemExit):
+        _run("--out", str(out), "--apply")
+    assert not out.exists()
+
+
+def test_pack_is_never_written_inside_the_repository_and_dates_are_checked(corpus):
     inside = Path(signal_card_pack.__file__).resolve().parents[1] / "exports" / "pack"
 
     with pytest.raises(SystemExit):
         _run("--out", str(inside), "--apply")
     assert not inside.exists()
+    with pytest.raises(SystemExit):
+        _run("--since", "август")
