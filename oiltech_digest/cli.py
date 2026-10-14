@@ -2249,6 +2249,25 @@ def cmd_radar_recall(args: argparse.Namespace) -> None:
         print(f"  - {item['title'][:90]}")
 
 
+def cmd_signal_card_expert_pack(args: argparse.Namespace) -> None:
+    from oiltech_digest import signal_card_pack
+
+    try:
+        result = signal_card_pack.export_pack(args.out, seed=args.seed, since=args.since, until=args.until,
+                                              apply=args.apply)
+    except signal_card_pack.PackError as exc:
+        raise SystemExit(f"signal-card-expert-pack: {exc}") from exc
+    origin = result["composition"]["origin"]
+    print(f"signal-card-expert-pack: сигналов {result['count']} — лента {origin.get('feed', 0)}, "
+          f"радар {origin.get('radar', 0)}; seed {args.seed}, статьи ленты {args.since} … {args.until}")
+    for key, title in (("category", "Категории"), ("theme", "Темы")):
+        print(f"{title}: " + ", ".join(f"{name} — {count}" for name, count in result["composition"][key].items()))
+    if result["applied"]:
+        print(f"Таблица: {result['workbook']}\nМанифест: {result['manifest']}")
+    else:
+        print("Сухой прогон: записать таблицу и манифест — тот же вызов с --apply и --out вне репозитория.")
+
+
 def cmd_archive_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -3202,6 +3221,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_radar_recall.add_argument("--sheet", action="append")
     p_radar_recall.add_argument("--json", action="store_true")
     p_radar_recall.set_defaults(func=cmd_radar_recall)
+
+    p_card_pack = sub.add_parser(
+        "signal-card-expert-pack",
+        help="пакет эксперту: справочники на утверждение и разметка 50 сигналов (xlsx + манифест); "
+             "сухой прогон по умолчанию",
+    )
+    p_card_pack.add_argument("--out", default=None, help="папка вне репозитория (он публичный)")
+    p_card_pack.add_argument("--seed", type=int, default=20261014, help="зерно выборки: то же — те же сигналы")
+    p_card_pack.add_argument("--since", default="2026-08-01", help="статьи ленты собраны с ГГГГ-ММ-ДД")
+    p_card_pack.add_argument("--until", default="2026-11-01", help="… и до ГГГГ-ММ-ДД (не включая)")
+    p_card_pack.add_argument("--apply", action="store_true", help="записать; без флага — только состав")
+    p_card_pack.set_defaults(func=cmd_signal_card_expert_pack)
 
     p_archive_signals = sub.add_parser(
         "archive-signals",

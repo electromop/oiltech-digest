@@ -1,0 +1,85 @@
+{
+  "version": "2026-10-14.1",
+  "status": "на утверждение эксперту",
+  "event_type": {
+    "title": "Тип события",
+    "rule": "один основной на сигнал",
+    "values": [
+      "исследование", "патент", "пилот", "промысловые испытания", "запуск продукта", "внедрение",
+      "масштабирование", "коммерциализация", "партнёрство", "регулирование", "сделка (M&A)", "контракт",
+      "инвестиции", "другое событие", "нет события"
+    ]
+  },
+  "region": {
+    "title": "Регион",
+    "rule": "по месту события, иначе по стране главного участника",
+    "values": [
+      "Россия", "СНГ и Центральная Азия", "Европа", "Ближний Восток", "Северная Америка", "Латинская Америка",
+      "Китай", "Индия", "Юго-Восточная Азия", "глобально", "другое"
+    ]
+  },
+  "technology_class": {
+    "title": "Класс технологии",
+    "rule": "основной класс технологии события",
+    "values": [
+      "ИИ и машинное обучение", "агентный ИИ", "компьютерное зрение", "граничные вычисления", "робототехника",
+      "дроны", "автономное управление", "замкнутый контур управления", "цифровой двойник", "датчики и IoT",
+      "беспроводная связь и 5G", "новые материалы", "накопители энергии", "другое", "неприменимо"
+    ]
+  },
+  "maturity": {
+    "title": "Зрелость",
+    "rule": "стадия технологии в событии; не путать с подтверждённостью радара",
+    "values": [
+      "исследование", "прототип", "пилот/ОПИ", "коммерческое внедрение", "масштабное внедрение", "неприменимо"
+    ]
+  },
+  "date_source": {
+    "title": "Источник даты события",
+    "rule": "из текста — дата названа в публикации; по дате публикации — в тексте её нет",
+    "values": ["из текста", "по дате публикации"]
+  },
+  "oilfield_relevance": {
+    "title": "Связь с нефтесервисом",
+    "rule": "переносимая — из другой отрасли (горнодобыча, производство, транспорт)",
+    "values": ["прямая", "переносимая", "нет связи"]
+  },
+  "companies": [
+    {"name": "SLB", "aliases": ["Schlumberger", "Шлюмберже"]},
+    {"name": "Halliburton", "aliases": ["Халлибертон", "Халлибёртон"]},
+    {"name": "Baker Hughes", "aliases": ["Бейкер Хьюз", "BKR"]},
+    {"name": "Weatherford", "aliases": ["Weatherford International", "Уэзерфорд"]},
+    {"name": "NOV", "aliases": ["National Oilwell Varco", "NOV Inc."]},
+    {"name": "TechnipFMC", "aliases": ["Technip FMC", "ТехнипФМС"]},
+    {"name": "Saipem", "aliases": ["Сайпем"]},
+    {"name": "Transocean", "aliases": ["Трансоушен"]},
+    {"name": "Nabors", "aliases": ["Nabors Industries"]},
+    {"name": "Helmerich & Payne", "aliases": ["H&P", "Helmerich and Payne"]},
+    {"name": "ChampionX", "aliases": ["Champion X"]},
+    {"name": "Expro", "aliases": ["Expro Group"]},
+    {"name": "Tenaris", "aliases": ["Тенарис"]},
+    {"name": "Subsea7", "aliases": ["Subsea 7"]},
+    {"name": "KBR", "aliases": ["Kellogg Brown & Root"]},
+    {"name": "Saudi Aramco", "aliases": ["Aramco", "Сауди Арамко", "Арамко"]},
+    {"name": "ADNOC", "aliases": ["Abu Dhabi National Oil Company", "АДНОК"]},
+    {"name": "ExxonMobil", "aliases": ["Exxon Mobil", "Exxon", "Эксон Мобил", "ЭксонМобил"]},
+    {"name": "Chevron", "aliases": ["Шеврон"]},
+    {"name": "Shell", "aliases": ["Royal Dutch Shell", "Шелл"]},
+    {"name": "BP", "aliases": ["British Petroleum", "Би-Пи"]},
+    {"name": "TotalEnergies", "aliases": ["Total", "Тоталь"]},
+    {"name": "Equinor", "aliases": ["Statoil", "Эквинор"]},
+    {"name": "Petrobras", "aliases": ["Петробрас"]},
+    {"name": "CNPC", "aliases": ["PetroChina", "China National Petroleum Corporation", "CNPC Group"]},
+    {"name": "Sinopec", "aliases": ["China Petrochemical Corporation", "Синопек"]},
+    {"name": "CNOOC", "aliases": ["China National Offshore Oil Corporation"]},
+    {"name": "Газпром нефть", "aliases": ["Gazprom Neft", "ГПН"]},
+    {"name": "Газпром", "aliases": ["Gazprom", "ПАО «Газпром»"]},
+    {"name": "Роснефть", "aliases": ["Rosneft", "НК «Роснефть»"]},
+    {"name": "ЛУКОЙЛ", "aliases": ["Lukoil"]},
+    {"name": "Татнефть", "aliases": ["Tatneft"]},
+    {"name": "Сургутнефтегаз", "aliases": ["Surgutneftegas", "Surgutneftegaz"]},
+    {"name": "НОВАТЭК", "aliases": ["Novatek"]},
+    {"name": "Буровая компания «Евразия»", "aliases": ["БКЕ", "Eurasia Drilling", "EDC"]},
+    {"name": "Интегра", "aliases": ["Integra", "Группа «Интегра»"]}
+  ]
+}
