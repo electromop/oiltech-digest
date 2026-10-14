@@ -18,13 +18,15 @@ from datetime import date
 import logging
 
 from oiltech_digest.db import connection
-from oiltech_digest.db.repository import SYSTEM_TAG_UNCLASSIFIED
+from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED
 
 logger = logging.getLogger(__name__)
 
-FEED_ORIGIN = "feed"
-RADAR_ORIGIN = "radar"
 FEED_CATEGORY = "business"
+# С какой даты сбора статьи мост заводит сигналы сам: история в единое хранилище — с августа
+# 2026 (#93), и обслуживание старых статей (пересчёт баллов, перепроверка, ремонт заголовков)
+# не должно заводить сигналы задним числом. Заведённый сигнал обновляется при любой дате.
+FEED_SIGNALS_SINCE = date(2026, 8, 1)
 # Ключ сигнала ленты — по главной статье: тот же у повторной обработки и у разовой команды.
 FEED_KEY_PREFIX = "feed:"
 REPRINT_MERGE_REASON = "перепечатка статьи"
@@ -42,7 +44,7 @@ INSERT INTO signals (
   signal_key, origin, origin_article_id, signal_category, title, title_ru, theme, summary,
   maturity, score, score_profile, criteria_snapshot, score_items_json, first_seen_at, last_seen_at
 )
-SELECT {_key_sql('a.id')}, '{FEED_ORIGIN}', a.id, '{FEED_CATEGORY}', a.title, c.title_ru,
+SELECT {_key_sql('a.id')}, '{SIGNAL_ORIGIN_FEED}', a.id, '{FEED_CATEGORY}', a.title, c.title_ru,
        COALESCE(root.name, t.name, %(unclassified)s), c.summary,
        'watch', COALESCE(sc.total_score, 0), sc.profile, sc.criteria_snapshot, items.items,
        COALESCE(a.collected_at, now()), COALESCE(a.collected_at, now())
@@ -59,6 +61,8 @@ LEFT JOIN LATERAL (
   FROM article_score_items i WHERE i.article_score_id = sc.id
 ) items ON TRUE
 WHERE NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
+  AND (%(create_since)s::date IS NULL OR a.collected_at >= %(create_since)s::date
+       OR EXISTS (SELECT 1 FROM signals x WHERE x.signal_key = {_key_sql('a.id')}))
 ON CONFLICT (signal_key) DO UPDATE SET
   -- Категорию не трогаем: её поменяет человек через сервис ОС, а повторная обработка статьи
   -- не должна возвращать сигнал в «бизнес».
@@ -138,7 +142,7 @@ ON CONFLICT (source_url) DO UPDATE SET
   updated_at = now()
 WHERE (signal_evidence.signal_id IS NULL
        OR EXISTS (SELECT 1 FROM signals owner
-                  WHERE owner.id = signal_evidence.signal_id AND owner.origin = '{FEED_ORIGIN}'))
+                  WHERE owner.id = signal_evidence.signal_id AND owner.origin = '{SIGNAL_ORIGIN_FEED}'))
   AND (signal_evidence.signal_id, signal_evidence.article_id, signal_evidence.title,
        signal_evidence.title_ru, signal_evidence.publisher, signal_evidence.published_at,
        signal_evidence.summary_ru, signal_evidence.strength)
@@ -164,17 +168,19 @@ def sync_feed_signals(
     *,
     collected_since: date | str | None = None,
     collected_until: date | str | None = None,
+    create_since: date | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Сигналы ленты для статей — по номерам или по дате сбора [since, until).
 
     В охват входят и связанные перепечатками статьи: принятая главная забирает публикации
-    своих копий, копия — к сигналу главной. dry_run — всё в одной транзакции и откат: числа
-    те же, что дал бы настоящий прогон, но в базе ничего не меняется."""
+    своих копий, копия — к сигналу главной. create_since — новые сигналы только статьям,
+    собранным с этой даты (уже заведённые обновляются всегда). dry_run — всё в одной
+    транзакции и откат: числа те же, что дал бы настоящий прогон, но в базе ничего не меняется."""
     if article_ids is None and collected_since is None and collected_until is None:
         raise ValueError("Нужны номера статей или период сбора")
     clauses: list[str] = []
-    params: dict = {"unclassified": SYSTEM_TAG_UNCLASSIFIED}
+    params: dict = {"unclassified": SYSTEM_TAG_UNCLASSIFIED, "create_since": create_since}
     if article_ids is not None:
         ids = sorted({int(value) for value in article_ids})
         if not ids:
@@ -227,6 +233,6 @@ def sync_quietly(article_ids: Sequence[int]) -> None:
     """Синхронизация из записи статьи: сбой моста не роняет обработку ленты — статья уже
     записана, а сигнал доведёт следующая запись или разовая команда (`sync-feed-signals`)."""
     try:
-        sync_feed_signals(article_ids)
+        sync_feed_signals(article_ids, create_since=FEED_SIGNALS_SINCE)
     except Exception:  # noqa: BLE001 - мост вторичен по отношению к записи статьи
         logger.exception("feed_signal_sync_failed article_ids=%s", list(article_ids)[:20])

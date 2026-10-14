@@ -120,6 +120,28 @@ def _radar_card(key, title, *, category=None, url=None, score=60, **extra):
     return signal_id
 
 
+def _finding(key, title, url, **payload):
+    """Находка поиска радара — тема с одним кандидатом, как её отдаёт воркер ядру."""
+    from oiltech_digest import signal_discovery
+
+    signal = signal_discovery._normalize_signal_payload(
+        {"title": title, "summary": title, "maturity": "shortlist", "score": 70, **payload}, DRILLING)
+    signal.update({"signal_key": key, "evidence_count": 1, "evidence": [{"source_url": url, "title": title}]})
+    return {"topic": DRILLING, "candidates": [{"signal": signal, "rejected": False}]}
+
+
+def _discovery_config():
+    from oiltech_digest import signal_discovery
+
+    return signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False, persist_training_examples=False)
+
+
+def _apply_findings(*topics):
+    from oiltech_digest import signal_discovery
+
+    return signal_discovery.apply_discovery(_discovery_config(), {"topics": list(topics)})
+
+
 def _radar_views(user, admin):
     """Всё, что радар отдаёт наружу: список, сводка, «Отсеянные и скрытые», итоги недели,
     снимки для поиска и дедупа, кандидаты в архив, замер полноты."""
@@ -147,20 +169,26 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
     shared = _radar_card("shared", "Датчик утечек на трубопроводе", url="https://feed.example/7")
     before = _radar_views(user, admin)
 
-    for n in (5, 6, 7):
-        _process(_article(n), title_ru=f"Бизнес-новость {n}")
+    articles = {n: _article(n) for n in (5, 6, 7)}
+    for n, article_id in articles.items():
+        _process(article_id, title_ru=f"Бизнес-новость {n}")
     article = _article(8)
     _process(article)
     repository.set_article_relevance(article, False, "передумал")
-    # Отзыв о сигнале ленты (его даст сервис ОС) — не отзыв радара.
-    reviewed_feed = next(card for card in _business(user) if card["origin"] == "feed" and card["evidence"])
+    feed = {card["origin_article_id"]: card["id"] for card in _business(user) if card["origin"] == "feed"}
+    assert sorted(feed) == sorted(articles.values())
     with repository.get_connection() as conn:
+        # Отзывы о сигналах ленты (их даст сервис ОС) — не отзывы радара, в том числе о сигнале с
+        # общей публикацией: «Обратная связь: N» на карточке радара считает отзывы и по адресу.
         conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict, source_url) "
-                     "VALUES (%s, 'verdict', 'approved', %s)",
-                     (reviewed_feed["id"], reviewed_feed["evidence"][0]["source_url"]))
+                     "VALUES (%s, 'verdict', 'approved', 'https://feed.example/7'), (%s, 'verdict', 'reject', NULL)",
+                     (feed[articles[7]], feed[articles[5]]))
+        # Сервис ОС сменит категорию сигнала ленты — витрина технологий всё равно «как сейчас»:
+        # только находки радара.
+        conn.execute("UPDATE signals SET signal_category = 'technology' WHERE id = %s", (feed[articles[6]],))
         conn.commit()
 
-    assert len(_business(user)) == 4  # три статьи ленты и бизнес-находка радара
+    assert len(_business(user)) == 3  # две статьи ленты (третья теперь «технология») и бизнес-находка радара
     assert _radar_views(user, admin) == before
     assert _rows(_get("/api/signals", user, q="#" + str(shared)))[0]["evidence"][0]["source_url"] == "https://feed.example/7"
 
@@ -168,23 +196,18 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
 def test_radar_finding_with_the_address_of_a_feed_article_is_stored_as_without_the_feed(user):
     # Адрес публикации уникален: ссылку держит кто-то один. Радар ведёт себя так, будто сигналов
     # ленты нет, — находка с адресом статьи ленты становится карточкой радара со своей ссылкой.
-    from oiltech_digest import signal_discovery
-
     article = _article(9)
     _process(article)
-    finding = signal_discovery._normalize_signal_payload(
-        {"title": "Датчик утечек", "summary": "датчик", "maturity": "shortlist", "score": 70}, DRILLING)
-    finding.update({"signal_key": "leak", "evidence_count": 1,
-                    "evidence": [{"source_url": "https://feed.example/9", "title": "Leak sensor"}]})
-    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False, persist_training_examples=False)
 
-    signal_discovery.apply_discovery(config, {"topics": [{"topic": DRILLING, "candidates": [
-        {"signal": finding, "rejected": False}]}]})
+    _apply_findings(_finding("leak", "Датчик утечек", "https://feed.example/9"))
 
     (card,) = _rows(_get("/api/signals", user))
     assert [item["source_url"] for item in card["evidence"]] == ["https://feed.example/9"]
-    # Сигнал ленты остаётся в витрине «бизнес» по своей статье; до агента дедупа — два сигнала.
-    assert [row["origin_article_id"] for row in _business(user)] == [article]
+    # Сигнал ленты остаётся в витрине «бизнес» по своей статье (до агента дедупа — два сигнала),
+    # и статья — по-прежнему его публикация: ту же ссылку видно и на нём.
+    (feed_card,) = _business(user)
+    assert feed_card["origin_article_id"] == article
+    assert [item["source_url"] for item in feed_card["evidence"]] == ["https://feed.example/9"]
 
 
 def test_business_showcase_has_radar_business_finds_and_its_own_summary(user, admin):
@@ -237,6 +260,35 @@ def test_feed_signal_leaves_the_showcase_with_its_article(user):
         conn.commit()
 
     assert [card["origin_article_id"] for card in _business(user)] == [kept]
+
+
+def test_feed_signal_is_shown_by_its_article_not_by_radar_quality_rules(user):
+    # Смешанные ссылки, «не про нефтесервис», срок события — правила находок поиска. Статью,
+    # которую принял отбор, они не прячут (поля заполнит агент карточки, #96).
+    article = _article(1)
+    _process(article)
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET event_date = '2020-01-01', oilfield_relevance = 'none', "
+                     "mixed_events = TRUE WHERE origin_article_id = %s", (article,))
+        conn.commit()
+
+    assert [card["origin_article_id"] for card in _business(user)] == [article]
+
+
+def test_bridge_starts_signals_only_for_articles_collected_since_august(user):
+    from oiltech_digest.db import feed_signals
+
+    july = _article(1, collected="2026-07-20 12:00+03")
+    august = _article(2, collected="2026-08-03 12:00+03")
+    _process(july)
+    _process(august)
+    assert [card["origin_article_id"] for card in _business(user)] == [august]
+
+    # Сигнал, заведённый явной командой, обновляется записями статьи, как любой.
+    feed_signals.sync_feed_signals([july])
+    repository.upsert_article_card(july, "Новая суть")
+    cards = {card["origin_article_id"]: card for card in _business(user)}
+    assert cards[july]["summary"] == "Новая суть"
 
 
 def test_reprint_is_a_publication_of_the_main_article_signal(user):
@@ -294,19 +346,13 @@ def test_new_finding_of_the_same_event_sits_in_the_existing_business_card(user, 
 
     business = _radar_card("biz", "ZenaTech купила Velocity Geomatics", category="business",
                            companies=["ZenaTech"], url="https://radar.example/zena-1")
-    again = signal_discovery._normalize_signal_payload(
-        {"title": "Покупка Velocity Geomatics компанией ZenaTech", "summary": "сделка", "maturity": "shortlist",
-         "score": 70, "companies": ["ZenaTech"], "signal_category": "business"},
-        DRILLING,
-    )
-    again.update({"signal_key": "zena-again", "evidence_count": 1,
-                  "evidence": [{"source_url": "https://radar.example/zena-2", "title": "ZenaTech buys Velocity"}]})
-    topics = [{"topic": DRILLING, "candidates": [{"signal": again, "rejected": False}]}]
+    topic = _finding("zena-again", "Покупка Velocity Geomatics компанией ZenaTech", "https://radar.example/zena-2",
+                     companies=["ZenaTech"], signal_category="business")
     monkeypatch.setattr(signal_discovery, "_radar_client", lambda: _SameEventJudge())
-    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False, persist_training_examples=False)
 
-    signal_discovery._dedupe_run(config, {"existing_signals": repository.list_signals_for_dedup()}, topics, lambda: None)
-    signal_discovery.apply_discovery(config, {"topics": topics})
+    signal_discovery._dedupe_run(_discovery_config(), {"existing_signals": repository.list_signals_for_dedup()},
+                                 [topic], lambda: None)
+    _apply_findings(topic)
 
     (card,) = _business(user)
     assert card["id"] == business
@@ -315,18 +361,10 @@ def test_new_finding_of_the_same_event_sits_in_the_existing_business_card(user, 
 
 
 def test_refound_link_of_a_business_card_is_its_repeat_not_a_new_card(user):
-    from oiltech_digest import signal_discovery
-
     business = _radar_card("biz", "ZenaTech купила Velocity Geomatics", category="business",
                            url="https://radar.example/zena-1")
-    again = signal_discovery._normalize_signal_payload(
-        {"title": "ZenaTech: сделка", "summary": "сделка", "maturity": "shortlist", "score": 70}, DRILLING)
-    again.update({"signal_key": "zena-again", "evidence_count": 1,
-                  "evidence": [{"source_url": "https://radar.example/zena-1", "title": "t"}]})
-    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=False, persist_training_examples=False)
 
-    signal_discovery.apply_discovery(config, {"topics": [{"topic": DRILLING, "candidates": [
-        {"signal": again, "rejected": False}]}]})
+    _apply_findings(_finding("zena-again", "ZenaTech: сделка", "https://radar.example/zena-1"))
 
     assert [card["id"] for card in _business(user)] == [business]
     assert _rows(_get("/api/signals", user)) == []
@@ -338,29 +376,29 @@ def _historical_article(n, collected, *, relevant=True):
     with repository.get_connection() as conn:
         conn.execute("INSERT INTO article_cards (article_id, summary, title_ru, relevant) VALUES (%s, 'Суть', %s, %s)",
                      (article_id, f"Статья {n}", relevant))
-        conn.execute("DELETE FROM signals WHERE origin_article_id = %s", (article_id,))
         conn.commit()
     return article_id
 
 
 def test_history_backfill_is_a_dry_run_by_default_and_never_doubles(user, capsys):
-    from oiltech_digest.db import feed_signals
+    from oiltech_digest import cli
 
-    july = _historical_article(1, "2026-07-20 12:00+03")
+    _historical_article(1, "2026-07-20 12:00+03")
     august = _historical_article(2, "2026-08-03 12:00+03")
     october = _historical_article(3, "2026-10-10 12:00+03")
     _historical_article(4, "2026-09-10 12:00+03", relevant=False)
 
-    dry = feed_signals.sync_feed_signals(collected_since="2026-08-01", dry_run=True)
-    assert (dry["signals_created"], dry["dry_run"]) == (2, True)
+    cli.main(["sync-feed-signals"])
+    dry = capsys.readouterr().out
+    assert "с 2026-08-01" in dry and "dry_run=True" in dry and "новых сигналов: 2;" in dry
     assert _business(user) == []
 
-    feed_signals.sync_feed_signals(collected_since="2026-08-01")
-    again = feed_signals.sync_feed_signals(collected_since="2026-08-01")
+    cli.main(["sync-feed-signals", "--apply"])
+    cli.main(["sync-feed-signals", "--apply"])
 
-    assert again["signals_created"] == 0
+    created = [line for line in capsys.readouterr().out.splitlines() if "новых сигналов" in line]
+    assert ["новых сигналов: 2;" in created[0], "новых сигналов: 0;" in created[1]] == [True, True]
     assert sorted(card["origin_article_id"] for card in _business(user)) == [august, october]
-    assert july not in [card["origin_article_id"] for card in _business(user)]
 
 
 def test_merge_of_business_duplicates_lists_pairs_and_merges_only_named_ones(user, capsys):
@@ -375,8 +413,53 @@ def test_merge_of_business_duplicates_lists_pairs_and_merges_only_named_ones(use
     assert f"{newer}:{older}" in out and str(other) + ":" not in out
     assert len(_business(user)) == 3  # сухой прогон
 
+    # Пара не из списка — отказ целиком, ни одной склейки.
+    with pytest.raises(SystemExit):
+        cli.main(["merge-business-duplicates", "--apply", "--pairs", f"{newer}:{older},{other}:{older}"])
+    assert len(_business(user)) == 3
+
     cli.main(["merge-business-duplicates", "--apply", "--pairs", f"{newer}:{older}"])
 
     (main, single) = sorted(_business(user), key=lambda card: card["id"])
     assert (main["id"], single["id"]) == (older, other)
     assert main["merged_count"] == 1
+
+
+def test_feed_signal_follows_the_telegram_title_repair(user):
+    from oiltech_digest.ingestion import telegram_titles
+
+    glued = "Газпрому разрешили не соблюдать требования по числу независимых директоровПрезидент РФ В."
+    fixed = "Газпрому разрешили не соблюдать требования по числу независимых директоров"
+    with repository.get_connection() as conn:
+        channel = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Канал', 'Telegram', 'https://t.me/s/chan', TRUE, 'telegram') RETURNING id"
+        ).fetchone()[0]
+        article = conn.execute(
+            "INSERT INTO articles (source_id, title, url, collected_at, raw_text, language) "
+            "VALUES (%s, %s, 'https://t.me/chan/1', now(), 'текст', 'ru') RETURNING id",
+            (channel, glued),
+        ).fetchone()[0]
+        conn.commit()
+    _process(article, title_ru=glued)
+
+    telegram_titles.repair(apply=True, frequency={"директоров": 40, "президент": 300})
+
+    (card,) = _business(user)
+    assert (card["title"], card["title_ru"]) == (fixed, fixed)
+
+
+def test_feed_signals_stay_out_of_the_issue_and_the_radar_context_bundle(user):
+    # Выпуск собирается как раньше: статьи — своей выборкой, сигнал ленты был бы их второй копией.
+    from oiltech_digest import signal_training
+
+    radar = _radar_card("tech", "Роботизированная буровая", score=70)
+    _process(_article(1), score=70)
+    (feed_card,) = _business(user)
+    for signal_id in (radar, feed_card["id"]):
+        repository.set_user_signal_status(int(user["id"]), signal_id, status="digest")
+
+    items = repository.digest_candidates(user_id=int(user["id"]), min_score=0)
+    assert [row["id"] for row in items if row["item_type"] == "signal"] == [radar]
+    bundle = signal_training._build_signal_context_bundle(include_rejected=True)
+    assert [row["id"] for row in bundle["signals"]] == [radar]

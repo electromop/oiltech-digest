@@ -156,21 +156,21 @@ def _build_signal_context_bundle(*, include_rejected: bool) -> dict[str, Any]:
         )
         topics = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             SELECT *
             FROM signals
-            WHERE origin = 'radar' AND (%s OR maturity <> 'reject')
+            WHERE {repository.radar_origin_sql("signals")} AND (%s OR maturity <> 'reject')
             ORDER BY score DESC, last_seen_at DESC, id DESC
             """,
             (include_rejected,),
         )
         signals = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             SELECT se.*, s.signal_key
             FROM signal_evidence se
             JOIN signals s ON s.id = se.signal_id
-            WHERE s.origin = 'radar' AND (%s OR s.maturity <> 'reject')
+            WHERE {repository.radar_origin_sql("s")} AND (%s OR s.maturity <> 'reject')
             ORDER BY s.score DESC, se.strength DESC, se.published_at DESC NULLS LAST, se.id DESC
             """,
             (include_rejected,),
@@ -185,11 +185,11 @@ def _build_signal_context_bundle(*, include_rejected: bool) -> dict[str, Any]:
         )
         memories = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             WITH exported_signals AS (
               SELECT id, signal_key
               FROM signals
-              WHERE origin = 'radar' AND (%s OR maturity <> 'reject')
+              WHERE {repository.radar_origin_sql("signals")} AND (%s OR maturity <> 'reject')
             ),
             exported_urls AS (
               SELECT se.source_url
@@ -210,12 +210,12 @@ def _build_signal_context_bundle(*, include_rejected: bool) -> dict[str, Any]:
         )
         feedback = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             SELECT ste.*, s.signal_key
             FROM signal_training_examples ste
             LEFT JOIN signals s ON s.id = ste.signal_id
             WHERE ste.signal_id IN (
-              SELECT id FROM signals WHERE origin = 'radar' AND (%s OR maturity <> 'reject')
+              SELECT id FROM signals WHERE {repository.radar_origin_sql("signals")} AND (%s OR maturity <> 'reject')
             )
             ORDER BY ste.created_at DESC, ste.id DESC
             """,

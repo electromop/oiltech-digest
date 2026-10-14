@@ -242,29 +242,26 @@ def _rank(node: dict[str, Any]) -> tuple:
 
 
 def pairs_among_stored(cards: list[dict[str, Any]], *, min_overlap: float = PAIR_MIN_OVERLAP) -> list[dict[str, Any]]:
-    """Пары-кандидаты среди уже сохранённых карточек — тем же дешёвым правилом, что у дедупа
-    (похожий заголовок, общая компания или ссылка), без судьи: для разовой склейки со списком
-    на просмотр человеку. Две разобранные не сравниваются — их не склеивает и дедуп. Главная
-    пары — по тем же правилам, что у дедупа (_rank): разобранная, затем более ранняя."""
+    """Пары-кандидаты среди уже сохранённых карточек — правилом дедупа (find_pairs: похожий
+    заголовок, общая компания или ссылка), без судьи: для разовой склейки со списком на
+    просмотр человеку. Главная пары — по тем же правилам, что у дедупа (_rank): разобранная,
+    затем более ранняя."""
     nodes = [
+        # «Свежая» — чтобы find_pairs сравнивал сохранённые между собой: пара с неразобранной
+        # судится, две разобранные — нет (_eligible), как у дедупа.
         {"kind": "existing", "id": int(card["id"]), "reviewed": bool(card.get("reviewed")),
          "verdict": card.get("verdict"), "fresh": True, "urls": list(card.get("urls") or []),
          "signal": {**card, "companies": list(card.get("companies") or [])}}
         for card in cards
     ]
     pairs = []
-    for left, right in itertools.combinations(nodes, 2):
-        if left["reviewed"] and right["reviewed"]:
-            continue
-        overlap = _overlap(title_stems(left["signal"]), title_stems(right["signal"]))
-        shared_companies = sorted(company_keys(left["signal"]) & company_keys(right["signal"]))
-        shared_urls = sorted(url_keys(left["urls"]) & url_keys(right["urls"]))
-        if overlap < min_overlap and not shared_companies and not shared_urls:
-            continue
-        main, duplicate = sorted((left, right), key=_rank)
-        pairs.append({"main": main["id"], "duplicate": duplicate["id"], "overlap": round(overlap, 2),
-                      "companies": shared_companies, "urls": shared_urls})
-    pairs.sort(key=lambda pair: (0 if pair["urls"] else 1, 0 if pair["companies"] else 1, -pair["overlap"]))
+    for i, j, overlap in find_pairs(nodes, min_overlap=min_overlap):
+        main, duplicate = sorted((nodes[i], nodes[j]), key=_rank)
+        pairs.append({
+            "main": main["id"], "duplicate": duplicate["id"], "overlap": round(overlap, 2),
+            "companies": sorted(company_keys(nodes[i]["signal"]) & company_keys(nodes[j]["signal"])),
+            "urls": sorted(url_keys(nodes[i]["urls"]) & url_keys(nodes[j]["urls"])),
+        })
     return pairs
 
 

@@ -9,6 +9,7 @@ import argparse
 import csv
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -2272,10 +2273,11 @@ def cmd_sync_feed_signals(args: argparse.Namespace) -> None:
     дублей не создаёт. По умолчанию сухой прогон: те же числа, запись откатывается."""
     from oiltech_digest.db import feed_signals
 
+    since = args.since or feed_signals.FEED_SIGNALS_SINCE.isoformat()
     result = feed_signals.sync_feed_signals(
-        collected_since=args.since, collected_until=args.until, dry_run=not args.apply,
+        collected_since=since, collected_until=args.until, dry_run=not args.apply,
     )
-    print(f"sync-feed-signals: статьи с {args.since} по {args.until or 'сейчас'} (по дате сбора), "
+    print(f"sync-feed-signals: статьи с {since} по {args.until or 'сейчас'} (по дате сбора), "
           f"dry_run={result['dry_run']}")
     print(f"  новых сигналов: {result['signals_created']}; обновлено: {result['signals_updated']}; "
           f"публикаций записано: {result['publications']}; перепечаток склеено: {result['reprints_merged']}; "
@@ -2302,20 +2304,27 @@ def cmd_merge_business_duplicates(args: argparse.Namespace) -> None:
         ) if part)
         print(f"  {pair['duplicate']}:{pair['main']}  #{pair['duplicate']} {titles[pair['duplicate']][:60]!r}"
               f" → #{pair['main']} {titles[pair['main']][:60]!r} ({why})")
-    chosen = [value.strip() for value in (args.pairs or "").split(",") if value.strip()]
     if not args.apply:
         print("Сухой прогон. Склеить выбранные: --apply --pairs ДУБЛЬ:ГЛАВНАЯ[,ДУБЛЬ:ГЛАВНАЯ…]")
         return
+    # Весь --pairs разбирается и сверяется со списком до первой записи: опечатка в одной паре не
+    # должна оставить склеенными только те, что стояли перед ней.
+    chosen = []
+    for value in (part.strip() for part in (args.pairs or "").split(",")):
+        match = re.fullmatch(r"(\d+):(\d+)", value)
+        if value and not match:
+            raise SystemExit(f"--pairs: «{value}» — нужно ДУБЛЬ:ГЛАВНАЯ; ничего не склеено")
+        if match:
+            chosen.append((int(match[1]), int(match[2])))
     if not chosen:
         raise SystemExit("--apply без --pairs: правило без судьи даёт и ложные пары — назовите пары из списка")
     known = {(pair["duplicate"], pair["main"]) for pair in pairs}
-    for value in chosen:
-        duplicate, main = (int(part) for part in value.split(":", 1))
-        if (duplicate, main) not in known:
-            print(f"  {value}: нет в списке пар — пропущено")
-            continue
+    unknown = [f"{duplicate}:{main}" for duplicate, main in chosen if (duplicate, main) not in known]
+    if unknown:
+        raise SystemExit(f"--pairs: нет в списке пар — {', '.join(unknown)}; ничего не склеено")
+    for duplicate, main in chosen:
         merged = repository.mark_signal_merged(duplicate, main, "то же событие: бизнес-находка радара (разовая склейка, #95)")
-        print(f"  {value}: {'склеено' if merged else 'не склеено (разобрана или уже дубль)'}")
+        print(f"  {duplicate}:{main}: {'склеено' if merged else 'не склеено (разобрана или уже дубль)'}")
 
 
 def cmd_unarchive_signals(args: argparse.Namespace) -> None:
@@ -3270,7 +3279,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sync-feed-signals",
         help="сигналы ленты для принятых статей по дате сбора (без ИИ); по умолчанию сухой прогон",
     )
-    p_sync_feed.add_argument("--since", default="2026-08-01", help="собраны с даты ГГГГ-ММ-ДД")
+    p_sync_feed.add_argument("--since", default=None, help="собраны с даты ГГГГ-ММ-ДД; по умолчанию — 2026-08-01")
     p_sync_feed.add_argument("--until", default=None, help="собраны до даты ГГГГ-ММ-ДД (не включая)")
     p_sync_feed.add_argument("--apply", action="store_true", help="записать; без флага — только числа")
     p_sync_feed.set_defaults(func=cmd_sync_feed_signals)
