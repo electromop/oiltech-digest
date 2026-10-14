@@ -2267,6 +2267,57 @@ def cmd_archive_signals(args: argparse.Namespace) -> None:
         print(f"В архиве: {changed}. Вернуть: unarchive-signals --reason {args.reason!r}")
 
 
+def cmd_sync_feed_signals(args: argparse.Namespace) -> None:
+    """Сигналы ленты для принятых статей по дате сбора (#95) — без ИИ, повторный запуск
+    дублей не создаёт. По умолчанию сухой прогон: те же числа, запись откатывается."""
+    from oiltech_digest.db import feed_signals
+
+    result = feed_signals.sync_feed_signals(
+        collected_since=args.since, collected_until=args.until, dry_run=not args.apply,
+    )
+    print(f"sync-feed-signals: статьи с {args.since} по {args.until or 'сейчас'} (по дате сбора), "
+          f"dry_run={result['dry_run']}")
+    print(f"  новых сигналов: {result['signals_created']}; обновлено: {result['signals_updated']}; "
+          f"публикаций записано: {result['publications']}; перепечаток склеено: {result['reprints_merged']}; "
+          f"расклеено: {result['reprints_unmerged']}")
+    if not args.apply:
+        print("Сухой прогон: записать — тот же вызов с --apply.")
+
+
+def cmd_merge_business_duplicates(args: argparse.Namespace) -> None:
+    """Разовая склейка пар дублей среди бизнес-находок радара (#95). Пары — правилом дедупа без
+    судьи, поэтому список — на просмотр: записываются только пары, названные в --pairs."""
+    from oiltech_digest import signal_dedup
+    from oiltech_digest.db import repository
+
+    cards = repository.business_radar_cards()
+    titles = {card["id"]: str(card.get("title_ru") or card.get("title") or "") for card in cards}
+    pairs = signal_dedup.pairs_among_stored(cards)
+    print(f"merge-business-duplicates: бизнес-находок радара {len(cards)}, пар-кандидатов {len(pairs)}")
+    for pair in pairs:
+        why = "; ".join(part for part in (
+            f"общая ссылка {', '.join(pair['urls'][:2])}" if pair["urls"] else "",
+            f"общая компания {', '.join(pair['companies'][:3])}" if pair["companies"] else "",
+            f"сходство заголовков {pair['overlap']}",
+        ) if part)
+        print(f"  {pair['duplicate']}:{pair['main']}  #{pair['duplicate']} {titles[pair['duplicate']][:60]!r}"
+              f" → #{pair['main']} {titles[pair['main']][:60]!r} ({why})")
+    chosen = [value.strip() for value in (args.pairs or "").split(",") if value.strip()]
+    if not args.apply:
+        print("Сухой прогон. Склеить выбранные: --apply --pairs ДУБЛЬ:ГЛАВНАЯ[,ДУБЛЬ:ГЛАВНАЯ…]")
+        return
+    if not chosen:
+        raise SystemExit("--apply без --pairs: правило без судьи даёт и ложные пары — назовите пары из списка")
+    known = {(pair["duplicate"], pair["main"]) for pair in pairs}
+    for value in chosen:
+        duplicate, main = (int(part) for part in value.split(":", 1))
+        if (duplicate, main) not in known:
+            print(f"  {value}: нет в списке пар — пропущено")
+            continue
+        merged = repository.mark_signal_merged(duplicate, main, "то же событие: бизнес-находка радара (разовая склейка, #95)")
+        print(f"  {value}: {'склеено' if merged else 'не склеено (разобрана или уже дубль)'}")
+
+
 def cmd_unarchive_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -3214,6 +3265,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_archive_signals.add_argument("--reason", default="early-free-theme-2026-09")
     p_archive_signals.add_argument("--apply", action="store_true", help="записать; без флага — только список")
     p_archive_signals.set_defaults(func=cmd_archive_signals)
+
+    p_sync_feed = sub.add_parser(
+        "sync-feed-signals",
+        help="сигналы ленты для принятых статей по дате сбора (без ИИ); по умолчанию сухой прогон",
+    )
+    p_sync_feed.add_argument("--since", default="2026-08-01", help="собраны с даты ГГГГ-ММ-ДД")
+    p_sync_feed.add_argument("--until", default=None, help="собраны до даты ГГГГ-ММ-ДД (не включая)")
+    p_sync_feed.add_argument("--apply", action="store_true", help="записать; без флага — только числа")
+    p_sync_feed.set_defaults(func=cmd_sync_feed_signals)
+
+    p_merge_business = sub.add_parser(
+        "merge-business-duplicates",
+        help="пары дублей среди бизнес-находок радара; по умолчанию сухой прогон со списком",
+    )
+    p_merge_business.add_argument("--pairs", default="", help="ДУБЛЬ:ГЛАВНАЯ через запятую — из списка сухого прогона")
+    p_merge_business.add_argument("--apply", action="store_true")
+    p_merge_business.set_defaults(func=cmd_merge_business_duplicates)
 
     p_unarchive_signals = sub.add_parser("unarchive-signals", help="вернуть карточки радара из архива")
     p_unarchive_signals.add_argument("--ids", default="")

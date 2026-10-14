@@ -459,15 +459,17 @@ def test_hidden_unreviewed_card_does_not_stay_main_over_a_visible_one():
 
 def test_dedup_snapshot_marks_cards_hidden_by_quality_or_archive(isolated_db):
     visible = repository.upsert_signal(_signal_row("visible", "Покупка Velocity Geomatics"))
+    # Бизнес-находка видна в витрине «бизнес» (#95) — не скрытая; «другое» не видно нигде.
     business = repository.upsert_signal({**_signal_row("business", "Сделка ZenaTech"), "signal_category": "business"})
+    other = repository.upsert_signal({**_signal_row("other", "Отчёт ZenaTech"), "signal_category": "other"})
     archived = repository.upsert_signal(_signal_row("archived", "ZenaTech и Velocity"))
-    for signal_id in (visible, business, archived):
+    for signal_id in (visible, business, other, archived):
         repository.upsert_signal_evidence(signal_id, {"source_url": f"https://a.example/{signal_id}", "title": "t"})
     repository.archive_signals([archived], reason="test")
 
     snapshot = {row["id"]: row["hidden"] for row in repository.list_signals_for_dedup()}
 
-    assert snapshot == {visible: False, business: True, archived: True}
+    assert snapshot == {visible: False, business: False, other: True, archived: True}
 
 
 def test_worker_takes_hidden_flag_from_the_core_snapshot(monkeypatch):
@@ -486,7 +488,9 @@ def test_worker_takes_hidden_flag_from_the_core_snapshot(monkeypatch):
     assert [node["hidden"] for node in seen["nodes"]] == [True, False]
 
 
-@pytest.mark.parametrize("hide", ["archive", "business"])
+# Бизнес-карточку видно в витрине «бизнес» (#95): найденная снова её ссылка — её повтор
+# (test_signal_unified_store), а не новая карточка. «Другое» не видно нигде.
+@pytest.mark.parametrize("hide", ["archive", "other"])
 def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_visible_card(isolated_db, hide):
     hidden = repository.upsert_signal(_signal_row("hidden", "Velocity Geomatics: первые данные"))
     repository.upsert_signal_evidence(hidden, {"source_url": "https://a.example/1", "title": "t"})
@@ -495,7 +499,7 @@ def test_refound_link_of_a_hidden_unreviewed_card_makes_a_new_visible_card(isola
         repository.archive_signals([hidden], reason="early-free-theme-2026-09")
     else:
         repository.upsert_signal({**_signal_row("hidden", "Velocity Geomatics: первые данные"),
-                                  "signal_category": "business"})
+                                  "signal_category": "other"})
     again = _candidate("ZenaTech купила Velocity Geomatics", ["ZenaTech"], key="fresh", url="https://a.example/1")
 
     result = _apply({"topics": [{"topic": GEO, "candidates": [{"signal": again, "rejected": False}]}]})

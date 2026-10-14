@@ -1747,8 +1747,14 @@ def _radar_screen_filters(
     # Отсеянные и скрытые (бизнес, смешанные, старые, не про нефтесервис, брак судьи, отсеянное
     # поиском, архив) — только админу (решение владельца 05.10: заказчик Виктор — админ).
     hidden: bool = False,
+    # Витрина (#95, ADR 0003): «technology» — технологический радар, как был; «business» —
+    # сигналы категории «бизнес» обоих происхождений (лента и находки радара).
+    showcase: str = Query("technology", pattern="^(technology|business)$"),
 ) -> dict[str, Any]:
+    if hidden and showcase != "technology":
+        raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
     return {
+        "showcase": showcase,
         "hidden": hidden,
         "maturity": maturity,
         "theme": theme,

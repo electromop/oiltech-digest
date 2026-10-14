@@ -241,6 +241,33 @@ def _rank(node: dict[str, Any]) -> tuple:
     )
 
 
+def pairs_among_stored(cards: list[dict[str, Any]], *, min_overlap: float = PAIR_MIN_OVERLAP) -> list[dict[str, Any]]:
+    """Пары-кандидаты среди уже сохранённых карточек — тем же дешёвым правилом, что у дедупа
+    (похожий заголовок, общая компания или ссылка), без судьи: для разовой склейки со списком
+    на просмотр человеку. Две разобранные не сравниваются — их не склеивает и дедуп. Главная
+    пары — по тем же правилам, что у дедупа (_rank): разобранная, затем более ранняя."""
+    nodes = [
+        {"kind": "existing", "id": int(card["id"]), "reviewed": bool(card.get("reviewed")),
+         "verdict": card.get("verdict"), "fresh": True, "urls": list(card.get("urls") or []),
+         "signal": {**card, "companies": list(card.get("companies") or [])}}
+        for card in cards
+    ]
+    pairs = []
+    for left, right in itertools.combinations(nodes, 2):
+        if left["reviewed"] and right["reviewed"]:
+            continue
+        overlap = _overlap(title_stems(left["signal"]), title_stems(right["signal"]))
+        shared_companies = sorted(company_keys(left["signal"]) & company_keys(right["signal"]))
+        shared_urls = sorted(url_keys(left["urls"]) & url_keys(right["urls"]))
+        if overlap < min_overlap and not shared_companies and not shared_urls:
+            continue
+        main, duplicate = sorted((left, right), key=_rank)
+        pairs.append({"main": main["id"], "duplicate": duplicate["id"], "overlap": round(overlap, 2),
+                      "companies": shared_companies, "urls": shared_urls})
+    pairs.sort(key=lambda pair: (0 if pair["urls"] else 1, 0 if pair["companies"] else 1, -pair["overlap"]))
+    return pairs
+
+
 def assign_duplicates(nodes: list[dict[str, Any]], edges: list[tuple[int, int, str]]) -> dict[int, tuple[int, str]]:
     """Звезда, а не цепочка: дублем становится только карточка, которую судья прямо
     сравнил с главной. Транзитивная склейка (A~B, B~C → A~C) собрала бы обзор лития
