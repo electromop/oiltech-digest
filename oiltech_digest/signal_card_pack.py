@@ -161,7 +161,11 @@ def export_pack(out_dir: str | Path | None, *, seed: int | None = None, since: s
     out = _checked_out_dir(out_dir)
     dictionaries = load_dictionaries()
     out.mkdir(parents=True, exist_ok=True)
-    _write_workbook(out / WORKBOOK_NAME, sample, dictionaries)
+    # Строки — вперемешку и своим ключом: блоками доли выдавали бы эксперту решение машины (шумные —
+    # последние статьи ленты, технологии — первые сигналы радара), а ключом отбора — тоже: шумные,
+    # отобранные из тысяч кандидатов, — это самые малые хэши, они встали бы первыми.
+    rows = sorted(sample, key=lambda item: _rank("table", seed, item["id"]))
+    _write_workbook(out / WORKBOOK_NAME, rows, dictionaries)
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seed": seed, "since": since, "until": until,
@@ -169,7 +173,7 @@ def export_pack(out_dir: str | Path | None, *, seed: int | None = None, since: s
         "composition": result["composition"],
         "items": [{key: item.get(key) for key in (
             "id", "origin", "stratum", "article_id", "signal_id", "evidence_id", "url", "category", "theme",
-            "text_sha256", "text_chars")} for item in sample],
+            "text_sha256", "text_chars")} for item in rows],
     }
     (out / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return {**result, "applied": True, "workbook": str(out / WORKBOOK_NAME), "manifest": str(out / MANIFEST_NAME)}
@@ -198,7 +202,8 @@ def _checked_out_dir(out_dir: str | Path | None) -> Path:
 
 def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
     """Принятые отбором статьи (relevant = TRUE), видимые в ленте, собранные в окне, с долей:
-    полезная или шумная (_feed_stratum). Отмеченные аналитиком дубликатом — мимо."""
+    полезная или шумная (_feed_stratum). Отмеченные дубликатом — мимо, и «архивом» тоже: его ставят
+    и «скрыть», и «убрать из дайджеста» — по нему не понять, полезна ли статья."""
     with repository.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -223,7 +228,7 @@ def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
               AND a.full_text_status IS DISTINCT FROM 'mismatch'
               AND length(btrim(COALESCE(a.raw_text, ''))) >= %s
               AND NOT EXISTS (SELECT 1 FROM user_article_states u
-                              WHERE u.article_id = a.id AND u.status = 'duplicate')
+                              WHERE u.article_id = a.id AND u.status IN ('duplicate', 'archive'))
             ORDER BY a.id
             """,
             (since, until, config.MIN_ARTICLE_TEXT_CHARS),
@@ -312,7 +317,7 @@ def _round_robin(items: list[dict[str, Any]], count: int, seed: int) -> list[dic
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in items:
         groups[str(item["theme"])].append(item)
-    queues = [sorted(group, key=lambda item: hashlib.sha256(f"{seed}:{item['id']}".encode()).hexdigest())
+    queues = [sorted(group, key=lambda item: _rank(seed, item["id"]))
               for _, group in sorted(groups.items())]
     chosen: list[dict[str, Any]] = []
     depth = 0
@@ -320,6 +325,11 @@ def _round_robin(items: list[dict[str, Any]], count: int, seed: int) -> list[dic
         chosen += [queue[depth] for queue in queues if depth < len(queue)][:count - len(chosen)]
         depth += 1
     return chosen
+
+
+def _rank(*parts: Any) -> str:
+    """Порядок по хэшу: тот же вход — то же место, новый кандидат не перетасовывает остальных."""
+    return hashlib.sha256(":".join(str(part) for part in parts).encode()).hexdigest()
 
 
 def _date(value: Any) -> str | None:

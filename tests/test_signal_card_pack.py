@@ -208,6 +208,14 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
     assert len(strata["useful"]) == 24 and strata["useful"] <= corpus["useful"]
     assert len(strata["noise"]) == 6 and strata["noise"] <= corpus["noise"]
     assert len(radar & corpus["tech"]) == 15 and len(radar & corpus["business"]) == 5
+    # Строки вперемешку: блоками доли выдавали бы эксперту решение машины — шумные шли бы последними
+    # статьями ленты, технологии — первыми сигналами радара.
+    _, _, header, rows = _markup(out)
+    stratum_of = {item["id"]: item["stratum"] for item in items}
+    order = [stratum_of[row[header.index("ID")].value] for row in rows]
+    for stratum in ("useful", "noise", "technology", "business"):
+        positions = [index for index, value in enumerate(order) if value == stratum]
+        assert positions != list(range(positions[0], positions[0] + len(positions))), stratum
     assert radar <= corpus["tech"] | corpus["business"] and not radar & corpus["not_radar"]
     assert radar & corpus["tech"] and radar & corpus["business"]
     assert {item["category"] for item in items} == {"бизнес", "технология"}
@@ -294,13 +302,41 @@ def test_usefulness_comes_from_the_score_and_the_analysts_marks(isolated_db, cap
         _seed_feed(conn, source_id, roots, 1, score=30, prefix="weak")
         _seed_feed(conn, source_id, roots, 1, score=None, prefix="unscored")  # балла ещё нет — не знаем
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=80, prefix="duplicate"), "duplicate")
+        both = _seed_feed(conn, source_id, roots, 1, score=40, prefix="both")  # двое разошлись — дайджест
+        _mark(conn, both, "digest")
+        _mark(conn, both, "noise")
+        # «Архив» ставят и «скрыть», и «убрать из дайджеста» — по нему не понять, полезна ли статья.
+        _mark(conn, _seed_feed(conn, source_id, roots, 1, score=90, prefix="archived"), "archive")
         conn.commit()
 
     _run("--until", "2026-10-01")
 
     printed = capsys.readouterr().out
-    assert "полезных статей ленты 2 из 24" in printed
+    assert "полезных статей ленты 3 из 24" in printed
     assert "шумных статей ленты 2 из 6" in printed
+
+
+def test_a_short_stratum_is_not_filled_from_its_neighbour(isolated_db, tmp_path, capsys):
+    # Добор из соседней доли тихо вернул бы прежний перекос: недостающий шум — полезными статьями,
+    # недостающий бизнес — технологиями.
+    with repository.get_connection() as conn:
+        source_id, roots = _source_and_tags(conn)
+        _seed_feed(conn, source_id, roots, 30)
+        _seed_feed(conn, source_id, roots, 2, score=30, prefix="noise")
+        conn.commit()
+    for i in range(20):
+        _radar(f"tech{i}", "technology", THEMES[i % 3])
+    for i in range(2):
+        _radar(f"biz{i}", "business", THEMES[0])
+    out = tmp_path / "pack"
+
+    _run("--until", "2026-10-01")
+
+    lines = capsys.readouterr().out.splitlines()
+    assert "Для экзамена не хватает: шумных статей ленты 2 из 6; бизнес-сигналов радара 2 из 5" in lines
+    with pytest.raises(SystemExit):
+        _run("--out", str(out), "--apply", "--until", "2026-10-01")
+    assert not out.exists()
 
 
 def test_block_pages_and_unreadable_texts_are_not_offered_to_the_expert(isolated_db, capsys):
