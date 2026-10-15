@@ -2,8 +2,16 @@
 
 Справочники — версионируемые данные в репозитории (`signal_card_dictionaries.json`): их же
 потом читает агент, версия идёт в рецепт карточки. Таблица эксперту — лист справочников на
-утверждение и лист разметки: 35 принятых статей ленты за август–октябрь и 15 сигналов радара
-(технологии и бизнес), по темам вперемешку.
+утверждение и лист разметки: 30 принятых статей ленты за август–октябрь и 20 сигналов радара,
+в каждой доле темы по кругу.
+
+Состав — решение владельца 15.10. В первой таблице (35 любых принятых статей + 15 радара) половина
+статей ленты была не про нефтесервис: отбор пропускает всё «про ТЭК» — цены, газификацию,
+происшествия. Теперь лента — 24 полезных (балл не ниже порога дайджеста или отметка «в дайджест»)
+и 6 шумных намеренно: проверить, что агент ответит «нет связи», а не припишет новости о ценах
+контракт; радар — 15 технологий и 5 бизнес, чтобы класс технологии и зрелость было на чём мерить.
+Темы чередуются по названиям как есть: у статей августа — теги прежней таксономии (до 13.09), и
+свести их к 13 тематикам можно только ручным сопоставлением — это решение о таксономии.
 
 Разметка вслепую: в таблице только то, что написал издатель, — заголовок, текст, ссылка, дата
 публикации. Сути, перевода, темы, решений судьи радара в ней нет. Отсюда правила выборки радара:
@@ -46,9 +54,13 @@ DICTIONARY_SHEET = "Справочники"
 LISTS_SHEET = "_списки"
 UNDEFINED = "не определено"
 TEXT_LIMIT = 6000
-FEED_COUNT = 35
-RADAR_QUOTA = {"technology": 10, "business": 5}
-RADAR_COUNT = sum(RADAR_QUOTA.values())
+FEED_QUOTA = {"useful": 24, "noise": 6}
+RADAR_QUOTA = {"technology": 15, "business": 5}
+STRATUM_RU = {"useful": "полезных статей ленты", "noise": "шумных статей ленты",
+              "technology": "технологий на радаре", "business": "бизнес-сигналов радара"}
+# Полезная статья — балл не ниже этого порога: тот же порог, что «сильные» в аналитике и «готовые
+# в дайджест» на обзоре.
+USEFUL_SCORE = 60
 CATEGORY_RU = {"technology": "технология", "business": "бизнес"}
 DEFAULT_SEED = 20261014
 DEFAULT_SINCE = "2026-08-01"
@@ -115,30 +127,23 @@ def default_until() -> str:
 
 
 def select_sample(*, seed: int, since: str, until: str) -> list[dict[str, Any]]:
-    """Статьи ленты и сигналы радара, темы по кругу. Те же seed и окно — те же сигналы."""
-    feed = _round_robin([item for item in _feed_candidates(since, until) if _markable(item)], FEED_COUNT, seed)
+    """Доли ленты (полезные, шумные) и радара (технологии, бизнес), в каждой темы по кругу. Чужой
+    доле недобор не отдаём — его покажет shortfall. Те же seed и окно — те же сигналы."""
+    feed_pool = [item for item in _feed_candidates(since, until) if _markable(item)]
+    feed = [item for stratum, quota in FEED_QUOTA.items()
+            for item in _round_robin([one for one in feed_pool if one["stratum"] == stratum], quota, seed)]
     taken = {item["article_id"] for item in feed}
-    pool = [item for item in _radar_candidates(until) if item.get("article_id") not in taken and _markable(item)]
-    radar: list[dict[str, Any]] = []
-    for category, quota in RADAR_QUOTA.items():
-        radar += _round_robin([item for item in pool if item["category_code"] == category], quota, seed)
-    if len(radar) < RADAR_COUNT:  # одной категории не хватило — добираем другой, недобор покажет shortfall
-        chosen = {item["id"] for item in radar}
-        radar += _round_robin([item for item in pool if item["id"] not in chosen], RADAR_COUNT - len(radar), seed)
+    radar_pool = [item for item in _radar_candidates(until) if item.get("article_id") not in taken and _markable(item)]
+    radar = [item for stratum, quota in RADAR_QUOTA.items()
+             for item in _round_robin([one for one in radar_pool if one["stratum"] == stratum], quota, seed)]
     return feed + radar
 
 
 def shortfall(sample: list[dict[str, Any]]) -> list[str]:
-    """Чего не хватает до набора экзамена: 35 + 15 и обе категории на радаре."""
-    origin = Counter(item["origin"] for item in sample)
-    problems = []
-    if origin["feed"] < FEED_COUNT:
-        problems.append(f"статей ленты {origin['feed']} из {FEED_COUNT}")
-    if origin["radar"] < RADAR_COUNT:
-        problems.append(f"сигналов радара {origin['radar']} из {RADAR_COUNT}")
-    categories = {item["category_code"] for item in sample if item["origin"] == "radar"}
-    problems += [f"на радаре нет категории «{CATEGORY_RU[code]}»" for code in RADAR_QUOTA if code not in categories]
-    return problems
+    """Чего не хватает до набора экзамена: у каждой доли своя квота."""
+    counts = Counter(item["stratum"] for item in sample)
+    return [f"{STRATUM_RU[stratum]} {counts[stratum]} из {quota}"
+            for stratum, quota in {**FEED_QUOTA, **RADAR_QUOTA}.items() if counts[stratum] < quota]
 
 
 def export_pack(out_dir: str | Path | None, *, seed: int | None = None, since: str | None = None,
@@ -163,7 +168,7 @@ def export_pack(out_dir: str | Path | None, *, seed: int | None = None, since: s
         "dictionaries_version": dictionaries["version"], "text_limit": TEXT_LIMIT,
         "composition": result["composition"],
         "items": [{key: item.get(key) for key in (
-            "id", "origin", "article_id", "signal_id", "evidence_id", "url", "category", "theme",
+            "id", "origin", "stratum", "article_id", "signal_id", "evidence_id", "url", "category", "theme",
             "text_sha256", "text_chars")} for item in sample],
     }
     (out / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -172,7 +177,7 @@ def export_pack(out_dir: str | Path | None, *, seed: int | None = None, since: s
 
 def composition(sample: list[dict[str, Any]]) -> dict[str, Any]:
     return {key: dict(sorted(Counter(item[key] for item in sample).items()))
-            for key in ("origin", "category", "theme")}
+            for key in ("origin", "stratum", "category", "theme")}
 
 
 class PackError(ValueError):
@@ -192,17 +197,24 @@ def _checked_out_dir(out_dir: str | Path | None) -> Path:
 
 
 def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
-    """Принятые отбором статьи (relevant = TRUE), видимые в ленте, собранные в окне."""
+    """Принятые отбором статьи (relevant = TRUE), видимые в ленте, собранные в окне, с долей:
+    полезная или шумная (_feed_stratum). Отмеченные аналитиком дубликатом — мимо."""
     with repository.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
             SELECT a.id AS article_id, a.title, a.url, a.raw_text AS text,
                    COALESCE(a.published_at, a.collected_at) AS published,
-                   COALESCE(p.name, t.name, 'без темы') AS theme, 'business' AS category_code
+                   COALESCE(p.name, t.name, 'без темы') AS theme, 'business' AS category_code,
+                   sc.total_score AS score,
+                   EXISTS (SELECT 1 FROM user_article_states u
+                           WHERE u.article_id = a.id AND u.status = 'digest') AS in_digest,
+                   EXISTS (SELECT 1 FROM user_article_states u
+                           WHERE u.article_id = a.id AND u.status = 'noise') AS marked_noise
             FROM articles a
             JOIN article_cards c ON c.article_id = a.id
             JOIN sources s ON s.id = a.source_id
+            LEFT JOIN article_scores sc ON sc.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags p ON p.id = t.parent_id
@@ -210,12 +222,27 @@ def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
               AND a.collected_at >= %s::date AND a.collected_at < %s::date
               AND a.full_text_status IS DISTINCT FROM 'mismatch'
               AND length(btrim(COALESCE(a.raw_text, ''))) >= %s
+              AND NOT EXISTS (SELECT 1 FROM user_article_states u
+                              WHERE u.article_id = a.id AND u.status = 'duplicate')
             ORDER BY a.id
             """,
             (since, until, config.MIN_ARTICLE_TEXT_CHARS),
         )
         rows = cur.fetchall()
-    return [_item("feed", f"article:{row['article_id']}", row) for row in rows]
+    return [_item("feed", f"article:{row['article_id']}", {**row, "stratum": stratum})
+            for row in rows if (stratum := _feed_stratum(row))]
+
+
+def _feed_stratum(row: dict[str, Any]) -> str | None:
+    """Доля статьи: отметка аналитика сильнее балла. «В дайджест» — полезная, «шум» — шумная; без
+    отметок — по баллу. Ни балла, ни отметок — неизвестно: в выборку не идёт."""
+    if row["in_digest"]:
+        return "useful"
+    if row["marked_noise"]:
+        return "noise"
+    if row["score"] is None:
+        return None
+    return "useful" if row["score"] >= USEFUL_SCORE else "noise"
 
 
 def _radar_candidates(until: str) -> list[dict[str, Any]]:
@@ -259,7 +286,8 @@ def _item(origin: str, item_id: str, row: dict[str, Any]) -> dict[str, Any]:
     text = publication_text(row.pop("text"))
     code = row.pop("category_code")
     return {
-        **row, "origin": origin, "id": item_id,
+        # Доля радара — его категория; у ленты её посчитал _feed_stratum.
+        "stratum": code, **row, "origin": origin, "id": item_id,
         "title": _CONTROL_RE.sub(" ", row.get("title") or "").strip(), "text": text,
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "text_chars": len(text),
         "published": _date(row.get("published")), "category_code": code,

@@ -43,7 +43,7 @@ def _source_and_tags(conn):
     return source_id, roots
 
 
-def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True, prefix="feed", text=None):
+def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True, prefix="feed", text=None, score=75):
     ids = []
     for i in range(n):
         at = _utc(month, day or 1 + i % 27)
@@ -62,8 +62,21 @@ def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True,
             "INSERT INTO article_tags (article_id, tag_id, confidence, rationale) VALUES (%s, %s, 0.9, 'TAG_RATIONALE')",
             (article_id, tag_ids[i % len(tag_ids)]),
         )
+        if score is not None:
+            conn.execute("INSERT INTO article_scores (article_id, total_score) VALUES (%s, %s)", (article_id, score))
         ids.append(article_id)
     return ids
+
+
+def _mark(conn, article_ids, status):
+    """Отметка аналитика в ленте: «в дайджест», «шум», «дубликат»."""
+    user_id = conn.execute(
+        "INSERT INTO users (email, password_salt, password_hash, role) VALUES (%s, 'x', 'x', 'user') RETURNING id",
+        (f"{status}-{article_ids[0]}@example.test",),
+    ).fetchone()[0]
+    for article_id in article_ids:
+        conn.execute("INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, %s)",
+                     (user_id, article_id, status))
 
 
 def _radar(key, category, theme, *, fetched=True, filtered=False, seen="2026-09-10", text=None):
@@ -96,14 +109,24 @@ def corpus(isolated_db):
         # Часть статей помечена дочерним тегом: тема — корневой.
         child = conn.execute("INSERT INTO tags (name, parent_id) VALUES ('Бурение: долота', %s) RETURNING id",
                              (roots[0],)).fetchone()[0]
-        accepted = _seed_feed(conn, source_id, roots + [child], 40)
+        # Полезная статья — балл не ниже порога дайджеста или отметка «в дайджест»; шумная — балл ниже
+        # порога или отметка «шум». Отметка человека сильнее балла.
+        useful = _seed_feed(conn, source_id, roots + [child], 30)
+        noise = _seed_feed(conn, source_id, roots, 10, score=30, prefix="noise")
+        digest_low = _seed_feed(conn, source_id, roots, 1, score=20, prefix="digest-low")
+        noise_high = _seed_feed(conn, source_id, roots, 1, score=95, prefix="noise-high")
+        unscored = _seed_feed(conn, source_id, roots, 1, score=None, prefix="unscored")
+        duplicate = _seed_feed(conn, source_id, roots, 1, score=80, prefix="duplicate")
+        _mark(conn, digest_low, "digest")
+        _mark(conn, noise_high, "noise")
+        _mark(conn, duplicate, "duplicate")
         rejected = _seed_feed(conn, source_id, roots, 5, relevant=False, prefix="rejected")
         july = _seed_feed(conn, source_id, roots, 5, month=7, prefix="july")
         reprint = _seed_feed(conn, source_id, roots, 1, prefix="reprint")
         conn.execute("INSERT INTO article_reprints (article_id, primary_id) VALUES (%s, %s)",
-                     (reprint[0], accepted[0]))
+                     (reprint[0], useful[0]))
         conn.commit()
-    tech = [_radar(f"tech{i}", "technology", THEMES[i % 3]) for i in range(12)]
+    tech = [_radar(f"tech{i}", "technology", THEMES[i % 3]) for i in range(18)]
     business = [_radar(f"biz{i}", "business", THEMES[i % 2]) for i in range(8)]
     excluded = [
         _radar("filtered", "technology", THEMES[0], filtered=True),
@@ -115,7 +138,9 @@ def corpus(isolated_db):
         conn.commit()
     return {
         "source": source_id, "tags": roots,
-        "feed": set(accepted), "not_feed": set(rejected + july + reprint),
+        "useful": set(useful + digest_low), "noise": set(noise + noise_high),
+        "feed": set(useful + digest_low + noise + noise_high),
+        "not_feed": set(rejected + july + reprint + unscored + duplicate),
         "tech": set(tech), "business": set(business), "not_radar": set(excluded + [merged]),
     }
 
@@ -159,7 +184,7 @@ def test_dry_run_prints_the_sample_and_writes_nothing(corpus, tmp_path, capsys):
     _run("--out", str(out), "--until", "2026-10-01")
 
     printed = capsys.readouterr().out
-    assert "лента 35" in printed and "радар 15" in printed
+    assert "лента 30" in printed and "радар 20" in printed
     assert "бизнес" in printed and "технология" in printed
     for theme in THEMES:
         assert theme in printed
@@ -175,8 +200,14 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
     items = _manifest(out)["items"]
     feed = {item["article_id"] for item in items if item["origin"] == "feed"}
     radar = {item["signal_id"] for item in items if item["origin"] == "radar"}
-    assert len(items) == 50 and len(feed) == 35 and len(radar) == 15
+    assert len(items) == 50 and len(feed) == 30 and len(radar) == 20
     assert feed <= corpus["feed"] and not feed & corpus["not_feed"]
+    # Эксперт размечает в основном полезное: 24 полезных и 6 шумных — намеренно, проверить «нет связи».
+    strata = {stratum: {item["article_id"] for item in items if item.get("stratum") == stratum}
+              for stratum in ("useful", "noise")}
+    assert len(strata["useful"]) == 24 and strata["useful"] <= corpus["useful"]
+    assert len(strata["noise"]) == 6 and strata["noise"] <= corpus["noise"]
+    assert len(radar & corpus["tech"]) == 15 and len(radar & corpus["business"]) == 5
     assert radar <= corpus["tech"] | corpus["business"] and not radar & corpus["not_radar"]
     assert radar & corpus["tech"] and radar & corpus["business"]
     assert {item["category"] for item in items} == {"бизнес", "технология"}
@@ -227,7 +258,7 @@ def test_feed_signals_of_the_unified_store_stay_out_of_the_radar_part(corpus, tm
     _run("--out", str(out), "--apply")
 
     radar = {item["signal_id"] for item in _manifest(out)["items"] if item["origin"] == "radar"}
-    assert len(radar) == 15 and radar <= corpus["tech"] | corpus["business"]
+    assert len(radar) == 20 and radar <= corpus["tech"] | corpus["business"]
 
 
 def test_same_seed_and_window_give_the_same_sample_and_never_overwrite(corpus, tmp_path):
@@ -249,6 +280,27 @@ def test_same_seed_and_window_give_the_same_sample_and_never_overwrite(corpus, t
     # Повтор в ту же папку не затирает таблицу, которую эксперт мог уже начать размечать.
     with pytest.raises(SystemExit):
         _run("--out", str(first), "--apply", *window)
+
+
+def test_usefulness_comes_from_the_score_and_the_analysts_marks(isolated_db, capsys):
+    # Владелец 15.10: в первой таблице половина статей ленты — не про нефтесервис (цены, газификация,
+    # происшествия). Отбор пропускает всё «про ТЭК»; полезность — балл не ниже порога дайджеста или
+    # отметка «в дайджест», а отметка «шум» делает статью шумной при любом балле.
+    with repository.get_connection() as conn:
+        source_id, roots = _source_and_tags(conn)
+        _seed_feed(conn, source_id, roots, 1, score=75, prefix="strong")
+        _mark(conn, _seed_feed(conn, source_id, roots, 1, score=20, prefix="digest-low"), "digest")
+        _mark(conn, _seed_feed(conn, source_id, roots, 1, score=95, prefix="noise-high"), "noise")
+        _seed_feed(conn, source_id, roots, 1, score=30, prefix="weak")
+        _seed_feed(conn, source_id, roots, 1, score=None, prefix="unscored")  # балла ещё нет — не знаем
+        _mark(conn, _seed_feed(conn, source_id, roots, 1, score=80, prefix="duplicate"), "duplicate")
+        conn.commit()
+
+    _run("--until", "2026-10-01")
+
+    printed = capsys.readouterr().out
+    assert "полезных статей ленты 2 из 24" in printed
+    assert "шумных статей ленты 2 из 6" in printed
 
 
 def test_block_pages_and_unreadable_texts_are_not_offered_to_the_expert(isolated_db, capsys):
