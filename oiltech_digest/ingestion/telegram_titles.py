@@ -21,7 +21,7 @@ from typing import Any
 
 # Модулем, а не функцией: тестовая фикстура подменяет connection.get_connection, и прямой
 # импорт функции писал бы в настоящую базу (так было с source_overrides).
-from oiltech_digest.db import connection
+from oiltech_digest.db import connection, feed_signals
 from oiltech_digest.ingestion.telegram_parser import title_from_text
 from oiltech_digest.processing.domain_glossary import normalize_scripts
 
@@ -164,4 +164,7 @@ def repair(
                         (normalize_scripts(change["after"][:200]), change["article_id"], change["title_ru_before"]),
                     )
             conn.commit()
+    if apply and changes:
+        # Сигнал ленты повторяет заголовок статьи (#95).
+        feed_signals.sync_quietly(sorted({change["article_id"] for change in changes}))
     return {"scanned": len(rows), "changed": len(changes), "applied": apply, "changes": changes}

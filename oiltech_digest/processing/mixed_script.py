@@ -13,7 +13,7 @@ from typing import Any
 
 from oiltech_digest import network_policy
 # Модулем, а не функцией: тестовая фикстура подменяет connection.get_connection.
-from oiltech_digest.db import connection, repository
+from oiltech_digest.db import connection, feed_signals, repository
 from oiltech_digest.processing.domain_glossary import mixed_script_words, normalize_scripts
 
 # Что перегенерирует задача process_articles с пометкой only (external_ai.stages_to_write).
@@ -50,6 +50,9 @@ def repair_cards(*, apply: bool = False, article_ids: list[int] | None = None) -
                     (change["after"], change["article_id"], change["before"]),
                 )
             conn.commit()
+    if apply and changes:
+        # Сигнал ленты повторяет заголовок и суть статьи (#95).
+        feed_signals.sync_quietly(sorted({change["article_id"] for change in changes}))
     return {"changed_fields": len(changes), "applied": apply, "changes": changes}
 
 

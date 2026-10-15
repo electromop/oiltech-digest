@@ -156,21 +156,21 @@ def _build_signal_context_bundle(*, include_rejected: bool) -> dict[str, Any]:
         )
         topics = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             SELECT *
             FROM signals
-            WHERE (%s OR maturity <> 'reject')
+            WHERE {repository.radar_origin_sql("signals")} AND (%s OR maturity <> 'reject')
             ORDER BY score DESC, last_seen_at DESC, id DESC
             """,
             (include_rejected,),
         )
         signals = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             SELECT se.*, s.signal_key
             FROM signal_evidence se
             JOIN signals s ON s.id = se.signal_id
-            WHERE (%s OR s.maturity <> 'reject')
+            WHERE {repository.radar_origin_sql("s")} AND (%s OR s.maturity <> 'reject')
             ORDER BY s.score DESC, se.strength DESC, se.published_at DESC NULLS LAST, se.id DESC
             """,
             (include_rejected,),
@@ -185,11 +185,11 @@ def _build_signal_context_bundle(*, include_rejected: bool) -> dict[str, Any]:
         )
         memories = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             WITH exported_signals AS (
               SELECT id, signal_key
               FROM signals
-              WHERE (%s OR maturity <> 'reject')
+              WHERE {repository.radar_origin_sql("signals")} AND (%s OR maturity <> 'reject')
             ),
             exported_urls AS (
               SELECT se.source_url
@@ -203,19 +203,22 @@ def _build_signal_context_bundle(*, include_rejected: bool) -> dict[str, Any]:
             LEFT JOIN signals s ON s.id = sfe.signal_id
             LEFT JOIN signals duplicate_signal ON duplicate_signal.id = sfe.duplicate_of_signal_id
             WHERE sfe.signal_id IN (SELECT id FROM exported_signals)
-               OR sfe.source_url IN (SELECT source_url FROM exported_urls)
+               OR (sfe.source_url IN (SELECT source_url FROM exported_urls)
+                   -- Отзыв о сигнале ленты с той же публикацией — не отзыв радара (#95).
+                   AND NOT EXISTS (SELECT 1 FROM signals fs
+                                   WHERE fs.id = sfe.signal_id AND NOT {repository.radar_origin_sql("fs")}))
             ORDER BY sfe.created_at DESC, sfe.id DESC
             """,
             (include_rejected,),
         )
         feedback = list(cur.fetchall())
         cur.execute(
-            """
+            f"""
             SELECT ste.*, s.signal_key
             FROM signal_training_examples ste
             LEFT JOIN signals s ON s.id = ste.signal_id
             WHERE ste.signal_id IN (
-              SELECT id FROM signals WHERE (%s OR maturity <> 'reject')
+              SELECT id FROM signals WHERE {repository.radar_origin_sql("signals")} AND (%s OR maturity <> 'reject')
             )
             ORDER BY ste.created_at DESC, ste.id DESC
             """,

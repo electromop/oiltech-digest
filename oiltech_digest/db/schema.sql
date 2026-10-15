@@ -771,6 +771,12 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_stage TEXT;   -- search / ju
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS filter_reason TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS verdict_reason TEXT;     -- почему такое решение (судья)
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS decision_log JSONB;      -- ход решения: [{stage, text}]
+-- Единое хранилище сигналов (#95, ADR 0003): сигнал ленты — принятая отбором статья
+-- (origin_article_id — её главная публикация), находка поиска — радар. Прежние — радар.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'radar';  -- radar / feed
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS origin_article_id BIGINT REFERENCES articles(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_signals_origin_article ON signals(origin_article_id) WHERE origin_article_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_signals_origin_category ON signals(origin, signal_category);
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;

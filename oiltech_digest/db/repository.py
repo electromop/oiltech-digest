@@ -1143,21 +1143,31 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
         conn.commit()
 
 
+def signal_publication_count_sql(alias: str = "s") -> str:
+    """Число публикаций сигнала (evidence_count): его ссылки, а у сигнала ленты — и его статья,
+    когда её адрес держит карточка радара (ссылка на адрес одна — feed_signals): в списке
+    публикаций она показана и у него (list_radar_evidence), и число должно с ним сходиться."""
+    a = alias
+    return (
+        f"((SELECT COUNT(*) FROM signal_evidence ce WHERE ce.signal_id = {a}.id)"
+        f" + CASE WHEN {a}.origin = '{SIGNAL_ORIGIN_FEED}' AND EXISTS ("
+        "SELECT 1 FROM articles ca JOIN signal_evidence cb ON cb.source_url = ca.url"
+        f" WHERE ca.id = {a}.origin_article_id AND cb.signal_id IS DISTINCT FROM {a}.id)"
+        " THEN 1 ELSE 0 END)::int"
+    )
+
+
 def refresh_signal_evidence_count(signal_id: int) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            """
-            UPDATE signals
-            SET evidence_count = (
-                  SELECT COUNT(*)::int
-                  FROM signal_evidence
-                  WHERE signal_id = %s
-                ),
+            f"""
+            UPDATE signals s
+            SET evidence_count = {signal_publication_count_sql("s")},
                 updated_at = now()
-            WHERE id = %s
+            WHERE s.id = %s
             RETURNING evidence_count
             """,
-            (signal_id, signal_id),
+            (signal_id,),
         )
         row = cur.fetchone()
         conn.commit()
@@ -1193,6 +1203,15 @@ _SIGNAL_APPROVED_SQL = (
     + ", ".join(f"'{verdict}'" for verdict in SIGNAL_POSITIVE_VERDICTS)
     + ")"
 )
+# Происхождение сигнала (#95, ADR 0003): находка поиска радара или статья ленты, принятая отбором.
+SIGNAL_ORIGIN_RADAR = "radar"
+SIGNAL_ORIGIN_FEED = "feed"
+
+
+def radar_origin_sql(alias: str = "s") -> str:
+    """Сигнал — находка радара. Всё, что радар показывает, считает и отдаёт в снимки, берёт
+    только их: сигналы ленты радар не меняют (#95)."""
+    return f"{alias}.origin = '{SIGNAL_ORIGIN_RADAR}'"
 
 
 def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit: int = 300) -> list[dict]:
@@ -1202,8 +1221,9 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
     или отклонил, и повтор того же события не должен вернуться новой карточкой.
     Неразобранные — за окно. fresh — появилась за последние дни: только такие
     неразобранные карточки сверяются между собой (см. signal_dedup._eligible).
-    hidden — не на экране по качеству или в архиве: такая не забирает себе новую находку
-    того же события (signal_dedup._rank)."""
+    hidden — не видна ни в одной витрине (качество, архив): такая не забирает себе новую
+    находку того же события (signal_dedup._rank). Бизнес-находка видна в витрине «бизнес» —
+    не скрытая (#95)."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1236,6 +1256,9 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
               ) top
             ) ev ON TRUE
             WHERE s.merged_into_signal_id IS NULL
+              -- Только находки радара (#95): сигналы ленты (тысячи в месяц) вытеснили бы
+              -- карточки радара из снимка в 300 штук; склейку ленты с радаром сделает агент дедупа.
+              AND {radar}
               -- Отсеянное в дедуп не идёт: новое событие не склеится с браком. Разобранное
               -- человеком — идёт: одобренная отсеянная видна на радаре, и её повтор должен
               -- стать её дублем; отклонённая — главной (_rank), повтор не вернётся.
@@ -1243,7 +1266,8 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
               AND ({reviewed} OR s.last_seen_at >= now() - make_interval(days => %s))
             ORDER BY {reviewed} DESC, s.last_seen_at DESC, s.id DESC
             LIMIT %s
-            """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s"), visible=_radar_quality_sql("s")),
+            """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s"), visible=_any_showcase_quality_sql("s"),
+                       radar=radar_origin_sql("s")),
             (fresh_days, window_days, limit),
         )
         rows = cur.fetchall()
@@ -1321,8 +1345,11 @@ def _signal_holds_evidence_sql(alias: str) -> str:
     Скрытую качеством или архивом неразобранную карточку повторная находка того же материала
     не узнаёт как «её же» и забирает ссылку себе: иначе событие пропало бы с экрана вместе с
     ней (02.10). Ссылки разобранной радар заново не приносит (list_reviewed_signal_urls)."""
-    return (f"({alias}.merged_into_signal_id IS NULL"
-            f" AND ({_radar_quality_sql(alias)} OR {_SIGNAL_REVIEWED_SQL.format(alias=alias)}))")
+    # Сигнал ленты ссылку у радара не держит (#95): иначе находка поиска с адресом статьи
+    # ленты стала бы его повтором и пропала с радара. Бизнес-находка радара держит — её
+    # видно в витрине «бизнес».
+    return (f"({radar_origin_sql(alias)} AND {alias}.merged_into_signal_id IS NULL"
+            f" AND ({_any_showcase_quality_sql(alias)} OR {_SIGNAL_REVIEWED_SQL.format(alias=alias)}))")
 
 
 def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
@@ -1356,6 +1383,7 @@ def archive_signal_candidates(*, created_before: date | str | None = None, free_
     её не прячет ничто (_SIGNAL_IN_DIGEST_SQL)."""
     clauses = ["s.archived_at IS NULL", "s.merged_into_signal_id IS NULL"]
     params: list = []
+    base_clauses = len(clauses)
     if created_before:
         clauses.append("s.first_seen_at < %s::date")
         params.append(str(created_before))
@@ -1365,9 +1393,11 @@ def archive_signal_candidates(*, created_before: date | str | None = None, free_
     if ids:
         clauses.append("s.id = ANY(%s)")
         params.append([int(value) for value in ids])
-    if len(clauses) == 2:
+    if len(clauses) == base_clauses:
         raise ValueError("Нужно условие отбора: дата, свободная тема или номера карточек")
     clauses.append(f"NOT {_SIGNAL_IN_DIGEST_SQL.format(alias='s')}")
+    # Архив — инструмент радара (#95): сигналы ленты по дате поступления сюда не попадают.
+    clauses.append(radar_origin_sql("s"))
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1493,8 +1523,10 @@ def radar_weekly_summary(*, days: int = 7) -> dict:
         cur.execute(
             f"""
             SELECT verdict, COUNT(*) AS count
-            FROM signal_feedback_events
+            FROM signal_feedback_events sfe
             WHERE created_at >= {since_sql} AND COALESCE(verdict, '') <> ''
+              -- Отзывы радара (#95): отзыв о сигнале ленты в итоги радара не входит.
+              AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND NOT {radar_origin_sql('fs')})
             GROUP BY verdict ORDER BY 2 DESC, 1
             """,
             {"days": days},
@@ -1526,7 +1558,7 @@ def radar_score_calibration() -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             WITH latest AS (
               SELECT DISTINCT ON (sfe.signal_id) sfe.signal_id, sfe.verdict
               FROM signal_feedback_events sfe
@@ -1542,7 +1574,7 @@ def radar_score_calibration() -> list[dict]:
               FROM latest l
               JOIN signals s ON s.id = l.signal_id
               CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.score_items_json, '[]'::jsonb)) item
-              WHERE s.score_profile = 'tech_radar'
+              WHERE s.score_profile = 'tech_radar' AND {radar_origin_sql("s")}
             )
             SELECT criterion_id, max(name) AS name,
                    round(avg(score) FILTER (WHERE verdict = ANY(%s)), 1) AS too_high_avg,
@@ -1560,6 +1592,34 @@ def radar_score_calibration() -> list[dict]:
             {key: (float(value) if key.endswith("_avg") and value is not None else value) for key, value in row.items()}
             for row in cur.fetchall()
         ]
+
+
+def business_radar_cards() -> list[dict]:
+    """Бизнес-находки радара, видимые в витрине «бизнес», со ссылками (свои и склеенных
+    дублей) — для разовой склейки пар, которые наплодило прежнее правило: пока бизнес-карточка
+    была скрыта с радара, новая находка того же события в неё не садилась (#95)."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT s.id, s.signal_key, s.title, s.title_ru, s.score, s.evidence_count,
+                   s.companies_json AS companies,
+                   to_char(s.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS first_seen_day,
+                   {_SIGNAL_REVIEWED_SQL.format(alias="s")} AS reviewed,
+                   (SELECT sfe.verdict FROM signal_feedback_events sfe
+                    WHERE sfe.signal_id = s.id AND COALESCE(sfe.verdict, '') <> ''
+                    ORDER BY sfe.created_at DESC, sfe.id DESC LIMIT 1) AS verdict,
+                   ARRAY(SELECT e.source_url FROM signal_evidence e
+                         WHERE e.signal_id = s.id
+                            OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id)
+                        ) AS urls
+            FROM signals s
+            WHERE {radar_origin_sql("s")} AND {_BUSINESS_VISIBLE_SQL}
+            ORDER BY s.id
+            """
+        )
+        return [{**row, "companies": list(row["companies"] or []), "urls": list(row["urls"] or [])}
+                for row in cur.fetchall()]
 
 
 def radar_cards_for_recall() -> list[dict]:
@@ -1581,6 +1641,7 @@ def radar_cards_for_recall() -> list[dict]:
                         ) AS urls
             FROM signals s
             WHERE s.merged_into_signal_id IS NULL
+              AND {radar_origin_sql("s")}
               AND (s.filter_stage IS NULL OR {_SIGNAL_APPROVED_SQL.format(alias="s")}
                    OR {_SIGNAL_IN_DIGEST_SQL.format(alias="s")})
             """
@@ -1595,12 +1656,10 @@ def refresh_all_signal_evidence_counts() -> int:
     получателя: у прежней оставалось старое число при пустом списке ссылок."""
     with get_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             WITH actual AS (
-              SELECT s.id, COUNT(e.id)::int AS n
-              FROM signals s
-              LEFT JOIN signal_evidence e ON e.signal_id = s.id
-              GROUP BY s.id
+              SELECT s2.id, {signal_publication_count_sql("s2")} AS n
+              FROM signals s2
             )
             UPDATE signals s
             SET evidence_count = actual.n, updated_at = now()
@@ -1877,30 +1936,23 @@ def _radar_card_evidence_exists(condition: str = "TRUE") -> str:
     )
 
 
-# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
-# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
-# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09).
-def _radar_quality_sql(alias: str = "s") -> str:
-    """Что радар не показывает по качеству (замечания Виктора 29.09). Карточка хранится:
-    правило — показа, срок и категории меняются без пересчёта. NULL — карточка до правки.
+def _quality_rules_sql(alias: str, *machine_rules: str) -> str:
+    """Правила качества витрины поверх правил машины `machine_rules` (замечания Виктора 29.09):
 
     - архив (ранние карточки со свободной темой) — обратимо, `unarchive-signals`;
-    - бизнес и «другое» — не техрадар, сохраняются для будущей бизнес-вкладки;
     - ссылки о разных событиях — одна карточка смешала бы две истории (сигнал 71);
     - нет связи с нефтесервисом — «релевантности мало» (Виктор 29.09);
+    - отсеяно поиском, судьёй, ревью пачки или сбоем судьи — хранится для разбора заказчиком;
     - событие старше срока — «нашёл очень старый сигнал».
 
-    Категорию, смешанность и связь с нефтесервисом ставит судья, и повторная находка их
-    перезаписывает: решение машины не прячет карточку, которую человек одобрил (последний
-    вердикт положительный). Отказ, «не тот блок», «шум» её не возвращают: разметка учит
-    агента, карточка остаётся в «Отсеянных и скрытых». Выбранную «в дайджест» не прячет ни одно
-    правило, включая архив: иначе её не снять с выпуска (mark_signal_merged).
-
-    Отсев (filter_stage) — тоже решение машины: одобренная в «Отсеянных» карточка выходит
-    на радар, иначе разбор отсеянного заказчиком ничего бы не менял."""
+    Решения машины (категорию, смешанность, связь с нефтесервисом ставит судья, отсев — поиск,
+    судья и ревью) не прячут карточку, которую человек одобрил (последний вердикт
+    положительный). Отказ, «не тот блок», «шум» её не возвращают: разметка учит агента,
+    карточка остаётся в «Отсеянных и скрытых». Выбранную «в дайджест» не прячет ни одно правило,
+    включая архив: иначе её не снять с выпуска (mark_signal_merged)."""
     a = alias
     machine = " AND ".join([
-        f"COALESCE({a}.signal_category, 'technology') = 'technology'",
+        *machine_rules,
         f"{a}.mixed_events IS NOT TRUE",
         # «Релевантности мало» (Виктор 29.09): общепромышленное без связи с нефтесервисом.
         f"COALESCE({a}.oilfield_relevance, 'direct') <> 'none'",
@@ -1917,20 +1969,69 @@ def _radar_quality_sql(alias: str = "s") -> str:
     return f"({_SIGNAL_IN_DIGEST_SQL.format(alias=a)} OR ({' AND '.join(parts)}))"
 
 
+# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
+# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
+# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09).
+def _radar_quality_sql(alias: str = "s") -> str:
+    """Что технологический радар не показывает по качеству (_quality_rules_sql) плюс бизнес и
+    «другое» — не техрадар (с 14.10 бизнес — своя витрина, _business_quality_sql). Карточка
+    хранится: правило — показа, срок и категории меняются без пересчёта. NULL — карточка до
+    правки. Категорию ставит судья — одобренная человеком бизнес-карточка на радаре видна."""
+    return _quality_rules_sql(alias, f"COALESCE({alias}.signal_category, 'technology') = 'technology'")
+
+
+def _business_quality_sql(alias: str = "s") -> str:
+    """Что витрина «бизнес» показывает из находок радара (#95, ADR 0003): категория «бизнес» и
+    те же правила качества, что у радара. Категорию одобрение не перекрывает: одобренная
+    технологическая карточка в бизнес не попадает."""
+    return f"({alias}.signal_category = 'business' AND {_quality_rules_sql(alias)})"
+
+
+def _any_showcase_quality_sql(alias: str = "s") -> str:
+    """Находка радара проходит качество своей витрины — технологий или бизнеса. Для дедупа и для
+    того, кто держит ссылку: бизнес-находку видно в витрине «бизнес», она не скрытая, и новая
+    находка того же события садится в неё, а не плодит пару (№186/№343, 14.10)."""
+    return f"({_radar_quality_sql(alias)} OR {_business_quality_sql(alias)})"
+
+
 # Какую карточку вообще показывать: со ссылкой (своей или склеенного дубля) — или отсеянную:
 # находка поиска без ссылки (битый адрес) тоже видна в разборе. Одно условие для радара и для
 # «Отсеянных и скрытых»: одобренная или выбранная «в дайджест» отсеянная без ссылки переходит
 # на радар, а не пропадает из обоих списков.
 _RADAR_CARD_SHOWN_SQL = f"({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
+# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
+# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
+# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09). Радар —
+# только находки поиска (#95): сигналы ленты в его списке, числах, «Отсеянных» и снимках не
+# участвуют, и радар выдаёт то же, что до единого хранилища.
 _RADAR_VISIBLE_SQL = (
-    f"s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}"
+    f"{radar_origin_sql()} AND s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}"
 )
 # «Отсеянные и скрытые» (экран, переключатель; только админу — решение 05.10): проверить, не отсеяно
 # ли лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут —
 # их ссылки и так в главной карточке.
 _RADAR_HIDDEN_SQL = (
-    f"s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()}) AND {_RADAR_CARD_SHOWN_SQL}"
+    f"{radar_origin_sql()} AND s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()})"
+    f" AND {_RADAR_CARD_SHOWN_SQL}"
 )
+# Сигнал ленты виден, пока видна его статья в ленте (feed_window.visible_sql): отбор передумал,
+# статью пометили на удаление или её источник в архиве — сигнал уходит вместе с ней. Правила
+# качества радара (смешанные ссылки, отсев, «не про нефтесервис», срок события) — о находках
+# поиска: статью, которую принял отбор, они не прячут. Ссылку сигнал ленты мог отдать карточке
+# радара (feed_signals), поэтому показ — по статье, а не по ссылке.
+_FEED_ARTICLE_SHOWN_SQL = (
+    "EXISTS (SELECT 1 FROM articles fa JOIN sources fs ON fs.id = fa.source_id"
+    " LEFT JOIN article_cards fc ON fc.article_id = fa.id"
+    f" WHERE fa.id = s.origin_article_id AND {visible_sql('fa', 'fc', 'fs')})"
+)
+# Витрина «бизнес» — сигналы категории «бизнес» обоих происхождений.
+_BUSINESS_VISIBLE_SQL = (
+    "s.merged_into_signal_id IS NULL AND s.signal_category = 'business'"
+    f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}'"
+    f" THEN s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}"
+    f" ELSE {_business_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL} END"
+)
+SIGNAL_SHOWCASES = ("technology", "business")
 RADAR_FILTER_STAGES = {
     "search": "поиск",
     "judge": "судья",
@@ -1979,7 +2080,10 @@ _RADAR_FEEDBACK_SQL = """
      OR (sfe.source_url IS NOT NULL AND EXISTS (
           SELECT 1 FROM signal_evidence se
           WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
-        ))"""
+        )
+        -- Публикация бывает общей у сигнала ленты и карточки радара (#95): отзыв о сигнале
+        -- другого происхождения этой карточке не засчитывается.
+        AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin))"""
 # «Поступил» на экране — дата первой находки по Москве (сутки радара — московские).
 _RADAR_ARRIVAL_DATE_SQL = "(s.first_seen_at AT TIME ZONE 'Europe/Moscow')::date"
 RADAR_SORTS = {
@@ -1995,14 +2099,27 @@ def _like_contains(text: str) -> str:
     return f"%{escaped}%"
 
 
+def _showcase_visible_sql(showcase: str, *, hidden: bool = False) -> str:
+    """Видимость карточки в витрине: «технологии» — прежний радар (и его «Отсеянные и
+    скрытые»), «бизнес» — категория «бизнес» обоих происхождений (#95). Отсеянных у витрины
+    «бизнес» нет: «Отсеянные и скрытые» — разбор работы радара."""
+    if showcase not in SIGNAL_SHOWCASES:
+        raise ValueError(f"Неизвестная витрина сигналов: {showcase!r}")
+    if showcase == "business":
+        if hidden:
+            raise ValueError("«Отсеянные и скрытые» есть только у витрины технологий")
+        return _BUSINESS_VISIBLE_SQL
+    return _RADAR_HIDDEN_SQL if hidden else _RADAR_VISIBLE_SQL
+
+
 def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: str | None = None,
                    since: date | str | None = None, until: date | str | None = None,
                    min_score: float | None = None, max_score: float | None = None,
-                   hidden: bool = False) -> tuple[list[str], list]:
+                   hidden: bool = False, showcase: str = "technology") -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля»."""
-    clauses = [_RADAR_HIDDEN_SQL if hidden else _RADAR_VISIBLE_SQL]
+    clauses = [_showcase_visible_sql(showcase, hidden=hidden)]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -2046,13 +2163,13 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                  user_id: int | None = None, q: str | None = None, since: date | str | None = None,
                  until: date | str | None = None, min_score: float | None = None,
                  max_score: float | None = None, sort: str = "score_desc", offset: int = 0,
-                 hidden: bool = False) -> list[dict]:
+                 hidden: bool = False, showcase: str = "technology") -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
     hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
-        hidden=hidden,
+        hidden=hidden, showcase=showcase,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
@@ -2065,7 +2182,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             f"""
             SELECT s.*,
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
-                   {_radar_hidden_reason_sql()} AS hidden_reason,
+                   {_radar_hidden_reason_sql() if showcase == "technology" else "NULL"} AS hidden_reason,
                    -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
                    -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска.
                    {signal_month_sql('s')} AS digest_month,
@@ -2094,6 +2211,8 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
     радару (поиск их не меняет); «в дайджесте» — выбор этого пользователя, как кнопка на
     карточке. matching — сколько в текущей выборке (фильтры — как у list_signals)."""
     clauses, filter_params = _radar_filters(**filters)
+    showcase = filters.get("showcase") or "technology"
+    visible = _showcase_visible_sql(showcase)
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -2104,7 +2223,7 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})) AS with_feedback
             FROM signals s
             LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
-            WHERE {_RADAR_VISIBLE_SQL}
+            WHERE {visible}
             """,
             [user_id],
         )
@@ -2115,12 +2234,15 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
             SELECT COUNT(*) AS merged
             FROM signals d
             JOIN signals s ON s.id = d.merged_into_signal_id
-            WHERE {_RADAR_VISIBLE_SQL}
+            WHERE {visible}
             """
         )
         tiles["merged"] = int(cur.fetchone()["merged"])
-        cur.execute(f"SELECT COUNT(*) AS hidden FROM signals s WHERE {_RADAR_HIDDEN_SQL}")
-        tiles["hidden"] = int(cur.fetchone()["hidden"])
+        # «Отсеянные и скрытые» есть только у радара (_showcase_visible_sql).
+        tiles["hidden"] = 0
+        if showcase == "technology":
+            cur.execute(f"SELECT COUNT(*) AS hidden FROM signals s WHERE {_RADAR_HIDDEN_SQL}")
+            tiles["hidden"] = int(cur.fetchone()["hidden"])
         total = tiles["total"]
         matching = total
         # Скрытые — своя выборка: «N из M» считается по ним даже без других фильтров.
@@ -2139,7 +2261,7 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
             f"""
             SELECT s.theme, COUNT(*) AS count
             FROM signals s
-            WHERE {_RADAR_VISIBLE_SQL} AND {_RADAR_TOPIC_SQL}
+            WHERE {visible} AND {_RADAR_TOPIC_SQL}
             GROUP BY s.theme
             ORDER BY s.theme
             """,
@@ -2165,27 +2287,40 @@ def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, l
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             WITH members AS (
               SELECT s.id AS card_id, s.id AS member_id FROM signals s WHERE s.id = ANY(%s)
               UNION ALL
               SELECT m.merged_into_signal_id AS card_id, m.id AS member_id
               FROM signals m WHERE m.merged_into_signal_id = ANY(%s)
+            ),
+            linked AS (
+              SELECT mb.card_id, e.id AS evidence_id
+              FROM members mb
+              JOIN signal_evidence e ON e.signal_id = mb.member_id
+              UNION
+              -- Статья сигнала ленты — его публикация, даже когда её адрес держит карточка радара
+              -- (адрес уникален, ссылка остаётся у радара — feed_signals): показываем ту же ссылку.
+              SELECT s.id, e.id
+              FROM signals s
+              JOIN articles a ON a.id = s.origin_article_id
+              JOIN signal_evidence e ON e.source_url = a.url
+              WHERE s.id = ANY(%s) AND s.origin = '{SIGNAL_ORIGIN_FEED}'
             )
             SELECT *
             FROM (
-              SELECT e.*, mb.card_id AS radar_card_id,
+              SELECT e.*, l.card_id AS radar_card_id,
                      ROW_NUMBER() OVER (
-                       PARTITION BY mb.card_id
+                       PARTITION BY l.card_id
                        ORDER BY e.strength DESC, e.published_at DESC NULLS LAST, e.created_at DESC, e.id DESC
                      ) AS radar_card_rank
-              FROM members mb
-              JOIN signal_evidence e ON e.signal_id = mb.member_id
+              FROM linked l
+              JOIN signal_evidence e ON e.id = l.evidence_id
             ) ranked
             WHERE ranked.radar_card_rank <= %s
             ORDER BY ranked.radar_card_id, ranked.radar_card_rank
             """,
-            (ids, ids, limit),
+            (ids, ids, ids, limit),
         )
         evidence: dict[int, list[dict]] = {}
         for row in cur.fetchall():
@@ -2778,11 +2913,13 @@ def list_reviewed_signal_urls() -> list[str]:
     (signal_evidence.source_url уникален — повторная находка забирает материал себе)."""
     with get_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             WITH reviewed AS (
+                -- Только находки радара (#95): отзыв о сигнале ленты — не повод радару не
+                -- приносить тот же адрес.
                 SELECT f.signal_id AS id FROM signal_feedback_events f
-                WHERE f.signal_id IS NOT NULL
-                  AND (f.verdict IS NOT NULL OR f.event_type = 'comment_added')
+                JOIN signals rs ON rs.id = f.signal_id AND {radar_origin_sql("rs")}
+                WHERE (f.verdict IS NOT NULL OR f.event_type = 'comment_added')
             )
             SELECT DISTINCT e.source_url
             FROM signal_evidence e
@@ -2792,8 +2929,8 @@ def list_reviewed_signal_urls() -> list[str]:
             UNION
             SELECT DISTINCT f.source_url
             FROM signal_feedback_events f
-            WHERE f.signal_id IS NOT NULL
-              AND COALESCE(f.source_url, '') <> ''
+            JOIN signals rs ON rs.id = f.signal_id AND {radar_origin_sql("rs")}
+            WHERE COALESCE(f.source_url, '') <> ''
             """
         )
         return [str(row[0]) for row in cur.fetchall() if row[0]]
@@ -5156,6 +5293,14 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
         return cur.fetchall()
 
 
+def _sync_feed_signal(*article_ids: int) -> None:
+    """Сигнал ленты повторяет статью (#95): после записи отбора, сути, заголовка, тега или
+    балла — синхронизировать. Лениво: feed_signals сам читает константы этого модуля."""
+    from oiltech_digest.db import feed_signals
+
+    feed_signals.sync_quietly([int(value) for value in article_ids])
+
+
 def resolve_reprint_root(conn, article_id: int, *, max_hops: int = 8) -> int:
     """Корень группы перепечаток: главная копия, которая сама ничьей копией не является.
 
@@ -5280,6 +5425,8 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             (primary_id, duplicate_id),
         )
         conn.commit()
+    # Перепечатка — публикация сигнала главной; её свой сигнал — дубль главного.
+    _sync_feed_signal(duplicate_id, primary_id)
 
 
 def unmark_article_reprint(article_id: int) -> bool:
@@ -5291,12 +5438,15 @@ def unmark_article_reprint(article_id: int) -> bool:
     """
     with get_connection() as conn:
         cur = conn.execute(
-            "DELETE FROM article_reprints WHERE article_id = %s RETURNING article_id",
+            "DELETE FROM article_reprints WHERE article_id = %s RETURNING primary_id",
             (int(article_id),),
         )
-        removed = cur.fetchone() is not None
+        row = cur.fetchone()
         conn.commit()
-    return removed
+    if row is not None:
+        # Статья снова главная своего сигнала; у прежней главной — минус публикация.
+        _sync_feed_signal(article_id, int(row[0]))
+    return row is not None
 
 
 def list_article_reprints(limit: int = 50) -> list[dict]:
@@ -5741,6 +5891,7 @@ def set_article_relevance(article_id: int, relevant: bool, reason: str | None,
             {"id": article_id, "rel": relevant, "reason": reason, "model": model},
         )
         conn.commit()
+    _sync_feed_signal(article_id)
 
 
 def get_articles_needing_tags(limit: int = 20) -> list[dict]:
@@ -5828,6 +5979,7 @@ def upsert_article_card(article_id: int, summary: str, model: str | None = None,
             (article_id, summary, model, title_ru),
         )
         conn.commit()
+    _sync_feed_signal(article_id)
 
 
 def set_article_title_ru(article_id: int, title_ru: str) -> None:
@@ -5845,6 +5997,7 @@ def set_article_title_ru(article_id: int, title_ru: str) -> None:
             (article_id, title_ru),
         )
         conn.commit()
+    _sync_feed_signal(article_id)
 
 
 def list_article_texts_for_terminology_audit(limit: int = 200, article_id: int | None = None) -> list[dict]:
@@ -5893,6 +6046,7 @@ def update_article_terminology_texts(article_id: int, *, summary: str | None = N
             params,
         )
         conn.commit()
+    _sync_feed_signal(article_id)
 
 
 def get_articles_needing_title_ru(limit: int = 20) -> list[dict]:
@@ -6215,6 +6369,7 @@ def upsert_article_tag(article_id: int, tag_id: int, confidence: float,
             (article_id, tag_id, confidence, rationale, model),
         )
         conn.commit()
+    _sync_feed_signal(article_id)
 
 
 def _upsert_scoring_criterion(conn, rec: dict, profile: str) -> int:
@@ -6610,6 +6765,7 @@ def replace_article_score(article_id: int, total_score: float, score_label: str,
                 ),
             )
         conn.commit()
+    _sync_feed_signal(article_id)
 
 
 def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float, *,
@@ -6713,7 +6869,12 @@ def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float, *
                 "UPDATE article_scores SET criteria_snapshot = %s, profile = %s WHERE id = ANY(%s)",
                 (Json(snapshot), profile, matched),
             )
+        article_ids = [row[0] for row in conn.execute(
+            "SELECT article_id FROM article_scores WHERE id = ANY(%s)", (eligible,)
+        )]
         conn.commit()
+    if article_ids:
+        _sync_feed_signal(*article_ids)
     return stats
 
 
@@ -6964,6 +7125,9 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             {_signal_corrections_lateral("sig", issue_window)}
             WHERE uss.status = 'digest'
               AND sig.merged_into_signal_id IS NULL
+              -- Выпуск собирается как раньше (#95): статьи — своей выборкой, сигнал ленты
+              -- в нём был бы второй копией статьи.
+              AND {radar_origin_sql("sig")}
               -- Зрелости «Отклонено» здесь нет (29.09): это оценка модели, а экран радара
               -- показывает такие карточки с кнопкой «В дайджест», и повторная находка
               -- перезаписывает зрелость выбранной карточки. Выбор человека — членство.
