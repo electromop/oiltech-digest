@@ -43,7 +43,7 @@ def _source_and_tags(conn):
     return source_id, roots
 
 
-def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True, prefix="feed"):
+def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True, prefix="feed", text=None):
     ids = []
     for i in range(n):
         at = _utc(month, day or 1 + i % 27)
@@ -51,7 +51,7 @@ def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True,
             "INSERT INTO articles (source_id, title, url, raw_text, published_at, collected_at)"
             " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (source_id, f"{HOSTILE_TITLE}{prefix} article {i}", f"https://news.example.org/{prefix}/{i}",
-             f"Body of {prefix} {i}.{CONTROL} " * 400, at, at),
+             text or f"Body of {prefix} {i}.{CONTROL} " * 400, at, at),
         ).fetchone()[0]
         conn.execute(
             "INSERT INTO article_cards (article_id, summary, title_ru, relevant, relevance_reason)"
@@ -66,14 +66,14 @@ def _seed_feed(conn, source_id, tag_ids, n, *, month=9, day=None, relevant=True,
     return ids
 
 
-def _radar(key, category, theme, *, fetched=True, filtered=False, seen="2026-09-10"):
+def _radar(key, category, theme, *, fetched=True, filtered=False, seen="2026-09-10", text=None):
     signal_id = repository.upsert_signal({
         "signal_key": key, "title": f"JUDGE_TITLE {key}", "title_ru": f"JUDGE_TITLE {key}", "theme": theme,
         "summary": "JUDGE_SUMMARY", "maturity": "watch", "score": 70, "companies": ["JudgeCo"],
     })
     repository.upsert_signal_evidence(signal_id, {
         "source_url": f"https://radar.example.com/{key}", "title": f"Page title {key}",
-        "published_at": "2026-07-03", "extracted_fact": f"Page text of {key}. " * 10 if fetched else "JUDGE_SUMMARY",
+        "published_at": "2026-07-03", "extracted_fact": (text or f"Page text of {key}. " * 10) if fetched else "JUDGE_SUMMARY",
         "summary_ru": "RESEARCH_SUMMARY", "strength": 0.8,
         "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": fetched,
                         "research_summary": "RESEARCH_SUMMARY"},
@@ -235,6 +235,27 @@ def test_same_seed_and_window_give_the_same_sample_and_never_overwrite(corpus, t
     # Повтор в ту же папку не затирает таблицу, которую эксперт мог уже начать размечать.
     with pytest.raises(SystemExit):
         _run("--out", str(first), "--apply", *window)
+
+
+def test_block_pages_and_unreadable_texts_are_not_offered_to_the_expert(isolated_db, capsys):
+    # С прода, первая выгрузка 15.10: докачка радара сохранила страницу блокировки вместо статьи,
+    # а один сигнал радара — на китайском. Разметить их эксперт не может.
+    blocked = "Доступ с вашего IP-адреса ограничен. Отключите VPN/прокси (если включены) и обновите страницу. " * 3
+    chinese = "大庆油田采油八厂第四作业区407注采班中控室内，集输工端坐在操作台前，目光在数据大屏上快速扫过。" * 4
+    with repository.get_connection() as conn:
+        source_id, roots = _source_and_tags(conn)
+        _seed_feed(conn, source_id, roots, 1, prefix="ok")
+        _seed_feed(conn, source_id, roots, 1, prefix="blocked", text=blocked)
+        _seed_feed(conn, source_id, roots, 1, prefix="chinese", text=chinese)
+        conn.commit()
+    _radar("ok", "technology", THEMES[0])
+    _radar("blocked", "technology", THEMES[0], text=blocked)
+    _radar("chinese", "business", THEMES[1], text=chinese)
+
+    _run("--until", "2026-10-01")
+
+    printed = capsys.readouterr().out
+    assert "лента 1, радар 1" in printed
 
 
 def test_incomplete_sample_is_reported_and_not_written(isolated_db, tmp_path, capsys):
