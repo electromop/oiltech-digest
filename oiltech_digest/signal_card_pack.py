@@ -9,7 +9,8 @@
 публикации. Сути, перевода, темы, решений судьи радара в ней нет. Отсюда правила выборки радара:
 главная публикация — статья корпуса или страница, которую докачали (`full_text_fetched`); без
 докачки текст находки «режима ChatGPT» — сводка модели. Дата — тоже издателя: у находки «режима
-ChatGPT» дата публикации — это дата события по версии модели, её в таблице нет.
+ChatGPT» дата публикации — это дата события по версии модели, её в таблице нет. Страницу блокировки
+вместо статьи и текст не на русском и не на английском эксперт не разметит — они в выборку не идут.
 
 Известные пределы данных, а не выгрузки: текст докачанной страницы платформа хранит только
 началом (`signal_discovery.WEB_EVIDENCE_FULLTEXT_CHARS`, 1 500 знаков); у страницы без og:title,
@@ -55,6 +56,15 @@ PERIOD_END = date(2026, 11, 1)  # август–октябрь
 # Символы, которые openpyxl в ячейку не пишет (openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE): один такой
 # в тексте издателя ронял бы всю выгрузку.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+# Страница блокировки вместо статьи: докачка сохраняет её как текст (первая выгрузка 15.10 —
+# «Доступ с вашего IP-адреса ограничен»). Ищем только в начале: в статье эти слова в первых
+# строках не стоят.
+_BLOCK_PAGE_MARKERS = (
+    "доступ с вашего ip", "отключите vpn", "доступ запрещен", "подтвердите, что вы человек",
+    "access denied", "verify you are human", "checking your browser", "enable javascript", "captcha",
+)
+_LETTER_RE = re.compile(r"[^\W\d_]")
+_READABLE_LETTER_RE = re.compile(r"[A-Za-zА-Яа-яЁё]")
 
 # Колонки, которые заполняет эксперт: (заголовок, справочник для выпадающего списка или None).
 MARKUP_COLUMNS = [
@@ -106,9 +116,9 @@ def default_until() -> str:
 
 def select_sample(*, seed: int, since: str, until: str) -> list[dict[str, Any]]:
     """Статьи ленты и сигналы радара, темы по кругу. Те же seed и окно — те же сигналы."""
-    feed = _round_robin(_feed_candidates(since, until), FEED_COUNT, seed)
+    feed = _round_robin([item for item in _feed_candidates(since, until) if _markable(item)], FEED_COUNT, seed)
     taken = {item["article_id"] for item in feed}
-    pool = [item for item in _radar_candidates(until) if item.get("article_id") not in taken]
+    pool = [item for item in _radar_candidates(until) if item.get("article_id") not in taken and _markable(item)]
     radar: list[dict[str, Any]] = []
     for category, quota in RADAR_QUOTA.items():
         radar += _round_robin([item for item in pool if item["category_code"] == category], quota, seed)
@@ -253,6 +263,17 @@ def _item(origin: str, item_id: str, row: dict[str, Any]) -> dict[str, Any]:
         "published": _date(row.get("published")), "category_code": code,
         "category": CATEGORY_RU.get(code, code),
     }
+
+
+def _markable(item: dict[str, Any]) -> bool:
+    """Эксперт разметит: не страница блокировки и текст на русском или английском (китайский
+    сигнал радара в первой выгрузке он бы не прочёл)."""
+    head = f"{item['title']} {item['text'][:300]}".lower().replace("ё", "е")
+    if any(marker in head for marker in _BLOCK_PAGE_MARKERS):
+        return False
+    sample = item["text"][:1000]
+    letters = len(_LETTER_RE.findall(sample))
+    return letters > 0 and len(_READABLE_LETTER_RE.findall(sample)) * 2 >= letters
 
 
 def _round_robin(items: list[dict[str, Any]], count: int, seed: int) -> list[dict[str, Any]]:
