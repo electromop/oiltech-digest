@@ -216,6 +216,20 @@ def test_apply_writes_50_blind_signals_and_a_manifest(corpus, tmp_path):
     assert signal_card_pack.DICTIONARY_SHEET in book.sheetnames
 
 
+def test_feed_signals_of_the_unified_store_stay_out_of_the_radar_part(corpus, tmp_path):
+    # Единое хранилище (#95): принятая статья ленты — сигнал «бизнес» со статьёй-публикацией. Радарная
+    # часть — только находки поиска, иначе сигналы ленты заняли бы квоту «бизнес».
+    from oiltech_digest.db import feed_signals
+
+    assert feed_signals.sync_feed_signals(collected_since="2026-01-01")["signals_created"] >= len(corpus["feed"])
+    out = tmp_path / "pack"
+
+    _run("--out", str(out), "--apply")
+
+    radar = {item["signal_id"] for item in _manifest(out)["items"] if item["origin"] == "radar"}
+    assert len(radar) == 15 and radar <= corpus["tech"] | corpus["business"]
+
+
 def test_same_seed_and_window_give_the_same_sample_and_never_overwrite(corpus, tmp_path):
     first, second = tmp_path / "a", tmp_path / "b"
     window = ("--seed", "7", "--since", "2026-08-01", "--until", "2026-10-01")

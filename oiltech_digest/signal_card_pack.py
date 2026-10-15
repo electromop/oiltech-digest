@@ -218,7 +218,7 @@ def _radar_candidates(until: str) -> list[dict[str, Any]]:
     with repository.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT DISTINCT ON (s.id)
                    s.id AS signal_id, s.signal_category AS category_code, s.theme,
                    e.id AS evidence_id, a.id AS article_id,
@@ -231,6 +231,8 @@ def _radar_candidates(until: str) -> list[dict[str, Any]]:
             JOIN signal_evidence e ON e.signal_id = s.id
             LEFT JOIN articles a ON a.id = e.article_id
             WHERE s.merged_into_signal_id IS NULL AND s.archived_at IS NULL AND s.filter_stage IS NULL
+              -- Только находки поиска (#95): сигнал ленты — это статья, её берёт лентовая часть.
+              AND {repository.radar_origin_sql("s")}
               AND s.signal_category IN ('technology', 'business') AND s.first_seen_at < %s::date
               AND (length(btrim(COALESCE(a.raw_text, ''))) >= %s
                    OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'
