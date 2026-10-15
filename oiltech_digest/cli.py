@@ -2269,11 +2269,14 @@ def cmd_signal_card_expert_pack(args: argparse.Namespace) -> None:
     origin = result["composition"]["origin"]
     print(f"signal-card-expert-pack: сигналов {result['count']} — лента {origin.get('feed', 0)}, "
           f"радар {origin.get('radar', 0)}")
+    print("Доли: " + ", ".join(f"{signal_card_pack.STRATUM_RU[stratum]} — {count}"
+                               for stratum, count in result["composition"]["stratum"].items()))
     for key, title in (("category", "Категории"), ("theme", "Темы")):
         print(f"{title}: " + ", ".join(f"{name} — {count}" for name, count in result["composition"][key].items()))
     if result["shortfall"]:
         print("Для экзамена не хватает: " + "; ".join(result["shortfall"]))
-    print(f"Повторить ту же выборку: --seed {result['seed']} --since {result['since']} --until {result['until']}")
+    print(f"Параметры выборки: --seed {result['seed']} --since {result['since']} --until {result['until']} "
+          "(тот же состав — пока не менялись баллы и отметки статей окна; точный состав — в манифесте)")
     if result["applied"]:
         print(f"Таблица: {result['workbook']}\nМанифест: {result['manifest']}")
     else:
