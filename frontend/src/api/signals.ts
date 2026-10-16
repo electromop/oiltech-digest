@@ -1,9 +1,14 @@
 import { apiFetch } from "./client";
 import type { Signal, SignalFeedbackPayload, SignalPatch } from "./types";
 
+// Витрина (#95): технологический радар или бизнес-лента — сигналы категории «бизнес».
+export type SignalShowcase = "technology" | "business";
+
 // Выборка экрана радара — на сервере, по всей базе (замечание заказчика 19.09): поиск,
-// тема, зрелость, период «Поступил» (даты ГГГГ-ММ-ДД по Москве) и балл.
+// тема, решение радара, период «Поступил» (даты ГГГГ-ММ-ДД по Москве) и балл.
 export type SignalFilters = {
+  // Без витрины — технологический радар.
+  showcase?: SignalShowcase;
   q?: string;
   maturity?: string;
   theme?: string;
@@ -13,6 +18,12 @@ export type SignalFilters = {
   maxScore?: number;
   // Отсеянные и скрытые (не на радаре) — всем: заказчик разбирает всё отсеянное.
   hidden?: boolean;
+  // Атрибуты карточки (#97): значение справочника или «не определено»; компания — под любым из её имён.
+  eventType?: string;
+  region?: string;
+  technologyClass?: string;
+  technologyMaturity?: string;
+  company?: string;
 };
 
 // По баллу (как раньше), «сначала новые» — по дате «Поступил», по баллу по возрастанию.
@@ -27,6 +38,7 @@ export type SignalQuery = SignalFilters & {
 
 function filterParams(filters: SignalFilters) {
   const params = new URLSearchParams();
+  if (filters.showcase) params.set("showcase", filters.showcase);
   if (filters.q) params.set("q", filters.q);
   if (filters.maturity) params.set("maturity", filters.maturity);
   if (filters.theme) params.set("theme", filters.theme);
@@ -35,7 +47,27 @@ function filterParams(filters: SignalFilters) {
   if (filters.minScore != null) params.set("min_score", String(filters.minScore));
   if (filters.maxScore != null) params.set("max_score", String(filters.maxScore));
   if (filters.hidden) params.set("hidden", "true");
+  if (filters.eventType) params.set("event_type", filters.eventType);
+  if (filters.region) params.set("region", filters.region);
+  if (filters.technologyClass) params.set("technology_class", filters.technologyClass);
+  if (filters.technologyMaturity) params.set("technology_maturity", filters.technologyMaturity);
+  if (filters.company) params.set("company", filters.company);
   return params;
+}
+
+// Справочники карточки сигнала (#97) — значения фильтров атрибутов по полям карточки (параметры
+// /api/signals); «не определено» — тоже значение фильтра, оно не входит в справочник.
+export type SignalDictionaries = {
+  event_type: string[];
+  region: string[];
+  technology_class: string[];
+  technology_maturity: string[];
+  // Подсказки к полю «Компания» — канонические имена справочника алиасов.
+  companies: string[];
+};
+
+export function getSignalDictionaries() {
+  return apiFetch<SignalDictionaries>("/api/signals/dictionaries");
 }
 
 export function listSignals(query: SignalQuery = {}) {

@@ -1750,9 +1750,24 @@ def _radar_screen_filters(
     # Витрина (#95, ADR 0003): «technology» — технологический радар, как был; «business» —
     # сигналы категории «бизнес» обоих происхождений (лента и находки радара).
     showcase: str = Query("technology", pattern="^(technology|business)$"),
+    # Атрибуты карточки сигнала (#97): значение справочника или «не определено». technology_maturity —
+    # зрелость технологии; maturity выше — решение радара (наблюдать / кандидат / подтверждено).
+    event_type: str | None = Query(None, max_length=100),
+    region: str | None = Query(None, max_length=100),
+    technology_class: str | None = Query(None, max_length=100),
+    technology_maturity: str | None = Query(None, max_length=100),
+    # «Всё про компанию» (#97): участник карточки под любым из имён справочника алиасов.
+    company: str | None = Query(None, max_length=200),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
+    try:
+        card = {column: signal_card.checked_choice(column, value) for column, value in (
+            ("event_type", event_type), ("region", region), ("technology_class", technology_class),
+            ("technology_maturity", technology_maturity),
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "showcase": showcase,
         "hidden": hidden,
@@ -1763,6 +1778,9 @@ def _radar_screen_filters(
         "until": until,
         "min_score": min_score,
         "max_score": max_score,
+        **card,
+        # Все имена компании по справочнику алиасов — здесь, на границе: выборка сверяет готовый список.
+        "company_names": signal_card.company_names(company or "") or None,
     }
 
 
@@ -1822,6 +1840,12 @@ def signal_radar_summary(
         # Число отсеянных и скрытых — служебное, как и сами карточки.
         summary.pop("hidden", None)
     return _clean(summary)
+
+
+@app.get("/api/signals/dictionaries")
+def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Значения фильтров атрибутов карточки на экранах (#97) — справочники агента «Карточка сигнала»."""
+    return signal_card.screen_dictionaries()
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
