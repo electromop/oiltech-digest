@@ -22,7 +22,8 @@ import type { Signal, SignalEvidence, SignalFeedbackPayload } from "../../api/ty
 import { radarDigestLockedText } from "../articles/feedWindow";
 import { StatCard } from "../shared/StatCard";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
-import { SignalCardChips, eventDateLabel, whyImportantText } from "./SignalCardChips";
+import { PROFILES } from "../scoring/ScoringPage";
+import { SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
 import { EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
 
@@ -33,7 +34,6 @@ export const RADAR_PAGE_SIZE = 100;
 const RADAR_MAX_PAGE = 200;
 // Задержка серверного поиска — как у ленты бизнес-сигналов: запрос не на каждую букву.
 const SEARCH_DELAY_MS = 400;
-const EVIDENCE_PER_CARD = 5;
 // Без фильтров видно всё: в отличие от ленты, радар слабые карточки по умолчанию не прячет.
 const SCORE_MIN = 0;
 const SCORE_MAX = 100;
@@ -49,6 +49,37 @@ type Props = {
   // карточка события, публикации снизу, атрибуты чипами. В ленте нет кнопок оценки и «в дайджест»
   // (оценки даст сервис ОС, выпуск собирается как сейчас) и служебного радара.
   showcase?: SignalShowcase;
+};
+
+// Подписи экрана по витрине. Публикаций у события ленты (статья и перепечатки) — сколько сервер отдаёт
+// за раз (evidence_limit ≤ 20), у карточки радара — 5, как раньше.
+const SCREENS: Record<SignalShowcase, {
+  heading: string;
+  catalog: string;
+  searchIn: string;
+  loadError: string;
+  summary: string;
+  evidence: string;
+  evidenceLimit: number;
+}> = {
+  technology: {
+    heading: "Технологический радар",
+    catalog: "Каталог технологических сигналов",
+    searchIn: "радару",
+    loadError: "Не удалось загрузить технологический радар",
+    summary: "Сводка радара",
+    evidence: "Ссылки",
+    evidenceLimit: 5,
+  },
+  business: {
+    heading: "Бизнес-лента",
+    catalog: "Каталог бизнес-сигналов",
+    searchIn: "ленте",
+    loadError: "Не удалось загрузить бизнес-ленту",
+    summary: "Сводка бизнес-ленты",
+    evidence: "Публикации",
+    evidenceLimit: 20,
+  },
 };
 
 const MATURITY_LABELS: Record<string, string> = {
@@ -113,17 +144,16 @@ function formatDay(value: string | null | undefined): string {
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: RADAR_TIME_ZONE });
 }
 
-// Профили балла (ADR 0002): у находки радара — «Технологический радар», у сигнала ленты — профиль
-// его статьи, «Бизнес-сигналы».
-const SCORE_PROFILES: Record<string, string> = {
-  tech_radar: "Технологический радар",
-  business: "Бизнес-сигналы",
-};
+// Профиль балла (ADR 0002): у находки радара — «Технологический радар», у сигнала ленты — профиль его
+// статьи, «Бизнес-сигналы». Имена — как на экране «Скоринг».
+function profileLabel(signal: Signal): string | undefined {
+  return PROFILES.find((item) => item.id === signal.score_profile)?.label;
+}
 
 // Разбивка балла по критериям профиля: имя и вес — из снимка набора на момент оценки, а не из
 // нынешнего экрана «Скоринг» (там их могли поменять).
 function scoreBreakdown(signal: Signal): Array<{ id: number; name: string; weight: number; score: number }> {
-  if (!SCORE_PROFILES[signal.score_profile ?? ""]) return [];
+  if (!profileLabel(signal)) return [];
   const byId = new Map((signal.criteria_snapshot || []).map((item) => [Number(item.id), item]));
   return (signal.score_items_json || []).map((item) => {
     const criterion = byId.get(Number(item.criterion_id));
@@ -137,7 +167,7 @@ function scoreBreakdown(signal: Signal): Array<{ id: number; name: string; weigh
 }
 
 function scoreTitle(signal: Signal, withBreakdown: boolean): string {
-  if (withBreakdown) return `Балл по профилю «${SCORE_PROFILES[signal.score_profile ?? ""]}»`;
+  if (withBreakdown) return `Балл по профилю «${profileLabel(signal)}»`;
   return signal.origin === "feed" ? "Балл статьи ленты" : "Балл судьи радара";
 }
 
@@ -165,32 +195,26 @@ function clampScore(value: string, fallback: number): number {
   return Math.max(SCORE_MIN, Math.min(SCORE_MAX, number));
 }
 
-// «1 ссылка», «2 ссылки», «5 ссылок».
-function linksWord(count: number): string {
+// Слово при числе: «1 ссылка», «2 ссылки», «5 ссылок».
+function pluralWord(count: number, one: string, few: string, many: string): string {
   const tens = count % 100;
   const units = count % 10;
-  if (units === 1 && tens !== 11) return "ссылка";
-  if (units >= 2 && units <= 4 && (tens < 12 || tens > 14)) return "ссылки";
-  return "ссылок";
+  if (units === 1 && tens !== 11) return one;
+  if (units >= 2 && units <= 4 && (tens < 12 || tens > 14)) return few;
+  return many;
 }
 
-// «1 публикация», «2 публикации», «5 публикаций».
-function publicationsWord(count: number): string {
-  const tens = count % 100;
-  const units = count % 10;
-  if (units === 1 && tens !== 11) return "публикация";
-  if (units >= 2 && units <= 4 && (tens < 12 || tens > 14)) return "публикации";
-  return "публикаций";
-}
+const LINK_WORDS = ["ссылка", "ссылки", "ссылок"] as const;
+const PUBLICATION_WORDS = ["публикация", "публикации", "публикаций"] as const;
 
 // Мета под заголовком карточки: «тема · N ссылок · подтверждённость · » — номер карточки следом.
 // Подтверждённость — оценка модели радара (не зрелость технологии: та — чипом карточки); оценка
 // человека в ОС называется «Оценка сигнала». У сигнала ленты подтверждённости нет, ссылки — публикации.
 function cardMeta(signal: Signal, business: boolean): string {
   const links = Number(signal.evidence_count || 0);
-  if (business) return `${signal.theme} · ${links} ${publicationsWord(links)} · `;
+  if (business) return `${signal.theme} · ${links} ${pluralWord(links, ...PUBLICATION_WORDS)} · `;
   const maturity = MATURITY_LABELS[signal.maturity] || signal.maturity;
-  return `${signal.theme} · ${links} ${linksWord(links)} · Подтверждённость: ${maturity} · `;
+  return `${signal.theme} · ${links} ${pluralWord(links, ...LINK_WORDS)} · Подтверждённость: ${maturity} · `;
 }
 
 // Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
@@ -235,6 +259,7 @@ function searchHealthNotice(health: SignalSearchHealth | null): string {
 
 export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, showcase = "technology" }: Props) {
   const business = showcase === "business";
+  const screenText = SCREENS[showcase];
   const [signals, setSignals] = useState<Signal[]>([]);
   const [summary, setSummary] = useState<SignalSummary | null>(null);
   // Первый ответ ещё не пришёл — вместо списка «Загружаем»; дальше старая выборка видна,
@@ -309,7 +334,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     setSearching(true);
     pendingTimer.current = window.setTimeout(() => {
       Promise.all([
-        listSignals({ ...query, sort: order, limit: size, offset: 0, evidenceLimit: EVIDENCE_PER_CARD }),
+        listSignals({ ...query, sort: order, limit: size, offset: 0, evidenceLimit: screenText.evidenceLimit }),
         getSignalSummary(query),
       ])
         .then(([rows, counts]) => {
@@ -319,7 +344,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         })
         .catch((error) => {
           if (seq !== requestSeq.current) return;
-          handleError(error, business ? "Не удалось загрузить бизнес-ленту" : "Не удалось загрузить технологический радар");
+          handleError(error, screenText.loadError);
         })
         .finally(() => {
           if (seq !== requestSeq.current) return;
@@ -400,16 +425,28 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     else refreshSummary();
   }
 
-  function resetFilters() {
+  // Снять фильтры выборки. Порядок списка — не фильтр: его возвращает только «Сбросить».
+  function clearFilters() {
     setSearch("");
     setTheme("");
     setMaturity("");
     setCardFilters(EMPTY_CARD_FILTERS);
-    setSort(DEFAULT_SORT);
     setScoreMin(SCORE_MIN);
     setScoreMax(SCORE_MAX);
     setDateFrom("");
     setDateTo("");
+  }
+
+  function resetFilters() {
+    clearFilters();
+    setSort(DEFAULT_SORT);
+  }
+
+  // Клик по компании на карточке — «всё про компанию» (#97): все сигналы витрины с её участием, а не
+  // пересечение с прежними фильтрами; порядок списка остаётся.
+  function showCompany(name: string) {
+    clearFilters();
+    setCardFilters({ ...EMPTY_CARD_FILTERS, company: name });
   }
 
   async function showMore() {
@@ -424,7 +461,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         sort,
         limit: RADAR_PAGE_SIZE,
         offset: signals.length,
-        evidenceLimit: EVIDENCE_PER_CARD,
+        evidenceLimit: screenText.evidenceLimit,
       });
       if (seq !== requestSeq.current) return;
       // Между страницами радар мог добавить карточку — повтор не рисуем дважды.
@@ -452,9 +489,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const groups = useMemo(() => {
     const byTheme = new Map<string, Signal[]>();
     for (const signal of visibleSignals) {
-      // Ранние карточки (первая партия 13.09) — с темой свободным текстом: один блок, а не
-      // десятки блоков по одной карточке. Тематику им даст разбор, а не догадка по словам.
-      const key = signal.theme_is_topic === false ? EARLY_THEME_GROUP : signal.theme || "Без темы";
+      // Ранние карточки радара (первая партия 13.09) — с темой свободным текстом: один блок, а не
+      // десятки блоков по одной карточке. Тематику им даст разбор, а не догадка по словам. У ленты
+      // свободных тем нет: статья без тематики — в блоке своей темы («не классифицировано»).
+      const key = !business && signal.theme_is_topic === false ? EARLY_THEME_GROUP : signal.theme || "Без темы";
       byTheme.set(key, [...(byTheme.get(key) || []), signal]);
     }
     // Блоки — в порядке выдачи, как у ленты: первым тот, чья карточка первая по выбранной
@@ -463,7 +501,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     return [...byTheme.entries()].sort(
       (a, b) => Number(a[0] === EARLY_THEME_GROUP) - Number(b[0] === EARLY_THEME_GROUP),
     );
-  }, [visibleSignals]);
+  }, [visibleSignals, business]);
 
   function toggleGroup(group: string, open: boolean) {
     setExpandedGroups((current) => {
@@ -619,7 +657,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     <section className="screenStack">
       <header className="screenHeader">
         <div>
-          <h1>{business ? "Бизнес-лента" : "Технологический радар"}</h1>
+          <h1>{screenText.heading}</h1>
         </div>
       </header>
 
@@ -690,7 +728,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           поиск и фильтры сужают список, но не эти числа. */}
       {/* В ленте нет «в дайджест» и оценок — и плиток про них. */}
       {summary ? (
-        <section className="statsGridReact" aria-label={business ? "Сводка бизнес-ленты" : "Сводка радара"}>
+        <section className="statsGridReact" aria-label={screenText.summary}>
           <StatCard label="Всего сигналов" value={summary.total} />
           <StatCard label="Новые за 7 дней" value={summary.new_7d} />
           {business ? null : <StatCard label="В дайджесте" value={summary.in_digest} />}
@@ -708,7 +746,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       <section className="panel">
         <div className="panelHeader">
           <h2>
-            {business ? "Каталог бизнес-сигналов" : showHidden ? "Отсеянные и скрытые карточки" : "Каталог технологических сигналов"}
+            {showHidden ? "Отсеянные и скрытые карточки" : screenText.catalog}
           </h2>
           <div className="settingsActions signalRadarPanelActions">
             {countBadge ? <span className="badge">{countBadge}</span> : null}
@@ -759,7 +797,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder={`Поиск по ${business ? "ленте" : "радару"}: название, суть, источник, #номер`}
+              placeholder={`Поиск по ${screenText.searchIn}: название, суть, источник, #номер`}
               // Не длиннее, чем принимает API (q ≤ 200): иначе 422 с сырым текстом ошибки.
               maxLength={200}
             />
@@ -888,6 +926,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
             // Дата самого события, а не поступления («Поступил» говорит, когда нашли).
             const eventDate = eventDateLabel(signal);
             const breakdown = scoreBreakdown(signal);
+            const why = whyBlock(signal, business);
+            const morePublications = Number(signal.evidence_count || 0) - (signal.evidence?.length ?? 0);
             const tone = scoreTone(signal);
             // Месяц карточки закрыт (признак сервера): отметку «в дайджест» не ставят и не снимают.
             const digestLocked = Boolean(signal.digest_locked);
@@ -922,7 +962,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                       {/* Дубли того же события скрыты, их ссылки — в этой карточке. */}
                       {Number(signal.merged_count || 0) > 0 ? ` · объединено дублей: ${signal.merged_count}` : ""}
                     </div>
-                    <SignalCardChips signal={signal} onCompany={(name) => updateCardFilters({ company: name })} />
+                    <SignalCardChips signal={signal} onCompany={showCompany} />
                     {signal.hidden_reason ? (
                       <div className="metaText signalHiddenReason">Не на радаре: {signal.hidden_reason}</div>
                     ) : null}
@@ -999,20 +1039,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                             </ul>
                           </div>
                         ) : null}
-                        {/* «Почему важно нефтесервису» агент карточки пишет в поле «почему интересно» (#96):
-                            в ленте это строка карточки, на радаре — прежний вывод ревью пачки. */}
-                        {business ? (
+                        {why ? (
                           <div>
-                            <span>Почему важно</span>
-                            <p>{whyImportantText(signal)}</p>
-                          </div>
-                        ) : signal.why_interesting ? (
-                          <div>
-                            <span>
-                              Почему интересно
-                              {signal.interest_score != null ? ` · ${Math.round(Number(signal.interest_score))}` : ""}
-                            </span>
-                            <p>{signal.why_interesting}</p>
+                            <span>{why.label}</span>
+                            <p>{why.text}</p>
                           </div>
                         ) : null}
                       </div>
@@ -1045,7 +1075,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                     {signal.evidence?.length ? (
                       <div className="signalEvidenceList">
                         {/* Публикации события — статья и её перепечатки (лента) или ссылки находки (радар). */}
-                        <div className="signalEvidenceHeading">{business ? "Публикации" : "Ссылки"}</div>
+                        <div className="signalEvidenceHeading">{screenText.evidence}</div>
                         {signal.evidence.map((item) => (
                           <a className="signalEvidenceRow" href={item.source_url} target="_blank" rel="noreferrer" key={item.id}>
                             <span>{evidenceSource(item)}</span>
@@ -1055,10 +1085,14 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                             ) : null}
                           </a>
                         ))}
+                        {/* Все статьи о событии — под карточкой (история 1 спеки #93): не уместились — счётом. */}
+                        {business && morePublications > 0 ? (
+                          <div className="metaText">{`и ещё ${morePublications} ${pluralWord(morePublications, ...PUBLICATION_WORDS)}`}</div>
+                        ) : null}
                       </div>
                     ) : null}
 
-                    {/* Оценки ленты даст сервис ОС (спека #93): формы отзыва у неё нет. */}
+                    {/* Оценки ленты даст сервис ОС (спека #93): формы ОС у неё нет. */}
                     {business ? null : isFeedbackOpen ? (
                       // Форма ОС (документ заказчика 19.09: «сделать поприятнее оформление»):
                       // на десктопе две колонки — пары полей одной высоты, подписи как в
@@ -1161,7 +1195,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           ) : null}
           </div>
         ) : (
-          <div className="emptyState">Сигналов по выбранным фильтрам нет.</div>
+          <div className="emptyState">
+            {/* Компания — целиком, а не подстрокой («Газпром» — не «Газпром нефть»): часть имени ничего
+                не найдёт, и это не «сигналов нет». */}
+            {cardFilters.company.trim()
+              ? "Сигналов по выбранным фильтрам нет. Компания ищется по имени целиком — выберите её из подсказок поля «Компания»."
+              : "Сигналов по выбранным фильтрам нет."}
+          </div>
         )}
       </section>
     </section>

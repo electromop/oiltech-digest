@@ -1,5 +1,6 @@
 import { useId } from "react";
 import type { SignalDictionaries } from "../../api/signals";
+import { CHOICE_FIELDS, UNDEFINED } from "./SignalCardChips";
 
 // Фильтры атрибутов карточки (#97) — сверху на обоих экранах: значения — из справочников агента
 // «Карточка сигнала» (/api/signals/dictionaries), «не определено» — тоже значение (так видны пробелы).
@@ -21,13 +22,6 @@ export const EMPTY_CARD_FILTERS: CardFilterValues = {
   company: "",
 };
 
-const CHOICES = [
-  { key: "eventType", dictionary: "event_type", any: "Любой тип" },
-  { key: "region", dictionary: "region", any: "Любой регион" },
-  { key: "technologyClass", dictionary: "technology_class", any: "Любой класс" },
-  { key: "technologyMaturity", dictionary: "technology_maturity", any: "Любая зрелость" },
-] as const;
-
 type Props = {
   // Справочники не пришли — нет и списков: фильтр по компании работает и без них.
   dictionaries: SignalDictionaries | null;
@@ -39,16 +33,16 @@ export function SignalCardFilters({ dictionaries, values, onChange }: Props) {
   const companiesId = useId();
   return (
     <div className="signalCardFilters">
-      {CHOICES.map(({ key, dictionary, any }) => {
-        const block = dictionaries?.[dictionary];
-        if (!dictionaries || !block?.values) return null;
+      {CHOICE_FIELDS.map(({ field, filter, label, any }) => {
+        const options = dictionaries?.[field];
+        if (!Array.isArray(options)) return null;
         return (
-          <label className="field" key={key}>
-            <span>{block.title}</span>
-            <select value={values[key]} onChange={(event) => onChange({ [key]: event.target.value })}>
+          <label className="field" key={field}>
+            <span>{label}</span>
+            <select value={values[filter]} onChange={(event) => onChange({ [filter]: event.target.value })}>
               <option value="">{any}</option>
-              {block.values.map((value) => <option value={value} key={value}>{value}</option>)}
-              <option value={dictionaries.undefined}>{dictionaries.undefined}</option>
+              {options.map((value) => <option value={value} key={value}>{value}</option>)}
+              <option value={UNDEFINED}>{UNDEFINED}</option>
             </select>
           </label>
         );

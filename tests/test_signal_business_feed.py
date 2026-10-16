@@ -72,6 +72,16 @@ def test_company_filter_finds_every_signal_with_the_company_under_any_of_its_nam
     assert (summary["total"], summary["matching"]) == (6, 2)
 
 
+def test_company_written_past_the_agent_is_found_whatever_the_spaces_and_case(user):
+    # Сервис ОС запишет участника рукой человека: неразрывный пробел, «ё», регистр — то же имя.
+    _card(_feed(user, "Газпром нефть бурит"), participants_json=_participants("ГАЗПРОМ НЕФТЬ"))
+    _card(_feed(user, "Самотлорнефтегаз пробурил"), participants_json=_participants("Самотлорнефтегаз  «Ёлка»"))
+
+    assert _titles(user, company="Газпром нефть") == ["Газпром нефть бурит"]
+    assert _titles(user, company="ГПН") == ["Газпром нефть бурит"]
+    assert _titles(user, company="самотлорнефтегаз «елка»") == ["Самотлорнефтегаз пробурил"]
+
+
 def test_radar_takes_the_same_card_filters(user):
     robot = radar_finding("robot", "Робот-бурильщик", "Equinor и SLB испытали робота-бурильщика.")
     sensor = radar_finding("sensor", "Датчик утечек", "Датчик утечек на трубопроводе.")
@@ -94,17 +104,13 @@ def test_radar_takes_the_same_card_filters(user):
 def test_screen_gets_the_filter_values_from_the_dictionaries(user):
     payload = api_get("/api/signals/dictionaries", user)
 
-    # Подписи и значения — справочники карточки (спека #93), по параметрам фильтров API.
-    assert payload["technology_maturity"] == {
-        "title": "Зрелость",
-        "values": ["исследование", "прототип", "пилот/ОПИ", "коммерческое внедрение", "масштабное внедрение",
-                   "неприменимо"],
-    }
-    assert payload["event_type"]["title"] == "Тип события" and "контракт" in payload["event_type"]["values"]
-    assert payload["region"]["title"] == "Регион" and "Ближний Восток" in payload["region"]["values"]
-    assert payload["technology_class"]["title"] == "Класс технологии"
-    assert "робототехника" in payload["technology_class"]["values"]
-    assert payload["undefined"] == "не определено"
+    # Значения — справочники карточки (спека #93), по параметрам фильтров API; «не определено» и подписи
+    # полей экран добавляет сам.
+    assert payload["technology_maturity"] == [
+        "исследование", "прототип", "пилот/ОПИ", "коммерческое внедрение", "масштабное внедрение", "неприменимо",
+    ]
+    assert "контракт" in payload["event_type"] and "не определено" not in payload["event_type"]
+    assert "Ближний Восток" in payload["region"] and "робототехника" in payload["technology_class"]
     # Подсказки к полю «Компания» — канонические имена справочника алиасов, без самих алиасов.
     assert "SLB" in payload["companies"] and "Schlumberger" not in payload["companies"]
 

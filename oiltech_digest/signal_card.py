@@ -33,7 +33,8 @@ BY_PUBLICATION = "по дате публикации"
 _RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты и связи.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance")
-# Поле карточки с выбором из справочника (колонка signals и фильтр экрана, #97) → его справочник.
+# Поле карточки с выбором из справочника: колонка signals (она же параметр фильтра экрана, #97) → справочник,
+# по нему же назван ключ в ответе модели. Зрелость — technology_maturity: maturity радара — подтверждённость.
 CHOICE_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                   "technology_maturity": "maturity"}
 _EARLIEST_EVENT = date(2000, 1, 1)
@@ -347,10 +348,7 @@ def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionari
         "event_date": event_date,
         "event_date_source": source,
         "participants_json": _participants(answer["companies"], publication, dictionaries),
-        "event_type": _listed(dictionaries, "event_type", answer["event_type"]),
-        "region": _listed(dictionaries, "region", answer["region"]),
-        "technology_class": _listed(dictionaries, "technology_class", answer["technology_class"]),
-        "technology_maturity": _listed(dictionaries, "maturity", answer["maturity"]),
+        **{column: _listed(dictionaries, key, answer[key]) for column, key in CHOICE_COLUMNS.items()},
         "oilfield_relevance": relevance,
         # Как у судьи радара: применение — только при прямой или переносимой связи.
         "oilfield_application": (_phrase(answer["oilfield_application"])
@@ -409,17 +407,45 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
 
 
 def company_names(name: str) -> list[str]:
-    """Все написания компании для фильтра «всё про компанию» (#97) — в форме сверки (_plain): по
-    справочнику алиасов — каноническое имя и алиасы, компании нет в справочнике — её имя. Компания —
-    целиком, а не подстрокой: «Газпром» — не «Газпром нефть»."""
+    """Все написания компании для фильтра «всё про компанию» (#97) — в форме сверки с базой (_name_key):
+    по справочнику алиасов — каноническое имя и алиасы, компании нет в справочнике — её имя. Компания —
+    целиком, а не подстрокой: «Газпром» — не «Газпром нефть». Пустое имя — пустой список."""
     wanted = _plain(name)
     if not wanted:
         return []
     for entry in load_dictionaries().get("companies") or []:
-        names = {_plain(item) for item in (entry["name"], *entry["aliases"])}
-        if wanted in names:
-            return sorted(names)
-    return [wanted]
+        names = (entry["name"], *entry["aliases"])
+        if wanted in {_plain(item) for item in names}:
+            return sorted({_name_key(item) for item in names})
+    return [_name_key(name)]
+
+
+def _name_key(value: str) -> str:
+    """Имя участника в форме сверки с базой (repository._PARTICIPANT_NAMED_SQL): без различий регистра,
+    «ё» и пробелов, в том числе неразрывных. lower, а не casefold: как lower() в Postgres."""
+    return " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").lower().split())
+
+
+def checked_choice(column: str, value: str | None) -> str | None:
+    """Значение фильтра справочного поля карточки (#97): из справочника или «не определено»; пустое —
+    фильтра нет. Чужое — ValueError: опечатка в адресе выглядела бы как «сигналов нет»."""
+    if not value:
+        return None
+    block = load_dictionaries()[CHOICE_COLUMNS[column]]
+    if value != UNDEFINED and value not in block["values"]:
+        raise ValueError(f"Фильтр «{block['title']}»: значения «{value}» нет в справочнике")
+    return value
+
+
+def screen_dictionaries() -> dict[str, list[str]]:
+    """Значения фильтров экрана (#97): справочные поля карточки по колонкам signals и подсказки к полю
+    «Компания» — канонические имена справочника алиасов. «Не определено» в справочник не входит: его
+    экран добавляет сам, как и подписи полей."""
+    dictionaries = load_dictionaries()
+    return {
+        **{column: list(dictionaries[key]["values"]) for column, key in CHOICE_COLUMNS.items()},
+        "companies": [entry["name"] for entry in dictionaries.get("companies") or []],
+    }
 
 
 def _named_in(quote: str, names: tuple[str, ...]) -> bool:

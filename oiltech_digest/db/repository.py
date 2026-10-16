@@ -2141,12 +2141,14 @@ def _like_contains(text: str) -> str:
     return f"%{escaped}%"
 
 
-# Участник карточки — одно из имён компании (#97): имя в форме сверки signal_card._plain — без
-# различий регистра, «ё» и пробелов. Не список в participants_json (запись мимо агента) — участников нет.
+# Участник карточки — одно из имён компании (#97): имя в форме сверки signal_card._name_key — без
+# различий регистра, «ё» и пробелов. Неразрывные пробелы — явно: \s Postgres их не ловит (en_US.utf8),
+# а split() в Python — ловит. Не список в participants_json (запись мимо агента) — участников нет.
 _PARTICIPANT_NAMED_SQL = (
     "EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.participants_json) = 'array'"
     " THEN s.participants_json ELSE '[]'::jsonb END) p"
-    " WHERE btrim(regexp_replace(replace(lower(p->>'name'), 'ё', 'е'), '\\s+', ' ', 'g')) = ANY(%s))"
+    " WHERE btrim(regexp_replace(replace(lower(p->>'name'), 'ё', 'е'), '[\\s\\u00a0\\u2007\\u202f]+', ' ', 'g'))"
+    " = ANY(%s))"
 )
 
 
@@ -2174,12 +2176,13 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
                    min_score: float | None = None, max_score: float | None = None,
                    hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                    region: str | None = None, technology_class: str | None = None,
-                   technology_maturity: str | None = None, company: str | None = None) -> tuple[list[str], list]:
+                   technology_maturity: str | None = None,
+                   company_names: Sequence[str] | None = None) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
-    компания — участник карточки под любым из имён справочника алиасов."""
+    компания — участник карточки под любым из имён company_names (signal_card.company_names)."""
     clauses = [_showcase_visible_sql(showcase, hidden=hidden)]
     params: list = []
     if maturity:
@@ -2190,12 +2193,9 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
         if value:
             clauses.append(f"s.{column} = %s")
             params.append(value)
-    if company:
-        # Лениво: signal_card сам читает этот модуль.
-        from oiltech_digest.signal_card import company_names
-
+    if company_names:
         clauses.append(_PARTICIPANT_NAMED_SQL)
-        params.append(company_names(company))
+        params.append(list(company_names))
     if theme:
         clauses.append("s.theme ILIKE %s")
         params.append(f"%{theme}%")
@@ -2237,14 +2237,14 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                  max_score: float | None = None, sort: str = "score_desc", offset: int = 0,
                  hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                  region: str | None = None, technology_class: str | None = None,
-                 technology_maturity: str | None = None, company: str | None = None) -> list[dict]:
+                 technology_maturity: str | None = None, company_names: Sequence[str] | None = None) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
     hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
-        technology_maturity=technology_maturity, company=company,
+        technology_maturity=technology_maturity, company_names=company_names,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:

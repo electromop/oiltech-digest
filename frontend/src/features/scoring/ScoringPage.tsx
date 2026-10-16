@@ -12,7 +12,8 @@ type Props = {
 
 // Два набора критериев (сессия G, ADR 0002) — вкладками, чтобы не засорять экран
 // (документ заказчика 19.09). У каждой вкладки свой список, своя сумма весов и своё «Сохранить».
-const PROFILES: ReadonlyArray<{ id: ScoringProfile; label: string }> = [
+// Те же имена — в подписи балла на карточке сигнала (SignalRadarPage).
+export const PROFILES: ReadonlyArray<{ id: ScoringProfile; label: string }> = [
   { id: "business", label: "Бизнес-сигналы" },
   { id: "tech_radar", label: "Технологический радар" },
 ];

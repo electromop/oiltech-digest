@@ -55,17 +55,13 @@ function filterParams(filters: SignalFilters) {
   return params;
 }
 
-// Справочники карточки сигнала (#97) — значения фильтров атрибутов, по параметрам /api/signals.
-export type SignalDictionary = { title: string; values: string[] };
-
+// Справочники карточки сигнала (#97) — значения фильтров атрибутов по полям карточки (параметры
+// /api/signals); «не определено» — тоже значение фильтра, оно не входит в справочник.
 export type SignalDictionaries = {
-  version: string;
-  // «не определено» — тоже значение фильтра: так находятся пробелы карточек.
-  undefined: string;
-  event_type: SignalDictionary;
-  region: SignalDictionary;
-  technology_class: SignalDictionary;
-  technology_maturity: SignalDictionary;
+  event_type: string[];
+  region: string[];
+  technology_class: string[];
+  technology_maturity: string[];
   // Подсказки к полю «Компания» — канонические имена справочника алиасов.
   companies: string[];
 };

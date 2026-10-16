@@ -27,12 +27,10 @@ vi.mock("../../api/signals", () => ({
 
 // Справочники — как их отдаёт сервер (/api/signals/dictionaries), сокращённо.
 const DICTIONARIES: SignalDictionaries = {
-  version: "2026-10-14.1",
-  undefined: "не определено",
-  event_type: { title: "Тип события", values: ["пилот", "контракт", "сделка (M&A)", "нет события"] },
-  region: { title: "Регион", values: ["Россия", "Европа", "Ближний Восток"] },
-  technology_class: { title: "Класс технологии", values: ["робототехника", "датчики и IoT", "неприменимо"] },
-  technology_maturity: { title: "Зрелость", values: ["прототип", "пилот/ОПИ", "неприменимо"] },
+  event_type: ["пилот", "контракт", "сделка (M&A)", "нет события"],
+  region: ["Россия", "Европа", "Ближний Восток"],
+  technology_class: ["робототехника", "датчики и IoT", "неприменимо"],
+  technology_maturity: ["прототип", "пилот/ОПИ", "неприменимо"],
   companies: ["SLB", "Saudi Aramco", "Роснефть"],
 };
 
@@ -306,11 +304,18 @@ describe("бизнес-лента", () => {
     it("клик по компании — все сигналы с её участием, в любой теме; «Сбросить» возвращает всё", async () => {
       renderFeed();
       fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
+      // Выбраны тема и регион, порядок — «сначала новые»: «всё про компанию» снимает фильтры, порядок оставляет.
+      fireEvent.change(screen.getByRole("combobox", { name: /^Тема/ }), { target: { value: "Бурение" } });
+      fireEvent.change(await screen.findByRole("combobox", { name: "Регион" }), { target: { value: "Ближний Восток" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Сортировка/ }), { target: { value: "date_desc" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ theme: "Бурение", region: "Ближний Восток" }));
       const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
 
       fireEvent.click(within(card).getByRole("button", { name: "SLB" }));
 
-      await waitFor(() => expect(lastListQuery()).toMatchObject({ showcase: "business", company: "SLB" }));
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ showcase: "business", company: "SLB", sort: "date_desc" }));
+      expect([lastListQuery().theme, lastListQuery().region]).toEqual([undefined, undefined]);
+      expect(screen.getByRole("combobox", { name: /^Тема/ })).toHaveValue("");
       expect(screen.getByRole("combobox", { name: "Компания" })).toHaveValue("SLB");
       await waitFor(() => expect(screen.queryByText("Роснефть купила сервисную компанию")).not.toBeInTheDocument());
       // Блоки тем раскрыты сами: «всё про компанию» видно сразу, как при поиске.
@@ -327,6 +332,61 @@ describe("бизнес-лента", () => {
       await waitFor(() => expect(lastListQuery().company).toBeUndefined());
       expect(input).toHaveValue("");
     });
+
+    it("компания — по имени целиком: пустая выборка подсказывает взять имя из подсказок", async () => {
+      renderFeed();
+      await screen.findByRole("button", { name: "Развернуть всё" });
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Компания" }), { target: { value: "Газпром" } });
+
+      expect(await screen.findByText(/Компания ищется по имени целиком/)).toBeInTheDocument();
+      expect(lastListQuery()).toMatchObject({ company: "Газпром" });
+    });
+  });
+
+  it("публикаций у карточки ленты — до 20, остальные — строкой «ещё N»", async () => {
+    const many = Array.from({ length: 20 }, (_, index) => publication(100 + index, { title_ru: `Перепечатка ${index + 1}` }));
+    serve([{ ...contract, evidence_count: 23, evidence: many }]);
+    renderFeed();
+    const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+    expect(lastListQuery()).toMatchObject({ evidenceLimit: 20 });
+
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    const publications = within(card).getByText("Публикации").closest(".signalEvidenceList") as HTMLElement;
+    expect(within(publications).getAllByRole("link")).toHaveLength(20);
+    expect(within(publications).getByText("и ещё 3 публикации")).toBeInTheDocument();
+  });
+
+  it("в ленте нет «ранних карточек» радара: статья без тематики — в блоке своей темы", async () => {
+    const unclassified = "Не классифицировано / новая тема";
+    serve([contract, { ...fresh, theme: unclassified, theme_is_topic: false }]);
+    renderFeed();
+
+    expect(await screen.findByRole("button", { name: `Раскрыть группу ${unclassified}` })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ранние карточки/ })).not.toBeInTheDocument();
+  });
+
+  it("подпись «почему» — по тому, кто написал: агент — «почему важно», ревью пачки радара — «почему интересно»", async () => {
+    // Бизнес-находка радара: «почему интересно» дало ревью пачки, агент значение судьи не переписывает.
+    const radarDeal: Signal = {
+      ...contract, id: 9010, signal_key: "zena", origin: "radar", title_ru: "ZenaTech купила Velocity Geomatics",
+      interest_score: 88, why_interesting: "Сильнее соседей по прогону: первая сделка с дронами для геофизики",
+      card_set_by: { why_interesting: "radar_judge", event_date: "radar_judge" }, event_date: "2026-09-12",
+      event_date_source: null, evidence: [publication(7, {})],
+    };
+    serve([contract, radarDeal]);
+    renderFeed();
+    const feedCard = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+    const radarCard = await cardOf("ZenaTech купила Velocity Geomatics");
+    fireEvent.click(within(feedCard).getByRole("button", { name: "Раскрыть сигнал" }));
+    fireEvent.click(within(radarCard).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    expect(within(feedCard).getByText("Почему важно").nextSibling).toHaveTextContent("Крупнейший контракт");
+    expect(within(radarCard).queryByText("Почему важно")).not.toBeInTheDocument();
+    expect(within(radarCard).getByText("Почему интересно · 88").nextSibling).toHaveTextContent("Сильнее соседей");
+    // Источник даты события — и у даты судьи радара.
+    expect(within(radarCard).getByText("Событие: 12.09.2026 · по оценке судьи")).toBeInTheDocument();
   });
 });
 
@@ -373,20 +433,23 @@ describe("технологический радар", () => {
       ["Связь с нефтесервисом: переносимая", false],
       ["Компании: Equinor SLB", false],
     ]);
-    // Дата судьи — без пометки источника, как раньше.
-    expect(within(card).getByText("Событие: 01.09.2026")).toBeInTheDocument();
+    // Дату поставил судья радара — так и подписана.
+    expect(within(card).getByText("Событие: 01.09.2026 · по оценке судьи")).toBeInTheDocument();
     // «Наблюдать / кандидат / подтверждено» — подтверждённость радара, а не зрелость технологии.
     expect(within(card).getByText(/· Подтверждённость: Кандидат ·/)).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
     expect(within(card).getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
     expect(within(card).getByText("Ссылки")).toBeInTheDocument();
+    // Ревью пачки «почему интересно» не дало — пустое поле заполнил агент: это «почему важно».
+    expect(within(card).getByText("Почему важно").nextSibling).toHaveTextContent("Крупнейший контракт");
 
     expect(screen.getByRole("combobox", { name: "Подтверждённость" })).toBeInTheDocument();
     fireEvent.change(await screen.findByRole("combobox", { name: "Зрелость" }), { target: { value: "пилот/ОПИ" } });
     await waitFor(() => expect(lastListQuery()).toMatchObject({ technologyMaturity: "пилот/ОПИ" }));
+    // «Всё про компанию» и на радаре: прочие фильтры снимаются, витрина — технологии.
     fireEvent.click(within(await cardOf("Робот-бурильщик на платформе Equinor")).getByRole("button", { name: "SLB" }));
-    await waitFor(() => expect(lastListQuery()).toMatchObject({ technologyMaturity: "пилот/ОПИ", company: "SLB" }));
-    expect(lastListQuery().showcase).toBeUndefined();
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB" }));
+    expect([lastListQuery().technologyMaturity, lastListQuery().showcase]).toEqual([undefined, undefined]);
   });
 });
