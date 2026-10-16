@@ -777,6 +777,25 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'radar
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS origin_article_id BIGINT REFERENCES articles(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_signals_origin_article ON signals(origin_article_id) WHERE origin_article_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_signals_origin_category ON signals(origin, signal_category);
+-- Карточка сигнала (#96, ADR 0003): атрибуты агента «Карточка сигнала». Зрелость технологии —
+-- technology_maturity: maturity (watch / shortlist / proven) — подтверждённость радара, не зрелость.
+-- Дата события, связь с нефтесервисом, применение и «почему важно» — прежние поля судьи радара.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_type TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS region TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS technology_class TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS technology_maturity TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS participants_json JSONB;  -- [{name, quote, verified}]
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date_source TEXT;   -- из текста / по дате публикации / не определено
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS card_set_by JSONB;        -- {поле: agent / radar_judge / human}
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS card_recipe JSONB;        -- инструкция, модель, справочники, время
+-- Кто поставил значения судьи у находок радара до #96 (новые пишет upsert_signal). Повторный прогон
+-- строк не находит: после него card_set_by у находок радара не пуст.
+UPDATE signals SET card_set_by = jsonb_strip_nulls(jsonb_build_object(
+    'event_date', CASE WHEN event_date IS NOT NULL THEN 'radar_judge' END,
+    'oilfield_relevance', CASE WHEN oilfield_relevance IS NOT NULL THEN 'radar_judge' END,
+    'oilfield_application', CASE WHEN COALESCE(oilfield_application, '') <> '' THEN 'radar_judge' END,
+    'why_interesting', CASE WHEN COALESCE(why_interesting, '') <> '' THEN 'radar_judge' END))
+WHERE origin = 'radar' AND card_set_by IS NULL;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;
@@ -1038,3 +1057,10 @@ ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS document_id BIGINT REFER
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_document_stage
   ON ai_processing_runs(job_id, document_id, stage) WHERE document_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_runs_document_id ON ai_processing_runs(document_id);
+
+-- Учёт расходов агента «Карточка сигнала» (#96): строка на (задача, сигнал, стадия). Статьи у
+-- вызова нет — как у документов, свой частичный уникальный индекс: повторное применение итога
+-- той же задачи не удваивает счёт.
+ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS signal_id BIGINT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_signal_stage
+  ON ai_processing_runs(job_id, signal_id, stage) WHERE signal_id IS NOT NULL;

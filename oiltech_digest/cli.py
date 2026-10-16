@@ -2107,6 +2107,28 @@ def cmd_enqueue_daily_signal_discovery(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
+    """Шаг планировщика «заполнить карточки» (#96): новые сигналы без карточки — в задачи агента
+    «Карточка сигнала» по полосе ежедневной обработки. За флагом SIGNAL_CARD_ENABLED. С --ids —
+    пересчёт названных сигналов по полосе пересчётов (без флага: это решение оператора)."""
+    from oiltech_digest import signal_card
+
+    try:
+        if args.ids:
+            ids = [int(value) for value in args.ids.split(",") if value.strip()]
+            result = {"signals": len(ids), "jobs": signal_card.enqueue_cards(ids, trigger="manual", bulk=True)}
+        else:
+            result = signal_card.enqueue_new_signals()
+    except signal_card.CardSetupError as exc:
+        raise SystemExit(f"enqueue-signal-cards: {exc}") from exc
+    if result.get("reason"):
+        print(f"enqueue-signal-cards: skipped reason={result['reason']}")
+        return
+    queues = sorted({job["queue_name"] for job in result["jobs"]})
+    print(f"enqueue-signal-cards: сигналов {result['signals']}, задач {len(result['jobs'])}"
+          + (f", очередь {', '.join(queues)}" if queues else ""))
+
+
 def cmd_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -3208,6 +3230,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_enqueue_daily_signals.add_argument("--force", action="store_true", help="игнорировать daily-idempotency")
     p_enqueue_daily_signals.set_defaults(func=cmd_enqueue_daily_signal_discovery)
+
+    p_enqueue_cards = sub.add_parser(
+        "enqueue-signal-cards",
+        help="шаг планировщика «заполнить карточки»: новые сигналы — агенту «Карточка сигнала» "
+             "(за флагом SIGNAL_CARD_ENABLED)",
+    )
+    p_enqueue_cards.add_argument("--ids", default="",
+                                 help="пересчитать карточки названных сигналов (номера через запятую) — "
+                                      "по полосе пересчётов")
+    p_enqueue_cards.set_defaults(func=cmd_enqueue_signal_cards)
 
     p_signals = sub.add_parser("signals", help="список найденных технологических сигналов")
     p_signals.add_argument("--maturity", choices=["watch", "shortlist", "proven", "reject"], default=None)

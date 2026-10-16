@@ -578,6 +578,18 @@ def _run_refetch_text(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     return {**result, "applied": applied}
 
 
+def _run_signal_card(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Агент «Карточка сигнала» в местном контуре (#96) — та же причина регистрации, что у судьи
+    перепечаток: без внешних воркеров маршрут ИИ ставит задачу в местную очередь ai."""
+    from oiltech_digest import signal_card
+
+    repository.update_background_job_progress(job_id, 20)
+    result = signal_card.process_payload(signal_card.build_payload(payload))
+    applied = signal_card.apply_result(result, job_id=job_id)
+    repository.update_background_job_progress(job_id, 95)
+    return {"signal_card": True, "applied": applied}
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "digest_export": _run_digest_export,
     "process_articles": _run_process_articles,
@@ -590,4 +602,5 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "source_discovery_loop": _run_source_discovery_loop,
     "discover_source_candidates": _run_discover_source_candidates,
     "signal_discovery": _run_signal_discovery,
+    "signal_card": _run_signal_card,
 }

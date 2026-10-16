@@ -318,6 +318,22 @@ SIGNAL_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_RESEARCH_TIMEOUT_
 # прайс-листом: по умолчанию $10 за 1 000 вызовов.
 SIGNAL_WEB_SEARCH_USD_PER_CALL = float(os.environ.get("SIGNAL_WEB_SEARCH_USD_PER_CALL", "0.01"))
 
+# --- Агент «Карточка сигнала» (#96, спека #93) ---
+# Шаг планировщика «заполнить карточки»: новые сигналы без карточки — в задачу агента во внешний
+# контур. Включать после пересборки NL (контракт 2): старая сборка такую задачу отказывает.
+SIGNAL_CARD_ENABLED = os.environ.get("SIGNAL_CARD_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# Модель — своя настройка агента и намеренно без отката на OPENAI_MODEL (как у документов): пусто —
+# постановка отказывает с явной ошибкой. Кандидаты — gpt-5.4-nano и gpt-5.4-mini, выбирает экзамен
+# (#98). Читает ядро: модель едет воркеру в задаче и попадает в рецепт карточки.
+SIGNAL_CARD_MODEL = os.environ.get("SIGNAL_CARD_MODEL", "").strip()
+SIGNAL_CARD_REASONING = os.environ.get("SIGNAL_CARD_REASONING", "").strip() or "low"
+# Сигналов в одной задаче.
+SIGNAL_CARD_BATCH = max(1, int(os.environ.get("SIGNAL_CARD_BATCH", "20")))
+# Новый сигнал для шага — заведён за столько дней; старые заполняет прогон по истории (#98).
+SIGNAL_CARD_NEW_DAYS = max(1, int(os.environ.get("SIGNAL_CARD_NEW_DAYS", "2")))
+# Потолок сигналов за один шаг планировщика.
+SIGNAL_CARD_STEP_LIMIT = max(1, int(os.environ.get("SIGNAL_CARD_STEP_LIMIT", "200")))
+
 # Целевые показатели экрана «Статистика» — из презентации ГД «Нефтесервисный радар»
 # (июль 2026): >120 источников (слайды 4–5); бюджет ИИ ≈10 000 ₽/мес при потоке
 # 5 000 статей/мес (слайд 7). Курс для пересчёта cost_usd в рубли берётся у ЦБ РФ
