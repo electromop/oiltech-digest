@@ -296,6 +296,20 @@ def test_hung_step_is_cut_and_the_cycle_goes_on(tmp_path):
         _cleanup(proc)
 
 
+@pytest.mark.parametrize(("flag", "runs"), [(None, False), ("0", False), ("1", True)])
+def test_signal_card_step_runs_only_behind_its_flag(tmp_path, monkeypatch, flag, runs):
+    """Шаг «заполнить карточки» (#96) — за флагом, по умолчанию выключен: флаг включают после
+    пересборки NL, иначе старая сборка отказывала бы каждой задаче."""
+    monkeypatch.delenv("SIGNAL_CARD_ENABLED", raising=False)
+    proc = _scheduler(tmp_path, **({} if flag is None else {"SIGNAL_CARD_ENABLED": flag}))
+    try:
+        assert _wait(lambda: "Cycle finished" in proc.out_path.read_text(), 20), proc.out_path.read_text()
+        names = [name for name, _pid in _fake_steps(proc.steps_path)]
+        assert ("enqueue-signal-cards" in names) is runs
+    finally:
+        _cleanup(proc)
+
+
 def test_failed_step_reports_its_real_exit_code(tmp_path):
     """`code="$?"` сразу после `if ...; fi` давал 0: по POSIX так выходит `if` без ветки.
     Лог писал «FAIL … exit=0», и run_required_step не останавливал скрипт никогда."""

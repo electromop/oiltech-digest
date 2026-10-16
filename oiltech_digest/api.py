@@ -27,7 +27,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import contract, lanes, network_policy
+from oiltech_digest import contract, lanes, network_policy, signal_card
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -2379,6 +2379,11 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         # Конверт ЗАМЕНЯЕТСЯ итогом: кандидаты с подтверждениями и промптами весят
         # мегабайты и уже лежат в signal_training_examples — в задаче только счётчики.
         result = {"signal_discovery": True, "applied": signal_discovery.apply_external_result(result, job_id=job_id)}
+    if job.get("kind") == "signal_card" and result.get("signal_card"):
+        # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели с цитатами уже разобраны в карточки сигналов.
+        applied = signal_card.apply_result(result, job_id=job_id,
+                                           signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
+        result = {"signal_card": True, "applied": applied}
     return result
 
 
@@ -2868,6 +2873,8 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     # Агенты (полоса external-agents): снимок базы для радара, статьи кандидата для оценки.
     "source_candidate_evaluate": lambda payload, job_id: external_ai.build_source_candidate_evaluate_payload(payload),
     "signal_discovery": lambda payload, job_id: _signal_discovery_payload(payload),
+    # Агент «Карточка сигнала» (#96): публикации и справочники — воркеру без базы.
+    "signal_card": lambda payload, job_id: signal_card.build_payload(payload),
 }
 
 

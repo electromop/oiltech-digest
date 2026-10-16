@@ -24,6 +24,12 @@ const MARK_LABELS: Record<string, string> = {
 
 const PERIODS = [3, 6, 12] as const;
 
+// Чей расход ИИ (ai_cost.area): лента — без пометки.
+const AREA_LABELS: Record<string, string> = {
+  radar: "радар · ",
+  signal_card: "карточка сигнала · ",
+};
+
 function pct(part: number, total: number): string {
   if (!total) return "—";
   return `${Math.round((100 * part) / total)}%`;
@@ -64,8 +70,8 @@ export function StatisticsPage({ onUnauthorized, showToast }: Props) {
       const cur = acc.get(row.month) ?? { runs: 0, cost: 0, models: [] };
       cur.runs += row.runs;
       cur.cost += Number(row.cost_usd ?? 0);
-      // Радар — с пометкой: та же модель у ленты и у радара — разные строки расхода.
-      const area = row.area === "radar" ? "радар · " : "";
+      // Радар и агент «Карточка сигнала» — с пометкой: та же модель у ленты и у них — разные строки расхода.
+      const area = AREA_LABELS[row.area ?? ""] ?? "";
       if (row.model) cur.models.push(`${area}${row.model.split("-2")[0]} · $${Number(row.cost_usd ?? 0).toFixed(2)}`);
       acc.set(row.month, cur);
     }

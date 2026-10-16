@@ -25,7 +25,8 @@ FETCH = "external-fetch"
 BROWSER = "external-playwright"
 AGENTS = "external-agents"
 
-_AI_KINDS = frozenset({"process_articles", "recheck_relevance", "translate_titles", "process_document", "reprint_review"})
+_AI_KINDS = frozenset({"process_articles", "recheck_relevance", "translate_titles", "process_document", "reprint_review",
+                       "signal_card"})
 _FETCH_KINDS = frozenset({"scrape_source", "refetch_text"})
 _AGENT_KINDS = frozenset({"signal_discovery", "source_candidate_evaluate"})
 
@@ -34,8 +35,9 @@ EXTERNAL_LANES: dict[str, frozenset[str]] = {
     AI_LIVE: _AI_KINDS,
     # Пересчёты корпуса — долгие пачки; не должны стоять перед потоком дня. Перепроверки
     # релевантности (удаляют статьи) здесь нет: резерв защищает только пару пакет×пакет, и
-    # удаление параллельно пакету дня уронило бы его apply на внешнем ключе.
-    AI_BULK: frozenset({"process_articles", "translate_titles"}),
+    # удаление параллельно пакету дня уронило бы его apply на внешнем ключе. Карточки сигналов по
+    # истории (#96, #98) — тоже пересчёт: новые сигналы идут потоком дня.
+    AI_BULK: frozenset({"process_articles", "translate_titles", "signal_card"}),
     FETCH: _FETCH_KINDS,
     BROWSER: _FETCH_KINDS,
     # Радар и оценка кандидатов агента источников (ADR 0001): прогон радара — минуты,

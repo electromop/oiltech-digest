@@ -123,6 +123,9 @@ SIGNAL_DISCOVERY_WEB_QUERY_LIMIT="${SIGNAL_DISCOVERY_WEB_QUERY_LIMIT:-8}"
 SIGNAL_DISCOVERY_RESEARCH_ROUNDS="${SIGNAL_DISCOVERY_RESEARCH_ROUNDS:-2}"
 SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT="${SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT:-20}"
 SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
+# Агент «Карточка сигнала» (#96): новые сигналы — в задачи агента на NL. По умолчанию выключен:
+# включать после пересборки NL (контракт 2) — старая сборка такие задачи отказывает.
+SIGNAL_CARD_ENABLED="${SIGNAL_CARD_ENABLED:-0}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -208,6 +211,10 @@ while true; do
     else
       log "SKIP find-reprints: OPENAI_API_KEY is empty"
     fi
+  fi
+
+  if [ "$SIGNAL_CARD_ENABLED" = "1" ]; then
+    run_step "enqueue-signal-cards" python -m oiltech_digest.cli enqueue-signal-cards
   fi
 
   if [ "$SOURCE_DISCOVERY_ENABLED" = "1" ]; then

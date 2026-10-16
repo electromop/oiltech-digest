@@ -945,6 +945,16 @@ def list_signal_article_evidence(
         return cur.fetchall()
 
 
+# Кто поставил значение карточки сигнала (#96, signals.card_set_by): агент «Карточка сигнала», судья
+# радара или человек (правки людей внесёт сервис ОС).
+CARD_SET_BY_AGENT = "agent"
+CARD_SET_BY_JUDGE = "radar_judge"
+CARD_SET_BY_HUMAN = "human"
+# Поля карточки сигнала, которые ставит судья радара: их значения агент у находки радара не
+# перезаписывает, а пустые — заполняет.
+RADAR_JUDGE_CARD_FIELDS = ("event_date", "oilfield_relevance", "oilfield_application", "why_interesting")
+
+
 def upsert_signal(signal: dict) -> int:
     """Карточка радара по ключу: новая — вставка, найденная снова — обновление.
 
@@ -960,6 +970,15 @@ def upsert_signal(signal: dict) -> int:
         " AND EXISTS (SELECT 1 FROM user_signal_states uss_f"
         " WHERE uss_f.signal_id = signals.id AND uss_f.status = 'digest'))"
     )
+
+    def by_human(field: str) -> str:
+        return f"signals.card_set_by->>'{field}' = '{CARD_SET_BY_HUMAN}'"
+
+    # Кто поставил поля судьи (#96): присланные — судья, но значение человека судья не переписывает.
+    judge_set_by = ", ".join(
+        f"'{field}', CASE WHEN {by_human(field)} THEN NULL ELSE EXCLUDED.card_set_by->>'{field}' END"
+        for field in RADAR_JUDGE_CARD_FIELDS
+    )
     with get_connection() as conn:
         cur = conn.execute(
             f"""
@@ -970,10 +989,10 @@ def upsert_signal(signal: dict) -> int:
               signal_category, event_date, mixed_events, mixed_events_reason,
               score_profile, score_items_json, criteria_snapshot,
               oilfield_relevance, oilfield_application, filter_stage, filter_reason,
-              verdict_reason, decision_log
+              verdict_reason, decision_log, card_set_by
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_key) DO UPDATE SET
               title = CASE WHEN {closed} THEN signals.title ELSE EXCLUDED.title END,
               title_ru = CASE WHEN {closed} THEN signals.title_ru ELSE EXCLUDED.title_ru END,
@@ -992,14 +1011,26 @@ def upsert_signal(signal: dict) -> int:
               -- Балл интереса — сравнение внутри пачки; тема из одного кандидата его
               -- не получает, и прошлый балл не должен стираться NULL'ом.
               interest_score = COALESCE(EXCLUDED.interest_score, signals.interest_score),
-              why_interesting = COALESCE(NULLIF(EXCLUDED.why_interesting, ''), signals.why_interesting),
+              why_interesting = CASE WHEN {by_human("why_interesting")} THEN signals.why_interesting
+                                     ELSE COALESCE(NULLIF(EXCLUDED.why_interesting, ''), signals.why_interesting) END,
               -- Поля судьи (29.09): результат старой сборки NL их не несёт — прежние не стираем.
               signal_category = COALESCE(EXCLUDED.signal_category, signals.signal_category),
-              event_date = COALESCE(EXCLUDED.event_date, signals.event_date),
+              event_date = CASE WHEN {by_human("event_date")} THEN signals.event_date
+                                ELSE COALESCE(EXCLUDED.event_date, signals.event_date) END,
+              -- Дата судьи — без источника (откуда она у судьи, неизвестно): источник агента «Карточка
+              -- сигнала» (#96) к ней не относится.
+              event_date_source = CASE WHEN EXCLUDED.event_date IS NOT NULL AND NOT {by_human("event_date")}
+                                       THEN NULL ELSE signals.event_date_source END,
               mixed_events = COALESCE(EXCLUDED.mixed_events, signals.mixed_events),
               mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
-              oilfield_relevance = COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance),
-              oilfield_application = COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application),
+              oilfield_relevance = CASE WHEN {by_human("oilfield_relevance")} THEN signals.oilfield_relevance
+                                        ELSE COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance) END,
+              oilfield_application = CASE WHEN {by_human("oilfield_application")} THEN signals.oilfield_application
+                                          ELSE COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application) END,
+              -- Кто поставил значения карточки (#96): присланные судьёй поля — его, кроме правок человека;
+              -- остальные (агента «Карточка сигнала») не трогаем.
+              card_set_by = COALESCE(signals.card_set_by, '{{}}'::jsonb)
+                            || jsonb_strip_nulls(jsonb_build_object({judge_set_by})),
               -- Отсев — решение этого прогона: принятая снова карточка выходит на радар.
               filter_stage = EXCLUDED.filter_stage,
               filter_reason = EXCLUDED.filter_reason,
@@ -1045,6 +1076,7 @@ def upsert_signal(signal: dict) -> int:
                 (signal.get("filter_reason") or None),
                 (signal.get("verdict_reason") or None),
                 Json(_jsonable(signal["decision_log"])) if signal.get("decision_log") else None,
+                Json({field: CARD_SET_BY_JUDGE for field in RADAR_JUDGE_CARD_FIELDS if signal.get(field)}),
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -1459,7 +1491,8 @@ def _radar_hidden_group_sql() -> str:
     Одобренную решения машины не прячут (_radar_quality_sql): её причина — архив или срок."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     stages = " ".join(f"WHEN '{stage}' THEN 'отсеяно ({label})'" for stage, label in RADAR_FILTER_STAGES.items())
-    age = f"WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней'" if age_days > 0 else ""
+    age = (f"WHEN {_judged_sql('s', 'event_date')} < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней'"
+           if age_days > 0 else "")
     approved_reason = f"CASE {age} ELSE 'другое' END" if age else "'другое'"
     return (
         "CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве'"
@@ -1467,7 +1500,7 @@ def _radar_hidden_group_sql() -> str:
         f" WHEN s.filter_stage IS NOT NULL THEN (CASE s.filter_stage {stages} ELSE 'отсеяно' END)"
         " WHEN s.signal_category = 'business' THEN 'бизнес-сигнал'"
         " WHEN s.signal_category = 'other' THEN 'не технологическое событие'"
-        " WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис'"
+        f" WHEN {_judged_sql('s', 'oilfield_relevance')} = 'none' THEN 'не про нефтесервис'"
         " WHEN s.mixed_events THEN 'ссылки о разных событиях'"
         f" {age} ELSE 'другое' END"
     )
@@ -1936,6 +1969,13 @@ def _radar_card_evidence_exists(condition: str = "TRUE") -> str:
     )
 
 
+def _judged_sql(alias: str, column: str) -> str:
+    """Значение поля карточки, по которому витрина решает, показывать ли карточку: судьи радара или
+    человека. Значение агента «Карточка сигнала» (#96) ничего не прячет: он заполняет пустые поля
+    старых находок, и иначе прогон по истории убрал бы с радара карточки, которые там были."""
+    return f"(CASE WHEN {alias}.card_set_by->>'{column}' = '{CARD_SET_BY_AGENT}' THEN NULL ELSE {alias}.{column} END)"
+
+
 def _quality_rules_sql(alias: str, *machine_rules: str) -> str:
     """Правила качества витрины поверх правил машины `machine_rules` (замечания Виктора 29.09):
 
@@ -1955,7 +1995,7 @@ def _quality_rules_sql(alias: str, *machine_rules: str) -> str:
         *machine_rules,
         f"{a}.mixed_events IS NOT TRUE",
         # «Релевантности мало» (Виктор 29.09): общепромышленное без связи с нефтесервисом.
-        f"COALESCE({a}.oilfield_relevance, 'direct') <> 'none'",
+        f"COALESCE({_judged_sql(a, 'oilfield_relevance')}, 'direct') <> 'none'",
         # Отсеяно поиском, судьёй, ревью пачки или сбоем судьи — хранится для разбора заказчиком.
         f"{a}.filter_stage IS NULL",
     ])
@@ -1965,7 +2005,8 @@ def _quality_rules_sql(alias: str, *machine_rules: str) -> str:
     ]
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     if age_days > 0:
-        parts.append(f"({a}.event_date IS NULL OR {a}.event_date >= CURRENT_DATE - {age_days})")
+        event_date = _judged_sql(a, "event_date")
+        parts.append(f"({event_date} IS NULL OR {event_date} >= CURRENT_DATE - {age_days})")
     return f"({_SIGNAL_IN_DIGEST_SQL.format(alias=a)} OR ({' AND '.join(parts)}))"
 
 
@@ -2045,7 +2086,8 @@ def _radar_hidden_reason_sql() -> str:
     У видимой причины нет: экран подписывает «Не на радаре: …» любую карточку с причиной."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     age = (
-        f"CASE WHEN s.event_date < CURRENT_DATE - {age_days} THEN 'событие старше {age_days} дней' END"
+        f"CASE WHEN {_judged_sql('s', 'event_date')} < CURRENT_DATE - {age_days}"
+        f" THEN 'событие старше {age_days} дней' END"
         if age_days > 0 else "NULL"
     )
     # Решения машины (судья, отсев) одобренную карточку не прячут (_radar_quality_sql) — и в
@@ -2057,7 +2099,7 @@ def _radar_hidden_reason_sql() -> str:
         + " END || COALESCE(': ' || NULLIF(s.filter_reason, ''), ''),"
         " CASE s.signal_category WHEN 'business' THEN 'бизнес-сигнал, не технология'"
         "   WHEN 'other' THEN 'не технологическое событие' END,"
-        " CASE WHEN s.oilfield_relevance = 'none' THEN 'не про нефтесервис' END,"
+        f" CASE WHEN {_judged_sql('s', 'oilfield_relevance')} = 'none' THEN 'не про нефтесервис' END,"
         " CASE WHEN s.mixed_events THEN 'ссылки о разных событиях'"
         "   || COALESCE(': ' || NULLIF(s.mixed_events_reason, ''), '') END"
         "), '') END"
@@ -4986,8 +5028,10 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             """
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
-                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*).
-                   CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar' ELSE 'feed' END AS area,
+                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агент
+                   -- «Карточка сигнала» (#96) — своей.
+                   CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
+                        WHEN stage = 'signal_card' THEN 'signal_card' ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs

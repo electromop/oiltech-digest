@@ -9,8 +9,12 @@
    тревогу contract_mismatch у живого потребителя с другим номером.
 
    CONTRACT повышается при любой несовместимой правке протокола: формы payload и итога,
-   эндпоинтов /api/external-worker/*. Порядок выката — ядро (обратно совместимо), потом NL.
-   История: 1 — сборка и контракт в заголовках, возврат задачи на остановке (release).
+   эндпоинтов /api/external-worker/*, нового вида задачи. Порядок выката — ядро (обратно
+   совместимо), потом NL.
+   История: 1 — сборка и контракт в заголовках, возврат задачи на остановке (release);
+   2 — вид задачи signal_card, агент «Карточка сигнала» (#96): сборка NL контракта 1 отказывает
+   ему ошибкой «Unsupported external job kind», поэтому шаг планировщика включается флагом
+   SIGNAL_CARD_ENABLED только после пересборки NL.
    Совместимые добавки номер не меняют — старая сторона их молча пропускает: 28.09 — поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002) — profile у критериев в payload и profile + criteria_snapshot в
@@ -28,7 +32,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 1
+CONTRACT = 2
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
 
@@ -50,8 +54,9 @@ PROCESS_LIMIT_DEFAULT = 5
 # Пакеты по статьям: итог — по строке на статью, её можно применить без остальных.
 _ARTICLE_BATCHES = frozenset({"process_articles", "recheck_relevance", "translate_titles"})
 # Виды, чей частичный итог ядро принимает. Сбор ИИ не зовёт — повторить его дёшево;
-# итог документа — одна карточка на весь файл, половина карточки не нужна никому.
-PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review"}
+# итог документа — одна карточка на весь файл, половина карточки не нужна никому. Карточки
+# сигналов (#96) — по строке на сигнал, как статьи.
+PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card"}
 
 
 def accepts_partial(kind: str | None, result: dict[str, Any] | None,
@@ -74,9 +79,9 @@ def without_reservation(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def done_count(result: dict[str, Any] | None) -> int:
-    """Сколько строк сделано в частичном итоге: статей пакета или пар судьи."""
+    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи или карточек сигналов."""
     result = result or {}
-    return len(result.get("articles") or result.get("verdicts") or [])
+    return len(result.get("articles") or result.get("verdicts") or result.get("cards") or [])
 
 
 def remaining_after_partial(kind: str | None, payload: dict[str, Any],
@@ -88,12 +93,18 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
       не повторил бы их внутри задачи);
     - пакет «N необработанных статей» — N уменьшается на сделанное, а выборка при выдаче
       сама обходит записанные;
-    - пары судьи перепечаток — без рассуженных.
+    - пары судьи перепечаток — без рассуженных;
+    - сигналы карточек — без тех, на которые модель уже ответила (в том числе ответом не по схеме:
+      вызов оплачен).
     """
     rest = without_reservation(payload)
     if not accepts_partial(kind, result, payload):
         return rest
     kind = str(kind)
+    if kind == "signal_card":
+        answered = {str(card.get("signal_id")) for card in result.get("cards") or [] if isinstance(card, dict)}
+        left = [signal_id for signal_id in rest.get("signal_ids") or [] if str(signal_id) not in answered]
+        return {**rest, "signal_ids": left} if left else None
     if kind in _ARTICLE_BATCHES:
         done = {int(item["article_id"]) for item in result.get("articles") or []}
         article_ids = [int(item) for item in rest.get("article_ids") or []]
