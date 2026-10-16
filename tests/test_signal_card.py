@@ -10,8 +10,8 @@ import pytest
 
 from oiltech_digest import cli, external_worker, signal_card, signal_card_pack
 from oiltech_digest.db import connection, repository
-from tests.signal_card_support import (CARD_KEYS, MODEL, FakeModel, answer, api_get, business, feed_signal, fill,
-                                       radar_finding, run_worker, worker)
+from tests.signal_card_support import (CARD_KEYS, DRILLING, MODEL, FakeModel, answer, api_get, business, feed_signal,
+                                       fill, radar_finding, run_worker, worker)
 from tests.signal_card_support import admin, contour, user  # noqa: F401 — фикстуры
 
 
@@ -319,3 +319,20 @@ def test_judge_finding_again_does_not_overwrite_a_human_correction(user, contour
     card = api_get("/api/signals", user)[0]
     assert (card["event_date"], card["card_set_by"]["event_date"]) == ("2026-08-30", "human")
     assert (card["oilfield_relevance"], card["card_set_by"]["oilfield_relevance"]) == ("direct", "radar_judge")
+
+
+def test_chatgpt_finding_link_date_is_not_a_publication_date(user, contour, monkeypatch):
+    # У находки «режима ChatGPT» дата ссылки — дата события по версии модели (и после докачки страницы
+    # без даты): модель не должна получить её как дату публикации, а «по дате публикации» — опереться на неё.
+    signal_id = repository.upsert_signal({"signal_key": "chatgpt", "title": "Робот на буровой", "theme": DRILLING,
+                                          "maturity": "shortlist", "score": 70, "signal_category": "technology"})
+    repository.upsert_signal_evidence(signal_id, {
+        "source_url": "https://radar.example/chatgpt", "title": "Робот на буровой",
+        "published_at": "2026-09-20T00:00:00+00:00", "extracted_fact": "Equinor испытала робота на буровой.",
+        "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": "true"},
+    })
+    model = fill(monkeypatch, {"Робот на буровой": answer(event_date="", event_date_source="по дате публикации")})
+
+    assert "Дата публикации: не указана" in model.calls[0]["input"]
+    card = api_get("/api/signals", user)[0]
+    assert (card["event_date"], card["event_date_source"]) == (None, "не определено")
