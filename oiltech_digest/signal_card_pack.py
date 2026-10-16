@@ -25,6 +25,12 @@ ChatGPT» дата публикации — это дата события по 
 twitter:title и h1 докачка оставляет заголовок модели (`parse_article_page`), и по базе его не
 отличить от заголовка издателя.
 
+Ручной отбор (решение владельца 16.10): балл не отделяет полезное нефтесервису — 50 строк выбраны и
+проверены вручную, команда собирает таблицу по списку номеров (--ids-file: номер и доля). Ручные
+поправки (--overrides) — дата публикации и текст с первоисточника, где в базе их нет или там меню
+сайта; каждая помечена в манифесте. Поэтому манифест хранит замороженные входы экзамена — заголовок,
+текст, дату публикации, издателя и его тип: экзамен #98 подаёт агенту их, а не перечитывает базу.
+
 Таблица и манифест (идентификаторы, отпечаток текста) пишутся вне репозитория — он публичный.
 Манифест фиксирует входы экзамена: текст публикации агент и экзамен берут через
 publication_text — отпечаток совпадёт с тем, что видел эксперт.
@@ -92,7 +98,7 @@ MARKUP_COLUMNS = [
     ("Почему важно нефтесервису", None),
     ("Комментарий эксперта", None),
 ]
-_GIVEN_COLUMNS = ["ID", "Заголовок", "Текст публикации", "Ссылка", "Дата публикации"]
+_GIVEN_COLUMNS = ["ID", "Заголовок", "Текст публикации", "Ссылка", "Издатель", "Дата публикации"]
 # На утверждение — четыре справочника спеки и алиасы компаний. Источник даты и связь с
 # нефтесервисом — значения самой карточки (спека #93), их эксперт не утверждает, а только ставит.
 # Справочники выбора значения карточки — их же агент «Карточка сигнала» передаёт модели (#96).
@@ -106,7 +112,10 @@ INSTRUCTION = [
     "Размечайте по тексту в таблице — агент увидит только его; ссылка — чтобы проверить контекст.",
     "Дата события — ГГГГ-ММ-ДД, если она названа в тексте или следует из него («из текста»); иначе —",
     "  дата публикации и «по дате публикации»; даты публикации нет — «не определено».",
-    "Компании — только участники события, через «;»; издатель публикации участником не считается.",
+    "Компании — только участники события, через «;». Издание, которое о событии сообщает (СМИ, журнал,",
+    "  Telegram-канал, аналитика — например, World Oil, Нефтегаз.РУ), участником не считается; компания,",
+    "  выпустившая пресс-релиз о своём событии, — участник, если это событие совершает она. Кто",
+    "  опубликовал — в колонке «Издатель».",
     "Колонки со справочниками — выпадающий список. «Неприменимо» и «нет события» — атрибут к событию",
     "  не относится (у сделки нет зрелости технологии, у обзора нет события); «не определено» — по",
     "  тексту понять нельзя.",
@@ -148,13 +157,94 @@ def shortfall(sample: list[dict[str, Any]]) -> list[str]:
             for stratum, quota in {**FEED_QUOTA, **RADAR_QUOTA}.items() if counts[stratum] < quota]
 
 
+def read_ids(path: str | Path) -> list[tuple[str, str]]:
+    """Список ручного отбора: строка — «номер доля», после «#» — комментарий (заголовок для человека)."""
+    listed: list[tuple[str, str]] = []
+    for number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1):
+        parts = line.split("#", 1)[0].split()
+        if not parts:
+            continue
+        if len(parts) != 2 or parts[1] not in STRATUM_RU:
+            raise PackError(f"{Path(path).name}, строка {number}: нужно «номер доля» "
+                            f"(доля — одна из: {', '.join(STRATUM_RU)}), получено {line.strip()!r}")
+        listed.append((parts[0], parts[1]))
+    repeated = sorted(item for item, count in Counter(item for item, _ in listed).items() if count > 1)
+    if repeated:
+        raise PackError("номер в списке дважды: " + ", ".join(repeated))
+    return listed
+
+
+def select_listed(listed: list[tuple[str, str]], *, since: str, until: str) -> list[dict[str, Any]]:
+    """Ручной отбор: ровно эти сигналы и в тех долях, что решил человек. Правила кандидатов те же, что у
+    выборки по долям (видимость, текст издателя, разметить можно); доля сигнала радара — его категория."""
+    pool = {item["id"]: item for item in _feed_candidates(since, until) + _radar_candidates(until)}
+    missing = [item for item, _ in listed if item not in pool or not _markable(pool[item])]
+    if missing:
+        raise PackError("нет среди кандидатов окна (или не разметить): " + ", ".join(missing))
+    wrong = [f"{item} ({stratum})" for item, stratum in listed
+             if stratum not in (RADAR_QUOTA if pool[item]["origin"] == "radar" else FEED_QUOTA)
+             or (pool[item]["origin"] == "radar" and stratum != pool[item]["category_code"])]
+    if wrong:
+        raise PackError("доля не подходит сигналу (у радара доля — его категория): " + ", ".join(wrong))
+    counts = Counter(stratum for _, stratum in listed)
+    off = [f"{STRATUM_RU[stratum]} {counts[stratum]} из {quota}"
+           for stratum, quota in {**FEED_QUOTA, **RADAR_QUOTA}.items() if counts[stratum] != quota]
+    if off:
+        raise PackError("в списке не те квоты: " + "; ".join(off))
+    return [{**pool[item], "stratum": stratum} for item, stratum in listed]
+
+
+def apply_overrides(sample: list[dict[str, Any]], path: str | Path) -> None:
+    """Ручные поправки к строкам выборки: дата публикации (ГГГГ-ММ-ДД), заголовок, текст и пояснение,
+    откуда взято. Текст проходит publication_text, отпечаток пересчитывается; поправка видна в манифесте."""
+    fixes = json.loads(Path(path).read_text(encoding="utf-8"))
+    by_id = {item["id"]: item for item in sample}
+    unknown = sorted(set(fixes) - set(by_id))
+    if unknown:
+        raise PackError("поправка к сигналу вне выборки: " + ", ".join(unknown))
+    for item_id, fix in fixes.items():
+        extra = sorted(set(fix) - {"published", "title", "text", "note"})
+        if extra:
+            raise PackError(f"{item_id}: поправлять можно дату публикации, заголовок и текст, получено {extra}")
+        item = by_id[item_id]
+        if "published" in fix:
+            try:
+                item["published"] = date.fromisoformat(str(fix["published"])).isoformat()
+            except ValueError as exc:
+                raise PackError(f"{item_id}: дата публикации — ГГГГ-ММ-ДД, получено {fix['published']!r}") from exc
+        if "title" in fix:
+            item["title"] = _CONTROL_RE.sub(" ", str(fix["title"])).strip()
+        if "text" in fix:
+            text = publication_text(str(fix["text"]))
+            if not text:
+                raise PackError(f"{item_id}: текст поправки пуст")
+            item.update(text=text, text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(), text_chars=len(text))
+        item["overrides"] = [key for key in ("published", "title", "text") if key in fix]
+        item["override_note"] = fix.get("note")
+
+
+def _file_mark(kind: str, path: str | Path) -> dict[str, str]:
+    """Чем собрана таблица: имя и отпечаток входного файла — по ним видно, тот ли список дошёл до выгрузки."""
+    content = Path(path).read_bytes()
+    return {f"{kind}_file": Path(path).name, f"{kind}_sha256": hashlib.sha256(content).hexdigest()}
+
+
 def export_pack(out_dir: str | Path | None, *, seed: int | None = None, since: str | None = None,
-                until: str | None = None, apply: bool = False) -> dict[str, Any]:
+                until: str | None = None, apply: bool = False, ids_file: str | Path | None = None,
+                overrides_file: str | Path | None = None) -> dict[str, Any]:
     seed = DEFAULT_SEED if seed is None else seed
     since, until = since or DEFAULT_SINCE, until or default_until()
-    sample = select_sample(seed=seed, since=since, until=until)
+    if ids_file:
+        sample = select_listed(read_ids(ids_file), since=since, until=until)
+        selection = {"rule": "список номеров", **_file_mark("ids", ids_file)}
+    else:
+        sample = select_sample(seed=seed, since=since, until=until)
+        selection = {"rule": "доли по баллу и отметкам аналитиков"}
+    if overrides_file:
+        apply_overrides(sample, overrides_file)
+        selection.update(_file_mark("overrides", overrides_file))
     result = {"composition": composition(sample), "count": len(sample), "shortfall": shortfall(sample),
-              "seed": seed, "since": since, "until": until, "applied": False}
+              "seed": seed, "since": since, "until": until, "selection": selection, "applied": False}
     if not apply:
         return result
     if result["shortfall"]:
@@ -172,10 +262,11 @@ def export_pack(out_dir: str | Path | None, *, seed: int | None = None, since: s
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seed": seed, "since": since, "until": until,
         "dictionaries_version": dictionaries["version"], "text_limit": TEXT_LIMIT,
-        "composition": result["composition"],
-        "items": [{key: item.get(key) for key in (
+        "selection": selection, "composition": result["composition"],
+        "items": [{**{key: item.get(key) for key in (
             "id", "origin", "stratum", "article_id", "signal_id", "evidence_id", "url", "category", "theme",
-            "text_sha256", "text_chars")} for item in rows],
+            "title", "text", "published", "publisher", "publisher_type", "text_sha256", "text_chars",
+            "override_note")}, "overrides": item.get("overrides") or []} for item in rows],
     }
     (out / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return {**result, "applied": True, "workbook": str(out / WORKBOOK_NAME), "manifest": str(out / MANIFEST_NAME)}
@@ -213,6 +304,7 @@ def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
             SELECT a.id AS article_id, a.title, a.url, a.raw_text AS text,
                    COALESCE(a.published_at, a.collected_at) AS published,
                    COALESCE(p.name, t.name, 'без темы') AS theme, 'business' AS category_code,
+                   s.name AS publisher, COALESCE(s.source_type, '') AS publisher_type, s.name AS publisher_source,
                    sc.total_score AS score,
                    EXISTS (SELECT 1 FROM user_article_states u
                            WHERE u.article_id = a.id AND u.status = 'digest') AS in_digest,
@@ -270,10 +362,15 @@ def _radar_candidates(until: str) -> list[dict[str, Any]]:
                    COALESCE(a.raw_text, e.extracted_fact) AS text,
                    CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)
                         WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %s THEN e.published_at
-                   END AS published
+                   END AS published,
+                   -- Издатель — как во входе агента #96: у статьи корпуса — её источник с типом, у находки
+                   -- поиска — e.publisher без типа. Эксперту у находки показываем сайт (_publisher_label).
+                   COALESCE(src.name, e.publisher, '') AS publisher, COALESCE(src.source_type, '') AS publisher_type,
+                   src.name AS publisher_source
             FROM signals s
             JOIN signal_evidence e ON e.signal_id = s.id
             LEFT JOIN articles a ON a.id = e.article_id
+            LEFT JOIN sources src ON src.id = a.source_id
             WHERE s.merged_into_signal_id IS NULL AND s.archived_at IS NULL AND s.filter_stage IS NULL
               -- Только находки поиска (#95): сигнал ленты — это статья, её берёт лентовая часть.
               AND {repository.radar_origin_sql("s")}
@@ -343,6 +440,15 @@ def publication_day(value: Any) -> str | None:
     return str(value)[:10]
 
 
+def _publisher_label(item: dict[str, Any]) -> str:
+    """Кто опубликовал — для эксперта: источник ленты или корпуса, у находки поиска — сайт. Имя издателя у
+    находки записала модель поиска, а сайт — из самой ссылки."""
+    if item.get("publisher_source"):
+        return str(item["publisher_source"])
+    host = re.sub(r"^https?://", "", str(item.get("url") or "")).split("/", 1)[0]
+    return host.removeprefix("www.")
+
+
 def _write_workbook(path: Path, sample: list[dict[str, Any]], dictionaries: dict[str, Any]) -> None:
     import openpyxl
     from openpyxl.styles import Alignment, Font
@@ -385,7 +491,8 @@ def _write_workbook(path: Path, sample: list[dict[str, Any]], dictionaries: dict
     for cell in sheet[1]:
         cell.font = Font(bold=True)
     for item in sample:
-        sheet.append([item["id"], item["title"], item["text"], item.get("url") or "", item["published"]])
+        sheet.append([item["id"], item["title"], item["text"], item.get("url") or "", _publisher_label(item),
+                      item["published"]])
         for cell in sheet[sheet.max_row]:
             # Заголовок издателя «=…» openpyxl записал бы формулой — в таблице он должен остаться текстом.
             if isinstance(cell.value, str) and cell.value.startswith("="):
@@ -398,7 +505,7 @@ def _write_workbook(path: Path, sample: list[dict[str, Any]], dictionaries: dict
         validation = DataValidation(type="list", formula1=list_refs[key], allow_blank=True)
         validation.add(f"{letter}2:{letter}{last}")
         sheet.add_data_validation(validation)
-    widths = [14, 40, 90, 30, 14] + [18] * len(MARKUP_COLUMNS)
+    widths = [14, 40, 90, 30, 20, 14] + [18] * len(MARKUP_COLUMNS)
     for column, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(column)].width = width
     for row in sheet.iter_rows(min_row=2, min_col=2, max_col=3):
