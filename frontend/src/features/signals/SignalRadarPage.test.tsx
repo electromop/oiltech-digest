@@ -46,6 +46,8 @@ vi.mock("../../api/signals", () => ({
   getSignalSearchHealth: vi.fn(),
   // Итоги недели по умолчанию не пришли — блока нет, остальные тесты экрана его не видят.
   getSignalWeekly: vi.fn(() => Promise.reject(new Error("нет итогов"))),
+  // Справочники атрибутов карточки (#97) — тоже: списков атрибутов нет, остальное как было.
+  getSignalDictionaries: vi.fn(() => Promise.reject(new Error("нет справочников"))),
 }));
 
 const DEFAULT_CARDS: Signal[] = [
@@ -482,12 +484,12 @@ describe("SignalRadarPage", () => {
       expect(screen.getByRole("option", { name: "Экология" })).toBeInTheDocument();
     });
 
-    it("зрелость тоже применяется сразу", async () => {
+    it("подтверждённость тоже применяется сразу", async () => {
       serve([drilling, { ...ecology, maturity: "proven" }]);
       renderRadar(false);
       await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
 
-      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "proven" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Подтверждённость/ }), { target: { value: "proven" } });
 
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: /группу Бурение/ })).not.toBeInTheDocument(),
@@ -536,7 +538,7 @@ describe("SignalRadarPage", () => {
       await screen.findByRole("button", { name: "В дайджест" });
       const stale = deferred<Signal[]>();
       vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
-      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "watch" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Подтверждённость/ }), { target: { value: "watch" } });
       await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
 
       fireEvent.click(screen.getByRole("button", { name: "В дайджест" }));
@@ -558,7 +560,7 @@ describe("SignalRadarPage", () => {
       fireEvent.change(screen.getByLabelText("Оценка сигнала"), { target: { value: "approved" } });
       const stale = deferred<Signal[]>();
       vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
-      fireEvent.change(screen.getByRole("combobox", { name: /^Зрелость/ }), { target: { value: "watch" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Подтверждённость/ }), { target: { value: "watch" } });
       await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -720,7 +722,7 @@ describe("SignalRadarPage", () => {
       const title = screen.getByRole("link", { name: "Роботизированная буровая установка" });
       expect(title).toHaveAttribute("href", "https://worldoil.com/a");
       expect(title).toHaveAttribute("target", "_blank");
-      expect(screen.getByText(/^Бурение · 2 ссылки · Зрелость: Наблюдать ·/)).toBeInTheDocument();
+      expect(screen.getByText(/^Бурение · 2 ссылки · Подтверждённость: Наблюдать ·/)).toBeInTheDocument();
       expect(screen.getByText("#21")).toBeInTheDocument();
       // Тело свёрнуто: суть, «Почему сейчас» и ссылки — только по раскрытию.
       expect(screen.queryByText("Спутник мониторинга метана перестал выходить на связь.")).not.toBeInTheDocument();

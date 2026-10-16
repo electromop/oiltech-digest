@@ -732,6 +732,50 @@ describe("App smoke", () => {
     expect(screen.getAllByRole("button", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
   });
 
+  // #97: бизнес-лента — экран радара в витрине «бизнес»; старый список статей остаётся рядом, пока
+  // новая лента не принята (спека #93).
+  it("«Бизнес-лента» — пункт меню рядом со старым списком статей, у каждого экрана свои фильтры", async () => {
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/signals/summary")) {
+        return Promise.resolve(jsonResponse({ total: 0, new_7d: 0, in_digest: 0, with_feedback: 0, merged: 0, matching: 0, themes: [] }));
+      }
+      if (url === "/api/signals/search-health") return Promise.resolve(jsonResponse({ search_health: null }));
+      if (url.startsWith("/api/signals/weekly")) return Promise.resolve(jsonResponse({ detail: "нет" }, { status: 404 }));
+      if (url.startsWith("/api/signals?")) return Promise.resolve(jsonResponse([]));
+      return baseImpl!(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    // Первым экраном — по-прежнему старый список статей.
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    const sidebar = document.querySelector(".sidebar") as HTMLElement;
+    const menu = within(sidebar).getAllByRole("button").map((button) => button.textContent);
+    expect(menu.slice(0, 3)).toEqual(["Бизнес-сигналы", "Бизнес-лента", "Технологический радар"]);
+
+    await user.click(within(sidebar).getByRole("button", { name: "Бизнес-лента" }));
+
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
+    expect(window.location.search).toBe("?screen=business-feed");
+    const lastSignalsUrl = () =>
+      fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.startsWith("/api/signals?")).slice(-1)[0];
+    await waitFor(() => expect(lastSignalsUrl()).toContain("showcase=business"));
+    await user.type(screen.getByRole("textbox", { name: /^Поиск/ }), "SLB");
+
+    await user.click(within(sidebar).getByRole("button", { name: "Технологический радар" }));
+
+    expect(await screen.findByRole("heading", { name: "Технологический радар" })).toBeInTheDocument();
+    // Свой экран — свои фильтры: поиск ленты на радар не переехал, витрина — технологии.
+    expect(screen.getByRole("textbox", { name: /^Поиск/ })).toHaveValue("");
+    await waitFor(() => expect(lastSignalsUrl()).not.toContain("showcase="));
+  });
+
   it("обычный пользователь не видит группу «Прототипы» и не открывает их по прямой ссылке", async () => {
     window.history.replaceState(null, "", "/?screen=tech-preview");
 

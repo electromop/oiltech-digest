@@ -27,7 +27,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import contract, lanes, network_policy, signal_card
+from oiltech_digest import contract, lanes, network_policy, signal_card, signal_card_pack
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -1750,9 +1750,19 @@ def _radar_screen_filters(
     # Витрина (#95, ADR 0003): «technology» — технологический радар, как был; «business» —
     # сигналы категории «бизнес» обоих происхождений (лента и находки радара).
     showcase: str = Query("technology", pattern="^(technology|business)$"),
+    # Атрибуты карточки сигнала (#97): значение справочника или «не определено». technology_maturity —
+    # зрелость технологии; maturity выше — подтверждённость радара (наблюдать / кандидат / подтверждено).
+    event_type: str | None = Query(None, max_length=100),
+    region: str | None = Query(None, max_length=100),
+    technology_class: str | None = Query(None, max_length=100),
+    technology_maturity: str | None = Query(None, max_length=100),
+    # «Всё про компанию» (#97): участник карточки под любым из имён справочника алиасов.
+    company: str | None = Query(None, max_length=200),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
+    card = _card_filter_values(event_type=event_type, region=region, technology_class=technology_class,
+                               technology_maturity=technology_maturity)
     return {
         "showcase": showcase,
         "hidden": hidden,
@@ -1763,7 +1773,23 @@ def _radar_screen_filters(
         "until": until,
         "min_score": min_score,
         "max_score": max_score,
+        **card,
+        "company": (company or "").strip() or None,
     }
+
+
+def _card_filter_values(**values: str | None) -> dict[str, str | None]:
+    """Фильтры атрибутов карточки (#97): значение справочника или «не определено». Чужое — 422, а не
+    пустой список: опечатка в адресе выглядела бы как «сигналов нет»."""
+    dictionaries = signal_card_pack.load_dictionaries()
+    checked: dict[str, str | None] = {}
+    for column, value in values.items():
+        block = dictionaries[signal_card.CHOICE_COLUMNS[column]]
+        if value and value != signal_card_pack.UNDEFINED and value not in block["values"]:
+            raise HTTPException(status_code=422,
+                                detail=f"Фильтр «{block['title']}»: значения «{value}» нет в справочнике")
+        checked[column] = value or None
+    return checked
 
 
 @app.get("/api/signals")
@@ -1822,6 +1848,20 @@ def signal_radar_summary(
         # Число отсеянных и скрытых — служебное, как и сами карточки.
         summary.pop("hidden", None)
     return _clean(summary)
+
+
+@app.get("/api/signals/dictionaries")
+def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Значения фильтров атрибутов карточки на экранах (#97) — справочники агента «Карточка сигнала», по
+    параметрам фильтров /api/signals; подсказки к полю «Компания» — канонические имена справочника алиасов."""
+    dictionaries = signal_card_pack.load_dictionaries()
+    return {
+        "version": dictionaries.get("version"),
+        "undefined": signal_card_pack.UNDEFINED,
+        **{column: {"title": dictionaries[key]["title"], "values": list(dictionaries[key]["values"])}
+           for column, key in signal_card.CHOICE_COLUMNS.items()},
+        "companies": [entry["name"] for entry in dictionaries.get("companies") or []],
+    }
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:

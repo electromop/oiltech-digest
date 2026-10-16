@@ -281,6 +281,23 @@ export type Signal = {
   // Почему такое решение (судья) и ход решения по шагам: судья, ревью пачки, тематика, отсев.
   verdict_reason?: string | null;
   decision_log?: Array<{ stage: string; text: string }> | null;
+  // Происхождение (#95): radar — находка поиска, feed — статья ленты, принятая отбором.
+  origin?: "radar" | "feed" | string;
+  origin_article_id?: number | null;
+  // Карточка сигнала (#96, агент «Карточка сигнала»): значения справочников или «не определено»;
+  // null — агент поле ещё не заполнял. technology_maturity — зрелость технологии, а maturity выше —
+  // подтверждённость радара.
+  event_type?: string | null;
+  region?: string | null;
+  technology_class?: string | null;
+  technology_maturity?: string | null;
+  // Компании-участники — только с цитатой из текста публикации (проверено кодом).
+  participants_json?: Array<{ name: string; quote: string; verified?: boolean }> | null;
+  // Откуда дата события: «из текста», «по дате публикации» или «не определено»; null — дата судьи радара.
+  event_date_source?: string | null;
+  // Кто поставил значение поля карточки: agent, radar_judge или human.
+  card_set_by?: Record<string, string> | null;
+  card_recipe?: Record<string, unknown> | null;
   evidence?: SignalEvidence[];
 };
 

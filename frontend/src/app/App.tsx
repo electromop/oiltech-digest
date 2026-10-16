@@ -29,7 +29,7 @@ const TechnologiesPreview = lazy(() =>
 );
 
 type ScreenId =
-  | "articles" | "signal-radar" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "articles" | "business-feed" | "signal-radar" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
   | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
@@ -75,6 +75,16 @@ const screens: ScreenDef[] = [
     eyebrow: "Лента",
     title: "Поток бизнес-сигналов",
     description: "Рабочий каталог бизнес-сигналов: фильтры, группировка, ИИ-суть, балл и редактор статусов уже живут в новом интерфейсе.",
+    status: "Экран активен",
+  },
+  {
+    id: "business-feed",
+    // #97 (спека #93): бизнес-сигналы карточками, как радар, — одна карточка на событие, публикации
+    // снизу. Старый список статей («Бизнес-сигналы») остаётся рядом, пока новая лента не принята.
+    label: "Бизнес-лента",
+    eyebrow: "Лента",
+    title: "Бизнес-лента",
+    description: "Бизнес-сигналы карточками событий: публикации, атрибуты карточки, фильтры и «всё про компанию».",
     status: "Экран активен",
   },
   {
@@ -180,7 +190,7 @@ const appHighlights = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["articles", "signal-radar", "digest", "documents"],
+    screens: ["articles", "business-feed", "signal-radar", "digest", "documents"],
   },
   {
     label: "Настройки",
@@ -201,7 +211,7 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent", "signal-radar"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent", "signal-radar", "business-feed"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
@@ -319,8 +329,18 @@ export function App() {
     );
   }
 
-  if (activeScreen === "signal-radar") {
-    currentScreen = <SignalRadarPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
+  // Лента и радар — один экран в двух витринах. Ключ — экран: при переходе между ними состояние
+  // (фильтры, выборка) не переезжает из одной витрины в другую.
+  if (activeScreen === "signal-radar" || activeScreen === "business-feed") {
+    currentScreen = (
+      <SignalRadarPage
+        key={activeScreen}
+        onUnauthorized={resetSession}
+        showToast={showToast}
+        isAdmin={isAdmin}
+        showcase={activeScreen === "business-feed" ? "business" : "technology"}
+      />
+    );
   }
 
   if (activeScreen === "digest") {
@@ -668,6 +688,16 @@ function ScreenIcon(props: { screenId: ScreenId }) {
       <svg {...common}>
         <rect x="2.5" y="2.5" width="11" height="11" rx="2.2" />
         <path d="M5 6h6M5 8.5h6M5 11h4" />
+      </svg>
+    );
+  }
+
+  if (props.screenId === "business-feed") {
+    // Карточки событий стопкой: одна карточка — несколько публикаций.
+    return (
+      <svg {...common}>
+        <rect x="2.5" y="4.5" width="9" height="9" rx="1.8" />
+        <path d="M5 2.5h6.7a1.8 1.8 0 0 1 1.8 1.8V11M5 8h4M5 10.5h3" />
       </svg>
     );
   }

@@ -33,6 +33,9 @@ BY_PUBLICATION = "по дате публикации"
 _RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты и связи.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance")
+# Поле карточки с выбором из справочника (колонка signals и фильтр экрана, #97) → его справочник.
+CHOICE_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
+                  "technology_maturity": "maturity"}
 _EARLIEST_EVENT = date(2000, 1, 1)
 # Потолки длины ответа воркера (недоверенный ввод); фраза — как у судьи радара.
 _PHRASE_CHARS, _NAME_CHARS, _QUOTE_CHARS = 400, 200, 600
@@ -403,6 +406,20 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
             continue
         kept[key] = {"name": name, "quote": quote, "verified": True}
     return list(kept.values())
+
+
+def company_names(name: str) -> list[str]:
+    """Все написания компании для фильтра «всё про компанию» (#97) — в форме сверки (_plain): по
+    справочнику алиасов — каноническое имя и алиасы, компании нет в справочнике — её имя. Компания —
+    целиком, а не подстрокой: «Газпром» — не «Газпром нефть»."""
+    wanted = _plain(name)
+    if not wanted:
+        return []
+    for entry in load_dictionaries().get("companies") or []:
+        names = {_plain(item) for item in (entry["name"], *entry["aliases"])}
+        if wanted in names:
+            return sorted(names)
+    return [wanted]
 
 
 def _named_in(quote: str, names: tuple[str, ...]) -> bool:

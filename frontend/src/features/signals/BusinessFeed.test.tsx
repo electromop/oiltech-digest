@@ -1,0 +1,392 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getSignalDictionaries,
+  getSignalSearchHealth,
+  getSignalSummary,
+  getSignalWeekly,
+  listSignals,
+  type SignalDictionaries,
+  type SignalQuery,
+} from "../../api/signals";
+import type { Signal, SignalEvidence } from "../../api/types";
+import { SignalRadarPage } from "./SignalRadarPage";
+
+// Бизнес-лента (#97, спека #93): экран радара в витрине «бизнес» — карточка события, атрибуты чипами,
+// фильтры сверху, клик по компании — «всё про компанию». Шов 3: экран на подставном API.
+
+vi.mock("../../api/signals", () => ({
+  listSignals: vi.fn(),
+  getSignalSummary: vi.fn(),
+  getSignalDictionaries: vi.fn(),
+  updateSignal: vi.fn(),
+  createSignalFeedback: vi.fn(),
+  getSignalSearchHealth: vi.fn(),
+  getSignalWeekly: vi.fn(),
+}));
+
+// Справочники — как их отдаёт сервер (/api/signals/dictionaries), сокращённо.
+const DICTIONARIES: SignalDictionaries = {
+  version: "2026-10-14.1",
+  undefined: "не определено",
+  event_type: { title: "Тип события", values: ["пилот", "контракт", "сделка (M&A)", "нет события"] },
+  region: { title: "Регион", values: ["Россия", "Европа", "Ближний Восток"] },
+  technology_class: { title: "Класс технологии", values: ["робототехника", "датчики и IoT", "неприменимо"] },
+  technology_maturity: { title: "Зрелость", values: ["прототип", "пилот/ОПИ", "неприменимо"] },
+  companies: ["SLB", "Saudi Aramco", "Роснефть"],
+};
+
+const AGENT_FIELDS = ["event_date", "participants", "event_type", "region", "technology_class", "technology_maturity",
+  "oilfield_relevance", "oilfield_application", "why_interesting"];
+
+function publication(id: number, fields: Partial<SignalEvidence>): SignalEvidence {
+  return {
+    id, signal_id: 9001, article_id: id, source_url: `https://feed.example/${id}`, title: `Publication ${id}`,
+    title_ru: null, publisher: "Нефтегаз", published_at: "2026-09-25T08:00:00Z", evidence_type: "feed_article",
+    extracted_fact: null, summary_ru: null, strength: 1, raw_payload_json: {}, created_at: null, updated_at: null,
+    ...fields,
+  };
+}
+
+// Сигнал ленты с карточкой агента: статья и её перепечатка — публикации одного события.
+const contract: Signal = {
+  id: 9001,
+  signal_key: "feed:1",
+  origin: "feed",
+  signal_category: "business",
+  title: "SLB wins Aramco drilling contract",
+  title_ru: "SLB получила контракт Saudi Aramco на бурение",
+  theme: "Бурение",
+  summary: "Контракт на бурение 40 скважин на шельфе.",
+  thesis: null,
+  transferability: null,
+  maturity: "watch",
+  confidence: 0,
+  score: 74,
+  score_label: "Выше средней",
+  score_profile: "business",
+  score_items_json: [{ criterion_id: 1, final_score: 80 }],
+  criteria_snapshot: [{ id: 1, name: "Стратегическая значимость для нефтесервиса", weight: 30 }],
+  why_now: null,
+  why_not_noise: null,
+  companies_json: [],
+  industries_json: [],
+  evidence_count: 2,
+  first_seen_at: "2026-09-25T09:00:00Z",
+  last_seen_at: null,
+  created_at: null,
+  updated_at: null,
+  event_date: "2026-09-24",
+  event_date_source: "из текста",
+  event_type: "контракт",
+  region: "Ближний Восток",
+  technology_class: "неприменимо",
+  technology_maturity: "неприменимо",
+  oilfield_relevance: "direct",
+  oilfield_application: "Бурение скважин на шельфе",
+  why_interesting: "Крупнейший контракт на буровые услуги в регионе",
+  participants_json: [
+    { name: "SLB", quote: "SLB подписала контракт", verified: true },
+    { name: "Saudi Aramco", quote: "Saudi Aramco заключила", verified: true },
+  ],
+  card_set_by: Object.fromEntries(AGENT_FIELDS.map((field) => [field, "agent"])),
+  card_recipe: { agent: "signal_card", prompt_version: "2026-10-16.1" },
+  evidence: [
+    publication(1, { title_ru: "SLB получила контракт Aramco", publisher: "Нефтегаз" }),
+    publication(2, { title_ru: "Aramco выбрала SLB", publisher: "Offshore Weekly", strength: 0.5 }),
+  ],
+};
+
+// Агент часть значений определить не смог: «не определено» — пробел карточки, его видно.
+const forum: Signal = {
+  ...contract,
+  id: 9002,
+  signal_key: "feed:2",
+  title_ru: "Форум нефтесервиса в Тюмени",
+  event_date: null,
+  event_date_source: "не определено",
+  event_type: "не определено",
+  region: "Россия",
+  technology_class: "не определено",
+  technology_maturity: "не определено",
+  oilfield_relevance: null,
+  oilfield_application: null,
+  why_interesting: null,
+  participants_json: [],
+  evidence: [publication(3, {})],
+};
+
+// Статья, принятая отбором до выхода агента в работу: карточку ещё не заполняли.
+const fresh: Signal = {
+  ...contract,
+  id: 9003,
+  signal_key: "feed:3",
+  title_ru: "Новость без карточки",
+  event_date: null,
+  event_date_source: null,
+  event_type: null,
+  region: null,
+  technology_class: null,
+  technology_maturity: null,
+  oilfield_relevance: null,
+  oilfield_application: null,
+  why_interesting: null,
+  participants_json: null,
+  card_set_by: null,
+  card_recipe: null,
+  evidence: [publication(4, {})],
+};
+
+function chips(card: HTMLElement) {
+  const group = within(card).getByRole("group", { name: "Атрибуты сигнала" });
+  return [...group.querySelectorAll(".signalChip")].map((chip) => [chip.textContent, chip.classList.contains("gap")]);
+}
+
+function matches(card: Signal, query: SignalQuery) {
+  const names = (card.participants_json || []).map((item) => item.name);
+  return (
+    (!query.theme || card.theme === query.theme)
+    && (!query.eventType || card.event_type === query.eventType)
+    && (!query.region || card.region === query.region)
+    && (!query.technologyClass || card.technology_class === query.technologyClass)
+    && (!query.technologyMaturity || card.technology_maturity === query.technologyMaturity)
+    && (!query.company || names.includes(query.company))
+  );
+}
+
+// Сервер в миниатюре: выборка и числа — «на сервере» по всем карточкам витрины.
+function serve(cards: Signal[]) {
+  vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) =>
+    cards.filter((card) => matches(card, query)).map((card) => ({ ...card })),
+  );
+  vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => ({
+    total: cards.length,
+    new_7d: 1,
+    in_digest: 0,
+    with_feedback: 0,
+    merged: 1,
+    hidden: 0,
+    matching: cards.filter((card) => matches(card, query)).length,
+    themes: [...new Set(cards.map((card) => card.theme))].map((theme) => ({ theme, count: 1 })),
+  }));
+}
+
+function lastListQuery(): SignalQuery {
+  return vi.mocked(listSignals).mock.lastCall?.[0] ?? {};
+}
+
+async function cardOf(title: string) {
+  return (await screen.findByText(title)).closest("article") as HTMLElement;
+}
+
+function renderFeed(isAdmin = false) {
+  render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin={isAdmin} showcase="business" />);
+}
+
+beforeEach(() => {
+  vi.mocked(listSignals).mockReset();
+  vi.mocked(getSignalSummary).mockReset();
+  vi.mocked(getSignalWeekly).mockReset();
+  vi.mocked(getSignalSearchHealth).mockReset();
+  vi.mocked(getSignalDictionaries).mockReset();
+  vi.mocked(getSignalDictionaries).mockResolvedValue(DICTIONARIES);
+  vi.mocked(getSignalWeekly).mockRejectedValue(new Error("нет итогов"));
+  vi.mocked(getSignalSearchHealth).mockResolvedValue({ search_health: null });
+  serve([contract]);
+});
+
+describe("бизнес-лента", () => {
+  it("экран радара в витрине «бизнес»: карточка события, публикации снизу, без оценки и «в дайджест»", async () => {
+    renderFeed(true);
+
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
+    const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+    expect(lastListQuery()).toMatchObject({ showcase: "business" });
+    // Подтверждённость — поле радара, у сигнала ленты её нет.
+    expect(within(card).getByText(/^Бурение · 2 публикации ·/)).not.toHaveTextContent("Подтверждённость");
+    expect(within(card).getByText("Событие: 24.09.2026 · из текста")).toBeInTheDocument();
+    expect(within(card).getByTitle("Балл по профилю «Бизнес-сигналы»")).toHaveTextContent("74");
+    expect(within(card).getByText("Выше средней")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    expect(within(card).getByText("Контракт на бурение 40 скважин на шельфе.")).toBeInTheDocument();
+    expect(within(card).getByText("Почему важно")).toBeInTheDocument();
+    expect(within(card).getByText("Крупнейший контракт на буровые услуги в регионе")).toBeInTheDocument();
+    const publications = within(card).getByText("Публикации").closest(".signalEvidenceList") as HTMLElement;
+    expect(within(publications).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "https://feed.example/1",
+      "https://feed.example/2",
+    ]);
+    // Оценки даст сервис ОС: ни формы, ни кнопки отзыва.
+    expect(within(card).queryByRole("button", { name: "Обратная связь" })).not.toBeInTheDocument();
+    // Служебное радара — «Итоги недели», здоровье поиска, «Отсеянные и скрытые» — не про ленту.
+    expect(getSignalWeekly).not.toHaveBeenCalled();
+    expect(getSignalSearchHealth).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Отсеянные и скрытые/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("1 из 1 сигнала")).toBeInTheDocument());
+  });
+
+  it("атрибуты — чипами; «не определено» — видимым пробелом, а не пропуском", async () => {
+    serve([contract, forum, fresh]);
+    renderFeed();
+
+    expect(chips(await cardOf("SLB получила контракт Saudi Aramco на бурение"))).toEqual([
+      ["Категория: бизнес", false],
+      ["Тип события: контракт", false],
+      ["Регион: Ближний Восток", false],
+      ["Класс технологии: неприменимо", false],
+      ["Зрелость: неприменимо", false],
+      ["Связь с нефтесервисом: прямая", false],
+      ["Компании: SLB Saudi Aramco", false],
+    ]);
+    const gaps = await cardOf("Форум нефтесервиса в Тюмени");
+    expect(chips(gaps)).toEqual([
+      ["Категория: бизнес", false],
+      ["Тип события: не определено", true],
+      ["Регион: Россия", false],
+      ["Класс технологии: не определено", true],
+      ["Зрелость: не определено", true],
+      ["Связь с нефтесервисом: не определено", true],
+      ["Компании: не определено", true],
+    ]);
+    expect(within(gaps).getByText("Событие: не определено")).toHaveClass("gap");
+    // Карточку ещё не заполняли — пробелов нет: «не определено» сказало бы, что агент не смог.
+    const unfilled = await cardOf("Новость без карточки");
+    expect(chips(unfilled)).toEqual([["Категория: бизнес", false]]);
+    expect(within(unfilled).queryByText(/^Событие:/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(gaps).getByRole("button", { name: "Раскрыть сигнал" }));
+    fireEvent.click(within(unfilled).getByRole("button", { name: "Раскрыть сигнал" }));
+    expect(within(gaps).getByText("Почему важно").nextSibling).toHaveTextContent("не определено");
+    expect(within(unfilled).getByText("Почему важно").nextSibling).toHaveTextContent("Карточка ещё не заполнена");
+  });
+
+  describe("фильтры и «всё про компанию»", () => {
+    const deal: Signal = {
+      ...contract, id: 9004, signal_key: "feed:4", theme: "Добыча", title_ru: "Роснефть купила сервисную компанию",
+      event_type: "сделка (M&A)", region: "Россия", participants_json: [{ name: "Роснефть", quote: "Роснефть купила" }],
+      evidence: [publication(5, {})],
+    };
+    const lift: Signal = {
+      ...contract, id: 9005, signal_key: "feed:5", theme: "Добыча", title_ru: "SLB запустила установку мехдобычи",
+      event_type: "запуск продукта", participants_json: [{ name: "SLB", quote: "SLB запустила" }],
+      evidence: [publication(6, {})],
+    };
+
+    beforeEach(() => serve([contract, deal, lift]));
+
+    it("справочники — в списках фильтров сверху, выбор уходит на сервер", async () => {
+      renderFeed();
+      fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
+
+      const eventType = await screen.findByRole("combobox", { name: "Тип события" });
+      expect(within(eventType).getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Любой тип", "пилот", "контракт", "сделка (M&A)", "нет события", "не определено",
+      ]);
+      fireEvent.change(eventType, { target: { value: "сделка (M&A)" } });
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ showcase: "business", eventType: "сделка (M&A)" }));
+      await waitFor(() => expect(screen.queryByText("SLB получила контракт Saudi Aramco на бурение")).not.toBeInTheDocument());
+      expect(screen.getByText("Роснефть купила сервисную компанию")).toBeInTheDocument();
+
+      fireEvent.change(eventType, { target: { value: "" } });
+      fireEvent.change(screen.getByRole("combobox", { name: "Регион" }), { target: { value: "Ближний Восток" } });
+      fireEvent.change(screen.getByRole("combobox", { name: "Класс технологии" }), { target: { value: "неприменимо" } });
+      fireEvent.change(screen.getByRole("combobox", { name: "Зрелость" }), { target: { value: "не определено" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({
+        region: "Ближний Восток", technologyClass: "неприменимо", technologyMaturity: "не определено",
+      }));
+      expect(lastListQuery().eventType).toBeUndefined();
+      // Подтверждённость радара («наблюдать / кандидат / подтверждено») — не про ленту.
+      expect(screen.queryByRole("combobox", { name: "Подтверждённость" })).not.toBeInTheDocument();
+    });
+
+    it("клик по компании — все сигналы с её участием, в любой теме; «Сбросить» возвращает всё", async () => {
+      renderFeed();
+      fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
+      const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+
+      fireEvent.click(within(card).getByRole("button", { name: "SLB" }));
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ showcase: "business", company: "SLB" }));
+      expect(screen.getByRole("combobox", { name: "Компания" })).toHaveValue("SLB");
+      await waitFor(() => expect(screen.queryByText("Роснефть купила сервисную компанию")).not.toBeInTheDocument());
+      // Блоки тем раскрыты сами: «всё про компанию» видно сразу, как при поиске.
+      expect(screen.getByText("SLB запустила установку мехдобычи")).toBeInTheDocument();
+      expect(screen.getByText("2 из 3 сигналов")).toBeInTheDocument();
+
+      // Компанию вводят и руками: подсказки — канонические имена справочника алиасов.
+      const input = screen.getByRole("combobox", { name: "Компания" });
+      const suggestions = document.getElementById(input.getAttribute("list") ?? "") as HTMLDataListElement;
+      expect([...suggestions.options].map((option) => option.value)).toEqual(DICTIONARIES.companies);
+      fireEvent.click(screen.getByRole("button", { name: "Расширенные фильтры" }));
+      fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+
+      await waitFor(() => expect(lastListQuery().company).toBeUndefined());
+      expect(input).toHaveValue("");
+    });
+  });
+});
+
+describe("технологический радар", () => {
+  // Находка радара: дату события и связь с нефтесервисом поставил судья, пустое дополнил агент.
+  const robot: Signal = {
+    ...contract,
+    id: 501,
+    signal_key: "k501",
+    origin: "radar",
+    signal_category: "technology",
+    title_ru: "Робот-бурильщик на платформе Equinor",
+    maturity: "shortlist",
+    score_profile: "tech_radar",
+    criteria_snapshot: [{ id: 1, name: "Ценность для нефтесервиса", weight: 30 }],
+    event_date: "2026-09-01",
+    event_date_source: null,
+    event_type: "пилот",
+    region: "Европа",
+    technology_class: "робототехника",
+    technology_maturity: "пилот/ОПИ",
+    oilfield_relevance: "transferable",
+    participants_json: [{ name: "Equinor", quote: "Equinor испытала" }, { name: "SLB", quote: "SLB поставила" }],
+    card_set_by: {
+      ...Object.fromEntries(AGENT_FIELDS.map((field) => [field, "agent"])),
+      event_date: "radar_judge",
+      oilfield_relevance: "radar_judge",
+    },
+  };
+
+  it("прежний радар плюс чипы атрибутов: «в дайджест», отзыв и подтверждённость — на месте", async () => {
+    serve([robot]);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+    expect(await screen.findByRole("heading", { name: "Технологический радар" })).toBeInTheDocument();
+    const card = await cardOf("Робот-бурильщик на платформе Equinor");
+    expect(lastListQuery().showcase).toBeUndefined();
+    expect(chips(card)).toEqual([
+      ["Категория: технология", false],
+      ["Тип события: пилот", false],
+      ["Регион: Европа", false],
+      ["Класс технологии: робототехника", false],
+      ["Зрелость: пилот/ОПИ", false],
+      ["Связь с нефтесервисом: переносимая", false],
+      ["Компании: Equinor SLB", false],
+    ]);
+    // Дата судьи — без пометки источника, как раньше.
+    expect(within(card).getByText("Событие: 01.09.2026")).toBeInTheDocument();
+    // «Наблюдать / кандидат / подтверждено» — подтверждённость радара, а не зрелость технологии.
+    expect(within(card).getByText(/· Подтверждённость: Кандидат ·/)).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    expect(within(card).getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
+    expect(within(card).getByText("Ссылки")).toBeInTheDocument();
+
+    expect(screen.getByRole("combobox", { name: "Подтверждённость" })).toBeInTheDocument();
+    fireEvent.change(await screen.findByRole("combobox", { name: "Зрелость" }), { target: { value: "пилот/ОПИ" } });
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ technologyMaturity: "пилот/ОПИ" }));
+    fireEvent.click(within(await cardOf("Робот-бурильщик на платформе Equinor")).getByRole("button", { name: "SLB" }));
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ technologyMaturity: "пилот/ОПИ", company: "SLB" }));
+    expect(lastListQuery().showcase).toBeUndefined();
+  });
+});
