@@ -385,3 +385,113 @@ def test_pack_is_never_written_inside_the_repository_and_dates_are_checked(corpu
     assert not inside.exists()
     with pytest.raises(SystemExit):
         _run("--since", "август")
+
+
+# --- Ручной отбор (16.10): владелец проверил 50 строк — выгрузка по списку номеров и ручные поправки.
+
+def _ids_file(tmp_path, rows, name="ids.txt"):
+    path = tmp_path / name
+    path.write_text("# ручной отбор\n" + "\n".join(f"{item} {stratum}  # заголовок" for item, stratum in rows) + "\n",
+                    encoding="utf-8")
+    return path
+
+
+def _listed(corpus):
+    # Человек решает, полезна ли статья: одна с низким баллом взята полезной.
+    noise = sorted(corpus["noise"])
+    return ([(f"article:{i}", "useful") for i in sorted(corpus["useful"])[:23] + noise[:1]]
+            + [(f"article:{i}", "noise") for i in noise[1:7]]
+            + [(f"signal:{i}", "technology") for i in sorted(corpus["tech"])[:15]]
+            + [(f"signal:{i}", "business") for i in sorted(corpus["business"])[:5]])
+
+
+def test_ids_file_selects_exactly_the_listed_signals_with_their_strata(corpus, tmp_path):
+    listed = _listed(corpus)
+    out = tmp_path / "pack"
+
+    _run("--out", str(out), "--apply", "--ids-file", str(_ids_file(tmp_path, listed)))
+
+    manifest = _manifest(out)
+    assert {(item["id"], item["stratum"]) for item in manifest["items"]} == set(listed)
+    assert manifest["selection"]["ids_file"] == "ids.txt"
+
+
+def test_ids_file_mistakes_are_refused(corpus, tmp_path):
+    listed = _listed(corpus)
+    tech, business = listed[30][0], listed[45][0]
+    cases = {
+        "unknown": (listed[:-1] + [("signal:999999", "business")], "нет среди кандидатов"),
+        "not-a-candidate": ([(f"article:{sorted(corpus['not_feed'])[0]}", "useful")] + listed[1:], "нет среди кандидатов"),
+        # Доля сигнала радара — его категория: технология, записанная бизнесом, — ошибка списка.
+        "radar-stratum": ([(item, {tech: "business", business: "technology"}.get(item, stratum))
+                           for item, stratum in listed], "доля не подходит"),
+        "count": (listed[1:], "не те квоты"),
+        "duplicate": (listed[:1] + listed[:1] + listed[2:], "дважды"),
+    }
+    for name, (rows, reason) in cases.items():
+        out = tmp_path / name
+        with pytest.raises(SystemExit) as refused:
+            _run("--out", str(out), "--apply", "--ids-file", str(_ids_file(tmp_path, rows, f"{name}.txt")))
+        assert reason in str(refused.value), (name, str(refused.value))
+        assert not out.exists(), name
+
+
+def test_overrides_fix_the_date_and_the_text_and_are_recorded(corpus, tmp_path):
+    # Владелец 16.10: у строк радара дата публикации пуста (у находок поиска в базе — дата события по
+    # версии модели), у части текстов в базе — меню сайта. Дату и текст берём с первоисточника вручную.
+    listed = _listed(corpus)
+    radar_id, feed_id = listed[30][0], listed[0][0]
+    fixes = tmp_path / "fixes.json"
+    fixes.write_text(json.dumps({
+        radar_id: {"published": "2026-09-03", "text": "KUALA LUMPUR, 3 September 2026 — the release itself. " * 5,
+                   "note": "дата и текст — со страницы источника"},
+        feed_id: {"published": "2026-09-01"},
+    }, ensure_ascii=False), encoding="utf-8")
+    out = tmp_path / "pack"
+
+    _run("--out", str(out), "--apply", "--ids-file", str(_ids_file(tmp_path, listed)), "--overrides", str(fixes))
+
+    items = {item["id"]: item for item in _manifest(out)["items"]}
+    radar = items[radar_id]
+    assert radar["published"] == "2026-09-03" and radar["text"].startswith("KUALA LUMPUR")
+    assert radar["text_sha256"] == hashlib.sha256(radar["text"].encode("utf-8")).hexdigest()
+    assert radar["overrides"] == ["published", "text"] and "источника" in radar["override_note"]
+    assert items[feed_id]["overrides"] == ["published"]
+    assert not items[listed[1][0]]["overrides"]
+    _, _, header, rows = _markup(out)
+    row = next(row for row in rows if row[header.index("ID")].value == radar_id)
+    assert row[header.index("Дата публикации")].value == "2026-09-03"
+    assert row[header.index("Текст публикации")].value == radar["text"]
+
+    for name, payload in {
+        "not-in-sample": {"signal:999999": {"published": "2026-09-03"}},
+        "bad-date": {radar_id: {"published": "03.09.2026"}},
+        "unknown-field": {radar_id: {"category": "бизнес"}},
+    }.items():
+        bad = tmp_path / f"{name}.json"
+        bad.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(SystemExit) as refused:
+            _run("--out", str(tmp_path / name), "--apply", "--ids-file", str(_ids_file(tmp_path, listed)),
+                 "--overrides", str(bad))
+        assert "signal-card-expert-pack:" in str(refused.value), name  # отказ команды, а не разбор аргументов
+
+
+def test_manifest_freezes_the_agent_inputs_and_the_table_names_the_publisher(corpus, tmp_path):
+    # Экзамен #98 подаёт агенту входы из манифеста, а не из базы: поправки вручную видны только там.
+    # Тип издателя нужен агенту #96 — компания-издатель участник своей новости, издание — нет.
+    out = tmp_path / "pack"
+
+    _run("--out", str(out), "--apply")
+
+    items = _manifest(out)["items"]
+    assert all({"title", "text", "published", "publisher", "publisher_type"} <= set(item) for item in items)
+    feed = next(item for item in items if item["origin"] == "feed")
+    radar = next(item for item in items if item["origin"] == "radar")
+    assert (feed["publisher"], feed["publisher_type"]) == ("World Oil", "Media")
+    assert radar["publisher_type"] == ""
+    book, _, header, rows = _markup(out)
+    by_id = {row[header.index("ID")].value: row for row in rows}
+    assert by_id[feed["id"]][header.index("Издатель")].value == "World Oil"
+    assert by_id[radar["id"]][header.index("Издатель")].value == "radar.example.com"
+    guide = " ".join(str(row[0]) for row in book["Инструкция"].iter_rows(values_only=True) if row[0])
+    assert "участником не считается" in guide and "пресс-релиз о своём событии" in guide

@@ -2263,12 +2263,15 @@ def cmd_signal_card_expert_pack(args: argparse.Namespace) -> None:
 
     try:
         result = signal_card_pack.export_pack(args.out, seed=args.seed, since=args.since, until=args.until,
-                                              apply=args.apply)
-    except signal_card_pack.PackError as exc:
+                                              apply=args.apply, ids_file=args.ids_file,
+                                              overrides_file=args.overrides)
+    except (signal_card_pack.PackError, OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"signal-card-expert-pack: {exc}") from exc
     origin = result["composition"]["origin"]
     print(f"signal-card-expert-pack: сигналов {result['count']} — лента {origin.get('feed', 0)}, "
-          f"радар {origin.get('radar', 0)}")
+          f"радар {origin.get('radar', 0)}; отбор: {result['selection']['rule']}"
+          + (f" ({result['selection']['ids_file']})" if result["selection"].get("ids_file") else "")
+          + (f", поправки: {result['selection']['overrides_file']}" if result["selection"].get("overrides_file") else ""))
     print("Доли: " + ", ".join(f"{signal_card_pack.STRATUM_RU[stratum]} — {count}"
                                for stratum, count in result["composition"]["stratum"].items()))
     for key, title in (("category", "Категории"), ("theme", "Темы")):
@@ -3309,6 +3312,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_card_pack.add_argument("--until", type=_iso_date, default=None,
                              help="… и до ГГГГ-ММ-ДД, не включая; он же край поступления сигналов радара "
                                   "(по умолчанию сегодня, не позже 2026-11-01)")
+    p_card_pack.add_argument("--ids-file", default=None,
+                             help="ручной отбор: файл «номер доля» на строку (article:N useful, signal:N technology …)")
+    p_card_pack.add_argument("--overrides", default=None,
+                             help="ручные поправки JSON: {номер: {published, title, text, note}} — с первоисточника")
     p_card_pack.add_argument("--apply", action="store_true", help="записать; без флага — только состав")
     p_card_pack.set_defaults(func=cmd_signal_card_expert_pack)
 
