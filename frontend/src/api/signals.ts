@@ -5,7 +5,7 @@ import type { Signal, SignalFeedbackPayload, SignalPatch } from "./types";
 export type SignalShowcase = "technology" | "business";
 
 // Выборка экрана радара — на сервере, по всей базе (замечание заказчика 19.09): поиск,
-// тема, подтверждённость, период «Поступил» (даты ГГГГ-ММ-ДД по Москве) и балл.
+// тема, решение радара, период «Поступил» (даты ГГГГ-ММ-ДД по Москве) и балл.
 export type SignalFilters = {
   // Без витрины — технологический радар.
   showcase?: SignalShowcase;

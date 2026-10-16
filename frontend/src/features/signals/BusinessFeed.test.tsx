@@ -200,8 +200,8 @@ describe("бизнес-лента", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
     expect(lastListQuery()).toMatchObject({ showcase: "business" });
-    // Подтверждённость — поле радара, у сигнала ленты её нет.
-    expect(within(card).getByText(/^Бурение · 2 публикации ·/)).not.toHaveTextContent("Подтверждённость");
+    // Решение радара — поле находки поиска, у сигнала ленты его нет.
+    expect(within(card).getByText(/^Бурение · 2 публикации ·/)).not.toHaveTextContent("Решение радара");
     expect(within(card).getByText("Событие: 24.09.2026 · из текста")).toBeInTheDocument();
     expect(within(card).getByTitle("Балл по профилю «Бизнес-сигналы»")).toHaveTextContent("74");
     expect(within(card).getByText("Выше средней")).toBeInTheDocument();
@@ -297,8 +297,8 @@ describe("бизнес-лента", () => {
         region: "Ближний Восток", technologyClass: "неприменимо", technologyMaturity: "не определено",
       }));
       expect(lastListQuery().eventType).toBeUndefined();
-      // Подтверждённость радара («наблюдать / кандидат / подтверждено») — не про ленту.
-      expect(screen.queryByRole("combobox", { name: "Подтверждённость" })).not.toBeInTheDocument();
+      // Решение радара («наблюдать / кандидат / подтверждено») — не про ленту.
+      expect(screen.queryByRole("combobox", { name: "Решение радара" })).not.toBeInTheDocument();
     });
 
     it("клик по компании — все сигналы с её участием, в любой теме; «Сбросить» возвращает всё", async () => {
@@ -417,7 +417,7 @@ describe("технологический радар", () => {
     },
   };
 
-  it("прежний радар плюс чипы атрибутов: «в дайджест», отзыв и подтверждённость — на месте", async () => {
+  it("прежний радар плюс чипы атрибутов: «в дайджест», отзыв и решение радара — на месте", async () => {
     serve([robot]);
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
 
@@ -435,8 +435,8 @@ describe("технологический радар", () => {
     ]);
     // Дату поставил судья радара — так и подписана.
     expect(within(card).getByText("Событие: 01.09.2026 · по оценке судьи")).toBeInTheDocument();
-    // «Наблюдать / кандидат / подтверждено» — подтверждённость радара, а не зрелость технологии.
-    expect(within(card).getByText(/· Подтверждённость: Кандидат ·/)).toBeInTheDocument();
+    // «Наблюдать / кандидат / подтверждено» — решение радара, а не зрелость технологии.
+    expect(within(card).getByText(/· Решение радара: Кандидат ·/)).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
     expect(within(card).getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
@@ -444,7 +444,7 @@ describe("технологический радар", () => {
     // Ревью пачки «почему интересно» не дало — пустое поле заполнил агент: это «почему важно».
     expect(within(card).getByText("Почему важно").nextSibling).toHaveTextContent("Крупнейший контракт");
 
-    expect(screen.getByRole("combobox", { name: "Подтверждённость" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Решение радара" })).toBeInTheDocument();
     fireEvent.change(await screen.findByRole("combobox", { name: "Зрелость" }), { target: { value: "пилот/ОПИ" } });
     await waitFor(() => expect(lastListQuery()).toMatchObject({ technologyMaturity: "пилот/ОПИ" }));
     // «Всё про компанию» и на радаре: прочие фильтры снимаются, витрина — технологии.

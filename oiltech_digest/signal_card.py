@@ -34,7 +34,7 @@ _RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transfe
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты и связи.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance")
 # Поле карточки с выбором из справочника: колонка signals (она же параметр фильтра экрана, #97) → справочник,
-# по нему же назван ключ в ответе модели. Зрелость — technology_maturity: maturity радара — подтверждённость.
+# по нему же назван ключ в ответе модели. Зрелость — technology_maturity: maturity — решение радара.
 CHOICE_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                   "technology_maturity": "maturity"}
 _EARLIEST_EVENT = date(2000, 1, 1)

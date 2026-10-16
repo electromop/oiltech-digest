@@ -286,7 +286,7 @@ export type Signal = {
   origin_article_id?: number | null;
   // Карточка сигнала (#96, агент «Карточка сигнала»): значения справочников или «не определено»;
   // null — агент поле ещё не заполнял. technology_maturity — зрелость технологии, а maturity выше —
-  // подтверждённость радара.
+  // решение радара (наблюдать / кандидат / подтверждено).
   event_type?: string | null;
   region?: string | null;
   technology_class?: string | null;

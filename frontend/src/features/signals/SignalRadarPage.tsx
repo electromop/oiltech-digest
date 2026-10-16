@@ -109,7 +109,7 @@ const EMPTY_FEEDBACK_DRAFT: FeedbackDraft = {
 
 // Шкала заказчика (список Виктора от 13.09). Это оценка ЧЕЛОВЕКА и она намеренно
 // отличается от maturity выше: та — оценка модели. «Наблюдать» встречается в обеих,
-// поэтому машинная подписана в карточке как «Подтверждённость», а эта — как «Оценка сигнала».
+// поэтому машинная подписана в карточке как «Решение радара», а эта — как «Оценка сигнала».
 const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> = [
   { value: "", label: "Не оценено" },
   { value: "strong_signal", label: "Сильный сигнал — вынести в дайджест / обсуждать" },
@@ -207,14 +207,15 @@ function pluralWord(count: number, one: string, few: string, many: string): stri
 const LINK_WORDS = ["ссылка", "ссылки", "ссылок"] as const;
 const PUBLICATION_WORDS = ["публикация", "публикации", "публикаций"] as const;
 
-// Мета под заголовком карточки: «тема · N ссылок · подтверждённость · » — номер карточки следом.
-// Подтверждённость — оценка модели радара (не зрелость технологии: та — чипом карточки); оценка
-// человека в ОС называется «Оценка сигнала». У сигнала ленты подтверждённости нет, ссылки — публикации.
+// Мета под заголовком карточки: «тема · N ссылок · решение радара · » — номер карточки следом.
+// Решение радара (наблюдать / кандидат / подтверждено) — оценка модели, а не зрелость технологии (та —
+// чипом карточки); оценка человека в ОС — «Оценка сигнала». У сигнала ленты решения радара нет, ссылки —
+// публикации.
 function cardMeta(signal: Signal, business: boolean): string {
   const links = Number(signal.evidence_count || 0);
   if (business) return `${signal.theme} · ${links} ${pluralWord(links, ...PUBLICATION_WORDS)} · `;
   const maturity = MATURITY_LABELS[signal.maturity] || signal.maturity;
-  return `${signal.theme} · ${links} ${pluralWord(links, ...LINK_WORDS)} · Подтверждённость: ${maturity} · `;
+  return `${signal.theme} · ${links} ${pluralWord(links, ...LINK_WORDS)} · Решение радара: ${maturity} · `;
 }
 
 // Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
@@ -741,7 +742,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       ) : null}
 
       {/* Раскладка — как у «Бизнес-сигналов» (документ заказчика 19.09): действия в шапке
-          панели, поиск и тема первой строкой, подтверждённость и сортировка второй, атрибуты
+          панели, поиск и тема первой строкой, решение радара и сортировка второй, атрибуты
           карточки третьей, остальное — в «Расширенных фильтрах». */}
       <section className="panel">
         <div className="panelHeader">
@@ -812,12 +813,12 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         </div>
 
         <div className="articlesFiltersRow signalRadarFiltersSecondary">
-          {/* Подтверждённость — поле радара; у сигнала ленты её нет (в карточку не входит, спека #93). */}
+          {/* Решение радара — поле находки поиска; у сигнала ленты его нет (в карточку не входит, спека #93). */}
           {business ? null : (
             <label className="field">
-              <span>Подтверждённость</span>
+              <span>Решение радара</span>
               <select value={maturity} onChange={(event) => setMaturity(event.target.value)}>
-                <option value="">Любая подтверждённость</option>
+                <option value="">Любое решение</option>
                 <option value="watch">Наблюдать</option>
                 <option value="shortlist">Кандидат</option>
                 <option value="proven">Подтверждено</option>

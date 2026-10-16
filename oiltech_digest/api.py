@@ -1751,7 +1751,7 @@ def _radar_screen_filters(
     # сигналы категории «бизнес» обоих происхождений (лента и находки радара).
     showcase: str = Query("technology", pattern="^(technology|business)$"),
     # Атрибуты карточки сигнала (#97): значение справочника или «не определено». technology_maturity —
-    # зрелость технологии; maturity выше — подтверждённость радара (наблюдать / кандидат / подтверждено).
+    # зрелость технологии; maturity выше — решение радара (наблюдать / кандидат / подтверждено).
     event_type: str | None = Query(None, max_length=100),
     region: str | None = Query(None, max_length=100),
     technology_class: str | None = Query(None, max_length=100),
