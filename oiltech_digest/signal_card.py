@@ -15,24 +15,31 @@ import re
 from typing import Any, Callable
 
 from oiltech_digest import config
-from oiltech_digest.db import repository, signal_cards
+from oiltech_digest.db import repository, signal_card_store
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
-from oiltech_digest.signal_card_pack import UNDEFINED, load_dictionaries, publication_text
+from oiltech_digest.signal_card_pack import (CATEGORY_RU, CHOICE_DICTIONARIES, UNDEFINED, load_dictionaries,
+                                             publication_day, publication_text)
 
-AGENT = signal_cards.AGENT_KIND
+KIND = signal_card_store.KIND
 # Версия инструкции — в рецепте карточки: другая инструкция — другие карточки.
 PROMPT_VERSION = "2026-10-16.1"
 _OUTPUT_TOKENS = 1200
-_CATEGORY_RU = {"technology": "технология", "business": "бизнес", "other": "другое"}
+# Источник даты события — значения справочника date_source, по ним код решает, откуда дата.
+FROM_TEXT = "из текста"
+BY_PUBLICATION = "по дате публикации"
+# Связь с нефтесервисом: значение справочника → прежний код радара (direct / transferable / none).
 _RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
-_DICTIONARY_FIELDS = ("event_type", "region", "technology_class", "maturity")
+# Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты и связи.
+_MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance")
 _EARLIEST_EVENT = date(2000, 1, 1)
+# Потолки длины ответа воркера (недоверенный ввод); фраза — как у судьи радара.
+_PHRASE_CHARS, _NAME_CHARS, _QUOTE_CHARS = 400, 200, 600
 
 
 class CardSetupError(ValueError):
-    """Агента нельзя поставить в работу: не задана модель."""
+    """Агента нельзя поставить в работу: выключен флаг или не задана модель."""
 
 
 # --- Постановка (ядро) ---------------------------------------------------------------------------
@@ -43,22 +50,26 @@ def enqueue_new_signals() -> dict[str, Any]:
     обработки. За флагом SIGNAL_CARD_ENABLED."""
     if not config.SIGNAL_CARD_ENABLED:
         return {"signals": 0, "jobs": [], "reason": "disabled"}
-    _model()
-    ids = signal_cards.new_signal_ids(days=config.SIGNAL_CARD_NEW_DAYS, limit=config.SIGNAL_CARD_STEP_LIMIT)
+    # Без модели шаг отказывает в каждом цикле, даже когда новых сигналов нет: настройка видна сразу.
+    _configured_model()
+    ids = signal_card_store.new_signal_ids(days=config.SIGNAL_CARD_NEW_DAYS, limit=config.SIGNAL_CARD_STEP_LIMIT)
     return {"signals": len(ids), "jobs": enqueue_cards(ids, trigger="daily")}
 
 
 def enqueue_cards(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[dict[str, Any]]:
     """Задачи агента пачками по SIGNAL_CARD_BATCH. bulk — пересчёт (названные сигналы, история): по
-    полосе пересчётов, чтобы не стоять перед потоком дня."""
+    полосе пересчётов, чтобы не стоять перед потоком дня. Только при включённом флаге: до экзамена
+    (#98) агент на проде не работает."""
     from oiltech_digest import network_policy
 
-    model = _model()
+    if not config.SIGNAL_CARD_ENABLED:
+        raise CardSetupError("SIGNAL_CARD_ENABLED выключен: агент карточки выходит в работу после экзамена (#98)")
+    model = _configured_model()
     decision = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
     batch = config.SIGNAL_CARD_BATCH
     return [
         repository.create_background_job(
-            AGENT,
+            KIND,
             {"signal_ids": signal_ids[start:start + batch], "model": model,
              "reasoning": config.SIGNAL_CARD_REASONING, "trigger": trigger},
             queue_name=decision.queue_name, execution_region=decision.execution_region,
@@ -68,7 +79,7 @@ def enqueue_cards(signal_ids: list[int], *, trigger: str, bulk: bool = False) ->
     ]
 
 
-def _model() -> str:
+def _configured_model() -> str:
     if not config.SIGNAL_CARD_MODEL:
         raise CardSetupError("SIGNAL_CARD_MODEL не задан: модель ленты агент карточки не берёт")
     return config.SIGNAL_CARD_MODEL
@@ -79,31 +90,33 @@ def _model() -> str:
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации, тема, категория, справочники."""
-    signals = [
-        {
-            "signal_id": int(row["signal_id"]),
-            "publication": row["publication"],
-            "title": publication_text(row.get("title"))[:500],
-            "text": publication_text(row.get("text")),
-            "published": _day(row.get("published")),
-            "publisher": row.get("publisher") or "",
-            "theme": row.get("theme") or "",
-            "category": _CATEGORY_RU.get(row.get("category") or "technology", UNDEFINED),
-        }
-        for row in signal_cards.card_inputs(job_payload.get("signal_ids") or [])
-    ]
+    signals = []
+    for row in signal_card_store.card_inputs(job_payload.get("signal_ids") or []):
+        publication = _publication(row)
+        published = publication["published"]
+        signals.append({**publication, "published": published.isoformat() if published else None})
     return {
-        "kind": AGENT, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
+        "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
         "dictionaries": load_dictionaries(), "signals": signals,
     }
 
 
-def _day(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).date().isoformat()
-    return str(value)[:10]
+def _publication(row: dict[str, Any]) -> dict[str, Any]:
+    """Главная публикация сигнала так, как её видит модель, — по ней же ядро сверяет ответ: тот же
+    текст (publication_text), издатель, дата публикации днём по UTC."""
+    published = publication_day(row.get("published"))
+    return {
+        "signal_id": int(row["signal_id"]),
+        "publication": row["publication"],
+        "title": publication_text(row.get("title"))[:500],
+        "text": publication_text(row.get("text")),
+        "published": date.fromisoformat(published) if published else None,
+        "publisher": row.get("publisher") or "",
+        "publisher_type": row.get("publisher_type") or "",
+        "theme": row.get("theme") or "",
+        # Без категории — находка радара до 29.09: радар показывает её как технологию.
+        "category": CATEGORY_RU.get(row.get("category") or "technology", UNDEFINED),
+    }
 
 
 # --- Вызов модели (воркер, без базы) -------------------------------------------------------------
@@ -120,7 +133,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     schema = _answer_schema(dictionaries)
     client = make_client()
     cards: list[dict[str, Any]] = []
-    result = {"signal_card": True, "kind": AGENT, "prompt_version": PROMPT_VERSION,
+    result = {"signal_card": True, "kind": KIND, "prompt_version": PROMPT_VERSION,
               "dictionaries_version": dictionaries.get("version"), "cards": cards}
     for item in payload.get("signals") or []:
         if heartbeat:
@@ -155,9 +168,10 @@ _TASK = """Ты заполняешь карточку сигнала — соб�
   «из текста». В тексте даты нет — event_date пусто, event_date_source = «по дате публикации».
   Понять нельзя — event_date пусто, event_date_source = «не определено».
 - companies — компании-участники события: кто внедряет, поставляет, разрабатывает, покупает,
-  продаёт, инвестирует. Издатель публикации и компании, упомянутые мимоходом, — не участники. Для
-  каждой: name — название компании; quote — ДОСЛОВНЫЙ фрагмент текста (без изменений, до 30 слов),
-  где она названа участником. Участников нет — пустой список.
+  продаёт, инвестирует. Издание, которое о событии сообщает, и компании, упомянутые мимоходом, — не
+  участники; компания, которая сама сообщает о своём событии, — участник. Для каждой: name —
+  название компании; quote — ДОСЛОВНЫЙ фрагмент текста (без изменений, до 30 слов), где она названа
+  участником. Участников нет — пустой список.
 - event_type, region, technology_class, maturity — строго одно значение из справочника ниже,
   буквально. Не подходит ни одно — «не определено».
 - oilfield_relevance — связь с нефтесервисом: «прямая»; «переносимая» — технология из другой
@@ -170,26 +184,27 @@ _TASK = """Ты заполняешь карточку сигнала — соб�
 
 def _instructions(dictionaries: dict[str, Any]) -> str:
     lines = [_TASK, "", f"Справочники (версия {dictionaries.get('version')}):"]
-    for field in _DICTIONARY_FIELDS:
+    for field in _MODEL_DICTIONARIES:
         block = dictionaries.get(field) or {}
         rule = f" ({block['rule']})" if block.get("rule") else ""
-        lines.append(f"- {field} — {block.get('title', field)}{rule}: " + "; ".join(block.get("values") or []))
+        lines.append(f"- {field} — {block.get('title', field)}{rule}: " + "; ".join(_values(dictionaries, field)))
     return "\n".join(lines)
 
 
 def _answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
-    def choice(values: list[str]) -> dict[str, Any]:
-        return {"type": "string", "enum": [*values, UNDEFINED]}
+    """Схема ответа модели (строгий JSON) — по ней же ядро проверяет ответ (_shape_problem)."""
+    def enum(field: str) -> dict[str, Any]:
+        return {"type": "string", "enum": [*_values(dictionaries, field), UNDEFINED]}
 
     properties: dict[str, Any] = {
         "event_date": {"type": "string"},
-        "event_date_source": choice(list((dictionaries.get("date_source") or {}).get("values") or [])),
+        "event_date_source": enum("date_source"),
         "companies": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["name", "quote"],
             "properties": {"name": {"type": "string"}, "quote": {"type": "string"}},
         }},
-        **{field: choice(list((dictionaries.get(field) or {}).get("values") or [])) for field in _DICTIONARY_FIELDS},
-        "oilfield_relevance": choice(list(_RELEVANCE_CODES)),
+        **{field: enum(field) for field in CHOICE_DICTIONARIES},
+        "oilfield_relevance": enum("oilfield_relevance"),
         "oilfield_application": {"type": "string"},
         "why_important": {"type": "string"},
     }
@@ -213,60 +228,96 @@ def _model_input(item: dict[str, Any]) -> str:
 # --- Применение (ядро) ---------------------------------------------------------------------------
 
 
-def apply_result(result: dict[str, Any], *, job_id: int | None = None) -> dict[str, Any]:
+def apply_result(result: dict[str, Any], *, job_id: int | None = None,
+                 signal_ids: list[Any] | None = None) -> dict[str, Any]:
     """Сторона ядра: проверить ответы кодом и записать карточки с рецептом. Ответ не по схеме не
-    пишется: ошибка — в итоге задачи, остальные карточки пачки пишутся."""
+    пишется: ошибка — в итоге задачи, остальные карточки пачки пишутся. signal_ids — сигналы задачи:
+    карточку другого сигнала итог воркера не пишет."""
     dictionaries = load_dictionaries()
+    schema = _answer_schema(dictionaries)
     cards = [card for card in result.get("cards") or [] if isinstance(card, dict)]
     ids = [signal_id for signal_id in map(_signal_id, cards) if signal_id is not None]
-    publications = {int(row["signal_id"]): _publication(row) for row in signal_cards.card_inputs(ids)}
-    applied = 0
-    errors: list[dict[str, Any]] = []
-    signal_cards.record_usage(job_id, [usage for card in cards if (usage := _usage(card))])
+    publications = {int(row["signal_id"]): _publication(row) for row in signal_card_store.card_inputs(ids)}
+    expected = None if signal_ids is None else {str(value) for value in signal_ids}
+    signal_card_store.record_usage(job_id, [usage for card in cards if (usage := _usage(card, expected))])
     if result.get("dictionaries_version") != dictionaries.get("version"):
         # Модель выбирала из других справочников: рецепт солгал бы, а значения сверены не с теми.
         stale = (f"справочники сменились после выдачи задачи ({result.get('dictionaries_version')} → "
                  f"{dictionaries.get('version')}): карточка не записана")
         return {"applied": 0, "errors": [{"signal_id": _signal_id(card), "error": stale} for card in cards]}
+    applied = 0
+    errors: list[dict[str, Any]] = []
     for card in cards:
         signal_id = _signal_id(card)
-        if card.get("error"):
-            errors.append({"signal_id": signal_id, "error": f"модель: {str(card['error'])[:300]}"})
-            continue
-        problem = _shape_problem(card.get("answer"))
+        problem = _card_problem(card, signal_id, expected, publications, schema)
         if problem:
-            errors.append({"signal_id": signal_id, "error": f"ответ не по схеме: {problem}"})
+            errors.append({"signal_id": signal_id, "error": problem})
             continue
-        publication = publications.get(signal_id)
-        if publication is None:
-            errors.append({"signal_id": signal_id, "error": "нет сигнала или его главной публикации"})
-            continue
-        if card.get("publication") != publication["key"]:
-            # Цитаты сверяются с текстом, который видела модель, — иначе компании отсеялись бы зря.
-            errors.append({"signal_id": signal_id, "error": "главная публикация сменилась после выдачи задачи"})
-            continue
-        values = check_answer(card["answer"], publication, dictionaries)
         recipe = {
-            "agent": AGENT, "prompt_version": result.get("prompt_version"), "model": card.get("model"),
-            "dictionaries_version": result.get("dictionaries_version"),
+            "agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
+            "model": _model_name(card), "dictionaries_version": dictionaries.get("version"),
             "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "job_id": job_id,
         }
-        if signal_cards.write_card(signal_id, values, recipe=recipe):
+        values = check_answer(card["answer"], publications[signal_id], dictionaries)
+        if signal_card_store.write_card(signal_id, values, recipe=recipe):
             applied += 1
     return {"applied": applied, "errors": errors}
 
 
-def _usage(card: dict[str, Any]) -> dict[str, Any] | None:
+def _in_job(signal_id: int | None, expected: set[str] | None) -> bool:
+    return signal_id is not None and (expected is None or str(signal_id) in expected)
+
+
+def _card_problem(card: dict[str, Any], signal_id: int | None, expected: set[str] | None,
+                  publications: dict[int, dict[str, Any]], schema: dict[str, Any]) -> str | None:
+    """Почему строку итога воркера нельзя записать; None — можно."""
+    if not _in_job(signal_id, expected):
+        return "сигнала нет в этой задаче"
+    if card.get("error"):
+        return f"модель: {str(card['error'])[:300]}"
+    problem = _shape_problem(card.get("answer"), schema)
+    if problem:
+        return f"ответ не по схеме: {problem}"
+    publication = publications.get(signal_id)
+    if publication is None:
+        return "нет сигнала или его главной публикации"
+    if card.get("publication") != publication["publication"]:
+        # Цитаты сверяются с текстом, который видела модель, — иначе компании отсеялись бы зря.
+        return "главная публикация сменилась после выдачи задачи"
+    return None
+
+
+def _shape_problem(answer: Any, schema: dict[str, Any]) -> str | None:
+    """Чем ответ не совпал со схемой агента; None — совпал. Значения справочников здесь не
+    проверяются: чужое значение — «не определено», а не брак ответа."""
+    if not isinstance(answer, dict):
+        return "не объект"
+    for field, spec in schema["schema"]["properties"].items():
+        value = answer.get(field)
+        if spec["type"] == "string" and not isinstance(value, str):
+            return f"нет строки {field}"
+        if spec["type"] == "array":
+            required = spec["items"]["required"]
+            if not isinstance(value, list) or not all(
+                isinstance(item, dict) and all(isinstance(item.get(key), str) for key in required) for item in value
+            ):
+                return f"{field} — не список объектов с полями {', '.join(required)}"
+    return None
+
+
+def _usage(card: dict[str, Any], expected: set[str] | None) -> dict[str, Any] | None:
     """Оплаченный вызов модели — и с ответом не по схеме: модель за него уже взяла деньги. Цена — по
-    ставкам ядра, как у радара (repository.record_radar_ai_usage)."""
+    ставкам ядра, как у радара (repository.record_radar_ai_usage). Строка чужого сигнала — не расход
+    этой задачи."""
     signal_id = _signal_id(card)
     try:
-        tokens_in, tokens_out = int(card.get("input_tokens") or 0), int(card.get("output_tokens") or 0)
+        tokens_in = max(0, int(card.get("input_tokens") or 0))
+        tokens_out = max(0, int(card.get("output_tokens") or 0))
     except (TypeError, ValueError):
         return None
-    if signal_id is None or not tokens_in + tokens_out:
+    if not _in_job(signal_id, expected) or not tokens_in + tokens_out:
         return None
-    model = str(card.get("model") or "")[:100] or None
+    model = _model_name(card)
     price_in, price_out = config.price_for_model(model)
     return {"signal_id": signal_id, "model": model, "input_tokens": tokens_in, "output_tokens": tokens_out,
             "cost_usd": round((tokens_in * price_in + tokens_out * price_out) / 1_000_000, 6)}
@@ -279,67 +330,41 @@ def _signal_id(card: dict[str, Any]) -> int | None:
         return None
 
 
-def _publication(row: dict[str, Any]) -> dict[str, Any]:
-    """Что ядро сверяет с ответом: тот же текст, что ушёл модели (publication_text), издатель, дата."""
-    published = _day(row.get("published"))
-    return {"key": row["publication"], "text": publication_text(row.get("text")),
-            "publisher": row.get("publisher") or "", "published": date.fromisoformat(published) if published else None}
-
-
-_TEXT_FIELDS = ("event_date", "event_date_source", *_DICTIONARY_FIELDS, "oilfield_relevance",
-                "oilfield_application", "why_important")
-
-
-def _shape_problem(answer: Any) -> str | None:
-    """Чем ответ не совпал со схемой агента; None — совпал. Значения справочников здесь не
-    проверяются: чужое значение — «не определено», а не брак ответа."""
-    if not isinstance(answer, dict):
-        return "не объект"
-    for field in _TEXT_FIELDS:
-        if not isinstance(answer.get(field), str):
-            return f"нет строки {field}"
-    companies = answer.get("companies")
-    if not isinstance(companies, list) or not all(
-        isinstance(item, dict) and isinstance(item.get("name"), str) and isinstance(item.get("quote"), str)
-        for item in companies
-    ):
-        return "companies — не список компаний с цитатами"
-    return None
+def _model_name(card: dict[str, Any]) -> str | None:
+    return str(card.get("model") or "")[:100] or None
 
 
 def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, Any]:
     """Ответ модели → значения карточки. Значение не из справочника — «не определено»; компания без
-    цитаты из текста публикации и издатель публикации отбрасываются, алиасы сводятся к одному имени."""
-    def choice(field: str, value: str) -> str:
-        return _choice(value, (dictionaries.get(field) or {}).get("values") or [])
-
-    event_date, source = _event_date(answer["event_date"], choice("date_source", answer["event_date_source"]),
-                                     publication["published"])
-    relevance = _RELEVANCE_CODES.get(_choice(answer["oilfield_relevance"], list(_RELEVANCE_CODES)))
+    цитаты из текста публикации и издание-издатель отбрасываются, алиасы сводятся к одному имени."""
+    source = _listed(dictionaries, "date_source", answer["event_date_source"])
+    event_date, source = _event_date(answer["event_date"], source, publication["published"])
+    relevance = _RELEVANCE_CODES.get(_listed(dictionaries, "oilfield_relevance", answer["oilfield_relevance"]))
     return {
         "event_date": event_date,
         "event_date_source": source,
         "participants_json": _participants(answer["companies"], publication, dictionaries),
-        "event_type": choice("event_type", answer["event_type"]),
-        "region": choice("region", answer["region"]),
-        "technology_class": choice("technology_class", answer["technology_class"]),
-        "technology_maturity": choice("maturity", answer["maturity"]),
+        "event_type": _listed(dictionaries, "event_type", answer["event_type"]),
+        "region": _listed(dictionaries, "region", answer["region"]),
+        "technology_class": _listed(dictionaries, "technology_class", answer["technology_class"]),
+        "technology_maturity": _listed(dictionaries, "maturity", answer["maturity"]),
         "oilfield_relevance": relevance,
         # Как у судьи радара: применение — только при прямой или переносимой связи.
-        "oilfield_application": (answer["oilfield_application"].strip() or None
+        "oilfield_application": (_phrase(answer["oilfield_application"])
                                  if relevance in ("direct", "transferable") else None),
-        "why_interesting": answer["why_important"].strip() or None,
+        # «Почему важно нефтесервису» — в прежнем поле судьи «почему интересно».
+        "why_interesting": _phrase(answer["why_important"]),
     }
 
 
 def _event_date(value: str, source: str, published: date | None) -> tuple[date | None, str]:
     """Дата события и откуда она: «по дате публикации» — дата публикации; «из текста» — дата модели,
     если она не позже публикации и не раньше 2000 года, иначе «не определено». Дата публикации — по
-    UTC, поэтому сутки допуска: событие дня публикации по Москве бывает на день позже её даты по UTC.
-    Даты публикации нет (находка «режима ChatGPT») — событие не позже сегодняшнего дня."""
-    if source == "по дате публикации":
+    UTC, поэтому сутки допуска: событие дня публикации по местному времени бывает на день позже её
+    даты по UTC. Даты публикации нет (находка «режима ChatGPT») — событие не позже сегодняшнего дня."""
+    if source == BY_PUBLICATION:
         return (published, source) if published else (None, UNDEFINED)
-    if source != "из текста":
+    if source != FROM_TEXT:
         return None, UNDEFINED
     try:
         day = date.fromisoformat(value.strip())
@@ -354,24 +379,27 @@ def _event_date(value: str, source: str, published: date | None) -> tuple[date |
 def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
                   dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
     """Участник — только с дословной цитатой из текста публикации, в которой он назван (verified —
-    проверено кодом): цитата, где компании нет, — догадка модели, а не участник. Издатель участником
-    не считается; алиасы — одно имя, повтор под другим именем отбрасывается."""
+    проверено кодом): цитата, где компании нет, — догадка модели, а не участник. Издание, которое о
+    событии сообщает, участником не считается; компания, которая сама публикует свою новость (тип
+    источника Company…), — считается: в её пресс-релизе она главный участник. Алиасы — одно имя,
+    повтор под другим именем отбрасывается."""
     entries = dictionaries.get("companies") or []
     canonical = {_plain(name): entry["name"] for entry in entries for name in (entry["name"], *entry["aliases"])}
     variants = {entry["name"]: (entry["name"], *entry["aliases"]) for entry in entries}
-    text = _quotable(publication["text"])
-    publisher = _plain(publication["publisher"])
-    publisher = canonical.get(publisher, publisher)
+    text = _quote_form(publication["text"])
+    reporter = None
+    if not publication["publisher_type"].lower().startswith("company"):
+        reporter = _plain(canonical.get(_plain(publication["publisher"]), publication["publisher"]))
     kept: dict[str, dict[str, Any]] = {}
     for company in companies:
-        given = " ".join(company["name"].split())
+        given = " ".join(company["name"].split())[:_NAME_CHARS]
         name = canonical.get(_plain(given), given)
-        quote = " ".join(company["quote"].split())
-        if not name or not quote or _quotable(quote) not in text \
+        quote = " ".join(company["quote"].split())[:_QUOTE_CHARS]
+        if not name or not quote or _quote_form(quote) not in text \
                 or not _named_in(quote, (given, *variants.get(name, (name,)))):
             continue
         key = _plain(name)
-        if key in kept or key == _plain(publisher):
+        if key in kept or key == reporter:
             continue
         kept[key] = {"name": name, "quote": quote, "verified": True}
     return list(kept.values())
@@ -396,14 +424,24 @@ _QUOTE_MARKS = str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„
                               "—": "-", "–": "-"})
 
 
-def _quotable(text: str) -> str:
+def _quote_form(text: str) -> str:
+    """Текст для сверки цитаты: без различий регистра, «ё», пробелов, кавычек и тире."""
     return _plain(str(text or "").translate(_QUOTE_MARKS))
 
 
-def _choice(value: str, allowed: list[str]) -> str:
-    """Значение справочника, как оно записано в справочнике; регистр, «ё» и пробелы — не расхождение."""
+def _phrase(value: str) -> str | None:
+    return " ".join(value.split())[:_PHRASE_CHARS] or None
+
+
+def _values(dictionaries: dict[str, Any], field: str) -> list[str]:
+    return list((dictionaries.get(field) or {}).get("values") or [])
+
+
+def _listed(dictionaries: dict[str, Any], field: str, value: str) -> str:
+    """Значение справочника, как оно записано в справочнике; регистр, «ё» и пробелы — не расхождение.
+    Не нашлось — «не определено»."""
     wanted = _plain(value)
-    return next((item for item in allowed if _plain(item) == wanted), UNDEFINED)
+    return next((item for item in _values(dictionaries, field) if _plain(item) == wanted), UNDEFINED)
 
 
 def _plain(value: str) -> str:

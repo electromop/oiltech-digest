@@ -12,9 +12,10 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest.db import connection
-from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_RADAR
+from oiltech_digest.db.repository import CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN, SIGNAL_ORIGIN_FEED, radar_origin_sql
 
-AGENT_KIND = "signal_card"
+# Вид задачи агента и стадия его расхода в ai_processing_runs.
+KIND = "signal_card"
 # Поле карточки → колонки signals; первая колонка решает, пусто ли поле.
 CARD_COLUMNS: dict[str, tuple[str, ...]] = {
     "event_date": ("event_date", "event_date_source"),
@@ -31,10 +32,13 @@ _JSON_COLUMNS = frozenset({"participants_json"})
 
 
 def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
-    """Главная публикация сигналов: у сигнала ленты — его статья, у находки радара — ссылка с
-    текстом издателя (статья корпуса или докачанная страница) раньше сводки модели, затем по силе.
-    Дата публикации — как в пакете эксперту: у находки «режима ChatGPT» дата ссылки — это дата
-    события по версии модели, публикационной даты у неё нет."""
+    """Главная публикация сигналов: у сигнала ленты — его статья, у находки радара — ссылка с текстом
+    издателя (статья корпуса или докачанная страница) раньше сводки модели, затем по силе. Среди
+    публикаций с текстом издателя выбор тот же, что у пакета эксперту (signal_card_pack._radar_candidates):
+    экзамен (#98) сверяет агента с разметкой того же текста. Дата публикации — как в пакете: у находки
+    «режима ChatGPT» дата ссылки — это дата события по версии модели, публикационной даты у неё нет.
+    publisher_type — тип источника из справочника источников (Media, Company…); у находки без статьи
+    корпуса его нет."""
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
     ids = sorted({int(value) for value in signal_ids})
@@ -46,7 +50,8 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
             f"""
             SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
                    'article:' || a.id AS publication, a.title, a.raw_text AS text,
-                   COALESCE(a.published_at, a.collected_at) AS published, src.name AS publisher
+                   COALESCE(a.published_at, a.collected_at) AS published,
+                   src.name AS publisher, src.source_type AS publisher_type
             FROM signals s
             JOIN articles a ON a.id = s.origin_article_id
             JOIN sources src ON src.id = a.source_id
@@ -64,12 +69,12 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
                    CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)
                         WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %(model_dated)s
                         THEN e.published_at END AS published,
-                   COALESCE(src.name, e.publisher) AS publisher
+                   COALESCE(src.name, e.publisher) AS publisher, src.source_type AS publisher_type
             FROM signals s
             JOIN signal_evidence e ON e.signal_id = s.id
             LEFT JOIN articles a ON a.id = e.article_id
             LEFT JOIN sources src ON src.id = a.source_id
-            WHERE s.id = ANY(%(ids)s) AND s.origin = '{SIGNAL_ORIGIN_RADAR}'
+            WHERE s.id = ANY(%(ids)s) AND {radar_origin_sql("s")}
             ORDER BY s.id,
                      (length(btrim(COALESCE(a.raw_text, ''))) > 0
                       OR e.raw_payload_json->>'full_text_fetched' = 'true') DESC,
@@ -81,18 +86,26 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: row["signal_id"])
 
 
+# Сколько задач шаг планировщика ставит одному сигналу: вторая — на случай сбоя модели или смены
+# справочников посреди задачи; дальше сигнал добирает прогон по истории (#98), а не каждые полчаса.
+DAILY_ATTEMPTS = 2
+
+
 def new_signal_ids(*, days: int, limit: int) -> list[int]:
-    """Сигналы для шага планировщика: заведены за `days` дней, без карточки, не дубли, и ни в одной
-    задаче агента за это окно — упавшую задачу шаг не повторяет каждые полчаса (её сигналы добирает
-    прогон по истории)."""
+    """Сигналы для шага планировщика: заведены за `days` дней, без карточки, не дубли, не в задаче
+    агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS)."""
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
-            WITH taken AS (
-              SELECT DISTINCT (jsonb_array_elements_text(j.payload_json->'signal_ids'))::bigint AS id
+            WITH attempts AS (
+              SELECT (jsonb_array_elements_text(j.payload_json->'signal_ids'))::bigint AS id,
+                     j.status IN ('queued', 'running', 'finalizing') AS pending
               FROM background_jobs j
-              WHERE j.kind = '{AGENT_KIND}' AND j.created_at >= now() - make_interval(days => %(window)s)
+              WHERE j.kind = '{KIND}' AND j.created_at >= now() - make_interval(days => %(window)s)
                 AND jsonb_typeof(j.payload_json->'signal_ids') = 'array'
+            ),
+            taken AS (
+              SELECT id FROM attempts GROUP BY id HAVING bool_or(pending) OR count(*) >= %(attempts)s
             )
             SELECT s.id
             FROM signals s
@@ -102,7 +115,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             ORDER BY s.id
             LIMIT %(limit)s
             """,
-            {"days": int(days), "window": int(days) + 1, "limit": int(limit)},
+            {"days": int(days), "window": int(days) + 1, "limit": int(limit), "attempts": DAILY_ATTEMPTS},
         ).fetchall()
     return [int(row[0]) for row in rows]
 
@@ -129,7 +142,7 @@ def write_card(signal_id: int, values: dict[str, Any], *, recipe: dict[str, Any]
             for column in columns:
                 value = values.get(column)
                 updates[column] = Json(value) if column in _JSON_COLUMNS else value
-            set_by[key] = "agent"
+            set_by[key] = CARD_SET_BY_AGENT
         updates["card_set_by"] = Json(set_by)
         updates["card_recipe"] = Json(recipe)
         assignments = ", ".join(f"{column} = %s" for column in updates)
@@ -155,13 +168,13 @@ def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
                 VALUES (%s, %s, %s, 'openai', %s, %s, %s, %s, %s, 'ok')
                 ON CONFLICT (job_id, signal_id, stage) WHERE signal_id IS NOT NULL DO NOTHING
                 """,
-                (job_id, row["signal_id"], AGENT_KIND, row.get("model"), row["input_tokens"], row["output_tokens"],
+                (job_id, row["signal_id"], KIND, row.get("model"), row["input_tokens"], row["output_tokens"],
                  row["input_tokens"] + row["output_tokens"], row["cost_usd"]),
             )
         conn.commit()
 
 
 def _writable(set_by: str | None, current: Any) -> bool:
-    if set_by == "human":
+    if set_by == CARD_SET_BY_HUMAN:
         return False
-    return set_by == "agent" or current is None or current == "" or current == []
+    return set_by == CARD_SET_BY_AGENT or current is None or current == "" or current == []

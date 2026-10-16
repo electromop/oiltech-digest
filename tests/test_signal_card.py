@@ -47,9 +47,9 @@ def test_value_outside_the_dictionaries_becomes_undefined(user, contour, monkeyp
     feed_signal("Контракт SLB", "SLB подписала контракт с Saudi Aramco.")
     fill(monkeypatch, {
         "Форум": answer(event_type="форум", region="Марс", technology_class="блокчейн", maturity="TRL 7",
-                         oilfield_relevance="косвенная", event_date_source="из головы"),
-        # Регистр — не чужое значение.
-        "Контракт SLB": answer(event_type="Контракт", region="ближний восток"),
+                        oilfield_relevance="косвенная", event_date_source="из головы"),
+        # Регистр — не чужое значение; фраза длиннее 400 знаков — обрезана, как у судьи радара.
+        "Контракт SLB": answer(event_type="Контракт", region="ближний восток", why_important="Важно. " * 200),
     })
 
     cards = business(user)
@@ -61,6 +61,7 @@ def test_value_outside_the_dictionaries_becomes_undefined(user, contour, monkeyp
     assert (forum["event_date"], forum["event_date_source"]) == (None, "не определено")
     assert forum["card_set_by"]["oilfield_relevance"] == "agent"
     assert (cards["Контракт SLB"]["event_type"], cards["Контракт SLB"]["region"]) == ("контракт", "Ближний Восток")
+    assert len(cards["Контракт SLB"]["why_interesting"]) == 400
 
 
 def test_participant_needs_a_quote_from_the_text_publisher_is_dropped_aliases_collapse(user, contour, monkeypatch):
@@ -85,12 +86,27 @@ def test_participant_needs_a_quote_from_the_text_publisher_is_dropped_aliases_co
     ]
 
 
+def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, monkeypatch):
+    # Пресс-релиз компании: издатель — она сама и главный участник. Не участник — издатель-СМИ.
+    feed_signal("Пресс-релиз Halliburton", "Halliburton и ADNOC подписали контракт на бурение.",
+                source="Halliburton", source_type="Company")
+    fill(monkeypatch, {"Пресс-релиз Halliburton": answer(companies=[
+        {"name": "Halliburton", "quote": "Halliburton и ADNOC подписали контракт"},
+        {"name": "ADNOC", "quote": "ADNOC подписали контракт на бурение"},
+    ])})
+
+    participants = business(user)["Пресс-релиз Halliburton"]["participants_json"]
+    assert [item["name"] for item in participants] == ["Halliburton", "ADNOC"]
+
+
 def test_event_date_after_publication_or_before_2000_is_undefined(user, contour, monkeypatch):
-    for title in ("После публикации", "До 2000 года", "Не дата", "Даты в тексте нет"):
+    for title in ("После публикации", "Через день", "До 2000 года", "Не дата", "Даты в тексте нет"):
         feed_signal(title, "Компания запустила новый буровой станок.",
-                     published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc))
+                    published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc))
     fill(monkeypatch, {
-        "После публикации": answer(event_date="2026-10-20"),
+        # Дата публикации — день по UTC; сутки допуска — на часовой пояс события, не больше.
+        "После публикации": answer(event_date="2026-09-27"),
+        "Через день": answer(event_date="2026-09-26"),
         "До 2000 года": answer(event_date="1999-12-31"),
         "Не дата": answer(event_date="24.09.2026"),
         "Даты в тексте нет": answer(event_date="", event_date_source="по дате публикации"),
@@ -99,6 +115,7 @@ def test_event_date_after_publication_or_before_2000_is_undefined(user, contour,
     cards = business(user)
     for title in ("После публикации", "До 2000 года", "Не дата"):
         assert (cards[title]["event_date"], cards[title]["event_date_source"]) == (None, "не определено"), title
+    assert (cards["Через день"]["event_date"], cards["Через день"]["event_date_source"]) == ("2026-09-26", "из текста")
     assert (cards["Даты в тексте нет"]["event_date"], cards["Даты в тексте нет"]["event_date_source"]) == (
         "2026-09-25", "по дате публикации")
 
@@ -127,7 +144,7 @@ def test_agent_does_not_overwrite_values_set_by_a_human(user, contour, monkeypat
 def test_radar_finding_gets_only_empty_fields_and_keeps_the_judge_values(user, contour, monkeypatch):
     text = "Equinor и SLB испытали робота-бурильщика на платформе в Северном море."
     radar_finding("robot", "Робот-бурильщик на платформе", text, event_date="2026-09-01",
-                   oilfield_relevance="transferable", oilfield_application="Роботизация буровой площадки")
+                  oilfield_relevance="transferable", oilfield_application="Роботизация буровой площадки")
     fill(monkeypatch, {"Робот-бурильщик на платформе": answer(
         event_date="2026-09-10", oilfield_relevance="прямая", oilfield_application="Бурение",
         why_important="Первый промышленный пилот", event_type="пилот", region="Европа",
@@ -171,9 +188,9 @@ def test_agent_values_do_not_change_what_the_radar_shows(user, admin, contour, m
     # Карточка до 02.10: связь с нефтесервисом и дату события судья тогда не ставил.
     radar_finding("early", "Ранняя находка", "Робот обслуживает буровую.")
     radar_finding("fresh", "Свежая находка", "Датчик утечек на трубопроводе.", event_date="2026-09-01",
-                   oilfield_relevance="direct")
+                  oilfield_relevance="direct")
     radar_finding("filtered", "Отсеянная находка", "Обзор рынка роботов.", filter_stage="judge",
-                   filter_reason="нет технологии")
+                  filter_reason="нет технологии")
     before = _radar_views(user, admin)
     assert len(before["list"]) == 2 and len(before["hidden"]) == 1
 
@@ -286,3 +303,19 @@ def test_before_deploy_sql_adds_the_card_to_the_old_schema_and_repeats_safely(is
         rows = conn.execute("SELECT signal_key, card_set_by FROM signals ORDER BY signal_key").fetchall()
     # Значения судьи у прежней находки — его; у сигнала ленты карточки ещё нет.
     assert rows == [("feed:1", None), ("radar", {"event_date": "radar_judge", "oilfield_relevance": "radar_judge"})]
+
+
+def test_judge_finding_again_does_not_overwrite_a_human_correction(user, contour, monkeypatch):
+    text = "Equinor и SLB испытали робота-бурильщика на платформе."
+    signal_id = radar_finding("robot", "Робот-бурильщик", text, event_date="2026-09-01")
+    # Правку человека внесёт сервис ОС; здесь — её след в карточке.
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE signals SET event_date = '2026-08-30', card_set_by = card_set_by || "
+                     "'{\"event_date\": \"human\"}' WHERE id = %s", (signal_id,))
+        conn.commit()
+
+    radar_finding("robot", "Робот-бурильщик", text, event_date="2026-09-05", oilfield_relevance="direct")
+
+    card = api_get("/api/signals", user)[0]
+    assert (card["event_date"], card["card_set_by"]["event_date"]) == ("2026-08-30", "human")
+    assert (card["oilfield_relevance"], card["card_set_by"]["oilfield_relevance"]) == ("direct", "radar_judge")

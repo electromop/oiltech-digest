@@ -2381,7 +2381,9 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         result = {"signal_discovery": True, "applied": signal_discovery.apply_external_result(result, job_id=job_id)}
     if job.get("kind") == "signal_card" and result.get("signal_card"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели с цитатами уже разобраны в карточки сигналов.
-        result = {"signal_card": True, "applied": signal_card.apply_result(result, job_id=job_id)}
+        applied = signal_card.apply_result(result, job_id=job_id,
+                                           signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
+        result = {"signal_card": True, "applied": applied}
     return result
 
 

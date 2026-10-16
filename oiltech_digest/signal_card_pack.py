@@ -61,7 +61,7 @@ STRATUM_RU = {"useful": "полезных статей ленты", "noise": "ш
 # Полезная статья — балл не ниже этого порога: тот же порог, что «сильные» в аналитике и «готовые
 # в дайджест» на обзоре.
 USEFUL_SCORE = 60
-CATEGORY_RU = {"technology": "технология", "business": "бизнес"}
+CATEGORY_RU = {"technology": "технология", "business": "бизнес", "other": "другое"}
 DEFAULT_SEED = 20261014
 DEFAULT_SINCE = "2026-08-01"
 PERIOD_END = date(2026, 11, 1)  # август–октябрь
@@ -95,7 +95,9 @@ MARKUP_COLUMNS = [
 _GIVEN_COLUMNS = ["ID", "Заголовок", "Текст публикации", "Ссылка", "Дата публикации"]
 # На утверждение — четыре справочника спеки и алиасы компаний. Источник даты и связь с
 # нефтесервисом — значения самой карточки (спека #93), их эксперт не утверждает, а только ставит.
-_APPROVAL = ["event_type", "region", "technology_class", "maturity"]
+# Справочники выбора значения карточки — их же агент «Карточка сигнала» передаёт модели (#96).
+CHOICE_DICTIONARIES = ("event_type", "region", "technology_class", "maturity")
+_APPROVAL = CHOICE_DICTIONARIES
 
 INSTRUCTION = [
     "Разметка 50 сигналов для проверки агента «Карточка сигнала».",
@@ -295,7 +297,7 @@ def _item(origin: str, item_id: str, row: dict[str, Any]) -> dict[str, Any]:
         "stratum": code, **row, "origin": origin, "id": item_id,
         "title": _CONTROL_RE.sub(" ", row.get("title") or "").strip(), "text": text,
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "text_chars": len(text),
-        "published": _date(row.get("published")), "category_code": code,
+        "published": publication_day(row.get("published")), "category_code": code,
         "category": CATEGORY_RU.get(code, code),
     }
 
@@ -332,7 +334,8 @@ def _rank(*parts: Any) -> str:
     return hashlib.sha256(":".join(str(part) for part in parts).encode()).hexdigest()
 
 
-def _date(value: Any) -> str | None:
+def publication_day(value: Any) -> str | None:
+    """Дата публикации днём по UTC (ГГГГ-ММ-ДД) — та, что в таблице эксперта и во входе агента."""
     if value is None:
         return None
     if isinstance(value, datetime):

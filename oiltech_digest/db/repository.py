@@ -945,8 +945,13 @@ def list_signal_article_evidence(
         return cur.fetchall()
 
 
-# Поля карточки сигнала, которые ставит судья радара (#96): их значения агент «Карточка сигнала» у
-# находки радара не перезаписывает, а пустые — заполняет.
+# Кто поставил значение карточки сигнала (#96, signals.card_set_by): агент «Карточка сигнала», судья
+# радара или человек (правки людей внесёт сервис ОС).
+CARD_SET_BY_AGENT = "agent"
+CARD_SET_BY_JUDGE = "radar_judge"
+CARD_SET_BY_HUMAN = "human"
+# Поля карточки сигнала, которые ставит судья радара: их значения агент у находки радара не
+# перезаписывает, а пустые — заполняет.
 RADAR_JUDGE_CARD_FIELDS = ("event_date", "oilfield_relevance", "oilfield_application", "why_interesting")
 
 
@@ -964,6 +969,15 @@ def upsert_signal(signal: dict) -> int:
         f"({feed_window.current().closed_sql(signal_month_sql('signals'))}"
         " AND EXISTS (SELECT 1 FROM user_signal_states uss_f"
         " WHERE uss_f.signal_id = signals.id AND uss_f.status = 'digest'))"
+    )
+
+    def by_human(field: str) -> str:
+        return f"signals.card_set_by->>'{field}' = '{CARD_SET_BY_HUMAN}'"
+
+    # Кто поставил поля судьи (#96): присланные — судья, но значение человека судья не переписывает.
+    judge_set_by = ", ".join(
+        f"'{field}', CASE WHEN {by_human(field)} THEN NULL ELSE EXCLUDED.card_set_by->>'{field}' END"
+        for field in RADAR_JUDGE_CARD_FIELDS
     )
     with get_connection() as conn:
         cur = conn.execute(
@@ -997,21 +1011,26 @@ def upsert_signal(signal: dict) -> int:
               -- Балл интереса — сравнение внутри пачки; тема из одного кандидата его
               -- не получает, и прошлый балл не должен стираться NULL'ом.
               interest_score = COALESCE(EXCLUDED.interest_score, signals.interest_score),
-              why_interesting = COALESCE(NULLIF(EXCLUDED.why_interesting, ''), signals.why_interesting),
+              why_interesting = CASE WHEN {by_human("why_interesting")} THEN signals.why_interesting
+                                     ELSE COALESCE(NULLIF(EXCLUDED.why_interesting, ''), signals.why_interesting) END,
               -- Поля судьи (29.09): результат старой сборки NL их не несёт — прежние не стираем.
               signal_category = COALESCE(EXCLUDED.signal_category, signals.signal_category),
-              event_date = COALESCE(EXCLUDED.event_date, signals.event_date),
+              event_date = CASE WHEN {by_human("event_date")} THEN signals.event_date
+                                ELSE COALESCE(EXCLUDED.event_date, signals.event_date) END,
               -- Дата судьи — без источника (откуда она у судьи, неизвестно): источник агента «Карточка
               -- сигнала» (#96) к ней не относится.
-              event_date_source = CASE WHEN EXCLUDED.event_date IS NOT NULL THEN NULL
-                                       ELSE signals.event_date_source END,
+              event_date_source = CASE WHEN EXCLUDED.event_date IS NOT NULL AND NOT {by_human("event_date")}
+                                       THEN NULL ELSE signals.event_date_source END,
               mixed_events = COALESCE(EXCLUDED.mixed_events, signals.mixed_events),
               mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
-              oilfield_relevance = COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance),
-              oilfield_application = COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application),
-              -- Кто поставил значения карточки (#96): поля, которые судья прислал, — его; остальные
-              -- (агента «Карточка сигнала», человека) не трогаем.
-              card_set_by = COALESCE(signals.card_set_by, '{{}}'::jsonb) || EXCLUDED.card_set_by,
+              oilfield_relevance = CASE WHEN {by_human("oilfield_relevance")} THEN signals.oilfield_relevance
+                                        ELSE COALESCE(EXCLUDED.oilfield_relevance, signals.oilfield_relevance) END,
+              oilfield_application = CASE WHEN {by_human("oilfield_application")} THEN signals.oilfield_application
+                                          ELSE COALESCE(EXCLUDED.oilfield_application, signals.oilfield_application) END,
+              -- Кто поставил значения карточки (#96): присланные судьёй поля — его, кроме правок человека;
+              -- остальные (агента «Карточка сигнала») не трогаем.
+              card_set_by = COALESCE(signals.card_set_by, '{{}}'::jsonb)
+                            || jsonb_strip_nulls(jsonb_build_object({judge_set_by})),
               -- Отсев — решение этого прогона: принятая снова карточка выходит на радар.
               filter_stage = EXCLUDED.filter_stage,
               filter_reason = EXCLUDED.filter_reason,
@@ -1057,7 +1076,7 @@ def upsert_signal(signal: dict) -> int:
                 (signal.get("filter_reason") or None),
                 (signal.get("verdict_reason") or None),
                 Json(_jsonable(signal["decision_log"])) if signal.get("decision_log") else None,
-                Json({field: "radar_judge" for field in RADAR_JUDGE_CARD_FIELDS if signal.get(field)}),
+                Json({field: CARD_SET_BY_JUDGE for field in RADAR_JUDGE_CARD_FIELDS if signal.get(field)}),
             ),
         )
         signal_id = int(cur.fetchone()[0])
@@ -1954,7 +1973,7 @@ def _judged_sql(alias: str, column: str) -> str:
     """Значение поля карточки, по которому витрина решает, показывать ли карточку: судьи радара или
     человека. Значение агента «Карточка сигнала» (#96) ничего не прячет: он заполняет пустые поля
     старых находок, и иначе прогон по истории убрал бы с радара карточки, которые там были."""
-    return f"(CASE WHEN {alias}.card_set_by->>'{column}' = 'agent' THEN NULL ELSE {alias}.{column} END)"
+    return f"(CASE WHEN {alias}.card_set_by->>'{column}' = '{CARD_SET_BY_AGENT}' THEN NULL ELSE {alias}.{column} END)"
 
 
 def _quality_rules_sql(alias: str, *machine_rules: str) -> str:

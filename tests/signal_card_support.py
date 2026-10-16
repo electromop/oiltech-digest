@@ -79,16 +79,18 @@ def tag(name):
     return int(row[0])
 
 
-def feed_signal(title, text, *, published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc), source="Нефтегаз"):
-    """Статья, принятая отбором, — сигнал ленты (мост #95)."""
+def feed_signal(title, text, *, published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc), source="Нефтегаз",
+                source_type="Media"):
+    """Статья, принятая отбором, — сигнал ленты (мост #95). source_type — как в справочнике источников:
+    Media, News, Company, Company / NOC…"""
     collected = datetime.now(timezone.utc)
     with repository.get_connection() as conn:
         source_row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()
         if source_row is None:
             source_row = conn.execute(
                 "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
-                "VALUES (%s, 'News', %s, TRUE, 'rss') RETURNING id",
-                (source, f"https://{abs(hash(source))}.example"),
+                "VALUES (%s, %s, %s, TRUE, 'rss') RETURNING id",
+                (source, source_type, f"https://{abs(hash(source))}.example"),
             ).fetchone()
         article_id = int(conn.execute(
             "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "

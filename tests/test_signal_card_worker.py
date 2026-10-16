@@ -100,8 +100,8 @@ def test_scheduler_step_is_behind_the_flag_and_takes_new_signals_once(user, admi
     ids = {title: card["id"] for title, card in business(user).items()}
     with repository.get_connection() as conn:
         conn.execute("UPDATE signals SET created_at = now() - interval '10 days' WHERE id = %s", (ids["Старый"],))
-        conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (ids["Свежий"], ids["Дубль"]))
         conn.commit()
+    assert repository.mark_signal_merged(ids["Дубль"], ids["Свежий"], "то же событие")
 
     monkeypatch.setattr(api.config, "SIGNAL_CARD_ENABLED", False)
     cli.main(["enqueue-signal-cards"])
@@ -119,13 +119,17 @@ def test_scheduler_step_is_behind_the_flag_and_takes_new_signals_once(user, admi
 
 def test_named_signals_are_recalculated_in_the_bulk_lane(user, admin, contour, monkeypatch):
     monkeypatch.setattr(api.config, "AI_BULK_LANE_ENABLED", True)
-    monkeypatch.setattr(api.config, "SIGNAL_CARD_ENABLED", False)  # пересчёт названных — не шаг планировщика
     for title in ("Контракт SLB", "Пилот робота"):
         feed_signal(title, "SLB подписала контракт с Saudi Aramco.")
     ids = sorted(card["id"] for card in business(user).values())
     model = FakeModel({"Контракт SLB": answer(), "Пилот робота": answer(event_type="пилот")})
     monkeypatch.setattr(signal_card, "make_client", lambda: model)
 
+    # До экзамена (флаг выключен) агент на проде не работает — и пересчёт названных тоже.
+    monkeypatch.setattr(api.config, "SIGNAL_CARD_ENABLED", False)
+    with pytest.raises(SystemExit, match="SIGNAL_CARD_ENABLED"):
+        cli.main(["enqueue-signal-cards", "--ids", ",".join(map(str, ids))])
+    monkeypatch.setattr(api.config, "SIGNAL_CARD_ENABLED", True)
     cli.main(["enqueue-signal-cards", "--ids", ",".join(map(str, ids))])
     jobs = api_get("/api/jobs", admin, kind="signal_card")
     run_worker("external-ai-bulk")
@@ -175,3 +179,48 @@ def test_card_job_runs_in_the_local_contour_too(user, monkeypatch):
     background_jobs.worker_loop(once=True, queue_names=["ai"], poll_seconds=0)
 
     assert business(user)["Контракт SLB"]["card_recipe"]["model"] == f"{MODEL}-2026-03-17"
+
+
+def test_core_writes_cards_only_for_the_signals_of_the_job(user, admin, contour, monkeypatch):
+    feed_signal("Контракт SLB", "SLB подписала контракт с Saudi Aramco.")
+    foreign_article = feed_signal("Чужой сигнал", "SLB подписала контракт с Saudi Aramco.")
+    ids = {title: card["id"] for title, card in business(user).items()}
+    with repository.get_connection() as conn:  # старый сигнал: шаг планировщика его не возьмёт
+        conn.execute("UPDATE signals SET created_at = now() - interval '10 days' WHERE id = %s", (ids["Чужой сигнал"],))
+        conn.commit()
+    monkeypatch.setattr(signal_card, "make_client", lambda: FakeModel({"Контракт SLB": answer()}))
+    cli.main(["enqueue-signal-cards"])
+    client = worker("external-ai")
+    job = client.claim()
+
+    # Итог воркера — недоверенный ввод: в нём карточка сигнала, которого в задаче не было.
+    result = signal_card.process_payload(job["payload"])
+    result["cards"].append({"signal_id": ids["Чужой сигнал"], "publication": f"article:{foreign_article}",
+                            "answer": answer(), "model": MODEL, "input_tokens": 1, "output_tokens": 1})
+    client.complete(job, result)
+
+    cards = business(user)
+    assert (bool(cards["Контракт SLB"]["card_recipe"]), cards["Чужой сигнал"]["card_recipe"]) == (True, None)
+    [error] = api_get(f"/api/jobs/{job['id']}", admin)["result"]["applied"]["errors"]
+    assert error["signal_id"] == ids["Чужой сигнал"]
+
+
+def test_scheduler_step_retries_a_failed_card_once(user, admin, contour, monkeypatch):
+    feed_signal("Контракт SLB", "SLB подписала контракт с Saudi Aramco.")
+    feed_signal("Модель молчит", "Equinor испытывает робота на платформе.")
+    answers = {"Контракт SLB": answer(), "Модель молчит": AIClientError("timeout")}
+    monkeypatch.setattr(signal_card, "make_client", lambda: FakeModel(answers))
+
+    for _ in range(3):  # три цикла планировщика: модель молчит в каждом
+        cli.main(["enqueue-signal-cards"])
+        run_worker("external-ai")
+
+    jobs = api_get("/api/jobs", admin, kind="signal_card")
+    silent = business(user)["Модель молчит"]["id"]
+    # Вторая попытка — на случай сбоя модели; дальше сигнал добирает прогон по истории, а не каждый цикл.
+    assert sorted(job["payload"]["signal_ids"] for job in jobs) == sorted(
+        [[business(user)["Контракт SLB"]["id"], silent], [silent]])
+
+    answers["Модель молчит"] = answer(event_type="пилот")  # модель ожила — но попытки шага исчерпаны
+    cli.main(["enqueue-signal-cards"])
+    assert len(api_get("/api/jobs", admin, kind="signal_card")) == 2

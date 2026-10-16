@@ -585,7 +585,7 @@ def _run_signal_card(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
 
     repository.update_background_job_progress(job_id, 20)
     result = signal_card.process_payload(signal_card.build_payload(payload))
-    applied = signal_card.apply_result(result, job_id=job_id)
+    applied = signal_card.apply_result(result, job_id=job_id, signal_ids=payload.get("signal_ids") or [])
     repository.update_background_job_progress(job_id, 95)
     return {"signal_card": True, "applied": applied}
 
