@@ -890,7 +890,7 @@ def test_run_collects_search_drops_and_judge_failures(monkeypatch):
 
     monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
     monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
-        _event(title="Бизнес", event_kind="other", technology="", source_url="https://example.com/biz"),
+        _event(title="Бизнес", event_kind="not_technology", technology="", source_url="https://example.com/biz"),
         _event(title="Технология А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
         _event(title="Технология Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
     ]))
