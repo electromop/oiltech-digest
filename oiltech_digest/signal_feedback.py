@@ -595,7 +595,8 @@ def feedback_prompt_block(topic: str | None = None, *, limit: int = 20) -> str:
 
 RESEARCH_POSITIVE_EXAMPLES = 6
 RESEARCH_NEGATIVE_EXAMPLES = 8
-RESEARCH_KNOWN_TITLES = 25
+# Карточки темы за период поиска (30 дней), а не за 3 дня: 17.10 в теме было до 32 таких.
+RESEARCH_KNOWN_TITLES = 40
 
 
 def research_feedback_block(topic: str | None = None, *, known_titles: list[str] | None = None) -> str:

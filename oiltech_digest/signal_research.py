@@ -114,6 +114,13 @@ RETRY_HINT = ("\n\nПредыдущая попытка не нашла ни од
               "по крупным сервисным компаниям и операторам, по отраслевым изданиям темы.\n")
 
 
+def research_period(days: int | None = None, period_end: date | None = None) -> tuple[date, date]:
+    """Период поиска темы: days дней до period_end (по умолчанию — сегодня). Один и для промпта, и
+    для списка уже известного, который поиску передаёт run_discovery."""
+    end = period_end or date.today()
+    return end - timedelta(days=int(days or app_config.SIGNAL_RESEARCH_DAYS)), end
+
+
 def _add_usage(stats: dict[str, Any], response: Any) -> None:
     """Расход — за все попытки: платим и за пустую."""
     data = response.data or {}
@@ -135,8 +142,7 @@ def research_topic(
 ) -> dict[str, Any]:
     """События темы за период с первоисточниками. Ошибка модели — пустой итог со статусом,
     а не падение прогона: у темы остаётся поиск Brave, если он включён."""
-    end = period_end or date.today()
-    start = end - timedelta(days=int(days or app_config.SIGNAL_RESEARCH_DAYS))
+    start, end = research_period(days, period_end)
     count = int(limit or app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC)
     stats: dict[str, Any] = {"status": "ok", "provider": "openai_web_search", "model": app_config.SIGNAL_RESEARCH_MODEL,
                              "period": [start.isoformat(), end.isoformat()], "events": 0, "dropped": [],
