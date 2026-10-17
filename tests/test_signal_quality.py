@@ -8,6 +8,7 @@ tech_radar; итог балла считает код; радар не пока�
 
 from __future__ import annotations
 
+import random
 from datetime import date, timedelta
 
 import pytest
@@ -746,9 +747,9 @@ def _column(signal_id, column):
         return conn.execute(f"SELECT {column} FROM signals WHERE id = %s", (signal_id,)).fetchone()[0]
 
 
-def _search_drop(title, url, reason="дата события вне периода"):
+def _search_drop(title, url, reason="дата события вне периода", stage="search"):
     return {"topic": DRILLING, "candidates": [], "filtered_findings": [
-        {"stage": "search", "title": title, "reason": reason, "url": url}]}
+        {"stage": stage, "title": title, "reason": reason, "url": url}]}
 
 
 @pytest.mark.parametrize("rescue", ["approved", "digest"])
@@ -783,10 +784,82 @@ def test_filtered_card_that_gave_its_last_link_to_an_accepted_one_becomes_its_du
         accepted, f"найдено снова: ссылку забрала карточка {accepted}")
 
 
+@pytest.mark.parametrize("stage, drop_reason", [
+    ("search", "не технологическое событие (нет технологии)"),
+    ("judge_error", "ReadTimeout"),
+])
+@pytest.mark.parametrize("rejected_by, reason", [
+    ({}, "отсеяно (судья): обзор без события"),
+    ({"batch_review_reason": "реклама без факта применения"}, "отсеяно (ревью пачки): реклама без факта применения"),
+])
+def test_link_dropped_before_the_verdict_then_rejected_leaves_one_filtered_card(isolated_db, stage, drop_reason,
+                                                                                rejected_by, reason):
+    # 17.10 (ревью PR #106): поиск отсеял u (или судья не ответил), в следующем прогоне судья или
+    # ревью пачки забраковали ту же u. Ссылка ушла к забраковавшей, а прежняя висела в «Отсеянных»
+    # пустой копией со старой причиной.
+    url = "https://example.com/u"
+    _apply_run([_search_drop("Событие", url, reason=drop_reason, stage=stage)])
+    (early,) = _filtered()
+
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("judge-u", "Событие", evidence=[{"source_url": url, "title": "u"}], **rejected_by)]}])
+
+    rejected = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
+    assert _filtered() == {rejected: reason}
+    # Пустая копия не удалена — дубль забраковавшей, как у принятой.
+    assert _column(early, "merged_into_signal_id") == rejected
+
+
+@pytest.mark.parametrize("stage, drop_reason", [
+    ("search", "дата события вне периода"),
+    ("judge_error", "ReadTimeout"),
+])
+@pytest.mark.parametrize("rejected_by, reason", [
+    ({}, "отсеяно (судья): обзор без события"),
+    ({"batch_review_reason": "реклама без факта применения"}, "отсеяно (ревью пачки): реклама без факта применения"),
+])
+def test_link_rejected_then_dropped_again_stays_with_the_rejected_card(isolated_db, stage, drop_reason,
+                                                                       rejected_by, reason):
+    # Обратный порядок (17.10): судья или ревью пачки забраковали u, потом поиск отсеял ту же u
+    # (повторная находка вышла за период) или судья не ответил. Повтор забирал ссылку себе, и пустой
+    # в «Отсеянных» оставалась забракованная — с лучшей причиной. Этапы идут только вперёд.
+    url = "https://example.com/u"
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("judge-u", "Событие", evidence=[{"source_url": url, "title": "u"}], **rejected_by)]}])
+    rejected = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
+
+    _apply_run([_search_drop("Событие", url, reason=drop_reason, stage=stage)])
+
+    assert _filtered() == {rejected: reason}
+    assert [row["source_url"] for row in repository.list_signal_evidence(rejected)] == [url]
+
+
+def test_link_rejected_again_under_another_key_stays_with_the_first_rejected_card(isolated_db):
+    # Судья → снова судья другим ключом (17.10): ключ события из нескольких ссылок — по заголовку и сути,
+    # и повторная находка забракованного события его меняет. Новый брак забирал ссылку у прежнего, и тот
+    # оставался в «Отсеянных» пустым. Теперь ссылка остаётся у прежнего, новый — только со своими.
+    u, v = "https://example.com/u", "https://example.com/v"
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-u", "Событие", evidence=[
+        {"source_url": u, "title": "u"}])]}])
+    first = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
+
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("review-u", "Событие", evidence=[
+        {"source_url": u, "title": "u"}], batch_review_reason="реклама без факта применения")]}])
+    assert _filtered() == {first: "отсеяно (судья): обзор без события"}
+
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-uv", "Событие и ещё", evidence=[
+        {"source_url": u, "title": "u"}, {"source_url": v, "title": "v"}])]}])
+    second = repository.signal_key_owners(["judge-uv"])["judge-uv"]["id"]
+    assert {card: {row["source_url"] for row in repository.list_signal_evidence(card)} for card in _filtered()} == {
+        first: {u}, second: {v}}
+
+
 def test_filtered_cards_passing_a_link_around_never_form_a_merge_ring(isolated_db):
     # Ревью 05.10: поиск отсеял u (A) → судья отклонил {u} (B) → судья отклонил {u, v}, v у
     # карточки на радаре (C) → поиск снова отсеял u. Дублем отсеянная становится только для
-    # принятой, поэтому кольца A→B→C→A нет, а принятое потом событие выходит на радар.
+    # несклеенной (принятой или — отсеянная до вердикта — забракованной судьёй, 17.10), а
+    # склеенная не оживает, поэтому кольца A→B→C→A нет, а принятое потом событие выходит на радар.
+    # С 17.10 C не появляется вовсе: u держит забракованная B, v — карточка на радаре.
     url = "https://example.com/u"
     _store_seen("seen-v", "https://example.com/v")
     _apply_run([_search_drop("Событие", url)])
@@ -811,6 +884,87 @@ def test_filtered_cards_passing_a_link_around_never_form_a_merge_ring(isolated_d
     assert accepted in _visible_ids()
     assert all(_column(signal_id, "merged_into_signal_id") is None or repository.resolve_signal_merge_root(signal_id)
                for signal_id in _filtered())
+
+
+def test_rejected_event_keeps_the_dropped_link_until_accepted_and_the_group_stays_one_step(isolated_db):
+    # Поиск отсеял u (A) → судья отклонил {u, w} (B): A — дубль B. Повторный отсев u не оживляет A
+    # и не уводит ссылку от B. Принятое потом событие забирает обе ссылки: B — дубль принятой, A —
+    # тоже, сразу (группа в один шаг, как у mark_signal_merged).
+    u, w = "https://example.com/u", "https://example.com/w"
+    _apply_run([_search_drop("Событие", u)])
+    (early,) = _filtered()
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-uw", "Событие и ещё", evidence=[
+        {"source_url": u, "title": "u"}, {"source_url": w, "title": "w"}])]}])
+    rejected = repository.signal_key_owners(["judge-uw"])["judge-uw"]["id"]
+    _apply_run([_search_drop("Событие", u)])
+
+    assert _filtered() == {rejected: "отсеяно (судья): обзор без события"}
+    assert {row["source_url"] for row in repository.list_signal_evidence(rejected)} == {u, w}
+
+    accepted = repository.upsert_signal({"signal_key": "accepted-uw", "title": "Принято", "theme": DRILLING,
+                                         "signal_category": "technology"})
+    for url in (u, w):
+        repository.upsert_signal_evidence(accepted, {"source_url": url, "title": url})
+
+    assert _filtered() == {}
+    assert accepted in _visible_ids()
+    assert (_column(early, "merged_into_signal_id"), _column(rejected, "merged_into_signal_id")) == (accepted, accepted)
+
+
+def _owner_stages():
+    """Чья ссылка: стадия отсева несклеенной хозяйки, «accepted» — у принятой."""
+    with repository.get_connection() as conn:
+        return dict(conn.execute("SELECT e.source_url, COALESCE(s.filter_stage, 'accepted') FROM signal_evidence e"
+                                 " JOIN signals s ON s.id = e.signal_id WHERE s.merged_into_signal_id IS NULL"))
+
+
+def test_any_order_of_drops_rejects_and_accepts_leaves_no_empty_copy_and_no_ring(isolated_db):
+    # Доказательство «этапы идут только вперёд» (17.10): тридцать шагов поиска, сбоя судьи, брака судьи
+    # и ревью и приёма в случайном порядке над скользящим окном из трёх ссылок — принятая держит свои
+    # ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: в «Отсеянных» нет
+    # пустой копии, ссылка забракованной не ушла к отсеянной до вердикта, главная любого дубля не
+    # склеена (группа в один шаг — кольца нет), ни одна ссылка не у дубля (событие не пропадает из
+    # обоих списков), ссылки принятого — у видимых карточек. С этим зерном повторный отсев ссылки
+    # забракованной — на шаге 2, новый брак тех же ссылок — на шаге 6, дубль отсеянной у забраковавшей
+    # — на шаге 22.
+    rng = random.Random(1017)
+    urls = [f"https://example.com/{n}" for n in range(12)]
+    into_filtered = 0
+    for step in range(30):
+        window = urls[step // 3:step // 3 + 3]
+        op = rng.choice(["search", "judge_error", "judge", "review", "accept"])
+        cluster = rng.choice([window[:1], window[1:2], window[2:], window[:2], window[1:], window])
+        key = "c-" + "-".join(url.rsplit("/", 1)[1] for url in cluster)
+        evidence = [{"source_url": url, "title": url} for url in cluster]
+        before = _owner_stages()
+        if op in ("search", "judge_error"):
+            _apply_run([_search_drop("Событие", cluster[0], reason=op, stage=op)])
+        elif op == "accept":
+            accepted = repository.upsert_signal({"signal_key": f"ok-{key}", "title": "Принято", "theme": DRILLING,
+                                                 "signal_category": "technology"})
+            for item in evidence:
+                repository.upsert_signal_evidence(accepted, item)
+            assert set(repository.visible_evidence_owners(cluster)) == set(cluster), (step, op, cluster)
+        else:
+            extra = {"batch_review_reason": "реклама"} if op == "review" else {}
+            _apply_run([{"topic": DRILLING, "candidates": [_rejected(key, "Событие", evidence=evidence, **extra)]}])
+        backwards = [url for url, stage in _owner_stages().items()
+                     if before.get(url) in ("judge", "review") and stage in ("search", "judge_error")]
+        assert not backwards, (step, op, cluster, backwards)
+        with repository.get_connection() as conn:
+            groups = conn.execute("SELECT d.id, t.merged_into_signal_id, t.filter_stage FROM signals d"
+                                  " JOIN signals t ON t.id = d.merged_into_signal_id").fetchall()
+            links_at_duplicates = conn.execute(
+                "SELECT count(*) FROM signal_evidence e JOIN signals s ON s.id = e.signal_id"
+                " WHERE s.merged_into_signal_id IS NOT NULL").fetchone()[0]
+            empty_copies = [row[0] for row in conn.execute(
+                "SELECT s.id FROM signals s WHERE s.filter_stage IS NOT NULL AND s.merged_into_signal_id IS NULL"
+                " AND NOT EXISTS (SELECT 1 FROM signal_evidence e WHERE e.signal_id = s.id)")]
+        assert not empty_copies, (step, op, cluster, empty_copies)
+        assert all(root_merged is None for _, root_merged, _ in groups), (step, op, cluster, groups)
+        assert links_at_duplicates == 0, (step, op, cluster)
+        into_filtered += sum(stage is not None for *_, stage in groups)
+    assert into_filtered  # прогулка прошла и по новому пути: дубль у отсеянной
 
 
 def test_unknown_filter_stage_from_the_worker_is_stored_as_search(isolated_db):

@@ -1149,16 +1149,20 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
 
 
 def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
-    """Отсеянная карточка, у которой найденное снова и принятое забрало последнюю ссылку, —
-    дубль принявшей: иначе в «Отсеянных» висела бы пустая копия события, которое уже на
-    радаре. Дубль не удаляется (merged_into_signal_id, как у дедупа). Разобранную человеком
-    это не касается: её ссылки не переезжают (_signal_holds_evidence_sql).
+    """Отсеянная карточка, у которой найденное снова забрало последнюю ссылку, — дубль забравшей:
+    иначе в «Отсеянных» висела бы пустая копия события со старой причиной. Забравшая — принятая
+    (событие на радаре) или, если пустая отсеяна до вердикта (поиск, сбой судьи), забракованная
+    судьёй или ревью пачки: событие разобрано дальше, и причина — у неё (17.10). Дубль не
+    удаляется (merged_into_signal_id, как у дедупа). Разобранную человеком это не касается: её
+    ссылки не переезжают (_signal_holds_evidence_sql).
 
-    Только к принятой (не отсеянной) и не склеенной: принятая отсеянной не становится, а
-    склеенная в снимок дедупа не идёт — кольца дублей не бывает (ревью 05.10: отсеянная
-    хозяйка давала A→B→C→A, и событие пропадало из обоих списков)."""
+    Обе карточки в этот момент не склеены, а склеенная ни ссылку не забирает, ни повторным
+    отсевом не оживает, — кольца дублей не бывает (ревью 05.10: склеенная хозяйка давала
+    A→B→C→A, и событие пропадало из обоих списков). Забракованная судьёй дублем отсеянной не
+    становится: её ключ носят кандидаты судьи, и принятый потом повтор ушёл бы в скрытую карточку
+    (_reconcile_with_owner). У отсеянной до вердикта ключ свой (filtered:…) — его кандидаты не носят."""
     with get_connection() as conn:
-        conn.execute(
+        retired = conn.execute(
             """
             UPDATE signals
             SET merged_into_signal_id = %(taken_by)s, merge_reason = %(reason)s, updated_at = now()
@@ -1166,12 +1170,23 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
               AND filter_stage IS NOT NULL
               AND merged_into_signal_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM signal_evidence WHERE signal_id = %(id)s)
-              AND EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s
-                          AND t.filter_stage IS NULL AND t.merged_into_signal_id IS NULL)
+              AND EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s AND t.merged_into_signal_id IS NULL
+                          AND (t.filter_stage IS NULL
+                               OR (t.filter_stage = ANY(%(verdict)s)
+                                   AND signals.filter_stage = ANY(%(before_verdict)s))))
+            RETURNING id
             """,
             {"id": signal_id, "taken_by": taken_by,
-             "reason": f"найдено снова: ссылку забрала карточка {taken_by}"},
-        )
+             "reason": f"найдено снова: ссылку забрала карточка {taken_by}",
+             "verdict": list(RADAR_VERDICT_STAGES), "before_verdict": list(RADAR_STAGES_BEFORE_VERDICT)},
+        ).fetchone()
+        if retired is not None:
+            # Группа — в один шаг, как у mark_signal_merged: пустая до вердикта, ставшая дублем
+            # этой карточки, — дубль забравшей.
+            conn.execute(
+                "UPDATE signals SET merged_into_signal_id = %s, updated_at = now() WHERE merged_into_signal_id = %s",
+                (taken_by, signal_id),
+            )
         conn.commit()
 
 
@@ -1402,6 +1417,29 @@ def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
               AND {_signal_holds_evidence_sql("s")}
             """,
             (list(urls),),
+        )
+        return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
+
+
+def rejected_evidence_owners(urls: list[str]) -> dict[str, dict]:
+    """Какие ссылки — у несклеенной находки радара, забракованной судьёй или ревью пачки: {url: {id,
+    signal_key}}. Такую ссылку себе не берут ни повторный отсев, ни новый брак под другим ключом: событие
+    уже разобрано (17.10). Забрать её может только принятая — тогда забракованная станет её дублем."""
+    urls = [url for url in urls if url]
+    if not urls:
+        return {}
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT e.source_url, s.id, s.signal_key
+            FROM signal_evidence e
+            JOIN signals s ON s.id = e.signal_id
+            WHERE e.source_url = ANY(%s)
+              AND {radar_origin_sql("s")} AND s.merged_into_signal_id IS NULL
+              AND s.filter_stage = ANY(%s)
+            """,
+            (list(urls), list(RADAR_VERDICT_STAGES)),
         )
         return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
 
@@ -2081,6 +2119,12 @@ RADAR_FILTER_STAGES = {
     "review": "ревью пачки",
     "judge_error": "судья не ответил",
 }
+# Этапы отсева идут только вперёд (17.10): до вердикта — поиск и сбой судьи, вердикт — брак судьи или
+# ревью пачки. Пустая до вердикта становится дублем забраковавшей (_retire_emptied_filtered_card), а
+# ссылку забракованной не берёт себе ни повторный отсев, ни новый брак под другим ключом
+# (rejected_evidence_owners) — забрать её может только принятая.
+RADAR_STAGES_BEFORE_VERDICT = ("search", "judge_error")
+RADAR_VERDICT_STAGES = ("judge", "review")
 
 
 def _radar_hidden_reason_sql() -> str:

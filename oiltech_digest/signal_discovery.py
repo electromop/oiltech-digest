@@ -1302,12 +1302,17 @@ def _store_filtered_candidate(signal: dict[str, Any], cluster: list[dict[str, An
     """Брак судьи или ревью пачки — карточкой «Отсеяно»: заказчик просматривает всё отсеянное.
 
     Принятую ранее карточку с тем же ключом брак этого прогона не трогает: уже видимая
-    карточка не исчезает из-за того, что судья в другой раз решил иначе."""
+    карточка не исчезает из-за того, что судья в другой раз решил иначе. Ссылку другой
+    забракованной — тоже: ключ события из нескольких ссылок — по заголовку и сути, и повторная
+    находка того же события с новым ключом оставила бы прежнюю пустой (17.10)."""
     owner = repository.signal_key_owners([signal["signal_key"]]).get(signal["signal_key"])
     if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
         # Принятая — не трогаем; склеенная отсеянная — событие уже найдено снова и принято.
         return int(owner["id"])
-    held = _links_held_elsewhere([str(item.get("source_url") or "") for item in cluster], signal["signal_key"])
+    urls = [str(item.get("source_url") or "") for item in cluster]
+    held = _links_held_elsewhere(urls, signal["signal_key"])
+    held.update({url: rejected for url, rejected in repository.rejected_evidence_owners(urls).items()
+                 if url not in held and rejected["signal_key"] != signal["signal_key"]})
     own = [item for item in cluster if str(item.get("source_url") or "") not in held]
     if cluster and not own:
         # Все ссылки уже у карточек, которые их держат: это повтор события, а не новое отсеянное.
@@ -1332,7 +1337,8 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
     """Находки, не дошедшие до судьи или без его ответа, — карточками «Отсеяно».
 
     Ключ — по ссылке (или заголовку): повторно отсеянное обновляет ту же карточку, а
-    найденное снова и принятое судьёй получит свой ключ и выйдет на радар."""
+    найденное снова и принятое судьёй получит свой ключ и выйдет на радар. Ссылку, которую уже
+    забраковали судья или ревью пачки, повторный отсев не трогает: этапы идут только вперёд."""
     stored = 0
     for item in findings:
         title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
@@ -1342,12 +1348,18 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
         key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
         owner = repository.signal_key_owners([key]).get(key)
         if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
-            # Склеенная отсеянная — событие уже найдено снова и принято: повтор отсева её не оживляет.
+            # Склеенная отсеянная — событие уже найдено снова (принято или забраковано судьёй):
+            # повтор отсева её не оживляет и не уводит ссылку от забравшей.
             continue
         if url and _links_held_elsewhere([url], key):
             # Ссылка уже у карточки на радаре или разобранной человеком: это повтор события
             # (вчерашнее сегодня вышло за период поиска), а не новое отсеянное. Запись
             # затёрла бы её ссылке русский заголовок и суть (ON CONFLICT source_url).
+            continue
+        if url and any(owner["signal_key"] != key for owner in repository.rejected_evidence_owners([url]).values()):
+            # Ссылка у забракованной судьёй или ревью: событие разобрано дальше, а повторный отсев
+            # (вышло за период, судья не ответил) — не новое отсеянное. Запись забрала бы у неё ссылку и
+            # оставила в «Отсеянных» пустую копию с лучшей причиной (17.10).
             continue
         signal_id = repository.upsert_signal({
             "signal_key": key,
