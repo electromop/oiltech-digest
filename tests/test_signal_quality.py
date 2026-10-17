@@ -834,11 +834,32 @@ def test_link_rejected_then_dropped_again_stays_with_the_rejected_card(isolated_
     assert [row["source_url"] for row in repository.list_signal_evidence(rejected)] == [url]
 
 
+def test_link_rejected_again_under_another_key_stays_with_the_first_rejected_card(isolated_db):
+    # Судья → снова судья другим ключом (17.10): ключ события из нескольких ссылок — по заголовку и сути,
+    # и повторная находка забракованного события его меняет. Новый брак забирал ссылку у прежнего, и тот
+    # оставался в «Отсеянных» пустым. Теперь ссылка остаётся у прежнего, новый — только со своими.
+    u, v = "https://example.com/u", "https://example.com/v"
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-u", "Событие", evidence=[
+        {"source_url": u, "title": "u"}])]}])
+    first = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
+
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("review-u", "Событие", evidence=[
+        {"source_url": u, "title": "u"}], batch_review_reason="реклама без факта применения")]}])
+    assert _filtered() == {first: "отсеяно (судья): обзор без события"}
+
+    _apply_run([{"topic": DRILLING, "candidates": [_rejected("judge-uv", "Событие и ещё", evidence=[
+        {"source_url": u, "title": "u"}, {"source_url": v, "title": "v"}])]}])
+    second = repository.signal_key_owners(["judge-uv"])["judge-uv"]["id"]
+    assert {card: {row["source_url"] for row in repository.list_signal_evidence(card)} for card in _filtered()} == {
+        first: {u}, second: {v}}
+
+
 def test_filtered_cards_passing_a_link_around_never_form_a_merge_ring(isolated_db):
     # Ревью 05.10: поиск отсеял u (A) → судья отклонил {u} (B) → судья отклонил {u, v}, v у
     # карточки на радаре (C) → поиск снова отсеял u. Дублем отсеянная становится только для
     # несклеенной (принятой или — отсеянная до вердикта — забракованной судьёй, 17.10), а
     # склеенная не оживает, поэтому кольца A→B→C→A нет, а принятое потом событие выходит на радар.
+    # С 17.10 C не появляется вовсе: u держит забракованная B, v — карточка на радаре.
     url = "https://example.com/u"
     _store_seen("seen-v", "https://example.com/v")
     _apply_run([_search_drop("Событие", url)])
@@ -897,14 +918,15 @@ def _owner_stages():
                                  " JOIN signals s ON s.id = e.signal_id WHERE s.merged_into_signal_id IS NULL"))
 
 
-def test_any_order_of_drops_rejects_and_accepts_keeps_merge_groups_one_step(isolated_db):
+def test_any_order_of_drops_rejects_and_accepts_leaves_no_empty_copy_and_no_ring(isolated_db):
     # Доказательство «этапы идут только вперёд» (17.10): тридцать шагов поиска, сбоя судьи, брака судьи
     # и ревью и приёма в случайном порядке над скользящим окном из трёх ссылок — принятая держит свои
-    # ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: ссылка
-    # забракованной не ушла к отсеянной до вердикта, главная любого дубля не склеена (группа в один
-    # шаг — кольца нет), ни одна ссылка не у дубля (событие не пропадает из обоих списков), ссылки
-    # принятого — у видимых карточек. С этим зерном повторный отсев ссылки забракованной — уже на
-    # шаге 2, дубль отсеянной у забраковавшей — на шаге 22.
+    # ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: в «Отсеянных» нет
+    # пустой копии, ссылка забракованной не ушла к отсеянной до вердикта, главная любого дубля не
+    # склеена (группа в один шаг — кольца нет), ни одна ссылка не у дубля (событие не пропадает из
+    # обоих списков), ссылки принятого — у видимых карточек. С этим зерном повторный отсев ссылки
+    # забракованной — на шаге 2, новый брак тех же ссылок — на шаге 6, дубль отсеянной у забраковавшей
+    # — на шаге 22.
     rng = random.Random(1017)
     urls = [f"https://example.com/{n}" for n in range(12)]
     into_filtered = 0
@@ -935,6 +957,10 @@ def test_any_order_of_drops_rejects_and_accepts_keeps_merge_groups_one_step(isol
             links_at_duplicates = conn.execute(
                 "SELECT count(*) FROM signal_evidence e JOIN signals s ON s.id = e.signal_id"
                 " WHERE s.merged_into_signal_id IS NOT NULL").fetchone()[0]
+            empty_copies = [row[0] for row in conn.execute(
+                "SELECT s.id FROM signals s WHERE s.filter_stage IS NOT NULL AND s.merged_into_signal_id IS NULL"
+                " AND NOT EXISTS (SELECT 1 FROM signal_evidence e WHERE e.signal_id = s.id)")]
+        assert not empty_copies, (step, op, cluster, empty_copies)
         assert all(root_merged is None for _, root_merged, _ in groups), (step, op, cluster, groups)
         assert links_at_duplicates == 0, (step, op, cluster)
         into_filtered += sum(stage is not None for *_, stage in groups)
