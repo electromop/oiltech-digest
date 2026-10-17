@@ -411,16 +411,25 @@ def test_core_snapshot_lets_the_search_know_a_card_refound_within_the_period(iso
 # --- Только технологические сигналы: бизнес отсекается до судьи (02.10) ------------------------
 
 
-@pytest.mark.parametrize("event", [
-    _event(event_kind="other", technology="", title="ProPetro получила контракт на генерацию 230 МВт"),
-    _event(event_kind="deployment", technology="  ", title="Внедрение без названной технологии"),
-    _event(event_kind="merger", technology="ИИ", title="Неизвестный тип события"),
+NOT_TECH_REASON = "не технологическое событие (по оценке поиска)"
+
+
+@pytest.mark.parametrize("event, reason", [
+    (_event(event_kind="not_technology", technology="", title="ProPetro получила контракт на генерацию 230 МВт"),
+     NOT_TECH_REASON),
+    # Премия остаётся премией, даже если поиск назвал награждённую технологию (прогон 17.10).
+    (_event(event_kind="not_technology", technology="AiPSO — ИИ-платформа оптимизации добычи",
+            title="GEI Excellence Awards 2026: ADNOC — Best Digital Transformation"), NOT_TECH_REASON),
+    (_event(event_kind="merger", technology="ИИ", title="Неизвестный тип события"), NOT_TECH_REASON),
+    (_event(event_kind="deployment", technology="  ", title="Внедрение без названной технологии"),
+     "не названа технология"),
+    (_event(event_kind="other", technology="", title="Событие без технологии"), "не названа технология"),
 ])
-def test_business_or_unnamed_technology_events_never_reach_the_judge(event):
+def test_business_or_unnamed_technology_events_never_reach_the_judge(event, reason):
     result = _research(_Research([event]))
 
     assert result["evidence"] == []
-    assert result["dropped"][0]["reason"] == "не технологическое событие (нет технологии)"
+    assert result["dropped"][0]["reason"] == reason
 
 
 def test_technology_contract_is_kept_and_names_the_technology():
@@ -433,13 +442,39 @@ def test_technology_contract_is_kept_and_names_the_technology():
         "technology_contract", "Автоматизированное строительство скважин SLB")
 
 
+# --- Ложный отсев «нет технологии» (прогоны 06–17.10) -------------------------------------------
+# Поиск называл технологию, но тип события был вне шести: квалификация (AiP, NTQ, JIP),
+# испытательный центр, рубеж применения. Схема оставляла ему только other, а код резал other как
+# бизнес: на проде у всех 28 карточек «нет технологии» технология была названа.
+
+
+@pytest.mark.parametrize("event", [
+    _event(title="MODEC и Eld Energy получили этап ABS NTQ для SOFC-модуля на FPSO", company="MODEC",
+           technology="SOFC-энергоустановка 40 кВт на попутном газе для FPSO", event_kind="other"),
+    _event(title="Seismos открыл полноразмерный акустический тест-центр", company="Seismos",
+           technology="Акустический мониторинг и замкнутый цикл стимуляции", event_kind="other"),
+    _event(title="SLB OneSubsea завершила JIP по полностью электрическим подводным системам",
+           technology="Полностью электрическая подводная система заканчивания", event_kind="other"),
+    _event(title="SLB Retina at-bit imaging преодолела рубеж 50 скважин",
+           technology="Retina — визуализация у долота", event_kind="other"),
+])
+def test_named_technology_of_an_unlisted_kind_reaches_the_judge(event):
+    result = _research(_Research([event]))
+
+    assert result["dropped"] == []
+    assert result["evidence"][0]["raw_payload"]["technology"] == event["technology"]
+
+
 def test_research_asks_for_technology_and_event_kind_and_excludes_business():
     item = signal_research.RESEARCH_SCHEMA["schema"]["properties"]["events"]["items"]
     assert {"technology", "event_kind"} <= set(item["required"])
-    assert item["properties"]["event_kind"]["enum"][-1] == "other"
+    assert item["properties"]["event_kind"]["enum"][-1] == "not_technology"
     text = signal_research.RESEARCH_INSTRUCTIONS
     assert "Нужны ТЕХНОЛОГИЧЕСКИЕ сигналы, не бизнес-новости" in text
     assert "FID" in text and "слияния и поглощения" in text
+    # Каждый тип описан в инструкции: перечень типов и их смысл не расходятся. До 17.10
+    # квалификации и испытательному центру было некуда деться, кроме other.
+    assert all(f"- {kind} —" in text for kind in signal_research.EVENT_KINDS)
 
 
 # --- Ревью #89 (02.10): итог задачи показывает, чем искали и почему поиск не ответил -------------
