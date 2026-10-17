@@ -1342,7 +1342,8 @@ def _store_filtered_findings(topic_name: str, findings: list[dict[str, Any]]) ->
         key = "filtered:" + hashlib.sha1((_normalize_url_for_key(url) or title.lower()).encode("utf-8")).hexdigest()[:24]
         owner = repository.signal_key_owners([key]).get(key)
         if owner and (owner.get("filter_stage") is None or owner.get("merged_into_signal_id")):
-            # Склеенная отсеянная — событие уже найдено снова и принято: повтор отсева её не оживляет.
+            # Склеенная отсеянная — событие уже найдено снова (принято или забраковано судьёй):
+            # повтор отсева её не оживляет и не уводит ссылку от забравшей.
             continue
         if url and _links_held_elsewhere([url], key):
             # Ссылка уже у карточки на радаре или разобранной человеком: это повтор события

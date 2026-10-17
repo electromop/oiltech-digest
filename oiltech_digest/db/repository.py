@@ -1149,16 +1149,20 @@ def upsert_signal_evidence(signal_id: int, evidence: dict) -> int:
 
 
 def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
-    """Отсеянная карточка, у которой найденное снова и принятое забрало последнюю ссылку, —
-    дубль принявшей: иначе в «Отсеянных» висела бы пустая копия события, которое уже на
-    радаре. Дубль не удаляется (merged_into_signal_id, как у дедупа). Разобранную человеком
-    это не касается: её ссылки не переезжают (_signal_holds_evidence_sql).
+    """Отсеянная карточка, у которой найденное снова забрало последнюю ссылку, — дубль забравшей:
+    иначе в «Отсеянных» висела бы пустая копия события со старой причиной. Забравшая — принятая
+    (событие на радаре) или, если пустая отсеяна до вердикта (поиск, сбой судьи), забракованная
+    судьёй или ревью пачки: событие разобрано дальше, и причина — у неё (17.10). Дубль не
+    удаляется (merged_into_signal_id, как у дедупа). Разобранную человеком это не касается: её
+    ссылки не переезжают (_signal_holds_evidence_sql).
 
-    Только к принятой (не отсеянной) и не склеенной: принятая отсеянной не становится, а
-    склеенная в снимок дедупа не идёт — кольца дублей не бывает (ревью 05.10: отсеянная
-    хозяйка давала A→B→C→A, и событие пропадало из обоих списков)."""
+    Обе карточки в этот момент не склеены, а склеенная ни ссылку не забирает, ни повторным
+    отсевом не оживает, — кольца дублей не бывает (ревью 05.10: склеенная хозяйка давала
+    A→B→C→A, и событие пропадало из обоих списков). Забракованная судьёй дублем отсеянной не
+    становится: её ключ носят кандидаты судьи, и принятый потом повтор ушёл бы в скрытую карточку
+    (_reconcile_with_owner). У отсеянной до вердикта ключ свой (filtered:…) — его кандидаты не носят."""
     with get_connection() as conn:
-        conn.execute(
+        retired = conn.execute(
             """
             UPDATE signals
             SET merged_into_signal_id = %(taken_by)s, merge_reason = %(reason)s, updated_at = now()
@@ -1166,12 +1170,22 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
               AND filter_stage IS NOT NULL
               AND merged_into_signal_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM signal_evidence WHERE signal_id = %(id)s)
-              AND EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s
-                          AND t.filter_stage IS NULL AND t.merged_into_signal_id IS NULL)
+              AND EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s AND t.merged_into_signal_id IS NULL
+                          AND (t.filter_stage IS NULL
+                               OR (t.filter_stage IN ('judge', 'review')
+                                   AND signals.filter_stage IN ('search', 'judge_error'))))
+            RETURNING id
             """,
             {"id": signal_id, "taken_by": taken_by,
              "reason": f"найдено снова: ссылку забрала карточка {taken_by}"},
-        )
+        ).fetchone()
+        if retired is not None:
+            # Группа — в один шаг, как у mark_signal_merged: пустая до вердикта, ставшая дублем
+            # этой карточки, — дубль забравшей.
+            conn.execute(
+                "UPDATE signals SET merged_into_signal_id = %s, updated_at = now() WHERE merged_into_signal_id = %s",
+                (taken_by, signal_id),
+            )
         conn.commit()
 
 
