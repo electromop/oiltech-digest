@@ -1255,7 +1255,8 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
     неразобранные карточки сверяются между собой (см. signal_dedup._eligible).
     hidden — не видна ни в одной витрине (качество, архив): такая не забирает себе новую
     находку того же события (signal_dedup._rank). Бизнес-находка видна в витрине «бизнес» —
-    не скрытая (#95)."""
+    не скрытая (#95). last_seen_day — когда радар нашёл событие последний раз: поиск темы
+    получает карточки, найденные за его период, чтобы не приносить их снова (17.10)."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1265,6 +1266,7 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
                    s.companies_json AS companies, s.score, s.evidence_count,
                    (s.first_seen_at >= now() - make_interval(days => %s)) AS fresh,
                    to_char(s.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS first_seen_day,
+                   to_char(s.last_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS last_seen_day,
                    v.verdict,
                    {reviewed} AS reviewed,
                    NOT {visible} AS hidden,

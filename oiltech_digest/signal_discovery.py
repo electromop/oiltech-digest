@@ -13,7 +13,7 @@ import contextvars
 from contextvars import ContextVar
 import threading
 from dataclasses import asdict, dataclass, fields, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import hashlib
 import json
 import re
@@ -847,6 +847,7 @@ def _run_discovery_topics(
     topics_out: list[dict[str, Any]],
 ) -> dict[str, Any]:
     with use_discovery_snapshot(snapshot):
+        research_start, _ = signal_research.research_period(_research_days(config))
         tag_topic_names = [
             _topic_name(topic, config)
             for topic in snapshot.get("topics") or []
@@ -860,11 +861,7 @@ def _run_discovery_topics(
             evidence = list(db_evidence)
             web_search = None
             if config.web_search or config.web_only:
-                known_titles = [
-                    str(row.get("title_ru") or row.get("title") or "")
-                    for row in snapshot.get("existing_signals") or []
-                    if row.get("fresh") and str(row.get("theme") or "") == topic_name
-                ]
+                known_titles = _known_titles(snapshot, topic_name, since=research_start)
                 web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat, known_titles=known_titles)
                 evidence.extend(web_search["evidence"])
                 # Дальше блок нужен только счётчиками: сами тексты уже в кандидатах. Без
@@ -2659,6 +2656,30 @@ def _contains_cyrillic(text: str) -> bool:
     return bool(re.search(r"[а-яё]", text or "", re.IGNORECASE))
 
 
+def _research_days(config: SignalDiscoveryConfig) -> int:
+    return max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS)
+
+
+def _known_titles(snapshot: dict[str, Any], topic_name: str, *, since: date) -> list[str]:
+    """Карточки темы, которые поиск может принести снова: радар видел их за период поиска.
+
+    Раньше здесь были только fresh — первое появление за 3 дня (окно дедупа). Разовые прогоны
+    идут реже: 14.10 и 17.10 свежих на старте не было ни одной, список пуст во всех темах, и
+    15 и 20 находок оказались уже известными карточками. Порядок — по последней находке, свежие
+    первыми: при пределе на тему (signal_feedback.RESEARCH_KNOWN_TITLES) старые уходят первыми.
+    Снимок ядра без last_seen_day — по дню первой находки; без обоих дней — как раньше, fresh."""
+    start = since.isoformat()
+    known = []
+    for row in snapshot.get("existing_signals") or []:
+        if str(row.get("theme") or "") != topic_name:
+            continue
+        day = str(row.get("last_seen_day") or row.get("first_seen_day") or "")
+        if (day >= start) if day else row.get("fresh"):
+            known.append((day, str(row.get("title_ru") or row.get("title") or "")))
+    known.sort(key=lambda item: item[0], reverse=True)
+    return [title for _, title in known]
+
+
 def _topic_web_evidence(
     topic: dict[str, Any],
     topic_name: str,
@@ -2677,7 +2698,7 @@ def _topic_web_evidence(
         "; ".join(context.get("descriptions") or []),
         "Ключевые слова: " + ", ".join((context.get("keywords_ru") or [])[:12] + (context.get("keywords_en") or [])[:12]),
     ) if part.strip() and not part.endswith(": "))
-    research = signal_research.research_topic(topic_name, days=max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS),
+    research = signal_research.research_topic(topic_name, days=_research_days(config),
                                               topic_context=topic_context, heartbeat=heartbeat,
                                               feedback=research_feedback_block(topic_name, known_titles=known_titles))
     heartbeat()

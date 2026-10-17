@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -329,6 +329,83 @@ def test_research_prompt_gets_feedback_and_cards_already_on_the_radar(monkeypatc
     assert "Вебинар по бурению — нет события" in prompt
     assert "- Nabors встроила MPD в SmartROS" in prompt
     assert "Старая карточка" not in prompt and "Чужая тема" not in prompt
+
+
+def _known_cards_prompt(monkeypatch, existing_signals):
+    client = _Research([_event()])
+    monkeypatch.setattr(signal_research, "make_client", lambda offline: client)
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
+                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
+    monkeypatch.setattr(config, "SIGNAL_RESEARCH_DAYS", 30)
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+    snapshot = {"topics": [{"name": TOPIC}], "tags": [], "memory": _memory(), "existing_signals": existing_signals}
+
+    signal_discovery.run_discovery(run_config, snapshot)
+
+    return client.calls[0]["input"]
+
+
+def _days_ago(days):
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+def test_research_prompt_knows_topic_cards_seen_within_the_search_period(monkeypatch):
+    """Разовые прогоны идут реже, чем раз в 3 дня, — свежих (fresh) нет, и поиск не знал ничего.
+
+    Прод 14.10 и 17.10: на старте свежих карточек — 0 из 243 и 0 из 264, список «уже на радаре»
+    пуст во всех темах; 15 и 20 находок — уже известные карточки (17.10 — 20 из 41). Среди них
+    WesCan (впервые 03.10) и Expro Velonix (впервые 08.09, снова — 14.10): обе видел радар за
+    период поиска, а в промпт они не попадали."""
+    prompt = _known_cards_prompt(monkeypatch, [
+        {"id": 176, "title_ru": "WesCan пробурила МЛТ‑скважину с 7 латералями в Rex/Mannville", "theme": TOPIC,
+         "fresh": False, "first_seen_day": _days_ago(15), "last_seen_day": _days_ago(15)},
+        {"id": 193, "title_ru": "Expro Velonix обеспечил первые ILI‑прогоны на водородном трубопроводе", "theme": TOPIC,
+         "fresh": False, "first_seen_day": _days_ago(39), "last_seen_day": _days_ago(3)},
+        {"id": 2, "title_ru": "Событие прошлого квартала", "theme": TOPIC, "fresh": False,
+         "first_seen_day": _days_ago(80), "last_seen_day": _days_ago(45)},
+        {"id": 3, "title_ru": "Чужая тема", "theme": "HSE", "fresh": False,
+         "first_seen_day": _days_ago(5), "last_seen_day": _days_ago(5)},
+    ])
+
+    known = prompt.split("Уже есть на радаре по этой теме — не повторяй, ищи новое:\n", 1)[1]
+    # Свежие первыми: Velonix радар видел 3 дня назад, WesCan — 15.
+    assert known.startswith("- Expro Velonix обеспечил первые ILI‑прогоны на водородном трубопроводе\n"
+                            "- WesCan пробурила МЛТ‑скважину с 7 латералями в Rex/Mannville")
+    assert "Событие прошлого квартала" not in prompt and "Чужая тема" not in prompt
+
+
+def test_research_prompt_caps_known_cards_per_topic_keeping_the_latest(monkeypatch):
+    from oiltech_digest import signal_feedback
+
+    cap = signal_feedback.RESEARCH_KNOWN_TITLES
+    prompt = _known_cards_prompt(monkeypatch, [
+        {"id": index, "title_ru": f"Карточка №{index:02d}", "theme": TOPIC, "fresh": False,
+         "first_seen_day": _days_ago(index // 2), "last_seen_day": _days_ago(index // 2)}
+        for index in range(cap + 5)
+    ])
+
+    assert f"- Карточка №{cap - 1:02d}" in prompt and f"- Карточка №{cap:02d}" not in prompt
+    assert prompt.count("- Карточка №") == cap
+
+
+def test_core_snapshot_lets_the_search_know_a_card_refound_within_the_period(isolated_db, monkeypatch):
+    """Ядро отдаёт день последней находки: карточку, впервые найденную 40 дней назад и снова —
+    5 дней назад, поиск темы знает (17.10 так повторились Expro Velonix и Aganova — впервые в сентябре)."""
+    from oiltech_digest.db import repository
+
+    card = repository.upsert_signal({"signal_key": "velonix", "title": "Expro Velonix first ILI runs",
+                                     "title_ru": "Expro Velonix: первые ILI‑прогоны на водородном трубопроводе",
+                                     "theme": TOPIC, "maturity": "watch", "score": 60, "companies": ["Expro"]})
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET first_seen_at = now() - interval '40 days', "
+                     "last_seen_at = now() - interval '5 days' WHERE id = %s", (card,))
+        conn.commit()
+    rows = repository.list_signals_for_dedup()
+    assert rows[0]["fresh"] is False and rows[0]["first_seen_day"] < rows[0]["last_seen_day"]
+
+    prompt = _known_cards_prompt(monkeypatch, rows)
+
+    assert "- Expro Velonix: первые ILI‑прогоны на водородном трубопроводе" in prompt
 
 
 # --- Только технологические сигналы: бизнес отсекается до судьи (02.10) ------------------------
