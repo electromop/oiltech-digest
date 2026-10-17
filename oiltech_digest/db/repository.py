@@ -1172,12 +1172,13 @@ def _retire_emptied_filtered_card(signal_id: int, *, taken_by: int) -> None:
               AND NOT EXISTS (SELECT 1 FROM signal_evidence WHERE signal_id = %(id)s)
               AND EXISTS (SELECT 1 FROM signals t WHERE t.id = %(taken_by)s AND t.merged_into_signal_id IS NULL
                           AND (t.filter_stage IS NULL
-                               OR (t.filter_stage IN ('judge', 'review')
-                                   AND signals.filter_stage IN ('search', 'judge_error'))))
+                               OR (t.filter_stage = ANY(%(verdict)s)
+                                   AND signals.filter_stage = ANY(%(before_verdict)s))))
             RETURNING id
             """,
             {"id": signal_id, "taken_by": taken_by,
-             "reason": f"найдено снова: ссылку забрала карточка {taken_by}"},
+             "reason": f"найдено снова: ссылку забрала карточка {taken_by}",
+             "verdict": list(RADAR_VERDICT_STAGES), "before_verdict": list(RADAR_STAGES_BEFORE_VERDICT)},
         ).fetchone()
         if retired is not None:
             # Группа — в один шаг, как у mark_signal_merged: пустая до вердикта, ставшая дублем
@@ -1416,6 +1417,28 @@ def visible_evidence_owners(urls: list[str]) -> dict[str, dict]:
               AND {_signal_holds_evidence_sql("s")}
             """,
             (list(urls),),
+        )
+        return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
+
+
+def rejected_evidence_owners(urls: list[str]) -> dict[str, dict]:
+    """Какие ссылки — у несклеенной находки радара, забракованной судьёй или ревью пачки: {url: {id,
+    signal_key}}. Такую ссылку повторный отсев себе не берёт: событие уже разобрано дальше (17.10)."""
+    urls = [url for url in urls if url]
+    if not urls:
+        return {}
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT e.source_url, s.id, s.signal_key
+            FROM signal_evidence e
+            JOIN signals s ON s.id = e.signal_id
+            WHERE e.source_url = ANY(%s)
+              AND {radar_origin_sql("s")} AND s.merged_into_signal_id IS NULL
+              AND s.filter_stage = ANY(%s)
+            """,
+            (list(urls), list(RADAR_VERDICT_STAGES)),
         )
         return {row["source_url"]: {"id": int(row["id"]), "signal_key": row["signal_key"]} for row in cur.fetchall()}
 
@@ -2095,6 +2118,11 @@ RADAR_FILTER_STAGES = {
     "review": "ревью пачки",
     "judge_error": "судья не ответил",
 }
+# Этапы отсева идут только вперёд (17.10): до вердикта — поиск и сбой судьи, вердикт — брак судьи или
+# ревью пачки. Пустая до вердикта становится дублем забраковавшей (_retire_emptied_filtered_card), а
+# повторный отсев ссылку забракованной себе не берёт (rejected_evidence_owners).
+RADAR_STAGES_BEFORE_VERDICT = ("search", "judge_error")
+RADAR_VERDICT_STAGES = ("judge", "review")
 
 
 def _radar_hidden_reason_sql() -> str:

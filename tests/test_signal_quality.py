@@ -810,6 +810,30 @@ def test_link_dropped_before_the_verdict_then_rejected_leaves_one_filtered_card(
     assert _column(early, "merged_into_signal_id") == rejected
 
 
+@pytest.mark.parametrize("stage, drop_reason", [
+    ("search", "дата события вне периода"),
+    ("judge_error", "ReadTimeout"),
+])
+@pytest.mark.parametrize("rejected_by, reason", [
+    ({}, "отсеяно (судья): обзор без события"),
+    ({"batch_review_reason": "реклама без факта применения"}, "отсеяно (ревью пачки): реклама без факта применения"),
+])
+def test_link_rejected_then_dropped_again_stays_with_the_rejected_card(isolated_db, stage, drop_reason,
+                                                                       rejected_by, reason):
+    # Обратный порядок (17.10): судья или ревью пачки забраковали u, потом поиск отсеял ту же u
+    # (повторная находка вышла за период) или судья не ответил. Повтор забирал ссылку себе, и пустой
+    # в «Отсеянных» оставалась забракованная — с лучшей причиной. Этапы идут только вперёд.
+    url = "https://example.com/u"
+    _apply_run([{"topic": DRILLING, "candidates": [
+        _rejected("judge-u", "Событие", evidence=[{"source_url": url, "title": "u"}], **rejected_by)]}])
+    rejected = repository.signal_key_owners(["judge-u"])["judge-u"]["id"]
+
+    _apply_run([_search_drop("Событие", url, reason=drop_reason, stage=stage)])
+
+    assert _filtered() == {rejected: reason}
+    assert [row["source_url"] for row in repository.list_signal_evidence(rejected)] == [url]
+
+
 def test_filtered_cards_passing_a_link_around_never_form_a_merge_ring(isolated_db):
     # Ревью 05.10: поиск отсеял u (A) → судья отклонил {u} (B) → судья отклонил {u, v}, v у
     # карточки на радаре (C) → поиск снова отсеял u. Дублем отсеянная становится только для
@@ -866,20 +890,31 @@ def test_rejected_event_keeps_the_dropped_link_until_accepted_and_the_group_stay
     assert (_column(early, "merged_into_signal_id"), _column(rejected, "merged_into_signal_id")) == (accepted, accepted)
 
 
+def _owner_stages():
+    """Чья ссылка: стадия отсева несклеенной хозяйки, «accepted» — у принятой."""
+    with repository.get_connection() as conn:
+        return dict(conn.execute("SELECT e.source_url, COALESCE(s.filter_stage, 'accepted') FROM signal_evidence e"
+                                 " JOIN signals s ON s.id = e.signal_id WHERE s.merged_into_signal_id IS NULL"))
+
+
 def test_any_order_of_drops_rejects_and_accepts_keeps_merge_groups_one_step(isolated_db):
-    # Доказательство для дубля отсеянной у забраковавшей (17.10): тридцать шагов поиска, сбоя судьи,
-    # брака судьи и ревью и приёма над тремя ссылками в случайном порядке (с этим зерном новый путь и
-    # выпрямление группы — уже в первых восьми шагах). После каждого шага главная любого дубля не
-    # склеена (группа в один шаг — кольца нет), ни одна ссылка не у дубля (событие не пропадает из
-    # обоих списков), ссылки принятого — у видимых карточек.
+    # Доказательство «этапы идут только вперёд» (17.10): тридцать шагов поиска, сбоя судьи, брака судьи
+    # и ревью и приёма в случайном порядке над скользящим окном из трёх ссылок — принятая держит свои
+    # ссылки, и без окна прогулка застывала бы на первом приёме. После каждого шага: ссылка
+    # забракованной не ушла к отсеянной до вердикта, главная любого дубля не склеена (группа в один
+    # шаг — кольца нет), ни одна ссылка не у дубля (событие не пропадает из обоих списков), ссылки
+    # принятого — у видимых карточек. С этим зерном повторный отсев ссылки забракованной — уже на
+    # шаге 2, дубль отсеянной у забраковавшей — на шаге 22.
     rng = random.Random(1017)
-    urls = [f"https://example.com/{name}" for name in "uvw"]
-    clusters = [[url] for url in urls] + [urls[:2], urls[1:], urls]
+    urls = [f"https://example.com/{n}" for n in range(12)]
     into_filtered = 0
     for step in range(30):
-        op, cluster = rng.choice(["search", "judge_error", "judge", "review", "accept"]), rng.choice(clusters)
-        key = "c-" + "".join(url[-1] for url in cluster)
+        window = urls[step // 3:step // 3 + 3]
+        op = rng.choice(["search", "judge_error", "judge", "review", "accept"])
+        cluster = rng.choice([window[:1], window[1:2], window[2:], window[:2], window[1:], window])
+        key = "c-" + "-".join(url.rsplit("/", 1)[1] for url in cluster)
         evidence = [{"source_url": url, "title": url} for url in cluster]
+        before = _owner_stages()
         if op in ("search", "judge_error"):
             _apply_run([_search_drop("Событие", cluster[0], reason=op, stage=op)])
         elif op == "accept":
@@ -891,6 +926,9 @@ def test_any_order_of_drops_rejects_and_accepts_keeps_merge_groups_one_step(isol
         else:
             extra = {"batch_review_reason": "реклама"} if op == "review" else {}
             _apply_run([{"topic": DRILLING, "candidates": [_rejected(key, "Событие", evidence=evidence, **extra)]}])
+        backwards = [url for url, stage in _owner_stages().items()
+                     if before.get(url) in ("judge", "review") and stage in ("search", "judge_error")]
+        assert not backwards, (step, op, cluster, backwards)
         with repository.get_connection() as conn:
             groups = conn.execute("SELECT d.id, t.merged_into_signal_id, t.filter_stage FROM signals d"
                                   " JOIN signals t ON t.id = d.merged_into_signal_id").fetchall()
