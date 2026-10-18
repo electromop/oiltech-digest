@@ -74,6 +74,20 @@ PAIR_MIN_OVERLAP = 0.25
 # передать свой потолок в снимке (dedup_max_pairs) — без пересборки воркера.
 MAX_JUDGED_PAIRS = 400
 
+class DedupSetupError(RuntimeError):
+    """Модель дедупа не задана: прогон радара падает с понятной причиной до поиска."""
+
+
+def dedup_model() -> str:
+    """Модель судьи пар — явная настройка SIGNAL_DEDUP_MODEL, без отката на модель ленты (спека #128, история 48).
+
+    До 03.11 дедуп молча шёл на OPENAI_MODEL (gpt-5-mini, её снимают 11.12.2026), а сбой пары считается «разными
+    событиями»: прогон выглядел бы зелёным, а на радаре копились бы дубли (риск из плана переезда 18.10)."""
+    if not app_config.SIGNAL_DEDUP_MODEL:
+        raise DedupSetupError("SIGNAL_DEDUP_MODEL не задан: модель ленты дедуп радара не берёт")
+    return app_config.SIGNAL_DEDUP_MODEL
+
+
 # Положительные вердикты Виктора — те же, что питают подсказки поиска (signal_feedback), и
 # «Оценка завышена» (03.10): сигнал годный, завышен только балл — подсказкой поиска не служит.
 _POSITIVE_VERDICTS = {"strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation", "overrated"}
@@ -306,6 +320,8 @@ def dedupe(
     edges: list[tuple[int, int, str]] = []
     stats = {"pairs": len(pairs), "judged": 0, "same": 0, "errors": 0,
              "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    # Сбой вызова ниже — «разные события» у пары, поэтому отсутствие модели проверяется до вызовов.
+    model = dedup_model() if judged else None
     client = client_factory() if judged else None
 
     def ask(i: int, j: int) -> Any:
@@ -314,7 +330,7 @@ def dedupe(
             pair_prompt(nodes[i], nodes[j]),
             SIGNAL_DUPLICATE_SCHEMA,
             max_output_tokens=output_budget(700, app_config.SIGNAL_DEDUP_REASONING),
-            model=app_config.SIGNAL_DEDUP_MODEL,
+            model=model,
             reasoning_effort=app_config.SIGNAL_DEDUP_REASONING,
         )
 

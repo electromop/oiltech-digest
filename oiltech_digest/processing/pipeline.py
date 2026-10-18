@@ -480,7 +480,9 @@ def tag_article(article: dict, tags: list[dict], client) -> AIResponse:
         TAGGING_INSTRUCTIONS,
         _article_prompt(article) + "\n\navailable_tags:\n" + "\n".join(tag_lines),
         TAG_SCHEMA,
-        max_output_tokens=1000,
+        max_output_tokens=output_budget(1000, config.OPENAI_TAG_REASONING),
+        model=config.OPENAI_TAG_MODEL,
+        reasoning_effort=config.OPENAI_TAG_REASONING,
     )
 
 

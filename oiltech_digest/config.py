@@ -179,6 +179,16 @@ OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").st
 # OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки.
 OPENAI_SUMMARY_MODEL = os.environ.get("OPENAI_SUMMARY_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SUMMARY_REASONING = os.environ.get("OPENAI_SUMMARY_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+# Теги — своя модель (переезд с gpt-5 до 11.12.2026): стадия старой цепочки ленты, до её снятия. Пусто — откат на
+# OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки. На OPENAI_MODEL остаётся ИИ-оценка агента источников.
+OPENAI_TAG_MODEL = os.environ.get("OPENAI_TAG_MODEL", "").strip() or OPENAI_MODEL
+OPENAI_TAG_REASONING = os.environ.get("OPENAI_TAG_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+
+# «Дедуп» ленты: судья перепечаток (processing/reprints.py). Модель — явная настройка без отката на модель ленты
+# (спека #128, история 48): пусто — задача перепечаток падает с понятной причиной до первого вызова, а не судит
+# снимаемой 11.12.2026 gpt-5-mini. Читает воркер, который зовёт OpenAI (.env.external-worker на NL).
+OPENAI_REPRINT_MODEL = os.environ.get("OPENAI_REPRINT_MODEL", "").strip()
+OPENAI_REPRINT_REASONING = os.environ.get("OPENAI_REPRINT_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 
 # Скоринг (бизнес-эффект и пр. критерии) — балл напрямую определяет отбор в дайджест.
 # Раньше скоринг ТИХО ехал на основной OPENAI_MODEL с минимальным reasoning: при смене
@@ -309,11 +319,15 @@ SIGNAL_JUDGE_MODEL = os.environ.get("SIGNAL_JUDGE_MODEL", "").strip() or OPENAI_
 SIGNAL_JUDGE_REASONING = os.environ.get("SIGNAL_JUDGE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 SIGNAL_REVIEW_MODEL = os.environ.get("SIGNAL_REVIEW_MODEL", "").strip() or SIGNAL_JUDGE_MODEL
 SIGNAL_REVIEW_REASONING = os.environ.get("SIGNAL_REVIEW_REASONING", "").strip() or SIGNAL_JUDGE_REASONING
-SIGNAL_DEDUP_MODEL = os.environ.get("SIGNAL_DEDUP_MODEL", "").strip() or OPENAI_MODEL
+# «Дедуп» радара (signal_dedup.py) — модель явной настройкой без отката на модель ленты (спека #128, история 48):
+# пусто — прогон радара падает с понятной причиной до поиска, а не судит пары снимаемой 11.12.2026 gpt-5-mini.
+SIGNAL_DEDUP_MODEL = os.environ.get("SIGNAL_DEDUP_MODEL", "").strip()
 SIGNAL_DEDUP_REASONING = os.environ.get("SIGNAL_DEDUP_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 # Второе мнение о тематике карточки — только при расхождении судьи с ключами тематик; вызов
-# короткий, хватает модели дедупа.
-SIGNAL_THEME_CHECK_MODEL = os.environ.get("SIGNAL_THEME_CHECK_MODEL", "").strip() or SIGNAL_DEDUP_MODEL
+# короткий, хватает модели дедупа. Стадия прежней цепочки (при «Отборе» не зовётся): без своей строки и без
+# модели дедупа — модель ленты, как до правки.
+SIGNAL_THEME_CHECK_MODEL = (os.environ.get("SIGNAL_THEME_CHECK_MODEL", "").strip() or SIGNAL_DEDUP_MODEL
+                            or OPENAI_MODEL)
 SIGNAL_THEME_CHECK_REASONING = os.environ.get("SIGNAL_THEME_CHECK_REASONING", "").strip() or SIGNAL_DEDUP_REASONING
 # Таймаут вызовов модели радара: сильная модель с рассуждением думает дольше 60 с ленты.
 SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))

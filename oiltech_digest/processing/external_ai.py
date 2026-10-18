@@ -1154,9 +1154,11 @@ def _compact_article_for_reprint(article: dict[str, Any]) -> dict[str, Any]:
 
 def process_reprint_review_payload(payload: dict[str, Any],
                                    heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
-    """Сторона воркера: рассудить пары. В базу не ходит."""
-    from oiltech_digest.processing.reprints import judge_pair
+    """Сторона воркера: рассудить пары. В базу не ходит. Токены каждой пары едут в вердикте: расход ядро пишет в
+    ai_processing_runs (до 03.11 судья в учёт не попадал)."""
+    from oiltech_digest.processing.reprints import judge_model, judge_pair
 
+    judge_model()  # без модели — сбой задачи с причиной, а не «разные события» у каждой пары
     client = make_client()
     result: dict[str, Any] = {
         "reprint_review": True,
@@ -1181,6 +1183,8 @@ def process_reprint_review_payload(payload: dict[str, Any],
                 "primary_id": response.data.get("primary_id"),
                 "reason": str(response.data.get("reason") or "")[:500],
                 "model": response.model,
+                "input_tokens": response.input_tokens,
+                "output_tokens": response.output_tokens,
                 "a_len": len(left.get("raw_text") or ""),
                 "b_len": len(right.get("raw_text") or ""),
             })
@@ -1200,6 +1204,8 @@ def apply_reprint_review_result(result: dict[str, Any], *, job_id: int | None = 
     from oiltech_digest.db import repository
     from oiltech_digest.processing.reprints import resolve_primary as reprints_resolve_primary
 
+    # Расход — и у сухого прогона: вызовы оплачены и в нём.
+    repository.record_reprint_usage(job_id, result.get("verdicts") or [])
     if result.get("dry_run"):
         # Сухой прогон ничего не пишет — это умолчание CLI и главный сценарий
         # показа заказчику перед тем, как что-то схлопывать.
