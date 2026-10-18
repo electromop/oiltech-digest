@@ -30,7 +30,7 @@ _OUTPUT_TOKENS = 1200
 FROM_TEXT = "из текста"
 BY_PUBLICATION = "по дате публикации"
 # Связь с нефтесервисом: значение справочника → прежний код радара (direct / transferable / none).
-_RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
+RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты и связи.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance")
 # Поле карточки с выбором из справочника: колонка signals (она же параметр фильтра экрана, #97) → справочник,
@@ -38,6 +38,10 @@ _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance"
 CHOICE_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                   "technology_maturity": "maturity"}
 _EARLIEST_EVENT = date(2000, 1, 1)
+# Оценка цены до вызова — для сухих прогонов экзамена и истории (#98): ответ карточки с рассуждением low
+# — около 600 токенов, русский текст — около трёх знаков на токен (с запасом).
+ESTIMATED_OUTPUT_TOKENS = 600
+CHARS_PER_TOKEN = 3
 # Типы источника-СМИ (по справочнику источников прода 18.10): издатель такого типа о событии только
 # сообщает, и код вычёркивает его из участников. Остальные решает модель по инструкции: пустой тип — у
 # находки поиска без статьи корпуса (часто это пресс-релиз самой компании), RSS — канал, а не вид
@@ -222,6 +226,11 @@ def _answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
     }}
 
 
+def request_chars(item: dict[str, Any], dictionaries: dict[str, Any]) -> int:
+    """Длина запроса модели в знаках — инструкция со справочниками и вход сигнала: для оценки цены до вызова."""
+    return len(_instructions(dictionaries)) + len(_model_input(item))
+
+
 def _model_input(item: dict[str, Any]) -> str:
     return "\n".join([
         f"Заголовок: {item.get('title') or ''}",
@@ -282,11 +291,9 @@ def _card_problem(card: dict[str, Any], signal_id: int | None, expected: set[str
     """Почему строку итога воркера нельзя записать; None — можно."""
     if not _in_job(signal_id, expected):
         return "сигнала нет в этой задаче"
-    if card.get("error"):
-        return f"модель: {str(card['error'])[:300]}"
-    problem = _shape_problem(card.get("answer"), schema)
+    problem = _answer_problem(card, schema)
     if problem:
-        return f"ответ не по схеме: {problem}"
+        return problem
     publication = publications.get(signal_id)
     if publication is None:
         return "нет сигнала или его главной публикации"
@@ -294,6 +301,24 @@ def _card_problem(card: dict[str, Any], signal_id: int | None, expected: set[str
         # Цитаты сверяются с текстом, который видела модель, — иначе компании отсеялись бы зря.
         return "главная публикация сменилась после выдачи задачи"
     return None
+
+
+def card_values(card: dict[str, Any], publication: dict[str, Any],
+                dictionaries: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """Строка итога воркера → значения карточки, как их запишет ядро, или почему карточки не будет
+    (ошибка модели, ответ не по схеме). Так же ответ модели проверяет экзамен (#98): мерится то, что
+    дойдёт до карточки, а не сырой ответ."""
+    problem = _answer_problem(card, _answer_schema(dictionaries))
+    if problem:
+        return None, problem
+    return check_answer(card["answer"], publication, dictionaries), None
+
+
+def _answer_problem(card: dict[str, Any], schema: dict[str, Any]) -> str | None:
+    if card.get("error"):
+        return f"модель: {str(card['error'])[:300]}"
+    problem = _shape_problem(card.get("answer"), schema)
+    return f"ответ не по схеме: {problem}" if problem else None
 
 
 def _shape_problem(answer: Any, schema: dict[str, Any]) -> str | None:
@@ -348,7 +373,7 @@ def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionari
     цитаты из текста публикации и издание-издатель отбрасываются, алиасы сводятся к одному имени."""
     source = _listed(dictionaries, "date_source", answer["event_date_source"])
     event_date, source = _event_date(answer["event_date"], source, publication["published"])
-    relevance = _RELEVANCE_CODES.get(_listed(dictionaries, "oilfield_relevance", answer["oilfield_relevance"]))
+    relevance = RELEVANCE_CODES.get(_listed(dictionaries, "oilfield_relevance", answer["oilfield_relevance"]))
     return {
         "event_date": event_date,
         "event_date_source": source,

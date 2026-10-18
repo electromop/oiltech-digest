@@ -174,6 +174,29 @@ def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
         conn.commit()
 
 
+def judge_values(signal_ids: Sequence[int]) -> dict[int, dict[str, Any]]:
+    """Дата события и связь с нефтесервисом сигналов радара — для сравнения судьи с экспертом (#98): кто
+    поставил значение — в card_set_by; дубль отдаёт свои значения и номер главной карточки."""
+    ids = sorted({int(value) for value in signal_ids})
+    if not ids:
+        return {}
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT id, event_date, oilfield_relevance, card_set_by, merged_into_signal_id FROM signals "
+            "WHERE id = ANY(%s)",
+            (ids,),
+        )
+        rows = cur.fetchall()
+    return {int(row["id"]): {
+        "event_date": row["event_date"].isoformat() if row["event_date"] else None,
+        "oilfield_relevance": row["oilfield_relevance"],
+        "set_by": {key: value for key, value in (row["card_set_by"] or {}).items()
+                   if key in ("event_date", "oilfield_relevance")},
+        "merged_into_signal_id": row["merged_into_signal_id"],
+    } for row in rows}
+
+
 def _writable(set_by: str | None, current: Any) -> bool:
     if set_by == CARD_SET_BY_HUMAN:
         return False
