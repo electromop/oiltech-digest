@@ -3,6 +3,8 @@
 «Бурение» у карточки про ИИ и дроны: тема была темой поиска, которым нашли статью.
 """
 
+import json
+
 from oiltech_digest import signal_discovery
 
 DRILLING = "Бурение и заканчивание скважин"
@@ -231,3 +233,70 @@ def test_judge_instruction_assigns_theme_by_operation():
     text = signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
     assert "по ОПЕРАЦИИ нефтесервиса" in text
     assert "автоматизированное MPD и автономное направленное бурение — бурение" in text
+
+
+# --- Ревью пачки не бракует за тему карточки, отличную от темы поиска (18.10) -----------------------
+#
+# Прогон 18.10: поиск темы геологоразведки нашёл Seismos, судья отнёс его к ГРП, а ревью пачки
+# отбраковало «не по теме пачки»: во входе была тема поиска («topic»), у кандидата — тема карточки от
+# судьи, а инструкция говорила о «пачке по одной теме». Событие, которое нашла только «чужая» тема
+# поиска, так терялось. Теперь темы поиска во входе ревью нет.
+
+
+class _ReviewRecorder:
+    """Пишет каждый вызов модели. Проверки — после прогона: assert внутри клиента проглотил бы
+    except Exception у второго мнения о теме карточки."""
+
+    def __init__(self):
+        self.calls = []
+
+    def complete_json(self, instructions, user_input, schema, **kwargs):
+        self.calls.append({"schema": schema["name"], "instructions": instructions, "input": user_input})
+        return AIResponse(data={"decisions": []}, model="fake-review")
+
+
+def test_batch_review_gets_judge_themes_no_search_topic_and_rule_against_theme_drops(monkeypatch):
+    pages = [
+        {"source_url": "https://example.com/drones", "title": "AI drone fleet expands",
+         "extracted_fact": "Operator expands drone fleet with machine learning analytics."},
+        {"source_url": "https://example.com/rig", "title": "Robotic drilling rig deployed",
+         "extracted_fact": "Robotic drilling rig drilled the first well."},
+    ]
+    monkeypatch.setattr(
+        signal_discovery,
+        "_search_web_evidence",
+        lambda topic, config, **kwargs: {"status": "ok", "queries": ["q"], "results": 2, "evidence": pages},
+    )
+
+    def judge(cluster, topic, offline=True):
+        # Судья выбирает тему карточки из списка по содержанию: дроны с ИИ — не бурение.
+        drones = "drone" in cluster[0]["source_url"]
+        theme = DIGITAL if drones else DRILLING
+        signal = {
+            "title": cluster[0]["title"], "theme": theme, "maturity": "watch", "score": 60,
+            "title_ru": "Флот дронов с ИИ" if drones else "Роботизированная буровая",
+            "summary": "Дрон и искусственный интеллект для осмотра." if drones else "Роботизированная буровая пробурила скважину.",
+        }
+        return signal, {"theme": theme}
+
+    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
+    monkeypatch.setattr(signal_discovery, "_dedupe_run", lambda *args: {"skipped": "test"})
+    reviewer = _ReviewRecorder()
+    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: reviewer)
+    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True, search_mode="brave")
+    snapshot = {"topics": [{"name": DRILLING, "tag_id": 1}], "tags": TAGS, "radar_themes": TOPICS, "memory": {}}
+
+    signal_discovery.run_discovery(config, snapshot)
+
+    # Один вызов модели — ревью пачки: второе мнение о теме карточки не понадобилось.
+    assert [call["schema"] for call in reviewer.calls] == ["signal_batch_review"]
+    review = json.loads(reviewer.calls[0]["input"])
+    # Темы поиска во входе нет; у кандидатов — тема карточки, которую выбрал судья.
+    assert set(review) == {"candidates", "customer_feedback"}
+    assert {item["title"]: item["theme"] for item in review["candidates"]} == {
+        "Флот дронов с ИИ": DIGITAL, "Роботизированная буровая": DRILLING,
+    }
+    # Инструкция прямо говорит: другая тема карточки — не причина убирать и не повод снижать балл.
+    rule = " ".join(reviewer.calls[0]["instructions"].split())
+    assert ("Тема карточки — не причина убирать кандидата («не по теме пачки») и не повод снижать "
+            "interest_score") in rule
