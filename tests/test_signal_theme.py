@@ -3,6 +3,8 @@
 «Бурение» у карточки про ИИ и дроны: тема была темой поиска, которым нашли статью.
 """
 
+import json
+
 from oiltech_digest import signal_discovery
 
 DRILLING = "Бурение и заканчивание скважин"
@@ -231,3 +233,70 @@ def test_judge_instruction_assigns_theme_by_operation():
     text = signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
     assert "по ОПЕРАЦИИ нефтесервиса" in text
     assert "автоматизированное MPD и автономное направленное бурение — бурение" in text
+
+
+# --- Ревью пачки не бракует за тематику, отличную от темы поиска (18.10) ----------------------------
+#
+# Прогон 18.10: поиск темы геологоразведки нашёл Seismos, судья отнёс его к ГРП, а ревью пачки
+# отбраковало «не по теме пачки»: во входе была тема поиска под ключом «topic», у кандидата — тема
+# судьи, а инструкция говорила о «пачке по одной теме». Событие, которое нашла только «чужая»
+# тема, так терялось.
+
+
+class _ReviewRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def complete_json(self, instructions, user_input, schema, **kwargs):
+        assert schema["name"] == "signal_batch_review", schema["name"]
+        self.calls.append({"instructions": instructions, "input": json.loads(user_input)})
+        return AIResponse(data={"decisions": []}, model="fake-review")
+
+
+def test_batch_review_sees_the_judges_theme_and_may_not_drop_for_another_theme(monkeypatch):
+    pages = [
+        {"source_url": "https://example.com/drones", "title": "AI drone fleet expands",
+         "extracted_fact": "Operator expands drone fleet with machine learning analytics."},
+        {"source_url": "https://example.com/rig", "title": "Robotic drilling rig deployed",
+         "extracted_fact": "Robotic drilling rig drilled the first well."},
+    ]
+    monkeypatch.setattr(
+        signal_discovery,
+        "_search_web_evidence",
+        lambda topic, config, **kwargs: {"status": "ok", "queries": ["q"], "results": 2, "evidence": pages},
+    )
+
+    def judge(cluster, topic, offline=True):
+        # Судья выбирает тематику из списка по содержанию: дроны с ИИ — не бурение.
+        drones = "drone" in cluster[0]["source_url"]
+        theme = DIGITAL if drones else DRILLING
+        signal = {
+            "title": cluster[0]["title"], "theme": theme, "maturity": "watch", "score": 60,
+            "title_ru": "Флот дронов с ИИ" if drones else "Роботизированная буровая",
+            "summary": "Дрон и искусственный интеллект для осмотра." if drones else "Роботизированная буровая пробурила скважину.",
+        }
+        return signal, {"theme": theme}
+
+    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
+    monkeypatch.setattr(signal_discovery, "_dedupe_run", lambda *args: {"skipped": "test"})
+    reviewer = _ReviewRecorder()
+    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: reviewer)
+    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True, search_mode="brave")
+    snapshot = {"topics": [{"name": DRILLING, "tag_id": 1}], "tags": TAGS, "radar_themes": TOPICS, "memory": {}}
+
+    run = signal_discovery.run_discovery(config, snapshot)
+
+    choices = [item["raw_output"]["theme_choice"] for item in run["topics"][0]["candidates"]]
+    assert sorted((choice["theme"], choice["reason"]) for choice in choices) == [(DRILLING, "judge"), (DIGITAL, "judge")]
+    [call] = reviewer.calls
+    # Тема пачки подписана как тема поиска; у кандидата — тематика, которую выбрал судья.
+    assert call["input"]["search_topic"] == DRILLING
+    assert "topic" not in call["input"]
+    assert {item["title"]: item["theme"] for item in call["input"]["candidates"]} == {
+        "Флот дронов с ИИ": DIGITAL, "Роботизированная буровая": DRILLING,
+    }
+    # Инструкция прямо говорит: другая тематика — не причина убирать и не повод снижать балл.
+    rule = " ".join(call["instructions"].split())
+    assert "может не совпадать с search_topic" in rule
+    assert "Тематика — не причина убирать кандидата и не повод снижать interest_score" in rule
+    assert "«не по теме пачки»" in rule
