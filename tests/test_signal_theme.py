@@ -235,25 +235,27 @@ def test_judge_instruction_assigns_theme_by_operation():
     assert "автоматизированное MPD и автономное направленное бурение — бурение" in text
 
 
-# --- Ревью пачки не бракует за тематику, отличную от темы поиска (18.10) ----------------------------
+# --- Ревью пачки не бракует за тему карточки, отличную от темы поиска (18.10) -----------------------
 #
 # Прогон 18.10: поиск темы геологоразведки нашёл Seismos, судья отнёс его к ГРП, а ревью пачки
-# отбраковало «не по теме пачки»: во входе была тема поиска под ключом «topic», у кандидата — тема
-# судьи, а инструкция говорила о «пачке по одной теме». Событие, которое нашла только «чужая»
-# тема, так терялось.
+# отбраковало «не по теме пачки»: во входе была тема поиска («topic»), у кандидата — тема карточки от
+# судьи, а инструкция говорила о «пачке по одной теме». Событие, которое нашла только «чужая» тема
+# поиска, так терялось. Теперь темы поиска во входе ревью нет.
 
 
 class _ReviewRecorder:
+    """Пишет каждый вызов модели. Проверки — после прогона: assert внутри клиента проглотил бы
+    except Exception у второго мнения о теме карточки."""
+
     def __init__(self):
         self.calls = []
 
     def complete_json(self, instructions, user_input, schema, **kwargs):
-        assert schema["name"] == "signal_batch_review", schema["name"]
-        self.calls.append({"instructions": instructions, "input": json.loads(user_input)})
+        self.calls.append({"schema": schema["name"], "instructions": instructions, "input": user_input})
         return AIResponse(data={"decisions": []}, model="fake-review")
 
 
-def test_batch_review_sees_the_judges_theme_and_may_not_drop_for_another_theme(monkeypatch):
+def test_batch_review_gets_judge_themes_no_search_topic_and_rule_against_theme_drops(monkeypatch):
     pages = [
         {"source_url": "https://example.com/drones", "title": "AI drone fleet expands",
          "extracted_fact": "Operator expands drone fleet with machine learning analytics."},
@@ -267,7 +269,7 @@ def test_batch_review_sees_the_judges_theme_and_may_not_drop_for_another_theme(m
     )
 
     def judge(cluster, topic, offline=True):
-        # Судья выбирает тематику из списка по содержанию: дроны с ИИ — не бурение.
+        # Судья выбирает тему карточки из списка по содержанию: дроны с ИИ — не бурение.
         drones = "drone" in cluster[0]["source_url"]
         theme = DIGITAL if drones else DRILLING
         signal = {
@@ -284,19 +286,17 @@ def test_batch_review_sees_the_judges_theme_and_may_not_drop_for_another_theme(m
     config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True, search_mode="brave")
     snapshot = {"topics": [{"name": DRILLING, "tag_id": 1}], "tags": TAGS, "radar_themes": TOPICS, "memory": {}}
 
-    run = signal_discovery.run_discovery(config, snapshot)
+    signal_discovery.run_discovery(config, snapshot)
 
-    choices = [item["raw_output"]["theme_choice"] for item in run["topics"][0]["candidates"]]
-    assert sorted((choice["theme"], choice["reason"]) for choice in choices) == [(DRILLING, "judge"), (DIGITAL, "judge")]
-    [call] = reviewer.calls
-    # Тема пачки подписана как тема поиска; у кандидата — тематика, которую выбрал судья.
-    assert call["input"]["search_topic"] == DRILLING
-    assert "topic" not in call["input"]
-    assert {item["title"]: item["theme"] for item in call["input"]["candidates"]} == {
+    # Один вызов модели — ревью пачки: второе мнение о теме карточки не понадобилось.
+    assert [call["schema"] for call in reviewer.calls] == ["signal_batch_review"]
+    review = json.loads(reviewer.calls[0]["input"])
+    # Темы поиска во входе нет; у кандидатов — тема карточки, которую выбрал судья.
+    assert set(review) == {"candidates", "customer_feedback"}
+    assert {item["title"]: item["theme"] for item in review["candidates"]} == {
         "Флот дронов с ИИ": DIGITAL, "Роботизированная буровая": DRILLING,
     }
-    # Инструкция прямо говорит: другая тематика — не причина убирать и не повод снижать балл.
-    rule = " ".join(call["instructions"].split())
-    assert "может не совпадать с search_topic" in rule
-    assert "Тематика — не причина убирать кандидата и не повод снижать interest_score" in rule
-    assert "«не по теме пачки»" in rule
+    # Инструкция прямо говорит: другая тема карточки — не причина убирать и не повод снижать балл.
+    rule = " ".join(reviewer.calls[0]["instructions"].split())
+    assert ("Тема карточки — не причина убирать кандидата («не по теме пачки») и не повод снижать "
+            "interest_score") in rule
