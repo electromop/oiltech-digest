@@ -116,13 +116,14 @@ class _Core(TestClient):
         return super().request(method, url, **kwargs)
 
 
-def radar_finding(key, title, text, **judge):
-    """Находка поиска радара — как её пишет ядро после судьи (upsert_signal), со страницей издателя."""
+def radar_finding(key, title, text, *, publisher="Offshore Weekly", **judge):
+    """Находка поиска радара — как её пишет ядро после судьи (upsert_signal), со страницей издателя.
+    Статьи корпуса у неё нет — и типа издателя тоже."""
     signal_id = repository.upsert_signal({"signal_key": key, "title": title, "title_ru": title, "theme": DRILLING,
                                           "maturity": "shortlist", "score": 70, "signal_category": "technology",
                                           **judge})
     repository.upsert_signal_evidence(signal_id, {
-        "source_url": f"https://radar.example/{key}", "title": title, "publisher": "Offshore Weekly",
+        "source_url": f"https://radar.example/{key}", "title": title, "publisher": publisher,
         "published_at": "2026-09-20T08:00:00+00:00", "extracted_fact": text,
         "raw_payload": {"evidence_source": "brave", "full_text_fetched": "true"},
     })

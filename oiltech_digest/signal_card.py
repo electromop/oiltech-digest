@@ -38,6 +38,11 @@ _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance"
 CHOICE_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                   "technology_maturity": "maturity"}
 _EARLIEST_EVENT = date(2000, 1, 1)
+# Типы источника-СМИ (по справочнику источников прода 18.10): издатель такого типа о событии только
+# сообщает, и код вычёркивает его из участников. Остальные решает модель по инструкции: пустой тип — у
+# находки поиска без статьи корпуса (часто это пресс-релиз самой компании), RSS — канал, а не вид
+# издателя (компании и СМИ вперемешку), аналитики, госорганы и вузы публикуют и собственные события (#98).
+_REPORTER_TYPES = frozenset({"media", "news", "journal", "telegram", "tech"})
 # Потолки длины ответа воркера (недоверенный ввод); фраза — как у судьи радара.
 _PHRASE_CHARS, _NAME_CHARS, _QUOTE_CHARS = 400, 200, 600
 
@@ -380,16 +385,16 @@ def _event_date(value: str, source: str, published: date | None) -> tuple[date |
 def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
                   dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
     """Участник — только с дословной цитатой из текста публикации, в которой он назван (verified —
-    проверено кодом): цитата, где компании нет, — догадка модели, а не участник. Издание, которое о
-    событии сообщает, участником не считается; компания, которая сама публикует свою новость (тип
-    источника Company…), — считается: в её пресс-релизе она главный участник. Алиасы — одно имя,
-    повтор под другим именем отбрасывается."""
+    проверено кодом): цитата, где компании нет, — догадка модели, а не участник. Издатель-СМИ
+    (_REPORTER_TYPES) о событии сообщает — участником не считается; компания, которая сама публикует
+    свою новость, — считается: в её пресс-релизе она главный участник. Алиасы — одно имя, повтор под
+    другим именем отбрасывается."""
     entries = dictionaries.get("companies") or []
     canonical = {_plain(name): entry["name"] for entry in entries for name in (entry["name"], *entry["aliases"])}
     variants = {entry["name"]: (entry["name"], *entry["aliases"]) for entry in entries}
     text = _quote_form(publication["text"])
     reporter = None
-    if not publication["publisher_type"].lower().startswith("company"):
+    if _plain(publication["publisher_type"]) in _REPORTER_TYPES:
         reporter = _plain(canonical.get(_plain(publication["publisher"]), publication["publisher"]))
     kept: dict[str, dict[str, Any]] = {}
     for company in companies:

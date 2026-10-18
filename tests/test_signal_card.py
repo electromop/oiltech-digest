@@ -99,6 +99,35 @@ def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, 
     assert [item["name"] for item in participants] == ["Halliburton", "ADNOC"]
 
 
+def test_publisher_is_dropped_only_when_it_is_a_media_outlet(user, contour, monkeypatch):
+    # Пресс-релиз компании, найденный поиском радара: статьи корпуса нет — нет и типа издателя (#98:
+    # так выпадали 12 из 38 компаний эксперта на радарной части набора).
+    radar_finding("fugro", "Fugro: контракт на диагностику", "Fugro has secured a marine asset integrity "
+                  "contract with Woodside for offshore Australia.", publisher="Fugro")
+    # RSS — канал, а не вид издателя: так приходят и собственные новости компаний.
+    feed_signal("JOGMEC: сейсмика", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia.",
+                source="JOGMEC", source_type="RSS")
+    # Журнал сообщает о чужом событии — его участником не становится.
+    feed_signal("World Oil: контракт", "Halliburton won a drilling contract in Oman, World Oil reports.",
+                source="World Oil", source_type="Journal")
+    fill(monkeypatch, {
+        "Fugro: контракт на диагностику": answer(companies=[
+            {"name": "Fugro", "quote": "Fugro has secured a marine asset integrity contract"}]),
+        "JOGMEC: сейсмика": answer(companies=[
+            {"name": "JOGMEC", "quote": "JOGMEC and PTTEP started a 3D seismic survey"},
+            {"name": "PTTEP", "quote": "PTTEP started a 3D seismic survey"}]),
+        "World Oil: контракт": answer(companies=[
+            {"name": "Halliburton", "quote": "Halliburton won a drilling contract in Oman"},
+            {"name": "World Oil", "quote": "World Oil reports"}]),
+    })
+
+    [radar] = api_get("/api/signals", user)
+    assert [item["name"] for item in radar["participants_json"]] == ["Fugro"]
+    feed = business(user)
+    assert [item["name"] for item in feed["JOGMEC: сейсмика"]["participants_json"]] == ["JOGMEC", "PTTEP"]
+    assert [item["name"] for item in feed["World Oil: контракт"]["participants_json"]] == ["Halliburton"]
+
+
 def test_event_date_after_publication_or_before_2000_is_undefined(user, contour, monkeypatch):
     for title in ("После публикации", "Через день", "До 2000 года", "Не дата", "Даты в тексте нет"):
         feed_signal(title, "Компания запустила новый буровой станок.",
