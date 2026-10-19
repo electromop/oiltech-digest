@@ -1,9 +1,9 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { listArticles } from "../api/articles";
 import { ApiError } from "../api/client";
-import { getSession, login, logout, register } from "../api/auth";
+import { admit, getSession, login, logout, register } from "../api/auth";
 import { getDashboardStats } from "../api/stats";
-import type { Article, DashboardStats, User } from "../api/types";
+import type { Article, AuthResponse, DashboardStats, User } from "../api/types";
 import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles/ArticlesPage";
 import { BacklogPage } from "../features/backlog/BacklogPage";
 import { DigestPage } from "../features/digest/DigestPage";
@@ -227,6 +227,9 @@ export function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // Шаг «код допуска» (#113): пароль верный, учётка ждёт допуска — пояснение сервера и поле кода.
+  const [admissionNotice, setAdmissionNotice] = useState<string | null>(null);
+  const [admissionCode, setAdmissionCode] = useState("");
   const [toast, setToast] = useState<{ text: string; tone: "default" | "error" } | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -436,16 +439,41 @@ export function App() {
   async function submitAuth() {
     try {
       const payload = authMode === "register" ? await register(email.trim(), password) : await login(email.trim(), password);
-      setArchivedModules(payload.archived_modules ?? []);
-      setUser(payload.user);
-      if (!isTasksApp) {
-        await loadDashboardData();
+      if ("admission_required" in payload) {
+        setAdmissionCode("");
+        setAdmissionNotice(payload.detail);
+        return;
       }
-      setPassword("");
-      showToast(authMode === "register" ? "Регистрация завершена" : "Вход выполнен");
+      await enter(payload, authMode === "register" ? "Регистрация завершена" : "Вход выполнен");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Не удалось выполнить вход", "error");
     }
+  }
+
+  async function submitAdmission() {
+    try {
+      await enter(await admit(email.trim(), password, admissionCode), "Допуск получен, вход выполнен");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Не удалось проверить код", "error");
+    }
+  }
+
+  function leaveAdmission() {
+    setAdmissionNotice(null);
+    setAdmissionCode("");
+    setPassword("");
+  }
+
+  async function enter(payload: AuthResponse, message: string) {
+    setArchivedModules(payload.archived_modules ?? []);
+    setUser(payload.user);
+    setAdmissionNotice(null);
+    setAdmissionCode("");
+    if (!isTasksApp) {
+      await loadDashboardData();
+    }
+    setPassword("");
+    showToast(message);
   }
 
   // Сброс сессии при 401. ВАЖНО: чистим не только user, но и данные — иначе после
@@ -484,6 +512,38 @@ export function App() {
 
   if (authLoading) {
     return <div className="splashScreen">Проверяем сессию…</div>;
+  }
+
+  if (!user && admissionNotice !== null) {
+    return (
+      <div className="authShellReact">
+        <div className="authCardReact">
+          <div className="eyebrow">OilTech Digest</div>
+          <h1>Код допуска</h1>
+          <p>{admissionNotice}</p>
+          <p>Учётка ещё не допущена к платформе. Введите код, который передали подтверждающие: он действует сутки, попыток ввода — пять.</p>
+          <label className="field">
+            <span>Код допуска</span>
+            <input
+              value={admissionCode}
+              onChange={(event) => setAdmissionCode(event.target.value)}
+              placeholder="8 цифр"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+            />
+          </label>
+          <div className="authActions">
+            <button type="button" className="primaryButton" onClick={() => void submitAdmission()}>
+              Подтвердить
+            </button>
+            <button type="button" className="ghostButton" onClick={leaveAdmission}>
+              Назад ко входу
+            </button>
+          </div>
+        </div>
+        {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
+      </div>
+    );
   }
 
   if (!user) {

@@ -416,3 +416,11 @@ AUTH_ALLOW_SELF_REGISTRATION = os.environ.get(
 ).strip().lower() in ("1", "true", "yes", "on")
 
 AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").strip().lower() in ("1", "true", "yes", "on")
+
+# Допуск по коду (#113, admission.py). Отправка кода в чат подтверждающих — задача admission_notify
+# в очереди external-notify; включать на ядре после пересборки NL (контракт 3): старая сборка такую
+# задачу отказывает. Выключено — код выдаёт только команда admission-code.
+ADMISSION_NOTIFY_ENABLED = os.environ.get("ADMISSION_NOTIFY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# Читает воркер NL (.env.external-worker): бот и закрытый чат подтверждающих.
+ADMISSION_TELEGRAM_BOT_TOKEN = os.environ.get("ADMISSION_TELEGRAM_BOT_TOKEN", "").strip()
+ADMISSION_TELEGRAM_CHAT_ID = os.environ.get("ADMISSION_TELEGRAM_CHAT_ID", "").strip()

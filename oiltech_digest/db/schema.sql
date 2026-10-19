@@ -363,6 +363,34 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
 
+-- Допуск по коду (#113, admission.py). Время допуска пусто — учётка ждёт допуска; новые учётки
+-- создаются без него. Учётки, которые были до колонки, допускаются один раз — при её
+-- добавлении: повторный init-db не должен вернуть допуск тем, с кого его сняли. На живой базе
+-- то же делает scripts/admission/admission-before-deploy.sql до выката кода.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'admitted_at') THEN
+    ALTER TABLE users ADD COLUMN admitted_at TIMESTAMPTZ;
+    UPDATE users SET admitted_at = now();
+  END IF;
+END $$;
+
+-- Код допуска: у учётки один действующий, новый заменяет прежний. Сам код не хранится — только
+-- отпечаток (PBKDF2, как пароль). notify_job_id — задача отправки в Telegram (external-notify).
+CREATE TABLE IF NOT EXISTS admission_codes (
+  user_id        BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  code_salt      TEXT NOT NULL,
+  code_hash      TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at     TIMESTAMPTZ NOT NULL,
+  used_at        TIMESTAMPTZ,
+  attempts       INTEGER NOT NULL DEFAULT 0,
+  notify_job_id  BIGINT,
+  sent_at        TIMESTAMPTZ,
+  send_error     TEXT
+);
+
 -- =========================================================================
 -- Метрики AI-обработки (для Issue #10)
 -- =========================================================================

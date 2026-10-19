@@ -61,6 +61,24 @@ def cmd_list_users(args: argparse.Namespace) -> None:
         print(f"  id={u['id']:>3}  {u['role']:<6}  {u['email']}")
 
 
+def cmd_admission_code(args: argparse.Namespace) -> None:
+    """Запасной путь допуска (#113): новый код учётке — при сбое отправки в Telegram или до
+    включения отправки. Заменяет прежний код, интервал в 10 минут не действует."""
+    from oiltech_digest import admission, auth
+    from oiltech_digest.db import repository
+
+    if args.user_id is not None:
+        target = repository.get_user_by_id(args.user_id)
+    else:
+        email = auth.normalize_email(args.email)
+        target = next((u for u in repository.list_users() if u["email"] == email), None)
+    if target is None:
+        print("Учётка не найдена")
+        raise SystemExit(1)
+    code, expires_at = admission.issue_code(int(target["id"]), force=True)
+    print(admission.notify_text(int(target["id"]), target["email"], code, expires_at))
+
+
 def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:
     end = datetime.now(timezone.utc)
     return end - timedelta(days=days), end
@@ -2812,6 +2830,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_sr.set_defaults(func=cmd_set_role)
 
     sub.add_parser("list-users", help="список пользователей и ролей").set_defaults(func=cmd_list_users)
+
+    p_ac = sub.add_parser("admission-code", help="выдать учётке новый код допуска и напечатать его")
+    p_ac_who = p_ac.add_mutually_exclusive_group(required=True)
+    p_ac_who.add_argument("--user-id", type=int, help="номер учётки")
+    p_ac_who.add_argument("--email")
+    p_ac.set_defaults(func=cmd_admission_code)
 
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
     p_disc.add_argument("--force", action="store_true", help="перепроверить все, а не только без rss_url")

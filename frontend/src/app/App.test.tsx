@@ -589,6 +589,73 @@ describe("App smoke", () => {
     expect(within(mobileNav as HTMLElement).queryByRole("button", { name: "Фоновые задачи" })).not.toBeInTheDocument();
   });
 
+  it("учётка без допуска: после пароля — шаг «код допуска», с кодом — вход", async () => {
+    const baseImpl = fetchMock.getMockImplementation();
+    const admitBodies: unknown[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (String(input) === "/api/auth/login" && method === "POST") {
+        return Promise.resolve(jsonResponse({
+          ok: false,
+          admission_required: true,
+          detail: "Нужен код допуска: код отправлен подтверждающим, получите его у них.",
+        }));
+      }
+      if (String(input) === "/api/auth/admit" && method === "POST") {
+        const body = JSON.parse(String(init?.body));
+        admitBodies.push(body);
+        if (body.code !== "12345678") {
+          return Promise.resolve(jsonResponse({ detail: "Код не подошёл. Осталось попыток: 4." }, { status: 400 }));
+        }
+        return baseImpl!("/api/auth/login", { ...init, body: JSON.stringify({ email: body.email, password: body.password }) });
+      }
+      return baseImpl!(input, init);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByRole("heading", { name: "Код допуска" })).toBeInTheDocument();
+    expect(screen.getByText(/код отправлен подтверждающим, получите его у них/)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Не короче 8 символов")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Код допуска"), "00000000");
+    await user.click(screen.getByRole("button", { name: "Подтвердить" }));
+    expect(await screen.findByText("Код не подошёл. Осталось попыток: 4.")).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Код допуска"));
+    await user.type(screen.getByLabelText("Код допуска"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Подтвердить" }));
+
+    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    expect(admitBodies[admitBodies.length - 1]).toEqual({ email: "user@example.com", password: "12345678", code: "12345678" });
+  });
+
+  it("с шага кода можно вернуться к паролю", async () => {
+    const baseImpl = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
+        return Promise.resolve(jsonResponse({ ok: false, admission_required: true, detail: "Нужен код допуска." }));
+      }
+      return baseImpl!(input, init);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+    await user.click(await screen.findByRole("button", { name: "Назад ко входу" }));
+
+    expect(screen.getByRole("heading", { name: "Вход в админ-панель" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Не короче 8 символов")).toHaveValue("");
+  });
+
   it("opens hidden jobs page from query string without adding it to navigation", async () => {
     window.history.replaceState(null, "", "/?screen=jobs");
 

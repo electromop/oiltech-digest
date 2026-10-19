@@ -1783,6 +1783,8 @@ def test_auth_register_login_me_and_logout(monkeypatch):
     monkeypatch.setattr(api.repository, "create_user_session", lambda user_id: f"session-{user_id}")
     monkeypatch.setattr(api.repository, "get_user_by_session", lambda token: sessions.get(token))
     monkeypatch.setattr(api.repository, "delete_user_session", lambda token: sessions.pop(token, None))
+    # Учётка допущена: шаг кода допуска (#113) проверяет tests/test_admission.py.
+    monkeypatch.setattr(api.admission, "is_admitted", lambda user_id: True)
 
     client = TestClient(app)
     register_response = client.post("/api/auth/register", json={"email": " USER@example.com ", "password": "12345678"})

@@ -14,7 +14,9 @@
    История: 1 — сборка и контракт в заголовках, возврат задачи на остановке (release);
    2 — вид задачи signal_card, агент «Карточка сигнала» (#96): сборка NL контракта 1 отказывает
    ему ошибкой «Unsupported external job kind», поэтому шаг планировщика включается флагом
-   SIGNAL_CARD_ENABLED только после пересборки NL.
+   SIGNAL_CARD_ENABLED только после пересборки NL;
+   3 — вид задачи admission_notify, код допуска в Telegram (#113) в очереди external-notify: её
+   слушает воркер сбора, отправку включает флаг ADMISSION_NOTIFY_ENABLED после пересборки NL.
    Совместимые добавки номер не меняют — старая сторона их молча пропускает: 28.09 — поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002) — profile у критериев в payload и profile + criteria_snapshot в
@@ -34,7 +36,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 2
+CONTRACT = 3
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
 
