@@ -24,7 +24,7 @@ from oiltech_digest import auth, background_jobs, backlog, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.db import analytics, documents_repo, repository
+from oiltech_digest.db import analytics, documents_repo, marks, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest import contract, lanes, network_policy, signal_card
@@ -659,7 +659,7 @@ def list_articles(
         clauses.append("(t.name = %s OR parent.name = %s)")
         params.extend([tag, tag])
     if status:
-        clauses.append("COALESCE(uas.status, 'new') = %s")
+        clauses.append(f"{marks.article_status_sql()} = %s")
         params.append(status)
     elif not changed_only:
         # Пометка «Шум»/«Дубликат» — это «убрать с глаз», и она обязана убирать.
@@ -670,9 +670,9 @@ def list_articles(
         # (changed_only) по-прежнему показывают помеченное — иначе его не пересмотреть.
         # `archive` добавлен 12.09: он перестал быть пустым счётчиком и означает
         # «отработано, с глаз долой» — в том числе после снятия статьи из дайджеста.
-        clauses.append("COALESCE(uas.status, 'new') NOT IN ('noise', 'duplicate', 'archive')")
+        clauses.append(f"{marks.article_status_sql()} NOT IN ('noise', 'duplicate', 'archive')")
     if changed_only:
-        clauses.append("COALESCE(uas.status, 'new') <> 'new'")
+        clauses.append(f"{marks.article_status_sql()} <> 'new'")
     if language:
         clauses.append("a.language = %s")
         params.append(language)
@@ -715,15 +715,15 @@ def list_articles(
                    a.published_at,
                    a.collected_at, a.text_truncated, s.name AS source_name,
                    COALESCE(c.summary, '') AS summary,
-                   COALESCE(uas.status, 'new') AS status,
+                   {marks.article_status_sql()} AS status,
                    c.relevant, c.relevance_reason,
-                   (COALESCE(uas.status, 'new') = 'digest') AS selected_for_digest,
+                   ({marks.article_status_sql()} = 'digest') AS selected_for_digest,
                    sc.total_score, sc.score_label, sc.explanation AS score_explanation,
                    t.name AS tag_name, parent.name AS parent_tag_name,
                    at.confidence AS tag_confidence, at.rationale AS tag_rationale
             FROM articles a
             JOIN sources s ON s.id = a.source_id
-            LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s
+            {marks.article_mark_join('%s')}
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
@@ -847,7 +847,7 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
                 "статус и отметку «в дайджест» у статей прошлых месяцев менять нельзя."
             ),
         )
-    previous = repository.get_user_article_status(int(user["id"]), article_id)
+    previous = marks.get_article_status(int(user["id"]), article_id)
     repository.set_user_article_status(
         int(user["id"]), article_id, status=target_status, analyst_comment=patch.analyst_comment
     )

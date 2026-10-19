@@ -41,7 +41,7 @@ from typing import Any, Iterable
 
 from oiltech_digest import feed_window, network_policy
 # Модулем, а не функцией: тестовая фикстура подменяет connection.get_connection.
-from oiltech_digest.db import connection, repository
+from oiltech_digest.db import connection, marks, repository
 from oiltech_digest.ingestion.article_fetcher import MIN_GAIN_RATIO
 from oiltech_digest.processing import pipeline
 
@@ -89,8 +89,7 @@ def _allowed_sql() -> str:
     feed_window) и её никто не выбрал в выпуск — ни отметкой «В дайджест», ни в черновике."""
     return (
         f"{feed_window.visible_sql('a', 'c', 's')} AND {feed_window.current().sql('a')}"
-        " AND NOT EXISTS (SELECT 1 FROM user_article_states u"
-        "                 WHERE u.article_id = a.id AND u.status = 'digest')"
+        f" AND NOT {marks.article_marked_sql('a.id', 'digest')}"
         " AND NOT EXISTS (SELECT 1 FROM monthly_digest_items di WHERE di.article_id = a.id)"
     )
 

@@ -17,6 +17,7 @@ from psycopg.types.json import Json
 
 from oiltech_digest import auth, config, contract, feed_window, lanes
 from oiltech_digest.ingestion import normalize, verdicts
+from oiltech_digest.db import marks
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, signal_month_sql, visible_sql
 from oiltech_digest import scoring_profiles
@@ -967,8 +968,7 @@ def upsert_signal(signal: dict) -> int:
     upsert_signal_evidence."""
     closed = (
         f"({feed_window.current().closed_sql(signal_month_sql('signals'))}"
-        " AND EXISTS (SELECT 1 FROM user_signal_states uss_f"
-        " WHERE uss_f.signal_id = signals.id AND uss_f.status = 'digest'))"
+        f" AND {marks.signal_marked_sql('signals.id', 'digest')})"
     )
 
     def by_human(field: str) -> str:
@@ -1228,15 +1228,11 @@ _SIGNAL_REVIEWED_SQL = """(
   EXISTS (SELECT 1 FROM signal_feedback_events sfe_r
           WHERE sfe_r.signal_id = {alias}.id
             AND (COALESCE(sfe_r.verdict, '') <> '' OR sfe_r.event_type = 'comment_added'))
-  OR EXISTS (SELECT 1 FROM user_signal_states uss_r
-             WHERE uss_r.signal_id = {alias}.id AND uss_r.status <> 'watch')
+  OR """ + marks.signal_marked_other_than_watch_sql("{alias}.id") + """
 )"""
 # Выбранная кем-то «в дайджест»: её не прячет ничто — ни дедуп, ни качество, ни архив. Иначе
 # она исчезла бы с экрана и осталась в выпуске без способа её оттуда убрать (mark_signal_merged).
-_SIGNAL_IN_DIGEST_SQL = (
-    "EXISTS (SELECT 1 FROM user_signal_states uss_d"
-    " WHERE uss_d.signal_id = {alias}.id AND uss_d.status = 'digest')"
-)
+_SIGNAL_IN_DIGEST_SQL = marks.signal_marked_sql("{alias}.id", "digest")
 # Положительные вердикты — те же, что у дедупа (signal_dedup._POSITIVE_VERDICTS). «Оценка
 # завышена» — тоже одобрение: сигнал годный, завышен только балл.
 SIGNAL_POSITIVE_VERDICTS = ("strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation",
@@ -1356,10 +1352,7 @@ def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *,
     else:
         # Решение человека прячет и разобранную карточку, но не выбранную в дайджест: иначе она
         # исчезла бы с экрана и осталась в выпуске без способа её оттуда убрать.
-        review_clause = (
-            "AND NOT EXISTS (SELECT 1 FROM user_signal_states uss_d"
-            " WHERE uss_d.signal_id = signals.id AND uss_d.status = 'digest')"
-        )
+        review_clause = "AND NOT " + marks.signal_marked_sql("signals.id", "digest")
     with get_connection() as conn:
         row = conn.execute(
             f"""
@@ -2308,8 +2301,8 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
                    -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска.
                    {signal_month_sql('s')} AS digest_month,
-                   COALESCE(uss.status, 'watch') AS user_status,
-                   (COALESCE(uss.status, 'watch') = 'digest') AS selected_for_digest,
+                   {marks.signal_status_sql()} AS user_status,
+                   ({marks.signal_status_sql()} = 'digest') AS selected_for_digest,
                    uss.analyst_comment AS user_comment,
                    uss.updated_at AS user_status_updated_at,
                    (SELECT COUNT(*) {_RADAR_FEEDBACK_SQL}) AS feedback_count,
@@ -2317,7 +2310,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    corr.corrected_title,
                    corr.corrected_thesis
             FROM signals s
-            LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
+            {marks.signal_mark_join('%s')}
             {_signal_corrections_lateral("s")}
             {where}
             ORDER BY {order_by}
@@ -2345,7 +2338,7 @@ def signal_radar_summary(*, user_id: int | None = None, **filters) -> dict:
                    COUNT(*) FILTER (WHERE uss.status = 'digest') AS in_digest,
                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})) AS with_feedback
             FROM signals s
-            LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
+            {marks.signal_mark_join('%s')}
             WHERE {visible}
             """,
             [user_id],
@@ -2454,23 +2447,7 @@ def list_radar_evidence(signal_ids: Sequence[int], *, limit: int) -> dict[int, l
 
 
 def signal_digest_state(user_id: int, signal_id: int) -> tuple[str, str | None] | None:
-    """Месяц выпуска карточки радара («ГГГГ-ММ», feed_window.signal_month_sql) и её статус у
-    этого человека (None — не отмечал); None — карточки нет.
-
-    Для отказа отметке «в дайджест» у карточки закрытого месяца (PATCH /api/signals/{id}):
-    отказ зависит и от месяца, и от того, выбрана ли карточка сейчас — снятие отметки другим
-    статусом тоже вывело бы её из выпуска закрытого месяца."""
-    with get_connection() as conn:
-        row = conn.execute(
-            f"""
-            SELECT {signal_month_sql('s')}, uss.status
-            FROM signals s
-            LEFT JOIN user_signal_states uss ON uss.signal_id = s.id AND uss.user_id = %s
-            WHERE s.id = %s
-            """,
-            (user_id, signal_id),
-        ).fetchone()
-    return (row[0], row[1]) if row else None
+    return marks.signal_digest_state(user_id, signal_id)
 
 
 def set_user_signal_status(
@@ -2480,24 +2457,7 @@ def set_user_signal_status(
     status: str | None = None,
     analyst_comment: str | None = None,
 ) -> None:
-    if status is None and analyst_comment is None:
-        return
-    with get_connection() as conn:
-        exists = conn.execute("SELECT 1 FROM signals WHERE id = %s", (signal_id,)).fetchone()
-        if not exists:
-            raise KeyError(f"Signal not found: {signal_id}")
-        conn.execute(
-            """
-            INSERT INTO user_signal_states (user_id, signal_id, status, analyst_comment)
-            VALUES (%s, %s, COALESCE(%s, 'watch'), %s)
-            ON CONFLICT (user_id, signal_id) DO UPDATE SET
-              status = COALESCE(%s, user_signal_states.status),
-              analyst_comment = COALESCE(%s, user_signal_states.analyst_comment),
-              updated_at = now()
-            """,
-            (user_id, signal_id, status, analyst_comment, status, analyst_comment),
-        )
-        conn.commit()
+    marks.set_signal_mark(user_id, signal_id, status=status, analyst_comment=analyst_comment)
 
 
 def list_signal_evidence(signal_id: int, *, limit: int = 20) -> list[dict]:
@@ -3112,18 +3072,9 @@ def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> l
                 c.relevant,
                 c.status AS card_status,
                 sc.total_score,
-                EXISTS (
-                  SELECT 1 FROM user_article_states uas
-                  WHERE uas.article_id = a.id AND uas.status = 'digest'
-                ) AS user_digest,
-                EXISTS (
-                  SELECT 1 FROM user_article_states uas
-                  WHERE uas.article_id = a.id AND uas.status = 'duplicate'
-                ) AS user_duplicate,
-                EXISTS (
-                  SELECT 1 FROM user_article_states uas
-                  WHERE uas.article_id = a.id AND uas.status = 'noise'
-                ) AS user_noise,
+                {marks.article_marked_sql('a.id', 'digest')} AS user_digest,
+                {marks.article_marked_sql('a.id', 'duplicate')} AS user_duplicate,
+                {marks.article_marked_sql('a.id', 'noise')} AS user_noise,
                 EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = a.id) AS has_tag,
                 COALESCE((
                   SELECT SUM(r.cost_usd)
@@ -3199,10 +3150,7 @@ def compute_topic_gap_rows(
                 c.relevant,
                 c.status AS card_status,
                 sc.total_score,
-                EXISTS (
-                  SELECT 1 FROM user_article_states uas
-                  WHERE uas.article_id = a.id AND uas.status = 'digest'
-                ) AS user_digest
+                {marks.article_marked_sql('a.id', 'digest')} AS user_digest
               FROM tags t
               LEFT JOIN tags parent ON parent.id = t.parent_id
               LEFT JOIN article_tags at ON at.tag_id = t.id
@@ -3505,20 +3453,7 @@ def count_admins() -> int:
 
 def set_user_article_status(user_id: int, article_id: int, status: str | None = None,
                             analyst_comment: str | None = None) -> None:
-    """Пер-юзерный рабочий статус статьи. status=None — не трогаем (только коммент)."""
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_article_states (user_id, article_id, status, analyst_comment)
-            VALUES (%s, %s, COALESCE(%s, 'new'), %s)
-            ON CONFLICT (user_id, article_id) DO UPDATE SET
-              status = COALESCE(%s, user_article_states.status),
-              analyst_comment = COALESCE(%s, user_article_states.analyst_comment),
-              updated_at = now()
-            """,
-            (user_id, article_id, status, analyst_comment, status, analyst_comment),
-        )
-        conn.commit()
+    marks.set_article_mark(user_id, article_id, status=status, analyst_comment=analyst_comment)
 
 
 def migrate_global_status_to_user(user_id: int) -> int:
@@ -4938,7 +4873,7 @@ def dashboard_stats(user_id: int | None = None, window: FeedWindow | None = None
         # были шесть подзапросов, и у каждого своя видимость.
         cur.execute(
             f"""
-            SELECT COALESCE(uas.status, 'new') AS status,
+            SELECT {marks.article_status_sql()} AS status,
                    COUNT(*) AS cnt,
                    COUNT(*) FILTER (WHERE COALESCE(c.summary, '') <> '') AS with_summary,
                    -- Обработано: есть суть, проверена релевантность и есть тег или оценка.
@@ -4954,8 +4889,7 @@ def dashboard_stats(user_id: int | None = None, window: FeedWindow | None = None
               JOIN sources s ON s.id = a.source_id
               LEFT JOIN article_cards c ON c.article_id = a.id
               LEFT JOIN article_scores sc ON sc.article_id = a.id
-              LEFT JOIN user_article_states uas
-                     ON uas.article_id = a.id AND uas.user_id = %(user_id)s
+              {marks.article_mark_join('%(user_id)s')}
              WHERE {visible_sql()}
                AND {win}
              GROUP BY 1
@@ -5049,7 +4983,7 @@ def feed_archive_months(window: FeedWindow, user_id: int | None = None) -> list[
               FROM articles a
               JOIN sources s ON s.id = a.source_id
               LEFT JOIN article_cards c ON c.article_id = a.id
-              LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s
+              {marks.article_mark_join('%s')}
              WHERE {visible_sql()}
                AND {month_expr} < %s
              GROUP BY 1
@@ -5475,9 +5409,9 @@ def article_visible_in_feed(conn, article_id: int) -> bool:
 def _chosen_for_digest(conn, article_id: int) -> bool:
     """Держит ли статью «в дайджест» хоть один пользователь."""
     return conn.execute(
-        "SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest' LIMIT 1",
+        f"SELECT {marks.article_marked_sql('%s', 'digest')}",
         (int(article_id),),
-    ).fetchone() is not None
+    ).fetchone()[0]
 
 
 def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float | None,
@@ -5661,7 +5595,7 @@ def _in_some_issue(conn, article_id: int) -> bool:
     одних черновиков пропускала выбранную, но не сохранённую статью (ревью #88)."""
     return bool(conn.execute(
         "SELECT EXISTS (SELECT 1 FROM monthly_digest_items WHERE article_id = %s)"
-        " OR EXISTS (SELECT 1 FROM user_article_states WHERE article_id = %s AND status = 'digest')",
+        f" OR {marks.article_marked_sql('%s', 'digest')}",
         (int(article_id), int(article_id)),
     ).fetchone()[0])
 
@@ -7159,13 +7093,13 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
                    t.name AS tag_name, parent.name AS parent_tag_name
             FROM articles a
             JOIN sources s ON s.id = a.source_id
-            JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %(user_id)s
+            {marks.article_mark_join('%(user_id)s')}
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
-            WHERE uas.status = 'digest'
+            WHERE {marks.article_status_sql()} = 'digest'
               -- Видимость — та же, что у ленты (feed_window.visible_sql): архивный источник,
               -- перепечатка (в выпуске нужна одна копия новости — заказчик 22.08: «одну
               -- заберу в дайджест, вторую отмечу как дубликат»), отсев гейтом и помеченное на
@@ -7238,7 +7172,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
                    NULL AS parent_tag_name,
                    'signal' AS item_type
             FROM signals sig
-            JOIN user_signal_states uss ON uss.signal_id = sig.id AND uss.user_id = %(user_id)s
+            {marks.signal_mark_join('%(user_id)s', 'sig')}
             LEFT JOIN LATERAL (
               SELECT e.source_url, e.publisher, e.published_at
               FROM signal_evidence e
@@ -7248,7 +7182,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               LIMIT 1
             ) best_evidence ON TRUE
             {_signal_corrections_lateral("sig", issue_window)}
-            WHERE uss.status = 'digest'
+            WHERE {marks.signal_status_sql()} = 'digest'
               AND sig.merged_into_signal_id IS NULL
               -- Выпуск собирается как раньше (#95): статьи — своей выборкой, сигнал ленты
               -- в нём был бы второй копией статьи.
@@ -7501,17 +7435,7 @@ ARTICLE_ONLY_FEEDBACK_REASONS = frozenset({"wrong_block"})
 
 
 def get_user_article_status(user_id: int, article_id: int) -> str | None:
-    """Текущий статус статьи у этого человека, или None если он её не трогал.
-
-    Нужен, чтобы записать в журнал ПРЕЖНЕЕ значение: в user_article_states одна строка
-    на пару «человек × статья», истории переходов нет, и после UPDATE старое уже не достать.
-    """
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT status FROM user_article_states WHERE user_id = %s AND article_id = %s",
-            (user_id, article_id),
-        ).fetchone()
-        return row[0] if row else None
+    return marks.get_article_status(user_id, article_id)
 
 
 def save_feedback_entry(user_id: int, *, article_id: int | None = None,

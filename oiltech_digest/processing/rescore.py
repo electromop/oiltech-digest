@@ -18,7 +18,7 @@ from psycopg import errors as pg_errors
 
 from oiltech_digest import config, feed_window, lanes, network_policy, scoring_profiles
 # Модулем, а не функцией: тестовая фикстура подменяет connection.get_connection.
-from oiltech_digest.db import connection, repository
+from oiltech_digest.db import connection, marks, repository
 
 RESCORE_STAGES = ["scoring"]
 
@@ -45,8 +45,7 @@ def rescore_selection(profile: str, month: str) -> dict[str, Any]:
         rows = conn.execute(
             f"""
             SELECT a.id, s.criteria_snapshot,
-                   EXISTS (SELECT 1 FROM user_article_states u
-                           WHERE u.article_id = a.id AND u.status = 'digest') AS in_digest
+                   {marks.article_marked_sql('a.id', 'digest')} AS in_digest
             FROM article_scores s
             JOIN articles a ON a.id = s.article_id
             JOIN sources src ON src.id = a.source_id
