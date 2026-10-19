@@ -61,20 +61,6 @@ def cmd_list_users(args: argparse.Namespace) -> None:
         print(f"  id={u['id']:>3}  {u['role']:<6}  {u['email']}")
 
 
-def cmd_migrate_digest_to_user(args: argparse.Namespace) -> None:
-    """Разовый перенос текущих глобальных статусов (article_cards.status != 'new')
-    в личное состояние пользователя — чтобы его дайджест сохранился при переходе на
-    пер-юзерную модель (#12)."""
-    from oiltech_digest.db import repository
-
-    target = next((u for u in repository.list_users() if u["email"].lower() == args.email.strip().lower()), None)
-    if target is None:
-        print(f"Пользователь {args.email} не найден")
-        return
-    n = repository.migrate_global_status_to_user(int(target["id"]))
-    print(f"Перенесено статусов: {n} → {args.email}")
-
-
 def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:
     end = datetime.now(timezone.utc)
     return end - timedelta(days=days), end
@@ -1608,6 +1594,35 @@ def cmd_digest_save(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_migrate_shared_marks(args: argparse.Namespace) -> None:
+    """Перенос личных отметок и черновиков учётки-основы в общие (#111). Пробный прогон по
+    умолчанию; --write — записать. Расхождение состава закрытого месяца — выход с кодом 1."""
+    from oiltech_digest.db.marks_migration import migrate_shared_marks
+
+    report = migrate_shared_marks(args.base_user_id, write=args.write)
+    mode = "ЗАПИСЬ" if args.write else "пробный прогон (ничего не записано; --write — записать)"
+    print(f"migrate-shared-marks: основа — учётка №{report['base_user_id']}, {mode}")
+    for kind, label in (("articles", "статей"), ("signals", "карточек радара")):
+        part = report[kind]
+        statuses = ", ".join(f"{status}={count}" for status, count in part["by_status"].items()) or "нет"
+        print(f"  отметки {label} у основы: {statuses}; в общие — {part['inserted']}"
+              f" (остальные уже есть в общих и не перезаписываются)")
+    print(f"  черновики основы: {report['base_drafts']}; в общий черновик месяца —"
+          f" {', '.join(report['drafts']['copied']) or 'нет'};"
+          f" общий новее, не тронут — {', '.join(report['drafts']['kept']) or 'нет'}")
+    skipped = report["skipped"]
+    print(f"  не переносятся (проверочные других учёток): отметок статей {skipped['article_marks']['rows']}"
+          f" у {skipped['article_marks']['users']} учёток, отметок карточек {skipped['signal_marks']['rows']}"
+          f" у {skipped['signal_marks']['users']}, личных черновиков {skipped['drafts']['rows']}")
+    print(f"  сверка закрытых месяцев: {', '.join(report['checked_months']) or 'нет закрытых месяцев с выпуском'}")
+    for mismatch in report["mismatches"]:
+        print(f"  РАСХОЖДЕНИЕ {mismatch['month']}: было {mismatch['before']}, стало бы {mismatch['after']}")
+    if not report["ok"]:
+        print("  ОСТАНОВЛЕНО: состав закрытого месяца изменился бы — ничего не записано")
+        raise SystemExit(1)
+    print("  записано" if report["written"] else "  сверка сошлась")
+
+
 def cmd_jobs_worker(args: argparse.Namespace) -> None:
     from oiltech_digest import background_jobs
 
@@ -2768,10 +2783,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-users", help="список пользователей и ролей").set_defaults(func=cmd_list_users)
 
-    p_md = sub.add_parser("migrate-digest-to-user", help="перенести текущий глобальный дайджест/статусы на пользователя (#12)")
-    p_md.add_argument("--email", required=True)
-    p_md.set_defaults(func=cmd_migrate_digest_to_user)
-
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
     p_disc.add_argument("--force", action="store_true", help="перепроверить все, а не только без rss_url")
     p_disc.add_argument("--source-id", type=int, default=None, help="только указанный источник")
@@ -3560,19 +3571,29 @@ def build_parser() -> argparse.ArgumentParser:
                                 help="в таблице — не больше N строк на вердикт (полный список — --json)")
     p_source_probe.set_defaults(func=cmd_source_probe)
 
-    p_digest = sub.add_parser("digest-content", help="собрать digest_content.json из обработанных статей")
+    p_digest = sub.add_parser("digest-content", help="собрать digest_content.json выпуска месяца (общие отметки)")
     p_digest.add_argument("month", help="YYYY-MM")
     p_digest.add_argument("--output", default="digest_content.generated.json")
     p_digest.add_argument("--html-output", default=None, help="дополнительно собрать email-ready HTML")
-    p_digest.add_argument("--limit", type=int, default=20)
-    p_digest.add_argument("--min-score", type=float, default=60)
+    # Умолчания — как у экрана выпуска (DigestPage: до 500 материалов, порог балла 0): команда
+    # собирает тот же выпуск, что экран (#111).
+    p_digest.add_argument("--limit", type=int, default=500)
+    p_digest.add_argument("--min-score", type=float, default=0)
     p_digest.set_defaults(func=cmd_digest_content)
 
-    p_digest_save = sub.add_parser("digest-save", help="сохранить draft monthly_digest из текущих digest-кандидатов")
+    p_digest_save = sub.add_parser("digest-save", help="сохранить общий черновик выпуска месяца из отмеченного «в дайджест»")
     p_digest_save.add_argument("month", help="YYYY-MM")
-    p_digest_save.add_argument("--limit", type=int, default=20)
-    p_digest_save.add_argument("--min-score", type=float, default=60)
+    p_digest_save.add_argument("--limit", type=int, default=500)
+    p_digest_save.add_argument("--min-score", type=float, default=0)
     p_digest_save.set_defaults(func=cmd_digest_save)
+
+    p_shared_marks = sub.add_parser(
+        "migrate-shared-marks",
+        help="перенести отметки и черновики учётки-основы в общие (#111); по умолчанию пробный прогон",
+    )
+    p_shared_marks.add_argument("--base-user-id", type=int, required=True, help="номер учётки-основы")
+    p_shared_marks.add_argument("--write", action="store_true", help="записать (без флага — пробный прогон)")
+    p_shared_marks.set_defaults(func=cmd_migrate_shared_marks)
 
     p_jobs_worker = sub.add_parser("jobs-worker", help="обрабатывать background_jobs из БД")
     p_jobs_worker.add_argument("--poll-seconds", type=float, default=None)

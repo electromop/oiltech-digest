@@ -30,24 +30,24 @@ def _patch(monkeypatch, *, saved_items=None, candidates=None):
     monkeypatch.setattr(
         digest.repository,
         "get_monthly_digest",
-        lambda month, user_id=None: {"id": 1, "month": month, "items": saved_items} if saved_items else None,
+        lambda month: {"id": 1, "month": month, "items": saved_items} if saved_items else None,
     )
     monkeypatch.setattr(
         digest.repository,
         "digest_items_by_article_ids",
-        lambda ids, selected_by=None, month=None: [_row(article_id) for article_id in ids],
+        lambda ids, month=None: [_row(article_id) for article_id in ids],
     )
     monkeypatch.setattr(
         digest.repository,
         "digest_candidates",
-        lambda month, limit=20, min_score=60, user_id=None, **kwargs: list(candidates or []),
+        lambda month, limit=20, min_score=60, **kwargs: list(candidates or []),
     )
 
 
 def test_signal_item_carries_signal_id_not_article_id(monkeypatch):
     _patch(monkeypatch, candidates=[_row(10), _row(10, item_type="signal", title="Сигнал радара")])
 
-    content = build_digest_content("2026-09", user_id=3)
+    content = build_digest_content("2026-09")
 
     by_type = {item["item_type"]: item for item in content["news"]}
     assert by_type["article"]["article_id"] == 10 and by_type["article"]["signal_id"] is None
@@ -62,7 +62,7 @@ def test_saved_draft_keeps_selected_radar_signals(monkeypatch):
         candidates=[_row(11), _row(7, item_type="signal", title="Сигнал радара")],
     )
 
-    content = build_digest_content("2026-09", user_id=3)
+    content = build_digest_content("2026-09")
 
     assert [(item["item_type"], item["article_id"], item["signal_id"]) for item in content["news"]] == [
         ("article", 11, None),
@@ -80,7 +80,7 @@ def test_draft_save_stores_articles_only(monkeypatch):
 
     monkeypatch.setattr(digest.repository, "save_monthly_digest", fake_save)
 
-    save_digest_draft("2026-09", user_id=3)
+    save_digest_draft("2026-09")
 
     assert [item["article_id"] for item in saved["items"]] == [10]
 
@@ -89,9 +89,9 @@ def test_hidden_draft_articles_fall_back_to_current_selection(monkeypatch):
     # Все статьи черновика с тех пор скрыты (перепечатка, удаление) — выпуск как раньше
     # берёт текущую подборку, а не одни сигналы.
     _patch(monkeypatch, saved_items=[{"article_id": 11}], candidates=[_row(12), _row(7, item_type="signal")])
-    monkeypatch.setattr(digest.repository, "digest_items_by_article_ids", lambda ids, selected_by=None, month=None: [])
+    monkeypatch.setattr(digest.repository, "digest_items_by_article_ids", lambda ids, month=None: [])
 
-    content = build_digest_content("2026-09", user_id=3)
+    content = build_digest_content("2026-09")
 
     assert [(item["item_type"], item["article_id"] or item["signal_id"]) for item in content["news"]] == [
         ("article", 12),

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from oiltech_digest.db import repository
+from oiltech_digest.db import marks
 
 
 def test_normalize_domain_handles_common_url_shapes():
@@ -449,9 +450,9 @@ def test_digest_candidates_include_selected_signal_agent_items(isolated_db):
         "summary_ru": "Технический разбор применения.",
         "strength": 0.9,
     })
-    repository.set_user_signal_status(user["id"], signal_id, status="digest")
+    marks.set_signal_mark(signal_id, status="digest", user_id=user["id"])
 
-    rows = repository.digest_candidates(user_id=user["id"], min_score=60, limit=10)
+    rows = repository.digest_candidates(min_score=60, limit=10)
 
     signal_rows = [row for row in rows if row.get("item_type") == "signal"]
     assert signal_rows

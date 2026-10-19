@@ -264,7 +264,7 @@ def _run_digest_export(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
         max_score=float(payload["max_score"]) if payload.get("max_score") is not None else None,
         search=str(payload.get("search") or "") or None,
         top_tag=str(payload.get("top_tag") or "") or None,
-        user_id=int(payload["user_id"]) if payload.get("user_id") is not None else None,
+        # user_id в задачах до #111 не читаем: выпуск общий.
     )
     repository.update_background_job_progress(job_id, 90)
     return result

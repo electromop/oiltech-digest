@@ -9,6 +9,7 @@ import pytest
 
 from oiltech_digest import signal_dedup, signal_discovery
 from oiltech_digest.db import repository
+from oiltech_digest.db import marks
 from oiltech_digest.processing.openai_client import AIResponse
 
 GEO = "Геологоразведка, сейсморазведка, геофизика и изучение недр"
@@ -350,7 +351,7 @@ def test_card_selected_for_digest_is_never_hidden(isolated_db):
     user = repository.create_user("digest-editor@example.com", "password123", role="admin")
     main = repository.upsert_signal(_signal_row("main", "Покупка Velocity Geomatics"))
     chosen = repository.upsert_signal(_signal_row("chosen", "ZenaTech купила Velocity"))
-    repository.set_user_signal_status(int(user["id"]), chosen, status="digest")
+    marks.set_signal_mark(chosen, status="digest", user_id=int(user["id"]))
 
     assert repository.mark_signal_merged(chosen, main) is False
     snapshot = {row["id"]: row for row in repository.list_signals_for_dedup()}

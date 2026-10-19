@@ -252,15 +252,16 @@ def learn_from_digest_selection(
     """«В дайджест» на карточке радара — положительный пример для агента.
 
     Выбор в выпуск — это «Сильный сигнал» по шкале заказчика: агент учится на нём так же,
-    как на вердикте из формы (пример для судьи, подсказка поиска в теме карточки). Пример
-    свой у каждого пользователя; снятие отметки гасит только его. Вердиктов людей из формы
+    как на вердикте из формы (пример для судьи, подсказка поиска в теме карточки). Отметка
+    общая (#111), и пример один на карточку; снятие отметки любым участником гасит все примеры
+    выбора этой карточки — и записанные до #111 у каждого пользователя свои. Вердиктов людей из формы
     выбор не трогает: «последнее слово» — за явным отзывом, а случайная отметка не должна
     стирать разбор. Обучающие примеры к событию выбора не привязываются: у него нет
     вердикта, а привязку ждёт отзыв из формы."""
     if not selected:
         superseded = repository.supersede_signal_feedback_memory(
             signal_id=signal_id, memory_types=VERDICT_MEMORY_TYPES + SEARCH_MEMORY_TYPES,
-            origin=DIGEST_SELECTION_ORIGIN, user_id=user_id,
+            origin=DIGEST_SELECTION_ORIGIN,
         )
         return {"memories": 0, "superseded": len(superseded)}
 
@@ -280,7 +281,7 @@ def learn_from_digest_selection(
     for item in extract_feedback_memories({"Сигнал": title, "verdict": "strong_signal", "reason": "Выбран в дайджест"}):
         subject = _memory_subject(item["subject"])
         memory_ids.append(repository.upsert_signal_agent_memory(
-            memory_key=_memory_key(item["memory_type"], subject, f"{DIGEST_SELECTION_ORIGIN}:{signal_id}:{user_id}"),
+            memory_key=_memory_key(item["memory_type"], subject, f"{DIGEST_SELECTION_ORIGIN}:{signal_id}"),
             memory_type=item["memory_type"],
             subject=subject,
             status="active",

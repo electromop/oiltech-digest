@@ -284,7 +284,6 @@ def build_digest_content(
     month: str | None = None,
     limit: int = 20,
     min_score: float = 60,
-    user_id: int | None = None,
     max_score: float | None = None,
     search: str | None = None,
     top_tag: str | None = None,
@@ -292,15 +291,17 @@ def build_digest_content(
     branding = _load_digest_branding()
     issue_cfg = branding["issue"]
     rows = []
-    if month and user_id is not None:
-        saved_digest = repository.get_monthly_digest(month, user_id=user_id)
+    # Выпуск один на всех (#111): отметки и черновик месяца общие, кто бы ни собирал выпуск —
+    # экран, выгрузка или команда на сервере. Состав без фильтров — repository.issue_composition.
+    if month:
+        saved_digest = repository.get_monthly_digest(month)
         saved_ids = [int(item["article_id"]) for item in (saved_digest or {}).get("items", []) if item.get("article_id") is not None]
         if saved_ids:
             # Черновик задаёт порядок, но в выпуск идёт только то, что человек держит «в
             # дайджест» сейчас: снятая после сохранения статья уходит и из выгрузки. И только
             # статьи месяца выпуска: черновик до 29.09 («Все месяцы») хранит и чужие (ревью #84).
             # Лимит — после отбора: чужая статья не занимает место своей.
-            rows = repository.digest_items_by_article_ids(saved_ids, selected_by=user_id, month=month)[:limit]
+            rows = repository.digest_items_by_article_ids(saved_ids, month=month)[:limit]
             # В черновике хранятся только статьи (monthly_digest_items.article_id → articles).
             # Сигналы радара, выбранные в дайджест, добавляются заново — иначе после
             # «Сохранить черновик» они из выпуска пропадали. Если все статьи черновика с тех
@@ -311,7 +312,7 @@ def build_digest_content(
                     *[
                         row
                         for row in repository.digest_candidates(
-                            month=month, limit=limit, min_score=min_score, user_id=user_id,
+                            month=month, limit=limit, min_score=min_score,
                             max_score=max_score, search=search, top_tag=top_tag,
                         )
                         if row.get("item_type") == "signal"
@@ -322,7 +323,6 @@ def build_digest_content(
             month=month,
             limit=limit,
             min_score=min_score,
-            user_id=user_id,
             max_score=max_score,
             search=search,
             top_tag=top_tag,
@@ -925,13 +925,12 @@ def _format_digest_date(value: object) -> str:
 
 def write_digest_content(path: str | Path, month: str, limit: int = 20,
                          min_score: float = 60, html_path: str | Path | None = None,
-                         user_id: int | None = None, max_score: float | None = None,
+                         max_score: float | None = None,
                          search: str | None = None, top_tag: str | None = None) -> dict:
     content = build_digest_content(
         month=month,
         limit=limit,
         min_score=min_score,
-        user_id=user_id,
         max_score=max_score,
         search=search,
         top_tag=top_tag,
@@ -950,7 +949,6 @@ def save_digest_draft(
     month: str,
     limit: int = 20,
     min_score: float = 60,
-    user_id: int | None = None,
     max_score: float | None = None,
     search: str | None = None,
     top_tag: str | None = None,
@@ -960,7 +958,6 @@ def save_digest_draft(
         month=month,
         limit=limit,
         min_score=min_score,
-        user_id=user_id,
         max_score=max_score,
         search=search,
         top_tag=top_tag,
@@ -979,7 +976,6 @@ def save_digest_draft(
         title=content.get("title") or f"Нефтесервисный дайджест · {month}",
         items=items,
         status="draft",
-        user_id=user_id,
     )
     return {**saved, "content_items": len(content.get("items", []))}
 
@@ -1262,7 +1258,6 @@ def write_digest_export(
     export_format: str = "pdf",
     limit: int = 100,
     min_score: float = 0,
-    user_id: int | None = None,
     max_score: float | None = None,
     search: str | None = None,
     top_tag: str | None = None,
@@ -1271,14 +1266,13 @@ def write_digest_export(
         month=month,
         limit=limit,
         min_score=min_score,
-        user_id=user_id,
         max_score=max_score,
         search=search,
         top_tag=top_tag,
     )
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    # Выпуск у каждого свой, а каталог выгрузок общий: без случайного хвоста две выгрузки
+    # Каталог выгрузок общий: без случайного хвоста две выгрузки
     # одного месяца в одну секунду писали один файл, и первый скачивал выпуск второго.
     base_name = f"digest-{month or 'all'}-{stamp}-{secrets.token_hex(3)}"
     normalized_format = "docx" if export_format == "doc" else export_format
