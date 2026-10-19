@@ -11,17 +11,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-import re
 from typing import Any, Callable
 
-from oiltech_digest import config
+from oiltech_digest import config, word_forms
 from oiltech_digest.db import repository, signal_card_store
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.signal_card_pack import (CATEGORY_RU, CHOICE_DICTIONARIES, UNDEFINED, load_dictionaries,
                                              publication_day, publication_text)
-from oiltech_digest.word_forms import same_word
 
 KIND = signal_card_store.KIND
 # Версия инструкции — в рецепте карточки: другая инструкция — другие карточки.
@@ -446,17 +444,11 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
 
 
 def _named_in(quote: str, names: tuple[str, ...]) -> bool:
-    """Названа ли компания в цитате — под любым из имён. Слово имени ищется среди слов цитаты с падежами
-    (word_forms.same_word): «Роснефтью» — это «Роснефть», а «Роснефтегаз» и «Сибнефть» при «Сибуре» — другие
-    компании. Имя без слов длиннее двух букв (BP, H&P) — целиком."""
-    words = re.findall(r"\w+", _plain(quote))
-    for name in names:
-        tokens = [token for token in re.findall(r"\w+", _plain(name)) if len(token) >= 3]
-        if not tokens and re.search(rf"(?<!\w){re.escape(_plain(name))}(?!\w)", _plain(quote)):
-            return True
-        if any(same_word(word, token) for token in tokens for word in words):
-            return True
-    return False
+    """Названа ли компания в цитате — под любым из имён (word_forms.named): названы все слова имени, кроме формы
+    собственности, в любом падеже. Одного общего слова мало: «Helmerich and Payne» не названа в «JOGMEC and PTTEP»,
+    а «Equinor ASA» названа в «Equinor испытала»; «Роснефтью» — это «Роснефть», а «Роснефтегаз» — другая компания."""
+    words = word_forms.words(quote)
+    return any(word_forms.named(word_forms.words(name), words) for name in names)
 
 
 # Кавычки и тире модель переписывает на свой лад — для сверки цитаты они одно и то же.

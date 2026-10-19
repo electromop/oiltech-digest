@@ -116,6 +116,34 @@ def test_short_name_counts_only_as_a_whole_word_and_fused_gazprom_neft_is_recogn
     assert [item["name"] for item in participants] == ["Газпром нефть"]
 
 
+def test_one_common_word_of_a_company_name_does_not_name_it_in_the_quote(user, contour, monkeypatch):
+    # Компания названа, когда в цитате все слова её имени: одного общего слова мало — «and» из «Helmerich and
+    # Payne», «Oil Company» из «Abu Dhabi National Oil Company», «ПАО» из «ПАО «Газпром»». Форма собственности
+    # — не обязательна («Equinor ASA» названа в «Equinor испытала»), а «total» строчными — не Total.
+    feed_signal("Сейсмика у Малайзии", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia. Kuwait "
+                                       "Oil Company awarded the drilling contract. The well reached a total depth "
+                                       "of 4,000 m.")
+    feed_signal("Робот Equinor", "ПАО «Татнефть» начало бурение на Ромашкинском месторождении. Equinor испытала "
+                                 "подводного робота на шельфе Норвегии.")
+    fill(monkeypatch, {
+        "Сейсмика у Малайзии": answer(companies=[
+            {"name": "JOGMEC", "quote": "JOGMEC and PTTEP started a 3D seismic survey"},
+            {"name": "H&P", "quote": "JOGMEC and PTTEP started a 3D seismic survey"},
+            {"name": "ADNOC", "quote": "Kuwait Oil Company awarded the drilling contract"},
+            {"name": "TotalEnergies", "quote": "The well reached a total depth of 4,000 m"},
+        ]),
+        "Робот Equinor": answer(companies=[
+            {"name": "Газпром", "quote": "ПАО «Татнефть» начало бурение"},
+            {"name": "Татнефть", "quote": "ПАО «Татнефть» начало бурение"},
+            {"name": "Equinor ASA", "quote": "Equinor испытала подводного робота"},
+        ]),
+    })
+
+    cards = business(user)
+    assert [item["name"] for item in cards["Сейсмика у Малайзии"]["participants_json"]] == ["JOGMEC"]
+    assert [item["name"] for item in cards["Робот Equinor"]["participants_json"]] == ["Татнефть", "Equinor ASA"]
+
+
 def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, monkeypatch):
     # Пресс-релиз компании: издатель — она сама и главный участник. Не участник — издатель-СМИ.
     feed_signal("Пресс-релиз Halliburton", "Halliburton и ADNOC подписали контракт на бурение.",

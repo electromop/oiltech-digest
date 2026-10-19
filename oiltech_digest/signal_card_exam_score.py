@@ -21,7 +21,7 @@ from typing import Any
 
 from oiltech_digest.signal_card import FROM_TEXT, RELEVANCE_CODES
 from oiltech_digest.signal_card_pack import UNDEFINED
-from oiltech_digest.word_forms import same_word
+from oiltech_digest.word_forms import named, same_word, words
 
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
               "technology_class": 0.75, "maturity": 0.75, "oilfield_relevance": 0.75}
@@ -210,10 +210,10 @@ def _company_tally(items, finals, names, lenient) -> dict[str, Any]:
     for item in items:
         optional = item["tolerated"].get("companies", []) if lenient else []
         required = [name for name in item["labels"]["companies"] if not names.among(name, optional)]
-        tokens = text_tokens(f"{item['title']}\n{item['text']}")
+        text = text_tokens(f"{item['title']}\n{item['text']}", keep_case=True)
         for final in finals[item["id"]]:
             given = _card_value(final, "companies") if final is not None else []
-            tally["invented"] += sum(not names.in_text(name, tokens) for name in given)
+            tally["invented"] += sum(not names.in_text(name, text) for name in given)
             counted = [name for name in given if not names.among(name, optional)]
             matched = names.matched(counted, required)
             tally["hits"] += matched
@@ -228,34 +228,32 @@ def _company_tally(items, finals, names, lenient) -> dict[str, Any]:
 
 # --- Имена компаний ------------------------------------------------------------------------------
 
-# Дефисы (и неразрывный U+2011) и кавычки для сравнения имён — пробел: «КТК‑Р» — это «КТК-Р».
-_NAME_MARKS = str.maketrans({mark: " " for mark in "-‐‑‒–—―«»„“”\"'’‘`"})
-
-
 def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
-    """Слова имени или текста в форме сравнения: без различий «ё», дефисов, кавычек и (кроме keep_case) регистра."""
-    plain = str(text or "").replace("ё", "е").replace("Ё", "Е")
-    return re.findall(r"\w+", (plain if keep_case else plain.casefold()).translate(_NAME_MARKS))
+    """Слова имени или текста — те же, что сверяет ядро (word_forms.words): без различий «ё», дефисов, кавычек
+    («КТК‑Р» — это «КТК-Р») и, кроме keep_case, регистра."""
+    return [word if keep_case else word.casefold() for word in words(text)]
 
 
 def _same_name(one: tuple[str, ...], other: tuple[str, ...]) -> bool:
-    return len(one) == len(other) and all(map(same_word, one, other))
+    return len(one) == len(other) and all(same_word(a.casefold(), b.casefold()) for a, b in zip(one, other))
 
 
 class CompanyNames:
     """Сравнение имён агента и эксперта: канон по алиасам (справочник и список экзамена), слова — по
-    основам. Компания — целиком: «Газпром» — не «Газпром нефть»."""
+    основам, без различий регистра. Компания — целиком: «Газпром» — не «Газпром нефть». Имена хранятся как
+    написаны: регистр нужен, чтобы искать компанию в тексте так же, как ядро — в цитате."""
 
     def __init__(self, entries: list[dict[str, Any]]):
         self.groups: list[list[tuple[str, ...]]] = []
         for entry in entries:
-            forms = [form for form in (tuple(text_tokens(name)) for name in (entry["name"], *entry["aliases"])) if form]
+            spelled = (tuple(text_tokens(name, keep_case=True)) for name in (entry["name"], *entry["aliases"]))
+            forms = [form for form in spelled if form]
             joined = [group for group in self.groups if any(_same_name(a, b) for a in forms for b in group)]
             self.groups = [group for group in self.groups if group not in joined]
             self.groups.append(forms + [form for group in joined for form in group])
 
     def forms(self, name: str) -> list[tuple[str, ...]]:
-        own = tuple(text_tokens(name))
+        own = tuple(text_tokens(name, keep_case=True))
         return next((group for group in self.groups if any(_same_name(own, form) for form in group)), [own])
 
     def same(self, one: str, other: str) -> bool:
@@ -266,7 +264,7 @@ class CompanyNames:
 
     def key(self, name: str) -> tuple[str, ...]:
         """Одно написание на компанию — для устойчивости между прогонами."""
-        return min(self.forms(name))
+        return min(tuple(word.casefold() for word in form) for form in self.forms(name))
 
     def matched(self, given: list[str], expected: list[str]) -> int:
         left = list(expected)
@@ -278,17 +276,10 @@ class CompanyNames:
                 hits += 1
         return hits
 
-    def in_text(self, name: str, tokens: list[str]) -> bool:
-        """Компания есть в тексте — хоть одно значимое слово (от трёх букв) хоть одного её имени, а имя из одних
-        коротких слов (BP, H&P) — целиком, подряд: как ядро ищет имя в цитате. Выдуманной — нет ни одного."""
-        for form in self.forms(name):
-            words = [word for word in form if len(word) >= 3]
-            if words and any(same_word(word, token) for word in words for token in tokens):
-                return True
-            if form and not words and any(tuple(tokens[start:start + len(form)]) == form
-                                          for start in range(len(tokens))):
-                return True
-        return False
+    def in_text(self, name: str, text: list[str]) -> bool:
+        """Компания есть в тексте (его слова с регистром — text_tokens(keep_case=True)) — названа под любым своим
+        именем по правилу ядра (word_forms.named): все слова имени, кроме формы собственности. Выдуманной — нет."""
+        return any(named(form, text) for form in self.forms(name))
 
 
 # --- Даты в тексте -------------------------------------------------------------------------------
