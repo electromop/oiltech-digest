@@ -9,27 +9,30 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from oiltech_digest.signal_card_exam_score import THRESHOLDS
 from oiltech_digest.signal_card_pack import STRATUM_RU
 
-# Строка таблицы: метрика отчёта → подпись и порог (как в спеке и поправках 18.10).
+# Строка таблицы: метрика отчёта → подпись; порог — из THRESHOLDS счёта или правило без числа (спека, поправки 18.10).
 _ROWS = (
-    ("companies_precision", "Компании — точность (по упоминаниям)", "≥ 90%"),
-    ("companies_recall", "Компании — полнота (по упоминаниям)", "≥ 80%"),
-    ("region", "Регион", "≥ 85%"),
-    ("event_type", "Тип события", "≥ 75%"),
-    ("technology_class", "Класс технологии", "≥ 75%"),
-    ("maturity", "Зрелость", "≥ 75%"),
-    ("oilfield_relevance", "Связь с нефтесервисом (среднее по значениям)", "≥ 75%"),
-    ("event_date", "Дата события — доля ошибок", "не больше константы"),
-    ("event_date_source", "Источник даты (где дата события ≠ дате публикации)", "—"),
-    ("invented_companies", "Выдуманные компании", "0"),
-    ("invented_dates", "Выдуманные даты", "0"),
+    ("companies_precision", "Компании — точность (по упоминаниям)"),
+    ("companies_recall", "Компании — полнота (по упоминаниям)"),
+    ("region", "Регион"),
+    ("event_type", "Тип события"),
+    ("technology_class", "Класс технологии"),
+    ("maturity", "Зрелость"),
+    ("oilfield_relevance", "Связь с нефтесервисом (среднее по значениям)"),
+    ("event_date", "Дата события — доля ошибок"),
+    ("event_date_source", "Источник даты (где дата события ≠ дате публикации)"),
+    ("invented_companies", "Выдуманные компании"),
+    ("invented_dates", "Выдуманные даты"),
 )
+_RULES = {"event_date": "не больше константы", "invented_companies": "0", "invented_dates": "0"}
+PART_RU = {"exam": "экзамен", "tuning": "настройка"}
 _COUNTS = ("invented_companies", "invented_dates")
 
 
 def render(report: dict[str, Any]) -> str:
-    part = "экзамен" if report["part"] == "exam" else "настройка"
+    part = PART_RU[report["part"]]
     signals = len(report["split"][report["part"]])
     lines = [
         f"# Экзамен агента «Карточка сигнала» — {report['created_at']}", "",
@@ -50,9 +53,11 @@ def render(report: dict[str, Any]) -> str:
 
 
 def _decision(decision: dict[str, Any]) -> str:
-    if decision["model"]:
-        return f"**{decision['model']}** — " + decision["reason"].split(" — ", 1)[1]
-    return decision["reason"]
+    return f"**{decision['model']}** — {decision['reason']}" if decision["model"] else decision["reason"]
+
+
+def _threshold(key: str) -> str:
+    return f"≥ {THRESHOLDS[key]:.0%}" if key in THRESHOLDS else _RULES.get(key, "—")
 
 
 def _file_line(mark: dict[str, str] | None, title: str, absent: str) -> str:
@@ -70,11 +75,11 @@ def _model(model: dict[str, Any], runs: int) -> list[str]:
         "| Атрибут | Порог | С допусками | Строго | Константа | Устойчивость | |",
         "|---|---|---|---|---|---|---|",
     ]
-    for key, title, threshold in _ROWS:
+    for key, title in _ROWS:
         row = lenient[key]
         form = _count if key in _COUNTS else _share
         mark = {True: "✓", False: "✗"}.get(row.get("passed"), "")
-        lines.append(f"| {title} | {threshold} | {form(row['agent'])} | {form(strict[key]['agent'])} | "
+        lines.append(f"| {title} | {_threshold(key)} | {form(row['agent'])} | {form(strict[key]['agent'])} | "
                      f"{_share(row.get('constant'))} | {_share(row.get('stability'))} | {mark} |")
     by_signal = lenient["companies_precision"]["by_signal"], lenient["companies_recall"]["by_signal"]
     lines += [f"| Компании по сигналам — точность / полнота | — | {_share(by_signal[0])} / {_share(by_signal[1])} "
@@ -86,7 +91,7 @@ def _model(model: dict[str, Any], runs: int) -> list[str]:
               "| Атрибут | " + " | ".join(f"{STRATUM_RU.get(stratum, stratum)} ({strata[stratum]['region']['n'] // runs})"
                                          for stratum in strata) + " |",
               "|---|" + "---|" * len(strata)]
-    for key, title, _ in _ROWS:
+    for key, title in _ROWS:
         form = _count if key in _COUNTS else _share
         lines.append(f"| {title} | " + " | ".join(form(strata[stratum][key]["agent"]) for stratum in strata) + " |")
     return lines + [""]

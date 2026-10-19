@@ -76,7 +76,7 @@ def _metrics(items, finals, names, lenient) -> dict[str, dict[str, Any]]:
     }
 
 
-def value(final: Mapping[str, Any] | None, key: str) -> Any:
+def _card_value(final: Mapping[str, Any] | None, key: str) -> Any:
     """Значение атрибута карточки в форме разметки эксперта."""
     if final is None:
         return _MISSING
@@ -103,13 +103,13 @@ def _stability(items, finals, key, form=lambda value: value) -> float | None:
     """Доля сигналов, у которых все прогоны дали одно и то же значение (и ни один не сорвался)."""
     stable = 0
     for item in items:
-        seen = [value(final, key) for final in finals[item["id"]]]
+        seen = [_card_value(final, key) for final in finals[item["id"]]]
         stable += all(one is not _MISSING for one in seen) and len({form(one) for one in seen}) == 1
     return _share(stable, len(items))
 
 
 def _accuracy(items, finals, key, lenient) -> dict[str, Any]:
-    hits = sum(value(final, key) in _allowed(item, key, lenient) for item in items for final in finals[item["id"]])
+    hits = sum(_card_value(final, key) in _allowed(item, key, lenient) for item in items for final in finals[item["id"]])
     total = sum(len(finals[item["id"]]) for item in items)
     constant = _most_common([item["labels"][key] for item in items])
     return {"agent": _share(hits, total), "n": total, "stability": _stability(items, finals, key),
@@ -125,7 +125,7 @@ def _per_value(items, finals, key, lenient) -> dict[str, Any]:
     constant = _most_common([item["labels"][key] for item in items])
     agent, fixed = [], []
     for group in groups.values():
-        hits = sum(value(final, key) in _allowed(item, key, lenient) for item in group for final in finals[item["id"]])
+        hits = sum(_card_value(final, key) in _allowed(item, key, lenient) for item in group for final in finals[item["id"]])
         agent.append(_share(hits, sum(len(finals[item["id"]]) for item in group)))
         fixed.append(_share(sum(constant in _allowed(item, key, lenient) for item in group), len(group)))
     return {"agent": _mean(agent), "n": sum(len(finals[item["id"]]) for item in items),
@@ -140,7 +140,7 @@ def _mean(values: list[float | None]) -> float | None:
 
 def _event_date(items, finals, lenient) -> dict[str, Any]:
     """Дата события: доля ошибок агента против доли ошибок ответа «всегда дата публикации»."""
-    errors = sum(value(final, "event_date") not in _allowed(item, "event_date", lenient)
+    errors = sum(_card_value(final, "event_date") not in _allowed(item, "event_date", lenient)
                  for item in items for final in finals[item["id"]])
     total = sum(len(finals[item["id"]]) for item in items)
     constant = sum(item["published"] not in _allowed(item, "event_date", lenient) for item in items)
@@ -156,7 +156,7 @@ def _invented_dates(items, finals, lenient) -> dict[str, Any]:
     for item in items:
         allowed = _allowed(item, "event_date", lenient)
         for final in finals[item["id"]]:
-            day = value(final, "event_date")
+            day = _card_value(final, "event_date")
             if day is _MISSING or day is None or final["event_date_source"] != FROM_TEXT or day in allowed:
                 continue
             published = item["published"]
@@ -182,32 +182,47 @@ def judge_metrics(items: list[dict[str, Any]], finals: Finals, *, lenient: bool)
 
 
 def _companies(items, finals, names, lenient):
-    """Точность и полнота — по упоминаниям (с порогами) и по сигналам (среднее по прогонам сигналов)."""
-    hits = named = required_total = invented = 0
-    by_signal_precision, by_signal_recall = [], []
+    """Точность и полнота — по упоминаниям (с порогами) и по сигналам (среднее по прогонам сигналов); рядом —
+    константа: самая частая компания эксперта у каждого сигнала."""
+    agent = _company_tally(items, finals, names, lenient)
+    labels = [name for item in items for name in item["labels"]["companies"]]
+    top = _most_common([names.key(name) for name in labels])
+    constant = next((name for name in labels if names.key(name) == top), None)
+    fixed = _company_tally(items, {item["id"]: [{"participants_json": [{"name": constant}] if constant else []}]
+                                   for item in items}, names, lenient)
+    total = sum(len(finals[item["id"]]) for item in items)
+    stability = _stability(items, finals, "companies", lambda given: frozenset(map(names.key, given)))
+    precision = {"agent": _share(agent["hits"], agent["named"]), "n": total, "stability": stability,
+                 "constant": _share(fixed["hits"], fixed["named"]), "constant_value": constant,
+                 "by_signal": _mean(agent["by_signal_precision"]), "named": agent["named"], "matched": agent["hits"]}
+    recall = {"agent": _share(agent["hits"], agent["required"]), "n": total, "stability": stability,
+              "constant": _share(fixed["hits"], fixed["required"]), "constant_value": constant,
+              "by_signal": _mean(agent["by_signal_recall"]), "expected": agent["required"], "matched": agent["hits"]}
+    return precision, recall, {"agent": agent["invented"], "n": total}
+
+
+def _company_tally(items, finals, names, lenient) -> dict[str, Any]:
+    """Совпадения компаний по прогонам: названные, совпавшие и требуемые упоминания, выдуманные, доли по сигналам.
+    Компания из допусков необязательна: её не требуют и за неё не штрафуют."""
+    tally: dict[str, Any] = {"hits": 0, "named": 0, "required": 0, "invented": 0,
+                             "by_signal_precision": [], "by_signal_recall": []}
     for item in items:
         optional = item["tolerated"].get("companies", []) if lenient else []
         required = [name for name in item["labels"]["companies"] if not names.among(name, optional)]
         tokens = text_tokens(f"{item['title']}\n{item['text']}")
         for final in finals[item["id"]]:
-            given = value(final, "companies") if final is not None else []
-            invented += sum(not names.in_text(name, tokens) for name in given)
+            given = _card_value(final, "companies") if final is not None else []
+            tally["invented"] += sum(not names.in_text(name, tokens) for name in given)
             counted = [name for name in given if not names.among(name, optional)]
             matched = names.matched(counted, required)
-            hits += matched
-            named += len(counted)
-            required_total += len(required)
+            tally["hits"] += matched
+            tally["named"] += len(counted)
+            tally["required"] += len(required)
             if counted:
-                by_signal_precision.append(matched / len(counted))
+                tally["by_signal_precision"].append(matched / len(counted))
             if required:
-                by_signal_recall.append(matched / len(required))
-    total = sum(len(finals[item["id"]]) for item in items)
-    stability = _stability(items, finals, "companies", lambda given: frozenset(map(names.key, given)))
-    precision = {"agent": _share(hits, named), "n": total, "stability": stability, "constant": None,
-                 "by_signal": _mean(by_signal_precision), "named": named, "matched": hits}
-    recall = {"agent": _share(hits, required_total), "n": total, "stability": stability, "constant": None,
-              "by_signal": _mean(by_signal_recall), "expected": required_total, "matched": hits}
-    return precision, recall, {"agent": invented, "n": total}
+                tally["by_signal_recall"].append(matched / len(required))
+    return tally
 
 
 # --- Имена компаний ------------------------------------------------------------------------------
@@ -215,6 +230,10 @@ def _companies(items, finals, names, lenient):
 # Дефисы (и неразрывный U+2011) и кавычки для сравнения имён — пробел: «КТК‑Р» — это «КТК-Р».
 _NAME_MARKS = str.maketrans({mark: " " for mark in "-‐‑‒–—―«»„“”\"'’‘`"})
 _CYRILLIC = re.compile(r"[а-яА-Я]")
+# Падежные окончания русских существительных и прилагательных (ед. и мн. число): слово — основа плюс одно из них.
+_ENDINGS = ("", "а", "я", "у", "ю", "е", "и", "ы", "о", "ь", "й", "ом", "ем", "ой", "ей", "ью", "ам", "ям", "ах", "ях",
+            "ов", "ев", "ую", "юю", "ая", "яя", "ое", "ее", "ие", "ые", "ий", "ый", "их", "ых", "им", "ым", "ого", "его",
+            "ому", "ему", "ами", "ями", "ими", "ыми")
 
 
 def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
@@ -224,15 +243,19 @@ def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
 
 
 def same_word(one: str, other: str) -> bool:
-    """Одно слово, в том числе в другом падеже: у русских слов от четырёх букв сверяется основа (без двух
-    последних букв, не короче трёх), а окончание длиннее не больше чем на три буквы — «Газпром» не
-    «Газпромнефть». Латиница склонений не знает — только целиком."""
+    """Одно слово, в том числе в другом падеже: у русских слов от четырёх букв — общая основа не короче трёх букв
+    и падежные окончания (_ENDINGS). «Роснефтью» — это «Роснефть», а «Роснефтегаз», «Газпромнефть» и
+    «Сибнефть» при «Сибуре» — другие слова: общее начало — не падеж. Латиница склонений не знает — только целиком."""
     if one == other:
         return True
-    short, long = sorted((one, other), key=len)
-    if len(short) < 4 or len(long) - len(short) > 3 or not (_CYRILLIC.match(one) and _CYRILLIC.match(other)):
+    if min(len(one), len(other)) < 4 or not (_CYRILLIC.match(one) and _CYRILLIC.match(other)):
         return False
-    return long.startswith(short[:max(3, len(short) - 2)])
+    return bool(_stems(one) & _stems(other))
+
+
+def _stems(word: str) -> set[str]:
+    return {word[:len(word) - len(ending)] for ending in _ENDINGS
+            if word.endswith(ending) and len(word) - len(ending) >= 3}
 
 
 def _same_name(one: tuple[str, ...], other: tuple[str, ...]) -> bool:

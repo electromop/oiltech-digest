@@ -13,7 +13,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest.db import connection
-from oiltech_digest.db.repository import CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN, SIGNAL_ORIGIN_FEED, radar_origin_sql
+from oiltech_digest.db.repository import (_FEED_ARTICLE_SHOWN_SQL, CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN,
+                                          SIGNAL_ORIGIN_FEED, radar_origin_sql)
 from oiltech_digest.feed_window import FeedWindow
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
@@ -123,8 +124,9 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
 
 
 def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
-    """Сигналы прогона по истории (#98, спека #93): ленты — по главной статье, собранной с `since`, и все
-    находки радара; дубли — мимо. first — радар или статья в текущем окне ленты (window): их карточки
+    """Сигналы прогона по истории (#98, спека #93): ленты — принятые статьи, собранные с `since` (сигнал не в
+    архиве, а статью показывает лента — как у витрины «бизнес»: за карточку, которую никто не увидит, не платим),
+    и все находки радара; дубли — мимо. first — радар или статья в текущем окне ленты (window): их карточки
     ставятся первыми; pending — сигнал в задаче агента, которая ещё идёт. По порядку постановки."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -142,7 +144,8 @@ def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
             FROM signals s
             LEFT JOIN articles a ON a.id = s.origin_article_id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
             WHERE s.merged_into_signal_id IS NULL
-              AND ({radar_origin_sql("s")} OR a.collected_at >= %(since)s)
+              AND ({radar_origin_sql("s")}
+                   OR (a.collected_at >= %(since)s AND s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}))
             ORDER BY first DESC, s.id
             """,
             {"since": since},

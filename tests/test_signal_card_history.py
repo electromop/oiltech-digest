@@ -132,6 +132,24 @@ def test_dry_run_prints_signals_and_price_and_enqueues_nothing(user, admin, cont
     assert "сухой прогон" in out
 
 
+def test_history_takes_only_feed_signals_whose_article_the_feed_shows(user, admin, contour, october, capsys):
+    feed_signal("Видна в ленте", TEXT, published=published(10))
+    rejected = feed_signal("Отбор передумал", TEXT, published=published(10))
+    deleted = feed_signal("Помечена на удаление", TEXT, published=published(10))
+    feed_signal("Источник в архиве", TEXT, published=published(10), source="Закрытый источник")
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE article_cards SET relevant = FALSE WHERE article_id = %s", (rejected,))
+        conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (deleted,))
+        conn.execute("UPDATE sources SET archived_at = now() WHERE name = 'Закрытый источник'")
+        conn.commit()
+
+    history()
+
+    # История — принятые статьи (спека #93): за карточку, которую лента не покажет, не платим.
+    out = capsys.readouterr().out
+    assert "сигналов 1;" in out and "к заполнению 1:" in out
+
+
 def test_history_is_put_only_into_the_bulk_lane_behind_the_flag_and_with_the_model(
         user, admin, contour, october, monkeypatch, capsys):
     feed_signal("Контракт SLB", TEXT, published=published(10))

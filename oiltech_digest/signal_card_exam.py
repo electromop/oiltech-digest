@@ -21,15 +21,17 @@ from datetime import date, datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from oiltech_digest import config, signal_card, signal_card_exam_baseline, signal_card_exam_report
+from oiltech_digest.signal_card import _plain
 from oiltech_digest.signal_card_exam_score import CompanyNames, baseline_metrics, evaluate, judge_metrics
-from oiltech_digest.signal_card_pack import (LISTS_SHEET, MANIFEST_NAME, MARKUP_SHEET, REPO_ROOT, UNDEFINED,
-                                             load_dictionaries, publication_text)
+from oiltech_digest.signal_card_pack import (LISTS_SHEET, MANIFEST_NAME, MARKUP_COLUMNS, MARKUP_SHEET, REPO_ROOT,
+                                             UNDEFINED, _rank, load_dictionaries, publication_text)
 
-# Лестница по цене (спека #93): сначала nano, при провале — mini.
+# Лестница по цене (спека #93): сначала nano, при провале — mini. Названные модели идут так же — по цене.
 MODELS = ("gpt-5.4-nano", "gpt-5.4-mini")
+# Прогонов на сигнал экзамена (спека); на настройке — сколько угодно.
 RUNS = 3
 TUNING_SHARE = 15 / 50
 SPLIT_NAME = "signal_card_exam_split.json"
@@ -48,9 +50,7 @@ LABEL_COLUMNS = {"Дата события": "event_date", "Источник да
                  "Компании-участники": "companies", "Тип события": "event_type", "Регион": "region",
                  "Класс технологии": "technology_class", "Зрелость": "maturity",
                  "Связь с нефтесервисом": "oilfield_relevance"}
-LABEL_DICTIONARIES = {"event_date_source": "date_source", "event_type": "event_type", "region": "region",
-                      "technology_class": "technology_class", "maturity": "maturity",
-                      "oilfield_relevance": "oilfield_relevance"}
+LABEL_DICTIONARIES = {LABEL_COLUMNS[title]: key for title, key in MARKUP_COLUMNS if key}
 
 
 class ExamError(ValueError):
@@ -58,23 +58,24 @@ class ExamError(ValueError):
 
 
 def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
-        runs: int = RUNS, part: str = "exam", log: Callable[[str], None] = print) -> dict[str, Any]:
+        runs: int = RUNS, part: str = "exam") -> dict[str, Any]:
     """Экзамен по лестнице моделей: отчёт и решение — рядом с манифестом."""
+    _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     split = _split(exam, write=True)
     items = [item for item in exam["items"] if item["id"] in set(split[part])]
     dictionaries = load_dictionaries()
     names = CompanyNames([*dictionaries["companies"], *exam["aliases"]])
     tried, decision = [], None
-    for model in models:
-        answers = _answers(model, items, runs, dictionaries, log)
+    for model in _by_price(models):
+        answers = _answers(model, items, runs, dictionaries)
         finals = _finals(answers, items, dictionaries)
         scored = {view: evaluate(items, finals, names, lenient=view == "lenient") for view in ("strict", "lenient")}
         tried.append({"model": model, **_spend(answers), "answers": answers, **scored,
                       "without_card": sum(final is None for one in finals.values() for final in one),
                       "passed": scored["lenient"]["passed"]})
-        log(f"{model}: " + ("пороги пройдены" if scored["lenient"]["passed"]
-                            else "не прошла: " + ", ".join(scored["lenient"]["failed"])))
+        print(f"{model}: " + ("пороги пройдены" if scored["lenient"]["passed"]
+                              else "не прошла: " + ", ".join(scored["lenient"]["failed"])))
         if scored["lenient"]["passed"] and part == "exam":
             decision = model
             break
@@ -100,12 +101,13 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
          runs: int = RUNS, part: str = "exam") -> dict[str, Any]:
     """Сухой прогон: число вызовов и цена по моделям; ничего не пишет и не вызывает модель. Цена — по длине
     запросов набора (signal_card.estimate)."""
+    _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     split = _split(exam, write=False)
     items = [item for item in exam["items"] if item["id"] in set(split[part])]
     dictionaries = load_dictionaries()
     chars = sum(signal_card.request_chars(_model_item(index, item), dictionaries) for index, item in enumerate(items))
-    priced = [signal_card.estimate(chars * runs, len(items) * runs, model) for model in models]
+    priced = [signal_card.estimate(chars * runs, len(items) * runs, model) for model in _by_price(models)]
     stratum_of = {item["id"]: item["stratum"] for item in exam["items"]}
     return {"part": part, "signals": len(items), "runs": runs, "rows": len(exam["items"]), "split_new": split["new"],
             "split": {key: dict(sorted(Counter(stratum_of[one] for one in split[key]).items()))
@@ -113,22 +115,25 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
             "models": priced}
 
 
+def _check_runs(runs: int, part: str) -> None:
+    """Экзамен — RUNS прогонов на сигнал (спека): меньше — устойчивость не измерить, и решение о модели было бы
+    принято не так, как задано. Настройка — от одного."""
+    if runs < 1 or (part == "exam" and runs != RUNS):
+        raise ExamError(f"--runs {runs}: на экзамене — {RUNS} прогона на сигнал, на настройке — от одного")
+
+
+def _by_price(models: tuple[str, ...]) -> list[str]:
+    """Лестница — от дешёвой модели к дорогой, в каком порядке модели ни назвали: решение — самая дешёвая из прошедших."""
+    return sorted(models, key=config.price_for_model)
+
+
 def _judged(exam: dict[str, Any]) -> dict[str, Any] | None:
     """Судья радара против эксперта — на всех радарных строках набора, без вызовов модели."""
-    path = exam["folder"] / JUDGE_NAME
-    if not path.exists():
+    values = exam["judge"]
+    if values is None:
         return None
-    values = json.loads(path.read_text(encoding="utf-8"))
     items = [item for item in exam["items"] if item["origin"] == "radar" and item["id"] in values]
-    finals: dict[str, list[dict[str, Any] | None]] = {}
-    for item in items:
-        judged = values[item["id"]]
-        day = judged.get("event_date")
-        try:
-            finals[item["id"]] = [{"event_date": date.fromisoformat(day) if day else None,
-                                   "oilfield_relevance": judged.get("oilfield_relevance")}]
-        except ValueError as exc:
-            raise ExamError(f"{path.name}, {item['id']}: дата события {day!r} — не ГГГГ-ММ-ДД") from exc
+    finals: dict[str, list[dict[str, Any] | None]] = {item["id"]: [values[item["id"]]] for item in items}
     return {view: judge_metrics(items, finals, lenient=view == "lenient") for view in ("strict", "lenient")}
 
 
@@ -144,8 +149,9 @@ def judge_values(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _reason(decision: str | None, tried: list[dict[str, Any]]) -> str:
+    """Почему решение такое; сама модель — в decision["model"]."""
     if decision:
-        return f"{decision} — самая дешёвая из прошедших пороги"
+        return "самая дешёвая из прошедших пороги"
     return "ни одна модель не прошла пороги: " + "; ".join(
         f"{one['model']} — {', '.join(one['lenient']['failed'])}" for one in tried)
 
@@ -170,6 +176,10 @@ def load(markup_path: str | Path, manifest_path: str | Path | None = None) -> di
     if folder == REPO_ROOT or REPO_ROOT in folder.parents:
         raise ExamError(f"{folder} — внутри репозитория, а он публичный: пакет эксперту и отчёт — вне его")
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("items"), list) or not all(
+            isinstance(item, dict) and {"id", "stratum", "text_sha256"} <= item.keys() for item in manifest["items"]):
+        raise ExamError(f"{manifest_file.name}: не манифест пакета эксперту — нужен список items с id, stratum и "
+                        "text_sha256")
     dictionaries = load_dictionaries()
     labels = _read_markup(markup, dictionaries)
     listed = [item["id"] for item in manifest["items"]]
@@ -186,6 +196,7 @@ def load(markup_path: str | Path, manifest_path: str | Path | None = None) -> di
             raise ExamError(f"{item['id']}: текст в таблице не тот, что в манифесте — таблица от другого пакета")
         items.append({**_inputs(item), "labels": row["labels"], "tolerated": tolerated.get(item["id"], {})})
     return {"folder": folder, "seed": manifest.get("seed"), "items": items, "aliases": _aliases(folder / ALIASES_NAME),
+            "judge": _judge_file(folder / JUDGE_NAME),
             "manifest": _file_mark(manifest_file), "markup": _file_mark(markup),
             "files": {name: _mark_if_exists(folder / file) for name, file in (
                 ("tolerances", TOLERANCES_NAME), ("aliases", ALIASES_NAME), ("judge", JUDGE_NAME))}}
@@ -202,6 +213,27 @@ def _aliases(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _judge_file(path: Path) -> dict[str, dict[str, Any]] | None:
+    """Выгрузка судьи с ядра (signal-card-exam-judge): {ID: {event_date, oilfield_relevance}} → значения в форме
+    карточки. Проверяется при загрузке набора, до вызовов модели: битый файл не должен сорвать оплаченный прогон."""
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not all(isinstance(judged, dict) for judged in data.values()):
+        raise ExamError(f"{path.name}: нужен объект {{ID строки: {{event_date, oilfield_relevance}}}} — выгрузка "
+                        "signal-card-exam-judge")
+    values = {}
+    for number, judged in data.items():
+        day, relevance = judged.get("event_date"), judged.get("oilfield_relevance")
+        if relevance is not None and not isinstance(relevance, str):
+            raise ExamError(f"{path.name}, {number}: связь с нефтесервисом {relevance!r} — не строка")
+        try:
+            values[number] = {"event_date": date.fromisoformat(day) if day else None, "oilfield_relevance": relevance}
+        except (TypeError, ValueError) as exc:
+            raise ExamError(f"{path.name}, {number}: дата события {day!r} — не ГГГГ-ММ-ДД") from exc
+    return values
+
+
 def _mark_if_exists(path: Path) -> dict[str, str] | None:
     return _file_mark(path) if path.exists() else None
 
@@ -210,13 +242,19 @@ def _tolerances(path: Path, ids: set[str], dictionaries: dict[str, Any]) -> dict
     """Список допусков: значения — в той же форме, что метки эксперта (справочники, даты ГГГГ-ММ-ДД)."""
     if not path.exists():
         return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ExamError(f"{path.name}: нужен объект {{ID строки: {{атрибут: [ответы]}}}}")
     problems: list[str] = []
     tolerated: dict[str, dict[str, list[Any]]] = {}
-    for number, cells in json.loads(path.read_text(encoding="utf-8")).items():
+    for number, cells in data.items():
         if number.startswith("_"):
             continue
         if number not in ids:
             problems.append(f"{number} — нет в манифесте")
+            continue
+        if not isinstance(cells, dict):
+            problems.append(f"{number} — нужен объект {{атрибут: [ответы]}}")
             continue
         row: dict[str, list[Any]] = {}
         for key, values in cells.items():
@@ -259,6 +297,8 @@ def _read_markup(path: Path, dictionaries: dict[str, Any]) -> dict[str, dict[str
     if MARKUP_SHEET not in book.sheetnames:
         raise ExamError(f"{path.name}: нет листа «{MARKUP_SHEET}»")
     rows = list(book[MARKUP_SHEET].iter_rows(values_only=True))
+    if not rows:
+        raise ExamError(f"{path.name}: лист «{MARKUP_SHEET}» пуст")
     header = [str(cell or "").strip() for cell in rows[0]]
     absent = [name for name in ("ID", "Текст публикации", *LABEL_COLUMNS) if name not in header]
     if absent:
@@ -317,9 +357,6 @@ def _label(key: str, raw: Any, dictionaries: dict[str, Any], problems: list[str]
     return found
 
 
-def _plain(value: str) -> str:
-    return " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").casefold().split())
-
 
 # --- Деление -------------------------------------------------------------------------------------
 
@@ -330,6 +367,8 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
     ids = sorted(item["id"] for item in exam["items"])
     if path.exists():
         saved = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(saved, dict) or not all(isinstance(saved.get(key), list) for key in ("tuning", "exam")):
+            raise ExamError(f"{path.name}: испорчен — нужны списки tuning и exam")
         if sorted(saved["tuning"] + saved["exam"]) != ids:
             raise ExamError(f"{path.name} — деление другого набора: манифест сменился после первого прогона")
         return {**saved, "new": False}
@@ -347,7 +386,7 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
         if len(group) >= 2:  # каждая доля — в обеих частях
             counts[stratum] = min(max(counts[stratum], 1), len(group) - 1)
     tuning = {number for stratum, group in by_stratum.items()
-              for number in sorted(group, key=lambda one: _rank(exam["seed"], one))[:counts[stratum]]}
+              for number in sorted(group, key=lambda one: _rank("split", exam["seed"], one))[:counts[stratum]]}
     split = {"created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
              "rule": "наибольшие остатки по долям манифеста, порядок в доле — по хэшу зерна и номера",
              "tuning": [item["id"] for item in exam["items"] if item["id"] in tuning],
@@ -356,9 +395,6 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
         path.write_text(json.dumps(split, ensure_ascii=False, indent=2), encoding="utf-8")
     return {**split, "new": True}
 
-
-def _rank(seed: Any, number: str) -> str:
-    return hashlib.sha256(f"split:{seed}:{number}".encode()).hexdigest()
 
 
 # --- Прогоны -------------------------------------------------------------------------------------
@@ -370,8 +406,7 @@ def _model_item(index: int, item: dict[str, Any]) -> dict[str, Any]:
             "published": item["published"].isoformat() if item["published"] else None}
 
 
-def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: dict[str, Any],
-             log: Callable[[str], None]) -> list[dict[str, Any]]:
+def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
     """Ответы модели: строка на (прогон, сигнал). Сбой вызова — одна повторная попытка, как у шага
     планировщика; обе попытки оплачены."""
     payload: dict[str, Any] = {"model": model, "reasoning": config.SIGNAL_CARD_REASONING, "dictionaries": dictionaries,
@@ -393,7 +428,7 @@ def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: d
                             "attempts": card.get("attempts", 1), "input_tokens": paid[index][0],
                             "output_tokens": paid[index][1]})
         errors = sum(_failed(card, items[index], dictionaries) for index, card in enumerate(cards))
-        log(f"{model}: прогон {number}/{runs} — вызовов {len(cards) + len(failed)}, без карточки {errors}")
+        print(f"{model}: прогон {number}/{runs} — вызовов {len(cards) + len(failed)}, без карточки {errors}")
     return answers
 
 

@@ -165,6 +165,11 @@ def test_exam_takes_the_next_model_only_when_the_cheaper_one_fails(tmp_path, mon
     assert report["decision"]["model"] is None
     assert [one["lenient"]["failed"] for one in report["models"]] == [["region"], ["event_type"]]
 
+    # Лестница — по цене, в каком порядке модели ни назови: прошла nano — до mini не доходит.
+    model, report = run_exam(monkeypatch, markup, {NANO: lambda title: answer(), MINI: lambda title: answer()},
+                             "--models", f"{MINI},{NANO}")
+    assert report["decision"]["model"] == NANO and {call["model"] for call in model.calls} == {NANO}
+
 
 def test_split_by_shares_is_fixed_at_the_first_run_and_does_not_change(tmp_path, monkeypatch, strata):
     markup = write_pack(tmp_path, pack_rows())
@@ -277,6 +282,48 @@ def test_company_names_are_compared_through_aliases_word_forms_and_spelling(tmp_
     assert metrics["companies_precision"]["by_signal"] == pytest.approx(17 / 31)
     assert metrics["companies_recall"]["by_signal"] == pytest.approx(17 / 31)
     assert metrics["invented_companies"]["agent"] == 0
+    # Константа — самая частая компания эксперта (одна из пяти у полезных, по 17 строк) у каждого сигнала.
+    assert metrics["companies_precision"]["constant"] == pytest.approx(17 / 35)
+    assert metrics["companies_recall"]["constant"] == pytest.approx(17 / 99)
+
+
+ROSNEFTEGAZ = "Роснефтегаз и Сибнефть подписали контракт 24 сентября 2026 года; Роснефть в сделке не участвует."
+
+
+def test_a_name_that_only_begins_like_the_experts_is_another_company(tmp_path, monkeypatch, strata):
+    # Общее начало слова — не падеж: «Роснефть» — не «Роснефтегаз», «Сибур» — не «Сибнефть».
+    markup = write_pack(tmp_path, pack_rows(business={"text": ROSNEFTEGAZ,
+                                                      "Компании-участники": "Роснефтегаз; Сибнефть"}))
+    wrong = [{"name": "Роснефть", "quote": "Роснефть в сделке не участвует"},
+             {"name": "Сибур", "quote": "Сибнефть подписали контракт"}]
+
+    _, report = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, business=answer(companies=wrong))})
+
+    business = report["models"][0]["strict"]["by_stratum"]["business"]
+    assert business["companies_precision"]["matched"] == 0
+    assert business["invented_companies"]["agent"] == 4 * 3  # «Сибура» в тексте нет, «Роснефть» — есть
+
+
+def test_broken_side_files_and_short_runs_are_refused_before_any_paid_call(tmp_path, monkeypatch, capsys):
+    markup = write_pack(tmp_path, pack_rows())
+    model = ExamModel({NANO: lambda title: answer(), MINI: lambda title: answer()})
+    monkeypatch.setattr(signal_card, "make_client", lambda: model)
+    # Файлы рядом с манифестом пишут люди и выгрузка с ядра: битый — отказ с именем файла, до вызовов модели.
+    for name, content in (("signal_card_exam_tolerances.json", "[]"),
+                          ("signal_card_exam_tolerances.json", '{"article:1": ["SLB"]}'),
+                          ("signal_card_exam_judge.json", '{"signal:25": "2026-09-24"}'),
+                          ("signal_card_exam_aliases.json", '{"name": "SLB"}')):
+        (tmp_path / name).write_text(content, encoding="utf-8")
+        with pytest.raises(SystemExit, match=name):
+            cli.main(["signal-card-exam", "--markup", str(markup)])
+        (tmp_path / name).unlink()
+    # Экзамен — три прогона на сигнал (спека); меньше — только на настройке.
+    for runs in ("0", "1"):
+        with pytest.raises(SystemExit, match="--runs"):
+            cli.main(["signal-card-exam", "--markup", str(markup), "--runs", runs])
+    cli.main(["signal-card-exam", "--markup", str(markup), "--part", "tuning", "--runs", "1", "--dry-run"])
+    assert "сигналов 15, прогонов на сигнал 1" in capsys.readouterr().out
+    assert model.calls == []
 
 
 def test_no_ai_baseline_finds_companies_and_region_by_dictionary(tmp_path, monkeypatch, strata):

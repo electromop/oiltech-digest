@@ -262,7 +262,6 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     пишется: ошибка — в итоге задачи, остальные карточки пачки пишутся. signal_ids — сигналы задачи:
     карточку другого сигнала итог воркера не пишет."""
     dictionaries = load_dictionaries()
-    schema = _answer_schema(dictionaries)
     cards = [card for card in result.get("cards") or [] if isinstance(card, dict)]
     ids = [signal_id for signal_id in map(_signal_id, cards) if signal_id is not None]
     publications = {int(row["signal_id"]): _publication(row) for row in signal_card_store.card_inputs(ids)}
@@ -277,8 +276,11 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     errors: list[dict[str, Any]] = []
     for card in cards:
         signal_id = _signal_id(card)
-        problem = _card_problem(card, signal_id, expected, publications, schema)
-        if problem:
+        problem = _publication_problem(card, signal_id, expected, publications)
+        values = None
+        if problem is None:
+            values, problem = card_values(card, publications[signal_id], dictionaries)
+        if values is None:
             errors.append({"signal_id": signal_id, "error": problem})
             continue
         recipe = {
@@ -286,7 +288,6 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
             "model": _model_name(card), "dictionaries_version": dictionaries.get("version"),
             "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "job_id": job_id,
         }
-        values = check_answer(card["answer"], publications[signal_id], dictionaries)
         if signal_card_store.write_card(signal_id, values, recipe=recipe):
             applied += 1
     return {"applied": applied, "errors": errors}
@@ -296,14 +297,12 @@ def _in_job(signal_id: int | None, expected: set[str] | None) -> bool:
     return signal_id is not None and (expected is None or str(signal_id) in expected)
 
 
-def _card_problem(card: dict[str, Any], signal_id: int | None, expected: set[str] | None,
-                  publications: dict[int, dict[str, Any]], schema: dict[str, Any]) -> str | None:
-    """Почему строку итога воркера нельзя записать; None — можно."""
+def _publication_problem(card: dict[str, Any], signal_id: int | None, expected: set[str] | None,
+                         publications: dict[int, dict[str, Any]]) -> str | None:
+    """Почему строку итога воркера не с чем сверить: сигнал чужой, главной публикации нет или она сменилась;
+    None — можно сверять ответ (card_values)."""
     if not _in_job(signal_id, expected):
         return "сигнала нет в этой задаче"
-    problem = _answer_problem(card, schema)
-    if problem:
-        return problem
     publication = publications.get(signal_id)
     if publication is None:
         return "нет сигнала или его главной публикации"
@@ -315,9 +314,8 @@ def _card_problem(card: dict[str, Any], signal_id: int | None, expected: set[str
 
 def card_values(card: dict[str, Any], publication: dict[str, Any],
                 dictionaries: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    """Строка итога воркера → значения карточки, как их запишет ядро, или почему карточки не будет
-    (ошибка модели, ответ не по схеме). Так же ответ модели проверяет экзамен (#98): мерится то, что
-    дойдёт до карточки, а не сырой ответ."""
+    """Строка итога воркера → значения карточки или почему карточки не будет (ошибка модели, ответ не по
+    схеме). Через неё пишет ядро (apply_result) и мерит экзамен (#98): мерится то, что дойдёт до карточки."""
     problem = _answer_problem(card, _answer_schema(dictionaries))
     if problem:
         return None, problem
