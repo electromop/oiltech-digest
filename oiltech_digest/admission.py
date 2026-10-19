@@ -1,9 +1,10 @@
 """Допуск по коду (#113, спека #110, ADR 0004): войти можно только допущенной учётке.
 
 Новая учётка и учётка, с которой сняли допуск, после верного пароля получают ответ «нужен код
-допуска». Код — восемь цифр, одноразовый, 24 часа, не больше пяти попыток ввода; в базе только
-его отпечаток. Новый код одной учётке — не чаще раза в 10 минут и только когда прежний уже не
-действует: повторные входы не засыпают чат.
+допуска». Код — восемь цифр, одноразовый, 24 часа, не больше пяти попыток ввода; в таблице кодов
+только его отпечаток, открытым текстом код лежит лишь в задаче отправки, пока она не завершилась.
+Новый код одной учётке — не чаще раза в 10 минут и только когда прежний уже не действует:
+повторные входы не засыпают чат.
 
 Код уходит в закрытый чат подтверждающих в Telegram. С РФ-ядра Telegram недоступен (решение
 владельца), поэтому ядро ставит задачу `admission_notify` в очередь external-notify, а сообщение
@@ -35,6 +36,8 @@ _MSK = ZoneInfo("Europe/Moscow")
 _TELEGRAM_API = "https://api.telegram.org"
 
 REQUIRED = "Нужен код допуска: код отправлен подтверждающим, получите его у них."
+# Отправка выключена: код выдают подтверждающие командой на сервере.
+REQUIRED_ASK = "Нужен код допуска: попросите его у подтверждающих."
 NO_CODE = "Код уже использован или не выдавался. Войдите с паролем ещё раз, чтобы получить новый."
 EXPIRED = "Срок кода истёк. Войдите с паролем ещё раз, чтобы получить новый."
 EXHAUSTED = ("Код больше не действует: попытки ввода закончились. Войдите с паролем ещё раз — новый код "
@@ -96,29 +99,38 @@ def issue_code(user_id: int, *, force: bool = False) -> tuple[str, datetime] | N
     return (code, row[0]) if row else None
 
 
-def request_code(user: dict[str, Any]) -> None:
+def request_code(user: dict[str, Any]) -> str:
     """Вход недопущенной учётки с верным паролем: выдать код и поставить отправку, если пора.
+    Возвращает пояснение для экрана входа.
 
     Без флага отправки код не выдаётся: его некому доставить, выдаёт команда на сервере."""
     if not config.ADMISSION_NOTIFY_ENABLED:
-        return
+        return REQUIRED_ASK
     user_id = int(user["id"])
     issued = issue_code(user_id)
     if issued is None:
-        return
+        return REQUIRED
     from oiltech_digest import background_jobs
 
     code, expires_at = issued
-    job = background_jobs.enqueue(
-        KIND,
-        {"user_id": user_id, "text": notify_text(user_id, str(user.get("email") or ""), code, expires_at)},
-        queue_name=lanes.NOTIFY,
-        execution_region="external",
-        capability=None,
-    )
+    try:
+        job = background_jobs.enqueue(
+            KIND,
+            {"user_id": user_id, "text": notify_text(user_id, str(user.get("email") or ""), code, expires_at)},
+            queue_name=lanes.NOTIFY,
+            execution_region="external",
+            capability=None,
+        )
+    except Exception:
+        # Код, который никуда не ушёл, не должен сутки держать место: следующий вход выдаст новый.
+        with connection.get_connection() as conn:
+            conn.execute("DELETE FROM admission_codes WHERE user_id = %s", (user_id,))
+            conn.commit()
+        raise
     with connection.get_connection() as conn:
         conn.execute("UPDATE admission_codes SET notify_job_id = %s WHERE user_id = %s", (int(job["id"]), user_id))
         conn.commit()
+    return REQUIRED
 
 
 def notify_text(user_id: int, email: str, code: str, expires_at: datetime) -> str:

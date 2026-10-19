@@ -557,8 +557,8 @@ def _login_or_admission(user: dict[str, Any], response: Response) -> dict[str, A
     """Допущенной учётке — сессия. Недопущенной — «нужен код допуска» без сессии (200, а не
     отказ: пароль верный, экран входа переходит к шагу кода); код выдаётся и уходит подтверждающим."""
     if not admission.is_admitted(int(user["id"])):
-        admission.request_code(user)
-        return {"ok": False, "admission_required": True, "detail": admission.REQUIRED}
+        notice = admission.request_code(user)
+        return {"ok": False, "admission_required": True, "detail": notice}
     session_token = repository.create_user_session(int(user["id"]))
     _set_session_cookie(response, session_token)
     return _session_payload(user)

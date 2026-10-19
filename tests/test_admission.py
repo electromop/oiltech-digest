@@ -77,7 +77,7 @@ def test_new_account_is_created_without_admission(newcomer):
     assert not _admitted(newcomer["id"])
 
 
-def test_unadmitted_login_with_right_password_asks_for_code_and_opens_no_session(newcomer):
+def test_unadmitted_login_with_right_password_asks_for_code_and_opens_no_session(newcomer, notify_on):
     client = _client()
     response = _login(client)
 
@@ -109,11 +109,31 @@ def test_admitted_account_logs_in_as_before(newcomer):
     assert client.get("/api/auth/me").status_code == 200
 
 
-def test_without_notify_flag_login_issues_no_code(newcomer):
-    _login(_client())
+def test_without_notify_flag_login_issues_no_code_and_does_not_claim_it_was_sent(newcomer):
+    response = _login(_client())
 
     assert _code_row(newcomer["id"]) is None
     assert _notify_jobs() == []
+    assert response.json()["admission_required"] is True
+    assert "отправлен" not in response.json()["detail"]
+    assert "подтверждающих" in response.json()["detail"]
+
+
+def test_failed_enqueue_leaves_no_code_so_next_login_retries(newcomer, notify_on, monkeypatch):
+    from oiltech_digest import background_jobs
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("queue down")
+
+    # Локальный контекст, а не monkeypatch.undo(): undo снял бы и подмену базы из isolated_db.
+    with monkeypatch.context() as patch:
+        patch.setattr(background_jobs, "enqueue", broken)
+        with pytest.raises(RuntimeError):
+            admission.request_code(newcomer)
+    assert _code_row(newcomer["id"]) is None
+
+    _login(_client())
+    assert len(_notify_jobs()) == 1
 
 
 def test_self_registration_stays_closed(isolated_db):
@@ -458,3 +478,17 @@ def test_admission_code_command_unknown_account(isolated_db, capsys):
     with pytest.raises(SystemExit):
         cli.main(["admission-code", "--user-id", "999"])
     assert "не найдена" in capsys.readouterr().out
+
+
+def test_failure_by_expired_lease_is_settled_by_queue_sweep(newcomer, notify_on):
+    """Окончательный сбой без /fail — аренда истекла на последней попытке (сторож очередей)."""
+    from oiltech_digest import background_jobs
+
+    _login(_client())
+    _sql("UPDATE background_jobs SET status = 'failed', error_message = 'lease expired' "
+         "WHERE kind = 'admission_notify'")
+
+    background_jobs.worker_loop(once=True, poll_seconds=0, queue_names=["nothing-here"])
+
+    assert "text" not in _notify_jobs()[0][3]
+    assert _code_row(newcomer["id"])[4] == "lease expired"

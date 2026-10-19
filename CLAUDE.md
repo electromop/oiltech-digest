@@ -158,7 +158,8 @@ transferable: заказчик такие берёт в свой ТОП. Эта�
 `ADMISSION_TELEGRAM_*` в `.env.external-worker`; текст с кодом стирается из задачи после
 завершения или окончательного сбоя. Выкат: `scripts/admission/admission-before-deploy.sql`
 (нынешние учётки допускаются один раз) → ядро → NL → `ADMISSION_NOTIFY_ENABLED=1` на ядре.
-До флага и при сбое отправки код выдаёт `cli admission-code --user-id N`.
+До флага и при сбое отправки код выдаёт `cli admission-code --user-id N` — так же входит первая
+учётка свежей установки.
 
 ## Агент источников — известные дефекты
 
