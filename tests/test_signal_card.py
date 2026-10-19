@@ -86,6 +86,36 @@ def test_participant_needs_a_quote_from_the_text_publisher_is_dropped_aliases_co
     ]
 
 
+def test_company_only_beginning_like_a_word_of_the_quote_is_not_named_in_it(user, contour, monkeypatch):
+    # Общее начало слова — не падеж: «Сибур» не назван в цитате про «Сибнефть», «Роснефть» — в цитате про
+    # «Роснефтегаз». Иначе не та компания записалась бы проверенным участником.
+    feed_signal("Контракт Сибнефти", "Сибнефть и Роснефтегаз подписали контракт на бурение. Сделку одобрил совет "
+                                     "директоров Роснефти.")
+    fill(monkeypatch, {"Контракт Сибнефти": answer(companies=[
+        {"name": "Сибур", "quote": "Сибнефть и Роснефтегаз подписали контракт"},
+        {"name": "Роснефть", "quote": "Сибнефть и Роснефтегаз подписали"},
+        {"name": "Сибнефть", "quote": "Сибнефть и Роснефтегаз подписали контракт"},
+        {"name": "Роснефть", "quote": "Сделку одобрил совет директоров Роснефти"},  # она же — в падеже
+    ])})
+
+    participants = business(user)["Контракт Сибнефти"]["participants_json"]
+    assert [(item["name"], item["quote"]) for item in participants] == [
+        ("Сибнефть", "Сибнефть и Роснефтегаз подписали контракт"),
+        ("Роснефть", "Сделку одобрил совет директоров Роснефти")]
+
+
+def test_short_name_counts_only_as_a_whole_word_and_fused_gazprom_neft_is_recognised(user, contour, monkeypatch):
+    # «BP» — не часть «bpd»; «Газпромнефть-Хантос» — это «Газпром нефть»: так слитно пишут её дочерние общества.
+    feed_signal("Бурение Хантоса", "Газпромнефть-Хантос начала бурение на Приобском. Добыча составила 100,000 bpd.")
+    fill(monkeypatch, {"Бурение Хантоса": answer(companies=[
+        {"name": "Газпром нефть", "quote": "Газпромнефть-Хантос начала бурение"},
+        {"name": "BP", "quote": "Добыча составила 100,000 bpd"},
+    ])})
+
+    participants = business(user)["Бурение Хантоса"]["participants_json"]
+    assert [item["name"] for item in participants] == ["Газпром нефть"]
+
+
 def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, monkeypatch):
     # Пресс-релиз компании: издатель — она сама и главный участник. Не участник — издатель-СМИ.
     feed_signal("Пресс-релиз Halliburton", "Halliburton и ADNOC подписали контракт на бурение.",

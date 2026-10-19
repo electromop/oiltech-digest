@@ -71,7 +71,7 @@
     {"name": "CNPC", "aliases": ["PetroChina", "China National Petroleum Corporation", "CNPC Group"]},
     {"name": "Sinopec", "aliases": ["China Petrochemical Corporation", "Синопек"]},
     {"name": "CNOOC", "aliases": ["China National Offshore Oil Corporation"]},
-    {"name": "Газпром нефть", "aliases": ["Gazprom Neft", "ГПН"]},
+    {"name": "Газпром нефть", "aliases": ["Gazprom Neft", "ГПН", "Газпромнефть", "Gazpromneft"]},
     {"name": "Газпром", "aliases": ["Gazprom", "ПАО «Газпром»"]},
     {"name": "Роснефть", "aliases": ["Rosneft", "НК «Роснефть»"]},
     {"name": "ЛУКОЙЛ", "aliases": ["Lukoil"]},

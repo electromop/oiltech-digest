@@ -11,8 +11,9 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from oiltech_digest.signal_card_exam_score import same_word, text_tokens
+from oiltech_digest.signal_card_exam_score import text_tokens
 from oiltech_digest.signal_card_pack import UNDEFINED
+from oiltech_digest.word_forms import same_word
 
 # Места — по-русски и по-английски; русские слова сверяются по основе (падежи), составные — целиком.
 _PLACES: dict[str, tuple[str, ...]] = {

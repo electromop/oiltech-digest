@@ -287,21 +287,36 @@ def test_company_names_are_compared_through_aliases_word_forms_and_spelling(tmp_
     assert metrics["companies_recall"]["constant"] == pytest.approx(17 / 99)
 
 
-ROSNEFTEGAZ = "Роснефтегаз и Сибнефть подписали контракт 24 сентября 2026 года; Роснефть в сделке не участвует."
+ROSNEFTEGAZ = "Роснефтегаз и Сибнефть подписали контракт 24 сентября 2026 года; Роснефть и Сибур в сделке не участвуют."
 
 
 def test_a_name_that_only_begins_like_the_experts_is_another_company(tmp_path, monkeypatch, strata):
     # Общее начало слова — не падеж: «Роснефть» — не «Роснефтегаз», «Сибур» — не «Сибнефть».
     markup = write_pack(tmp_path, pack_rows(business={"text": ROSNEFTEGAZ,
                                                       "Компании-участники": "Роснефтегаз; Сибнефть"}))
-    wrong = [{"name": "Роснефть", "quote": "Роснефть в сделке не участвует"},
-             {"name": "Сибур", "quote": "Сибнефть подписали контракт"}]
+    wrong = [{"name": "Роснефть", "quote": "Роснефть и Сибур в сделке не участвуют"},
+             {"name": "Сибур", "quote": "Роснефть и Сибур в сделке не участвуют"}]
 
     _, report = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, business=answer(companies=wrong))})
 
     business = report["models"][0]["strict"]["by_stratum"]["business"]
-    assert business["companies_precision"]["matched"] == 0
-    assert business["invented_companies"]["agent"] == 4 * 3  # «Сибура» в тексте нет, «Роснефть» — есть
+    # Обе дошли до карточки (названы в своей цитате), но это не компании эксперта.
+    assert (business["companies_precision"]["named"], business["companies_precision"]["matched"]) == (4 * 3 * 2, 0)
+
+
+SHORT_NAMES = "BP и H&P подписали контракт на бурение 24 сентября 2026 года."
+
+
+def test_short_company_names_named_in_the_text_are_not_invented(tmp_path, monkeypatch, strata):
+    # У коротких имён нет слов от трёх букв — их ищут в тексте целиком; иначе верная карточка «выдумывала» бы BP.
+    markup = write_pack(tmp_path, pack_rows(business={"text": SHORT_NAMES,
+                                                      "Компании-участники": "BP; Helmerich & Payne"}))
+    named = [{"name": "BP", "quote": "BP и H&P подписали контракт"}, {"name": "H&P", "quote": "BP и H&P подписали"}]
+
+    _, report = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, business=answer(companies=named))})
+
+    business = report["models"][0]["strict"]["by_stratum"]["business"]
+    assert (business["invented_companies"]["agent"], business["companies_recall"]["matched"]) == (0, 4 * 3 * 2)
 
 
 def test_broken_side_files_and_short_runs_are_refused_before_any_paid_call(tmp_path, monkeypatch, capsys):

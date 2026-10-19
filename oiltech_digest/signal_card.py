@@ -21,6 +21,7 @@ from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.signal_card_pack import (CATEGORY_RU, CHOICE_DICTIONARIES, UNDEFINED, load_dictionaries,
                                              publication_day, publication_text)
+from oiltech_digest.word_forms import same_word
 
 KIND = signal_card_store.KIND
 # Версия инструкции — в рецепте карточки: другая инструкция — другие карточки.
@@ -445,15 +446,15 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
 
 
 def _named_in(quote: str, names: tuple[str, ...]) -> bool:
-    """Названа ли компания в цитате — под любым из имён. Слово имени сверяется по основе (без двух
-    последних букв, не короче трёх): «Роснефтью» — это «Роснефть». Имя без слов длиннее двух букв
-    (BP, H&P) — целиком."""
+    """Названа ли компания в цитате — под любым из имён. Слово имени ищется среди слов цитаты с падежами
+    (word_forms.same_word): «Роснефтью» — это «Роснефть», а «Роснефтегаз» и «Сибнефть» при «Сибуре» — другие
+    компании. Имя без слов длиннее двух букв (BP, H&P) — целиком."""
     words = re.findall(r"\w+", _plain(quote))
     for name in names:
         tokens = [token for token in re.findall(r"\w+", _plain(name)) if len(token) >= 3]
-        if not tokens and _plain(name) in _plain(quote):
+        if not tokens and re.search(rf"(?<!\w){re.escape(_plain(name))}(?!\w)", _plain(quote)):
             return True
-        if any(word.startswith(token[:max(3, len(token) - 2)]) for token in tokens for word in words):
+        if any(same_word(word, token) for token in tokens for word in words):
             return True
     return False
 

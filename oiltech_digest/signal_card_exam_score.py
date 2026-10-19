@@ -21,6 +21,7 @@ from typing import Any
 
 from oiltech_digest.signal_card import FROM_TEXT, RELEVANCE_CODES
 from oiltech_digest.signal_card_pack import UNDEFINED
+from oiltech_digest.word_forms import same_word
 
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
               "technology_class": 0.75, "maturity": 0.75, "oilfield_relevance": 0.75}
@@ -229,33 +230,12 @@ def _company_tally(items, finals, names, lenient) -> dict[str, Any]:
 
 # Дефисы (и неразрывный U+2011) и кавычки для сравнения имён — пробел: «КТК‑Р» — это «КТК-Р».
 _NAME_MARKS = str.maketrans({mark: " " for mark in "-‐‑‒–—―«»„“”\"'’‘`"})
-_CYRILLIC = re.compile(r"[а-яА-Я]")
-# Падежные окончания русских существительных и прилагательных (ед. и мн. число): слово — основа плюс одно из них.
-_ENDINGS = ("", "а", "я", "у", "ю", "е", "и", "ы", "о", "ь", "й", "ом", "ем", "ой", "ей", "ью", "ам", "ям", "ах", "ях",
-            "ов", "ев", "ую", "юю", "ая", "яя", "ое", "ее", "ие", "ые", "ий", "ый", "их", "ых", "им", "ым", "ого", "его",
-            "ому", "ему", "ами", "ями", "ими", "ыми")
 
 
 def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
     """Слова имени или текста в форме сравнения: без различий «ё», дефисов, кавычек и (кроме keep_case) регистра."""
     plain = str(text or "").replace("ё", "е").replace("Ё", "Е")
     return re.findall(r"\w+", (plain if keep_case else plain.casefold()).translate(_NAME_MARKS))
-
-
-def same_word(one: str, other: str) -> bool:
-    """Одно слово, в том числе в другом падеже: у русских слов от четырёх букв — общая основа не короче трёх букв
-    и падежные окончания (_ENDINGS). «Роснефтью» — это «Роснефть», а «Роснефтегаз», «Газпромнефть» и
-    «Сибнефть» при «Сибуре» — другие слова: общее начало — не падеж. Латиница склонений не знает — только целиком."""
-    if one == other:
-        return True
-    if min(len(one), len(other)) < 4 or not (_CYRILLIC.match(one) and _CYRILLIC.match(other)):
-        return False
-    return bool(_stems(one) & _stems(other))
-
-
-def _stems(word: str) -> set[str]:
-    return {word[:len(word) - len(ending)] for ending in _ENDINGS
-            if word.endswith(ending) and len(word) - len(ending) >= 3}
 
 
 def _same_name(one: tuple[str, ...], other: tuple[str, ...]) -> bool:
@@ -299,9 +279,16 @@ class CompanyNames:
         return hits
 
     def in_text(self, name: str, tokens: list[str]) -> bool:
-        """Компания есть в тексте — хоть одно значимое слово хоть одного её имени (выдуманной — нет ни одного)."""
-        words = {word for form in self.forms(name) for word in form if len(word) >= 3} or set(self.forms(name)[0])
-        return any(same_word(word, token) for word in words for token in tokens)
+        """Компания есть в тексте — хоть одно значимое слово (от трёх букв) хоть одного её имени, а имя из одних
+        коротких слов (BP, H&P) — целиком, подряд: как ядро ищет имя в цитате. Выдуманной — нет ни одного."""
+        for form in self.forms(name):
+            words = [word for word in form if len(word) >= 3]
+            if words and any(same_word(word, token) for word in words for token in tokens):
+                return True
+            if form and not words and any(tuple(tokens[start:start + len(form)]) == form
+                                          for start in range(len(tokens))):
+                return True
+        return False
 
 
 # --- Даты в тексте -------------------------------------------------------------------------------
