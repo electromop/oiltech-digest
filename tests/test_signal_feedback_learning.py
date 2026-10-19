@@ -246,12 +246,16 @@ def test_digest_example_is_one_per_card_and_anyones_unselect_retracts_it(isolate
     )
 
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=second)
-    signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=first)
-    # Записанный до #111 сохранён, новых — один, сколько бы раз ни отмечали.
-    assert _active("signal_verdict", signal) == ["strong_signal", "strong_signal"]
+    # Записанный до #111 сохранён и остаётся единственным: второй пример карточке не нужен.
+    assert _active("signal_verdict", signal) == ["strong_signal"]
 
     signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=second)
     assert _active("signal_verdict", signal) == []
+
+    # Снова «в дайджест» — снова один пример, сколько бы раз ни отмечали.
+    signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=first)
+    signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=second)
+    assert _active("signal_verdict", signal) == ["strong_signal"]
 
 
 def test_duplicate_verdict_spares_card_chosen_for_the_issue(isolated_db):

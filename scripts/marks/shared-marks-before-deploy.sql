@@ -21,4 +21,15 @@ CREATE TABLE IF NOT EXISTS signal_marks (
 );
 CREATE INDEX IF NOT EXISTS idx_signal_marks_status ON signal_marks(status);
 
+-- Перенос личных отметок в общие (#111) — запись «сделан», одна строка: повторный запуск ничего
+-- не меняет, сверка только чтением берёт отсюда основу и первый открытый месяц на момент переноса.
+CREATE TABLE IF NOT EXISTS shared_marks_migration (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  base_user_id   BIGINT NOT NULL,
+  open_from      TEXT NOT NULL,  -- «ГГГГ-ММ»: месяцы раньше — закрытые на момент переноса
+  report_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  done_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_marks_migration_once ON shared_marks_migration ((TRUE));
+
 COMMIT;

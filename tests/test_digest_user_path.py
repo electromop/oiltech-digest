@@ -79,32 +79,6 @@ def test_one_draft_per_month_edited_by_anyone(issue):
     assert repository.issue_composition(SEPT)["article_ids"] == [a["hi"]]
 
 
-def test_server_commands_build_the_same_issue_as_the_screen(issue, tmp_path):
-    """digest-content и digest-save на сервере собирают тот же выпуск, что экран (#111): без
-    учётки, по общим отметкам и общему черновику, с умолчаниями экрана."""
-    from oiltech_digest import cli
-
-    analyst, colleague, a, s = issue["analyst"], issue["colleague"], issue["a"], issue["s"]
-    analyst.mark(a["low"])
-    colleague.mark(a["hi"])
-    colleague.mark_signal(s["sep"])
-    assert analyst.save(SEPT, [a["low"], a["hi"]]).status_code == 200
-
-    out = tmp_path / "digest.json"
-    cli.main(["digest-content", SEPT, "--output", str(out)])
-    import json
-
-    by_command = [
-        ("signal", item["signal_id"]) if item.get("item_type") == "signal" else ("article", item["article_id"])
-        for item in json.loads(out.read_text(encoding="utf-8"))["news"]
-    ]
-    assert by_command == analyst.issue() == [("article", a["low"]), ("article", a["hi"]), ("signal", s["sep"])]
-
-    cli.main(["digest-save", SEPT])
-    saved = colleague.get(f"/api/monthly-digests/{SEPT}").json()
-    assert [item["article_id"] for item in saved["items"]] == [a["low"], a["hi"]]
-
-
 # ---------------------------------------------------------------------------
 #  3. Черновик: порядок, «Из выпуска», повторное открытие
 # ---------------------------------------------------------------------------

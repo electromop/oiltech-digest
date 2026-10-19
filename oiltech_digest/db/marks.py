@@ -6,8 +6,10 @@
 когда поставил её последним. Нет строки — «новая» / «наблюдать».
 
 Все запросы, которые читают или пишут отметку, берут её отсюда: SQL-обрывки для выборок и
-функции записи. Личные таблицы `user_article_states` и `user_signal_states` — архив только для
-чтения (перенос — db/marks_migration.py); приложение их не читает и не пишет.
+функции записи; мимо них пишет только разовый перенос (db/marks_migration.py). Личные таблицы
+`user_article_states` и `user_signal_states` — архив только для чтения: их читают перенос и
+статистика «кто сколько пометил» (repository.monthly_user_activity) — после переноса она видит
+только прежние месяцы, новые — по журналу (#112).
 """
 
 from __future__ import annotations
@@ -43,38 +45,12 @@ def article_marked_sql(article_ref: str, *statuses: str) -> str:
     )
 
 
-def get_article_status(article_id: int) -> str | None:
-    """Текущая отметка статьи, или None — её никто не ставил."""
-    with connection.get_connection() as conn:
-        row = conn.execute("SELECT status FROM article_marks WHERE article_id = %s", (article_id,)).fetchone()
-        return row[0] if row else None
-
-
 def set_article_mark(article_id: int, *, status: str | None = None, analyst_comment: str | None = None,
                      user_id: int | None = None) -> str | None:
-    """Поставить отметку статье; status=None — не трогаем (только комментарий).
-
-    Возвращает ПРЕЖНЮЮ отметку (None — её не было): журнал пишет прежнее и новое значение, а
-    после записи прежнее уже не достать. Чтение и запись — под одной блокировкой строки: две
-    одновременные отметки не запишут в журнал одно и то же «было»."""
-    with connection.get_connection() as conn:
-        row = conn.execute(
-            "SELECT status FROM article_marks WHERE article_id = %s FOR UPDATE", (article_id,),
-        ).fetchone()
-        conn.execute(
-            """
-            INSERT INTO article_marks (article_id, status, analyst_comment, set_by_user_id)
-            VALUES (%s, COALESCE(%s, 'new'), %s, %s)
-            ON CONFLICT (article_id) DO UPDATE SET
-              status = COALESCE(%s, article_marks.status),
-              analyst_comment = COALESCE(%s, article_marks.analyst_comment),
-              set_by_user_id = EXCLUDED.set_by_user_id,
-              updated_at = now()
-            """,
-            (article_id, status, analyst_comment, user_id, status, analyst_comment),
-        )
-        conn.commit()
-        return row[0] if row else None
+    """Поставить отметку статье; status=None — не трогаем (только комментарий). Возвращает
+    ПРЕЖНЮЮ отметку (None — её не было): журнал пишет прежнее и новое значение."""
+    return _set_mark("article_marks", "article_id", ARTICLE_DEFAULT_STATUS, article_id,
+                     status=status, analyst_comment=analyst_comment, user_id=user_id)
 
 
 # --- Карточки радара ------------------------------------------------------------------------
@@ -127,29 +103,44 @@ def signal_digest_state(signal_id: int) -> tuple[str, str | None] | None:
 
 def set_signal_mark(signal_id: int, *, status: str | None = None, analyst_comment: str | None = None,
                     user_id: int | None = None) -> str | None:
-    """Поставить отметку карточке радара; KeyError — карточки нет.
-
-    Возвращает прежнюю отметку (None — её не было), как set_article_mark."""
+    """Поставить отметку карточке радара, как set_article_mark; KeyError — карточки нет."""
     with connection.get_connection() as conn:
-        exists = conn.execute("SELECT 1 FROM signals WHERE id = %s", (signal_id,)).fetchone()
-        if not exists:
+        if not conn.execute("SELECT 1 FROM signals WHERE id = %s", (signal_id,)).fetchone():
             raise KeyError(f"Signal not found: {signal_id}")
-        row = conn.execute(
-            "SELECT status FROM signal_marks WHERE signal_id = %s FOR UPDATE", (signal_id,),
-        ).fetchone()
+    return _set_mark("signal_marks", "signal_id", SIGNAL_DEFAULT_STATUS, signal_id,
+                     status=status, analyst_comment=analyst_comment, user_id=user_id)
+
+
+def _set_mark(table: str, key: str, default_status: str, row_id: int, *, status: str | None,
+              analyst_comment: str | None, user_id: int | None) -> str | None:
+    """Запись отметки и чтение прежней — одной транзакцией. Пустой запрос ничего не пишет.
+
+    Прежнее значение читается под блокировкой строки, а строки до первой отметки нет: сначала
+    вставляем строку по умолчанию (ON CONFLICT DO NOTHING). Одновременная первая отметка ждёт на
+    уникальном ключе, пока первая не закончит, и читает уже её значение — две первые отметки не
+    запишут в журнал одно и то же «было». Последний поставивший и время — того, кто менял статус:
+    комментарий отметку не ставит. `table`, `key` — имена из этого модуля, не ввод."""
+    with connection.get_connection() as conn:
         if status is None and analyst_comment is None:
+            row = conn.execute(f"SELECT status FROM {table} WHERE {key} = %s", (row_id,)).fetchone()
             return row[0] if row else None
+        created = conn.execute(
+            f"INSERT INTO {table} ({key}, status) VALUES (%s, %s) ON CONFLICT ({key}) DO NOTHING",
+            (row_id, default_status),
+        ).rowcount == 1
+        previous = None if created else conn.execute(
+            f"SELECT status FROM {table} WHERE {key} = %s FOR UPDATE", (row_id,),
+        ).fetchone()[0]
         conn.execute(
-            """
-            INSERT INTO signal_marks (signal_id, status, analyst_comment, set_by_user_id)
-            VALUES (%s, COALESCE(%s, 'watch'), %s, %s)
-            ON CONFLICT (signal_id) DO UPDATE SET
-              status = COALESCE(%s, signal_marks.status),
-              analyst_comment = COALESCE(%s, signal_marks.analyst_comment),
-              set_by_user_id = EXCLUDED.set_by_user_id,
-              updated_at = now()
+            f"""
+            UPDATE {table} SET
+              status = COALESCE(%(status)s::text, status),
+              analyst_comment = COALESCE(%(comment)s::text, analyst_comment),
+              set_by_user_id = CASE WHEN %(status)s::text IS NULL THEN set_by_user_id ELSE %(user_id)s::bigint END,
+              updated_at = CASE WHEN %(status)s::text IS NULL THEN updated_at ELSE now() END
+            WHERE {key} = %(id)s
             """,
-            (signal_id, status, analyst_comment, user_id, status, analyst_comment),
+            {"status": status, "comment": analyst_comment, "user_id": user_id, "id": row_id},
         )
         conn.commit()
-        return row[0] if row else None
+        return previous

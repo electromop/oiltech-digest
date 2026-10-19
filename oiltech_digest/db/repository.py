@@ -26,7 +26,7 @@ from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profi
 
 logger = logging.getLogger(__name__)
 
-# Единый источник правды для набора пер-юзерных рабочих статусов статьи (#12).
+# Единый источник правды для набора статусов отметки статьи (общей с #111).
 # ДОЛЖЕН совпадать с union Article["status"] во фронте (frontend/src/api/types.ts).
 # api.ArticlePatch.status импортирует ArticleStatus отсюда (валидация 422), dashboard_stats
 # проецирует счётчики по ARTICLE_STATUS_VALUES — так Python-половина не рассинхронится:
@@ -2306,7 +2306,6 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    ({marks.signal_status_sql()} = 'digest') AS selected_for_digest,
                    sm.analyst_comment AS user_comment,
                    sm.updated_at AS user_status_updated_at,
-                   sm.set_by_user_id AS user_status_set_by,
                    (SELECT COUNT(*) {_RADAR_FEEDBACK_SQL}) AS feedback_count,
                    (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
                    corr.corrected_title,
@@ -2890,19 +2889,28 @@ def get_signal_brief(signal_id: int) -> dict | None:
         return cur.fetchone()
 
 
+def signal_memory_exists(*, signal_id: int, origin: str) -> bool:
+    """Есть ли у карточки активная память этого происхождения (по номеру карточки в фактах)."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM signal_agent_memory WHERE status = 'active'"
+            " AND facts_json->>'signal_id' = %s AND facts_json->>'origin' = %s)",
+            (str(int(signal_id)), origin),
+        ).fetchone()[0]
+
+
 def supersede_signal_feedback_memory(
     *,
     signal_id: int,
     memory_types: tuple[str, ...],
     origin: str | None = None,
-    user_id: int | None = None,
 ) -> list[dict]:
     """Погасить активную память ОС по карточке (статус 'superseded', строки не удаляются).
 
     Карточка узнаётся только по своему номеру: signal_id в фактах (строки с 28.09) или отзыв,
     из которого строка выросла (строки до 28.09 — у всех есть feedback_event_id). По заголовку
     не сравниваем: у двух карточек он бывает одинаковым, и «Дубль» на одной гасил бы память
-    другой. `origin`, `user_id` — сузить до этого происхождения и этого пользователя.
+    другой. `origin` — сузить до этого происхождения.
     Возвращает погашенные строки."""
     clauses = [
         "status = 'active'",
@@ -2916,9 +2924,6 @@ def supersede_signal_feedback_memory(
     if origin:
         clauses.append("facts_json->>'origin' = %s")
         params.append(origin)
-    if user_id is not None:
-        clauses.append("facts_json->>'user_id' = %s")
-        params.append(str(int(user_id)))
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -5023,6 +5028,9 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
 def monthly_user_activity(months: int = 6, user_id: int | None = None) -> list[dict]:
     """Разметка пользователей по месяцам: кто сколько чего пометил.
 
+    Читает архив личных отметок (#111): после переноса в общие отметки новые месяцы здесь пусты —
+    статистика по журналу и за прежние месяцы по архиву — #112.
+
     СКОУП: user_id=None — все пользователи (только для админа, решается в api).
     Передан user_id — строго его собственная активность. Fail-closed не нужен:
     вызывающий обязан передать user_id для не-админа (см. api.monthly_stats).
@@ -5551,9 +5559,10 @@ def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -
 
 
 def _in_some_issue(conn, article_id: int) -> bool:
-    """Статья в выпуске: в сохранённом черновике (общем или в архиве личных) или отмечена
-    «в дайджест». С #84 выпуск строится по отметкам, а черновик задаёт только порядок: защита
-    одних черновиков пропускала выбранную, но не сохранённую статью (ревью #88)."""
+    """Статья в выпуске: в сохранённом черновике или отмечена «в дайджест». С #84 выпуск строится
+    по отметкам, а черновик задаёт только порядок: защита одних черновиков пропускала выбранную, но
+    не сохранённую статью (ревью #88). Черновик — любой, и архивный личный (#111): позиция черновика
+    держит статью внешним ключом без каскада, и удалить такую статью без force всё равно нельзя."""
     return bool(conn.execute(
         "SELECT EXISTS (SELECT 1 FROM monthly_digest_items WHERE article_id = %s)"
         f" OR {marks.article_marked_sql('%s', 'digest')}",
@@ -5566,7 +5575,7 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
 
     FK на articles в основном БЕЗ ON DELETE CASCADE, поэтому удаляем детей вручную
     в правильном порядке (отметка статьи каскадится сама). По умолчанию НЕ удаляем
-    статью из чьего-то выпуска (сохранённый черновик или отметка «в дайджест») — чтобы не
+    статью из выпуска (сохранённый черновик или отметка «в дайджест») — чтобы не
     рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста)."""
     with get_connection() as conn:
         if not force and _in_some_issue(conn, article_id):
@@ -5592,7 +5601,7 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
 
 def mark_article_for_deletion(article_id: int, reason: str | None, *, force: bool = False) -> str:
     """Пометить статью на удаление (мягко, без физического DELETE). Возвращает
-    'marked' либо 'skipped_in_digest' (статья в чьём-то выпуске — сохранённый черновик или
+    'marked' либо 'skipped_in_digest' (статья в выпуске — сохранённый черновик или
     отметка «в дайджест», force=False)."""
     with get_connection() as conn:
         if not force and _in_some_issue(conn, article_id):
@@ -7202,12 +7211,13 @@ def save_monthly_digest(month: str, title: str, items: list[dict], status: str =
             """,
             (month, title, status),
         ).fetchone()
-        _replace_monthly_digest_items(conn, digest[0], items)
+        replace_monthly_digest_items(conn, digest[0], items)
         conn.commit()
         return {"id": digest[0], "month": digest[1], "title": digest[2], "status": digest[3], "items": len(items)}
 
 
-def _replace_monthly_digest_items(conn, digest_id: int, items: list[dict]) -> None:
+def replace_monthly_digest_items(conn, digest_id: int, items: list[dict]) -> None:
+    """Заменить упорядоченный список статей черновика в транзакции `conn` (без commit)."""
     conn.execute("DELETE FROM monthly_digest_items WHERE digest_id = %s", (digest_id,))
     for idx, item in enumerate(items, start=1):
         conn.execute(

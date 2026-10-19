@@ -197,9 +197,11 @@ def test_radar_mark_is_shared_by_everyone(analyst, monkeypatch):
     assert learned == [True]
 
     # Коллега снимает отметку аналитика — карточка уходит из выпуска у всех, пример гаснет.
-    assert _select(colleague, sep).status_code == 200
+    assert _select(analyst, sep).status_code == 200
+    assert analyst.issue("2026-09") == [("signal", sep)]
     assert _select(colleague, sep, selected=False).status_code == 200
     assert analyst.issue("2026-09") == []
+    assert {row["id"]: row for row in analyst.get("/api/signals").json()}[sep]["selected_for_digest"] is False
     assert learned == [True, True, False]
 
     _freeze(monkeypatch, msk(2026, 9, 5, 12, 0))

@@ -219,9 +219,11 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: схема прос�
 **Отметки** (#111, ADR 0004) — **общие**: `article_marks` (статус статьи `new` / `digest` /
 `archive` / `noise` / `duplicate` и комментарий) и `signal_marks` (то же у карточки радара,
 вместо `new` — `watch`), одна строка на статью или карточку, с последним поставившим и временем.
-Чтение и запись — только через `oiltech_digest/db/marks.py`. Личные `user_article_states` и
-`user_signal_states` — архив только для чтения (перенос — `migrate-shared-marks`). За автором
-остаются только оценки ОС статьи (`feedback_entries`).
+Приложение читает и пишет их через `oiltech_digest/db/marks.py`; мимо него — только разовый
+перенос `migrate-shared-marks` (запись о нём — `shared_marks_migration`). Личные
+`user_article_states` и `user_signal_states` — архив только для чтения: его читают перенос и
+статистика «кто сколько пометил» (до перехода на журнал, #112). За автором остаются только
+оценки ОС статьи (`feedback_entries`).
 
 **Дайджест:** `monthly_digests` — черновик один на месяц (строка без учётки; личные — архив) ·
 `monthly_digest_items`. Состав выпуска месяца — `repository.issue_composition`.

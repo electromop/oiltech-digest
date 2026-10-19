@@ -1594,29 +1594,59 @@ def cmd_digest_save(args: argparse.Namespace) -> None:
     )
 
 
+def _print_issue_months(months: list[dict]) -> None:
+    """Состав выпуска закрытых месяцев: прежнее правило против общих отметок."""
+    if not months:
+        print("  закрытых месяцев с выпуском нет")
+    for month in months:
+        after = month["after"]
+        line = f"  {month['month']}: статей {len(after['article_ids'])}, карточек радара {len(after['signal_ids'])}"
+        if month["match"]:
+            print(f"{line} — совпадает с прежним выпуском")
+        else:
+            print(f"{line} — РАСХОЖДЕНИЕ: было {month['before']}, стало бы {after}")
+
+
 def cmd_migrate_shared_marks(args: argparse.Namespace) -> None:
     """Перенос личных отметок и черновиков учётки-основы в общие (#111). Пробный прогон по
-    умолчанию; --write — записать. Расхождение состава закрытого месяца — выход с кодом 1."""
-    from oiltech_digest.db.marks_migration import migrate_shared_marks
+    умолчанию; --write — записать; --check — сверка после переноса только чтением. Расхождение
+    состава закрытого месяца — выход с кодом 1."""
+    from oiltech_digest.db.marks_migration import check_shared_marks, migrate_shared_marks
 
+    if args.check:
+        try:
+            report = check_shared_marks()
+        except ValueError as exc:
+            print(f"migrate-shared-marks --check: {exc}")
+            raise SystemExit(1)
+        print(f"migrate-shared-marks --check (только чтение): перенос {report['done_at']:%d.%m.%Y %H:%M},"
+              f" основа — учётка №{report['base_user_id']}, месяцы до {report['open_from']}")
+        _print_issue_months(report["months"])
+        if not report["ok"]:
+            raise SystemExit(1)
+        return
+    if args.base_user_id is None:
+        print("migrate-shared-marks: нужен --base-user-id (или --check)")
+        raise SystemExit(2)
     report = migrate_shared_marks(args.base_user_id, write=args.write)
+    if report["already_done"]:
+        print(f"migrate-shared-marks: перенос уже сделан {report['done_at']:%d.%m.%Y %H:%M}"
+              f" (основа — учётка №{report['base_user_id']}) — повторный ничего не меняет; сверка — --check")
+        return
     mode = "ЗАПИСЬ" if args.write else "пробный прогон (ничего не записано; --write — записать)"
     print(f"migrate-shared-marks: основа — учётка №{report['base_user_id']}, {mode}")
     for kind, label in (("articles", "статей"), ("signals", "карточек радара")):
         part = report[kind]
         statuses = ", ".join(f"{status}={count}" for status, count in part["by_status"].items()) or "нет"
-        print(f"  отметки {label} у основы: {statuses}; в общие — {part['inserted']}"
-              f" (остальные уже есть в общих и не перезаписываются)")
-    print(f"  черновики основы: {report['base_drafts']}; в общий черновик месяца —"
-          f" {', '.join(report['drafts']['copied']) or 'нет'};"
-          f" общий новее, не тронут — {', '.join(report['drafts']['kept']) or 'нет'}")
+        print(f"  отметки {label} у основы: {statuses}; в общие — {part['inserted']}")
+    print(f"  черновики основы — в общий черновик месяца: {', '.join(report['drafts_copied']) or 'нет'}")
     skipped = report["skipped"]
-    print(f"  не переносятся (проверочные других учёток): отметок статей {skipped['article_marks']['rows']}"
-          f" у {skipped['article_marks']['users']} учёток, отметок карточек {skipped['signal_marks']['rows']}"
-          f" у {skipped['signal_marks']['users']}, личных черновиков {skipped['drafts']['rows']}")
-    print(f"  сверка закрытых месяцев: {', '.join(report['checked_months']) or 'нет закрытых месяцев с выпуском'}")
-    for mismatch in report["mismatches"]:
-        print(f"  РАСХОЖДЕНИЕ {mismatch['month']}: было {mismatch['before']}, стало бы {mismatch['after']}")
+    print(f"  не переносятся (проверочные других учёток): отметок статей {skipped['articles']['rows']}"
+          f" у {skipped['articles']['users']} учёток, отметок карточек {skipped['signals']['rows']}"
+          f" у {skipped['signals']['users']}, личных черновиков {skipped['drafts']['rows']};"
+          f" их примеров «выбран в дайджест» гаснет {report['examples_superseded']}")
+    print(f"  сверка закрытых месяцев (до {report['open_from']}):")
+    _print_issue_months(report["months"])
     if not report["ok"]:
         print("  ОСТАНОВЛЕНО: состав закрытого месяца изменился бы — ничего не записано")
         raise SystemExit(1)
@@ -3591,8 +3621,11 @@ def build_parser() -> argparse.ArgumentParser:
         "migrate-shared-marks",
         help="перенести отметки и черновики учётки-основы в общие (#111); по умолчанию пробный прогон",
     )
-    p_shared_marks.add_argument("--base-user-id", type=int, required=True, help="номер учётки-основы")
-    p_shared_marks.add_argument("--write", action="store_true", help="записать (без флага — пробный прогон)")
+    p_shared_marks.add_argument("--base-user-id", type=int, default=None, help="номер учётки-основы")
+    shared_marks_mode = p_shared_marks.add_mutually_exclusive_group()
+    shared_marks_mode.add_argument("--write", action="store_true", help="записать (без флага — пробный прогон)")
+    shared_marks_mode.add_argument("--check", action="store_true",
+                                   help="после переноса: сверка закрытых месяцев только чтением")
     p_shared_marks.set_defaults(func=cmd_migrate_shared_marks)
 
     p_jobs_worker = sub.add_parser("jobs-worker", help="обрабатывать background_jobs из БД")

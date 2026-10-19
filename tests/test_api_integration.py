@@ -314,6 +314,41 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
     }
 
 
+def test_noise_marked_by_one_account_hides_the_article_from_the_other(isolated_db):
+    """Отметка общая (#111): «шум» коллеги прячет статью из ленты другого, вкладка «Со статусом» и
+    фильтр по статусу её показывают, а вернуть её в ленту может любой."""
+    app = api.app
+    with connection.get_connection() as conn:
+        author_id, _source_id, article_id = _feedback_fixture(conn, "author@example.com")
+        colleague_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('colleague@example.com', 'salt', 'hash', 'user') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    def as_user(user_id: int) -> TestClient:
+        app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": f"{user_id}@example.com"}
+        return TestClient(app)
+
+    def feed_ids(user_id: int, **params) -> list[int]:
+        response = as_user(user_id).get("/api/articles", params=params)
+        assert response.status_code == 200, response.text
+        return [row["id"] for row in response.json()]
+
+    try:
+        assert feed_ids(author_id) == [article_id]
+        assert as_user(colleague_id).patch(f"/api/articles/{article_id}", json={"status": "noise"}).status_code == 200
+
+        assert feed_ids(author_id) == []
+        assert feed_ids(author_id, changed_only=True) == [article_id]
+        assert feed_ids(author_id, status="noise") == [article_id]
+
+        assert as_user(author_id).patch(f"/api/articles/{article_id}", json={"status": "new"}).status_code == 200
+        assert feed_ids(colleague_id) == [article_id]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db):
     """Статус валидируется на границе API (422), мусор в БД не попадает.
 

@@ -264,6 +264,9 @@ def learn_from_digest_selection(
             origin=DIGEST_SELECTION_ORIGIN,
         )
         return {"memories": 0, "superseded": len(superseded)}
+    if repository.signal_memory_exists(signal_id=signal_id, origin=DIGEST_SELECTION_ORIGIN):
+        # Пример уже есть — в том числе записанный до #111 под ключом учётки: один на карточку.
+        return {"memories": 0, "superseded": 0}
 
     signal = repository.get_signal_brief(signal_id) or {}
     title = str(signal.get("title_ru") or signal.get("title") or "").strip()
