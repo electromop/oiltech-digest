@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, background_jobs, backlog, config, feed_window
+from oiltech_digest import admission, auth, background_jobs, backlog, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
@@ -429,6 +429,12 @@ class AuthPayload(BaseModel):
     password: str
 
 
+class AdmitPayload(BaseModel):
+    email: str
+    password: str
+    code: str
+
+
 class UserCreate(BaseModel):
     email: str
     password: str
@@ -521,9 +527,7 @@ def auth_register(payload: AuthPayload, response: Response) -> dict[str, Any]:
         user = repository.create_user(email, payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    session_token = repository.create_user_session(int(user["id"]))
-    _set_session_cookie(response, session_token)
-    return _session_payload(user)
+    return _login_or_admission(user, response)
 
 
 @app.post("/api/auth/login")
@@ -531,6 +535,30 @@ def auth_login(payload: AuthPayload, response: Response) -> dict[str, Any]:
     user = repository.authenticate_user(payload.email, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    return _login_or_admission(user, response)
+
+
+@app.post("/api/auth/admit")
+def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
+    """Шаг «код допуска» (#113): почта, пароль и код одним запросом — допуск и сессия."""
+    user = repository.authenticate_user(payload.email, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    try:
+        admission.redeem(int(user["id"]), payload.code)
+    except admission.AdmissionRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    session_token = repository.create_user_session(int(user["id"]))
+    _set_session_cookie(response, session_token)
+    return _session_payload(user)
+
+
+def _login_or_admission(user: dict[str, Any], response: Response) -> dict[str, Any]:
+    """Допущенной учётке — сессия. Недопущенной — «нужен код допуска» без сессии (200, а не
+    отказ: пароль верный, экран входа переходит к шагу кода); код выдаётся и уходит подтверждающим."""
+    if not admission.is_admitted(int(user["id"])):
+        admission.request_code(user)
+        return {"ok": False, "admission_required": True, "detail": admission.REQUIRED}
     session_token = repository.create_user_session(int(user["id"]))
     _set_session_cookie(response, session_token)
     return _session_payload(user)
@@ -580,6 +608,9 @@ def update_user_endpoint(user_id: int, payload: UserUpdate, user: dict[str, Any]
         if not auth.validate_password(payload.password):
             raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
         repository.set_user_password(user_id, payload.password)
+        if int(user["id"]) != user_id:
+            # Чужой пароль сменён — под ним мог войти кто угодно: снова через код допуска (#113).
+            admission.revoke(user_id)
     return {"ok": True, "user": _clean(repository.get_user_by_id(user_id))}
 
 
@@ -2361,6 +2392,8 @@ def external_worker_complete(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
+    if job.get("kind") == admission.KIND:
+        admission.settle_notifications()
     return {"ok": True}
 
 
@@ -2471,6 +2504,9 @@ def external_worker_fail(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
+    # Окончательный сбой отправки кода — текст с кодом стирается (повторяемый — остаётся до попытки).
+    if (repository.get_background_job(job_id) or {}).get("kind") == admission.KIND:
+        admission.settle_notifications()
     return {"ok": True}
 
 
@@ -2864,7 +2900,8 @@ def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
         "progress": float(row.get("progress") or 0),
         "attempts": int(row.get("attempts") or 0),
         "max_attempts": int(row.get("max_attempts") or 0),
-        "payload": _clean(row.get("payload_json") or {}),
+        "payload": _clean(admission.without_text(row.get("payload_json") or {})
+                          if row.get("kind") == admission.KIND else row.get("payload_json") or {}),
         "result": _clean(row.get("result_json") or {}),
         "error": row.get("error_message"),
         "run_after": _clean(row.get("run_after")),

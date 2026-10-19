@@ -24,6 +24,7 @@ AI_BULK = "external-ai-bulk"
 FETCH = "external-fetch"
 BROWSER = "external-playwright"
 AGENTS = "external-agents"
+NOTIFY = "external-notify"
 
 _AI_KINDS = frozenset({"process_articles", "recheck_relevance", "translate_titles", "process_document", "reprint_review",
                        "signal_card"})
@@ -43,18 +44,21 @@ EXTERNAL_LANES: dict[str, frozenset[str]] = {
     # Радар и оценка кандидатов агента источников (ADR 0001): прогон радара — минуты,
     # а не секунды, и в общей полосе пакет статей дня ждал бы его, а радар — пакеты.
     AGENTS: _AGENT_KINDS,
+    # Короткие сообщения людям — код допуска в Telegram (#113, контракт 3). Слушает воркер сбора:
+    # несколько потоков и простой не дольше 30 с, — код не ждёт долгих задач ИИ и радара.
+    NOTIFY: frozenset({"admission_notify"}),
 }
 
 # Полосы, чью задачу нельзя рвать выкатом ядра: ИИ оплачен, а итог, пришедший в минуту
 # перезапуска, теряется (24.07 — петля и двойная оплата). Все внешние, кроме сбора: новая
 # полоса (радар, агенты) защищена по умолчанию, пока её явно не отнесли к дешёвым.
-AI_LANES: frozenset[str] = frozenset(EXTERNAL_LANES) - {FETCH, BROWSER}
+AI_LANES: frozenset[str] = frozenset(EXTERNAL_LANES) - {FETCH, BROWSER, NOTIFY}
 
 # Сколько задача может ждать в очереди, пока это норма (минуты). Пачка сбора — раз в
 # ~41 мин и разбирается за ~6; поток дня ИИ ждёт секунды; пересчёт — часами по замыслу;
 # у агентов один поток: пачка оценок кандидатов ждёт прогон радара (12 прогонов до
-# 23.09: медиана 4 мин, максимум 17) и друг друга.
-STALE_AFTER_MINUTES: dict[str, int] = {AI_LIVE: 30, AI_BULK: 360, FETCH: 45, BROWSER: 45, AGENTS: 120}
+# 23.09: медиана 4 мин, максимум 17) и друг друга; код допуска человек ждёт у экрана входа.
+STALE_AFTER_MINUTES: dict[str, int] = {AI_LIVE: 30, AI_BULK: 360, FETCH: 45, BROWSER: 45, AGENTS: 120, NOTIFY: 10}
 # Задачи есть, но ни одна не стартовала столько минут и ничего не выполняется —
 # у очереди нет живого потребителя.
 IDLE_AFTER_MINUTES = 15
