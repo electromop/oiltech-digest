@@ -9,6 +9,7 @@ import { BacklogPage } from "../features/backlog/BacklogPage";
 import { DigestPage } from "../features/digest/DigestPage";
 import { DocumentsPage } from "../features/documents/DocumentsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
+import { ColleagueMaterialsPage } from "../features/materials/ColleagueMaterialsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
@@ -29,7 +30,7 @@ const TechnologiesPreview = lazy(() =>
 );
 
 type ScreenId =
-  | "articles" | "business-feed" | "signal-radar" | "digest" | "documents" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
+  | "articles" | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
   | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
@@ -113,6 +114,15 @@ const screens: ScreenDef[] = [
     status: "Экран активен",
   },
   {
+    id: "colleague-materials",
+    // Бот «Материалы коллег» в рабочей группе Telegram: ссылки, файлы, события с оценкой автора.
+    label: "Материалы коллег",
+    eyebrow: "Telegram",
+    title: "Материалы коллег",
+    description: "Ссылки, файлы и события, присланные сотрудниками боту в Telegram, с оценкой по шкале платформы.",
+    status: "Экран активен",
+  },
+  {
     id: "sources",
     label: "Источники",
     eyebrow: "Источники",
@@ -190,7 +200,7 @@ const appHighlights = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["articles", "business-feed", "signal-radar", "digest", "documents"],
+    screens: ["articles", "business-feed", "signal-radar", "digest", "documents", "colleague-materials"],
   },
   {
     label: "Настройки",
@@ -211,7 +221,7 @@ const navGroups: NavGroup[] = [
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
 // прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent", "signal-radar", "business-feed"];
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent", "signal-radar", "business-feed", "colleague-materials"];
 
 function initialScreenFromUrl(): ScreenId {
   const value = new URLSearchParams(window.location.search).get("screen");
@@ -317,6 +327,10 @@ export function App() {
 
   if (activeScreen === "documents") {
     currentScreen = <DocumentsPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "colleague-materials") {
+    currentScreen = <ColleagueMaterialsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "articles") {

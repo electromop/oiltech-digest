@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 import hashlib
 import hmac
+import json
 import logging
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import admission, auth, background_jobs, backlog, config, feed_window
+from oiltech_digest import admission, auth, background_jobs, backlog, colleague_materials, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
@@ -3195,6 +3196,104 @@ def delete_document(document_id: int, user: dict[str, Any] = Depends(require_use
     except OSError:
         logger.warning("не удалось удалить файл документа %s", storage_path)
     return {"ok": True}
+
+
+# --- Материалы коллег из Telegram (colleague_materials.py, бот на NL) ------------------------
+
+
+class ExternalWorkerHelloRequest(BaseModel):
+    worker_id: str
+
+
+def _record_bot(worker_id: str, build: str | None, contract_header: str | None) -> None:
+    # Бот задач не берёт, но отмечается в ядре, как воркер: так выкат NL (worker-versions --self)
+    # видит, что контейнер бота поднялся новой сборкой.
+    try:
+        repository.record_external_consumer(
+            worker_id, queues=[], build=(build or "").strip()[:64] or None,
+            contract_number=contract.parse_contract(contract_header),
+        )
+    except Exception:  # noqa: BLE001 - учёт версий не должен мешать приёму материала
+        logger.warning("external_consumer_record_failed worker=%s", worker_id, exc_info=True)
+
+
+@app.post("/api/external-worker/materials/hello")
+def external_worker_materials_hello(
+    payload: ExternalWorkerHelloRequest,
+    x_worker_build: str | None = Header(default=None),
+    x_worker_contract: str | None = Header(default=None),
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    _record_bot(payload.worker_id, x_worker_build, x_worker_contract)
+    return {"ok": True}
+
+
+@app.post("/api/external-worker/materials")
+async def external_worker_save_material(
+    material: str = Form(...),
+    worker_id: str = Form(...),
+    file: UploadFile | None = File(default=None),
+    x_worker_build: str | None = Header(default=None),
+    x_worker_contract: str | None = Header(default=None),
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    _record_bot(worker_id, x_worker_build, x_worker_contract)
+    try:
+        data = json.loads(material)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="material: не JSON") from None
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="material: ожидается объект")
+    content = await file.read() if file is not None else b""
+    if file is not None and not content:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+    if len(content) > config.TG_MATERIALS_MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл больше {config.TG_MATERIALS_MAX_FILE_BYTES // 1024 // 1024} МБ")
+    try:
+        fields = colleague_materials.validate(data, has_file=bool(content))
+    except colleague_materials.InvalidMaterial as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    file_fields: dict[str, Any] = {}
+    if content:
+        path = colleague_materials.store_file(content, file.filename or "")
+        file_fields = {"file_name": (file.filename or "файл")[:300], "file_path": str(path), "file_size": len(content)}
+    row, created = colleague_materials.save(fields, **file_fields)
+    return {"ok": True, "created": created, "material": _clean(colleague_materials.brief(row))}
+
+
+@app.get("/api/external-worker/materials")
+def external_worker_list_materials(
+    tg_user_id: int,
+    limit: int = Query(default=5, ge=1, le=20),
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    """Последние материалы автора — для команды бота /my."""
+    rows = colleague_materials.list_materials(limit=limit, tg_user_id=tg_user_id)
+    return {"ok": True, "materials": [_clean(colleague_materials.brief(row)) for row in rows]}
+
+
+@app.get("/api/materials")
+def list_colleague_materials(
+    limit: int = Query(default=200, ge=1, le=500),
+    _: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    rows = colleague_materials.list_materials(limit=limit)
+    return {
+        "ok": True,
+        "materials": [_clean(colleague_materials.brief(row)) for row in rows],
+        "verdicts": [{"value": value, "label": label} for value, _short, label in colleague_materials.VERDICTS],
+    }
+
+
+@app.get("/api/materials/{material_id}/file")
+def download_colleague_material_file(material_id: int, _: dict[str, Any] = Depends(require_user)):
+    row = colleague_materials.get_material(material_id)
+    if row is None or not row.get("file_path"):
+        raise HTTPException(status_code=404, detail="Файла у материала нет")
+    path = Path(row["file_path"]).resolve()
+    if not str(path).startswith(str(colleague_materials.files_dir().resolve())) or not path.exists():
+        raise HTTPException(status_code=404, detail="Файл недоступен")
+    return FileResponse(path, filename=row.get("file_name") or path.name)
 
 
 def _document_brief(row: dict[str, Any] | None) -> dict[str, Any]:

@@ -1697,6 +1697,13 @@ def cmd_external_worker(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_tg_materials_bot(args: argparse.Namespace) -> None:
+    """Бот «Материалы коллег» (NL): приём материалов из рабочей группы Telegram в ядро."""
+    from oiltech_digest import tg_materials_bot
+
+    tg_materials_bot.run(core_api_url=args.core_api_url, token=args.token, worker_id=args.worker_id)
+
+
 def cmd_jobs_requeue_stale(args: argparse.Namespace) -> None:
     from oiltech_digest import config
     from oiltech_digest.db import repository
@@ -3671,6 +3678,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_external_worker.add_argument("--concurrency", type=int, default=None,
                                    help="потоков выдачи в процессе (по умолчанию EXTERNAL_WORKER_CONCURRENCY)")
     p_external_worker.set_defaults(func=cmd_external_worker)
+
+    p_tg_bot = sub.add_parser("tg-materials-bot", help="бот «Материалы коллег»: приём из Telegram в ядро (NL)")
+    p_tg_bot.add_argument("--core-api-url", default=None)
+    p_tg_bot.add_argument("--token", default=None)
+    p_tg_bot.add_argument("--worker-id", default=None)
+    p_tg_bot.set_defaults(func=cmd_tg_materials_bot)
 
     p_jobs_requeue = sub.add_parser("jobs-requeue-stale", help="вернуть зависшие running-задачи обратно в queued")
     p_jobs_requeue.add_argument("--stale-minutes", type=int, default=None)

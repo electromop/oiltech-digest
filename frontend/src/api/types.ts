@@ -1296,3 +1296,30 @@ export type FeedbackSourceSummary = {
   bad_translation: number;
   good: number;
 };
+
+// Материалы коллег из Telegram (бот «Материалы коллег», colleague_materials.py).
+export type ColleagueMaterial = {
+  id: number;
+  kind: "link" | "file" | "event";
+  kind_label: string;
+  title: string;
+  description: string;
+  url: string | null;
+  companies: string[];
+  verdict: string;
+  verdict_label: string;
+  verdict_comment: string | null;
+  file_name: string | null;
+  file_size: number | null;
+  has_file: boolean;
+  author: string;
+  author_username: string | null;
+  signal_id: number | null;
+  created_at: string | null;
+};
+
+export type ColleagueMaterialsResult = {
+  ok: boolean;
+  materials: ColleagueMaterial[];
+  verdicts: Array<{ value: string; label: string }>;
+};
