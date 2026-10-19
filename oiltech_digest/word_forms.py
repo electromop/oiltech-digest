@@ -2,14 +2,15 @@
 
 Общее начало — не падеж: «Роснефтью» — это «Роснефть», а «Роснефтегаз», «Газпромнефть» и «Сибнефть» при «Сибуре» —
 другие слова. Слово — основа не короче трёх букв плюс падежное окончание из списка. Компания названа, когда названы
-все слова её имени, кроме формы собственности: одно общее слово («and», «Oil Company», «ПАО») — не имя. Правило одно
-у ядра (названа ли компания в цитате участника, signal_card._named_in) и у экзамена агента (имена агента и эксперта,
-есть ли компания в тексте, signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку.
+все слова её имени, кроме формы собственности: одно общее слово («and», «Oil Company», «ПАО») — не имя. Короткое имя
+внутри длинного имени другой компании компанию не называет: в «Газпром нефть начала бурение» «Газпром» не назван.
+Правило одно у ядра (названа ли компания в цитате участника, signal_card._named_in) и у экзамена агента (имена агента
+и эксперта, есть ли компания в тексте, signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 import re
 
 _CYRILLIC = re.compile(r"[а-яА-Я]")
@@ -54,13 +55,46 @@ def named(name: Sequence[str], text: Sequence[str]) -> bool:
     собственности (_OPTIONAL), — в любом падеже и порядке. Одного общего слова мало: «Helmerich and Payne» не
     названа в «JOGMEC and PTTEP», «ПАО «Газпром»» — в «ПАО «Татнефть»». Имя из одних коротких слов (BP, H&P) —
     целиком, подряд."""
-    required = [word for word in name if word.casefold() not in _OPTIONAL] or name
+    required = _required(name)
     if not required:
         return False
     if all(len(word) < 3 for word in required):
         return any(all(_named_word(word, text[start + offset]) for offset, word in enumerate(required))
                    for start in range(len(text) - len(required) + 1))
     return all(any(_named_word(word, token) for token in text) for word in required)
+
+
+def named_among(names: Sequence[Sequence[str]], text: Sequence[str], others: Iterable[Sequence[str]]) -> bool:
+    """Названа ли компания (names — words каждого её имени) по правилу named среди слов текста, где стоят и другие
+    компании (others — words их имён). Длинное имя закрывает короткое: вхождение имени другой компании, внутри
+    которого стоит имя этой, не в счёт — «Газпром» не назван в «Газпром нефть начала бурение» и в «Gazprom Neft
+    reported», а в «Газпром и Газпром нефть подписали» назван."""
+    closing = [other for other in others if any(_inside(name, other) for name in names)]
+    rest = _closed(text, closing)
+    return any(named(name, rest) for name in names)
+
+
+def _inside(name: Sequence[str], other: Sequence[str]) -> bool:
+    """Имя внутри другого, более длинного: все слова имени названы в другом, а не наоборот."""
+    return named(name, other) and not named(other, name)
+
+
+def _closed(text: Sequence[str], names: Sequence[Sequence[str]]) -> list[str]:
+    """Слова текста, где имена (слова подряд, в любом падеже и регистре, с формой собственности и без неё) заменены
+    пустыми словами: пустое слово ничего не называет и не даёт соседям имени встать подряд."""
+    rest = list(text)
+    for name in names:
+        for phrase in {tuple(name), tuple(_required(name))}:
+            for start in range(len(text) - len(phrase) + 1):
+                if all(same_word(text[start + offset].casefold(), word.casefold())
+                       for offset, word in enumerate(phrase)):
+                    rest[start:start + len(phrase)] = [""] * len(phrase)
+    return rest
+
+
+def _required(name: Sequence[str]) -> list[str]:
+    """Слова имени без формы собственности (_OPTIONAL); имя из одной формы собственности — целиком."""
+    return [word for word in name if word.casefold() not in _OPTIONAL] or list(name)
 
 
 def _named_word(word: str, token: str) -> bool:

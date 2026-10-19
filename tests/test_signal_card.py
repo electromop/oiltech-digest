@@ -144,6 +144,30 @@ def test_one_common_word_of_a_company_name_does_not_name_it_in_the_quote(user, c
     assert [item["name"] for item in cards["Робот Equinor"]["participants_json"]] == ["Татнефть", "Equinor ASA"]
 
 
+def test_name_inside_a_longer_name_of_another_company_does_not_name_it_in_the_quote(user, contour, monkeypatch):
+    # Длинное имя справочника закрывает короткое: «Газпром» стоит внутри «Газпром нефть» и «Gazprom Neft», и в
+    # цитате про них он не назван — ни в кавычках, ни в падеже, ни по-английски. Назван, если стоит и отдельно.
+    feed_signal("Бурение Газпром нефти", "«Газпром нефть» начала бурение на Приобском. Проект Газпром нефти "
+                                         "рассчитан до 2030 года. Gazprom Neft reported first oil.")
+    feed_signal("Соглашение Газпрома", "Газпром и Газпром нефть подписали соглашение о поставках газа.")
+    fill(monkeypatch, {
+        "Бурение Газпром нефти": answer(companies=[
+            {"name": "Газпром", "quote": "«Газпром нефть» начала бурение"},
+            {"name": "ПАО «Газпром»", "quote": "Проект Газпром нефти рассчитан до 2030 года"},
+            {"name": "Gazprom", "quote": "Gazprom Neft reported first oil"},
+            {"name": "Газпром нефть", "quote": "«Газпром нефть» начала бурение"},
+        ]),
+        "Соглашение Газпрома": answer(companies=[
+            {"name": "Газпром", "quote": "Газпром и Газпром нефть подписали соглашение"},
+            {"name": "Газпром нефть", "quote": "Газпром и Газпром нефть подписали"},
+        ]),
+    })
+
+    cards = business(user)
+    assert [item["name"] for item in cards["Бурение Газпром нефти"]["participants_json"]] == ["Газпром нефть"]
+    assert [item["name"] for item in cards["Соглашение Газпрома"]["participants_json"]] == ["Газпром", "Газпром нефть"]
+
+
 def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, monkeypatch):
     # Пресс-релиз компании: издатель — она сама и главный участник. Не участник — издатель-СМИ.
     feed_signal("Пресс-релиз Halliburton", "Halliburton и ADNOC подписали контракт на бурение.",

@@ -319,6 +319,24 @@ def test_short_company_names_named_in_the_text_are_not_invented(tmp_path, monkey
     assert (business["invented_companies"]["agent"], business["companies_recall"]["matched"]) == (0, 4 * 3 * 2)
 
 
+GAZPROM_NEFT_ONLY = "Газпром нефть начала бурение на Приобском месторождении 24 сентября 2026 года."
+
+
+def test_company_named_in_the_text_only_inside_a_longer_name_is_invented(tmp_path, monkeypatch, strata):
+    # Компанию в тексте экзамен ищет по правилу ядра: «Газпром» здесь только внутри «Газпром нефть» — его в тексте
+    # нет. Цитата-обрывок «Газпром» — подстрока текста: ядро сверяет цитату с текстом по подстроке и пропускает её,
+    # а экзамен считает такую компанию выдуманной.
+    markup = write_pack(tmp_path, pack_rows(business={"text": GAZPROM_NEFT_ONLY,
+                                                      "Компании-участники": "Газпром нефть"}))
+    cut = [{"name": "Газпром", "quote": "Газпром"},
+           {"name": "Газпром нефть", "quote": "Газпром нефть начала бурение"}]
+
+    _, report = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, business=answer(companies=cut))})
+
+    business = report["models"][0]["strict"]["by_stratum"]["business"]
+    assert (business["invented_companies"]["agent"], business["companies_recall"]["matched"]) == (4 * 3, 4 * 3)
+
+
 def test_broken_side_files_and_short_runs_are_refused_before_any_paid_call(tmp_path, monkeypatch, capsys):
     markup = write_pack(tmp_path, pack_rows())
     model = ExamModel({NANO: lambda title: answer(), MINI: lambda title: answer()})

@@ -417,10 +417,11 @@ def _event_date(value: str, source: str, published: date | None) -> tuple[date |
 def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
                   dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
     """Участник — только с дословной цитатой из текста публикации, в которой он назван (verified —
-    проверено кодом): цитата, где компании нет, — догадка модели, а не участник. Издатель-СМИ
-    (_REPORTER_TYPES) о событии сообщает — участником не считается; компания, которая сама публикует
-    свою новость, — считается: в её пресс-релизе она главный участник. Алиасы — одно имя, повтор под
-    другим именем отбрасывается."""
+    проверено кодом): цитата, где компании нет, — догадка модели, а не участник, как и цитата, где её
+    имя стоит только внутри имени другой компании справочника («Газпром» в «Газпром нефть»).
+    Издатель-СМИ (_REPORTER_TYPES) о событии сообщает — участником не считается; компания, которая
+    сама публикует свою новость, — считается: в её пресс-релизе она главный участник. Алиасы — одно
+    имя, повтор под другим именем отбрасывается."""
     entries = dictionaries.get("companies") or []
     canonical = {_plain(name): entry["name"] for entry in entries for name in (entry["name"], *entry["aliases"])}
     variants = {entry["name"]: (entry["name"], *entry["aliases"]) for entry in entries}
@@ -434,7 +435,7 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
         name = canonical.get(_plain(given), given)
         quote = " ".join(company["quote"].split())[:_QUOTE_CHARS]
         if not name or not quote or _quote_form(quote) not in text \
-                or not _named_in(quote, (given, *variants.get(name, (name,)))):
+                or not _named_in(quote, (given, *variants.get(name, (name,))), _other_names(entries, name)):
             continue
         key = _plain(name)
         if key in kept or key == reporter:
@@ -443,12 +444,19 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
     return list(kept.values())
 
 
-def _named_in(quote: str, names: tuple[str, ...]) -> bool:
-    """Названа ли компания в цитате — под любым из имён (word_forms.named): названы все слова имени, кроме формы
+def _named_in(quote: str, names: tuple[str, ...], others: list[str]) -> bool:
+    """Названа ли компания в цитате — под любым из имён (word_forms.named_among): названы все слова имени, кроме формы
     собственности, в любом падеже. Одного общего слова мало: «Helmerich and Payne» не названа в «JOGMEC and PTTEP»,
-    а «Equinor ASA» названа в «Equinor испытала»; «Роснефтью» — это «Роснефть», а «Роснефтегаз» — другая компания."""
-    words = word_forms.words(quote)
-    return any(word_forms.named(word_forms.words(name), words) for name in names)
+    а «Equinor ASA» названа в «Equinor испытала»; «Роснефтью» — это «Роснефть», а «Роснефтегаз» — другая компания.
+    Имя внутри длинного имени другой компании справочника (others) не в счёт: «Газпром» не назван в «Газпром нефть
+    начала бурение», а в «Газпром и Газпром нефть подписали» назван."""
+    return word_forms.named_among([word_forms.words(name) for name in names], word_forms.words(quote),
+                                  [word_forms.words(other) for other in others])
+
+
+def _other_names(entries: list[dict[str, Any]], name: str) -> list[str]:
+    """Имена всех компаний справочника, кроме этой (name — её имя в справочнике или имя модели вне его)."""
+    return [other for entry in entries if entry["name"] != name for other in (entry["name"], *entry["aliases"])]
 
 
 # Кавычки и тире модель переписывает на свой лад — для сверки цитаты они одно и то же.

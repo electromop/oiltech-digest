@@ -65,7 +65,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     split = _split(exam, write=True)
     items = [item for item in exam["items"] if item["id"] in set(split[part])]
     dictionaries = load_dictionaries()
-    names = CompanyNames([*dictionaries["companies"], *exam["aliases"]])
+    names = CompanyNames(dictionaries["companies"], exam["aliases"])
     tried, decision = [], None
     for model in _by_price(models):
         answers = _answers(model, items, runs, dictionaries)

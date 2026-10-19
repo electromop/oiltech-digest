@@ -21,7 +21,7 @@ from typing import Any
 
 from oiltech_digest.signal_card import FROM_TEXT, RELEVANCE_CODES
 from oiltech_digest.signal_card_pack import UNDEFINED
-from oiltech_digest.word_forms import named, same_word, words
+from oiltech_digest.word_forms import named_among, same_word, words
 
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
               "technology_class": 0.75, "maturity": 0.75, "oilfield_relevance": 0.75}
@@ -243,14 +243,19 @@ class CompanyNames:
     основам, без различий регистра. Компания — целиком: «Газпром» — не «Газпром нефть». Имена хранятся как
     написаны: регистр нужен, чтобы искать компанию в тексте так же, как ядро — в цитате."""
 
-    def __init__(self, entries: list[dict[str, Any]]):
+    def __init__(self, entries: Sequence[dict[str, Any]], aliases: Sequence[dict[str, Any]] = ()):
+        """entries — справочник компаний ядра, aliases — алиасы экзамена (имена эксперта не как в тексте)."""
         self.groups: list[list[tuple[str, ...]]] = []
-        for entry in entries:
+        for entry in (*entries, *aliases):
             spelled = (tuple(text_tokens(name, keep_case=True)) for name in (entry["name"], *entry["aliases"]))
             forms = [form for form in spelled if form]
             joined = [group for group in self.groups if any(_same_name(a, b) for a in forms for b in group)]
             self.groups = [group for group in self.groups if group not in joined]
             self.groups.append(forms + [form for group in joined for form in group])
+        # Имена справочника ядра: длинное закрывает короткое в тексте так же, как у ядра в цитате. Алиасы экзамена
+        # не закрывают — ядро их не знает, и экзамен не был бы строже карточки.
+        self.dictionary = [tuple(text_tokens(name, keep_case=True)) for entry in entries
+                           for name in (entry["name"], *entry["aliases"])]
 
     def forms(self, name: str) -> list[tuple[str, ...]]:
         own = tuple(text_tokens(name, keep_case=True))
@@ -278,8 +283,10 @@ class CompanyNames:
 
     def in_text(self, name: str, text: list[str]) -> bool:
         """Компания есть в тексте (его слова с регистром — text_tokens(keep_case=True)) — названа под любым своим
-        именем по правилу ядра (word_forms.named): все слова имени, кроме формы собственности. Выдуманной — нет."""
-        return any(named(form, text) for form in self.forms(name))
+        именем по правилу ядра (word_forms.named_among): все слова имени, кроме формы собственности, и не только
+        внутри длинного имени другой компании справочника. Выдуманной — нет."""
+        forms = self.forms(name)
+        return named_among(forms, text, [form for form in self.dictionary if form not in forms])
 
 
 # --- Даты в тексте -------------------------------------------------------------------------------
