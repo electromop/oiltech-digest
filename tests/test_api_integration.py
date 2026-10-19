@@ -60,12 +60,11 @@ def test_articles_api_filters_and_patch_status_against_real_db(isolated_db):
             """,
             (article_id,),
         )
-        # Рабочий статус статьи ПЕР-ЮЗЕРНЫЙ (#12): /api/articles фильтрует по
-        # COALESCE(uas.status, 'new'), а не по article_cards.status. Без строки в
-        # user_article_states статус читается как 'new' и фильтр status=digest даёт 0 строк.
+        # Статус статьи — общая отметка (#111): /api/articles фильтрует по article_marks, а не
+        # по article_cards.status. Без строки отметки статус читается как 'new'.
         conn.execute(
             """
-            INSERT INTO user_article_states (user_id, article_id, status)
+            INSERT INTO article_marks (set_by_user_id, article_id, status)
             VALUES (%s, %s, 'digest')
             """,
             (user_id, article_id),
@@ -264,13 +263,13 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
             )
             if status is not None:
                 conn.execute(
-                    "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, %s)",
+                    "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, %s)",
                     (user_id, article_id, status),
                 )
             return article_id
 
-        n1_id = add_article("n1", status=None)      # без строки состояния → считается 'new'
-        add_article("n2", status="new")
+        add_article("n1", status=None)      # без строки состояния → считается 'new'
+        n2_id = add_article("n2", status="new")
         add_article("noise1", status="noise")
         add_article("dup1", status="duplicate")
         add_article("dup2", status="duplicate")
@@ -280,10 +279,8 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
         add_article("rejected", status="new", relevant=False)
         add_article("marked", status="new", pending_deletion=True)
 
-        # Второй пользователь метит статью n1 (которую A оставил как 'new') статусом 'noise'.
-        # Счётчики A должны это ИГНОРИРОВАТЬ — состояние статьи пер-юзерное (#12). Если из
-        # GROUP BY уберут предикат uas.user_id, чужой 'noise' протечёт в счётчики A и точный
-        # ассерт ниже упадёт (n1 уедет из 'new' в 'noise').
+        # Второй пользователь метит «шумом» статью n2, которую A оставил «новой». Отметка общая
+        # (#111): «шум» коллеги прячет статью и у A, и счётчики A это видят (n2 уезжает в 'noise').
         other_user_id = conn.execute(
             """
             INSERT INTO users (email, password_salt, password_hash, role)
@@ -291,11 +288,13 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
             RETURNING id
             """
         ).fetchone()[0]
-        conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'noise')",
-            (other_user_id, n1_id),
-        )
         conn.commit()
+
+    app.dependency_overrides[api.require_user] = lambda: {"id": other_user_id, "email": "other@example.com"}
+    try:
+        assert TestClient(app).patch(f"/api/articles/{n2_id}", json={"status": "noise"}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
 
     app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": "analyst@example.com"}
 
@@ -307,12 +306,47 @@ def test_stats_status_counts_cover_whole_db_and_respect_feed_visibility(isolated
 
     # Отклонённый гейтом и помеченный на удаление в 'new' НЕ попали (их 2, оба со статусом new).
     assert counts == {
-        "new": 2,
+        "new": 1,
         "digest": 1,
         "archive": 1,
-        "noise": 1,
+        "noise": 2,
         "duplicate": 2,
     }
+
+
+def test_noise_marked_by_one_account_hides_the_article_from_the_other(isolated_db):
+    """Отметка общая (#111): «шум» коллеги прячет статью из ленты другого, вкладка «Со статусом» и
+    фильтр по статусу её показывают, а вернуть её в ленту может любой."""
+    app = api.app
+    with connection.get_connection() as conn:
+        author_id, _source_id, article_id = _feedback_fixture(conn, "author@example.com")
+        colleague_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('colleague@example.com', 'salt', 'hash', 'user') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    def as_user(user_id: int) -> TestClient:
+        app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": f"{user_id}@example.com"}
+        return TestClient(app)
+
+    def feed_ids(user_id: int, **params) -> list[int]:
+        response = as_user(user_id).get("/api/articles", params=params)
+        assert response.status_code == 200, response.text
+        return [row["id"] for row in response.json()]
+
+    try:
+        assert feed_ids(author_id) == [article_id]
+        assert as_user(colleague_id).patch(f"/api/articles/{article_id}", json={"status": "noise"}).status_code == 200
+
+        assert feed_ids(author_id) == []
+        assert feed_ids(author_id, changed_only=True) == [article_id]
+        assert feed_ids(author_id, status="noise") == [article_id]
+
+        assert as_user(author_id).patch(f"/api/articles/{article_id}", json={"status": "new"}).status_code == 200
+        assert feed_ids(colleague_id) == [article_id]
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db):
@@ -320,7 +354,7 @@ def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db
 
     Колонки статуса — свободный TEXT без CHECK. Раньше ArticlePatch.status был
     просто str, поэтому любая опечатка/неизвестное значение молча записывалось в
-    user_article_states, и статья исчезала из всех вкладок (они перечисляют
+    отметку статьи, и статья исчезала из всех вкладок (они перечисляют
     известный набор статусов) — тихая потеря сигнала.
     """
     app = api.app
@@ -361,8 +395,8 @@ def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db
 
         with connection.get_connection() as conn:
             stored = conn.execute(
-                "SELECT status FROM user_article_states WHERE user_id = %s AND article_id = %s",
-                (user_id, article_id),
+                "SELECT status FROM article_marks WHERE article_id = %s",
+                (article_id,),
             ).fetchone()
         assert stored is None, "невалидный статус не должен создавать строку состояния"
 
@@ -371,8 +405,8 @@ def test_patch_article_rejects_unknown_status_and_accepts_known_ones(isolated_db
             assert ok.status_code == 200, f"статус {status} должен приниматься"
             with connection.get_connection() as conn:
                 stored = conn.execute(
-                    "SELECT status FROM user_article_states WHERE user_id = %s AND article_id = %s",
-                    (user_id, article_id),
+                    "SELECT status FROM article_marks WHERE article_id = %s",
+                    (article_id,),
                 ).fetchone()[0]
             assert stored == status
     finally:
@@ -775,6 +809,47 @@ def test_feedback_saves_scores_and_comment_and_is_editable(isolated_db):
 
         loaded = client.get("/api/feedback", params={"article_id": article_id}).json()["entry"]
         assert loaded["reason"] == "bad_translation"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_feedback_stays_with_its_author_while_marks_are_shared(isolated_db):
+    """Отметки общие (#111), а оценка ОС статьи — за автором: одна карточка на пару «учётка ×
+    статья», оценку коллеги не видно и не затереть — агент учитывает мнения всех."""
+    app = api.app
+    with connection.get_connection() as conn:
+        author_id, _source_id, article_id = _feedback_fixture(conn, "author@example.com")
+        colleague_id = conn.execute(
+            "INSERT INTO users (email, password_salt, password_hash, role) "
+            "VALUES ('colleague@example.com', 'salt', 'hash', 'user') RETURNING id"
+        ).fetchone()[0]
+        conn.commit()
+
+    def as_user(user_id: int) -> TestClient:
+        app.dependency_overrides[api.require_user] = lambda: {"id": user_id, "email": f"{user_id}@example.com"}
+        return TestClient(app)
+
+    try:
+        assert as_user(author_id).post("/api/feedback", json={
+            "article_id": article_id, "usefulness": 5, "comment": "сильный сигнал",
+        }).status_code == 200
+        assert as_user(author_id).patch(f"/api/articles/{article_id}", json={"status": "digest"}).status_code == 200
+
+        colleague = as_user(colleague_id)
+        assert colleague.get("/api/feedback", params={"article_id": article_id}).json()["entry"] is None
+        assert colleague.post("/api/feedback", json={
+            "article_id": article_id, "usefulness": 1, "comment": "слабо",
+        }).status_code == 200
+        # Отметка автора видна коллеге, оценка — нет.
+        assert colleague.get("/api/articles", params={"status": "digest"}).json()[0]["id"] == article_id
+
+        mine = as_user(author_id).get("/api/feedback", params={"article_id": article_id}).json()["entry"]
+        assert (mine["usefulness"], mine["comment"]) == (5, "сильный сигнал")
+        with connection.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT count(*) FROM feedback_entries WHERE article_id = %s", (article_id,),
+            ).fetchone()[0]
+        assert rows == 2
     finally:
         app.dependency_overrides.clear()
 

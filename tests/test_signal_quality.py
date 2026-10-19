@@ -15,6 +15,7 @@ import pytest
 
 from oiltech_digest import config, scoring_profiles, signal_discovery
 from oiltech_digest.db import repository
+from oiltech_digest.db import marks
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse
 
 DRILLING = "Бурение, направленное бурение, буровые растворы и буровое оборудование"
@@ -497,7 +498,7 @@ def test_research_prompt_requires_oilfield_relevance():
 
 def _choose_for_digest(signal_id):
     user = repository.create_user(f"editor-{signal_id}@example.test", "long-enough-password", "admin")
-    repository.set_user_signal_status(int(user["id"]), signal_id, status="digest")
+    marks.set_signal_mark(signal_id, status="digest", user_id=int(user["id"]))
 
 
 def test_card_in_digest_stays_on_radar_when_refound_with_a_hiding_verdict(isolated_db):

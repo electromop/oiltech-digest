@@ -7,6 +7,7 @@
 
 from oiltech_digest import signal_feedback
 from oiltech_digest.db import repository
+from oiltech_digest.db import marks
 
 THEME = "Бурение, заканчивание и внутрискважинные работы"
 
@@ -148,7 +149,7 @@ def test_digest_selection_is_a_strong_example_and_unselect_retracts_it(isolated_
     )
 
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=user)
-    # Выбор — свой пример «Сильный сигнал»; вердикт человека из формы он не трогает.
+    # Выбор — пример «Сильный сигнал»; вердикт человека из формы он не трогает.
     assert _active("signal_verdict", signal) == ["reject", "strong_signal"]
 
     signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=user)
@@ -232,15 +233,28 @@ def test_old_verdict_is_replaced_even_after_the_card_was_retitled(isolated_db):
     assert _active("signal_verdict", signal) == ["wrong_block"]
 
 
-def test_colleague_keeps_digest_example_until_the_last_one_unselects(isolated_db):
+def test_digest_example_is_one_per_card_and_anyones_unselect_retracts_it(isolated_db):
+    """Отметка общая (#111): пример «выбран в дайджест» — один на карточку, кто бы ни отметил;
+    снятие любым участником гасит все примеры выбора карточки — и записанный до #111 личный."""
     first, second = _user(), int(repository.create_user("second@example.test", "long-enough-password", "user")["id"])
     signal = _signal("both", "Роботизированная обсадка", url="https://example.com/casing")
+    # Пример до #111: ключ с номером учётки, у каждого свой.
+    repository.upsert_signal_agent_memory(
+        memory_key=f"legacy-digest-selection:{signal}:{first}", memory_type="signal_verdict",
+        subject="strong_signal", score=90,
+        facts={"signal_id": signal, "origin": signal_feedback.DIGEST_SELECTION_ORIGIN, "user_id": first},
+    )
 
+    signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=second)
+    # Записанный до #111 сохранён и остаётся единственным: второй пример карточке не нужен.
+    assert _active("signal_verdict", signal) == ["strong_signal"]
+
+    signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=second)
+    assert _active("signal_verdict", signal) == []
+
+    # Снова «в дайджест» — снова один пример, сколько бы раз ни отмечали.
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=first)
     signal_feedback.learn_from_digest_selection(signal, selected=True, user_id=second)
-    signal_feedback.learn_from_digest_selection(signal, selected=False, user_id=second)
-
-    # Второй снял отметку, у первого карточка в выпуске — пример остаётся.
     assert _active("signal_verdict", signal) == ["strong_signal"]
 
 
@@ -248,7 +262,7 @@ def test_duplicate_verdict_spares_card_chosen_for_the_issue(isolated_db):
     user = _user()
     main = _signal("m", "ZenaTech: дроны", url="https://example.com/m")
     chosen = _signal("c", "ZenaTech дроны для инспекций", url="https://example.com/c")
-    repository.set_user_signal_status(user, chosen, status="digest")
+    marks.set_signal_mark(chosen, status="digest", user_id=user)
 
     result = signal_feedback.store_signal_feedback(
         {"signal_id": chosen, "signal_title": "ZenaTech дроны", "verdict": "merge_duplicate",
@@ -265,13 +279,13 @@ def test_hidden_duplicate_does_not_enter_the_issue(isolated_db):
     user = _user()
     main = _signal("m2", "Сделка ZenaTech", url="https://example.com/m2")
     dup = _signal("d2", "ZenaTech купила", url="https://example.com/d2")
-    repository.set_user_signal_status(user, dup, status="digest")
+    marks.set_signal_mark(dup, status="digest", user_id=user)
     repository.mark_signal_merged(dup, main, "судья дедупа", respect_review=True)
     with repository.get_connection() as conn:  # дубль, скрытый раньше отметки в выпуск
         conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (main, dup))
         conn.commit()
 
-    rows = repository.digest_candidates(user_id=user, min_score=0)
+    rows = repository.digest_candidates(min_score=0)
 
     assert dup not in {row["id"] for row in rows if row.get("item_type") == "signal"}
 

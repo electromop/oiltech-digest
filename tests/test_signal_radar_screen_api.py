@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from oiltech_digest import api
 from oiltech_digest.db import repository
+from oiltech_digest.db import marks
 
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
 ECOLOGY = "Экология, промышленная безопасность и охрана труда"
@@ -245,9 +246,9 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
         with repository.get_connection() as conn:
             conn.execute("UPDATE signals SET merged_into_signal_id = %s WHERE id = %s", (fresh, dup))
             conn.commit()
-    repository.set_user_signal_status(int(user["id"]), fresh, status="digest")
-    # Чужой выбор в дайджест — не «мой»: плитка, как и кнопка на карточке, — по пользователю.
-    repository.set_user_signal_status(int(other["id"]), old, status="digest")
+    marks.set_signal_mark(fresh, status="digest", user_id=int(user["id"]))
+    # Выбор коллеги — тоже в дайджесте: плитка, как и кнопка на карточке, — по общей отметке (#111).
+    marks.set_signal_mark(old, status="digest", user_id=int(other["id"]))
     repository.record_signal_feedback_event(
         None, "comment_added", signal_id=reviewed, user_id=int(other["id"]), comment="сильный источник",
     )
@@ -255,7 +256,7 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
     tiles = ("total", "new_7d", "in_digest", "with_feedback", "merged")
     payload = _get("/api/signals/summary", user).json()
     assert {key: payload[key] for key in tiles} == {
-        "total": 3, "new_7d": 1, "in_digest": 1, "with_feedback": 1, "merged": 2,
+        "total": 3, "new_7d": 1, "in_digest": 2, "with_feedback": 1, "merged": 2,
     }
     # Поиск сужает выборку, но не плитки: они — про весь радар.
     searched = _get("/api/signals/summary", user, q="двухнедельной").json()

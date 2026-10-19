@@ -312,8 +312,8 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
--- Личное состояние пользователя: свои статусы статей и свой дайджест (срез на юзера).
--- Сами статьи/AI/теги/скоринг/источники — общие; пер-юзерный только рабочий статус.
+-- До #111 — личное состояние пользователя: свои статусы статей и свой дайджест. С #111 —
+-- архив только для чтения: отметки общие (article_marks ниже), перенос — migrate-shared-marks.
 CREATE TABLE IF NOT EXISTS user_article_states (
   user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   article_id      BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
@@ -335,9 +335,22 @@ CREATE INDEX IF NOT EXISTS idx_user_article_states_user_status ON user_article_s
 -- их в общий поток — ничего не теряется.
 -- Идемпотентно: повторный запуск не находит строк и ничего не делает.
 UPDATE user_article_states SET status = 'new' WHERE status = 'review';
--- Та же чистка в легаси-колонке article_cards.status (её читает только
+-- Та же чистка в легаси-колонке article_cards.status (до #111 её читал разовый перенос
 -- migrate_global_status_to_user), чтобы комментарии схемы не расходились с данными.
 UPDATE article_cards SET status = 'new' WHERE status = 'review';
+
+-- Общие отметки статей (#111, ADR 0004): одна строка на статью, кто бы её ни поставил.
+-- Нет строки — «новая». Последний поставивший — set_by_user_id (учётку удалили — пусто,
+-- отметка остаётся). user_article_states выше — архив личных отметок только для чтения:
+-- приложение его не читает и не пишет (перенос — команда migrate-shared-marks).
+CREATE TABLE IF NOT EXISTS article_marks (
+  article_id      BIGINT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL DEFAULT 'new',  -- new / digest / archive / noise / duplicate
+  analyst_comment TEXT,
+  set_by_user_id  BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_article_marks_status ON article_marks(status);
 
 CREATE TABLE IF NOT EXISTS user_sessions (
   id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -753,6 +766,28 @@ CREATE TABLE IF NOT EXISTS user_signal_states (
   PRIMARY KEY (user_id, signal_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_signal_states_user_status ON user_signal_states(user_id, status);
+
+-- Общие отметки карточек радара (#111): как article_marks; нет строки — «наблюдать».
+-- user_signal_states выше — архив личных отметок только для чтения.
+CREATE TABLE IF NOT EXISTS signal_marks (
+  signal_id       BIGINT PRIMARY KEY REFERENCES signals(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL DEFAULT 'watch',  -- watch / digest / archive / noise / duplicate
+  analyst_comment TEXT,
+  set_by_user_id  BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_signal_marks_status ON signal_marks(status);
+
+-- Перенос личных отметок в общие (#111) — запись «сделан», одна строка: повторный запуск ничего
+-- не меняет, сверка только чтением берёт отсюда основу и первый открытый месяц на момент переноса.
+CREATE TABLE IF NOT EXISTS shared_marks_migration (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  base_user_id   BIGINT NOT NULL,
+  open_from      TEXT NOT NULL,  -- «ГГГГ-ММ»: месяцы раньше — закрытые на момент переноса
+  report_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  done_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_marks_migration_once ON shared_marks_migration ((TRUE));
 
 CREATE TABLE IF NOT EXISTS signal_agent_memory (
   id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -38,32 +38,45 @@ def test_marks_from_feed_and_radar_reach_the_issue_and_unmarking_takes_them_out(
 
 
 # ---------------------------------------------------------------------------
-#  2. Кандидаты — только своё; черновик — свой (п. 5: изоляция, админ — как в коде)
+#  2. Выпуск один на всех (#111): общие отметки и один черновик на месяц
 # ---------------------------------------------------------------------------
 
-def test_each_person_sees_and_saves_only_own_issue_admin_included(issue):
+def test_everyone_builds_the_same_issue_from_everyones_marks(issue):
+    """Выпуск месяца — все отметки «в дайджест», кто бы их ни поставил и кто бы ни собирал."""
     analyst, colleague, admin, a = issue["analyst"], issue["colleague"], issue["admin"], issue["a"]
     analyst.mark(a["hi"])
     colleague.mark(a["mid"])
     admin.mark(a["low"])
 
-    assert analyst.issue() == [("article", a["hi"])]
-    assert colleague.issue() == [("article", a["mid"])]
-    # Админ собирает свой выпуск по тем же правилам: чужие отметки ему не видны.
-    assert admin.issue() == [("article", a["low"])]
+    expected = [("article", a["hi"]), ("article", a["mid"]), ("article", a["low"])]
+    assert analyst.issue() == colleague.issue() == admin.issue() == expected
+    assert repository.issue_composition(SEPT) == {
+        "article_ids": sorted([a["hi"], a["mid"], a["low"]]), "signal_ids": [],
+    }
 
-    assert analyst.save(SEPT, [a["hi"]]).status_code == 200
-    # Чужой черновик не открывается ни коллеге, ни админу: у каждого свой выпуск за месяц.
-    assert colleague.get(f"/api/monthly-digests/{SEPT}").status_code == 404
-    assert admin.get(f"/api/monthly-digests/{SEPT}").status_code == 404
+    # Коллега снимает отметку аналитика — статья уходит из выпуска у всех.
+    colleague.mark(a["hi"], status="noise")
+    assert analyst.issue() == admin.issue() == [("article", a["mid"]), ("article", a["low"])]
 
-    # Сохранение коллеги пишет его черновик и не трогает черновик аналитика.
-    assert colleague.save(SEPT, [a["mid"]]).status_code == 200
+
+def test_one_draft_per_month_edited_by_anyone(issue):
+    analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
+    for key in ("hi", "mid"):
+        analyst.mark(a[key])
+    assert analyst.save(SEPT, [a["hi"], a["mid"]]).status_code == 200
+
+    # Коллега открывает тот же черновик и переставляет порядок — аналитик видит его порядок.
+    theirs = colleague.get(f"/api/monthly-digests/{SEPT}").json()
+    assert [item["article_id"] for item in theirs["items"]] == [a["hi"], a["mid"]]
+    assert colleague.save(SEPT, [a["mid"], a["hi"]]).status_code == 200
     mine = analyst.get(f"/api/monthly-digests/{SEPT}").json()
-    assert [item["article_id"] for item in mine["items"]] == [a["hi"]]
-    assert mine["user_id"] == analyst.id
+    assert [item["article_id"] for item in mine["items"]] == [a["mid"], a["hi"]]
+    assert analyst.issue() == colleague.issue() == [("article", a["mid"]), ("article", a["hi"])]
+
+    # Снятая коллегой после сохранения статья в выпуск не идёт, хотя в черновике осталась.
+    colleague.mark(a["mid"], status="archive")
     assert analyst.issue() == [("article", a["hi"])]
-    assert colleague.issue() == [("article", a["mid"])]
+    assert repository.issue_composition(SEPT)["article_ids"] == [a["hi"]]
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +164,6 @@ def test_issue_takes_only_its_own_month_even_from_a_draft_saved_before_the_check
     repository.save_monthly_digest(
         SEPT, "Нефтесервисный дайджест · 2026-09",
         [{"article_id": october}, {"article_id": a["mid"]}, {"article_id": a["hi"]}],
-        user_id=analyst.id,
     )
 
     assert analyst.issue() == [("article", a["mid"]), ("article", a["hi"])]
@@ -371,7 +383,7 @@ def test_reprint_robot_makes_the_chosen_copy_primary_and_hides_the_other(issue):
 
 def test_reprint_robot_hides_neither_copy_when_different_people_chose_them(issue):
     """Разные люди выбрали в дайджест разные копии одной новости — робот не прячет ни одну: иначе
-    выпуск одного из них потерял бы новость. Копию, которую не выбирал никто, он прячет, как
+    выпуск потерял бы выбранную новость. Копию, которую не выбирал никто, он прячет, как
     раньше, — и в пользу главной, выбранной кем-то."""
     analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
     analyst.mark(a["hi"])
@@ -380,8 +392,8 @@ def test_reprint_robot_hides_neither_copy_when_different_people_chose_them(issue
     with pytest.raises(ValueError, match="обе копии"):
         _judge_says(a["hi"], a["mid"])
     assert _reprints() == {}
-    assert analyst.issue() == [("article", a["hi"])]
-    assert colleague.issue() == [("article", a["mid"])]
+    # Выпуск общий (#111): обе выбранные копии — в нём у всех.
+    assert analyst.issue() == colleague.issue() == [("article", a["hi"]), ("article", a["mid"])]
 
     _judge_says(a["low"], a["mid"])
     assert _reprints() == {a["low"]: a["mid"]}

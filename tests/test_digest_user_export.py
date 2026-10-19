@@ -98,7 +98,7 @@ class _SameSecond(datetime):
 
 
 def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(issue, monkeypatch):
-    """Дефект до 29.09 (п. 5, изоляция). Файл выгрузки назывался digest-<месяц>-<секунда>:
+    """Дефект до 29.09 (п. 5). Файл выгрузки назывался digest-<месяц>-<секунда>:
     две выгрузки одного месяца в одну секунду (двадцать человек собирают сентябрь до 05.10,
     HTML готовится за доли секунды) писали в один файл — и первый скачивал выпуск второго."""
     analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
@@ -109,10 +109,13 @@ def test_exports_of_two_people_in_the_same_second_do_not_overwrite_each_other(is
     mine = analyst.start_export("html")
     theirs = colleague.start_export("html")
 
-    mine_html = analyst.download(mine).decode("utf-8")
-    theirs_html = colleague.download(theirs).decode("utf-8")
-    assert "Материал hi" in mine_html and "Материал low" not in mine_html
-    assert "Материал low" in theirs_html and "Материал hi" not in theirs_html
+    # Выпуск общий (#111): обе выгрузки — один выпуск, но каждая в своём файле.
+    # Список задач пока у каждого свой (общий — #114): свою задачу каждый читает сам.
+    paths = {job_id: person.get(f"/api/jobs/{job_id}").json()["result"]["path"]
+             for person, job_id in ((analyst, mine), (colleague, theirs))}
+    assert paths[mine] != paths[theirs]
+    for html in (analyst.download(mine).decode("utf-8"), colleague.download(theirs).decode("utf-8")):
+        assert "Материал hi" in html and "Материал low" in html
 
 
 def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(

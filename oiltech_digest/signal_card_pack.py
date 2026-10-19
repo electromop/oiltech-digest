@@ -49,7 +49,7 @@ from typing import Any
 from psycopg.rows import dict_row
 
 from oiltech_digest import config, feed_window
-from oiltech_digest.db import repository
+from oiltech_digest.db import marks, repository
 
 DICTIONARIES_PATH = Path(__file__).with_name("signal_card_dictionaries.json")
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -306,10 +306,8 @@ def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
                    COALESCE(p.name, t.name, 'без темы') AS theme, 'business' AS category_code,
                    s.name AS publisher, COALESCE(s.source_type, '') AS publisher_type, s.name AS publisher_source,
                    sc.total_score AS score,
-                   EXISTS (SELECT 1 FROM user_article_states u
-                           WHERE u.article_id = a.id AND u.status = 'digest') AS in_digest,
-                   EXISTS (SELECT 1 FROM user_article_states u
-                           WHERE u.article_id = a.id AND u.status = 'noise') AS marked_noise
+                   {marks.article_marked_sql('a.id', 'digest')} AS in_digest,
+                   {marks.article_marked_sql('a.id', 'noise')} AS marked_noise
             FROM articles a
             JOIN article_cards c ON c.article_id = a.id
             JOIN sources s ON s.id = a.source_id
@@ -321,8 +319,7 @@ def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
               AND a.collected_at >= %s::date AND a.collected_at < %s::date
               AND a.full_text_status IS DISTINCT FROM 'mismatch'
               AND length(btrim(COALESCE(a.raw_text, ''))) >= %s
-              AND NOT EXISTS (SELECT 1 FROM user_article_states u
-                              WHERE u.article_id = a.id AND u.status IN ('duplicate', 'archive'))
+              AND NOT {marks.article_marked_sql('a.id', 'duplicate', 'archive')}
             ORDER BY a.id
             """,
             (since, until, config.MIN_ARTICLE_TEXT_CHARS),

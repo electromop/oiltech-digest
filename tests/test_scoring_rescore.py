@@ -148,7 +148,7 @@ def test_enqueue_rescore_dry_run_prints_n_and_cost_and_enqueues_nothing(isolated
     with connection.get_connection() as conn:
         user_id = conn.execute("INSERT INTO users (email, password_salt, password_hash) "
                                "VALUES ('d@example.com', 's', 'h') RETURNING id").fetchone()[0]
-        conn.execute("INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+        conn.execute("INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
                      (user_id, legacy))
         conn.commit()
     for _ in range(3):

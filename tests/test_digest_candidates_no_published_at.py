@@ -38,11 +38,11 @@ def test_issue_with_article_without_publication_date_does_not_crash(isolated_db)
                 (article_id,),
             )
             conn.execute(
-                "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+                "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
                 (user_id, article_id),
             )
             ids.append(article_id)
         conn.commit()
 
-    rows = repository.digest_candidates(month=None, limit=50, min_score=0, user_id=user_id)
+    rows = repository.digest_candidates(month=None, limit=50, min_score=0)
     assert {row["id"] for row in rows} == set(ids)

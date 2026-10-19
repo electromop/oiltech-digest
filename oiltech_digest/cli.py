@@ -79,20 +79,6 @@ def cmd_admission_code(args: argparse.Namespace) -> None:
     print(admission.notify_text(int(target["id"]), target["email"], code, expires_at))
 
 
-def cmd_migrate_digest_to_user(args: argparse.Namespace) -> None:
-    """Разовый перенос текущих глобальных статусов (article_cards.status != 'new')
-    в личное состояние пользователя — чтобы его дайджест сохранился при переходе на
-    пер-юзерную модель (#12)."""
-    from oiltech_digest.db import repository
-
-    target = next((u for u in repository.list_users() if u["email"].lower() == args.email.strip().lower()), None)
-    if target is None:
-        print(f"Пользователь {args.email} не найден")
-        return
-    n = repository.migrate_global_status_to_user(int(target["id"]))
-    print(f"Перенесено статусов: {n} → {args.email}")
-
-
 def _utc_period_from_days(days: int) -> tuple[datetime, datetime]:
     end = datetime.now(timezone.utc)
     return end - timedelta(days=days), end
@@ -1626,6 +1612,65 @@ def cmd_digest_save(args: argparse.Namespace) -> None:
     )
 
 
+def _print_issue_months(months: list[dict]) -> None:
+    """Состав выпуска закрытых месяцев: прежнее правило против общих отметок."""
+    if not months:
+        print("  закрытых месяцев с выпуском нет")
+    for month in months:
+        after = month["after"]
+        line = f"  {month['month']}: статей {len(after['article_ids'])}, карточек радара {len(after['signal_ids'])}"
+        if month["match"]:
+            print(f"{line} — совпадает с прежним выпуском")
+        else:
+            print(f"{line} — РАСХОЖДЕНИЕ: было {month['before']}, стало бы {after}")
+
+
+def cmd_migrate_shared_marks(args: argparse.Namespace) -> None:
+    """Перенос личных отметок и черновиков учётки-основы в общие (#111). Пробный прогон по
+    умолчанию; --write — записать; --check — сверка после переноса только чтением. Расхождение
+    состава закрытого месяца — выход с кодом 1."""
+    from oiltech_digest.db.marks_migration import check_shared_marks, migrate_shared_marks
+
+    if args.check:
+        try:
+            report = check_shared_marks()
+        except ValueError as exc:
+            print(f"migrate-shared-marks --check: {exc}")
+            raise SystemExit(1)
+        print(f"migrate-shared-marks --check (только чтение): перенос {report['done_at']:%d.%m.%Y %H:%M},"
+              f" основа — учётка №{report['base_user_id']}, месяцы до {report['open_from']}")
+        _print_issue_months(report["months"])
+        if not report["ok"]:
+            raise SystemExit(1)
+        return
+    if args.base_user_id is None:
+        print("migrate-shared-marks: нужен --base-user-id (или --check)")
+        raise SystemExit(2)
+    report = migrate_shared_marks(args.base_user_id, write=args.write)
+    if report["already_done"]:
+        print(f"migrate-shared-marks: перенос уже сделан {report['done_at']:%d.%m.%Y %H:%M}"
+              f" (основа — учётка №{report['base_user_id']}) — повторный ничего не меняет; сверка — --check")
+        return
+    mode = "ЗАПИСЬ" if args.write else "пробный прогон (ничего не записано; --write — записать)"
+    print(f"migrate-shared-marks: основа — учётка №{report['base_user_id']}, {mode}")
+    for kind, label in (("articles", "статей"), ("signals", "карточек радара")):
+        part = report[kind]
+        statuses = ", ".join(f"{status}={count}" for status, count in part["by_status"].items()) or "нет"
+        print(f"  отметки {label} у основы: {statuses}; в общие — {part['inserted']}")
+    print(f"  черновики основы — в общий черновик месяца: {', '.join(report['drafts_copied']) or 'нет'}")
+    skipped = report["skipped"]
+    print(f"  не переносятся (проверочные других учёток): отметок статей {skipped['articles']['rows']}"
+          f" у {skipped['articles']['users']} учёток, отметок карточек {skipped['signals']['rows']}"
+          f" у {skipped['signals']['users']}, личных черновиков {skipped['drafts']['rows']};"
+          f" их примеров «выбран в дайджест» гаснет {report['examples_superseded']}")
+    print(f"  сверка закрытых месяцев (до {report['open_from']}):")
+    _print_issue_months(report["months"])
+    if not report["ok"]:
+        print("  ОСТАНОВЛЕНО: состав закрытого месяца изменился бы — ничего не записано")
+        raise SystemExit(1)
+    print("  записано" if report["written"] else "  сверка сошлась")
+
+
 def cmd_jobs_worker(args: argparse.Namespace) -> None:
     from oiltech_digest import background_jobs
 
@@ -2792,10 +2837,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ac_who.add_argument("--email")
     p_ac.set_defaults(func=cmd_admission_code)
 
-    p_md = sub.add_parser("migrate-digest-to-user", help="перенести текущий глобальный дайджест/статусы на пользователя (#12)")
-    p_md.add_argument("--email", required=True)
-    p_md.set_defaults(func=cmd_migrate_digest_to_user)
-
     p_disc = sub.add_parser("discover-rss", help="автообнаружение RSS-лент")
     p_disc.add_argument("--force", action="store_true", help="перепроверить все, а не только без rss_url")
     p_disc.add_argument("--source-id", type=int, default=None, help="только указанный источник")
@@ -3584,19 +3625,32 @@ def build_parser() -> argparse.ArgumentParser:
                                 help="в таблице — не больше N строк на вердикт (полный список — --json)")
     p_source_probe.set_defaults(func=cmd_source_probe)
 
-    p_digest = sub.add_parser("digest-content", help="собрать digest_content.json из обработанных статей")
+    p_digest = sub.add_parser("digest-content", help="собрать digest_content.json выпуска месяца (общие отметки)")
     p_digest.add_argument("month", help="YYYY-MM")
     p_digest.add_argument("--output", default="digest_content.generated.json")
     p_digest.add_argument("--html-output", default=None, help="дополнительно собрать email-ready HTML")
-    p_digest.add_argument("--limit", type=int, default=20)
-    p_digest.add_argument("--min-score", type=float, default=60)
+    # Умолчания — как у экрана выпуска (DigestPage: до 500 материалов, порог балла 0): команда
+    # собирает тот же выпуск, что экран (#111).
+    p_digest.add_argument("--limit", type=int, default=500)
+    p_digest.add_argument("--min-score", type=float, default=0)
     p_digest.set_defaults(func=cmd_digest_content)
 
-    p_digest_save = sub.add_parser("digest-save", help="сохранить draft monthly_digest из текущих digest-кандидатов")
+    p_digest_save = sub.add_parser("digest-save", help="сохранить общий черновик выпуска месяца из отмеченного «в дайджест»")
     p_digest_save.add_argument("month", help="YYYY-MM")
-    p_digest_save.add_argument("--limit", type=int, default=20)
-    p_digest_save.add_argument("--min-score", type=float, default=60)
+    p_digest_save.add_argument("--limit", type=int, default=500)
+    p_digest_save.add_argument("--min-score", type=float, default=0)
     p_digest_save.set_defaults(func=cmd_digest_save)
+
+    p_shared_marks = sub.add_parser(
+        "migrate-shared-marks",
+        help="перенести отметки и черновики учётки-основы в общие (#111); по умолчанию пробный прогон",
+    )
+    p_shared_marks.add_argument("--base-user-id", type=int, default=None, help="номер учётки-основы")
+    shared_marks_mode = p_shared_marks.add_mutually_exclusive_group()
+    shared_marks_mode.add_argument("--write", action="store_true", help="записать (без флага — пробный прогон)")
+    shared_marks_mode.add_argument("--check", action="store_true",
+                                   help="после переноса: сверка закрытых месяцев только чтением")
+    p_shared_marks.set_defaults(func=cmd_migrate_shared_marks)
 
     p_jobs_worker = sub.add_parser("jobs-worker", help="обрабатывать background_jobs из БД")
     p_jobs_worker.add_argument("--poll-seconds", type=float, default=None)

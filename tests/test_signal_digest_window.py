@@ -42,8 +42,8 @@ def _select(person: Person, signal_id: int, selected: bool = True):
 def _status(person: Person, signal_id: int) -> str | None:
     with connection.get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM user_signal_states WHERE user_id = %s AND signal_id = %s",
-            (person.id, signal_id),
+            "SELECT status FROM signal_marks WHERE signal_id = %s",
+            (signal_id,),
         ).fetchone()
     return row[0] if row else None
 
@@ -87,7 +87,7 @@ def test_from_the_5th_the_previous_month_card_is_refused(analyst, monkeypatch, n
         assert refused.status_code == 409, (person.role, body)
         assert "архиву за сентябрь 2026" in refused.json()["detail"]
     with connection.get_connection() as conn:
-        states = conn.execute("SELECT count(*) FROM user_signal_states WHERE signal_id = %s", (card,)).fetchone()[0]
+        states = conn.execute("SELECT count(*) FROM signal_marks WHERE signal_id = %s", (card,)).fetchone()[0]
         events = conn.execute("SELECT count(*) FROM signal_feedback_events WHERE signal_id = %s", (card,)).fetchone()[0]
     assert (states, events) == (0, 0), "отказ не оставляет следов: ни отметки, ни события «в дайджест» для обучения"
 
@@ -172,3 +172,39 @@ def test_unknown_card_is_still_404_and_unknown_status_400(analyst, monkeypatch):
     card = add_signal("aug", first_seen=msk(2026, 8, 20, 0, 15))
     assert _select(analyst, 999999).status_code == 404
     assert analyst.patch(f"/api/signals/{card}", json={"status": "делете"}).status_code == 400
+
+
+def test_radar_mark_is_shared_by_everyone(analyst, monkeypatch):
+    """Отметка карточки общая (#111): кнопка, число «В дайджесте», выпуск и отказ в закрытом месяце
+    — одни и те же у всех учёток; снять отметку коллеги может любой."""
+    from oiltech_digest import signal_feedback
+
+    learned = []
+    monkeypatch.setattr(signal_feedback, "learn_from_digest_selection",
+                        lambda signal_id, **kwargs: learned.append(kwargs["selected"]) or {})
+    colleague = Person(int(repository.create_user("colleague@example.test", "long-enough-password", "user")["id"]))
+    _freeze(monkeypatch, msk(2026, 9, 3, 12, 0))  # зазор: август ещё открыт
+    card = add_signal("aug", first_seen=msk(2026, 8, 20, 0, 15))
+    sep = add_signal("sep", first_seen=msk(2026, 9, 2, 0, 15))
+
+    assert _select(analyst, card).status_code == 200
+    by_colleague = {row["id"]: row for row in colleague.get("/api/signals").json()}
+    assert by_colleague[card]["selected_for_digest"] is True
+    assert colleague.get("/api/signals/summary").json()["in_digest"] == 1
+    assert colleague.issue("2026-08") == [("signal", card)]
+    # Повторное «В дайджест» коллегой отметку не меняет — второго примера для обучения нет.
+    assert _select(colleague, card).status_code == 200
+    assert learned == [True]
+
+    # Коллега снимает отметку аналитика — карточка уходит из выпуска у всех, пример гаснет.
+    assert _select(analyst, sep).status_code == 200
+    assert analyst.issue("2026-09") == [("signal", sep)]
+    assert _select(colleague, sep, selected=False).status_code == 200
+    assert analyst.issue("2026-09") == []
+    assert {row["id"]: row for row in analyst.get("/api/signals").json()}[sep]["selected_for_digest"] is False
+    assert learned == [True, True, False]
+
+    _freeze(monkeypatch, msk(2026, 9, 5, 12, 0))
+    refused = colleague.patch(f"/api/signals/{card}", json={"selected_for_digest": False})
+    assert refused.status_code == 409, "отметка аналитика в закрытом месяце закрыта и для коллеги"
+    assert _status(analyst, card) == "digest"

@@ -6,46 +6,37 @@ from oiltech_digest.db import connection
 from oiltech_digest.db import repository
 
 
-def test_monthly_digests_are_scoped_by_user(isolated_db):
+def test_monthly_digest_draft_is_one_per_month(isolated_db):
+    """Черновик выпуска один на месяц (#111): второй сохранивший правит тот же черновик, а
+    личные черновики до #111 (архив) не читаются."""
     with connection.get_connection() as conn:
-        user_rows = conn.execute(
+        user_id = conn.execute(
             """
             INSERT INTO users (email, password_salt, password_hash, role)
-            VALUES
-              ('first@example.com', 'salt', 'hash', 'user'),
-              ('second@example.com', 'salt', 'hash', 'user')
-            RETURNING id, email
+            VALUES ('first@example.com', 'salt', 'hash', 'user')
+            RETURNING id
             """
-        ).fetchall()
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO monthly_digests (user_id, month, title, status) VALUES (%s, '2026-06', 'Личный', 'draft')",
+            (user_id,),
+        )
         conn.commit()
-    user_ids = {email: user_id for user_id, email in user_rows}
 
-    first = repository.save_monthly_digest(
-        "2026-06",
-        "Digest for first user",
-        [],
-        user_id=user_ids["first@example.com"],
-    )
-    second = repository.save_monthly_digest(
-        "2026-06",
-        "Digest for second user",
-        [],
-        user_id=user_ids["second@example.com"],
-    )
+    assert repository.get_monthly_digest("2026-06") is None
+    first = repository.save_monthly_digest("2026-06", "Первая правка", [])
+    second = repository.save_monthly_digest("2026-06", "Вторая правка", [])
 
-    assert first["id"] != second["id"]
-    assert first["user_id"] == user_ids["first@example.com"]
-    assert second["user_id"] == user_ids["second@example.com"]
-    assert repository.get_monthly_digest("2026-06", user_id=user_ids["first@example.com"])["title"] == "Digest for first user"
-    assert repository.get_monthly_digest("2026-06", user_id=user_ids["second@example.com"])["title"] == "Digest for second user"
+    assert first["id"] == second["id"]
+    assert repository.get_monthly_digest("2026-06")["title"] == "Вторая правка"
 
 
 def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated_db):
     now = datetime.now(timezone.utc)
 
     with connection.get_connection() as conn:
-        # Выбор в дайджест ПЕР-ЮЗЕРНЫЙ (#12): dashboard_stats считает selected_for_digest
-        # из user_article_states для конкретного user_id, а не из article_cards.
+        # Выбор в дайджест — общая отметка (#111): dashboard_stats считает selected_for_digest
+        # из article_marks, а не из article_cards.
         analyst_id = conn.execute(
             """
             INSERT INTO users (email, password_salt, password_hash, role)
@@ -110,10 +101,10 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
             """,
             (article_ids["Old article"], article_ids["Digest candidate"]),
         )
-        # Пер-юзерный выбор в дайджест (#12) — источник правды для selected_for_digest.
+        # Общая отметка (#111) — источник правды для selected_for_digest.
         conn.execute(
             """
-            INSERT INTO user_article_states (user_id, article_id, status)
+            INSERT INTO article_marks (set_by_user_id, article_id, status)
             VALUES (%s, %s, 'digest')
             """,
             (analyst_id, article_ids["Digest candidate"]),
@@ -143,7 +134,7 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
         )
         conn.commit()
 
-    stats = repository.dashboard_stats(user_id=analyst_id)
+    stats = repository.dashboard_stats()
     assert stats == {
         "total_articles": 2,
         "with_summary": 2,
@@ -173,12 +164,11 @@ def test_repository_dashboard_health_and_digest_queries_use_real_schema(isolated
     assert health[0]["name"] == "No Articles"
     assert repository.source_health_report(stale_days=3, verdict="stale")[0]["name"] == "Stale Source"
 
-    # digest_candidates тоже пер-юзерная (#12): без user_id выбор в дайджест не виден.
     # Месяц выпуска — месяц статьи (feed_window.period_month_sql: пояс сессии БД, UTC), а не
     # «сейчас»: кандидат датирован «вчера», и первого числа месяца это уже прошлый месяц (тест
     # падал 1.10). По Москве нельзя: 02.10 00:23 МСК — по UTC ещё 1.10, месяцы расходятся.
     candidate_month = (now - timedelta(days=1)).astimezone(timezone.utc).strftime("%Y-%m")
-    digest_rows = repository.digest_candidates(month=candidate_month, min_score=60, user_id=analyst_id)
+    digest_rows = repository.digest_candidates(month=candidate_month, min_score=60)
     assert len(digest_rows) == 1
     assert digest_rows[0]["id"] == article_ids["Digest candidate"]
     assert digest_rows[0]["tag_name"] == "ГРП"
@@ -280,7 +270,7 @@ def test_dashboard_all_articles_counts_whole_base_not_just_signals(isolated_db):
         )
         conn.commit()
 
-    stats = repository.dashboard_stats(user_id=None)
+    stats = repository.dashboard_stats()
     assert stats["all_articles"] == 3      # все три статьи базы
     assert stats["total_articles"] == 1    # только один видимый сигнал
     assert stats["cleaned_articles"] == 1  # одна вычищена

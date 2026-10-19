@@ -256,7 +256,7 @@ def test_august_archive_is_viewable_but_statuses_cannot_change(feed, monkeypatch
         assert refused.status_code == 409, body
         assert "архиву за август 2026" in refused.json()["detail"]
     with connection.get_connection() as conn:
-        rows = conn.execute("SELECT count(*) FROM user_article_states WHERE article_id = %s", (ids["aug"],)).fetchone()[0]
+        rows = conn.execute("SELECT count(*) FROM article_marks WHERE article_id = %s", (ids["aug"],)).fetchone()[0]
     assert rows == 0, "отказ не должен оставлять следов в базе"
 
     # Открытый месяц правится как раньше.
@@ -283,7 +283,7 @@ def test_stats_count_only_the_window(feed, monkeypatch):
     with connection.get_connection() as conn:
         # Выбор «в дайджест» в сентябре и в августе, отсев и пометка на удаление в сентябре.
         conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest'), (%s, %s, 'digest')",
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest'), (%s, %s, 'digest')",
             (feed["user"], ids["sep"], feed["user"], ids["aug"]),
         )
         conn.execute("UPDATE article_cards SET relevant = FALSE WHERE article_id = %s", (ids["sep_nopub"],))
@@ -354,13 +354,13 @@ def test_issue_skips_article_pending_deletion(feed):
     aug = feed["ids"]["aug"]
     with connection.get_connection() as conn:
         conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
             (feed["user"], aug),
         )
         conn.commit()
 
     def issue() -> set[int]:
-        rows = repository.digest_candidates(month="2026-08", limit=50, min_score=0, user_id=feed["user"])
+        rows = repository.digest_candidates(month="2026-08", limit=50, min_score=0)
         return {row["id"] for row in rows}
 
     assert aug in issue()
@@ -379,11 +379,11 @@ def test_issue_with_article_without_publication_date_does_not_crash(feed):
     ids = feed["ids"]
     with connection.get_connection() as conn:
         conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest'), (%s, %s, 'digest')",
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest'), (%s, %s, 'digest')",
             (feed["user"], ids["aug_nopub"], feed["user"], ids["aug"]),
         )
         conn.commit()
-    rows = repository.digest_candidates(month=None, limit=50, min_score=0, user_id=feed["user"])
+    rows = repository.digest_candidates(month=None, limit=50, min_score=0)
     assert {row["id"] for row in rows} == {ids["aug_nopub"], ids["aug"]}
 
 
@@ -399,17 +399,17 @@ def test_saved_issue_export_follows_the_same_visibility(feed):
         # Черновик — из отмеченного «в дайджест»: снятую отметку выгрузка не берёт (29.09).
         for key in ("aug", "aug_late", "aug_nopub"):
             conn.execute(
-                "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+                "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
                 (feed["user"], ids[key]),
             )
         conn.commit()
     repository.save_monthly_digest(
-        month="2026-08", title="Август", status="draft", user_id=feed["user"],
+        month="2026-08", title="Август", status="draft",
         items=[{"article_id": ids["aug"]}, {"article_id": ids["aug_late"]}, {"article_id": ids["aug_nopub"]}],
     )
 
     def exported() -> list[int]:
-        content = digest_module.build_digest_content(month="2026-08", limit=50, min_score=0, user_id=feed["user"])
+        content = digest_module.build_digest_content(month="2026-08", limit=50, min_score=0)
         return [item["article_id"] for item in content["news"]]
 
     assert exported() == [ids["aug"], ids["aug_late"], ids["aug_nopub"]]
@@ -426,7 +426,7 @@ def test_saved_issue_export_follows_the_same_visibility(feed):
 def test_feed_window_endpoint_lists_archive_months_with_counts(feed, monkeypatch):
     with connection.get_connection() as conn:
         conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
             (feed["user"], feed["ids"]["aug"]),
         )
         conn.commit()
@@ -435,16 +435,16 @@ def test_feed_window_endpoint_lists_archive_months_with_counts(feed, monkeypatch
     assert payload["months"] == ["2026-09"]
     assert payload["read_only"] is False
     assert payload["archive"] == [{"month": "2026-08", "articles": 3, "digest": 1}]
-    # Выбор «в дайджест» личный: у админа тот же месяц без выбранных статей.
+    # Выбор «в дайджест» общий (#111): у админа то же число выбранных.
     admin_view = _as(feed["admin"], "admin").get("/api/feed-window").json()
-    assert admin_view["archive"] == [{"month": "2026-08", "articles": 3, "digest": 0}]
+    assert admin_view["archive"] == [{"month": "2026-08", "articles": 3, "digest": 1}]
 
 
 def test_archived_issue_can_be_viewed_but_its_draft_cannot_change(feed, monkeypatch):
     """Решение владельца 23.09: прошлый выпуск — просмотр и выгрузка, без правки черновика."""
     with connection.get_connection() as conn:
         conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
             (feed["user"], feed["ids"]["aug"]),
         )
         conn.commit()
@@ -496,7 +496,7 @@ def test_publication_month_wins_over_collection_month_in_feed_and_issue(feed, mo
     отнести её к одному месяцу — августу (COALESCE берёт дату публикации)."""
     with connection.get_connection() as conn:
         conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
             (feed["user"], feed["ids"]["aug_late"]),
         )
         conn.commit()
@@ -507,7 +507,7 @@ def test_publication_month_wins_over_collection_month_in_feed_and_issue(feed, mo
     assert aug_late not in _feed_ids(client, month="2026-09")
 
     def issue(month: str) -> set[int]:
-        rows = repository.digest_candidates(month=month, limit=50, min_score=0, user_id=feed["user"])
+        rows = repository.digest_candidates(month=month, limit=50, min_score=0)
         return {row["id"] for row in rows}
 
     assert aug_late in issue("2026-08")
@@ -534,7 +534,7 @@ def test_feed_month_matches_the_digest_month_at_the_day_boundary(feed, monkeypat
             published=_utc(2026, 8, 31, 22, 30), collected=_utc(2026, 8, 31, 23, 0),
         )
         conn.execute(
-            "INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
             (feed["user"], boundary),
         )
         conn.commit()
@@ -543,7 +543,7 @@ def test_feed_month_matches_the_digest_month_at_the_day_boundary(feed, monkeypat
 
     assert boundary not in _feed_ids(client)
     assert boundary in _feed_ids(client, month="2026-08")
-    august_issue = repository.digest_candidates(month="2026-08", limit=50, min_score=0, user_id=feed["user"])
+    august_issue = repository.digest_candidates(month="2026-08", limit=50, min_score=0)
     assert boundary in {row["id"] for row in august_issue}
 
 
