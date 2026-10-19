@@ -3,9 +3,10 @@
 Общее начало — не падеж: «Роснефтью» — это «Роснефть», а «Роснефтегаз», «Газпромнефть» и «Сибнефть» при «Сибуре» —
 другие слова. Слово — основа не короче трёх букв плюс падежное окончание из списка. Компания названа, когда названы
 все слова её имени, кроме формы собственности: одно общее слово («and», «Oil Company», «ПАО») — не имя. Короткое имя
-внутри длинного имени другой компании компанию не называет: в «Газпром нефть начала бурение» «Газпром» не назван.
-Правило одно у ядра (названа ли компания в цитате участника, signal_card._named_in) и у экзамена агента (имена агента
-и эксперта, есть ли компания в тексте, signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку.
+внутри длинного имени другой компании компанию не называет: в «Газпром нефть начала бурение» «Газпром» не назван, и
+цитата «Газпром» из этого текста его не называет — длинное имя видно и за краем цитаты. Правило одно у ядра (названа
+ли компания в цитате участника, signal_card._named_in) и у экзамена агента (имена агента и эксперта, есть ли
+компания в тексте, signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку.
 """
 
 from __future__ import annotations
@@ -64,13 +65,16 @@ def named(name: Sequence[str], text: Sequence[str]) -> bool:
     return all(any(_named_word(word, token) for token in text) for word in required)
 
 
-def named_among(names: Sequence[Sequence[str]], text: Sequence[str], others: Iterable[Sequence[str]]) -> bool:
+def named_among(names: Sequence[Sequence[str]], text: Sequence[str], others: Iterable[Sequence[str]], *,
+                before: Sequence[str] = (), after: Sequence[str] = ()) -> bool:
     """Названа ли компания (names — words каждого её имени) по правилу named среди слов текста, где стоят и другие
     компании (others — words их имён). Длинное имя закрывает короткое: вхождение имени другой компании, внутри
     которого стоит имя этой, не в счёт — «Газпром» не назван в «Газпром нефть начала бурение» и в «Gazprom Neft
-    reported», а в «Газпром и Газпром нефть подписали» назван."""
+    reported», а в «Газпром и Газпром нефть подписали» назван. Для цитаты before и after — слова текста до и после
+    неё: закрывает и вхождение, которое выходит за край цитаты, — «подписали Газпром» из «подписали Газпром нефть»
+    «Газпром» не называет."""
     closing = [other for other in others if any(_inside(name, other) for name in names)]
-    rest = _closed(text, closing)
+    rest = _closed([*before, *text, *after], closing)[len(before):len(before) + len(text)]
     return any(named(name, rest) for name in names)
 
 

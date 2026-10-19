@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Any, Callable
 
 from oiltech_digest import config, word_forms
@@ -418,7 +419,8 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
                   dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
     """Участник — только с дословной цитатой из текста публикации, в которой он назван (verified —
     проверено кодом): цитата, где компании нет, — догадка модели, а не участник, как и цитата, где её
-    имя стоит только внутри имени другой компании справочника («Газпром» в «Газпром нефть»).
+    имя стоит только внутри имени другой компании справочника («Газпром» в «Газпром нефть»), и обрывок
+    слова или имени текста («Газпром» из «Газпромнефть-Хантос» или из «Газпром нефть»).
     Издатель-СМИ (_REPORTER_TYPES) о событии сообщает — участником не считается; компания, которая
     сама публикует свою новость, — считается: в её пресс-релизе она главный участник. Алиасы — одно
     имя, повтор под другим именем отбрасывается."""
@@ -434,8 +436,8 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
         given = " ".join(company["name"].split())[:_NAME_CHARS]
         name = canonical.get(_plain(given), given)
         quote = " ".join(company["quote"].split())[:_QUOTE_CHARS]
-        if not name or not quote or _quote_form(quote) not in text \
-                or not _named_in(quote, (given, *variants.get(name, (name,))), _other_names(entries, name)):
+        if not name or not quote \
+                or not _named_in(quote, text, (given, *variants.get(name, (name,))), _other_names(entries, name)):
             continue
         key = _plain(name)
         if key in kept or key == reporter:
@@ -444,14 +446,30 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
     return list(kept.values())
 
 
-def _named_in(quote: str, names: tuple[str, ...], others: list[str]) -> bool:
-    """Названа ли компания в цитате — под любым из имён (word_forms.named_among): названы все слова имени, кроме формы
-    собственности, в любом падеже. Одного общего слова мало: «Helmerich and Payne» не названа в «JOGMEC and PTTEP»,
-    а «Equinor ASA» названа в «Equinor испытала»; «Роснефтью» — это «Роснефть», а «Роснефтегаз» — другая компания.
-    Имя внутри длинного имени другой компании справочника (others) не в счёт: «Газпром» не назван в «Газпром нефть
-    начала бурение», а в «Газпром и Газпром нефть подписали» назван."""
-    return word_forms.named_among([word_forms.words(name) for name in names], word_forms.words(quote),
-                                  [word_forms.words(other) for other in others])
+def _named_in(quote: str, text: str, names: tuple[str, ...], others: list[str]) -> bool:
+    """Названа ли компания в цитате из текста публикации (text — в _quote_form) — под любым из имён
+    (word_forms.named_among): названы все слова имени, кроме формы собственности, в любом падеже. Одного общего слова
+    мало: «Helmerich and Payne» не названа в «JOGMEC and PTTEP», а «Equinor ASA» названа в «Equinor испытала»;
+    «Роснефтью» — это «Роснефть», а «Роснефтегаз» — другая компания. Цитата стоит в тексте целыми словами (_spots):
+    «Газпром» из «Газпромнефть-Хантос» и «100,000 bp» из «100,000 bpd» — обрывки, а не цитаты. Имя внутри длинного
+    имени другой компании справочника (others) не в счёт, в том числе когда длинное имя выходит за край цитаты:
+    «Газпром» не назван ни в «Газпром нефть начала бурение», ни в цитате «Газпром» из неё, а в «Газпром и Газпром
+    нефть подписали» назван. Цитата стоит в тексте не раз — компания названа, если названа хоть в одном месте."""
+    form = _quote_form(quote)
+    spoken = [word_forms.words(name) for name in names]
+    closing = [word_forms.words(other) for other in others]
+    quoted = word_forms.words(quote)
+    return any(word_forms.named_among(spoken, quoted, closing, before=word_forms.words(text[:start]),
+                                      after=word_forms.words(text[start + len(form):]))
+               for start in _spots(form, text))
+
+
+def _spots(form: str, text: str) -> list[int]:
+    """Где цитата (form — в _quote_form) стоит в тексте целыми словами: буква или цифра на её краю не продолжает
+    слово текста."""
+    left = r"(?<!\w)" if re.match(r"\w", form) else ""
+    right = r"(?!\w)" if re.match(r"\w", form[-1:]) else ""
+    return [match.start() for match in re.finditer(f"(?={left}{re.escape(form)}{right})", text)]
 
 
 def _other_names(entries: list[dict[str, Any]], name: str) -> list[str]:
