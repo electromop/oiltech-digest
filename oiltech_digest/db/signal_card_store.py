@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -13,6 +14,7 @@ from psycopg.types.json import Json
 
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN, SIGNAL_ORIGIN_FEED, radar_origin_sql
+from oiltech_digest.feed_window import FeedWindow
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "signal_card"
@@ -118,6 +120,34 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             {"days": int(days), "window": int(days) + 1, "limit": int(limit), "attempts": DAILY_ATTEMPTS},
         ).fetchall()
     return [int(row[0]) for row in rows]
+
+
+def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
+    """Сигналы прогона по истории (#98, спека #93): ленты — по главной статье, собранной с `since`, и все
+    находки радара; дубли — мимо. first — радар или статья в текущем окне ленты (window): их карточки
+    ставятся первыми; pending — сигнал в задаче агента, которая ещё идёт. По порядку постановки."""
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            WITH pending AS (
+              SELECT DISTINCT (jsonb_array_elements_text(j.payload_json->'signal_ids'))::bigint AS id
+              FROM background_jobs j
+              WHERE j.kind = '{KIND}' AND j.status IN ('queued', 'running', 'finalizing')
+                AND jsonb_typeof(j.payload_json->'signal_ids') = 'array'
+            )
+            SELECT s.id, s.card_recipe,
+                   ({radar_origin_sql("s")} OR COALESCE({window.sql("a")}, FALSE)) AS first,
+                   EXISTS (SELECT 1 FROM pending p WHERE p.id = s.id) AS pending
+            FROM signals s
+            LEFT JOIN articles a ON a.id = s.origin_article_id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
+            WHERE s.merged_into_signal_id IS NULL
+              AND ({radar_origin_sql("s")} OR a.collected_at >= %(since)s)
+            ORDER BY first DESC, s.id
+            """,
+            {"since": since},
+        )
+        return cur.fetchall()
 
 
 def write_card(signal_id: int, values: dict[str, Any], *, recipe: dict[str, Any]) -> bool:

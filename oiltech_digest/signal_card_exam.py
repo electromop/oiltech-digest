@@ -98,20 +98,14 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
 
 def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
          runs: int = RUNS, part: str = "exam") -> dict[str, Any]:
-    """Сухой прогон: число вызовов и цена по моделям; ничего не пишет и не вызывает модель. Вход — по длине
-    запросов набора, ответ — по оценке агента (signal_card.ESTIMATED_OUTPUT_TOKENS)."""
+    """Сухой прогон: число вызовов и цена по моделям; ничего не пишет и не вызывает модель. Цена — по длине
+    запросов набора (signal_card.estimate)."""
     exam = load(markup_path, manifest_path)
     split = _split(exam, write=False)
     items = [item for item in exam["items"] if item["id"] in set(split[part])]
     dictionaries = load_dictionaries()
     chars = sum(signal_card.request_chars(_model_item(index, item), dictionaries) for index, item in enumerate(items))
-    tokens_in = -(-chars // signal_card.CHARS_PER_TOKEN) * runs
-    tokens_out = signal_card.ESTIMATED_OUTPUT_TOKENS * len(items) * runs
-    priced = []
-    for model in models:
-        price_in, price_out = config.price_for_model(model)
-        priced.append({"model": model, "calls": len(items) * runs, "input_tokens": tokens_in, "output_tokens": tokens_out,
-                       "cost_usd": (tokens_in * price_in + tokens_out * price_out) / 1_000_000})
+    priced = [signal_card.estimate(chars * runs, len(items) * runs, model) for model in models]
     stratum_of = {item["id"]: item["stratum"] for item in exam["items"]}
     return {"part": part, "signals": len(items), "runs": runs, "rows": len(exam["items"]), "split_new": split["new"],
             "split": {key: dict(sorted(Counter(stratum_of[one] for one in split[key]).items()))

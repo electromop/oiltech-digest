@@ -2130,6 +2130,40 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
           + (f", очередь {', '.join(queues)}" if queues else ""))
 
 
+def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
+    """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе
+    пересчётов, сначала текущее окно ленты и радар. По умолчанию сухой прогон: число сигналов и цена."""
+    from oiltech_digest import signal_card, signal_card_history
+
+    try:
+        plan = signal_card_history.plan()
+    except signal_card.CardSetupError as exc:
+        raise SystemExit(f"enqueue-signal-card-history: {exc}") from exc
+    estimate, count = plan["estimate"], len(plan["first"]) + len(plan["rest"])
+    print(f"enqueue-signal-card-history: модель {plan['model']}, инструкция {plan['prompt_version']}, "
+          f"справочники {plan['dictionaries_version']}")
+    print(f"  история — лента с {plan['since']} (по дате сбора статьи) и весь радар, без дублей: сигналов "
+          f"{plan['signals']}; заполнены этим рецептом — {plan['filled']}, уже в задачах агента — {plan['pending']}, "
+          f"без главной публикации — {plan['no_publication']}")
+    print(f"  к заполнению {count}: сначала текущее окно ленты ({', '.join(plan['months'])}) и радар — "
+          f"{len(plan['first'])}, затем остальное — {len(plan['rest'])}")
+    print(f"  цена ≈ {_usd(estimate['cost_usd'])}: вызовов {estimate['calls']}, токенов ≈ "
+          f"{estimate['input_tokens'] // 1000} тыс. входа и {estimate['output_tokens'] // 1000} тыс. выхода "
+          f"(оценка: ответ — {signal_card.ESTIMATED_OUTPUT_TOKENS} токенов, знаков на токен — {signal_card.CHARS_PER_TOKEN})")
+    print(f"  полоса {plan['queue']}: задач {-(-count // plan['batch'])} по {plan['batch']} сигналов")
+    if not plan["bulk_lane"]:
+        print("  ВНИМАНИЕ: полоса пересчётов выключена (AI_BULK_LANE_ENABLED) — задачи встали бы в поток дня перед "
+              "новыми статьями; --apply откажет")
+    if not args.apply:
+        print("  сухой прогон — задачи не поставлены и не оплачены (поставить: --apply)")
+        return
+    try:
+        jobs = signal_card_history.enqueue(plan)
+    except signal_card.CardSetupError as exc:
+        raise SystemExit(f"enqueue-signal-card-history: {exc}") from exc
+    print(f"  поставлено задач {len(jobs)}")
+
+
 def cmd_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -3299,6 +3333,15 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="пересчитать карточки названных сигналов (номера через запятую) — "
                                       "по полосе пересчётов")
     p_enqueue_cards.set_defaults(func=cmd_enqueue_signal_cards)
+
+    p_card_history = sub.add_parser(
+        "enqueue-signal-card-history",
+        help="прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе "
+             "пересчётов; по умолчанию сухой прогон — число сигналов и цена",
+    )
+    p_card_history.add_argument("--apply", action="store_true",
+                                help="поставить задачи (только при включённом агенте); без флага — число и цена")
+    p_card_history.set_defaults(func=cmd_enqueue_signal_card_history)
 
     p_signals = sub.add_parser("signals", help="список найденных технологических сигналов")
     p_signals.add_argument("--maturity", choices=["watch", "shortlist", "proven", "reject"], default=None)

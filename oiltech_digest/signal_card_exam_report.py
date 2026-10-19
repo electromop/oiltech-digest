@@ -43,7 +43,7 @@ def render(report: dict[str, Any]) -> str:
         "",
     ]
     for model in report["models"]:
-        lines += _model(model)
+        lines += _model(model, report["runs"])
     lines += _baseline(report["baseline"])
     lines += _judge(report.get("judge"))
     return "\n".join(lines) + "\n"
@@ -59,7 +59,7 @@ def _file_line(mark: dict[str, str] | None, title: str, absent: str) -> str:
     return f"{title}: `{Path(mark['file']).name}` (sha256 {mark['sha256'][:12]}…)." if mark else absent
 
 
-def _model(model: dict[str, Any]) -> list[str]:
+def _model(model: dict[str, Any], runs: int) -> list[str]:
     strict, lenient = model["strict"]["overall"], model["lenient"]["overall"]
     lines = [
         f"## {model['model']} — " + ("пороги пройдены" if model["passed"]
@@ -81,8 +81,9 @@ def _model(model: dict[str, Any]) -> list[str]:
               f"| {_share(strict['companies_precision']['by_signal'])} / "
               f"{_share(strict['companies_recall']['by_signal'])} | — | — | |", ""]
     strata = model["lenient"]["by_stratum"]
+    # В скобках — строки доли: у каждой строки ровно runs ответов (без карточки — тоже ответ).
     lines += ["По долям набора (с допусками, справочно — на экзамене в доле от 4 строк):", "",
-              "| Атрибут | " + " | ".join(f"{STRATUM_RU.get(stratum, stratum)} ({strata[stratum]['region']['n']})"
+              "| Атрибут | " + " | ".join(f"{STRATUM_RU.get(stratum, stratum)} ({strata[stratum]['region']['n'] // runs})"
                                          for stratum in strata) + " |",
               "|---|" + "---|" * len(strata)]
     for key, title, _ in _ROWS:

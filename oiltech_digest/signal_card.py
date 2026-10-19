@@ -52,7 +52,7 @@ _PHRASE_CHARS, _NAME_CHARS, _QUOTE_CHARS = 400, 200, 600
 
 
 class CardSetupError(ValueError):
-    """Агента нельзя поставить в работу: выключен флаг или не задана модель."""
+    """Агента нельзя поставить в работу: выключен флаг, не задана модель, у истории нет полосы пересчётов."""
 
 
 # --- Постановка (ядро) ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ def enqueue_new_signals() -> dict[str, Any]:
     if not config.SIGNAL_CARD_ENABLED:
         return {"signals": 0, "jobs": [], "reason": "disabled"}
     # Без модели шаг отказывает в каждом цикле, даже когда новых сигналов нет: настройка видна сразу.
-    _configured_model()
+    configured_model()
     ids = signal_card_store.new_signal_ids(days=config.SIGNAL_CARD_NEW_DAYS, limit=config.SIGNAL_CARD_STEP_LIMIT)
     return {"signals": len(ids), "jobs": enqueue_cards(ids, trigger="daily")}
 
@@ -77,7 +77,7 @@ def enqueue_cards(signal_ids: list[int], *, trigger: str, bulk: bool = False) ->
 
     if not config.SIGNAL_CARD_ENABLED:
         raise CardSetupError("SIGNAL_CARD_ENABLED выключен: агент карточки выходит в работу после экзамена (#98)")
-    model = _configured_model()
+    model = configured_model()
     decision = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
     batch = config.SIGNAL_CARD_BATCH
     return [
@@ -92,10 +92,20 @@ def enqueue_cards(signal_ids: list[int], *, trigger: str, bulk: bool = False) ->
     ]
 
 
-def _configured_model() -> str:
+def configured_model() -> str:
     if not config.SIGNAL_CARD_MODEL:
         raise CardSetupError("SIGNAL_CARD_MODEL не задан: модель ленты агент карточки не берёт")
     return config.SIGNAL_CARD_MODEL
+
+
+def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
+    """Цена вызовов до оплаты — для сухих прогонов экзамена и истории (#98): вход — по длине запросов в
+    знаках (request_chars), ответ — ESTIMATED_OUTPUT_TOKENS на вызов, ставки ядра (config.price_for_model)."""
+    tokens_in = -(-chars // CHARS_PER_TOKEN)
+    tokens_out = ESTIMATED_OUTPUT_TOKENS * calls
+    price_in, price_out = config.price_for_model(model)
+    return {"model": model, "calls": calls, "input_tokens": tokens_in, "output_tokens": tokens_out,
+            "cost_usd": (tokens_in * price_in + tokens_out * price_out) / 1_000_000}
 
 
 # --- Пакет (ядро, при выдаче) --------------------------------------------------------------------
