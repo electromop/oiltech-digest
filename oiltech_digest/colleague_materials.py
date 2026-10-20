@@ -202,15 +202,28 @@ def save(fields: dict[str, Any], *, file_name: str | None = None, file_path: str
     return dict(row), created
 
 
-def list_materials(*, limit: int = 200, tg_user_id: int | None = None) -> list[dict[str, Any]]:
+def list_materials(*, limit: int = 200, tg_user_id: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
     where, params = ("WHERE tg_user_id = %s", [tg_user_id]) if tg_user_id is not None else ("", [])
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            f"SELECT * FROM colleague_materials {where} ORDER BY created_at DESC, id DESC LIMIT %s",
-            (*params, max(1, min(int(limit), 500))),
+            f"SELECT * FROM colleague_materials {where} ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+            (*params, max(1, min(int(limit), 500)), max(0, int(offset))),
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+def count_materials(*, tg_user_id: int | None = None) -> int:
+    where, params = ("WHERE tg_user_id = %s", [tg_user_id]) if tg_user_id is not None else ("", [])
+    with connection.get_connection() as conn:
+        return int(conn.execute(f"SELECT count(*) FROM colleague_materials {where}", params).fetchone()[0])
+
+
+def status(row: dict[str, Any]) -> tuple[str, str]:
+    """Где материал в воронке. До оценки материалов (следующий шаг) — «принят»; с сигналом — его номер."""
+    if row.get("signal_id"):
+        return "signal", f"Стал сигналом №{row['signal_id']}"
+    return "accepted", "Принят на платформу"
 
 
 def get_material(material_id: int) -> dict[str, Any] | None:
@@ -223,6 +236,7 @@ def get_material(material_id: int) -> dict[str, Any] | None:
 
 def brief(row: dict[str, Any]) -> dict[str, Any]:
     """Строка для экрана и бота: без пути на диске."""
+    state, state_label = status(row)
     return {
         "id": row["id"],
         "kind": row["kind"],
@@ -240,5 +254,7 @@ def brief(row: dict[str, Any]) -> dict[str, Any]:
         "author": row["tg_author"],
         "author_username": row.get("tg_username"),
         "signal_id": row.get("signal_id"),
+        "status": state,
+        "status_label": state_label,
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
     }

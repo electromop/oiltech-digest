@@ -15,6 +15,7 @@ function material(changes: Partial<ColleagueMaterial>): ColleagueMaterial {
     description: "Итог тендера на ГРП", url: null, companies: ["Татнефть"], verdict: "strong_signal",
     verdict_label: "Сильный сигнал — вынести в дайджест / обсуждать", verdict_comment: null, file_name: null,
     file_size: null, has_file: false, author: "Иван Иванов", author_username: "ivanov", signal_id: null,
+    status: "accepted", status_label: "Принят на платформу",
     created_at: "2026-10-19T10:00:00+03:00", ...changes,
   };
 }
@@ -46,5 +47,21 @@ describe("ColleagueMaterialsPage", () => {
 
     expect(screen.queryByText("Татнефть выбрала подрядчика")).toBeNull();
     expect(screen.getByText("Обзор рынка")).toBeTruthy();
+  });
+
+  it("shows where each material is in the platform funnel", async () => {
+    vi.mocked(listColleagueMaterials).mockResolvedValue({
+      ok: true,
+      materials: [
+        material({}),
+        material({ id: 3, title: "Контракт на ГРП", signal_id: 7, status: "signal", status_label: "Стал сигналом №7" }),
+      ],
+      verdicts: [],
+    });
+
+    render(<ColleagueMaterialsPage onUnauthorized={vi.fn()} showToast={vi.fn()} />);
+
+    expect(await screen.findByText("Принят на платформу")).toBeTruthy();
+    expect(screen.getByText("Стал сигналом №7")).toBeTruthy();
   });
 });

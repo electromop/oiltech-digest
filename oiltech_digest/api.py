@@ -3264,12 +3264,14 @@ async def external_worker_save_material(
 @app.get("/api/external-worker/materials")
 def external_worker_list_materials(
     tg_user_id: int,
-    limit: int = Query(default=5, ge=1, le=20),
+    limit: int = Query(default=10, ge=1, le=20),
+    offset: int = Query(default=0, ge=0),
     _: None = Depends(require_external_worker),
 ) -> dict[str, Any]:
-    """Последние материалы автора — для команды бота /my."""
-    rows = colleague_materials.list_materials(limit=limit, tg_user_id=tg_user_id)
-    return {"ok": True, "materials": [_clean(colleague_materials.brief(row)) for row in rows]}
+    """История материалов автора со статусом, страницами — для команды бота /history."""
+    rows = colleague_materials.list_materials(limit=limit, tg_user_id=tg_user_id, offset=offset)
+    return {"ok": True, "materials": [_clean(colleague_materials.brief(row)) for row in rows],
+            "total": colleague_materials.count_materials(tg_user_id=tg_user_id)}
 
 
 @app.get("/api/materials")

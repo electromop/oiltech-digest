@@ -1315,6 +1315,8 @@ export type ColleagueMaterial = {
   author: string;
   author_username: string | null;
   signal_id: number | null;
+  status: string;
+  status_label: string;
   created_at: string | null;
 };
 
