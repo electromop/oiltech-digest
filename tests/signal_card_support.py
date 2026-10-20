@@ -1,15 +1,19 @@
 """Общее для тестов агента «Карточка сигнала» (#96): подставная модель, сигналы ленты и находки
 радара на изолированной базе, настоящий клиент воркера NL против тестового ядра. Сами тесты —
 test_signal_card.py (шов 1: применение и API) и test_signal_card_worker.py (шов 2: воркер, контракт,
-полосы).
+полосы). Пакет эксперту во временной папке и подставная модель экзамена (#98) — для test_signal_card_exam.py и
+test_signal_card_exam_rescore.py (шов 4).
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+import hashlib
+import json
 
+import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api, cli, contract, external_worker, signal_card
+from oiltech_digest import api, cli, contract, external_worker, signal_card, signal_card_pack
 from oiltech_digest.db import repository
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIResponse
@@ -174,3 +178,105 @@ def api_get(path, user, **params):
 
 def business(user):
     return {card["title"]: card for card in api_get("/api/signals", user, showcase="business")}
+
+
+# --- Экзамен (#98): пакет эксперту во временной папке и подставная модель ---------------------
+
+NANO, MINI = "gpt-5.4-nano", "gpt-5.4-mini"
+STRATA = {"useful": 24, "noise": 6, "technology": 15, "business": 5}
+EXAM_COUNTS = {"useful": 17, "noise": 4, "technology": 10, "business": 4}
+TEXT = "SLB подписала контракт с Saudi Aramco 24 сентября 2026 года на бурение 40 скважин."
+MARKUP_NAME = "signal_card_markup_completed.xlsx"
+
+
+def label(**overrides):
+    """Разметка эксперта одной строки — колонки таблицы пакета (signal_card_pack.MARKUP_COLUMNS)."""
+    return {
+        "Дата события": date(2026, 9, 24), "Источник даты события": "из текста", "Компании-участники": "SLB",
+        "Тип события": "контракт", "Регион": "Ближний Восток", "Класс технологии": "неприменимо",
+        "Зрелость": "неприменимо", "Связь с нефтесервисом": "прямая",
+        "Применение в нефтесервисе": "Бурение скважин", "Почему важно нефтесервису": "Крупный контракт",
+        "Комментарий эксперта": "", **overrides,
+    }
+
+
+def row(number, stratum, *, title=None, text=TEXT, published="2026-09-25", publisher="Нефтегаз",
+        publisher_type="Media", **labels):
+    radar = stratum in ("technology", "business")
+    return {
+        "id": f"{'signal' if radar else 'article'}:{number}", "origin": "radar" if radar else "feed",
+        "stratum": stratum, "signal_id": str(number) if radar else None,
+        "article_id": None if radar else str(number), "evidence_id": str(number) if radar else None,
+        "url": f"https://pack.example/{number}", "category": "технология" if stratum == "technology" else "бизнес",
+        "theme": DRILLING, "title": title or f"Сигнал {number}", "text": text, "published": published,
+        "publisher": publisher, "publisher_type": "" if radar else publisher_type,
+        "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "text_chars": len(text),
+        "override_note": None, "overrides": [], "labels": label(**labels),
+    }
+
+
+def pack_rows(**by_stratum):
+    """50 строк набора; by_stratum — поправки разметки целой доли (её строки на экзамене — по долям)."""
+    rows, number = [], 0
+    for stratum, count in STRATA.items():
+        for _ in range(count):
+            number += 1
+            rows.append(row(number, stratum, **by_stratum.get(stratum, {})))
+    return rows
+
+
+def write_pack(folder, rows):
+    """Пакет эксперту так, как он вернулся: манифест рядом с заполненной таблицей."""
+    items = [{key: value for key, value in item.items() if key != "labels"} for item in rows]
+    manifest = {"created_at": "2026-10-16T07:40:50+00:00", "seed": signal_card_pack.DEFAULT_SEED,
+                "dictionaries_version": signal_card_pack.load_dictionaries()["version"],
+                "text_limit": signal_card_pack.TEXT_LIMIT, "items": items}
+    (folder / signal_card_pack.MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    path = folder / MARKUP_NAME
+    signal_card_pack._write_workbook(path, items, signal_card_pack.load_dictionaries())
+    book = openpyxl.load_workbook(path)
+    sheet = book[signal_card_pack.MARKUP_SHEET]
+    header = [cell.value for cell in sheet[1]]
+    for number, item in enumerate(rows, start=2):
+        for name, value in item["labels"].items():
+            sheet.cell(row=number, column=header.index(name) + 1, value=value)
+    book.save(path)
+    return path
+
+
+class ExamModel:
+    """Подставная модель экзамена: ответ — по модели и заголовку публикации; вызовы запоминает."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.calls = []
+
+    def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None,
+                      reasoning_effort=None):
+        title = next(line.split(":", 1)[1].strip() for line in user_input.splitlines()
+                     if line.startswith("Заголовок:"))
+        self.calls.append({"model": model, "title": title, "input": user_input})
+        reply = self.answers[model](title)
+        if isinstance(reply, Exception):
+            raise reply
+        return AIResponse(data=reply, model=f"{model}-2026-03-17", input_tokens=3000, output_tokens=600)
+
+
+def run_exam(monkeypatch, markup, answers, *args):
+    model = ExamModel(answers)
+    monkeypatch.setattr(signal_card, "make_client", lambda: model)
+    cli.main(["signal-card-exam", "--markup", str(markup), *args])
+    [report] = sorted(markup.parent.glob("signal_card_exam_report_*.json"))[-1:]
+    return model, json.loads(report.read_text(encoding="utf-8"))
+
+
+def by_stratum(stratum_of, **answers_by_stratum):
+    """Ответ модели по доле строки: заголовок «Сигнал N» → доля N-й строки набора."""
+    def reply(title):
+        return answers_by_stratum.get(stratum_of[title], answer())
+    return reply
+
+
+@pytest.fixture()
+def strata():
+    return {item["title"]: item["stratum"] for item in pack_rows()}
