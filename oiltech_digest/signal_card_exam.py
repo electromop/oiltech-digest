@@ -25,7 +25,7 @@ from typing import Any
 
 from oiltech_digest import config, signal_card, signal_card_exam_baseline, signal_card_exam_report
 from oiltech_digest.signal_card import _plain
-from oiltech_digest.signal_card_exam_score import CompanyNames, baseline_metrics, evaluate, judge_metrics
+from oiltech_digest.signal_card_exam_score import CompanyNames, baseline_metrics, evaluate, judged
 from oiltech_digest.signal_card_pack import (LISTS_SHEET, MANIFEST_NAME, MARKUP_COLUMNS, MARKUP_SHEET, REPO_ROOT,
                                              UNDEFINED, _rank, load_dictionaries, publication_text)
 
@@ -44,7 +44,6 @@ ALIASES_NAME = "signal_card_exam_aliases.json"
 # Значения судьи радара у радарных строк набора — выгрузка с ядра (signal-card-exam-judge): {ID: {event_date,
 # oilfield_relevance}}. Экзамен идёт там, где доступна модель, а база — на ядре.
 JUDGE_NAME = "signal_card_exam_judge.json"
-REPORT_PREFIX = "signal_card_exam_report_"
 # Колонка таблицы разметки → атрибут; справочник значения — у выбора из списка.
 LABEL_COLUMNS = {"Дата события": "event_date", "Источник даты события": "event_date_source",
                  "Компании-участники": "companies", "Тип события": "event_type", "Регион": "region",
@@ -63,19 +62,19 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     split = _split(exam, write=True)
-    items = [item for item in exam["items"] if item["id"] in set(split[part])]
+    items = _part_items(exam, split, part)
     dictionaries = load_dictionaries()
     names = CompanyNames(dictionaries["companies"], exam["aliases"])
-    tried, decision = [], None
+    tried: list[dict[str, Any]] = []
     for model in _by_price(models):
-        tried.append(_scored(model, _answers(model, items, runs, dictionaries), items, dictionaries, names))
+        tried.append(_model_scores(model, _answers(model, items, runs, dictionaries), items, dictionaries, names))
         print(f"{model}: " + ("пороги пройдены" if tried[-1]["passed"]
                               else "не прошла: " + ", ".join(tried[-1]["lenient"]["failed"])))
-        if tried[-1]["passed"] and part == "exam":
-            decision = model
+        if _decision(tried, part):
             break
-    return _write(exam, items, dictionaries, names, tried, decision, part=part, runs=runs, split=split,
-                  reasoning=config.SIGNAL_CARD_REASONING, prompt_version=signal_card.PROMPT_VERSION)
+    settings = {"part": part, "runs": runs, "split": split, "reasoning": config.SIGNAL_CARD_REASONING,
+                "prompt_version": signal_card.PROMPT_VERSION}
+    return _report(exam, items, dictionaries, names, tried, settings)
 
 
 def rescore(report_path: str | Path, markup_path: str | Path, *,
@@ -84,29 +83,42 @@ def rescore(report_path: str | Path, markup_path: str | Path, *,
     (card_values), допускам, алиасам и выгрузке судьи; новый отчёт — рядом, с пометкой, откуда ответы. Ответы
     относятся к текстам своего манифеста и к своей версии справочников: с другими пересчёт отказывает."""
     source = Path(report_path).expanduser().resolve()
-    saved = json.loads(source.read_text(encoding="utf-8"))
-    if not isinstance(saved, dict) or saved.get("part") not in ("exam", "tuning") or not isinstance(
-            saved.get("models"), list):
-        raise ExamError(f"{source.name}: не отчёт экзамена")
+    try:
+        saved = signal_card_exam_report.read(source)
+    except ValueError as exc:
+        raise ExamError(str(exc)) from exc
     exam = load(markup_path, manifest_path)
     dictionaries = load_dictionaries()
-    if (saved.get("manifest") or {}).get("sha256") != exam["manifest"]["sha256"]:
+    if saved["manifest"]["sha256"] != exam["manifest"]["sha256"]:
         raise ExamError(f"{source.name}: ответы получены на другом манифесте — тексты другие, пересчёт неверен")
-    if saved.get("dictionaries_version") != dictionaries.get("version"):
-        raise ExamError(f"{source.name}: ответы на справочниках {saved.get('dictionaries_version')}, сейчас "
+    if saved["dictionaries_version"] != dictionaries.get("version"):
+        raise ExamError(f"{source.name}: ответы на справочниках {saved['dictionaries_version']}, сейчас "
                         f"{dictionaries.get('version')} — пересчёт неверен, нужен новый прогон")
-    part = saved["part"]
-    items = [item for item in exam["items"] if item["id"] in set(saved["split"][part])]
+    items = _part_items(exam, saved["split"], saved["part"])
     names = CompanyNames(dictionaries["companies"], exam["aliases"])
-    tried = [_scored(one["model"], one["answers"], items, dictionaries, names) for one in saved["models"]]
-    decision = next((one["model"] for one in tried if one["passed"]), None) if part == "exam" else None
-    return _write(exam, items, dictionaries, names, tried, decision, part=part, runs=saved["runs"],
-                  split=saved["split"], reasoning=saved["reasoning"], prompt_version=saved["prompt_version"],
-                  rescored_from=source.name)
+    # Цена и токены — исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
+    tried = [{**_model_scores(one["model"], one["answers"], items, dictionaries, names),
+              **{key: one[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}}
+             for one in saved["models"]]
+    settings = {key: saved[key] for key in ("part", "runs", "split", "reasoning", "prompt_version")}
+    decided = saved.get("decision")
+    return _report(exam, items, dictionaries, names, tried, settings, rescored_from=source.name,
+                   markup_changed=saved["markup"]["sha256"] != exam["markup"]["sha256"],
+                   original_decision=decided.get("model") if isinstance(decided, dict) else None)
 
 
-def _scored(model: str, answers: list[dict[str, Any]], items: list[dict[str, Any]], dictionaries: dict[str, Any],
-            names: CompanyNames) -> dict[str, Any]:
+def _part_items(exam: dict[str, Any], split: dict[str, Any], part: str) -> list[dict[str, Any]]:
+    ids = set(split[part])
+    return [item for item in exam["items"] if item["id"] in ids]
+
+
+def _decision(tried: list[dict[str, Any]], part: str) -> str | None:
+    """Решение экзамена — первая по цене модель, прошедшая пороги; настройка модель не выбирает."""
+    return next((one["model"] for one in tried if one["passed"]), None) if part == "exam" else None
+
+
+def _model_scores(model: str, answers: list[dict[str, Any]], items: list[dict[str, Any]],
+                  dictionaries: dict[str, Any], names: CompanyNames) -> dict[str, Any]:
     """Ответы модели против разметки — строго и с допусками; цена — по токенам ответов."""
     finals = _finals(answers, items, dictionaries)
     scored = {view: evaluate(items, finals, names, lenient=view == "lenient") for view in ("strict", "lenient")}
@@ -115,26 +127,25 @@ def _scored(model: str, answers: list[dict[str, Any]], items: list[dict[str, Any
             "passed": scored["lenient"]["passed"]}
 
 
-def _write(exam: dict[str, Any], items: list[dict[str, Any]], dictionaries: dict[str, Any], names: CompanyNames,
-           tried: list[dict[str, Any]], decision: str | None, *, part: str, runs: int, split: dict[str, Any],
-           reasoning: str, prompt_version: str, rescored_from: str | None = None) -> dict[str, Any]:
-    """Отчёт рядом с манифестом: JSON с ответами и метриками и читаемый .md."""
+def _report(exam: dict[str, Any], items: list[dict[str, Any]], dictionaries: dict[str, Any], names: CompanyNames,
+            tried: list[dict[str, Any]], settings: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    """Отчёт прогона или пересчёта (settings — часть, прогоны, деление, рассуждение и версия инструкции) — рядом
+    с манифестом, JSON и читаемый .md (signal_card_exam_report.write)."""
+    part, decision = settings["part"], _decision(tried, settings["part"])
     report = {
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "part": part, "runs": runs,
-        "reasoning": reasoning, "prompt_version": prompt_version,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "part": part,
+        **{key: settings[key] for key in ("runs", "reasoning", "prompt_version")},
         "dictionaries_version": dictionaries.get("version"), "manifest": exam["manifest"], "markup": exam["markup"],
-        "files": exam["files"], "split": {key: split[key] for key in ("tuning", "exam")}, "models": tried,
+        "files": exam["files"], "split": {key: settings["split"][key] for key in ("tuning", "exam")},
+        "models": tried,
         "baseline": {view: baseline_metrics(items, signal_card_exam_baseline.finals(items, dictionaries), names,
                                             lenient=view == "lenient") for view in ("strict", "lenient")},
-        "judge": _judged(exam),
-        "decision": {"model": decision, "reason": _reason(decision, tried) if part == "exam"
+        "judge": judged(exam["items"], exam["judge"]),
+        "decision": {"model": decision, "reason": signal_card_exam_report.reason(decision, tried) if part == "exam"
                      else "настройка: модель выбирает только экзамен"},
-        **({"rescored_from": rescored_from} if rescored_from else {}),
+        **extra,
     }
-    path = _report_path(exam["folder"])
-    path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    readable = path.with_suffix(".md")
-    readable.write_text(signal_card_exam_report.render(report), encoding="utf-8")
+    path, readable = signal_card_exam_report.write(exam["folder"], report)
     return {**report, "report": str(path), "readable": str(readable)}
 
 
@@ -145,7 +156,7 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     split = _split(exam, write=False)
-    items = [item for item in exam["items"] if item["id"] in set(split[part])]
+    items = _part_items(exam, split, part)
     dictionaries = load_dictionaries()
     chars = sum(signal_card.request_chars(_model_item(index, item), dictionaries) for index, item in enumerate(items))
     priced = [signal_card.estimate(chars * runs, len(items) * runs, model) for model in _by_price(models)]
@@ -168,16 +179,6 @@ def _by_price(models: tuple[str, ...]) -> list[str]:
     return sorted(models, key=config.price_for_model)
 
 
-def _judged(exam: dict[str, Any]) -> dict[str, Any] | None:
-    """Судья радара против эксперта — на всех радарных строках набора, без вызовов модели."""
-    values = exam["judge"]
-    if values is None:
-        return None
-    items = [item for item in exam["items"] if item["origin"] == "radar" and item["id"] in values]
-    finals: dict[str, list[dict[str, Any] | None]] = {item["id"]: [values[item["id"]]] for item in items}
-    return {view: judge_metrics(items, finals, lenient=view == "lenient") for view in ("strict", "lenient")}
-
-
 def judge_values(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Выгрузка с ядра (там база): значения судьи у радарных строк манифеста — по номеру строки."""
     from oiltech_digest.db import signal_card_store
@@ -187,23 +188,6 @@ def judge_values(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     found = signal_card_store.judge_values(list(numbers.values()))
     return {number: {"signal_id": signal_id, **found[signal_id]}
             for number, signal_id in numbers.items() if signal_id in found}
-
-
-def _reason(decision: str | None, tried: list[dict[str, Any]]) -> str:
-    """Почему решение такое; сама модель — в decision["model"]."""
-    if decision:
-        return "самая дешёвая из прошедших пороги"
-    return "ни одна модель не прошла пороги: " + "; ".join(
-        f"{one['model']} — {', '.join(one['lenient']['failed'])}" for one in tried)
-
-
-def _report_path(folder: Path) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    path, number = folder / f"{REPORT_PREFIX}{stamp}.json", 1
-    while path.exists():
-        number += 1
-        path = folder / f"{REPORT_PREFIX}{stamp}_{number}.json"
-    return path
 
 
 # --- Набор ---------------------------------------------------------------------------------------

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,71 @@ _ROWS = (
 _RULES = {"event_date": "не больше константы", "invented_companies": "0", "invented_dates": "0"}
 PART_RU = {"exam": "экзамен", "tuning": "настройка"}
 _COUNTS = ("invented_companies", "invented_dates")
+REPORT_PREFIX = "signal_card_exam_report_"
+
+
+def reason(decision: str | None, tried: list[dict[str, Any]]) -> str:
+    """Почему решение экзамена такое; сама модель — в decision["model"]."""
+    if decision:
+        return "самая дешёвая из прошедших пороги"
+    return "ни одна модель не прошла пороги: " + "; ".join(
+        f"{one['model']} — {', '.join(one['lenient']['failed'])}" for one in tried)
+
+
+def write(folder: Path, report: dict[str, Any]) -> tuple[Path, Path]:
+    """Отчёт рядом с манифестом: JSON с ответами и метриками и читаемый .md; имя — по времени записи, прежние
+    отчёты не перезаписываются."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    path, number = folder / f"{REPORT_PREFIX}{stamp}.json", 1
+    while path.exists():
+        number += 1
+        path = folder / f"{REPORT_PREFIX}{stamp}_{number}.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    readable = path.with_suffix(".md")
+    readable.write_text(render(report), encoding="utf-8")
+    return path, readable
+
+
+def read(path: Path) -> dict[str, Any]:
+    """Сохранённый отчёт — для пересчёта без вызовов модели. Файл лежит на диске и его правят руками: устройство
+    проверяется до счёта, битый отчёт — ValueError с именем файла, а не трасса посреди пересчёта."""
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path.name}: не JSON ({exc})") from exc
+    problems = _problems(saved)
+    if problems:
+        raise ValueError(f"{path.name}: не отчёт экзамена — " + "; ".join(problems))
+    return saved
+
+
+def _problems(saved: Any) -> list[str]:
+    if not isinstance(saved, dict):
+        return ["нужен объект"]
+    split, part = saved.get("split"), saved.get("part")
+    problems = [] if part in PART_RU else ["часть — exam или tuning"]
+    if not (isinstance(split, dict) and all(isinstance(split.get(key), list) for key in PART_RU)):
+        problems.append("деление — списки tuning и exam")
+    if not (isinstance(saved.get("runs"), int) and saved["runs"] >= 1):
+        problems.append("прогонов на сигнал — число от 1")
+    problems += [f"нет {key}" for key in ("reasoning", "prompt_version", "dictionaries_version")
+                 if not isinstance(saved.get(key), str)]
+    problems += [f"{key} — без sha256" for key in ("manifest", "markup")
+                 if not (isinstance(saved.get(key), dict) and isinstance(saved[key].get("sha256"), str))]
+    ids = set(split[part]) if not problems and isinstance(split, dict) else set()
+    models = saved.get("models")
+    if not (isinstance(models, list) and models and all(_model_entry(one, ids) for one in models)):
+        problems.append("модели — с именем, ценой и ответами (прогон, строка своей части, токены, попытки)")
+    return problems
+
+
+def _model_entry(one: Any, ids: set[str]) -> bool:
+    return (isinstance(one, dict) and isinstance(one.get("model"), str) and isinstance(one.get("answers"), list)
+            and all(isinstance(one.get(key), (int, float)) for key in ("calls", "input_tokens", "output_tokens",
+                                                                       "cost_usd"))
+            and all(isinstance(answer, dict) and answer.get("id") in ids and isinstance(answer.get("run"), int)
+                    and all(isinstance(answer.get(key), int) for key in ("input_tokens", "output_tokens", "attempts"))
+                    for answer in one["answers"]))
 
 
 def render(report: dict[str, Any]) -> str:
@@ -39,6 +106,10 @@ def render(report: dict[str, Any]) -> str:
         f"Решение: {_decision(report['decision'])}", "",
         *([f"Пересчёт отчёта {report['rescored_from']} без вызовов модели: ответы те же, счёт — по нынешним "
            "проверкам ядра, допускам и алиасам; цена — исходного прогона.", ""] if report.get("rescored_from") else []),
+        *(["Разметка изменилась после исходного прогона: счёт — по новой разметке.", ""]
+          if report.get("markup_changed") else []),
+        *([f"Исходный прогон остановился на {report['original_decision']}: модели дороже не пробовались — для "
+           "решения нужен прогон.", ""] if report.get("original_decision") and not report["decision"]["model"] else []),
         f"Часть: {part} — сигналов {signals}, прогонов на сигнал {report['runs']}; инструкция "
         f"{report['prompt_version']}, справочники {report['dictionaries_version']}, рассуждение {report['reasoning']}.",
         f"Манифест: `{Path(report['manifest']['file']).name}`, разметка: `{Path(report['markup']['file']).name}`.",

@@ -7,6 +7,8 @@
 цитата «Газпром» из этого текста его не называет — длинное имя видно и за краем цитаты. Правило одно у ядра (названа
 ли компания в цитате участника — named_in_quote, его зовёт signal_card._participants) и у экзамена агента (имена
 агента и эксперта, есть ли компания в тексте, signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку.
+Два имени между собой сравнивает пока только экзамен (same_name, split_abbreviation): ядро участников по
+ним не сводит.
 """
 
 from __future__ import annotations
@@ -55,8 +57,29 @@ def same_name(one: Sequence[str], other: Sequence[str]) -> bool:
     """Одно ли это имя компании (слова — words): те же слова в том же порядке, в любом падеже и регистре, без
     формы собственности (_OPTIONAL): «Atlas Energy Solutions Inc.» — это «Atlas Energy Solutions», «ПАО «Газпром»»
     — «Газпром», а «ПАО «Татнефть»» — другая компания. Компания — целиком: «Газпром» — не «Газпром нефть»."""
-    mine, theirs = _required(one), _required(other)
+    mine, theirs = without_legal_form(one), without_legal_form(other)
     return len(mine) == len(theirs) and all(same_word(a.casefold(), b.casefold()) for a, b in zip(mine, theirs))
+
+
+def without_legal_form(name: Sequence[str]) -> list[str]:
+    """Слова имени без формы собственности (_OPTIONAL); имя из одной формы собственности — целиком."""
+    return _required(name)
+
+
+# «Имя (АББР)» — так компанию пишут в пресс-релизах: «Petroleum Development Oman (PDO)».
+_ABBREVIATED = re.compile(r"(?P<name>[^()]+?)\s*\((?P<short>[^()]+)\)")
+
+
+def split_abbreviation(name: str) -> tuple[str, str | None]:
+    """Имя и аббревиатура из записи «Имя (АББР)». Аббревиатура — одно слово заглавными и не форма собственности:
+    «(PDO)», «(ФРП)». Иная скобка — часть имени: «Газпром (ПАО)», «Омега Нефть-Восток (Омега Нефть)» не делятся."""
+    found = _ABBREVIATED.fullmatch(str(name or "").strip())
+    if found is None:
+        return name, None
+    short = words(found["short"])
+    if len(short) == 1 and short[0].isupper() and short[0].casefold() not in _OPTIONAL:
+        return found["name"], short[0]
+    return name, None
 
 
 def named(name: Sequence[str], text: Sequence[str]) -> bool:

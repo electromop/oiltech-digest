@@ -1,122 +1,22 @@
 """Экзамен агента «Карточка сигнала» (#98, спека #93), шов 4 — команда экзамена на подставной модели.
 
-Пакет эксперту (#94) — манифест и таблица разметки — собирается здесь же, во временной папке вне
-репозитория: таблица — тем же писателем, что у пакета, разметка — как её вернул эксперт. Состав — как у
+Пакет эксперту (#94) — манифест и таблица разметки — собирается во временной папке вне репозитория
+(tests/signal_card_support.py): таблица — тем же писателем, что у пакета, разметка — как её вернул
+эксперт. Состав — как у
 настоящего набора: 24 полезных и 6 шумных статей ленты, 15 технологий и 5 бизнес-сигналов радара; деление
 по долям — настройка 7 / 2 / 5 / 1, экзамен 17 / 4 / 10 / 4 (наибольшие остатки, проверка разметки 18.10).
 """
 
-from datetime import date
-import hashlib
+from collections import Counter
 import io
 import json
 
-import openpyxl
 import pytest
 
 from oiltech_digest import cli, signal_card, signal_card_pack
 from oiltech_digest.db import repository
-from oiltech_digest.processing.openai_client import AIResponse
-from tests.signal_card_support import DRILLING, answer, radar_finding
-
-NANO, MINI = "gpt-5.4-nano", "gpt-5.4-mini"
-STRATA = {"useful": 24, "noise": 6, "technology": 15, "business": 5}
-EXAM_COUNTS = {"useful": 17, "noise": 4, "technology": 10, "business": 4}
-TEXT = "SLB подписала контракт с Saudi Aramco 24 сентября 2026 года на бурение 40 скважин."
-MARKUP_NAME = "signal_card_markup_completed.xlsx"
-
-
-def label(**overrides):
-    """Разметка эксперта одной строки — колонки таблицы пакета (signal_card_pack.MARKUP_COLUMNS)."""
-    return {
-        "Дата события": date(2026, 9, 24), "Источник даты события": "из текста", "Компании-участники": "SLB",
-        "Тип события": "контракт", "Регион": "Ближний Восток", "Класс технологии": "неприменимо",
-        "Зрелость": "неприменимо", "Связь с нефтесервисом": "прямая",
-        "Применение в нефтесервисе": "Бурение скважин", "Почему важно нефтесервису": "Крупный контракт",
-        "Комментарий эксперта": "", **overrides,
-    }
-
-
-def row(number, stratum, *, title=None, text=TEXT, published="2026-09-25", publisher="Нефтегаз",
-        publisher_type="Media", **labels):
-    radar = stratum in ("technology", "business")
-    return {
-        "id": f"{'signal' if radar else 'article'}:{number}", "origin": "radar" if radar else "feed",
-        "stratum": stratum, "signal_id": str(number) if radar else None,
-        "article_id": None if radar else str(number), "evidence_id": str(number) if radar else None,
-        "url": f"https://pack.example/{number}", "category": "технология" if stratum == "technology" else "бизнес",
-        "theme": DRILLING, "title": title or f"Сигнал {number}", "text": text, "published": published,
-        "publisher": publisher, "publisher_type": "" if radar else publisher_type,
-        "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "text_chars": len(text),
-        "override_note": None, "overrides": [], "labels": label(**labels),
-    }
-
-
-def pack_rows(**by_stratum):
-    """50 строк набора; by_stratum — поправки разметки целой доли (её строки на экзамене — по долям)."""
-    rows, number = [], 0
-    for stratum, count in STRATA.items():
-        for _ in range(count):
-            number += 1
-            rows.append(row(number, stratum, **by_stratum.get(stratum, {})))
-    return rows
-
-
-def write_pack(folder, rows):
-    """Пакет эксперту так, как он вернулся: манифест рядом с заполненной таблицей."""
-    items = [{key: value for key, value in item.items() if key != "labels"} for item in rows]
-    manifest = {"created_at": "2026-10-16T07:40:50+00:00", "seed": signal_card_pack.DEFAULT_SEED,
-                "dictionaries_version": signal_card_pack.load_dictionaries()["version"],
-                "text_limit": signal_card_pack.TEXT_LIMIT, "items": items}
-    (folder / signal_card_pack.MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-    path = folder / MARKUP_NAME
-    signal_card_pack._write_workbook(path, items, signal_card_pack.load_dictionaries())
-    book = openpyxl.load_workbook(path)
-    sheet = book[signal_card_pack.MARKUP_SHEET]
-    header = [cell.value for cell in sheet[1]]
-    for number, item in enumerate(rows, start=2):
-        for name, value in item["labels"].items():
-            sheet.cell(row=number, column=header.index(name) + 1, value=value)
-    book.save(path)
-    return path
-
-
-class ExamModel:
-    """Подставная модель экзамена: ответ — по модели и заголовку публикации; вызовы запоминает."""
-
-    def __init__(self, answers):
-        self.answers = answers
-        self.calls = []
-
-    def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None,
-                      reasoning_effort=None):
-        title = next(line.split(":", 1)[1].strip() for line in user_input.splitlines()
-                     if line.startswith("Заголовок:"))
-        self.calls.append({"model": model, "title": title, "input": user_input})
-        reply = self.answers[model](title)
-        if isinstance(reply, Exception):
-            raise reply
-        return AIResponse(data=reply, model=f"{model}-2026-03-17", input_tokens=3000, output_tokens=600)
-
-
-def run_exam(monkeypatch, markup, answers, *args):
-    model = ExamModel(answers)
-    monkeypatch.setattr(signal_card, "make_client", lambda: model)
-    cli.main(["signal-card-exam", "--markup", str(markup), *args])
-    [report] = sorted(markup.parent.glob("signal_card_exam_report_*.json"))[-1:]
-    return model, json.loads(report.read_text(encoding="utf-8"))
-
-
-def by_stratum(stratum_of, **answers_by_stratum):
-    """Ответ модели по доле строки: заголовок «Сигнал N» → доля N-й строки набора."""
-    def reply(title):
-        return answers_by_stratum.get(stratum_of[title], answer())
-    return reply
-
-
-@pytest.fixture()
-def strata():
-    return {item["title"]: item["stratum"] for item in pack_rows()}
+from tests.signal_card_support import (EXAM_COUNTS, MINI, NANO, STRATA, ExamModel, answer, by_stratum, pack_rows,
+                                       radar_finding, row, run_exam, strata, write_pack)
 
 
 def test_exam_scores_the_agent_against_the_markup_with_the_constant_alongside(tmp_path, monkeypatch, strata):
@@ -292,7 +192,8 @@ FORMS = ("Atlas Energy Solutions Inc., Iraya Energies Sdn Bhd and Petroleum Deve
 
 
 def test_legal_form_and_abbreviation_do_not_make_another_company(tmp_path, monkeypatch, strata):
-    # Как у ядра (word_forms): форма собственности — не часть имени, «Имя (АББР)» — имя и его аббревиатура.
+    # Форма собственности — не часть имени, как у ядра (word_forms); «Имя (АББР)» — правило экзамена: имя и его
+    # аббревиатура.
     markup = write_pack(tmp_path, pack_rows(
         useful={"text": FORMS,
                 "Компании-участники": "Atlas Energy Solutions; Iraya Energies; Petroleum Development Oman"},
@@ -312,6 +213,49 @@ def test_legal_form_and_abbreviation_do_not_make_another_company(tmp_path, monke
     assert (useful["named"], useful["matched"]) == (17 * 3 * 3, 17 * 3 * 3)
     # Общая форма собственности компанию не называет: «ПАО «Татнефть»» — не «ПАО «Газпром»».
     assert (technology["named"], technology["matched"]) == (10 * 3, 0)
+
+
+def test_one_company_with_and_without_legal_form_is_stable_between_runs(tmp_path, monkeypatch, strata):
+    markup = write_pack(tmp_path, pack_rows(useful={"text": FORMS, "Компании-участники": "Atlas Energy Solutions"}))
+    runs = Counter()
+
+    def agent(title):
+        if strata[title] != "useful":
+            return answer()
+        runs[title] += 1
+        name = "Atlas Energy Solutions Inc." if runs[title] == 1 else "Atlas Energy Solutions"
+        return answer(companies=[{"name": name, "quote": "Atlas Energy Solutions Inc., Iraya Energies Sdn Bhd"}])
+
+    _, report = run_exam(monkeypatch, markup, {NANO: agent}, "--models", NANO)
+
+    # Устойчивость считает компанию по ключу, а ключ — как сравнение: форма собственности его не меняет.
+    assert report["models"][0]["strict"]["by_stratum"]["useful"]["companies_precision"]["stability"] == 1.0
+
+
+BRACKETS = ("Бета (ПАО) и Дельта (США) подписали контракт 24 сентября 2026 года. "
+            "Омега Нефть-Восток (Омега Нефть) начала бурение.")
+
+
+def test_a_bracket_is_an_abbreviation_only_when_it_is_one_capital_word(tmp_path, monkeypatch, strata):
+    # «Имя (АББР)» — правило экзамена, ядро его не знает: аббревиатура — одно слово заглавными, не форма
+    # собственности, и аббревиатуры между собой не сравниваются. Иначе общая скобка («(ПАО)», «(США)») или
+    # материнская компания в скобке делали бы чужие компании одной.
+    markup = write_pack(tmp_path, pack_rows(
+        useful={"text": BRACKETS, "Компании-участники": "Альфа (ПАО); Гамма (США); Омега Нефть"},
+        technology={"text": BRACKETS, "Компании-участники": "Дельта"}))
+    others = [{"name": "Бета (ПАО)", "quote": "Бета (ПАО) и Дельта (США) подписали"},
+              {"name": "Дельта (США)", "quote": "Дельта (США) подписали контракт"},
+              {"name": "Омега Нефть-Восток (Омега Нефть)", "quote": "Омега Нефть-Восток (Омега Нефть) начала бурение"}]
+    delta = [{"name": "Дельта (США)", "quote": "Дельта (США) подписали контракт"}]
+
+    _, report = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, useful=answer(companies=others),
+                                                                technology=answer(companies=delta))}, "--models", NANO)
+
+    by_part = report["models"][0]["strict"]["by_stratum"]
+    useful, technology = by_part["useful"]["companies_precision"], by_part["technology"]["companies_precision"]
+    assert (useful["named"], useful["matched"]) == (17 * 3 * 3, 0)
+    # Одно заглавное слово в скобке не делает компанию другой: «Дельта (США)» — это «Дельта».
+    assert (technology["named"], technology["matched"]) == (10 * 3, 10 * 3)
 
 
 ROSNEFTEGAZ = "Роснефтегаз и Сибнефть подписали контракт 24 сентября 2026 года; Роснефть и Сибур в сделке не участвуют."
@@ -500,48 +444,3 @@ def test_readable_report_lies_next_to_the_manifest_in_two_views(tmp_path, monkey
     assert ("| Атрибут | бизнес-сигналов радара (4) | шумных статей ленты (4) | технологий на радаре (10) "
             "| полезных статей ленты (17) |") in text
     assert "## Без ИИ (словарём)" in text
-
-
-def _reports(folder):
-    return set(folder.glob("signal_card_exam_report_*.json"))
-
-
-def test_rescore_counts_a_saved_report_again_without_model_calls(tmp_path, monkeypatch, strata, capsys):
-    # Допуски, алиасы и правила счёта правят после прогона: пересчёт тех же ответов не платит модели второй раз.
-    rows = pack_rows()
-    markup = write_pack(tmp_path, rows)
-    _, first = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, useful=answer(region="глобально"))},
-                        "--models", NANO)
-    [saved] = _reports(tmp_path)
-    tolerated = {item["id"]: {"region": ["глобально"]} for item in rows if item["stratum"] == "useful"}
-    (tmp_path / "signal_card_exam_tolerances.json").write_text(json.dumps(tolerated), encoding="utf-8")
-    monkeypatch.setattr(signal_card, "make_client", lambda: pytest.fail("пересчёт вызвал модель"))
-
-    cli.main(["signal-card-exam", "--markup", str(markup), "--rescore", str(saved)])
-
-    [again] = _reports(tmp_path) - {saved}
-    report = json.loads(again.read_text(encoding="utf-8"))
-    assert report["rescored_from"] == saved.name
-    [before], [after] = first["models"], report["models"]
-    assert after["answers"] == before["answers"]
-    assert after["cost_usd"] == before["cost_usd"]  # цена — исходного прогона, новых вызовов нет
-    region = (before["lenient"]["by_stratum"]["useful"]["region"]["agent"],
-              after["lenient"]["by_stratum"]["useful"]["region"]["agent"])
-    assert region == (0.0, 1.0)
-    assert str(again.with_suffix(".md")) in capsys.readouterr().out
-    assert f"Пересчёт отчёта {saved.name} без вызовов модели" in again.with_suffix(".md").read_text(encoding="utf-8")
-
-
-def test_rescore_refuses_answers_from_another_pack_or_dictionaries(tmp_path, monkeypatch, strata):
-    markup = write_pack(tmp_path, pack_rows())
-    run_exam(monkeypatch, markup, {NANO: by_stratum(strata)}, "--models", NANO)
-    [saved] = _reports(tmp_path)
-    report = json.loads(saved.read_text(encoding="utf-8"))
-    # Ответы относятся к текстам своего манифеста и к своей версии справочников: с другими пересчёт неверен.
-    for name, broken in (("manifest", {**report, "manifest": {**report["manifest"], "sha256": "0" * 64}}),
-                         ("dictionaries", {**report, "dictionaries_version": "v0"})):
-        other = tmp_path / f"other_{name}.json"
-        other.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
-        with pytest.raises(SystemExit, match="манифест" if name == "manifest" else "справочник"):
-            cli.main(["signal-card-exam", "--markup", str(markup), "--rescore", str(other)])
-    assert _reports(tmp_path) == {saved}

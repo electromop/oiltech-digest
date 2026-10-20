@@ -21,7 +21,7 @@ from typing import Any
 
 from oiltech_digest.signal_card import FROM_TEXT, RELEVANCE_CODES
 from oiltech_digest.signal_card_pack import UNDEFINED
-from oiltech_digest.word_forms import named_among, same_name, words
+from oiltech_digest.word_forms import named_among, same_name, split_abbreviation, without_legal_form, words
 
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
               "technology_class": 0.75, "maturity": 0.75, "oilfield_relevance": 0.75}
@@ -175,6 +175,16 @@ def baseline_metrics(items: list[dict[str, Any]], finals: Finals, names: Company
             "region": _accuracy(items, finals, "region", lenient)["agent"]}
 
 
+def judged(items: list[dict[str, Any]], values: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Судья радара против эксперта — на всех радарных строках набора (values — выгрузка судьи с ядра), без
+    вызовов модели; выгрузки нет — None."""
+    if values is None:
+        return None
+    radar = [item for item in items if item["origin"] == "radar" and item["id"] in values]
+    finals = {item["id"]: [values[item["id"]]] for item in radar}
+    return {view: judge_metrics(radar, finals, lenient=view == "lenient") for view in ("strict", "lenient")}
+
+
 def judge_metrics(items: list[dict[str, Any]], finals: Finals, *, lenient: bool) -> dict[str, Any]:
     """Судья радара против эксперта: дата события и связь с нефтесервисом, которые на проде у находок радара
     показывает судья (агент их не перезаписывает)."""
@@ -234,21 +244,15 @@ def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
     return [word if keep_case else word.casefold() for word in words(text)]
 
 
-# «Имя (АББР)» — так компанию пишут в пресс-релизах: «Petroleum Development Oman (PDO)» — и имя, и аббревиатура.
-_ABBREVIATED = re.compile(r"(?P<name>[^()]+?)\s*\((?P<short>[^()]+)\)")
-
-
-def _spellings(name: str) -> list[tuple[str, ...]]:
-    """Слова имени как написано, а у «Имя (АББР)» — ещё имени и аббревиатуры по отдельности."""
-    whole = _ABBREVIATED.fullmatch(name.strip())
-    parts = [tuple(text_tokens(part, keep_case=True)) for part in (whole["name"], whole["short"])] if whole else []
-    return [tuple(text_tokens(name, keep_case=True)), *(part for part in parts if part)]
+def _spelled(name: str) -> tuple[str, ...]:
+    return tuple(text_tokens(name, keep_case=True))
 
 
 class CompanyNames:
     """Сравнение имён агента и эксперта: канон по алиасам (справочник и список экзамена), слова — по
-    основам, без различий регистра и формы собственности, как у ядра (word_forms.same_name); «Имя (АББР)» —
-    и имя, и аббревиатура. Компания — целиком: «Газпром» — не «Газпром нефть». Имена хранятся как
+    основам, без различий регистра и формы собственности (word_forms.same_name — форму собственности не считает и
+    ядро). «Имя (АББР)» — правило экзамена, ядро его не знает: аббревиатура (word_forms.split_abbreviation) равна
+    имени другой стороны. Компания — целиком: «Газпром» — не «Газпром нефть». Имена хранятся как
     написаны: регистр нужен, чтобы искать компанию в тексте так же, как ядро — в цитате."""
 
     def __init__(self, entries: Sequence[dict[str, Any]], aliases: Sequence[dict[str, Any]] = ()):
@@ -265,23 +269,31 @@ class CompanyNames:
         self.dictionary = [tuple(text_tokens(name, keep_case=True)) for entry in entries
                            for name in (entry["name"], *entry["aliases"])]
 
+    def _group(self, own: tuple[str, ...]) -> list[tuple[str, ...]]:
+        return next((group for group in self.groups if any(same_name(own, form) for form in group)), [own])
+
     def forms(self, name: str) -> list[tuple[str, ...]]:
-        """Написания компании: её группа алиасов, у «Имя (АББР)» — группы и имени, и аббревиатуры."""
-        found: list[tuple[str, ...]] = []
-        for own in _spellings(name):
-            group = next((group for group in self.groups if any(same_name(own, form) for form in group)), [own])
-            found += [form for form in group if form not in found]
-        return found
+        """Написания компании — её группа алиасов; у «Имя (АББР)» — группа имени без аббревиатуры."""
+        return self._group(_spelled(split_abbreviation(name)[0]))
+
+    def _abbreviation(self, name: str) -> list[tuple[str, ...]]:
+        short = split_abbreviation(name)[1]
+        return self._group(_spelled(short)) if short else []
 
     def same(self, one: str, other: str) -> bool:
-        return any(same_name(a, b) for a in self.forms(one) for b in self.forms(other))
+        """Одна компания: совпали написания, или аббревиатура одной — написание другой. Аббревиатуры между собой
+        не сравниваются: одно заглавное слово в скобках («(США)») бывает у разных компаний."""
+        mine, theirs = self.forms(one), self.forms(other)
+        return (any(same_name(a, b) for a in (*mine, *self._abbreviation(one)) for b in theirs)
+                or any(same_name(a, b) for a in mine for b in self._abbreviation(other)))
 
     def among(self, name: str, others: list[str]) -> bool:
         return any(self.same(name, other) for other in others)
 
     def key(self, name: str) -> tuple[str, ...]:
-        """Одно написание на компанию — для устойчивости между прогонами."""
-        return min(tuple(word.casefold() for word in form) for form in self.forms(name))
+        """Одно написание на компанию — для устойчивости между прогонами: как в сравнении, без формы собственности
+        и аббревиатуры в скобках (одна аббревиатура без имени — свой ключ)."""
+        return min(tuple(word.casefold() for word in without_legal_form(form)) for form in self.forms(name))
 
     def matched(self, given: list[str], expected: list[str]) -> int:
         left = list(expected)
@@ -296,8 +308,9 @@ class CompanyNames:
     def in_text(self, name: str, text: list[str]) -> bool:
         """Компания есть в тексте (его слова с регистром — text_tokens(keep_case=True)) — названа под любым своим
         именем по правилу ядра (word_forms.named_among): все слова имени, кроме формы собственности, и не только
-        внутри длинного имени другой компании справочника. Выдуманной — нет."""
-        forms = self.forms(name)
+        внутри длинного имени другой компании справочника. Выдуманной — нет. Имя — как написано, со скобкой: ядро
+        «Имя (АББР)» не делит."""
+        forms = self._group(_spelled(name))
         return named_among(forms, text, [form for form in self.dictionary if form not in forms])
 
 
