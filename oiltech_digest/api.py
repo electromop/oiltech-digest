@@ -53,7 +53,7 @@ from oiltech_digest.processing.digest import (
 )
 from oiltech_digest.processing import external_ai
 from oiltech_digest.source_discovery.learning import apply_candidate_learning
-from oiltech_digest import company_parents, word_forms
+from oiltech_digest import company_parents
 from oiltech_digest.db import company_parents_repo
 
 WEB_DIR = REPO_ROOT / "web"
@@ -1619,10 +1619,12 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
 # Проверки и разбор вставки — company_parents.py, база — db/company_parents_repo.py.
 
 
-def _same(one: str, other: str) -> bool:
-    """Одна ли это компания для списка дочек: пока правило PR #121 (word_forms.same_name: форма собственности,
-    регистр, падеж). Полное правило «одна компания» (скобки, справочник алиасов) встаёт здесь одной строкой."""
-    return word_forms.same_name(word_forms.words(one), word_forms.words(other))
+def _same() -> company_parents.Same:
+    """Одна ли это компания — для списка дочек: полное правило «одна компания» со справочником алиасов ядра, то же,
+    что у фильтра «всё про компанию» (signal_card_filters.company_rule). Правило берётся раз на запрос, а не на
+    каждое сравнение: справочник читается с диска, а вставка списком сверяет десятки тысяч пар имён (замер 20.10,
+    вставка 500 строк: 7,4 с против 0,14 с)."""
+    return signal_card_filters.company_rule().same
 
 
 class CompanyParentIn(BaseModel):
@@ -1649,7 +1651,7 @@ def add_company_parent(payload: CompanyParentIn, user: dict[str, Any] = Depends(
            "parent_name": company_parents.clean(payload.parent_name),
            "note": company_parents.clean(payload.note) or None}
     with company_parents_repo.editing() as edit:
-        problem = (company_parents.check_pair(row["child_name"], row["parent_name"], edit.pairs(), _same)
+        problem = (company_parents.check_pair(row["child_name"], row["parent_name"], edit.pairs(), _same())
                    or company_parents.check_note(row["note"]))
         if problem:
             raise HTTPException(status_code=400, detail=problem)
@@ -1689,7 +1691,7 @@ def _company_parents_answer(lines: list[dict[str, Any]], *, applied: bool) -> di
 
 def _company_parent_lines(text: str, pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
     try:
-        lines = company_parents.parse_lines(text, pairs, _same)
+        lines = company_parents.parse_lines(text, pairs, _same())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not lines:
@@ -1848,6 +1850,24 @@ def seed_signal_topics(user: dict[str, Any] = Depends(require_admin)) -> dict[st
     return {"ok": True, "topics": seed_default_radar_topics()}
 
 
+def _company_filter(
+    # «Всё про компанию» (#97): участник карточки — та же компания по правилу «одна компания» (word_forms) или её
+    # дочернее общество по списку «дочка → мать» (экран «Дочерние общества», решение владельца 20.10).
+    company: str | None = Query(None, max_length=200),
+    # Имена участников и список дочек фильтр читает из базы — только после входа.
+    user: dict[str, Any] = Depends(require_user),
+) -> dict[str, list[str]] | None:
+    """Фильтр «всё про компанию» — здесь, на границе: кого он показывает (group: сама компания и её дочки по цепочке,
+    signal_card_filters.company_group) и под какими именами участников в базе (names: выборка сверяет их точно).
+    Нет компании — нет фильтра; есть — фильтр есть, и компания, которой нет ни в одной карточке, даёт пустой список
+    сигналов, а не все. Список дочек читается на каждом запросе: правка на экране «Дочерние общества» действует
+    сразу, без выката. Список сигналов и сводка берут фильтр зависимостью: в одном запросе он считается один раз."""
+    if not (company or "").strip():
+        return None
+    group = signal_card_filters.company_group(company, company_parents_repo.pairs())
+    return {"group": group, "names": signal_card_filters.group_names(group, repository.participant_names())}
+
+
 def _radar_screen_filters(
     maturity: str | None = Query(None, pattern="^(watch|shortlist|proven|reject)$"),
     theme: str | None = None,
@@ -1870,10 +1890,8 @@ def _radar_screen_filters(
     region: str | None = Query(None, max_length=100),
     technology_class: str | None = Query(None, max_length=100),
     technology_maturity: str | None = Query(None, max_length=100),
-    # «Всё про компанию» (#97): участник карточки — та же компания по правилу «одна компания» (word_forms).
-    company: str | None = Query(None, max_length=200),
-    # Имена участников фильтр читает из базы — только после входа.
-    user: dict[str, Any] = Depends(require_user),
+    # «Всё про компанию» (#97) — с дочками по списку «дочка → мать» (_company_filter).
+    company_filter: dict[str, list[str]] | None = Depends(_company_filter),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
@@ -1895,17 +1913,9 @@ def _radar_screen_filters(
         "min_score": min_score,
         "max_score": max_score,
         **card,
-        "company_names": _company_names(company),
+        # Пустой список имён — фильтр, который ничего не нашёл, а не «без фильтра».
+        "company_names": None if company_filter is None else company_filter["names"],
     }
-
-
-def _company_names(company: str | None) -> list[str] | None:
-    """Имена участников в базе, которые по правилу «одна компания» та же компания, — здесь, на границе: выборка
-    сверяет готовый список точно. Нет компании — нет фильтра; есть — фильтр есть, и компания, которой нет ни в
-    одной карточке, даёт пустой список сигналов, а не все."""
-    if not (company or "").strip():
-        return None
-    return signal_card_filters.company_names(company, repository.participant_names())
 
 
 @app.get("/api/signals")
@@ -1955,14 +1965,19 @@ def signal_radar_weekly(
 @app.get("/api/signals/summary")
 def signal_radar_summary(
     filters: dict[str, Any] = Depends(_radar_screen_filters),
+    company_filter: dict[str, list[str]] | None = Depends(_company_filter),
     user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
-    """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра."""
+    """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра. С фильтром «всё про
+    компанию» — и кого он показывает (company_group: сама компания первой, затем её дочки по списку): экран пишет
+    это рядом с полем «Компания»."""
     _guard_hidden_radar(filters, user)
     summary = repository.signal_radar_summary(**filters)
     if user.get("role") != "admin":
         # Число отсеянных и скрытых — служебное, как и сами карточки.
         summary.pop("hidden", None)
+    if company_filter is not None:
+        summary["company_group"] = company_filter["group"]
     return _clean(summary)
 
 

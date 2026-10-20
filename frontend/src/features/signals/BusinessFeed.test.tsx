@@ -333,6 +333,33 @@ describe("бизнес-лента", () => {
       expect(input).toHaveValue("");
     });
 
+    it("компания с дочками по списку: рядом с полем видно, кого фильтр добавил; без дочек подсказки нет", async () => {
+      // Сервер раскрывает компанию по списку «дочка → мать» и говорит, кого добавил (company_group в сводке).
+      const groups: Record<string, string[]> = {
+        "Газпром нефть": ["Газпром нефть", "Газпромнефть-Заполярье", "Газпромнефть-Хантос"],
+      };
+      const counts = vi.mocked(getSignalSummary).getMockImplementation()!;
+      vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => ({
+        ...(await counts(query)),
+        ...(query.company ? { company_group: groups[query.company] ?? [query.company] } : {}),
+      }));
+      renderFeed();
+      await screen.findByRole("button", { name: "Развернуть всё" });
+      const input = screen.getByRole("combobox", { name: "Компания" });
+
+      fireEvent.change(input, { target: { value: " Газпром нефть " } });
+
+      expect(await screen.findByText("Газпром нефть и дочерние: Газпромнефть-Заполярье, Газпромнефть-Хантос"))
+        .toBeInTheDocument();
+
+      // Дочек у компании нет: сводка пришла (в выборке её сделка), подсказки нет.
+      fireEvent.change(input, { target: { value: "Роснефть" } });
+
+      expect(await screen.findByText("1 из 3 сигналов")).toBeInTheDocument();
+      expect(screen.queryByText(/и дочерние:/)).not.toBeInTheDocument();
+      expect(vi.mocked(getSignalSummary).mock.lastCall?.[0]).toMatchObject({ company: "Роснефть" });
+    });
+
     it("компания — по имени целиком: пустая выборка подсказывает взять имя из подсказок", async () => {
       renderFeed();
       await screen.findByRole("button", { name: "Развернуть всё" });

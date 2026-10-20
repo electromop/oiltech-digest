@@ -1,8 +1,10 @@
 """Список дочерних обществ «дочка → мать» (решение владельца 20.10).
 
 Без базы: проверка новой пары, дочки компании по цепочке и разбор вставки списком — по правилу «одна ли это
-компания», которое API передаёт в company_parents (api._same). На изолированной базе: API экрана «Дочерние
-общества» — вход, добавление, список, удаление, отказы с причиной, вставка с разбором и без записи."""
+компания», которое API передаёт в company_parents (api._same: полное правило, как у фильтра), и раскрытие компании
+для фильтра «всё про компанию» (signal_card_filters.company_group). На изолированной базе: API экрана «Дочерние
+общества» — вход, добавление, список, удаление, отказы с причиной, вставка с разбором и без записи. Фильтр
+сигналов с дочками на изолированной базе — tests/test_signal_business_feed.py."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,8 +12,9 @@ from fastapi.testclient import TestClient
 from oiltech_digest import admission, api
 from oiltech_digest.company_parents import MAX_LINES, check_pair, descendants, parse_lines
 from oiltech_digest.db import company_parents_repo, repository
+from oiltech_digest.signal_card_filters import company_group, company_names
 
-same = api._same
+same = api._same()
 PASSWORD = "long-enough-password"
 ADMIN = "parents-admin@example.test"
 GAZPROM = [("Газпром нефть", "Газпром"), ("Газпромнефть-Заполярье", "Газпром нефть")]
@@ -77,6 +80,38 @@ def test_broken_list_with_cycle_does_not_hang():
     broken = [("B", "A"), ("C", "B"), ("A", "C"), ("C", "A")]
     assert descendants("A", broken, lambda one, other: one == other) == ["B", "C"]
     assert descendants("C", broken, lambda one, other: one == other) == ["A", "B"]
+
+
+# --- Раскрытие компании для фильтра «всё про компанию», без базы -------------------------------------
+
+# Мать записана в списке с формой собственности, а спрашивают без неё; у Роснефти своя ветка.
+LISTED = [("Газпром нефть", "ПАО «Газпром»"), ("Газпромнефть-Заполярье", "Газпром нефть"), ("Башнефть", "Роснефть")]
+
+
+def test_company_group_is_the_company_then_its_daughters_by_the_chain():
+    # Одна ступень и цепочка; «ПАО «Газпром»» в списке — тот же «Газпром», что в запросе.
+    assert company_group("Газпром нефть", LISTED) == ["Газпром нефть", "Газпромнефть-Заполярье"]
+    assert company_group("  Газпром ", LISTED) == ["Газпром", "Газпром нефть", "Газпромнефть-Заполярье"]
+    # Справочник алиасов — тоже правило «одна компания»: «Gazprom» — это «Газпром».
+    assert company_group("Gazprom", LISTED) == ["Gazprom", "Газпром нефть", "Газпромнефть-Заполярье"]
+
+
+def test_daughter_does_not_pull_her_mother_and_company_without_daughters_is_alone():
+    assert company_group("Газпромнефть-Заполярье", LISTED) == ["Газпромнефть-Заполярье"]
+    assert company_group("Татнефть", LISTED) == ["Татнефть"]
+    assert company_group("Газпром", []) == ["Газпром"]
+    assert company_group("  ", LISTED) == []
+
+
+def test_filter_names_are_participants_of_the_company_and_of_every_daughter():
+    known = ["ПАО «Газпром нефть»", "ООО «Газпромнефть-Заполярье»", "Газпромнефть-Хантос", "Роснефть", "Башнефть"]
+
+    assert company_names("Газпром", known, LISTED) == [
+        "Газпром", "Газпром нефть", "Газпромнефть-Заполярье", "ООО «Газпромнефть-Заполярье»", "ПАО «Газпром нефть»"]
+    # Дочка мать не тянет; без списка — только сама компания: «Газпром» — не «Газпром нефть».
+    assert company_names("Газпромнефть-Заполярье", known, LISTED) == [
+        "Газпромнефть-Заполярье", "ООО «Газпромнефть-Заполярье»"]
+    assert company_names("Газпром", known) == ["Газпром"]
 
 
 # --- Вставка списком, без базы -------------------------------------------------------------------
