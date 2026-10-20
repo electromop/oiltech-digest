@@ -21,7 +21,7 @@ from typing import Any
 
 from oiltech_digest.signal_card import FROM_TEXT, RELEVANCE_CODES
 from oiltech_digest.signal_card_pack import UNDEFINED
-from oiltech_digest.word_forms import named_among, same_word, words
+from oiltech_digest.word_forms import named_among, same_name, words
 
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
               "technology_class": 0.75, "maturity": 0.75, "oilfield_relevance": 0.75}
@@ -234,13 +234,21 @@ def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
     return [word if keep_case else word.casefold() for word in words(text)]
 
 
-def _same_name(one: tuple[str, ...], other: tuple[str, ...]) -> bool:
-    return len(one) == len(other) and all(same_word(a.casefold(), b.casefold()) for a, b in zip(one, other))
+# «Имя (АББР)» — так компанию пишут в пресс-релизах: «Petroleum Development Oman (PDO)» — и имя, и аббревиатура.
+_ABBREVIATED = re.compile(r"(?P<name>[^()]+?)\s*\((?P<short>[^()]+)\)")
+
+
+def _spellings(name: str) -> list[tuple[str, ...]]:
+    """Слова имени как написано, а у «Имя (АББР)» — ещё имени и аббревиатуры по отдельности."""
+    whole = _ABBREVIATED.fullmatch(name.strip())
+    parts = [tuple(text_tokens(part, keep_case=True)) for part in (whole["name"], whole["short"])] if whole else []
+    return [tuple(text_tokens(name, keep_case=True)), *(part for part in parts if part)]
 
 
 class CompanyNames:
     """Сравнение имён агента и эксперта: канон по алиасам (справочник и список экзамена), слова — по
-    основам, без различий регистра. Компания — целиком: «Газпром» — не «Газпром нефть». Имена хранятся как
+    основам, без различий регистра и формы собственности, как у ядра (word_forms.same_name); «Имя (АББР)» —
+    и имя, и аббревиатура. Компания — целиком: «Газпром» — не «Газпром нефть». Имена хранятся как
     написаны: регистр нужен, чтобы искать компанию в тексте так же, как ядро — в цитате."""
 
     def __init__(self, entries: Sequence[dict[str, Any]], aliases: Sequence[dict[str, Any]] = ()):
@@ -249,7 +257,7 @@ class CompanyNames:
         for entry in (*entries, *aliases):
             spelled = (tuple(text_tokens(name, keep_case=True)) for name in (entry["name"], *entry["aliases"]))
             forms = [form for form in spelled if form]
-            joined = [group for group in self.groups if any(_same_name(a, b) for a in forms for b in group)]
+            joined = [group for group in self.groups if any(same_name(a, b) for a in forms for b in group)]
             self.groups = [group for group in self.groups if group not in joined]
             self.groups.append(forms + [form for group in joined for form in group])
         # Имена справочника ядра: длинное закрывает короткое в тексте так же, как у ядра в цитате. Алиасы экзамена
@@ -258,11 +266,15 @@ class CompanyNames:
                            for name in (entry["name"], *entry["aliases"])]
 
     def forms(self, name: str) -> list[tuple[str, ...]]:
-        own = tuple(text_tokens(name, keep_case=True))
-        return next((group for group in self.groups if any(_same_name(own, form) for form in group)), [own])
+        """Написания компании: её группа алиасов, у «Имя (АББР)» — группы и имени, и аббревиатуры."""
+        found: list[tuple[str, ...]] = []
+        for own in _spellings(name):
+            group = next((group for group in self.groups if any(same_name(own, form) for form in group)), [own])
+            found += [form for form in group if form not in found]
+        return found
 
     def same(self, one: str, other: str) -> bool:
-        return any(_same_name(a, b) for a in self.forms(one) for b in self.forms(other))
+        return any(same_name(a, b) for a in self.forms(one) for b in self.forms(other))
 
     def among(self, name: str, others: list[str]) -> bool:
         return any(self.same(name, other) for other in others)

@@ -37,6 +37,8 @@ def render(report: dict[str, Any]) -> str:
     lines = [
         f"# Экзамен агента «Карточка сигнала» — {report['created_at']}", "",
         f"Решение: {_decision(report['decision'])}", "",
+        *([f"Пересчёт отчёта {report['rescored_from']} без вызовов модели: ответы те же, счёт — по нынешним "
+           "проверкам ядра, допускам и алиасам; цена — исходного прогона.", ""] if report.get("rescored_from") else []),
         f"Часть: {part} — сигналов {signals}, прогонов на сигнал {report['runs']}; инструкция "
         f"{report['prompt_version']}, справочники {report['dictionaries_version']}, рассуждение {report['reasoning']}.",
         f"Манифест: `{Path(report['manifest']['file']).name}`, разметка: `{Path(report['markup']['file']).name}`.",

@@ -68,20 +68,60 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     names = CompanyNames(dictionaries["companies"], exam["aliases"])
     tried, decision = [], None
     for model in _by_price(models):
-        answers = _answers(model, items, runs, dictionaries)
-        finals = _finals(answers, items, dictionaries)
-        scored = {view: evaluate(items, finals, names, lenient=view == "lenient") for view in ("strict", "lenient")}
-        tried.append({"model": model, **_spend(answers), "answers": answers, **scored,
-                      "without_card": sum(final is None for one in finals.values() for final in one),
-                      "passed": scored["lenient"]["passed"]})
-        print(f"{model}: " + ("пороги пройдены" if scored["lenient"]["passed"]
-                              else "не прошла: " + ", ".join(scored["lenient"]["failed"])))
-        if scored["lenient"]["passed"] and part == "exam":
+        tried.append(_scored(model, _answers(model, items, runs, dictionaries), items, dictionaries, names))
+        print(f"{model}: " + ("пороги пройдены" if tried[-1]["passed"]
+                              else "не прошла: " + ", ".join(tried[-1]["lenient"]["failed"])))
+        if tried[-1]["passed"] and part == "exam":
             decision = model
             break
+    return _write(exam, items, dictionaries, names, tried, decision, part=part, runs=runs, split=split,
+                  reasoning=config.SIGNAL_CARD_REASONING, prompt_version=signal_card.PROMPT_VERSION)
+
+
+def rescore(report_path: str | Path, markup_path: str | Path, *,
+            manifest_path: str | Path | None = None) -> dict[str, Any]:
+    """Пересчёт сохранённого отчёта без вызовов модели: те же ответы — по нынешним проверкам ядра
+    (card_values), допускам, алиасам и выгрузке судьи; новый отчёт — рядом, с пометкой, откуда ответы. Ответы
+    относятся к текстам своего манифеста и к своей версии справочников: с другими пересчёт отказывает."""
+    source = Path(report_path).expanduser().resolve()
+    saved = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(saved, dict) or saved.get("part") not in ("exam", "tuning") or not isinstance(
+            saved.get("models"), list):
+        raise ExamError(f"{source.name}: не отчёт экзамена")
+    exam = load(markup_path, manifest_path)
+    dictionaries = load_dictionaries()
+    if (saved.get("manifest") or {}).get("sha256") != exam["manifest"]["sha256"]:
+        raise ExamError(f"{source.name}: ответы получены на другом манифесте — тексты другие, пересчёт неверен")
+    if saved.get("dictionaries_version") != dictionaries.get("version"):
+        raise ExamError(f"{source.name}: ответы на справочниках {saved.get('dictionaries_version')}, сейчас "
+                        f"{dictionaries.get('version')} — пересчёт неверен, нужен новый прогон")
+    part = saved["part"]
+    items = [item for item in exam["items"] if item["id"] in set(saved["split"][part])]
+    names = CompanyNames(dictionaries["companies"], exam["aliases"])
+    tried = [_scored(one["model"], one["answers"], items, dictionaries, names) for one in saved["models"]]
+    decision = next((one["model"] for one in tried if one["passed"]), None) if part == "exam" else None
+    return _write(exam, items, dictionaries, names, tried, decision, part=part, runs=saved["runs"],
+                  split=saved["split"], reasoning=saved["reasoning"], prompt_version=saved["prompt_version"],
+                  rescored_from=source.name)
+
+
+def _scored(model: str, answers: list[dict[str, Any]], items: list[dict[str, Any]], dictionaries: dict[str, Any],
+            names: CompanyNames) -> dict[str, Any]:
+    """Ответы модели против разметки — строго и с допусками; цена — по токенам ответов."""
+    finals = _finals(answers, items, dictionaries)
+    scored = {view: evaluate(items, finals, names, lenient=view == "lenient") for view in ("strict", "lenient")}
+    return {"model": model, **_spend(answers), "answers": answers, **scored,
+            "without_card": sum(final is None for one in finals.values() for final in one),
+            "passed": scored["lenient"]["passed"]}
+
+
+def _write(exam: dict[str, Any], items: list[dict[str, Any]], dictionaries: dict[str, Any], names: CompanyNames,
+           tried: list[dict[str, Any]], decision: str | None, *, part: str, runs: int, split: dict[str, Any],
+           reasoning: str, prompt_version: str, rescored_from: str | None = None) -> dict[str, Any]:
+    """Отчёт рядом с манифестом: JSON с ответами и метриками и читаемый .md."""
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "part": part, "runs": runs,
-        "reasoning": config.SIGNAL_CARD_REASONING, "prompt_version": signal_card.PROMPT_VERSION,
+        "reasoning": reasoning, "prompt_version": prompt_version,
         "dictionaries_version": dictionaries.get("version"), "manifest": exam["manifest"], "markup": exam["markup"],
         "files": exam["files"], "split": {key: split[key] for key in ("tuning", "exam")}, "models": tried,
         "baseline": {view: baseline_metrics(items, signal_card_exam_baseline.finals(items, dictionaries), names,
@@ -89,6 +129,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
         "judge": _judged(exam),
         "decision": {"model": decision, "reason": _reason(decision, tried) if part == "exam"
                      else "настройка: модель выбирает только экзамен"},
+        **({"rescored_from": rescored_from} if rescored_from else {}),
     }
     path = _report_path(exam["folder"])
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

@@ -51,6 +51,14 @@ def words(text: str) -> list[str]:
     return re.findall(r"\w+", str(text or "").replace("ё", "е").replace("Ё", "Е"))
 
 
+def same_name(one: Sequence[str], other: Sequence[str]) -> bool:
+    """Одно ли это имя компании (слова — words): те же слова в том же порядке, в любом падеже и регистре, без
+    формы собственности (_OPTIONAL): «Atlas Energy Solutions Inc.» — это «Atlas Energy Solutions», «ПАО «Газпром»»
+    — «Газпром», а «ПАО «Татнефть»» — другая компания. Компания — целиком: «Газпром» — не «Газпром нефть»."""
+    mine, theirs = _required(one), _required(other)
+    return len(mine) == len(theirs) and all(same_word(a.casefold(), b.casefold()) for a, b in zip(mine, theirs))
+
+
 def named(name: Sequence[str], text: Sequence[str]) -> bool:
     """Названо ли имя (его words) среди слов цитаты или текста: названо каждое слово имени, кроме формы
     собственности (_OPTIONAL), — в любом падеже и порядке. Одного общего слова мало: «Helmerich and Payne» не

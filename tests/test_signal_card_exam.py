@@ -287,6 +287,33 @@ def test_company_names_are_compared_through_aliases_word_forms_and_spelling(tmp_
     assert metrics["companies_recall"]["constant"] == pytest.approx(17 / 99)
 
 
+FORMS = ("Atlas Energy Solutions Inc., Iraya Energies Sdn Bhd and Petroleum Development Oman (PDO) signed a contract "
+         "on 24 September 2026. ПАО «Татнефть» и ПАО «Газпром» в сделке не участвуют.")
+
+
+def test_legal_form_and_abbreviation_do_not_make_another_company(tmp_path, monkeypatch, strata):
+    # Как у ядра (word_forms): форма собственности — не часть имени, «Имя (АББР)» — имя и его аббревиатура.
+    markup = write_pack(tmp_path, pack_rows(
+        useful={"text": FORMS,
+                "Компании-участники": "Atlas Energy Solutions; Iraya Energies; Petroleum Development Oman"},
+        technology={"text": FORMS, "Компании-участники": "ПАО «Газпром»"}))
+    spelled = [{"name": "Atlas Energy Solutions Inc.", "quote": "Atlas Energy Solutions Inc., Iraya Energies Sdn Bhd"},
+               {"name": "Iraya Energies Sdn Bhd", "quote": "Iraya Energies Sdn Bhd and Petroleum Development Oman"},
+               {"name": "Petroleum Development Oman (PDO)",
+                "quote": "Petroleum Development Oman (PDO) signed a contract"}]
+    other = [{"name": "ПАО «Татнефть»", "quote": "ПАО «Татнефть» и ПАО «Газпром» в сделке не участвуют"}]
+
+    _, report = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, useful=answer(companies=spelled),
+                                                                technology=answer(companies=other))})
+
+    by_part = report["models"][0]["strict"]["by_stratum"]
+    useful, technology = by_part["useful"]["companies_precision"], by_part["technology"]["companies_precision"]
+    # 17 полезных строк экзамена × 3 прогона × 3 компании — все те же, что у эксперта.
+    assert (useful["named"], useful["matched"]) == (17 * 3 * 3, 17 * 3 * 3)
+    # Общая форма собственности компанию не называет: «ПАО «Татнефть»» — не «ПАО «Газпром»».
+    assert (technology["named"], technology["matched"]) == (10 * 3, 0)
+
+
 ROSNEFTEGAZ = "Роснефтегаз и Сибнефть подписали контракт 24 сентября 2026 года; Роснефть и Сибур в сделке не участвуют."
 
 
@@ -473,3 +500,48 @@ def test_readable_report_lies_next_to_the_manifest_in_two_views(tmp_path, monkey
     assert ("| Атрибут | бизнес-сигналов радара (4) | шумных статей ленты (4) | технологий на радаре (10) "
             "| полезных статей ленты (17) |") in text
     assert "## Без ИИ (словарём)" in text
+
+
+def _reports(folder):
+    return set(folder.glob("signal_card_exam_report_*.json"))
+
+
+def test_rescore_counts_a_saved_report_again_without_model_calls(tmp_path, monkeypatch, strata, capsys):
+    # Допуски, алиасы и правила счёта правят после прогона: пересчёт тех же ответов не платит модели второй раз.
+    rows = pack_rows()
+    markup = write_pack(tmp_path, rows)
+    _, first = run_exam(monkeypatch, markup, {NANO: by_stratum(strata, useful=answer(region="глобально"))},
+                        "--models", NANO)
+    [saved] = _reports(tmp_path)
+    tolerated = {item["id"]: {"region": ["глобально"]} for item in rows if item["stratum"] == "useful"}
+    (tmp_path / "signal_card_exam_tolerances.json").write_text(json.dumps(tolerated), encoding="utf-8")
+    monkeypatch.setattr(signal_card, "make_client", lambda: pytest.fail("пересчёт вызвал модель"))
+
+    cli.main(["signal-card-exam", "--markup", str(markup), "--rescore", str(saved)])
+
+    [again] = _reports(tmp_path) - {saved}
+    report = json.loads(again.read_text(encoding="utf-8"))
+    assert report["rescored_from"] == saved.name
+    [before], [after] = first["models"], report["models"]
+    assert after["answers"] == before["answers"]
+    assert after["cost_usd"] == before["cost_usd"]  # цена — исходного прогона, новых вызовов нет
+    region = (before["lenient"]["by_stratum"]["useful"]["region"]["agent"],
+              after["lenient"]["by_stratum"]["useful"]["region"]["agent"])
+    assert region == (0.0, 1.0)
+    assert str(again.with_suffix(".md")) in capsys.readouterr().out
+    assert f"Пересчёт отчёта {saved.name} без вызовов модели" in again.with_suffix(".md").read_text(encoding="utf-8")
+
+
+def test_rescore_refuses_answers_from_another_pack_or_dictionaries(tmp_path, monkeypatch, strata):
+    markup = write_pack(tmp_path, pack_rows())
+    run_exam(monkeypatch, markup, {NANO: by_stratum(strata)}, "--models", NANO)
+    [saved] = _reports(tmp_path)
+    report = json.loads(saved.read_text(encoding="utf-8"))
+    # Ответы относятся к текстам своего манифеста и к своей версии справочников: с другими пересчёт неверен.
+    for name, broken in (("manifest", {**report, "manifest": {**report["manifest"], "sha256": "0" * 64}}),
+                         ("dictionaries", {**report, "dictionaries_version": "v0"})):
+        other = tmp_path / f"other_{name}.json"
+        other.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+        with pytest.raises(SystemExit, match="манифест" if name == "manifest" else "справочник"):
+            cli.main(["signal-card-exam", "--markup", str(markup), "--rescore", str(other)])
+    assert _reports(tmp_path) == {saved}
