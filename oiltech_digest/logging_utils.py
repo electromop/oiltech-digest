@@ -27,6 +27,9 @@ def setup_logging(service: str, *, verbose: bool = False, force: bool = False) -
 
     root = logging.getLogger()
     root.setLevel(level)
+    # urllib3 на DEBUG пишет полный адрес каждого запроса, а Bot API Telegram принимает токен
+    # прямо в адресе (/bot<токен>/getUpdates): с -v токен бота оседал в логах контейнеров NL.
+    logging.getLogger("urllib3").setLevel(max(level, logging.INFO))
     for handler in root.handlers:
         handler.setLevel(level)
         handler.addFilter(_ServiceFilter(service))
