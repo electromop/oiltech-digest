@@ -427,6 +427,8 @@ def test_every_lane_has_its_own_nl_worker():
     services = yaml.safe_load(compose.read_text())["services"]
     served: dict[str, list[str]] = {}
     for name, service in services.items():
+        if "external-worker" not in service["command"]:
+            continue  # бот «Материалы коллег» задач из очередей не берёт
         env = service["environment"]
         queues = [item.strip() for item in env["EXTERNAL_WORKER_QUEUES"].split(",")]
         if lanes.NOTIFY in queues:

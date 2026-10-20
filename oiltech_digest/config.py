@@ -424,3 +424,17 @@ ADMISSION_NOTIFY_ENABLED = os.environ.get("ADMISSION_NOTIFY_ENABLED", "0").strip
 # Читает воркер NL (.env.external-worker): бот и закрытый чат подтверждающих.
 ADMISSION_TELEGRAM_BOT_TOKEN = os.environ.get("ADMISSION_TELEGRAM_BOT_TOKEN", "").strip()
 ADMISSION_TELEGRAM_CHAT_ID = os.environ.get("ADMISSION_TELEGRAM_CHAT_ID", "").strip()
+
+# Бот «Материалы коллег» (tg_materials_bot.py): живёт на NL, с РФ-ядра Telegram недоступен.
+# Свой бот, не бот допуска: тот пишет в закрытый чат подтверждающих, этот слушает рабочую группу.
+# CHAT_IDS — группы, где бот принимает материалы (через запятую, -100…); в личке бот отвечает
+# только участникам этих групп. Пусто — бот никому не отвечает.
+TG_MATERIALS_BOT_TOKEN = os.environ.get("TG_MATERIALS_BOT_TOKEN", "").strip()
+TG_MATERIALS_CHAT_IDS = [
+    int(item) for item in os.environ.get("TG_MATERIALS_CHAT_IDS", "").replace(" ", "").split(",")
+    if item.lstrip("-").isdigit()
+]
+# Bot API отдаёт боту файлы до 20 МБ (getFile) — больше бот скачать не может.
+TG_MATERIALS_MAX_FILE_BYTES = int(os.environ.get("TG_MATERIALS_MAX_FILE_BYTES", str(20 * 1024 * 1024)))
+# Брошенный на полпути ввод забывается через столько минут.
+TG_MATERIALS_DIALOG_TTL_MINUTES = int(os.environ.get("TG_MATERIALS_DIALOG_TTL_MINUTES", "30"))

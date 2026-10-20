@@ -702,6 +702,38 @@ CREATE TABLE IF NOT EXISTS signals (
 CREATE INDEX IF NOT EXISTS idx_signals_maturity_score ON signals(maturity, score DESC, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_signals_theme_seen ON signals(theme, last_seen_at DESC);
 
+-- Материалы коллег из Telegram (бот tg_materials_bot.py на NL): ссылка, файл или событие
+-- своими словами и оценка автора по шкале Виктора (те же вердикты, что у карточки радара,
+-- signal_feedback._normalize_verdict). Не статья: у материала нет источника в каталоге, и
+-- в articles его взяли бы дозагрузка, гейт релевантности и дедуп (тот же довод, что у
+-- documents). Карточка сигнала из материала — следующий шаг (signal_id), пока — хранение.
+-- Повтор отправки после сбоя связи NL↔ядро не двоит материал: ключ — сообщение бота с
+-- карточкой подтверждения (tg_chat_id, tg_message_id).
+CREATE TABLE IF NOT EXISTS colleague_materials (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  kind             TEXT NOT NULL,             -- link / file / event
+  title            TEXT NOT NULL,
+  description      TEXT NOT NULL,
+  url              TEXT,                      -- у link
+  companies_json   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  verdict          TEXT NOT NULL,
+  verdict_comment  TEXT,
+  file_name        TEXT,                      -- исходное имя, ТОЛЬКО для показа
+  file_path        TEXT,                      -- на томе документов, имя генерируется
+  file_size        BIGINT,
+  tg_chat_id       BIGINT NOT NULL,
+  tg_message_id    BIGINT NOT NULL,
+  tg_user_id       BIGINT NOT NULL,
+  tg_username      TEXT,
+  tg_author        TEXT NOT NULL,             -- имя, как его видно в Telegram
+  signal_id        BIGINT REFERENCES signals(id) ON DELETE SET NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_colleague_materials_tg_message
+  ON colleague_materials(tg_chat_id, tg_message_id);
+CREATE INDEX IF NOT EXISTS idx_colleague_materials_created ON colleague_materials(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_colleague_materials_tg_user ON colleague_materials(tg_user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS signal_evidence (
   id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   signal_id         BIGINT REFERENCES signals(id) ON DELETE CASCADE,

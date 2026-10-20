@@ -115,3 +115,20 @@ services:
       SOURCE_DISCOVERY_SEARCH_PROVIDER: brave
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
     stop_grace_period: 120s
+
+  # Бот «Материалы коллег» (tg_materials_bot.py): рабочая группа Telegram → ядро. Задач из
+  # очередей не берёт (queues пусто), а материал пишет в ядро запросом с токеном воркера; в ядре
+  # отмечается, как воркер, — по этому выкат видит новую сборку. Бот и группа —
+  # TG_MATERIALS_BOT_TOKEN и TG_MATERIALS_CHAT_IDS в .env.external-worker; без них бот молчит,
+  # но не падает. Свой бот, не бот допуска (ADMISSION_TELEGRAM_*): getUpdates у бота один.
+  tg-materials-bot:
+    build: *worker-build
+    container_name: oiltech_tg_materials_bot
+    restart: unless-stopped
+    env_file:
+      - .env.external-worker
+    environment:
+      PYTHONUNBUFFERED: "1"
+      EXTERNAL_WORKER_ID: nl-tg-bot-1
+    command: ["python", "-m", "oiltech_digest.cli", "-v", "tg-materials-bot"]
+    stop_grace_period: 120s

@@ -5653,3 +5653,80 @@ button {
   color: var(--text-muted);
   padding: 6px 0;
 }
+
+/* Материалы коллег из Telegram (ColleagueMaterialsPage). */
+.materialsFilters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.materialsList {
+  display: grid;
+  gap: 10px;
+}
+
+.materialCard {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.materialCardTop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.materialCard h3 {
+  margin: 8px 0 4px;
+  font-size: 1rem;
+}
+
+.materialDescription {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+
+.materialMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.materialVerdict {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border: 1px solid var(--sem-muted-bg);
+  background: var(--sem-muted-bg);
+  color: var(--sem-muted-fg);
+}
+
+.materialVerdict.strong {
+  background: var(--sem-info-bg);
+  color: var(--sem-info-fg);
+  border-color: var(--sem-info-bg);
+}
+
+.materialVerdict.good {
+  background: var(--sem-ok-bg);
+  color: var(--sem-ok-fg);
+  border-color: var(--sem-ok-border);
+}
+
+.materialVerdict.watch {
+  background: var(--sem-warn-bg);
+  color: var(--sem-warn-fg);
+  border-color: var(--sem-warn-border);
+}
