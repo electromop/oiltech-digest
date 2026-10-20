@@ -2419,17 +2419,22 @@ def cmd_signal_card_exam(args: argparse.Namespace) -> None:
     from oiltech_digest.signal_card_exam_report import PART_RU
     from oiltech_digest.signal_card_pack import STRATUM_RU
 
+    if args.rescore and (args.dry_run or args.models or args.runs is not None or args.part):
+        raise SystemExit("signal-card-exam: --rescore берёт модели, прогоны и часть из отчёта — без --dry-run, "
+                         "--models, --runs и --part")
     models = tuple(model.strip() for model in (args.models or "").split(",") if model.strip()) or signal_card_exam.MODELS
     runs = signal_card_exam.RUNS if args.runs is None else args.runs
-    options = {"manifest_path": args.manifest, "models": models, "runs": runs, "part": args.part}
+    options = {"manifest_path": args.manifest, "models": models, "runs": runs, "part": args.part or "exam"}
     try:
-        if args.dry_run:
+        if args.rescore:
+            result = signal_card_exam.rescore(args.rescore, args.markup, manifest_path=args.manifest)
+        elif args.dry_run:
             plan = signal_card_exam.plan(args.markup, **options)
         else:
             result = signal_card_exam.run(args.markup, **options)
     except (signal_card_exam.ExamError, OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"signal-card-exam: {exc}") from exc
-    if not args.dry_run:
+    if args.rescore or not args.dry_run:
         decision = result["decision"]
         print("signal-card-exam: решение — " + (f"{decision['model']} — " if decision["model"] else "")
               + decision["reason"])
@@ -3540,7 +3545,10 @@ def build_parser() -> argparse.ArgumentParser:
                              help="прогонов на сигнал: на экзамене — только 3 (спека), на настройке — от 1")
     p_card_exam.add_argument("--dry-run", action="store_true",
                              help="только число вызовов и цена: ничего не записать и не вызвать модель")
-    p_card_exam.add_argument("--part", choices=["exam", "tuning"], default="exam",
+    p_card_exam.add_argument("--rescore", default=None, metavar="REPORT",
+                             help="пересчитать сохранённый отчёт без вызовов модели: те же ответы по нынешним "
+                                  "проверкам, допускам и алиасам; модели, прогоны и часть — из отчёта")
+    p_card_exam.add_argument("--part", choices=["exam", "tuning"], default=None,
                              help="часть набора: экзамен (35) или настройка (15) — по ней и только по ней правят инструкцию")
     p_card_exam.set_defaults(func=cmd_signal_card_exam)
 

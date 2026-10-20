@@ -264,6 +264,17 @@ def test_event_date_after_publication_or_before_2000_is_undefined(user, contour,
         "2026-09-25", "по дате публикации")
 
 
+def test_from_text_without_a_date_is_the_publication_date(user, contour, monkeypatch):
+    # Ответ сам себе противоречит: «из текста», а даты нет. Даты в тексте нет — инструкция велит «по дате
+    # публикации» (экзамен 20.10: так gpt-5.5 ответила на «в течение 2026 года» в трёх прогонах из трёх).
+    feed_signal("В течение года", "MODEC расширила применение технологии в течение 2026 года.",
+                published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc))
+    fill(monkeypatch, {"В течение года": answer(event_date="", event_date_source="из текста")})
+
+    card = business(user)["В течение года"]
+    assert (card["event_date"], card["event_date_source"]) == ("2026-09-25", "по дате публикации")
+
+
 def test_agent_does_not_overwrite_values_set_by_a_human(user, contour, monkeypatch):
     signal_id = None
     feed_signal("Контракт SLB", "SLB подписала контракт с Saudi Aramco 24 сентября 2026 года.")
