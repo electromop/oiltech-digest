@@ -1785,8 +1785,10 @@ def _radar_screen_filters(
     region: str | None = Query(None, max_length=100),
     technology_class: str | None = Query(None, max_length=100),
     technology_maturity: str | None = Query(None, max_length=100),
-    # «Всё про компанию» (#97): участник карточки под любым из имён справочника алиасов.
+    # «Всё про компанию» (#97): участник карточки — та же компания по правилу «одна компания» (word_forms).
     company: str | None = Query(None, max_length=200),
+    # Имена участников фильтр читает из базы — только после входа.
+    user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
@@ -1808,9 +1810,17 @@ def _radar_screen_filters(
         "min_score": min_score,
         "max_score": max_score,
         **card,
-        # Все имена компании по справочнику алиасов — здесь, на границе: выборка сверяет готовый список.
-        "company_names": signal_card_filters.company_names(company or "") or None,
+        "company_names": _company_names(company),
     }
+
+
+def _company_names(company: str | None) -> list[str] | None:
+    """Имена участников в базе, которые по правилу «одна компания» та же компания, — здесь, на границе: выборка
+    сверяет готовый список точно. Нет компании — нет фильтра; есть — фильтр есть, и компания, которой нет ни в
+    одной карточке, даёт пустой список сигналов, а не все."""
+    if not (company or "").strip():
+        return None
+    return signal_card_filters.company_names(company, repository.participant_names())
 
 
 @app.get("/api/signals")

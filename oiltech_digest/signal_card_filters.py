@@ -1,30 +1,26 @@
 """Фильтры экрана по атрибутам карточки сигнала (#97): значения справочников для экрана, проверка значения
-фильтра и все написания компании для «всё про компанию». Агент «Карточка сигнала» — в signal_card.py."""
+фильтра и имена участников для «всё про компанию». Агент «Карточка сигнала» — в signal_card.py."""
 
 from __future__ import annotations
 
-from oiltech_digest.signal_card import CHOICE_COLUMNS, _plain
+from collections.abc import Iterable
+
+from oiltech_digest import word_forms
+from oiltech_digest.signal_card import CHOICE_COLUMNS
 from oiltech_digest.signal_card_pack import UNDEFINED, load_dictionaries
 
 
-def company_names(name: str) -> list[str]:
-    """Все написания компании для фильтра «всё про компанию» (#97) — в форме сверки с базой (_name_key):
-    по справочнику алиасов — каноническое имя и алиасы, компании нет в справочнике — её имя. Компания —
-    целиком, а не подстрокой: «Газпром» — не «Газпром нефть». Пустое имя — пустой список."""
-    wanted = _plain(name)
+def company_names(name: str, known: Iterable[str]) -> list[str]:
+    """Имена участников для фильтра «всё про компанию» (#97): из известных имён (known — все разные имена
+    участников карточек в базе) — те, что по правилу «одна компания» (word_forms.Companies: форма собственности,
+    «Имя (АББР)», пояснение в скобках, падеж, справочник алиасов) та же компания, плюс само имя без крайних
+    пробелов. Выборка сверяет их с именем участника точно: правило работает здесь, при запросе, — в базе ничего не
+    хранится и не пересчитывается. Компания — целиком: «Газпром» — не «Газпром нефть». Пустое имя — пустой список."""
+    wanted = str(name or "").strip()
     if not wanted:
         return []
-    for entry in load_dictionaries().get("companies") or []:
-        names = (entry["name"], *entry["aliases"])
-        if wanted in {_plain(item) for item in names}:
-            return sorted({_name_key(item) for item in names})
-    return [_name_key(name)]
-
-
-def _name_key(value: str) -> str:
-    """Имя участника в форме сверки с базой (repository._PARTICIPANT_NAMED_SQL): без различий регистра,
-    «ё» и пробелов, в том числе неразрывных. lower, а не casefold: как lower() в Postgres."""
-    return " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").lower().split())
+    rule = word_forms.companies(load_dictionaries().get("companies") or [])
+    return sorted({wanted, *(other for other in known if isinstance(other, str) and rule.same(wanted, other))})
 
 
 def checked_choice(column: str, value: str | None) -> str | None:

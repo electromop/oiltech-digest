@@ -2181,15 +2181,25 @@ def _like_contains(text: str) -> str:
     return f"%{escaped}%"
 
 
-# Участник карточки — одно из имён компании (#97): имя в форме сверки signal_card_filters._name_key — без
-# различий регистра, «ё» и пробелов. Неразрывные пробелы — явно: \s Postgres их не ловит (en_US.utf8),
-# а split() в Python — ловит. Не список в participants_json (запись мимо агента) — участников нет.
-_PARTICIPANT_NAMED_SQL = (
-    "EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.participants_json) = 'array'"
+# Участники карточки (#97) — элементы списка participants_json; не список (запись мимо агента) — участников нет.
+_PARTICIPANTS_SQL = (
+    "jsonb_array_elements(CASE WHEN jsonb_typeof(s.participants_json) = 'array'"
     " THEN s.participants_json ELSE '[]'::jsonb END) p"
-    " WHERE btrim(regexp_replace(replace(lower(p->>'name'), 'ё', 'е'), '[\\s\\u00a0\\u2007\\u202f]+', ' ', 'g'))"
-    " = ANY(%s))"
 )
+# Участник карточки — одно из имён компании (#97): имена участников из базы, которые по правилу «одна компания»
+# та же компания, сверены при запросе (signal_card_filters.company_names), здесь — точное сравнение.
+_PARTICIPANT_NAMED_SQL = f"EXISTS (SELECT 1 FROM {_PARTICIPANTS_SQL} WHERE p->>'name' = ANY(%s))"
+
+
+def participant_names() -> list[str]:
+    """Все разные имена участников карточек (#97), по всем сигналам: из них фильтр «всё про компанию» берёт те,
+    что по правилу «одна компания» та же компания (signal_card_filters.company_names). Элемент без имени — не
+    в счёт."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT p->>'name' FROM signals s, {_PARTICIPANTS_SQL} WHERE p->>'name' IS NOT NULL"
+        ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def _without_jit(conn) -> None:
@@ -2222,7 +2232,8 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
-    компания — участник карточки под любым из имён company_names (signal_card_filters.company_names)."""
+    компания — участник карточки под любым из имён company_names (signal_card_filters.company_names); пустой
+    список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра»."""
     clauses = [_showcase_visible_sql(showcase, hidden=hidden)]
     params: list = []
     if maturity:
@@ -2233,7 +2244,7 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
         if value:
             clauses.append(f"s.{column} = %s")
             params.append(value)
-    if company_names:
+    if company_names is not None:
         clauses.append(_PARTICIPANT_NAMED_SQL)
         params.append(list(company_names))
     if theme:

@@ -1,12 +1,13 @@
 """Бизнес-лента карточками (#97, спека #93), шов 1 — фильтры API списка сигналов на изолированной базе:
-тип события, регион, класс технологии, зрелость и компания (с алиасами) — в витрине «бизнес» и на радаре.
+тип события, регион, класс технологии, зрелость и компания (по правилу «одна компания», word_forms) — в витрине
+«бизнес» и на радаре.
 Карточки — функциями хранилища, как их пишет агент «Карточка сигнала» (#96).
 """
 
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api
-from oiltech_digest.db import signal_card_store
+from oiltech_digest.db import repository, signal_card_store
 from tests.signal_card_support import api_get, business, feed_signal, radar_finding
 from tests.signal_card_support import user  # noqa: F401 — фикстура
 
@@ -80,6 +81,24 @@ def test_company_written_past_the_agent_is_found_whatever_the_spaces_and_case(us
     assert _titles(user, company="Газпром нефть") == ["Газпром нефть бурит"]
     assert _titles(user, company="ГПН") == ["Газпром нефть бурит"]
     assert _titles(user, company="самотлорнефтегаз «елка»") == ["Самотлорнефтегаз пробурил"]
+
+
+def test_company_filter_compares_participants_by_the_one_company_rule(user):
+    # Имена участников сверяются по правилу «одна компания» (word_forms) при запросе: форма собственности и
+    # «Имя (АББР)» — та же компания, а в базе имя хранится как дала модель.
+    _card(_feed(user, "Контракт Atlas"), participants_json=_participants("Atlas Energy Solutions Inc."))
+    _card(_feed(user, "Пилот Atlas"), participants_json=_participants("Atlas Energy Solutions"))
+    _card(_feed(user, "Тендер PDO"), participants_json=_participants("Petroleum Development Oman (PDO)"))
+
+    assert _titles(user, company="Atlas Energy Solutions") == ["Контракт Atlas", "Пилот Atlas"]
+    assert _titles(user, company="Atlas Energy Solutions Inc.") == ["Контракт Atlas", "Пилот Atlas"]
+    assert _titles(user, company="PDO") == ["Тендер PDO"]
+    # Компании нет ни в одной карточке — сигналов нет, а не все сигналы.
+    assert _titles(user, company="Kolibri Global Energy") == []
+    summary = api_get("/api/signals/summary", user, showcase="business", company="Kolibri Global Energy")
+    assert (summary["total"], summary["matching"]) == (3, 0)
+    # Пустой список имён у выборки — фильтр, который ничего не нашёл, а не «без фильтра».
+    assert repository.list_signals(showcase="business", company_names=[]) == []
 
 
 def test_radar_takes_the_same_card_filters(user):
