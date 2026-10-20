@@ -3054,7 +3054,7 @@ def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> l
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             WITH article_metrics AS (
               SELECT
                 a.id,
@@ -3133,7 +3133,7 @@ def compute_topic_gap_rows(
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             WITH tagged_articles AS (
               SELECT
                 COALESCE(parent.name, t.name) AS topic,
