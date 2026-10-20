@@ -2891,7 +2891,7 @@ def build_parser() -> argparse.ArgumentParser:
     from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, SCORING_PRESETS, SCORING_PROFILES
 
     parser = argparse.ArgumentParser(prog="oiltech_digest.cli", description="OilTech Digest — сбор RSS")
-    parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (INFO)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="подробный лог (DEBUG; адреса запросов urllib3 не пишутся)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_agent_loop_args(p: argparse.ArgumentParser) -> None:
