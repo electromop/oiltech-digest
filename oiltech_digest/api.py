@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
@@ -53,6 +53,8 @@ from oiltech_digest.processing.digest import (
 )
 from oiltech_digest.processing import external_ai
 from oiltech_digest.source_discovery.learning import apply_candidate_learning
+from oiltech_digest import company_parents, word_forms
+from oiltech_digest.db import company_parents_repo
 
 WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -1610,6 +1612,89 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
         # Служебный тег-приёмник удалить нельзя — объясняем, а не 500.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
+
+
+# --- Дочерние общества (решение владельца 20.10) ------------------------------------------------
+# Список «дочка → мать» для фильтра «всё про компанию»: ведут на экране, правка действует без выката.
+# Проверки и разбор вставки — company_parents.py, база — db/company_parents_repo.py.
+
+
+def _same(one: str, other: str) -> bool:
+    """Одна ли это компания для списка дочек: пока правило PR #121 (word_forms.same_name: форма собственности,
+    регистр, падеж). Полное правило «одна компания» (скобки, справочник алиасов) встаёт здесь одной строкой."""
+    return word_forms.same_name(word_forms.words(one), word_forms.words(other))
+
+
+class CompanyParentIn(BaseModel):
+    # Длины здесь только ограничивают запрос; понятный отказ по длине имени даёт company_parents.check_pair.
+    child_name: str = Field(max_length=1000)
+    parent_name: str = Field(max_length=1000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class CompanyParentsImportIn(BaseModel):
+    text: str = Field(max_length=company_parents.MAX_TEXT)
+    apply: bool = False
+
+
+@app.get("/api/company-parents")
+def list_company_parents(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    return {"pairs": [_clean(row) for row in company_parents_repo.list_rows()]}
+
+
+@app.post("/api/company-parents")
+def add_company_parent(payload: CompanyParentIn, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Добавить пару «дочка → мать»; отказ — 400 с причиной (company_parents.check_pair)."""
+    row = {"child_name": company_parents.clean(payload.child_name),
+           "parent_name": company_parents.clean(payload.parent_name),
+           "note": company_parents.clean(payload.note) or None}
+    with company_parents_repo.editing() as edit:
+        problem = (company_parents.check_pair(row["child_name"], row["parent_name"], edit.pairs(), _same)
+                   or company_parents.check_note(row["note"]))
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        saved = edit.add([row], user_id=int(user["id"]))[0]
+    return {"ok": True, "pair": _clean({**saved, "created_by_email": user.get("email")})}
+
+
+@app.delete("/api/company-parents/{pair_id}")
+def delete_company_parent(pair_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    if not company_parents_repo.delete(pair_id):
+        raise HTTPException(status_code=404, detail="Связь не найдена")
+    return {"ok": True}
+
+
+@app.post("/api/company-parents/import")
+def import_company_parents(
+    payload: CompanyParentsImportIn, user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Вставка списком «дочка; мать»: без apply только разбор строк, в базу ничего. С apply — все строки одной
+    транзакцией, если ни в одной нет ошибки; иначе 400 с тем же разбором (и message), ничего не записано."""
+    if not payload.apply:
+        return _company_parents_answer(_company_parent_lines(payload.text, company_parents_repo.pairs()), applied=False)
+    with company_parents_repo.editing() as edit:
+        lines = _company_parent_lines(payload.text, edit.pairs())
+        refused = _company_parents_answer(lines, applied=False)
+        if refused["problems"]:
+            raise HTTPException(status_code=400, detail={
+                **refused, "message": f"Ничего не записано: строк с ошибками {refused['problems']} из {len(lines)}"})
+        edit.add(lines, user_id=int(user["id"]))
+    return _company_parents_answer(lines, applied=True)
+
+
+def _company_parents_answer(lines: list[dict[str, Any]], *, applied: bool) -> dict[str, Any]:
+    problems = sum(1 for line in lines if line["problem"])
+    return {"ok": not problems, "applied": applied, "problems": problems, "lines": lines}
+
+
+def _company_parent_lines(text: str, pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    try:
+        lines = company_parents.parse_lines(text, pairs, _same)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not lines:
+        raise HTTPException(status_code=400, detail="Нет ни одной строки «дочка; мать»")
+    return lines
 
 
 @app.get("/api/scoring-criteria")
