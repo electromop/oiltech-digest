@@ -6,13 +6,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from typing import Any
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest.db import connection
-from oiltech_digest.db.repository import CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN, SIGNAL_ORIGIN_FEED, radar_origin_sql
+from oiltech_digest.db.repository import (_FEED_ARTICLE_SHOWN_SQL, CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN,
+                                          SIGNAL_ORIGIN_FEED, radar_origin_sql)
+from oiltech_digest.feed_window import FeedWindow
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "signal_card"
@@ -120,6 +123,36 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
     return [int(row[0]) for row in rows]
 
 
+def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
+    """Сигналы прогона по истории (#98, спека #93): ленты — принятые статьи, собранные с `since` (сигнал не в
+    архиве, а статью показывает лента — как у витрины «бизнес»: за карточку, которую никто не увидит, не платим),
+    и все находки радара; дубли — мимо. first — радар или статья в текущем окне ленты (window): их карточки
+    ставятся первыми; pending — сигнал в задаче агента, которая ещё идёт. По порядку постановки."""
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            WITH pending AS (
+              SELECT DISTINCT (jsonb_array_elements_text(j.payload_json->'signal_ids'))::bigint AS id
+              FROM background_jobs j
+              WHERE j.kind = '{KIND}' AND j.status IN ('queued', 'running', 'finalizing')
+                AND jsonb_typeof(j.payload_json->'signal_ids') = 'array'
+            )
+            SELECT s.id, s.card_recipe,
+                   ({radar_origin_sql("s")} OR COALESCE({window.sql("a")}, FALSE)) AS first,
+                   EXISTS (SELECT 1 FROM pending p WHERE p.id = s.id) AS pending
+            FROM signals s
+            LEFT JOIN articles a ON a.id = s.origin_article_id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
+            WHERE s.merged_into_signal_id IS NULL
+              AND ({radar_origin_sql("s")}
+                   OR (a.collected_at >= %(since)s AND s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}))
+            ORDER BY first DESC, s.id
+            """,
+            {"since": since},
+        )
+        return cur.fetchall()
+
+
 def write_card(signal_id: int, values: dict[str, Any], *, recipe: dict[str, Any]) -> bool:
     """Записать проверенные значения карточки и её рецепт. False — сигнала нет.
 
@@ -172,6 +205,29 @@ def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
                  row["input_tokens"] + row["output_tokens"], row["cost_usd"]),
             )
         conn.commit()
+
+
+def judge_values(signal_ids: Sequence[int]) -> dict[int, dict[str, Any]]:
+    """Дата события и связь с нефтесервисом сигналов радара — для сравнения судьи с экспертом (#98): кто
+    поставил значение — в card_set_by; дубль отдаёт свои значения и номер главной карточки."""
+    ids = sorted({int(value) for value in signal_ids})
+    if not ids:
+        return {}
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT id, event_date, oilfield_relevance, card_set_by, merged_into_signal_id FROM signals "
+            "WHERE id = ANY(%s)",
+            (ids,),
+        )
+        rows = cur.fetchall()
+    return {int(row["id"]): {
+        "event_date": row["event_date"].isoformat() if row["event_date"] else None,
+        "oilfield_relevance": row["oilfield_relevance"],
+        "set_by": {key: value for key, value in (row["card_set_by"] or {}).items()
+                   if key in ("event_date", "oilfield_relevance")},
+        "merged_into_signal_id": row["merged_into_signal_id"],
+    } for row in rows}
 
 
 def _writable(set_by: str | None, current: Any) -> bool:

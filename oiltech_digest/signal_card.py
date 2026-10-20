@@ -11,10 +11,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-import re
 from typing import Any, Callable
 
-from oiltech_digest import config
+from oiltech_digest import config, word_forms
 from oiltech_digest.db import repository, signal_card_store
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
@@ -30,7 +29,7 @@ _OUTPUT_TOKENS = 1200
 FROM_TEXT = "из текста"
 BY_PUBLICATION = "по дате публикации"
 # Связь с нефтесервисом: значение справочника → прежний код радара (direct / transferable / none).
-_RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
+RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты и связи.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance")
 # Поле карточки с выбором из справочника: колонка signals (она же параметр фильтра экрана, #97) → справочник,
@@ -38,12 +37,21 @@ _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance"
 CHOICE_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                   "technology_maturity": "maturity"}
 _EARLIEST_EVENT = date(2000, 1, 1)
+# Оценка цены до вызова — для сухих прогонов экзамена и истории (#98): ответ карточки с рассуждением low
+# — около 600 токенов, русский текст — около трёх знаков на токен (с запасом).
+ESTIMATED_OUTPUT_TOKENS = 600
+CHARS_PER_TOKEN = 3
+# Типы источника-СМИ (по справочнику источников прода 18.10): издатель такого типа о событии только
+# сообщает, и код вычёркивает его из участников. Остальные решает модель по инструкции: пустой тип — у
+# находки поиска без статьи корпуса (часто это пресс-релиз самой компании), RSS — канал, а не вид
+# издателя (компании и СМИ вперемешку), аналитики, госорганы и вузы публикуют и собственные события (#98).
+_REPORTER_TYPES = frozenset({"media", "news", "journal", "telegram", "tech"})
 # Потолки длины ответа воркера (недоверенный ввод); фраза — как у судьи радара.
 _PHRASE_CHARS, _NAME_CHARS, _QUOTE_CHARS = 400, 200, 600
 
 
 class CardSetupError(ValueError):
-    """Агента нельзя поставить в работу: выключен флаг или не задана модель."""
+    """Агента нельзя поставить в работу: выключен флаг, не задана модель, у истории нет полосы пересчётов."""
 
 
 # --- Постановка (ядро) ---------------------------------------------------------------------------
@@ -55,7 +63,7 @@ def enqueue_new_signals() -> dict[str, Any]:
     if not config.SIGNAL_CARD_ENABLED:
         return {"signals": 0, "jobs": [], "reason": "disabled"}
     # Без модели шаг отказывает в каждом цикле, даже когда новых сигналов нет: настройка видна сразу.
-    _configured_model()
+    configured_model()
     ids = signal_card_store.new_signal_ids(days=config.SIGNAL_CARD_NEW_DAYS, limit=config.SIGNAL_CARD_STEP_LIMIT)
     return {"signals": len(ids), "jobs": enqueue_cards(ids, trigger="daily")}
 
@@ -68,7 +76,7 @@ def enqueue_cards(signal_ids: list[int], *, trigger: str, bulk: bool = False) ->
 
     if not config.SIGNAL_CARD_ENABLED:
         raise CardSetupError("SIGNAL_CARD_ENABLED выключен: агент карточки выходит в работу после экзамена (#98)")
-    model = _configured_model()
+    model = configured_model()
     decision = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
     batch = config.SIGNAL_CARD_BATCH
     return [
@@ -83,10 +91,20 @@ def enqueue_cards(signal_ids: list[int], *, trigger: str, bulk: bool = False) ->
     ]
 
 
-def _configured_model() -> str:
+def configured_model() -> str:
     if not config.SIGNAL_CARD_MODEL:
         raise CardSetupError("SIGNAL_CARD_MODEL не задан: модель ленты агент карточки не берёт")
     return config.SIGNAL_CARD_MODEL
+
+
+def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
+    """Цена вызовов до оплаты — для сухих прогонов экзамена и истории (#98): вход — по длине запросов в
+    знаках (request_chars), ответ — ESTIMATED_OUTPUT_TOKENS на вызов, ставки ядра (config.price_for_model)."""
+    tokens_in = -(-chars // CHARS_PER_TOKEN)
+    tokens_out = ESTIMATED_OUTPUT_TOKENS * calls
+    price_in, price_out = config.price_for_model(model)
+    return {"model": model, "calls": calls, "input_tokens": tokens_in, "output_tokens": tokens_out,
+            "cost_usd": (tokens_in * price_in + tokens_out * price_out) / 1_000_000}
 
 
 # --- Пакет (ядро, при выдаче) --------------------------------------------------------------------
@@ -217,6 +235,11 @@ def _answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
     }}
 
 
+def request_chars(item: dict[str, Any], dictionaries: dict[str, Any]) -> int:
+    """Длина запроса модели в знаках — инструкция со справочниками и вход сигнала: для оценки цены до вызова."""
+    return len(_instructions(dictionaries)) + len(_model_input(item))
+
+
 def _model_input(item: dict[str, Any]) -> str:
     return "\n".join([
         f"Заголовок: {item.get('title') or ''}",
@@ -238,7 +261,6 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     пишется: ошибка — в итоге задачи, остальные карточки пачки пишутся. signal_ids — сигналы задачи:
     карточку другого сигнала итог воркера не пишет."""
     dictionaries = load_dictionaries()
-    schema = _answer_schema(dictionaries)
     cards = [card for card in result.get("cards") or [] if isinstance(card, dict)]
     ids = [signal_id for signal_id in map(_signal_id, cards) if signal_id is not None]
     publications = {int(row["signal_id"]): _publication(row) for row in signal_card_store.card_inputs(ids)}
@@ -253,8 +275,11 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     errors: list[dict[str, Any]] = []
     for card in cards:
         signal_id = _signal_id(card)
-        problem = _card_problem(card, signal_id, expected, publications, schema)
-        if problem:
+        problem = _publication_problem(card, signal_id, expected, publications)
+        values = None
+        if problem is None:
+            values, problem = card_values(card, publications[signal_id], dictionaries)
+        if values is None:
             errors.append({"signal_id": signal_id, "error": problem})
             continue
         recipe = {
@@ -262,7 +287,6 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
             "model": _model_name(card), "dictionaries_version": dictionaries.get("version"),
             "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "job_id": job_id,
         }
-        values = check_answer(card["answer"], publications[signal_id], dictionaries)
         if signal_card_store.write_card(signal_id, values, recipe=recipe):
             applied += 1
     return {"applied": applied, "errors": errors}
@@ -272,16 +296,12 @@ def _in_job(signal_id: int | None, expected: set[str] | None) -> bool:
     return signal_id is not None and (expected is None or str(signal_id) in expected)
 
 
-def _card_problem(card: dict[str, Any], signal_id: int | None, expected: set[str] | None,
-                  publications: dict[int, dict[str, Any]], schema: dict[str, Any]) -> str | None:
-    """Почему строку итога воркера нельзя записать; None — можно."""
+def _publication_problem(card: dict[str, Any], signal_id: int | None, expected: set[str] | None,
+                         publications: dict[int, dict[str, Any]]) -> str | None:
+    """Почему строку итога воркера не с чем сверить: сигнал чужой, главной публикации нет или она сменилась;
+    None — можно сверять ответ (card_values)."""
     if not _in_job(signal_id, expected):
         return "сигнала нет в этой задаче"
-    if card.get("error"):
-        return f"модель: {str(card['error'])[:300]}"
-    problem = _shape_problem(card.get("answer"), schema)
-    if problem:
-        return f"ответ не по схеме: {problem}"
     publication = publications.get(signal_id)
     if publication is None:
         return "нет сигнала или его главной публикации"
@@ -289,6 +309,23 @@ def _card_problem(card: dict[str, Any], signal_id: int | None, expected: set[str
         # Цитаты сверяются с текстом, который видела модель, — иначе компании отсеялись бы зря.
         return "главная публикация сменилась после выдачи задачи"
     return None
+
+
+def card_values(card: dict[str, Any], publication: dict[str, Any],
+                dictionaries: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """Строка итога воркера → значения карточки или почему карточки не будет (ошибка модели, ответ не по
+    схеме). Через неё пишет ядро (apply_result) и мерит экзамен (#98): мерится то, что дойдёт до карточки."""
+    problem = _answer_problem(card, _answer_schema(dictionaries))
+    if problem:
+        return None, problem
+    return check_answer(card["answer"], publication, dictionaries), None
+
+
+def _answer_problem(card: dict[str, Any], schema: dict[str, Any]) -> str | None:
+    if card.get("error"):
+        return f"модель: {str(card['error'])[:300]}"
+    problem = _shape_problem(card.get("answer"), schema)
+    return f"ответ не по схеме: {problem}" if problem else None
 
 
 def _shape_problem(answer: Any, schema: dict[str, Any]) -> str | None:
@@ -343,7 +380,7 @@ def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionari
     цитаты из текста публикации и издание-издатель отбрасываются, алиасы сводятся к одному имени."""
     source = _listed(dictionaries, "date_source", answer["event_date_source"])
     event_date, source = _event_date(answer["event_date"], source, publication["published"])
-    relevance = _RELEVANCE_CODES.get(_listed(dictionaries, "oilfield_relevance", answer["oilfield_relevance"]))
+    relevance = RELEVANCE_CODES.get(_listed(dictionaries, "oilfield_relevance", answer["oilfield_relevance"]))
     return {
         "event_date": event_date,
         "event_date_source": source,
@@ -380,24 +417,27 @@ def _event_date(value: str, source: str, published: date | None) -> tuple[date |
 def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
                   dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
     """Участник — только с дословной цитатой из текста публикации, в которой он назван (verified —
-    проверено кодом): цитата, где компании нет, — догадка модели, а не участник. Издание, которое о
-    событии сообщает, участником не считается; компания, которая сама публикует свою новость (тип
-    источника Company…), — считается: в её пресс-релизе она главный участник. Алиасы — одно имя,
-    повтор под другим именем отбрасывается."""
+    проверено кодом): цитата, где компании нет, — догадка модели, а не участник, как и цитата, где её
+    имя стоит только внутри имени другой компании справочника («Газпром» в «Газпром нефть»), и обрывок
+    слова или имени текста («Газпром» из «Газпромнефть-Хантос» или из «Газпром нефть»).
+    Издатель-СМИ (_REPORTER_TYPES) о событии сообщает — участником не считается; компания, которая
+    сама публикует свою новость, — считается: в её пресс-релизе она главный участник. Алиасы — одно
+    имя, повтор под другим именем отбрасывается."""
     entries = dictionaries.get("companies") or []
     canonical = {_plain(name): entry["name"] for entry in entries for name in (entry["name"], *entry["aliases"])}
     variants = {entry["name"]: (entry["name"], *entry["aliases"]) for entry in entries}
-    text = _quote_form(publication["text"])
+    text = word_forms.quote_form(publication["text"])
     reporter = None
-    if not publication["publisher_type"].lower().startswith("company"):
+    if _plain(publication["publisher_type"]) in _REPORTER_TYPES:
         reporter = _plain(canonical.get(_plain(publication["publisher"]), publication["publisher"]))
     kept: dict[str, dict[str, Any]] = {}
     for company in companies:
         given = " ".join(company["name"].split())[:_NAME_CHARS]
         name = canonical.get(_plain(given), given)
         quote = " ".join(company["quote"].split())[:_QUOTE_CHARS]
-        if not name or not quote or _quote_form(quote) not in text \
-                or not _named_in(quote, (given, *variants.get(name, (name,)))):
+        if not name or not quote \
+                or not word_forms.named_in_quote(quote, text, (given, *variants.get(name, (name,))),
+                                                 _other_names(entries, name)):
             continue
         key = _plain(name)
         if key in kept or key == reporter:
@@ -406,70 +446,9 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
     return list(kept.values())
 
 
-def company_names(name: str) -> list[str]:
-    """Все написания компании для фильтра «всё про компанию» (#97) — в форме сверки с базой (_name_key):
-    по справочнику алиасов — каноническое имя и алиасы, компании нет в справочнике — её имя. Компания —
-    целиком, а не подстрокой: «Газпром» — не «Газпром нефть». Пустое имя — пустой список."""
-    wanted = _plain(name)
-    if not wanted:
-        return []
-    for entry in load_dictionaries().get("companies") or []:
-        names = (entry["name"], *entry["aliases"])
-        if wanted in {_plain(item) for item in names}:
-            return sorted({_name_key(item) for item in names})
-    return [_name_key(name)]
-
-
-def _name_key(value: str) -> str:
-    """Имя участника в форме сверки с базой (repository._PARTICIPANT_NAMED_SQL): без различий регистра,
-    «ё» и пробелов, в том числе неразрывных. lower, а не casefold: как lower() в Postgres."""
-    return " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").lower().split())
-
-
-def checked_choice(column: str, value: str | None) -> str | None:
-    """Значение фильтра справочного поля карточки (#97): из справочника или «не определено»; пустое —
-    фильтра нет. Чужое — ValueError: опечатка в адресе выглядела бы как «сигналов нет»."""
-    if not value:
-        return None
-    block = load_dictionaries()[CHOICE_COLUMNS[column]]
-    if value != UNDEFINED and value not in block["values"]:
-        raise ValueError(f"Фильтр «{block['title']}»: значения «{value}» нет в справочнике")
-    return value
-
-
-def screen_dictionaries() -> dict[str, list[str]]:
-    """Значения фильтров экрана (#97): справочные поля карточки по колонкам signals и подсказки к полю
-    «Компания» — канонические имена справочника алиасов. «Не определено» в справочник не входит: его
-    экран добавляет сам, как и подписи полей."""
-    dictionaries = load_dictionaries()
-    return {
-        **{column: list(dictionaries[key]["values"]) for column, key in CHOICE_COLUMNS.items()},
-        "companies": [entry["name"] for entry in dictionaries.get("companies") or []],
-    }
-
-
-def _named_in(quote: str, names: tuple[str, ...]) -> bool:
-    """Названа ли компания в цитате — под любым из имён. Слово имени сверяется по основе (без двух
-    последних букв, не короче трёх): «Роснефтью» — это «Роснефть». Имя без слов длиннее двух букв
-    (BP, H&P) — целиком."""
-    words = re.findall(r"\w+", _plain(quote))
-    for name in names:
-        tokens = [token for token in re.findall(r"\w+", _plain(name)) if len(token) >= 3]
-        if not tokens and _plain(name) in _plain(quote):
-            return True
-        if any(word.startswith(token[:max(3, len(token) - 2)]) for token in tokens for word in words):
-            return True
-    return False
-
-
-# Кавычки и тире модель переписывает на свой лад — для сверки цитаты они одно и то же.
-_QUOTE_MARKS = str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„": '"', "’": "'", "‘": "'",
-                              "—": "-", "–": "-"})
-
-
-def _quote_form(text: str) -> str:
-    """Текст для сверки цитаты: без различий регистра, «ё», пробелов, кавычек и тире."""
-    return _plain(str(text or "").translate(_QUOTE_MARKS))
+def _other_names(entries: list[dict[str, Any]], name: str) -> list[str]:
+    """Имена всех компаний справочника, кроме этой (name — её имя в справочнике или имя модели вне его)."""
+    return [other for entry in entries if entry["name"] != name for other in (entry["name"], *entry["aliases"])]
 
 
 def _phrase(value: str) -> str | None:

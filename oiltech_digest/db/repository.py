@@ -2181,7 +2181,7 @@ def _like_contains(text: str) -> str:
     return f"%{escaped}%"
 
 
-# Участник карточки — одно из имён компании (#97): имя в форме сверки signal_card._name_key — без
+# Участник карточки — одно из имён компании (#97): имя в форме сверки signal_card_filters._name_key — без
 # различий регистра, «ё» и пробелов. Неразрывные пробелы — явно: \s Postgres их не ловит (en_US.utf8),
 # а split() в Python — ловит. Не список в participants_json (запись мимо агента) — участников нет.
 _PARTICIPANT_NAMED_SQL = (
@@ -2222,7 +2222,7 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
-    компания — участник карточки под любым из имён company_names (signal_card.company_names)."""
+    компания — участник карточки под любым из имён company_names (signal_card_filters.company_names)."""
     clauses = [_showcase_visible_sql(showcase, hidden=hidden)]
     params: list = []
     if maturity:

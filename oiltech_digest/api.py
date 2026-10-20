@@ -27,7 +27,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, marks, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import contract, lanes, network_policy, signal_card
+from oiltech_digest import contract, lanes, network_policy, signal_card, signal_card_filters
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -1790,7 +1790,7 @@ def _radar_screen_filters(
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
     try:
-        card = {column: signal_card.checked_choice(column, value) for column, value in (
+        card = {column: signal_card_filters.checked_choice(column, value) for column, value in (
             ("event_type", event_type), ("region", region), ("technology_class", technology_class),
             ("technology_maturity", technology_maturity),
         )}
@@ -1808,7 +1808,7 @@ def _radar_screen_filters(
         "max_score": max_score,
         **card,
         # Все имена компании по справочнику алиасов — здесь, на границе: выборка сверяет готовый список.
-        "company_names": signal_card.company_names(company or "") or None,
+        "company_names": signal_card_filters.company_names(company or "") or None,
     }
 
 
@@ -1873,7 +1873,7 @@ def signal_radar_summary(
 @app.get("/api/signals/dictionaries")
 def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Значения фильтров атрибутов карточки на экранах (#97) — справочники агента «Карточка сигнала»."""
-    return signal_card.screen_dictionaries()
+    return signal_card_filters.screen_dictionaries()
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:

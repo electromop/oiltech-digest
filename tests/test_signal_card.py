@@ -86,6 +86,121 @@ def test_participant_needs_a_quote_from_the_text_publisher_is_dropped_aliases_co
     ]
 
 
+def test_company_only_beginning_like_a_word_of_the_quote_is_not_named_in_it(user, contour, monkeypatch):
+    # Общее начало слова — не падеж: «Сибур» не назван в цитате про «Сибнефть», «Роснефть» — в цитате про
+    # «Роснефтегаз». Иначе не та компания записалась бы проверенным участником.
+    feed_signal("Контракт Сибнефти", "Сибнефть и Роснефтегаз подписали контракт на бурение. Сделку одобрил совет "
+                                     "директоров Роснефти.")
+    fill(monkeypatch, {"Контракт Сибнефти": answer(companies=[
+        {"name": "Сибур", "quote": "Сибнефть и Роснефтегаз подписали контракт"},
+        {"name": "Роснефть", "quote": "Сибнефть и Роснефтегаз подписали"},
+        {"name": "Сибнефть", "quote": "Сибнефть и Роснефтегаз подписали контракт"},
+        {"name": "Роснефть", "quote": "Сделку одобрил совет директоров Роснефти"},  # она же — в падеже
+    ])})
+
+    participants = business(user)["Контракт Сибнефти"]["participants_json"]
+    assert [(item["name"], item["quote"]) for item in participants] == [
+        ("Сибнефть", "Сибнефть и Роснефтегаз подписали контракт"),
+        ("Роснефть", "Сделку одобрил совет директоров Роснефти")]
+
+
+def test_short_name_counts_only_as_a_whole_word_and_fused_gazprom_neft_is_recognised(user, contour, monkeypatch):
+    # «BP» — не часть «bpd»; «Газпромнефть-Хантос» — это «Газпром нефть»: так слитно пишут её дочерние общества.
+    feed_signal("Бурение Хантоса", "Газпромнефть-Хантос начала бурение на Приобском. Добыча составила 100,000 bpd.")
+    fill(monkeypatch, {"Бурение Хантоса": answer(companies=[
+        {"name": "Газпром нефть", "quote": "Газпромнефть-Хантос начала бурение"},
+        {"name": "BP", "quote": "Добыча составила 100,000 bpd"},
+    ])})
+
+    participants = business(user)["Бурение Хантоса"]["participants_json"]
+    assert [item["name"] for item in participants] == ["Газпром нефть"]
+
+
+def test_one_common_word_of_a_company_name_does_not_name_it_in_the_quote(user, contour, monkeypatch):
+    # Компания названа, когда в цитате все слова её имени: одного общего слова мало — «and» из «Helmerich and
+    # Payne», «Oil Company» из «Abu Dhabi National Oil Company», «ПАО» из «ПАО «Газпром»». Форма собственности
+    # — не обязательна («Equinor ASA» названа в «Equinor испытала»), а «total» строчными — не Total.
+    feed_signal("Сейсмика у Малайзии", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia. Kuwait "
+                                       "Oil Company awarded the drilling contract. The well reached a total depth "
+                                       "of 4,000 m.")
+    feed_signal("Робот Equinor", "ПАО «Татнефть» начало бурение на Ромашкинском месторождении. Equinor испытала "
+                                 "подводного робота на шельфе Норвегии.")
+    fill(monkeypatch, {
+        "Сейсмика у Малайзии": answer(companies=[
+            {"name": "JOGMEC", "quote": "JOGMEC and PTTEP started a 3D seismic survey"},
+            {"name": "H&P", "quote": "JOGMEC and PTTEP started a 3D seismic survey"},
+            {"name": "ADNOC", "quote": "Kuwait Oil Company awarded the drilling contract"},
+            {"name": "TotalEnergies", "quote": "The well reached a total depth of 4,000 m"},
+        ]),
+        "Робот Equinor": answer(companies=[
+            {"name": "Газпром", "quote": "ПАО «Татнефть» начало бурение"},
+            {"name": "Татнефть", "quote": "ПАО «Татнефть» начало бурение"},
+            {"name": "Equinor ASA", "quote": "Equinor испытала подводного робота"},
+        ]),
+    })
+
+    cards = business(user)
+    assert [item["name"] for item in cards["Сейсмика у Малайзии"]["participants_json"]] == ["JOGMEC"]
+    assert [item["name"] for item in cards["Робот Equinor"]["participants_json"]] == ["Татнефть", "Equinor ASA"]
+
+
+def test_name_inside_a_longer_name_of_another_company_does_not_name_it_in_the_quote(user, contour, monkeypatch):
+    # Длинное имя справочника закрывает короткое: «Газпром» стоит внутри «Газпром нефть» и «Gazprom Neft», и в
+    # цитате про них он не назван — ни в кавычках, ни в падеже, ни по-английски. Назван, если стоит и отдельно.
+    feed_signal("Бурение Газпром нефти", "«Газпром нефть» начала бурение на Приобском. Проект Газпром нефти "
+                                         "рассчитан до 2030 года. Gazprom Neft reported first oil.")
+    feed_signal("Соглашение Газпрома", "Газпром и Газпром нефть подписали соглашение о поставках газа.")
+    fill(monkeypatch, {
+        "Бурение Газпром нефти": answer(companies=[
+            {"name": "Газпром", "quote": "«Газпром нефть» начала бурение"},
+            {"name": "ПАО «Газпром»", "quote": "Проект Газпром нефти рассчитан до 2030 года"},
+            {"name": "Gazprom", "quote": "Gazprom Neft reported first oil"},
+            {"name": "Газпром нефть", "quote": "«Газпром нефть» начала бурение"},
+        ]),
+        "Соглашение Газпрома": answer(companies=[
+            {"name": "Газпром", "quote": "Газпром и Газпром нефть подписали соглашение"},
+            {"name": "Газпром нефть", "quote": "Газпром и Газпром нефть подписали"},
+        ]),
+    })
+
+    cards = business(user)
+    assert [item["name"] for item in cards["Бурение Газпром нефти"]["participants_json"]] == ["Газпром нефть"]
+    assert [item["name"] for item in cards["Соглашение Газпрома"]["participants_json"]] == ["Газпром", "Газпром нефть"]
+
+
+def test_quote_cut_from_a_longer_name_or_word_of_the_text_does_not_name_the_company(user, contour, monkeypatch):
+    # Цитата стоит в тексте целыми словами, а длинное имя справочника закрывает короткое и на словах текста вокруг
+    # цитаты: обрывок «Газпром» из «Газпром нефть» и «Газпромнефть-Хантос», «…подписали Газпром» перед «нефть»,
+    # «100,000 bp» из «bpd» компанию не называют. Целая цитата называет — и с кавычками и тире, переписанными моделью.
+    feed_signal("Соглашение Газпром нефти", "«Газпром нефть» начала бурение на Приобском. Соглашение подписали "
+                                            "Газпром нефть и Татнефть — на пять лет.")
+    feed_signal("Бурение Хантоса", "Газпромнефть-Хантос начала бурение на Приобском. Добыча составила 100,000 bpd.")
+    feed_signal("Соглашение Газпрома", "Газпром и Газпром нефть подписали соглашение о поставках газа.")
+    fill(monkeypatch, {
+        "Соглашение Газпром нефти": answer(companies=[
+            {"name": "Газпром", "quote": "Газпром"},
+            {"name": "Газпром", "quote": "Соглашение подписали Газпром"},
+            {"name": "Газпром нефть", "quote": '"Газпром нефть" начала бурение'},
+            {"name": "Татнефть", "quote": "Газпром нефть и Татнефть - на пять лет"},
+        ]),
+        "Бурение Хантоса": answer(companies=[
+            {"name": "Газпром", "quote": "Газпром"},
+            {"name": "BP", "quote": "Добыча составила 100,000 bp"},
+            {"name": "Газпром нефть", "quote": "Газпромнефть-Хантос начала бурение"},
+        ]),
+        "Соглашение Газпрома": answer(companies=[
+            {"name": "Газпром", "quote": "Газпром"},  # в первый раз он стоит отдельно
+            {"name": "Газпром нефть", "quote": "Газпром нефть подписали"},
+        ]),
+    })
+
+    cards = business(user)
+    assert [item["name"] for item in cards["Соглашение Газпром нефти"]["participants_json"]] == [
+        "Газпром нефть", "Татнефть"]
+    assert [item["name"] for item in cards["Бурение Хантоса"]["participants_json"]] == ["Газпром нефть"]
+    assert [item["name"] for item in cards["Соглашение Газпрома"]["participants_json"]] == ["Газпром", "Газпром нефть"]
+
+
 def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, monkeypatch):
     # Пресс-релиз компании: издатель — она сама и главный участник. Не участник — издатель-СМИ.
     feed_signal("Пресс-релиз Halliburton", "Halliburton и ADNOC подписали контракт на бурение.",
@@ -97,6 +212,35 @@ def test_company_that_publishes_its_own_news_stays_a_participant(user, contour, 
 
     participants = business(user)["Пресс-релиз Halliburton"]["participants_json"]
     assert [item["name"] for item in participants] == ["Halliburton", "ADNOC"]
+
+
+def test_publisher_is_dropped_only_when_it_is_a_media_outlet(user, contour, monkeypatch):
+    # Пресс-релиз компании, найденный поиском радара: статьи корпуса нет — нет и типа издателя (#98:
+    # так выпадали 12 из 38 компаний эксперта на радарной части набора).
+    radar_finding("fugro", "Fugro: контракт на диагностику", "Fugro has secured a marine asset integrity "
+                  "contract with Woodside for offshore Australia.", publisher="Fugro")
+    # RSS — канал, а не вид издателя: так приходят и собственные новости компаний.
+    feed_signal("JOGMEC: сейсмика", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia.",
+                source="JOGMEC", source_type="RSS")
+    # Журнал сообщает о чужом событии — его участником не становится.
+    feed_signal("World Oil: контракт", "Halliburton won a drilling contract in Oman, World Oil reports.",
+                source="World Oil", source_type="Journal")
+    fill(monkeypatch, {
+        "Fugro: контракт на диагностику": answer(companies=[
+            {"name": "Fugro", "quote": "Fugro has secured a marine asset integrity contract"}]),
+        "JOGMEC: сейсмика": answer(companies=[
+            {"name": "JOGMEC", "quote": "JOGMEC and PTTEP started a 3D seismic survey"},
+            {"name": "PTTEP", "quote": "PTTEP started a 3D seismic survey"}]),
+        "World Oil: контракт": answer(companies=[
+            {"name": "Halliburton", "quote": "Halliburton won a drilling contract in Oman"},
+            {"name": "World Oil", "quote": "World Oil reports"}]),
+    })
+
+    [radar] = api_get("/api/signals", user)
+    assert [item["name"] for item in radar["participants_json"]] == ["Fugro"]
+    feed = business(user)
+    assert [item["name"] for item in feed["JOGMEC: сейсмика"]["participants_json"]] == ["JOGMEC", "PTTEP"]
+    assert [item["name"] for item in feed["World Oil: контракт"]["participants_json"]] == ["Halliburton"]
 
 
 def test_event_date_after_publication_or_before_2000_is_undefined(user, contour, monkeypatch):

@@ -10,6 +10,7 @@ import csv
 import json
 import logging
 import re
+import sys
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -2192,6 +2193,40 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
           + (f", очередь {', '.join(queues)}" if queues else ""))
 
 
+def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
+    """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе
+    пересчётов, сначала текущее окно ленты и радар. По умолчанию сухой прогон: число сигналов и цена."""
+    from oiltech_digest import signal_card, signal_card_history
+
+    try:
+        plan = signal_card_history.plan()
+    except signal_card.CardSetupError as exc:
+        raise SystemExit(f"enqueue-signal-card-history: {exc}") from exc
+    estimate, count = plan["estimate"], len(plan["first"]) + len(plan["rest"])
+    print(f"enqueue-signal-card-history: модель {plan['model']}, инструкция {plan['prompt_version']}, "
+          f"справочники {plan['dictionaries_version']}")
+    print(f"  история — лента с {plan['since']} (по дате сбора статьи) и весь радар, без дублей: сигналов "
+          f"{plan['signals']}; заполнены этим рецептом — {plan['filled']}, уже в задачах агента — {plan['pending']}, "
+          f"без главной публикации — {plan['no_publication']}")
+    print(f"  к заполнению {count}: сначала текущее окно ленты ({', '.join(plan['months'])}) и радар — "
+          f"{len(plan['first'])}, затем остальное — {len(plan['rest'])}")
+    print(f"  цена ≈ {_usd(estimate['cost_usd'])}: вызовов {estimate['calls']}, токенов ≈ "
+          f"{estimate['input_tokens'] // 1000} тыс. входа и {estimate['output_tokens'] // 1000} тыс. выхода "
+          f"(оценка: ответ — {signal_card.ESTIMATED_OUTPUT_TOKENS} токенов, знаков на токен — {signal_card.CHARS_PER_TOKEN})")
+    print(f"  полоса {plan['queue']}: задач {-(-count // plan['batch'])} по {plan['batch']} сигналов")
+    if not plan["bulk_lane"]:
+        print("  ВНИМАНИЕ: полоса пересчётов выключена (AI_BULK_LANE_ENABLED) — задачи встали бы в поток дня перед "
+              "новыми статьями; --apply откажет")
+    if not args.apply:
+        print("  сухой прогон — задачи не поставлены и не оплачены (поставить: --apply)")
+        return
+    try:
+        jobs = signal_card_history.enqueue(plan)
+    except signal_card.CardSetupError as exc:
+        raise SystemExit(f"enqueue-signal-card-history: {exc}") from exc
+    print(f"  поставлено задач {len(jobs)}")
+
+
 def cmd_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -2369,6 +2404,64 @@ def cmd_signal_card_expert_pack(args: argparse.Namespace) -> None:
         print(f"Таблица: {result['workbook']}\nМанифест: {result['manifest']}")
     else:
         print("Сухой прогон: записать таблицу и манифест — тот же вызов с --apply и --out вне репозитория.")
+
+
+def cmd_signal_card_exam(args: argparse.Namespace) -> None:
+    """Экзамен агента «Карточка сигнала» (#98) на разметке эксперта: модели лестницей по цене."""
+    from oiltech_digest import signal_card, signal_card_exam
+    from oiltech_digest.signal_card_exam_report import PART_RU
+    from oiltech_digest.signal_card_pack import STRATUM_RU
+
+    models = tuple(model.strip() for model in (args.models or "").split(",") if model.strip()) or signal_card_exam.MODELS
+    runs = signal_card_exam.RUNS if args.runs is None else args.runs
+    options = {"manifest_path": args.manifest, "models": models, "runs": runs, "part": args.part}
+    try:
+        if args.dry_run:
+            plan = signal_card_exam.plan(args.markup, **options)
+        else:
+            result = signal_card_exam.run(args.markup, **options)
+    except (signal_card_exam.ExamError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"signal-card-exam: {exc}") from exc
+    if not args.dry_run:
+        decision = result["decision"]
+        print("signal-card-exam: решение — " + (f"{decision['model']} — " if decision["model"] else "")
+              + decision["reason"])
+        print(f"Отчёт: {result['readable']}\nОтветы и метрики: {result['report']}")
+        return
+    print("signal-card-exam: сухой прогон — ничего не записано и не оплачено")
+    print(f"Набор: строк {plan['rows']}; деление " + ("новое — запишется при первом прогоне" if plan["split_new"]
+                                                    else f"из {signal_card_exam.SPLIT_NAME}"))
+    for key in ("tuning", "exam"):
+        counts = plan["split"][key]
+        print(f"  {PART_RU[key]} {sum(counts.values())}: " + ", ".join(
+            f"{STRATUM_RU.get(stratum, stratum)} {count}" for stratum, count in counts.items()))
+    print(f"Часть «{PART_RU[plan['part']]}»: сигналов {plan['signals']}, "
+          f"прогонов на сигнал {plan['runs']}")
+    for number, one in enumerate(plan["models"]):
+        print(f"  {one['model']}: вызовов {one['calls']}, токенов ≈ {one['input_tokens'] // 1000} тыс. входа и "
+              f"{one['output_tokens'] // 1000} тыс. выхода, ≈ {_usd(one['cost_usd'])}"
+              + (" — если не пройдёт предыдущая" if number and plan["part"] == "exam" else ""))
+    total = sum(one["cost_usd"] for one in plan["models"])
+    print(("Не больше" if plan["part"] == "exam" else "Всего") + f": вызовов {sum(one['calls'] for one in plan['models'])}, "
+          f"≈ {_usd(total)} (оценка: ответ — {signal_card.ESTIMATED_OUTPUT_TOKENS} токенов, "
+          f"знаков на токен — {signal_card.CHARS_PER_TOKEN})")
+
+
+def cmd_signal_card_exam_judge(args: argparse.Namespace) -> None:
+    """Значения судьи радара у радарных строк манифеста (#98) — JSON в stdout: экзамен идёт там, где есть
+    модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    from oiltech_digest import signal_card_exam
+
+    try:
+        raw = sys.stdin.read() if args.manifest == "-" else Path(args.manifest).read_text(encoding="utf-8")
+        values = signal_card_exam.judge_values(json.loads(raw))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"signal-card-exam-judge: {exc}") from exc
+    print(json.dumps(values, ensure_ascii=False, indent=1))
+
+
+def _usd(value: float) -> str:
+    return f"${value:.2f}" if value >= 1 else f"${value:.3f}"
 
 
 def cmd_archive_signals(args: argparse.Namespace) -> None:
@@ -3309,6 +3402,15 @@ def build_parser() -> argparse.ArgumentParser:
                                       "по полосе пересчётов")
     p_enqueue_cards.set_defaults(func=cmd_enqueue_signal_cards)
 
+    p_card_history = sub.add_parser(
+        "enqueue-signal-card-history",
+        help="прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе "
+             "пересчётов; по умолчанию сухой прогон — число сигналов и цена",
+    )
+    p_card_history.add_argument("--apply", action="store_true",
+                                help="поставить задачи (только при включённом агенте); без флага — число и цена")
+    p_card_history.set_defaults(func=cmd_enqueue_signal_card_history)
+
     p_signals = sub.add_parser("signals", help="список найденных технологических сигналов")
     p_signals.add_argument("--maturity", choices=["watch", "shortlist", "proven", "reject"], default=None)
     p_signals.add_argument("--theme", default=None)
@@ -3415,6 +3517,32 @@ def build_parser() -> argparse.ArgumentParser:
                              help="ручные поправки JSON: {номер: {published, title, text, note}} — с первоисточника")
     p_card_pack.add_argument("--apply", action="store_true", help="записать; без флага — только состав")
     p_card_pack.set_defaults(func=cmd_signal_card_expert_pack)
+
+    p_card_exam = sub.add_parser(
+        "signal-card-exam",
+        help="экзамен агента «Карточка сигнала» на разметке эксперта (#98): модели по порогам, отчёт и решение "
+             "— рядом с манифестом",
+    )
+    p_card_exam.add_argument("--markup", required=True, help="таблица разметки, заполненная экспертом (вне репозитория)")
+    p_card_exam.add_argument("--manifest", default=None,
+                             help="манифест пакета (по умолчанию — signal_card_markup_manifest.json рядом с таблицей)")
+    p_card_exam.add_argument("--models", default=None,
+                             help="лестница моделей по цене, через запятую: следующая — только при провале предыдущей "
+                                  "(по умолчанию gpt-5.4-nano, gpt-5.4-mini)")
+    p_card_exam.add_argument("--runs", type=int, default=None,
+                             help="прогонов на сигнал: на экзамене — только 3 (спека), на настройке — от 1")
+    p_card_exam.add_argument("--dry-run", action="store_true",
+                             help="только число вызовов и цена: ничего не записать и не вызвать модель")
+    p_card_exam.add_argument("--part", choices=["exam", "tuning"], default="exam",
+                             help="часть набора: экзамен (35) или настройка (15) — по ней и только по ней правят инструкцию")
+    p_card_exam.set_defaults(func=cmd_signal_card_exam)
+
+    p_card_exam_judge = sub.add_parser(
+        "signal-card-exam-judge",
+        help="значения судьи радара у радарных строк манифеста экзамена (#98) — JSON в stdout, запуск на ядре",
+    )
+    p_card_exam_judge.add_argument("--manifest", required=True, help="манифест пакета эксперту или «-» — из stdin")
+    p_card_exam_judge.set_defaults(func=cmd_signal_card_exam_judge)
 
     p_archive_signals = sub.add_parser(
         "archive-signals",
