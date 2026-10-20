@@ -5,8 +5,8 @@
 все слова её имени, кроме формы собственности: одно общее слово («and», «Oil Company», «ПАО») — не имя. Короткое имя
 внутри длинного имени другой компании компанию не называет: в «Газпром нефть начала бурение» «Газпром» не назван, и
 цитата «Газпром» из этого текста его не называет — длинное имя видно и за краем цитаты. Правило одно у ядра (названа
-ли компания в цитате участника, signal_card._named_in) и у экзамена агента (имена агента и эксперта, есть ли
-компания в тексте, signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку.
+ли компания в цитате участника — named_in_quote, его зовёт signal_card._participants) и у экзамена агента (имена
+агента и эксперта, есть ли компания в тексте, signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку.
 """
 
 from __future__ import annotations
@@ -107,3 +107,38 @@ def _named_word(word: str, token: str) -> bool:
     if len(word) >= 4 and _LATIN.search(word) and word != word.casefold() and token == token.casefold():
         return False
     return same_word(token.casefold(), word.casefold())
+
+
+# Кавычки и тире модель переписывает на свой лад — для сверки цитаты они одно и то же.
+_QUOTE_MARKS = str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„": '"', "’": "'", "‘": "'",
+                              "—": "-", "–": "-"})
+
+
+def quote_form(text: str) -> str:
+    """Текст для сверки цитаты: без различий регистра, «ё», пробелов, кавычек и тире."""
+    return " ".join(str(text or "").translate(_QUOTE_MARKS).replace("ё", "е").replace("Ё", "Е").casefold().split())
+
+
+def named_in_quote(quote: str, text: str, names: Sequence[str], others: Sequence[str]) -> bool:
+    """Названа ли компания в цитате из текста публикации (text — в quote_form) — под любым из имён
+    (named_among): названы все слова имени, кроме формы собственности, в любом падеже. Одного общего слова
+    мало: «Helmerich and Payne» не названа в «JOGMEC and PTTEP», а «Equinor ASA» названа в «Equinor испытала»;
+    «Роснефтью» — это «Роснефть», а «Роснефтегаз» — другая компания. Цитата стоит в тексте целыми словами (_spots):
+    «Газпром» из «Газпромнефть-Хантос» и «100,000 bp» из «100,000 bpd» — обрывки, а не цитаты. Имя внутри длинного
+    имени другой компании справочника (others) не в счёт, в том числе когда длинное имя выходит за край цитаты:
+    «Газпром» не назван ни в «Газпром нефть начала бурение», ни в цитате «Газпром» из неё, а в «Газпром и Газпром
+    нефть подписали» назван. Цитата стоит в тексте не раз — компания названа, если названа хоть в одном месте."""
+    form = quote_form(quote)
+    spoken = [words(name) for name in names]
+    closing = [words(other) for other in others]
+    quoted = words(quote)
+    return any(named_among(spoken, quoted, closing, before=words(text[:start]), after=words(text[start + len(form):]))
+               for start in _spots(form, text))
+
+
+def _spots(form: str, text: str) -> list[int]:
+    """Где цитата (form — в quote_form) стоит в тексте целыми словами: буква или цифра на её краю не продолжает
+    слово текста."""
+    left = r"(?<!\w)" if re.match(r"\w", form) else ""
+    right = r"(?!\w)" if re.match(r"\w", form[-1:]) else ""
+    return [match.start() for match in re.finditer(f"(?={left}{re.escape(form)}{right})", text)]

@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-import re
 from typing import Any, Callable
 
 from oiltech_digest import config, word_forms
@@ -427,7 +426,7 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
     entries = dictionaries.get("companies") or []
     canonical = {_plain(name): entry["name"] for entry in entries for name in (entry["name"], *entry["aliases"])}
     variants = {entry["name"]: (entry["name"], *entry["aliases"]) for entry in entries}
-    text = _quote_form(publication["text"])
+    text = word_forms.quote_form(publication["text"])
     reporter = None
     if _plain(publication["publisher_type"]) in _REPORTER_TYPES:
         reporter = _plain(canonical.get(_plain(publication["publisher"]), publication["publisher"]))
@@ -437,7 +436,8 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
         name = canonical.get(_plain(given), given)
         quote = " ".join(company["quote"].split())[:_QUOTE_CHARS]
         if not name or not quote \
-                or not _named_in(quote, text, (given, *variants.get(name, (name,))), _other_names(entries, name)):
+                or not word_forms.named_in_quote(quote, text, (given, *variants.get(name, (name,))),
+                                                 _other_names(entries, name)):
             continue
         key = _plain(name)
         if key in kept or key == reporter:
@@ -446,45 +446,9 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
     return list(kept.values())
 
 
-def _named_in(quote: str, text: str, names: tuple[str, ...], others: list[str]) -> bool:
-    """Названа ли компания в цитате из текста публикации (text — в _quote_form) — под любым из имён
-    (word_forms.named_among): названы все слова имени, кроме формы собственности, в любом падеже. Одного общего слова
-    мало: «Helmerich and Payne» не названа в «JOGMEC and PTTEP», а «Equinor ASA» названа в «Equinor испытала»;
-    «Роснефтью» — это «Роснефть», а «Роснефтегаз» — другая компания. Цитата стоит в тексте целыми словами (_spots):
-    «Газпром» из «Газпромнефть-Хантос» и «100,000 bp» из «100,000 bpd» — обрывки, а не цитаты. Имя внутри длинного
-    имени другой компании справочника (others) не в счёт, в том числе когда длинное имя выходит за край цитаты:
-    «Газпром» не назван ни в «Газпром нефть начала бурение», ни в цитате «Газпром» из неё, а в «Газпром и Газпром
-    нефть подписали» назван. Цитата стоит в тексте не раз — компания названа, если названа хоть в одном месте."""
-    form = _quote_form(quote)
-    spoken = [word_forms.words(name) for name in names]
-    closing = [word_forms.words(other) for other in others]
-    quoted = word_forms.words(quote)
-    return any(word_forms.named_among(spoken, quoted, closing, before=word_forms.words(text[:start]),
-                                      after=word_forms.words(text[start + len(form):]))
-               for start in _spots(form, text))
-
-
-def _spots(form: str, text: str) -> list[int]:
-    """Где цитата (form — в _quote_form) стоит в тексте целыми словами: буква или цифра на её краю не продолжает
-    слово текста."""
-    left = r"(?<!\w)" if re.match(r"\w", form) else ""
-    right = r"(?!\w)" if re.match(r"\w", form[-1:]) else ""
-    return [match.start() for match in re.finditer(f"(?={left}{re.escape(form)}{right})", text)]
-
-
 def _other_names(entries: list[dict[str, Any]], name: str) -> list[str]:
     """Имена всех компаний справочника, кроме этой (name — её имя в справочнике или имя модели вне его)."""
     return [other for entry in entries if entry["name"] != name for other in (entry["name"], *entry["aliases"])]
-
-
-# Кавычки и тире модель переписывает на свой лад — для сверки цитаты они одно и то же.
-_QUOTE_MARKS = str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„": '"', "’": "'", "‘": "'",
-                              "—": "-", "–": "-"})
-
-
-def _quote_form(text: str) -> str:
-    """Текст для сверки цитаты: без различий регистра, «ё», пробелов, кавычек и тире."""
-    return _plain(str(text or "").translate(_QUOTE_MARKS))
 
 
 def _phrase(value: str) -> str | None:
