@@ -134,12 +134,13 @@ def request_code(user: dict[str, Any]) -> str:
 
 
 def notify_text(user_id: int, email: str, code: str, expires_at: datetime) -> str:
-    """Сообщение подтверждающим: номер учётки, начало почты, код и срок. Полной почты нет."""
-    local = email.split("@", 1)[0]
-    start = local[: min(3, max(1, len(local) // 2))]
+    """Сообщение подтверждающим: откуда код (платформа), чей он (номер учётки и полная почта), код
+    и срок. Полная почта — решение владельца 20.10: по одному началу почты подтверждающий не понимал,
+    кому передать код (прежде — история 40 спеки #110)."""
     until = expires_at.astimezone(_MSK).strftime("%d.%m.%Y %H:%M")
-    return (f"Учётка №{user_id} ({start}…) ждёт допуска.\n"
-            f"Код: {code} — действует до {until} МСК, не больше {MAX_ATTEMPTS} попыток ввода.\n"
+    return ("OilTech Digest: запрос кода допуска\n"
+            f"Учётка №{user_id} {email} ждёт допуска.\n"
+            f"Код: {code}, действует до {until} МСК, не больше {MAX_ATTEMPTS} попыток ввода.\n"
             "Передайте код владельцу учётки.")
 
 

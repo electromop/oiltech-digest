@@ -145,7 +145,9 @@ def test_self_registration_stays_closed(isolated_db):
 # --- код и задача на отправку ---------------------------------------------------------------
 
 
-def test_login_puts_notify_job_with_account_number_email_start_code_and_expiry(newcomer, notify_on):
+def test_login_puts_notify_job_with_platform_account_number_full_email_code_and_expiry(newcomer, notify_on):
+    """Владелец 20.10: подтверждающему должно быть видно, откуда код и чей он — название платформы
+    и полная почта учётки (прежде — только начало почты, история 40 спеки #110)."""
     _login(_client())
 
     jobs = _notify_jobs()
@@ -153,9 +155,8 @@ def test_login_puts_notify_job_with_account_number_email_start_code_and_expiry(n
     _, queue, region, payload, status = jobs[0]
     assert (queue, region, status) == ("external-notify", "external", "queued")
     text = payload["text"]
-    assert f"№{newcomer['id']}" in text
-    assert "new…" in text
-    assert EMAIL not in text and "example.test" not in text
+    assert text.splitlines()[0] == "OilTech Digest: запрос кода допуска"
+    assert f"Учётка №{newcomer['id']} {EMAIL} ждёт допуска." in text
     assert re.search(r"\b\d{8}\b", text)
     assert "действует до" in text
     assert _code_row(newcomer["id"])[2] == jobs[0][0]
