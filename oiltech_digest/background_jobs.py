@@ -190,6 +190,13 @@ def worker_loop(
                 external.requeued,
                 external.exhausted,
             )
+        # Отправка кода допуска, упавшая окончательно по истёкшей аренде, — без текста с кодом.
+        try:
+            from oiltech_digest import admission
+
+            admission.settle_notifications()
+        except Exception:  # noqa: BLE001 - уборка не должна останавливать очередь
+            logger.exception("admission_settle_failed")
 
     last_sweep = 0.0
     while True:
@@ -264,7 +271,7 @@ def _run_digest_export(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
         max_score=float(payload["max_score"]) if payload.get("max_score") is not None else None,
         search=str(payload.get("search") or "") or None,
         top_tag=str(payload.get("top_tag") or "") or None,
-        user_id=int(payload["user_id"]) if payload.get("user_id") is not None else None,
+        # user_id в задачах до #111 не читаем: выпуск общий.
     )
     repository.update_background_job_progress(job_id, 90)
     return result
@@ -590,6 +597,12 @@ def _run_signal_card(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     return {"signal_card": True, "applied": applied}
 
 
+def _run_admission_notify(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Код допуска отправляет только воркер NL (#113): с РФ-ядра Telegram недоступен. Вид
+    зарегистрирован, чтобы ядро могло поставить задачу; очередь external-notify здесь не исполняется."""
+    raise RuntimeError("admission_notify исполняется только внешним воркером (очередь external-notify)")
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "digest_export": _run_digest_export,
     "process_articles": _run_process_articles,
@@ -603,4 +616,5 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "discover_source_candidates": _run_discover_source_candidates,
     "signal_discovery": _run_signal_discovery,
     "signal_card": _run_signal_card,
+    "admission_notify": _run_admission_notify,
 }

@@ -101,7 +101,7 @@ def _mark_for_digest(article_id: int) -> None:
         user_id = row[0] if row else conn.execute(
             "INSERT INTO users (email, password_salt, password_hash) VALUES ('d@example.com', 's', 'h') RETURNING id"
         ).fetchone()[0]
-        conn.execute("INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, 'digest')",
+        conn.execute("INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
                      (user_id, article_id))
         conn.commit()
 

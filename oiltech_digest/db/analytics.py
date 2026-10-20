@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from psycopg.rows import dict_row
 
 from oiltech_digest import config, fx
-from oiltech_digest.db import connection
+from oiltech_digest.db import connection, marks
 
 TZ = "Europe/Moscow"
 _MONTH = f"to_char(a.collected_at AT TIME ZONE '{TZ}', 'YYYY-MM')"
@@ -68,7 +68,8 @@ _COUNTERS_SQL = f"""
     LEFT JOIN article_cards c ON c.article_id = a.id
     LEFT JOIN article_scores s ON s.article_id = a.id
     LEFT JOIN article_reprints r ON r.article_id = a.id
-    LEFT JOIN (SELECT DISTINCT article_id FROM user_article_states WHERE status = 'digest') d
+    LEFT JOIN (SELECT a_d.id AS article_id FROM articles a_d
+               WHERE {marks.article_marked_sql('a_d.id', 'digest')}) d
            ON d.article_id = a.id
     WHERE a.collected_at >= {_SINCE}
       {{extra}}

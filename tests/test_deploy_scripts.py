@@ -229,8 +229,9 @@ def test_core_deploy_schema_check_survives_retry_and_manual_reset(tmp_path):
 
 
 def test_core_guard_covers_every_ai_lane():
-    """Выкат не рвёт ИИ ни в одной полосе; новая полоса защищена по умолчанию."""
-    assert lanes.AI_LANES == set(lanes.EXTERNAL_LANES) - {lanes.FETCH, lanes.BROWSER}
+    """Выкат не рвёт ИИ ни в одной полосе; новая полоса защищена по умолчанию. Без ИИ — сбор и
+    отправка кода допуска (#113): секунды, повторить дёшево."""
+    assert lanes.AI_LANES == set(lanes.EXTERNAL_LANES) - {lanes.FETCH, lanes.BROWSER, lanes.NOTIFY}
     assert {lanes.AI_LIVE, lanes.AI_BULK} <= lanes.AI_LANES
 
 

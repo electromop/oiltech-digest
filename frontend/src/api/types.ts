@@ -1099,6 +1099,15 @@ export type AuthResponse = {
   archived_modules?: string[];
 };
 
+// Пароль верный, но учётка ждёт допуска (#113): сессии нет, нужен код от подтверждающих.
+export type AdmissionRequiredResponse = {
+  ok: false;
+  admission_required: true;
+  detail: string;
+};
+
+export type LoginResponse = AuthResponse | AdmissionRequiredResponse;
+
 // --- Месячная статистика платформы (раздел «Статистика», admin-only) ---
 export type MonthlyPlatformRow = {
   month: string;

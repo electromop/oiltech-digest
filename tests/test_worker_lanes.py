@@ -421,13 +421,18 @@ def test_every_job_kind_resolves_to_a_worker_handler():
 
 def test_every_lane_has_its_own_nl_worker():
     """Раскладка NL: у каждой внешней очереди есть воркер, полосы не делят контейнер
-    (иначе пересчёт снова встанет перед потоком дня, а браузер — перед RSS)."""
+    (иначе пересчёт снова встанет перед потоком дня, а браузер — перед RSS). Одно исключение —
+    код допуска (#113): короткие сообщения отправляет воркер сбора вдобавок к своей полосе."""
     compose = Path(__file__).resolve().parents[1] / "docker-compose.external-worker.yml"
     services = yaml.safe_load(compose.read_text())["services"]
     served: dict[str, list[str]] = {}
     for name, service in services.items():
         env = service["environment"]
         queues = [item.strip() for item in env["EXTERNAL_WORKER_QUEUES"].split(",")]
+        if lanes.NOTIFY in queues:
+            assert queues == [lanes.FETCH, lanes.NOTIFY], f"{name}: код допуска — только при полосе сбора"
+            served.setdefault(lanes.NOTIFY, []).append(name)
+            queues = queues[:1]
         assert len(queues) == 1, f"{name} слушает несколько полос: {queues}"
         served.setdefault(queues[0], []).append(name)
 

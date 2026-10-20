@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from oiltech_digest import api
 from oiltech_digest.db import repository
+from oiltech_digest.db import marks
 from oiltech_digest.processing import external_ai
 
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
@@ -459,14 +460,14 @@ def test_feed_signals_stay_out_of_the_issue_and_the_radar_context_bundle(user):
     _process(_article(1), score=70)
     (feed_card,) = _business(user)
     for signal_id in (radar, feed_card["id"]):
-        repository.set_user_signal_status(int(user["id"]), signal_id, status="digest")
+        marks.set_signal_mark(signal_id, status="digest", user_id=int(user["id"]))
     # Отзыв о сигнале ленты с адресом публикации радара (форма берёт адрес первой ссылки).
     with repository.get_connection() as conn:
         conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict, source_url) "
                      "VALUES (%s, 'verdict', 'approved', 'https://radar.example/tech')", (feed_card["id"],))
         conn.commit()
 
-    items = repository.digest_candidates(user_id=int(user["id"]), min_score=0)
+    items = repository.digest_candidates(min_score=0)
     assert [row["id"] for row in items if row["item_type"] == "signal"] == [radar]
     bundle = signal_training._build_signal_context_bundle(include_rejected=True)
     assert [row["id"] for row in bundle["signals"]] == [radar]

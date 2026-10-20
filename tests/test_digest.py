@@ -104,10 +104,10 @@ def test_build_digest_content_uses_branding_config(monkeypatch):
             },
         },
     )
-    monkeypatch.setattr("oiltech_digest.processing.digest.repository.digest_candidates", lambda month, limit=20, min_score=60, user_id=None, **kwargs: [])
-    monkeypatch.setattr("oiltech_digest.processing.digest.repository.get_monthly_digest", lambda month, user_id=None: None)
+    monkeypatch.setattr("oiltech_digest.processing.digest.repository.digest_candidates", lambda month, limit=20, min_score=60, **kwargs: [])
+    monkeypatch.setattr("oiltech_digest.processing.digest.repository.get_monthly_digest", lambda month: None)
 
-    content = build_digest_content("2026-05", user_id=1)
+    content = build_digest_content("2026-05")
 
     assert content["branding"]["header"]["brand_text"] == "ТЕСТ БРЕНД"
     assert content["hero"]["headline"] == "ТЕСТОВЫЙ ДАЙДЖЕСТ"
@@ -131,11 +131,11 @@ def test_build_digest_content_prefers_saved_monthly_digest_order(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.get_monthly_digest",
-        lambda month, user_id=None: {"id": 5, "user_id": user_id, "month": month, "items": [{"article_id": 11}, {"article_id": 10}]},
+        lambda month: {"id": 5, "month": month, "items": [{"article_id": 11}, {"article_id": 10}]},
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_items_by_article_ids",
-        lambda article_ids, selected_by=None, month=None: [
+        lambda article_ids, month=None: [
             {
                 "id": article_id,
                 "title": f"Article {article_id}",
@@ -154,10 +154,10 @@ def test_build_digest_content_prefers_saved_monthly_digest_order(monkeypatch):
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [],
+        lambda month, limit=20, min_score=60, **kwargs: [],
     )
 
-    content = build_digest_content("2026-05", user_id=1)
+    content = build_digest_content("2026-05")
 
     assert [item["article_id"] for item in content["news"]] == [11, 10]
 
@@ -224,7 +224,7 @@ def test_write_digest_export_json(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=20, min_score=60, user_id=None, **kwargs: {
+        lambda month, limit=20, min_score=60, **kwargs: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [],
@@ -245,7 +245,7 @@ def test_write_digest_export_html_and_docx(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=100, min_score=0, user_id=None, **kwargs: {
+        lambda month, limit=100, min_score=0, **kwargs: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [
@@ -286,7 +286,7 @@ def test_write_digest_export_doc_alias_writes_real_docx(monkeypatch, tmp_path):
     monkeypatch.setattr("oiltech_digest.processing.digest.EXPORTS_DIR", tmp_path)
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=100, min_score=0, user_id=None, **kwargs: {
+        lambda month, limit=100, min_score=0, **kwargs: {
             "issue": {"title": f"Digest {month}", "intro": "Test intro"},
             "hero": {"badge": "TEST", "headline": "DIGEST", "subtitle": "Sandbox"},
             "news": [],
@@ -365,7 +365,7 @@ def test_build_digest_content_includes_article_ids(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [
+        lambda month, limit=20, min_score=60, **kwargs: [
             {
                 "id": 123,
                 "title": "Digest candidate",
@@ -395,7 +395,7 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [
+        lambda month, limit=20, min_score=60, **kwargs: [
             {
                 "id": 123,
                 "title": "Digest candidate",
@@ -424,7 +424,7 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
 def test_build_digest_content_enforces_domain_terms(monkeypatch):
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
-        lambda month, limit=20, min_score=60, user_id=None, **kwargs: [
+        lambda month, limit=20, min_score=60, **kwargs: [
             {
                 "id": 124,
                 "title": "Electric frac fleet expands hydraulic fracturing",
@@ -736,7 +736,7 @@ def test_save_digest_draft_persists_ordered_items(monkeypatch):
 
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.build_digest_content",
-        lambda month, limit=20, min_score=60, user_id=None, **kwargs: {
+        lambda month, limit=20, min_score=60, **kwargs: {
             "month": month,
             "title": f"Digest {month}",
             "items": [
@@ -760,7 +760,7 @@ def test_save_digest_draft_persists_ordered_items(monkeypatch):
 
     assert result["id"] == 5
     assert saved["month"] == "2026-05"
-    assert saved["user_id"] is None
+    assert "user_id" not in saved  # черновик один на месяц (#111)
     assert saved["items"] == [
         {"article_id": 10, "section": "Drilling", "editor_note": "First"},
         {"article_id": 11, "section": "Production", "editor_note": "Second"},

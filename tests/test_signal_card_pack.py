@@ -75,7 +75,7 @@ def _mark(conn, article_ids, status):
         (f"{status}-{article_ids[0]}@example.test",),
     ).fetchone()[0]
     for article_id in article_ids:
-        conn.execute("INSERT INTO user_article_states (user_id, article_id, status) VALUES (%s, %s, %s)",
+        conn.execute("INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, %s)",
                      (user_id, article_id, status))
 
 
@@ -302,9 +302,8 @@ def test_usefulness_comes_from_the_score_and_the_analysts_marks(isolated_db, cap
         _seed_feed(conn, source_id, roots, 1, score=30, prefix="weak")
         _seed_feed(conn, source_id, roots, 1, score=None, prefix="unscored")  # балла ещё нет — не знаем
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=80, prefix="duplicate"), "duplicate")
-        both = _seed_feed(conn, source_id, roots, 1, score=40, prefix="both")  # двое разошлись — дайджест
-        _mark(conn, both, "digest")
-        _mark(conn, both, "noise")
+        # Отметка одна на статью (#111): «в дайджест» при низком балле — полезная.
+        _mark(conn, _seed_feed(conn, source_id, roots, 1, score=40, prefix="both"), "digest")
         # «Архив» ставят и «скрыть», и «убрать из дайджеста» — по нему не понять, полезна ли статья.
         _mark(conn, _seed_feed(conn, source_id, roots, 1, score=90, prefix="archived"), "archive")
         conn.commit()

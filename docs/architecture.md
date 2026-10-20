@@ -214,14 +214,19 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: схема прос�
 **Контент и оценки:** `sources` · `articles` · `article_cards` (суть, релевантность) ·
 `tags` + `article_tags` · `scoring_criteria` + `article_scores` + `article_score_items`.
 
-**Пользователи:** `users` (e-mail, PBKDF2-хэш, роль) · `user_sessions` ·
-`user_article_states` — **личное** состояние: статус статьи (`new` / `review` / `digest` /
-`archive` / `noise` / `duplicate`) и комментарий аналитика.
+**Пользователи:** `users` (e-mail, PBKDF2-хэш, роль) · `user_sessions`.
 
-Модель разделения: статьи, оценки, теги и источники — **общие**; пер-юзерный только
-рабочий статус и состав дайджеста.
+**Отметки** (#111, ADR 0004) — **общие**: `article_marks` (статус статьи `new` / `digest` /
+`archive` / `noise` / `duplicate` и комментарий) и `signal_marks` (то же у карточки радара,
+вместо `new` — `watch`), одна строка на статью или карточку, с последним поставившим и временем.
+Приложение читает и пишет их через `oiltech_digest/db/marks.py`; мимо него — только разовый
+перенос `migrate-shared-marks` (запись о нём — `shared_marks_migration`). Личные
+`user_article_states` и `user_signal_states` — архив только для чтения: его читают перенос и
+статистика «кто сколько пометил» (до перехода на журнал, #112). За автором остаются только
+оценки ОС статьи (`feedback_entries`).
 
-**Дайджест:** `monthly_digests` (уникальность по `(user_id, month)`) · `monthly_digest_items`.
+**Дайджест:** `monthly_digests` — черновик один на месяц (строка без учётки; личные — архив) ·
+`monthly_digest_items`. Состав выпуска месяца — `repository.issue_composition`.
 
 **Служебное:** `background_jobs` (владелец, очередь, регион исполнения, lease, попытки) ·
 `ai_processing_runs` (аудит каждого AI-вызова и его стоимости) · `export_jobs`.

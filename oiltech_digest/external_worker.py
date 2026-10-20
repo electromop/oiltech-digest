@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import requests
 
-from oiltech_digest import config, contract, signal_card, signal_discovery, worker_shutdown
+from oiltech_digest import admission, config, contract, signal_card, signal_discovery, worker_shutdown
 from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
@@ -441,6 +441,8 @@ _HANDLERS: dict[str, tuple[Any, str]] = {
     "signal_discovery": (signal_discovery, "process_external_payload"),
     # Агент «Карточка сигнала» (#96, контракт 2): поток дня и полоса пересчётов.
     "signal_card": (signal_card, "process_payload"),
+    # Код допуска в чат подтверждающих (#113, контракт 3): воркер сбора, полоса external-notify.
+    "admission_notify": (admission, "send_notification"),
 }
 
 

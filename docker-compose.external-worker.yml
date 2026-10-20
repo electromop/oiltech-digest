@@ -60,7 +60,9 @@ services:
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]
     stop_grace_period: 120s
 
-  # Сбор запросом: RSS, листинги, статьи, дозагрузка тел. I/O — три потока.
+  # Сбор запросом: RSS, листинги, статьи, дозагрузка тел. I/O — три потока. Он же отправляет
+  # код допуска в Telegram (external-notify, #113): короткая задача не ждёт ИИ и радара. Бот и
+  # чат — ADMISSION_TELEGRAM_BOT_TOKEN и ADMISSION_TELEGRAM_CHAT_ID в .env.external-worker.
   external-worker-fetch:
     build: *worker-build
     container_name: oiltech_external_worker_fetch
@@ -70,7 +72,7 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       EXTERNAL_WORKER_ID: nl-fetch-1
-      EXTERNAL_WORKER_QUEUES: external-fetch
+      EXTERNAL_WORKER_QUEUES: external-fetch,external-notify
       EXTERNAL_WORKER_CAPABILITIES: http_fetch
       EXTERNAL_WORKER_CONCURRENCY: "3"
     command: ["python", "-m", "oiltech_digest.cli", "-v", "external-worker"]

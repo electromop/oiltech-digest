@@ -20,11 +20,11 @@ from pydantic import BaseModel
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, background_jobs, backlog, config, feed_window
+from oiltech_digest import admission, auth, background_jobs, backlog, config, feed_window
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.db import analytics, documents_repo, repository
+from oiltech_digest.db import analytics, documents_repo, marks, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest import contract, lanes, network_policy, signal_card, signal_card_filters
@@ -85,7 +85,7 @@ async def log_requests(request, call_next):
     return response
 
 
-# Набор допустимых пер-юзерных статусов — единый источник правды в repository.ArticleStatus
+# Набор допустимых статусов отметки — единый источник правды в repository.ArticleStatus
 # (там же кортеж для счётчиков). Колонки статуса — свободный TEXT без CHECK, поэтому
 # валидация на границе API — единственное, что не даёт записать мусор: статья с
 # неизвестным статусом молча пропадает из всех вкладок (фильтры перечисляют известный набор).
@@ -429,6 +429,12 @@ class AuthPayload(BaseModel):
     password: str
 
 
+class AdmitPayload(BaseModel):
+    email: str
+    password: str
+    code: str
+
+
 class UserCreate(BaseModel):
     email: str
     password: str
@@ -521,9 +527,7 @@ def auth_register(payload: AuthPayload, response: Response) -> dict[str, Any]:
         user = repository.create_user(email, payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    session_token = repository.create_user_session(int(user["id"]))
-    _set_session_cookie(response, session_token)
-    return _session_payload(user)
+    return _login_or_admission(user, response)
 
 
 @app.post("/api/auth/login")
@@ -531,6 +535,30 @@ def auth_login(payload: AuthPayload, response: Response) -> dict[str, Any]:
     user = repository.authenticate_user(payload.email, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    return _login_or_admission(user, response)
+
+
+@app.post("/api/auth/admit")
+def auth_admit(payload: AdmitPayload, response: Response) -> dict[str, Any]:
+    """Шаг «код допуска» (#113): почта, пароль и код одним запросом — допуск и сессия."""
+    user = repository.authenticate_user(payload.email, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    try:
+        admission.redeem(int(user["id"]), payload.code)
+    except admission.AdmissionRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    session_token = repository.create_user_session(int(user["id"]))
+    _set_session_cookie(response, session_token)
+    return _session_payload(user)
+
+
+def _login_or_admission(user: dict[str, Any], response: Response) -> dict[str, Any]:
+    """Допущенной учётке — сессия. Недопущенной — «нужен код допуска» без сессии (200, а не
+    отказ: пароль верный, экран входа переходит к шагу кода); код выдаётся и уходит подтверждающим."""
+    if not admission.is_admitted(int(user["id"])):
+        notice = admission.request_code(user)
+        return {"ok": False, "admission_required": True, "detail": notice}
     session_token = repository.create_user_session(int(user["id"]))
     _set_session_cookie(response, session_token)
     return _session_payload(user)
@@ -580,6 +608,9 @@ def update_user_endpoint(user_id: int, payload: UserUpdate, user: dict[str, Any]
         if not auth.validate_password(payload.password):
             raise HTTPException(status_code=400, detail="Пароль должен быть не короче 8 символов")
         repository.set_user_password(user_id, payload.password)
+        if int(user["id"]) != user_id:
+            # Чужой пароль сменён — под ним мог войти кто угодно: снова через код допуска (#113).
+            admission.revoke(user_id)
     return {"ok": True, "user": _clean(repository.get_user_by_id(user_id))}
 
 
@@ -659,20 +690,20 @@ def list_articles(
         clauses.append("(t.name = %s OR parent.name = %s)")
         params.extend([tag, tag])
     if status:
-        clauses.append("COALESCE(uas.status, 'new') = %s")
+        clauses.append(f"{marks.article_status_sql()} = %s")
         params.append(status)
     elif not changed_only:
         # Пометка «Шум»/«Дубликат» — это «убрать с глаз», и она обязана убирать.
         # Раньше лента не фильтровала статусы вообще, поэтому помеченное продолжало
         # висеть у того, кто его пометил (замер 24.07: 104 таких статьи в ленте).
-        # Фильтр ПЕР-ЮЗЕРНЫЙ: uas приджойнен по текущему пользователю, чужие пометки
-        # ничего не скрывают. Явный фильтр по статусу и вкладка «Со статусом»
+        # Отметка общая (#111): «шум», поставленный одним, прячет статью у всех. Явный
+        # фильтр по статусу и вкладка «Со статусом»
         # (changed_only) по-прежнему показывают помеченное — иначе его не пересмотреть.
         # `archive` добавлен 12.09: он перестал быть пустым счётчиком и означает
         # «отработано, с глаз долой» — в том числе после снятия статьи из дайджеста.
-        clauses.append("COALESCE(uas.status, 'new') NOT IN ('noise', 'duplicate', 'archive')")
+        clauses.append(f"{marks.article_status_sql()} NOT IN ('noise', 'duplicate', 'archive')")
     if changed_only:
-        clauses.append("COALESCE(uas.status, 'new') <> 'new'")
+        clauses.append(f"{marks.article_status_sql()} <> 'new'")
     if language:
         clauses.append("a.language = %s")
         params.append(language)
@@ -703,8 +734,6 @@ def list_articles(
         "score_asc": "COALESCE(sc.total_score, 0) ASC, a.published_at DESC NULLS LAST, a.id DESC",
         "score_desc": "COALESCE(sc.total_score, 0) DESC, a.published_at DESC NULLS LAST, a.id DESC",
     }[sort]
-    # user_id — первый %s (для LEFT JOIN user_article_states), затем where-параметры, затем limit.
-    params.insert(0, int(user["id"]))
     params.append(limit)
 
     with get_connection() as conn:
@@ -715,15 +744,15 @@ def list_articles(
                    a.published_at,
                    a.collected_at, a.text_truncated, s.name AS source_name,
                    COALESCE(c.summary, '') AS summary,
-                   COALESCE(uas.status, 'new') AS status,
+                   {marks.article_status_sql()} AS status,
                    c.relevant, c.relevance_reason,
-                   (COALESCE(uas.status, 'new') = 'digest') AS selected_for_digest,
+                   ({marks.article_status_sql()} = 'digest') AS selected_for_digest,
                    sc.total_score, sc.score_label, sc.explanation AS score_explanation,
                    t.name AS tag_name, parent.name AS parent_tag_name,
                    at.confidence AS tag_confidence, at.rationale AS tag_rationale
             FROM articles a
             JOIN sources s ON s.id = a.source_id
-            LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s
+            {marks.article_mark_join()}
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
@@ -755,7 +784,7 @@ def dashboard_stats(
     фронту открытые месяцы и признак архива «только просмотр».
     """
     window = feed_window.current(month)
-    payload = repository.dashboard_stats(int(user["id"]), window=window)
+    payload = repository.dashboard_stats(window=window)
     payload["window"] = window.describe()
     return _clean(payload)
 
@@ -764,7 +793,7 @@ def dashboard_stats(
 def feed_window_months(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Открытые месяцы ленты и прошлые месяцы для переключателя «Архив» (с числом статей)."""
     window = feed_window.current()
-    archive = repository.feed_archive_months(window, user_id=int(user["id"]))
+    archive = repository.feed_archive_months(window)
     return _clean({**window.describe(), "archive": archive})
 
 
@@ -821,7 +850,7 @@ def create_backlog_task_comment_endpoint(
 
 @app.patch("/api/articles/{article_id}")
 def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    # Статус и выбор в дайджест — ПЕР-ЮЗЕРНЫЕ (#12). selected_for_digest сводится к статусу.
+    # Статус и выбор в дайджест — общая отметка (#111). selected_for_digest сводится к статусу.
     target_status = patch.status
     if target_status is None and patch.selected_for_digest is not None:
         # Снятие из дайджеста ведёт в `archive` (решение владельца 12.09; раньше был
@@ -847,16 +876,15 @@ def update_article(article_id: int, patch: ArticlePatch, user: dict[str, Any] = 
                 "статус и отметку «в дайджест» у статей прошлых месяцев менять нельзя."
             ),
         )
-    previous = repository.get_user_article_status(int(user["id"]), article_id)
-    repository.set_user_article_status(
-        int(user["id"]), article_id, status=target_status, analyst_comment=patch.analyst_comment
+    previous = marks.set_article_mark(
+        article_id, status=target_status, analyst_comment=patch.analyst_comment, user_id=int(user["id"]),
     )
     # Журнал обратной связи. До 12.09 таблица signal_feedback_events была мёртвой:
     # писала в неё ОДНА CLI-команда, которую никто не звал, а боевой путь пометки —
     # вот этот эндпоинт — не писал вовсе. Поэтому на вопрос заказчика «я всё что
     # выделил как шум, он на этом обучился?» честный ответ был «обучаться не на чем».
-    # Старый статус читаем ДО записи: в user_article_states одна строка на пару,
-    # истории переходов там нет, после UPDATE прежнее значение уже не достать.
+    # Прежний статус возвращает сама запись: в отметке одна строка на статью, истории
+    # переходов там нет, после UPDATE прежнее значение уже не достать.
     event = {
         "noise": "marked_noise",
         "duplicate": "marked_duplicate",
@@ -1794,7 +1822,7 @@ def list_signals(
     user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
     _guard_hidden_radar(filters, user)
-    cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset, user_id=int(user["id"]))
+    cards = repository.list_signals(**filters, sort=sort, limit=limit, offset=offset)
     # Ссылки всей страницы — одним запросом (не подключением к базе на карточку).
     evidence = repository.list_radar_evidence([int(row["id"]) for row in cards], limit=evidence_limit)
     # Месяц выпуска карточки закрыт — «В дайджест» и «Убрать» на экране неактивны. Правило то
@@ -1835,7 +1863,7 @@ def signal_radar_summary(
 ) -> dict[str, Any]:
     """Числа над списком радара: всего карточек, сколько в выборке и тематики для фильтра."""
     _guard_hidden_radar(filters, user)
-    summary = repository.signal_radar_summary(user_id=int(user["id"]), **filters)
+    summary = repository.signal_radar_summary(**filters)
     if user.get("role") != "admin":
         # Число отсеянных и скрытых — служебное, как и сами карточки.
         summary.pop("hidden", None)
@@ -1853,7 +1881,7 @@ def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
         raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
 
 
-def _guard_signal_digest_month(user_id: int, signal_id: int, target_status: str | None) -> None:
+def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> None:
     """«В дайджест» и «Убрать» у карточки радара закрытого месяца — отказ (решение владельца
     29.09), как статус статьи из архива ленты: выпуск прошлого месяца — только просмотр.
 
@@ -1865,7 +1893,7 @@ def _guard_signal_digest_month(user_id: int, signal_id: int, target_status: str 
     """
     if target_status is None:
         return
-    state = repository.signal_digest_state(user_id, signal_id)
+    state = marks.signal_digest_state(signal_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Signal not found")
     month, current_status = state
@@ -1889,13 +1917,13 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
         target_status = "digest" if patch.selected_for_digest else "watch"
     if target_status is not None and target_status not in {"watch", "digest", "archive", "noise", "duplicate"}:
         raise HTTPException(status_code=400, detail="Unknown signal status")
-    _guard_signal_digest_month(int(user["id"]), signal_id, target_status)
+    _guard_signal_digest_month(signal_id, target_status)
     try:
-        repository.set_user_signal_status(
-            int(user["id"]),
+        previous = marks.set_signal_mark(
             signal_id,
             status=target_status,
             analyst_comment=patch.analyst_comment,
+            user_id=int(user["id"]),
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Signal not found")
@@ -1908,8 +1936,11 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
             user_id=int(user["id"]),
             comment=patch.analyst_comment,
         )
-    if target_status in {"digest", "watch"} and patch.selected_for_digest is not None:
-        # Выбор в дайджест — «Сильный сигнал» для обучения агента; снятие гасит этот пример.
+    was_selected = previous == "digest"
+    if target_status is not None and (target_status == "digest") != was_selected:
+        # Выбор в дайджест — «Сильный сигнал» для обучения агента, один пример на карточку;
+        # снятие отметки (любым статусом и любым участником) гасит примеры этой карточки.
+        # Учимся на смене отметки, а не на нажатии: повторная «в дайджест» второго примера не даёт.
         # Сбой обучения не должен отменять отметку, которую пользователь уже поставил.
         from oiltech_digest.signal_feedback import learn_from_digest_selection
 
@@ -2036,7 +2067,6 @@ def digest_content(month: str = "", limit: int = Query(100, ge=1, le=500),
             max_score=max_score,
             search=search.strip() or None,
             top_tag=top_tag.strip() or None,
-            user_id=int(user["id"]),
         )
     )
 
@@ -2106,14 +2136,13 @@ def create_monthly_digest(payload: DigestRequest, user: dict[str, Any] = Depends
             max_score=payload.max_score,
             search=payload.search.strip() or None,
             top_tag=payload.top_tag.strip() or None,
-            user_id=int(user["id"]),
         )
     )
 
 
 @app.get("/api/monthly-digests/{month}")
 def get_monthly_digest(month: str, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    digest = repository.get_monthly_digest(month, user_id=int(user["id"]))
+    digest = repository.get_monthly_digest(month)
     if digest is None:
         raise HTTPException(status_code=404, detail="Digest not found")
     return _clean(digest)
@@ -2127,7 +2156,6 @@ def update_monthly_digest(month: str, payload: MonthlyDigestUpdateRequest, user:
         title=payload.title or f"Нефтесервисный дайджест · {month}",
         items=[item.model_dump() for item in payload.items],
         status=payload.status,
-        user_id=int(user["id"]),
     )
     return _clean(saved)
 
@@ -2146,7 +2174,6 @@ def digest_email(month: str = "", limit: int = Query(100, ge=1, le=500),
         max_score=max_score,
         search=search.strip() or None,
         top_tag=top_tag.strip() or None,
-        user_id=int(user["id"]),
     )
     return HTMLResponse(render_digest_email(content))
 
@@ -2207,7 +2234,7 @@ def enqueue_digest_export(payload: DigestExportJobRequest, user: dict[str, Any] 
     decision = network_policy.route_digest_export(payload.export_format)
     job = background_jobs.enqueue(
         "digest_export",
-        {**payload.model_dump(), "user_id": int(user["id"])},  # дайджест пер-юзерный (#12)
+        payload.model_dump(),  # выпуск общий (#111): учётка — только владелец задачи
         user_id=int(user["id"]),
         queue_name=decision.queue_name,
         execution_region=decision.execution_region,
@@ -2361,6 +2388,8 @@ def external_worker_complete(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
+    if job.get("kind") == admission.KIND:
+        admission.settle_notifications()
     return {"ok": True}
 
 
@@ -2471,6 +2500,9 @@ def external_worker_fail(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="Job lease is not active")
+    # Окончательный сбой отправки кода — текст с кодом стирается (повторяемый — остаётся до попытки).
+    if (repository.get_background_job(job_id) or {}).get("kind") == admission.KIND:
+        admission.settle_notifications()
     return {"ok": True}
 
 
@@ -2612,7 +2644,6 @@ def digest_export(
             max_score=max_score,
             search=search.strip() or None,
             top_tag=top_tag.strip() or None,
-            user_id=int(user["id"]),
         )
         repository.finish_export_job(job_id, "ok", result["path"])
     except RuntimeError as exc:  # PDF без Chromium и т.п. — понятное сообщение, не 500
@@ -2864,7 +2895,8 @@ def _job_payload(row: dict[str, Any]) -> dict[str, Any]:
         "progress": float(row.get("progress") or 0),
         "attempts": int(row.get("attempts") or 0),
         "max_attempts": int(row.get("max_attempts") or 0),
-        "payload": _clean(row.get("payload_json") or {}),
+        "payload": _clean(admission.without_text(row.get("payload_json") or {})
+                          if row.get("kind") == admission.KIND else row.get("payload_json") or {}),
         "result": _clean(row.get("result_json") or {}),
         "error": row.get("error_message"),
         "run_after": _clean(row.get("run_after")),

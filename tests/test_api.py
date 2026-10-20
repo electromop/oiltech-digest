@@ -14,7 +14,7 @@ def _freeze_inside_month(monkeypatch, month: str) -> None:
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(year, number, 15, 12, 0, tzinfo=feed_window.MSK))
 
 
-def _signal_of_the_current_month(user_id: int, signal_id: int) -> tuple[str, None]:
+def _signal_of_the_current_month(signal_id: int) -> tuple[str, None]:
     """Карточка радара поступила в текущем месяце и ещё не отмечена: «В дайджест» открыт.
 
     С 29.09 PATCH /api/signals/{id} читает из базы месяц и статус карточки: в закрытом
@@ -195,14 +195,14 @@ def test_signal_feedback_endpoint_accepts_structured_feedback_without_comment(mo
 def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "admin"}
-    monkeypatch.setattr(api.repository, "signal_digest_state", _signal_of_the_current_month)
+    monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)
 
     captured = {}
     events = []
     monkeypatch.setattr(
-        api.repository,
-        "set_user_signal_status",
-        lambda user_id, signal_id, **kwargs: captured.update({"user_id": user_id, "signal_id": signal_id, **kwargs}),
+        api.marks,
+        "set_signal_mark",
+        lambda signal_id, **kwargs: captured.update({"signal_id": signal_id, **kwargs}),
     )
     monkeypatch.setattr(
         api.repository,
@@ -224,6 +224,7 @@ def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+    # Отметка общая (#111); учётка — последний поставивший.
     assert captured == {"user_id": 3, "signal_id": 7, "status": "digest", "analyst_comment": "Берём в выпуск"}
     assert events[0][1]["signal_id"] == 7
     assert events[0][1]["user_id"] == 3
@@ -234,8 +235,9 @@ def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
 def test_signal_patch_unselect_retracts_digest_example(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
-    monkeypatch.setattr(api.repository, "signal_digest_state", _signal_of_the_current_month)
-    monkeypatch.setattr(api.repository, "set_user_signal_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)
+    # Карточка была «в дайджест»: снятие меняет отметку и гасит пример.
+    monkeypatch.setattr(api.marks, "set_signal_mark", lambda *args, **kwargs: "digest")
     learned = []
     from oiltech_digest import signal_feedback
 
@@ -256,9 +258,9 @@ def test_signal_patch_unselect_retracts_digest_example(monkeypatch):
 def test_signal_patch_keeps_status_when_learning_fails(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
-    monkeypatch.setattr(api.repository, "signal_digest_state", _signal_of_the_current_month)
+    monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)
     saved = []
-    monkeypatch.setattr(api.repository, "set_user_signal_status", lambda *args, **kwargs: saved.append(kwargs))
+    monkeypatch.setattr(api.marks, "set_signal_mark", lambda *args, **kwargs: saved.append(kwargs))
     monkeypatch.setattr(api.repository, "record_signal_feedback_event", lambda *args, **kwargs: 5)
     from oiltech_digest import signal_feedback
 
@@ -1217,7 +1219,7 @@ def test_create_monthly_digest_endpoint(monkeypatch):
         "max_score": 90.0,
         "search": "drilling",
         "top_tag": "Бурение",
-        "user_id": 1,
+        "user_id": None,  # выпуск общий (#111): учётка в сборку не передаётся
     }
 
 
@@ -1247,7 +1249,7 @@ def test_digest_content_endpoint_passes_filters(monkeypatch):
         "max_score": 88.0,
         "search": "drilling",
         "top_tag": "Бурение",
-        "user_id": 1,
+        "user_id": None,  # выпуск общий (#111): учётка в сборку не передаётся
     }
 
 
@@ -1285,7 +1287,7 @@ def test_update_monthly_digest_endpoint(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "id": 12,
-        "user_id": 1,
+        "user_id": None,
         "month": "2026-06",
         "title": "Digest 2026-06",
         "status": "draft",
@@ -1295,7 +1297,7 @@ def test_update_monthly_digest_endpoint(monkeypatch):
         "month": "2026-06",
         "title": "Digest 2026-06",
         "status": "draft",
-        "user_id": 1,
+        "user_id": None,  # черновик один на месяц (#111)
         "items": [
             {"article_id": 42, "section": "Технологии / Бурение", "editor_note": "First"},
             {"article_id": 43, "section": "Рынок / ОФС", "editor_note": "Second"},
@@ -1303,7 +1305,7 @@ def test_update_monthly_digest_endpoint(monkeypatch):
     }
 
 
-def test_get_monthly_digest_endpoint_scopes_to_user(monkeypatch):
+def test_get_monthly_digest_endpoint_reads_the_shared_draft(monkeypatch):
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 7, "email": "test@example.com", "role": "user"}
     captured = {}
@@ -1327,8 +1329,8 @@ def test_get_monthly_digest_endpoint_scopes_to_user(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert captured == {"month": "2026-06", "user_id": 7}
-    assert response.json()["user_id"] == 7
+    # Черновик один на месяц (#111): учётка вошедшего в чтение не передаётся.
+    assert captured == {"month": "2026-06", "user_id": None}
 
 
 def test_update_monthly_digest_endpoint_allows_empty_issue(monkeypatch):
@@ -1360,7 +1362,7 @@ def test_update_monthly_digest_endpoint_allows_empty_issue(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "id": 13,
-        "user_id": 1,
+        "user_id": None,
         "month": "2026-07",
         "title": "Digest 2026-07",
         "status": "draft",
@@ -1370,7 +1372,7 @@ def test_update_monthly_digest_endpoint_allows_empty_issue(monkeypatch):
         "month": "2026-07",
         "title": "Digest 2026-07",
         "status": "draft",
-        "user_id": 1,
+        "user_id": None,
         "items": [],
     }
 
@@ -1582,9 +1584,10 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
         assert fragment in articles_sql, f"поиск обязан покрывать {fragment}"
     assert "s.name = %s" in articles_sql
     assert "(t.name = %s OR parent.name = %s)" in articles_sql
-    assert "user_article_states uas ON uas.article_id = a.id AND uas.user_id = %s" in articles_sql  # пер-юзерный статус (#12)
-    assert "COALESCE(uas.status, 'new') = %s" in articles_sql
-    assert "COALESCE(uas.status, 'new') <> 'new'" in articles_sql
+    # Отметка общая (#111): без условия на учётку.
+    assert "LEFT JOIN article_marks am ON am.article_id = a.id\n" in articles_sql
+    assert "COALESCE(am.status, 'new') = %s" in articles_sql
+    assert "COALESCE(am.status, 'new') <> 'new'" in articles_sql
     assert "a.language = %s" in articles_sql
     # min_score применяется ТОЛЬКО к уже оценённым: у неоценённых балла нет, и COALESCE(...,0)
     # выдавал бы их за 0, отсекая свежий приток порогом (лента выглядела замороженной).
@@ -1592,9 +1595,9 @@ def test_list_articles_applies_filters_and_score_items(monkeypatch):
     assert "COALESCE(sc.total_score, 0) <= %s" in articles_sql
     assert "COALESCE(a.published_at::date, a.collected_at::date) >= %s" in articles_sql
     assert "COALESCE(a.published_at::date, a.collected_at::date) <= %s" in articles_sql
-    # user_id — первый параметр (LEFT JOIN), затем фильтры, затем limit.
+    # Фильтры, затем limit; учётки в параметрах нет.
     assert "ORDER BY a.published_at DESC NULLS LAST" in articles_sql
-    assert articles_params == [1, "%drilling%", "World Oil", "Бурение", "Бурение", "digest", "en", 80.0, 95.0, "2026-06-01", "2026-06-30", 25]
+    assert articles_params == ["%drilling%", "World Oil", "Бурение", "Бурение", "digest", "en", 80.0, 95.0, "2026-06-01", "2026-06-30", 25]
 
 
 def test_update_source_persists_non_rss_scraper_fields(monkeypatch):
@@ -1780,6 +1783,8 @@ def test_auth_register_login_me_and_logout(monkeypatch):
     monkeypatch.setattr(api.repository, "create_user_session", lambda user_id: f"session-{user_id}")
     monkeypatch.setattr(api.repository, "get_user_by_session", lambda token: sessions.get(token))
     monkeypatch.setattr(api.repository, "delete_user_session", lambda token: sessions.pop(token, None))
+    # Учётка допущена: шаг кода допуска (#113) проверяет tests/test_admission.py.
+    monkeypatch.setattr(api.admission, "is_admitted", lambda user_id: True)
 
     client = TestClient(app)
     register_response = client.post("/api/auth/register", json={"email": " USER@example.com ", "password": "12345678"})
@@ -1864,8 +1869,8 @@ def test_enqueue_digest_export_endpoint(monkeypatch):
             "max_score": 95.0,
             "search": "drilling",
             "top_tag": "Бурение",
-            "user_id": 1,
         },
+        # Выпуск общий (#111): учётки в задании нет, она — только владелец задачи.
         "kwargs": {"user_id": 1, "queue_name": "playwright", "execution_region": "ru", "capability": "playwright"},
     }
     assert response.json()["job"]["status"] == "queued"
