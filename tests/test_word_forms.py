@@ -33,6 +33,9 @@ CASES = [
     ("Petroleum Development Oman (PDO)", "Pipeline Development Organization (PDO)", False),
     # Русское слово — в любом падеже.
     ("Роснефтью", "Роснефть", True),
+    # Вид апострофа — не различие: буква-апостроф (ʻ U+02BB, ʿ U+02BF) делит слово, как ‘ и ’ (замер 21.10).
+    ("O‘zbekneftgaz", "Oʻzbekneftgaz", True),
+    ("Maʿaden", "Ma’aden", True),
     # Компания — целиком: «Газпром» не «Газпром нефть», дочка не мать.
     ("Газпром", "Газпром нефть", False),
     # Любая другая скобка — пояснение, в имя не входит.
@@ -138,6 +141,20 @@ def test_quote_names_the_company_under_any_of_its_spellings():
         {"name": "Petroleum Development Oman (PDO)", "quote": "PDO signed a contract", "verified": True},
         {"name": "FleetRabbit (поставщик)", "quote": "FleetRabbit offers fleet software", "verified": True},
     ]
+
+
+def test_apostrophe_divides_a_word_so_a_possessive_still_names_the_company():
+    # Апостроф любого вида делит слово, а не склеивает его: «Shell’s» и «Shellʼs» называют Shell.
+    for quote in ("Shell’s unit signed a contract", "Shellʼs unit signed a contract"):
+        assert [item["name"] for item in _kept(f"{quote}.", [{"name": "Shell", "quote": quote}])] == ["Shell"], quote
+
+
+def test_quote_names_the_company_whatever_apostrophe_the_model_typed():
+    # Апостроф модель переписывает на свой лад, как кавычки и тире: цитата с ‘ находится в тексте с ʻ.
+    text = "Oʻzbekneftgaz signed a contract with Halliburton."
+    participants = _kept(text, [{"name": "O‘zbekneftgaz", "quote": "O‘zbekneftgaz signed a contract"}])
+
+    assert [item["name"] for item in participants] == ["O‘zbekneftgaz"]
 
 
 def test_company_from_the_dictionary_is_written_under_its_dictionary_name():
