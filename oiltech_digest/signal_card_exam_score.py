@@ -239,8 +239,8 @@ def _company_tally(items, finals, names, lenient) -> dict[str, Any]:
 # --- Имена компаний ------------------------------------------------------------------------------
 
 def text_tokens(text: str, *, keep_case: bool = False) -> list[str]:
-    """Слова имени или текста — те же, что сверяет ядро (word_forms.words): без различий «ё», дефисов, кавычек
-    («КТК‑Р» — это «КТК-Р») и, кроме keep_case, регистра."""
+    """Слова имени или текста — те же, что сверяет ядро (word_forms.words): без различий «ё», дефисов, кавычек,
+    вида апострофа («КТК‑Р» — это «КТК-Р») и, кроме keep_case, регистра."""
     return [word if keep_case else word.casefold() for word in words(text)]
 
 
