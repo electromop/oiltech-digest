@@ -1,5 +1,6 @@
 """Бот «Материалы коллег» (NL) с подставными Telegram и ядром: шаги, свой цикл у каждого, отправка."""
 
+import html
 from pathlib import Path
 import re
 
@@ -20,9 +21,13 @@ class FakeTelegram:
         self.next_id = 1000
         self.members = {}
         self.files = {}
+        self.fail_next_send = None  # ошибка, которой ответит следующий sendMessage (лимит Telegram и т. п.)
 
     def call(self, method, http_timeout=30, **params):
         self.calls.append((method, params))
+        if method == "sendMessage" and self.fail_next_send:
+            error, self.fail_next_send = self.fail_next_send, None
+            raise error
         if method == "sendMessage":
             self.next_id += 1
             return {"message_id": self.next_id, "chat": {"id": params["chat_id"]}}
@@ -50,6 +55,7 @@ class FakeCore:
     def __init__(self):
         self.saved = []
         self.error = None
+        self.history_rows = []
 
     def save(self, material, file):
         if self.error:
@@ -57,8 +63,8 @@ class FakeCore:
         self.saved.append((material, file))
         return {"id": 12}
 
-    def recent(self, tg_user_id, limit=5):
-        return [{"id": 12, "kind": "link", "title": "Сделка", "verdict_label": "Наблюдать — рано", "created_at": "2026-10-19T10:00:00"}]
+    def history(self, tg_user_id, limit=10, offset=0):
+        return self.history_rows[offset:offset + limit], len(self.history_rows)
 
 
 class Clock:
@@ -112,18 +118,25 @@ def answer(bot, tg, uid, text=None, **extra):
 
 
 def walk_event(bot, tg, uid=1):
-    say(bot, uid, "/add@oiltech_materials_bot")
+    """Ввод события целиком; возвращает номера сообщений автора (/add и ответы)."""
+    sent = [say(bot, uid, "/add@oiltech_materials_bot")]
     press(bot, tg, uid, f"m:{uid}:kind:event")
-    answer(bot, tg, uid, "Татнефть выбрала подрядчика по ГРП")
-    answer(bot, tg, uid, "Итог тендера: три года, объём вырос на 20 % — конкурент взял объём.")
-    answer(bot, tg, uid, "Татнефть, ТаграС")
+    sent.append(answer(bot, tg, uid, "Татнефть выбрала подрядчика по ГРП"))
+    sent.append(answer(bot, tg, uid, "Итог тендера: три года, объём вырос на 20 % — конкурент взял объём."))
+    sent.append(answer(bot, tg, uid, "Татнефть, ТаграС"))
     press(bot, tg, uid, f"m:{uid}:verdict:watch_later")
-    answer(bot, tg, uid, "-")
+    sent.append(answer(bot, tg, uid, "-"))
+    return [message["message_id"] for message in sent]
+
+
+def deleted(tg):
+    return {params["message_id"] for method, params in tg.calls if method == "deleteMessage"}
 
 
 def test_event_walkthrough_submits_and_leaves_only_final_card(env):
     bot, tg, core, _ = env
-    walk_event(bot, tg)
+    first_bot_message = tg.next_id + 1
+    user_messages = walk_event(bot, tg)
     card = tg.last()
     assert "Проверьте карточку" in card["text"] and "Наблюдать — рано, нужен следующий этап" in card["text"]
 
@@ -136,8 +149,8 @@ def test_event_walkthrough_submits_and_leaves_only_final_card(env):
     assert (material["tg_chat_id"], material["tg_message_id"], material["tg_user_id"]) == (GROUP, tg.next_id, 1)
     edits = [p for m, p in tg.calls if m == "editMessageText"]
     assert "Материал №12 принят на платформу" in edits[0]["text"]
-    deleted = {p["message_id"] for m, p in tg.calls if m == "deleteMessage"}
-    assert tg.next_id not in deleted and len(deleted) == 6  # шесть вопросов стёрты, итоговая карточка — нет
+    # После записи в группе остаётся только итоговая карточка: вопросы бота, /add и ответы автора стёрты.
+    assert deleted(tg) == set(range(first_bot_message, tg.next_id)) | set(user_messages)
     assert bot.dialogs == {}
 
 
@@ -205,8 +218,8 @@ def test_file_with_caption_takes_title_and_is_uploaded(env):
     tg.files["F1"] = b"%PDF"
     say(bot, 1, "/add")
     press(bot, tg, 1, "m:1:kind:file")
-    answer(bot, tg, 1, document={"file_id": "F1", "file_name": "Обзор рынка ГРП.pdf", "file_size": 4},
-           caption="Обзор рынка ГРП за 9 месяцев")
+    file_message = answer(bot, tg, 1, document={"file_id": "F1", "file_name": "Обзор рынка ГРП.pdf", "file_size": 4},
+                          caption="Обзор рынка ГРП за 9 месяцев")
     assert bot.dialogs[(GROUP, 1)].step == "description"
     answer(bot, tg, 1, "Рынок ГРП вырос, у независимых подрядчиков доля 40 %, ценовое давление.")
     answer(bot, tg, 1, "-")
@@ -218,6 +231,22 @@ def test_file_with_caption_takes_title_and_is_uploaded(env):
     assert file == ("Обзор рынка ГРП.pdf", b"%PDF")
     assert material["title"] == "Обзор рынка ГРП за 9 месяцев" and material["companies"] == []
     assert material["verdict_comment"] == "Пригодится для дайджеста"
+    # Сообщение с файлом остаётся в группе: коллеги открывают файл там, итоговая карточка — ответ на него.
+    assert file_message["message_id"] not in deleted(tg)
+    final = next(params for method, params in tg.calls if method == "sendMessage" and "Проверьте карточку" in params["text"])
+    assert final["reply_parameters"]["message_id"] == file_message["message_id"]
+
+
+def test_cancel_clears_the_whole_input(env):
+    bot, tg, _, _ = env
+    added = say(bot, 1, "/add")
+    press(bot, tg, 1, "m:1:kind:event")
+    title = answer(bot, tg, 1, "Заголовок материала про сделку")
+
+    press(bot, tg, 1, "m:1:cancel:")
+
+    assert {added["message_id"], title["message_id"]} <= deleted(tg)
+    assert bot.dialogs == {}
 
 
 def test_too_big_file_is_refused_before_download(env):
@@ -242,6 +271,36 @@ def test_core_failure_keeps_dialog_for_retry(env):
     core.error = None
     press(bot, tg, 1, "m:1:send:", message_id=bot.dialogs[(GROUP, 1)].card_id)
     assert len(core.saved) == 1 and bot.dialogs == {}
+
+
+def test_unexpected_error_does_not_stop_the_bot_and_tells_the_author(env):
+    """Ошибка не от Telegram не роняет процесс: иначе Telegram пришлёт то же обновление после перезапуска
+    и бот уйдёт в петлю перезапусков."""
+    bot, tg, core, _ = env
+    walk_event(bot, tg)
+    core.error = KeyError("material")  # ответ ядра не той формы — не CoreError
+
+    press(bot, tg, 1, "m:1:send:", message_id=tg.next_id)
+
+    assert "что-то пошло не так" in tg.acks()[-1]["text"].lower()
+    assert (GROUP, 1) in bot.dialogs  # ввод цел: можно нажать «Отправить» ещё раз
+
+
+def test_question_not_sent_keeps_step_so_the_answer_can_be_repeated(env):
+    """Telegram не принял следующий вопрос (лимит сообщений в группе): шаг не сдвигается, и тот же ответ
+    на тот же вопрос, отправленный ещё раз, ведёт дальше."""
+    bot, tg, _, _ = env
+    say(bot, 1, "/add")
+    press(bot, tg, 1, "m:1:kind:event")
+    title_prompt = prompt_id(tg)
+    tg.fail_next_send = TelegramError("Telegram sendMessage: 429 Too Many Requests: retry after 3")
+
+    say(bot, 1, "Татнефть выбрала подрядчика по ГРП", reply_to=title_prompt)
+
+    dialog = bot.dialogs[(GROUP, 1)]
+    assert (dialog.step, dialog.prompt_id) == ("title", title_prompt)
+    say(bot, 1, "Татнефть выбрала подрядчика по ГРП", reply_to=title_prompt)
+    assert bot.dialogs[(GROUP, 1)].step == "description"
 
 
 def test_double_press_after_success_does_not_resend(env):
@@ -291,6 +350,71 @@ def test_private_chat_needs_no_reply(env):
     assert "force_reply" in tg.last()["reply_markup"]
 
 
+def test_private_material_card_is_posted_to_the_group(env):
+    """Материал, внесённый в личке, группа тоже видит: итоговая карточка уходит и туда, без кнопок."""
+    bot, tg, core, _ = env
+    tg.members[6] = "member"
+    say(bot, 6, "/add", chat=6)
+    press(bot, tg, 6, "m:6:kind:event", chat=6)
+    say(bot, 6, "Газпром нефть заключила контракт на ГРП", chat=6)
+    say(bot, 6, "Контракт на три года, объём работ вырос на четверть.", chat=6)
+    say(bot, 6, "-", chat=6)
+    press(bot, tg, 6, "m:6:verdict:approved", chat=6)
+    say(bot, 6, "-", chat=6)
+
+    press(bot, tg, 6, "m:6:send:", chat=6, message_id=tg.next_id)
+
+    to_group = [params for params in tg.sent() if params["chat_id"] == GROUP]
+    assert len(core.saved) == 1 and len(to_group) == 1
+    assert "Материал №12 принят на платформу" in to_group[0]["text"] and to_group[0].get("reply_markup") is None
+
+
+def _history_rows(count):
+    return [{"id": n, "kind": "link", "title": f"Материал {n}", "verdict": "approved", "status": "accepted",
+             "status_label": "Принят на платформу", "created_at": "2026-10-20T10:00:00"} for n in range(count, 0, -1)]
+
+
+def test_history_shows_own_materials_with_status_and_pages(env):
+    bot, tg, core, clock = env
+    core.history_rows = _history_rows(12)
+
+    say(bot, 1, "/history")
+
+    reply_id, page = tg.next_id, tg.last()
+    assert "История загрузок" in page["text"] and "всего 12" in page["text"]
+    assert "№12" in page["text"] and "№3" in page["text"] and "№2" not in page["text"]
+    assert "Полезный сигнал" in page["text"] and "Принят на платформу" in page["text"]
+    assert page["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "m:1:history:10"
+
+    press(bot, tg, 1, "m:1:history:10", message_id=reply_id)
+
+    edit = [params for method, params in tg.calls if method == "editMessageText"][-1]
+    assert edit["message_id"] == reply_id and "№2" in edit["text"] and "№1" in edit["text"]
+    assert edit["reply_markup"] == {"inline_keyboard": []}
+
+
+def test_history_in_group_disappears_after_two_minutes(env):
+    """В группе история не засоряет ленту: команда и ответ стираются через 2 минуты; в личке остаются."""
+    bot, tg, core, clock = env
+    core.history_rows = _history_rows(1)
+    command = say(bot, 1, "/my")  # прежняя команда: та же история
+    reply_id = tg.next_id
+    assert "История загрузок" in tg.last()["text"]
+
+    clock.now += 110
+    bot.tick()
+    assert command["message_id"] not in deleted(tg)
+    clock.now += 15
+    bot.tick()
+    assert {command["message_id"], reply_id} <= deleted(tg)
+
+    tg.members[6] = "member"
+    private = say(bot, 6, "/history", chat=6)
+    clock.now += 300
+    bot.tick()
+    assert private["message_id"] not in deleted(tg)
+
+
 def test_command_for_another_bot_is_ignored(env):
     bot, tg, _, _ = env
     say(bot, 1, "/add@other_bot")
@@ -320,3 +444,18 @@ def test_card_is_html_escaped():
     text = bot_module.card_text({"kind": "link", "title": "<b>x</b>", "description": "a & b", "url": "https://e.x/?a=1&b=2",
                                  "verdict": "approved"}, author="<script>", header="Проверьте карточку")
     assert "<b>x</b>" not in text and "&lt;b&gt;x&lt;/b&gt;" in text and "&lt;script&gt;" in text
+
+
+def test_long_card_fits_telegram_message_limit():
+    """Сообщение Telegram — до 4096 знаков после разбора HTML, в единицах UTF-16. Карточка с полями по
+    максимуму туда не влезала: Telegram её не принимал, и ввод висел без объяснения."""
+    data = {"kind": "link", "title": "з" * cm.TITLE_MAX, "description": "о" * cm.DESCRIPTION_MAX,
+            "url": "https://example.com/" + "a" * (cm.URL_MAX - 20),
+            "companies": [f"Компания {i} " + "к" * 80 for i in range(cm.COMPANIES_MAX)],
+            "verdict": "approved", "verdict_comment": "м" * cm.COMMENT_MAX}
+
+    text = bot_module.card_text(data, author="Иван Петров", header="Проверьте карточку")
+
+    plain = html.unescape(re.sub(r"<[^>]+>", "", text))
+    assert len(plain.encode("utf-16-le")) // 2 <= 4096
+    assert "о" * 1500 in plain  # описание урезано, но не выброшено

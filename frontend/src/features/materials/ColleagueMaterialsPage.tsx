@@ -149,6 +149,7 @@ export function ColleagueMaterialsPage({ onUnauthorized, showToast }: Props) {
               <div className="materialCardTop">
                 <span className="badge">{KIND_ICONS[item.kind] ?? "•"} {item.kind_label}</span>
                 <span className={`materialVerdict ${VERDICT_TONE[item.verdict] ?? "low"}`}>{item.verdict_label}</span>
+                <span className="badge">{item.status_label}</span>
                 <span className="metaText">№{item.id} · {formatMoment(item.created_at)}</span>
               </div>
               <h3>{item.title}</h3>

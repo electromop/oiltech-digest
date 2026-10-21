@@ -44,13 +44,20 @@ _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
 _POLL_SECONDS = 50
 _HELLO_EVERY_SECONDS = 300
 _MEMBER_CACHE_SECONDS = 600
-_CARD_DESCRIPTION_MAX = 2500  # сообщение Telegram — до 4096 символов вместе с остальными полями
+_HISTORY_PAGE = 10
+# В группе /history и ответ на неё стираются через столько секунд: лента группы — для материалов.
+_GROUP_REPLY_SECONDS = 120
+_CARD_DESCRIPTION_MAX = 2500
+# Сообщение Telegram — до 4096 знаков после разбора HTML, в единицах UTF-16. В карточке на показ ссылка,
+# компании и комментарий урезаются, описание получает остаток; полный текст — на платформе.
+_TELEGRAM_TEXT_MAX = 4096
+_CARD_URL_SHOWN, _CARD_COMPANIES_SHOWN, _CARD_COMMENT_SHOWN = 300, 600, 600
 
 KIND_ICONS = {"link": "🔗", "file": "📎", "event": "📰"}
 
 COMMANDS = [
     ("add", "Внести материал"),
-    ("my", "Мои последние материалы"),
+    ("history", "История и статус моих материалов"),
     ("cancel", "Отменить ввод"),
     ("help", "Формат и шкала оценки"),
 ]
@@ -91,7 +98,7 @@ HELP = (
     "7. Комментарий к оценке — можно пропустить\n"
     "Перед отправкой бот покажет карточку целиком.\n\n"
     "<b>Шкала оценки</b> (та же, что на платформе)\n{verdicts}\n\n"
-    "/my — ваши последние материалы · /cancel — отменить ввод"
+    "/history: история и статус ваших материалов · /cancel: отменить ввод"
 )
 
 
@@ -191,11 +198,13 @@ class CoreClient:
         retryable = response.status_code >= 500 or response.status_code in {401, 408, 429}
         raise CoreError(detail or f"платформа ответила {response.status_code}", retryable=retryable)
 
-    def recent(self, tg_user_id: int, limit: int = 5) -> list[dict[str, Any]]:
+    def history(self, tg_user_id: int, limit: int = 10, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+        """Материалы автора, новые первыми, и сколько их всего; ядро старее бота total не отдаёт — тогда счёт по странице."""
         response = self.session.get(f"{self.url}/api/external-worker/materials",
-                                    params={"tg_user_id": tg_user_id, "limit": limit}, timeout=20)
+                                    params={"tg_user_id": tg_user_id, "limit": limit, "offset": offset}, timeout=20)
         response.raise_for_status()
-        return response.json()["materials"]
+        body = response.json()
+        return body["materials"], int(body.get("total", len(body["materials"])))
 
 
 @dataclass
@@ -209,6 +218,7 @@ class Dialog:
     data: dict[str, Any] = field(default_factory=dict)
     prompt_id: int | None = None      # вопрос, на который ждём ответ
     bot_messages: list[int] = field(default_factory=list)  # что стереть после отправки
+    user_messages: list[int] = field(default_factory=list)  # /add и ответы автора: тоже стираются
     card_id: int | None = None
     touched: float = field(default_factory=time.monotonic)
 
@@ -226,29 +236,57 @@ def _size(value: int | None) -> str:
     return f"{value / 1024 / 1024:.1f} МБ".replace(".", ",")
 
 
+def _clip(value: str, limit: int) -> str:
+    return value if len(value) <= limit else value[:limit].rstrip() + "…"
+
+
+def _visible_len(text: str) -> int:
+    """Длина так, как её считает Telegram: текст после разбора HTML, в единицах UTF-16."""
+    return len(html.unescape(re.sub(r"<[^>]+>", "", text)).encode("utf-16-le")) // 2
+
+
 def card_text(data: dict[str, Any], *, author: str, header: str, when: datetime | None = None) -> str:
     """Карточка материала: и на проверку автору, и итоговая в группе."""
     esc = html.escape
     kind = data.get("kind") or "event"
-    description = str(data.get("description") or "")
-    if len(description) > _CARD_DESCRIPTION_MAX:
-        description = description[:_CARD_DESCRIPTION_MAX].rstrip() + "…"
-    lines = [f"{KIND_ICONS.get(kind, '•')} <b>{esc(header)}</b> · {esc(cm.KINDS.get(kind, kind))}", ""]
-    lines.append(f"<b>{esc(str(data.get('title') or '—'))}</b>")
-    lines += ["", esc(description) or "—", ""]
+    head = [f"{KIND_ICONS.get(kind, '•')} <b>{esc(header)}</b> · {esc(cm.KINDS.get(kind, kind))}", "",
+            f"<b>{esc(str(data.get('title') or '—'))}</b>", ""]
+    tail = [""]
     if data.get("url"):
-        lines.append(f"🔗 {esc(data['url'])}")
+        tail.append(f"🔗 {esc(_clip(str(data['url']), _CARD_URL_SHOWN))}")
     if data.get("file_name"):
         size = _size(data.get("file_size"))
-        lines.append(f"📎 {esc(data['file_name'])}" + (f" · {size}" if size else ""))
-    companies = data.get("companies") or []
-    lines.append(f"🏢 Компании: {esc(', '.join(companies)) if companies else '—'}")
+        tail.append(f"📎 {esc(data['file_name'])}" + (f" · {size}" if size else ""))
+    companies = _clip(", ".join(data.get("companies") or []), _CARD_COMPANIES_SHOWN)
+    tail.append(f"🏢 Компании: {esc(companies) if companies else '—'}")
     verdict = cm.VERDICT_LABELS.get(str(data.get("verdict") or ""), "—")
-    lines.append(f"⭐ Оценка: <b>{esc(verdict)}</b>")
+    tail.append(f"⭐ Оценка: <b>{esc(verdict)}</b>")
     if data.get("verdict_comment"):
-        lines.append(f"💬 {esc(data['verdict_comment'])}")
+        tail.append(f"💬 {esc(_clip(str(data['verdict_comment']), _CARD_COMMENT_SHOWN))}")
     stamp = (when or datetime.now(_MSK)).astimezone(_MSK).strftime("%d.%m.%Y %H:%M")
-    lines.append(f"👤 {esc(author)} · {stamp} МСК")
+    tail.append(f"👤 {esc(author)} · {stamp} МСК")
+    # Описание получает, что осталось от предела сообщения, с запасом на знак обрезки и перевод строки.
+    room = _TELEGRAM_TEXT_MAX - 8 - _visible_len("\n".join(head + tail))
+    description = _clip(str(data.get("description") or ""), max(0, min(_CARD_DESCRIPTION_MAX, room)))
+    return "\n".join([*head, esc(description) or "—", *tail])
+
+
+def history_text(rows: list[dict[str, Any]], total: int, offset: int = 0) -> str:
+    """Страница истории: номер, дата, заголовок, оценка автора (коротко) и статус материала."""
+    if not total:
+        return "Ваших материалов пока нет. Внести первый: /add."
+    shorts = {value: short for value, short, _full in cm.VERDICTS}
+    lines = [f"📋 <b>История загрузок</b> · всего {total}", ""]
+    for row in rows:
+        when = str(row.get("created_at") or "")[:10]
+        day = ".".join(reversed(when.split("-"))) if when else ""
+        verdict = shorts.get(str(row.get("verdict") or ""), str(row.get("verdict_label") or ""))
+        status = str(row.get("status_label") or "Принят на платформу")
+        lines.append(f"{KIND_ICONS.get(row.get('kind'), '•')} №{row['id']} · {html.escape(day)} · "
+                     f"<b>{html.escape(str(row.get('title') or ''))}</b>")
+        lines.append(f"     ⭐ {html.escape(verdict)} · {html.escape(status)}")
+    if total > len(rows):
+        lines += ["", f"Показаны с {offset + 1} по {offset + len(rows)}."]
     return "\n".join(lines)
 
 
@@ -267,6 +305,7 @@ class MaterialsBot:
         self.dialogs: dict[tuple[int, int], Dialog] = {}
         self.username = ""
         self._members: dict[int, tuple[bool, float]] = {}
+        self._later: list[tuple[float, int, int]] = []  # (когда, чат, сообщение): стереть позже, tick()
 
     # --- вход ---------------------------------------------------------------------------------
 
@@ -278,6 +317,23 @@ class MaterialsBot:
                 self._on_message(update["message"])
         except TelegramError as exc:
             logger.warning("tg_materials_update_failed update=%s error=%s", update.get("update_id"), exc)
+        except Exception:  # noqa: BLE001 - упавший процесс получил бы это обновление снова: петля перезапусков
+            logger.exception("tg_materials_update_crashed update=%s", update.get("update_id"))
+            self._tell_crash(update)
+
+    def _tell_crash(self, update: dict[str, Any]) -> None:
+        """Автор не остаётся в тишине: кнопке — всплывающий ответ, сообщению — короткий ответ в тот же чат."""
+        text = "Что-то пошло не так. Попробуйте ещё раз или начните заново: /add."
+        try:
+            if "callback_query" in update:
+                self._ack(update["callback_query"], text, alert=True)
+            else:
+                message = update.get("message") or {}
+                chat = message.get("chat") or {}
+                if chat.get("id") is not None:
+                    self._send(chat["id"], text, reply_to=message.get("message_id"))
+        except Exception:  # noqa: BLE001 - сообщить об ошибке — по возможности, не ценой второго падения
+            logger.warning("tg_materials_crash_notice_failed update=%s", update.get("update_id"))
 
     def _allowed(self, chat: dict[str, Any], user: dict[str, Any]) -> bool:
         if chat.get("type") == "private":
@@ -331,8 +387,8 @@ class MaterialsBot:
         if command == "cancel":
             self._cancel(key, message)
             return
-        if command == "my":
-            self._my(chat, user, message)
+        if command in {"history", "my"}:
+            self._history(chat, user, message)
             return
         if command:
             return
@@ -358,7 +414,9 @@ class MaterialsBot:
 
     # --- шаги ---------------------------------------------------------------------------------
 
-    def _start(self, chat: dict[str, Any], user: dict[str, Any], message: dict[str, Any]) -> None:
+    def _start(self, chat: dict[str, Any], user: dict[str, Any], message: dict[str, Any], *,
+               own: bool = True) -> None:
+        """own — /add самого автора (стирается вместе с вводом); «Заново» начинает без нового сообщения."""
         key = (int(chat["id"]), int(user["id"]))
         previous = self.dialogs.pop(key, None)
         if previous:
@@ -369,6 +427,8 @@ class MaterialsBot:
         # На это сообщение автора бот отвечает вопросами: ForceReply с selective показывается
         # тому, на чьё сообщение ответ, и тем, кто упомянут, — остальным в группе нет.
         dialog.data["_last_user_message"] = message.get("message_id")
+        if own and message.get("message_id"):
+            dialog.user_messages.append(int(message["message_id"]))
         self.dialogs[key] = dialog
         buttons = [[_button(f"{KIND_ICONS[kind]} {label}", f"m:{dialog.user_id}:kind:{kind}")]
                    for kind, label in cm.KINDS.items()]
@@ -386,7 +446,8 @@ class MaterialsBot:
         return f'<a href="tg://user?id={dialog.user_id}">{html.escape(dialog.author)}</a>, '
 
     def _ask(self, dialog: Dialog, step: str, *, note: str = "") -> None:
-        dialog.step = step
+        # Шаг сдвигается только после того, как Telegram принял вопрос: при сбое (лимит сообщений в
+        # группе) диалог остаётся на прежнем вопросе, и тот же ответ, отправленный ещё раз, ведёт дальше.
         prompt_key = "description_event" if step == "description" and dialog.data.get("kind") == "event" else step
         text, placeholder = STEP_PROMPTS[prompt_key]
         text = text.format(max_mb=config.TG_MATERIALS_MAX_FILE_BYTES // 1024 // 1024)
@@ -397,19 +458,22 @@ class MaterialsBot:
             "force_reply": True, "selective": True, "input_field_placeholder": placeholder[:64],
         }, reply_to=dialog.data.get("_last_user_message"))
         self._remember(dialog, sent)
+        dialog.step = step
         dialog.prompt_id = sent.get("message_id") if sent else None
 
     def _ask_verdict(self, dialog: Dialog) -> None:
-        dialog.step = "verdict"
         rows = [[_button(short, f"m:{dialog.user_id}:verdict:{value}")] for value, short, _full in cm.VERDICTS]
         scale = "\n".join(f"• {html.escape(full)}" for _value, _short, full in cm.VERDICTS)
         sent = self._send(dialog.chat_id, f"{self._intro(dialog)}<b>ваша оценка</b> — по шкале платформы:\n\n{scale}",
                           markup={"inline_keyboard": rows})
         self._remember(dialog, sent)
+        dialog.step = "verdict"
         dialog.prompt_id = None
 
     def _answer(self, dialog: Dialog, message: dict[str, Any], text: str) -> None:
         dialog.touched = self.clock()
+        if message.get("message_id"):
+            dialog.user_messages.append(int(message["message_id"]))
         dialog.data["_last_user_message"] = message.get("message_id")
         step = dialog.step
         try:
@@ -466,8 +530,6 @@ class MaterialsBot:
         dialog.step = "file_taken"
 
     def _show_card(self, dialog: Dialog) -> None:
-        dialog.step = "confirm"
-        dialog.prompt_id = None
         uid = dialog.user_id
         markup = {"inline_keyboard": [
             [_button("✅ Отправить", f"m:{uid}:send:")],
@@ -476,6 +538,8 @@ class MaterialsBot:
         text = card_text(dialog.data, author=dialog.author, header="Проверьте карточку")
         sent = self._send(dialog.chat_id, text, markup=markup,
                           reply_to=dialog.data.get("_file_message") or dialog.data.get("_last_user_message"))
+        dialog.step = "confirm"
+        dialog.prompt_id = None
         dialog.card_id = sent.get("message_id") if sent else None
 
     # --- кнопки -------------------------------------------------------------------------------
@@ -492,6 +556,11 @@ class MaterialsBot:
         if str(user.get("id")) != owner:
             self._ack(query, "Это меню другого участника. Чтобы внести свой материал — /add.", alert=True)
             return
+        if action == "history":  # листание истории — не ввод, диалога у него нет
+            self._ack(query)
+            self._history(chat, user, {}, offset=int(value) if value.isdigit() else 0,
+                          edit_id=message.get("message_id"))
+            return
         key = (int(chat["id"]), int(user["id"]))
         dialog = self._dialog(key)
         if dialog is None:
@@ -504,7 +573,7 @@ class MaterialsBot:
             self._cleanup(dialog)
         elif action == "restart":
             self._ack(query)
-            self._start(chat, user, {"message_id": dialog.data.get("_last_user_message")})
+            self._start(chat, user, {"message_id": dialog.data.get("_last_user_message")}, own=False)
         elif action == "kind" and dialog.step == "kind" and value in cm.KINDS:
             self._ack(query, cm.KINDS[value])
             dialog.data["kind"] = value
@@ -544,7 +613,21 @@ class MaterialsBot:
         final = card_text(data, author=dialog.author, header=f"Материал №{saved['id']} принят на платформу")
         self.tg.call("editMessageText", chat_id=dialog.chat_id, message_id=dialog.card_id, text=final,
                      parse_mode="HTML", disable_web_page_preview=True, reply_markup={"inline_keyboard": []})
-        self._cleanup(dialog, keep=dialog.card_id)
+        if dialog.private:
+            self._post_to_groups(dialog.user_id, final)
+        # Остаются итоговая карточка и у материала «файл» сообщение с файлом: коллеги открывают его в группе.
+        self._cleanup(dialog, keep={dialog.card_id, data.get("_file_message") if data.get("kind") == "file" else None})
+
+    def _post_to_groups(self, user_id: int, text: str) -> None:
+        """Материал из лички — и в рабочие группы автора: группа видит всё, что внесено, как бы ни вносили."""
+        for chat_id in sorted(self.chat_ids):
+            try:
+                info = self.tg.call("getChatMember", chat_id=chat_id, user_id=user_id) or {}
+                if info.get("status") in {"creator", "administrator", "member"} or info.get("is_member"):
+                    self._send(chat_id, text)
+            except TelegramError as exc:
+                # Материал уже на платформе: сбой показа в группе ввод не ломает.
+                logger.warning("tg_materials_group_post_failed chat=%s error=%s", chat_id, exc)
 
     # --- прочие команды -----------------------------------------------------------------------
 
@@ -556,22 +639,41 @@ class MaterialsBot:
         self._cleanup(dialog)
         self._send(key[0], "Ввод отменён.", reply_to=message.get("message_id"))
 
-    def _my(self, chat: dict[str, Any], user: dict[str, Any], message: dict[str, Any]) -> None:
+    def _history(self, chat: dict[str, Any], user: dict[str, Any], message: dict[str, Any], *,
+                 offset: int = 0, edit_id: int | None = None) -> None:
+        """История и статус материалов автора, по _HISTORY_PAGE; «Ещё» листает тем же сообщением."""
+        chat_id, uid = int(chat["id"]), int(user["id"])
         try:
-            rows = self.core.recent(int(user["id"]))
+            rows, total = self.core.history(uid, limit=_HISTORY_PAGE, offset=offset)
         except requests.RequestException:
-            self._send(chat["id"], "Платформа сейчас недоступна — попробуйте позже.", reply_to=message.get("message_id"))
+            self._send(chat_id, "Платформа сейчас недоступна, попробуйте позже.", reply_to=message.get("message_id"))
             return
-        if not rows:
-            self._send(chat["id"], "Ваших материалов пока нет. Внести первый — /add.", reply_to=message.get("message_id"))
+        more = offset + len(rows) < total
+        buttons = [[_button("Ещё", f"m:{uid}:history:{offset + _HISTORY_PAGE}")]] if more else []
+        text = history_text(rows, total, offset)
+        if edit_id:
+            self.tg.call("editMessageText", chat_id=chat_id, message_id=edit_id, text=text, parse_mode="HTML",
+                         disable_web_page_preview=True, reply_markup={"inline_keyboard": buttons})
             return
-        lines = ["<b>Ваши последние материалы</b>", ""]
-        for row in rows:
-            when = (row.get("created_at") or "")[:10]
-            day = ".".join(reversed(when.split("-"))) if when else ""
-            lines.append(f"{KIND_ICONS.get(row.get('kind'), '•')} №{row['id']} · {html.escape(day)} · "
-                         f"<b>{html.escape(row.get('title') or '')}</b>\n    ⭐ {html.escape(row.get('verdict_label') or '')}")
-        self._send(chat["id"], "\n".join(lines), reply_to=message.get("message_id"))
+        sent = self._send(chat_id, text, reply_to=message.get("message_id"),
+                          markup={"inline_keyboard": buttons} if buttons else None)
+        if chat.get("type") != "private":
+            self._delete_later(chat_id, [message.get("message_id"), sent.get("message_id")])
+
+    def _delete_later(self, chat_id: int, message_ids: list[int | None]) -> None:
+        due = self.clock() + _GROUP_REPLY_SECONDS
+        self._later += [(due, chat_id, int(message_id)) for message_id in message_ids if message_id]
+
+    def tick(self) -> None:
+        """Отложенная уборка группы; цикл зовёт её между опросами Telegram (опрос длится до 50 с)."""
+        now = self.clock()
+        due = [item for item in self._later if item[0] <= now]
+        self._later = [item for item in self._later if item[0] > now]
+        for _when, chat_id, message_id in due:
+            try:
+                self.tg.call("deleteMessage", chat_id=chat_id, message_id=message_id)
+            except TelegramError:
+                pass  # уже удалено руками или старше 48 ч
 
     # --- Telegram -----------------------------------------------------------------------------
 
@@ -593,10 +695,11 @@ class MaterialsBot:
         if sent and sent.get("message_id"):
             dialog.bot_messages.append(int(sent["message_id"]))
 
-    def _cleanup(self, dialog: Dialog, keep: int | None = None) -> None:
-        """Стереть вопросы бота этого диалога: в группе остаются ответы автора и итог."""
-        for message_id in dialog.bot_messages + ([dialog.card_id] if dialog.card_id else []):
-            if message_id == keep:
+    def _cleanup(self, dialog: Dialog, keep: set[int | None] | None = None) -> None:
+        """Стереть ввод: вопросы бота, /add и ответы автора; keep — что оставить (итоговая карточка, файл)."""
+        keep = keep or set()
+        for message_id in dialog.bot_messages + ([dialog.card_id] if dialog.card_id else []) + dialog.user_messages:
+            if message_id in keep:
                 continue
             try:
                 self.tg.call("deleteMessage", chat_id=dialog.chat_id, message_id=message_id)
@@ -667,6 +770,7 @@ def run(*, core_api_url: str | None = None, token: str | None = None, worker_id:
     pause = 1.0
     while not stop["flag"]:
         hello()
+        bot.tick()
         try:
             updates = tg.call("getUpdates", http_timeout=_POLL_SECONDS + 15, timeout=_POLL_SECONDS,
                               offset=offset, allowed_updates=["message", "callback_query"])

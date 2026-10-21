@@ -121,3 +121,16 @@ def test_bot_recent_list_is_per_author(core):
     mine = core.get("/api/external-worker/materials", headers=WORKER, params={"tg_user_id": 9001}).json()
 
     assert [row["author"] for row in mine["materials"]] == ["Иван Иванов"]
+
+
+def test_bot_history_pages_with_total_and_status(core):
+    for number in range(12):
+        _post(core, _material(tg_message_id=100 + number, title=f"Материал номер {number} про сделку"))
+    path, user = "/api/external-worker/materials", {"tg_user_id": 9001, "limit": 10}
+
+    first = core.get(path, headers=WORKER, params=user).json()
+    rest = core.get(path, headers=WORKER, params={**user, "offset": 10}).json()
+
+    assert (first["total"], len(first["materials"]), len(rest["materials"])) == (12, 10, 2)
+    assert (first["materials"][0]["status"], first["materials"][0]["status_label"]) == ("accepted", "Принят на платформу")
+    assert {row["id"] for row in first["materials"]}.isdisjoint(row["id"] for row in rest["materials"])
