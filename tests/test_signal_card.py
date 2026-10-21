@@ -119,7 +119,8 @@ def test_short_name_counts_only_as_a_whole_word_and_fused_gazprom_neft_is_recogn
 def test_one_common_word_of_a_company_name_does_not_name_it_in_the_quote(user, contour, monkeypatch):
     # Компания названа, когда в цитате все слова её имени: одного общего слова мало — «and» из «Helmerich and
     # Payne», «Oil Company» из «Abu Dhabi National Oil Company», «ПАО» из «ПАО «Газпром»». Форма собственности
-    # — не обязательна («Equinor ASA» названа в «Equinor испытала»), а «total» строчными — не Total.
+    # — не обязательна («Equinor ASA» названа в «Equinor испытала» и записана именем справочника), а «total»
+    # строчными — не Total.
     feed_signal("Сейсмика у Малайзии", "JOGMEC and PTTEP started a 3D seismic survey offshore Malaysia. Kuwait "
                                        "Oil Company awarded the drilling contract. The well reached a total depth "
                                        "of 4,000 m.")
@@ -141,7 +142,7 @@ def test_one_common_word_of_a_company_name_does_not_name_it_in_the_quote(user, c
 
     cards = business(user)
     assert [item["name"] for item in cards["Сейсмика у Малайзии"]["participants_json"]] == ["JOGMEC"]
-    assert [item["name"] for item in cards["Робот Equinor"]["participants_json"]] == ["Татнефть", "Equinor ASA"]
+    assert [item["name"] for item in cards["Робот Equinor"]["participants_json"]] == ["Татнефть", "Equinor"]
 
 
 def test_name_inside_a_longer_name_of_another_company_does_not_name_it_in_the_quote(user, contour, monkeypatch):

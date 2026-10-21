@@ -1,14 +1,16 @@
 """Бизнес-лента карточками (#97, спека #93), шов 1 — фильтры API списка сигналов на изолированной базе:
-тип события, регион, класс технологии, зрелость и компания (с алиасами) — в витрине «бизнес» и на радаре.
-Карточки — функциями хранилища, как их пишет агент «Карточка сигнала» (#96).
+тип события, регион, класс технологии, зрелость и компания (по правилу «одна компания», word_forms, с дочками по
+списку «дочка → мать» — решение владельца 20.10) — в витрине «бизнес» и на радаре.
+Карточки — функциями хранилища, как их пишет агент «Карточка сигнала» (#96); список дочек — через API экрана
+«Дочерние общества».
 """
 
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api
-from oiltech_digest.db import signal_card_store
+from oiltech_digest.db import company_parents_repo, repository, signal_card_store
 from tests.signal_card_support import api_get, business, feed_signal, radar_finding
-from tests.signal_card_support import user  # noqa: F401 — фикстура
+from tests.signal_card_support import admin, user  # noqa: F401 — фикстуры
 
 
 def _feed(user, title):
@@ -80,6 +82,84 @@ def test_company_written_past_the_agent_is_found_whatever_the_spaces_and_case(us
     assert _titles(user, company="Газпром нефть") == ["Газпром нефть бурит"]
     assert _titles(user, company="ГПН") == ["Газпром нефть бурит"]
     assert _titles(user, company="самотлорнефтегаз «елка»") == ["Самотлорнефтегаз пробурил"]
+
+
+def test_company_filter_compares_participants_by_the_one_company_rule(user):
+    # Имена участников сверяются по правилу «одна компания» (word_forms) при запросе: форма собственности и
+    # «Имя (АББР)» — та же компания, а в базе имя хранится как дала модель.
+    _card(_feed(user, "Контракт Atlas"), participants_json=_participants("Atlas Energy Solutions Inc."))
+    _card(_feed(user, "Пилот Atlas"), participants_json=_participants("Atlas Energy Solutions"))
+    _card(_feed(user, "Тендер PDO"), participants_json=_participants("Petroleum Development Oman (PDO)"))
+
+    assert _titles(user, company="Atlas Energy Solutions") == ["Контракт Atlas", "Пилот Atlas"]
+    assert _titles(user, company="Atlas Energy Solutions Inc.") == ["Контракт Atlas", "Пилот Atlas"]
+    assert _titles(user, company="PDO") == ["Тендер PDO"]
+    # Компании нет ни в одной карточке — сигналов нет, а не все сигналы.
+    assert _titles(user, company="Kolibri Global Energy") == []
+    summary = api_get("/api/signals/summary", user, showcase="business", company="Kolibri Global Energy")
+    assert (summary["total"], summary["matching"]) == (3, 0)
+    # Пустой список имён у выборки — фильтр, который ничего не нашёл, а не «без фильтра».
+    assert repository.list_signals(showcase="business", company_names=[]) == []
+
+
+def _edit(method, path, user, **body):
+    """Правка списка дочек через API экрана «Дочерние общества» (только админ)."""
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        response = TestClient(api.app).request(method, path, json=body or None)
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _daughter(admin, child, parent):
+    """Пара «дочка → мать» в список; номер строки списка."""
+    return _edit("POST", "/api/company-parents", admin, child_name=child, parent_name=parent)["pair"]["id"]
+
+
+def _group(user, company):
+    return api_get("/api/signals/summary", user, showcase="business", company=company)["company_group"]
+
+
+def _gazprom_and_rosneft(user):
+    _card(_feed(user, "Заполярье бурит"), participants_json=_participants("Газпромнефть-Заполярье"))
+    _card(_feed(user, "Газпром нефть бурит"), participants_json=_participants("Газпром нефть"))
+    _card(_feed(user, "Роснефть бурит"), participants_json=_participants("Роснефть"))
+
+
+def test_company_filter_shows_the_daughters_by_the_chain_but_a_daughter_never_shows_her_mother(admin, monkeypatch):
+    _gazprom_and_rosneft(admin)
+    # Цепочка Газпром → Газпром нефть → Газпромнефть-Заполярье; мать записана с формой собственности.
+    _daughter(admin, "Газпром нефть", "ПАО «Газпром»")
+    _daughter(admin, "Газпромнефть-Заполярье", "Газпром нефть")
+
+    assert _titles(admin, company="Газпром нефть") == ["Газпром нефть бурит", "Заполярье бурит"]
+    assert _titles(admin, company="Газпром") == ["Газпром нефть бурит", "Заполярье бурит"]
+    assert _titles(admin, company="Роснефть") == ["Роснефть бурит"]
+    assert _titles(admin, company="Газпромнефть-Заполярье") == ["Заполярье бурит"]
+    # Сводка говорит экрану, кого фильтр показывает; список дочек читается один раз на запрос.
+    reads = []
+    listed = company_parents_repo.pairs
+    monkeypatch.setattr(company_parents_repo, "pairs", lambda: reads.append(1) or listed())
+    summary = api_get("/api/signals/summary", admin, showcase="business", company="Газпром")
+    assert (summary["matching"], summary["company_group"], len(reads)) == (
+        2, ["Газпром", "Газпром нефть", "Газпромнефть-Заполярье"], 1)
+    assert _group(admin, "Роснефть") == ["Роснефть"]
+    assert "company_group" not in api_get("/api/signals/summary", admin, showcase="business")
+
+
+def test_list_edit_on_the_screen_changes_the_company_filter_at_once(admin):
+    _gazprom_and_rosneft(admin)
+    assert _titles(admin, company="Газпром нефть") == ["Газпром нефть бурит"]
+
+    pair_id = _daughter(admin, "Газпромнефть-Заполярье", "Газпром нефть")
+    assert _titles(admin, company="Газпром нефть") == ["Газпром нефть бурит", "Заполярье бурит"]
+    assert _group(admin, "Газпром нефть") == ["Газпром нефть", "Газпромнефть-Заполярье"]
+
+    _edit("DELETE", f"/api/company-parents/{pair_id}", admin)
+    assert _titles(admin, company="Газпром нефть") == ["Газпром нефть бурит"]
+    assert _group(admin, "Газпром нефть") == ["Газпром нефть"]
 
 
 def test_radar_takes_the_same_card_filters(user):

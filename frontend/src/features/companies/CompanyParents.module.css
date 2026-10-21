@@ -1,0 +1,78 @@
+/* Экран «Дочерние общества»: форма по одной связи, таблица списка и вставка списком с разбором строк.
+   Таблицы — общая сетка jobsTable, здесь только своё. */
+
+.addGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: 12px 16px;
+  align-items: end;
+}
+
+@media (max-width: 760px) {
+  .addGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Колонок меньше, чем у задач: общие 860px здесь лишние. */
+.table {
+  min-width: 640px;
+}
+
+.name {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.arrow {
+  margin-right: 6px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.moment {
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.hint {
+  margin: 0 0 10px;
+}
+
+.paste {
+  min-height: 160px;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.pasteActions {
+  margin-top: 10px;
+}
+
+.analysis {
+  margin-top: 12px;
+}
+
+/* Разбор длинной вставки (до 500 строк) прокручивается внутри панели, а не тянет экран. */
+.analysisRows {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.fineAlert {
+  color: var(--sem-ok-fg);
+  background: var(--sem-ok-bg);
+  border: 1px solid var(--sem-ok-border);
+}
+
+.problemRow {
+  background: var(--sem-bad-bg);
+}
+
+.problem {
+  color: var(--sem-bad-fg);
+  font-weight: 700;
+}
+
+.fine {
+  color: var(--sem-ok-fg);
+}

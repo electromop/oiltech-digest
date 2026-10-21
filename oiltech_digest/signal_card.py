@@ -377,7 +377,8 @@ def _model_name(card: dict[str, Any]) -> str | None:
 
 def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, Any]:
     """Ответ модели → значения карточки. Значение не из справочника — «не определено»; компания без
-    цитаты из текста публикации и издание-издатель отбрасываются, алиасы сводятся к одному имени."""
+    цитаты из текста публикации и издание-издатель отбрасываются, написания одной компании (word_forms.Companies)
+    сводятся к одному участнику."""
     source = _listed(dictionaries, "date_source", answer["event_date_source"])
     event_date, source = _event_date(answer["event_date"], source, publication["published"])
     relevance = RELEVANCE_CODES.get(_listed(dictionaries, "oilfield_relevance", answer["oilfield_relevance"]))
@@ -419,34 +420,31 @@ def _event_date(value: str, source: str, published: date | None) -> tuple[date |
 
 def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
                   dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
-    """Участник — только с дословной цитатой из текста публикации, в которой он назван (verified —
-    проверено кодом): цитата, где компании нет, — догадка модели, а не участник, как и цитата, где её
-    имя стоит только внутри имени другой компании справочника («Газпром» в «Газпром нефть»), и обрывок
-    слова или имени текста («Газпром» из «Газпромнефть-Хантос» или из «Газпром нефть»).
+    """Участник — только с дословной цитатой из текста публикации, в которой он назван под любым своим
+    написанием (verified — проверено кодом): цитата, где компании нет, — догадка модели, а не участник, как и
+    цитата, где её имя стоит только внутри имени другой компании справочника («Газпром» в «Газпром нефть»), и
+    обрывок слова или имени текста («Газпром» из «Газпромнефть-Хантос» или из «Газпром нефть»).
     Издатель-СМИ (_REPORTER_TYPES) о событии сообщает — участником не считается; компания, которая
-    сама публикует свою новость, — считается: в её пресс-релизе она главный участник. Алиасы — одно
-    имя, повтор под другим именем отбрасывается."""
+    сама публикует свою новость, — считается: в её пресс-релизе она главный участник. Одна ли это компания —
+    по правилу word_forms.Companies: «PDO signed» называет «Petroleum Development Oman (PDO)», пояснение в скобках
+    в имя не входит, «Equinor ASA» — это «Equinor» справочника; повтор под другим написанием отбрасывается, и
+    издатель — под любым написанием. Имя участника — имя записи справочника, вне справочника — как дала модель."""
     entries = dictionaries.get("companies") or []
-    canonical = {_plain(name): entry["name"] for entry in entries for name in (entry["name"], *entry["aliases"])}
-    variants = {entry["name"]: (entry["name"], *entry["aliases"]) for entry in entries}
+    rule = word_forms.companies(entries)
     text = word_forms.quote_form(publication["text"])
-    reporter = None
-    if _plain(publication["publisher_type"]) in _REPORTER_TYPES:
-        reporter = _plain(canonical.get(_plain(publication["publisher"]), publication["publisher"]))
-    kept: dict[str, dict[str, Any]] = {}
+    reporter = (publication["publisher"] or "") if _plain(publication["publisher_type"]) in _REPORTER_TYPES else ""
+    kept: list[dict[str, Any]] = []
     for company in companies:
         given = " ".join(company["name"].split())[:_NAME_CHARS]
-        name = canonical.get(_plain(given), given)
+        name = rule.canonical(given) or given
         quote = " ".join(company["quote"].split())[:_QUOTE_CHARS]
-        if not name or not quote \
-                or not word_forms.named_in_quote(quote, text, (given, *variants.get(name, (name,))),
-                                                 _other_names(entries, name)):
+        spelled = [" ".join(form) for form in rule.forms(given)]
+        if not name or not quote or not word_forms.named_in_quote(quote, text, spelled, _other_names(entries, name)):
             continue
-        key = _plain(name)
-        if key in kept or key == reporter:
+        if rule.same(name, reporter) or any(rule.same(name, other["name"]) for other in kept):
             continue
-        kept[key] = {"name": name, "quote": quote, "verified": True}
-    return list(kept.values())
+        kept.append({"name": name, "quote": quote, "verified": True})
+    return kept
 
 
 def _other_names(entries: list[dict[str, Any]], name: str) -> list[str]:

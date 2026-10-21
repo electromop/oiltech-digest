@@ -6,6 +6,7 @@ import { getDashboardStats } from "../api/stats";
 import type { Article, AuthResponse, DashboardStats, User } from "../api/types";
 import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles/ArticlesPage";
 import { BacklogPage } from "../features/backlog/BacklogPage";
+import { CompanyParentsPage } from "../features/companies/CompanyParentsPage";
 import { DigestPage } from "../features/digest/DigestPage";
 import { DocumentsPage } from "../features/documents/DocumentsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
@@ -31,13 +32,15 @@ const TechnologiesPreview = lazy(() =>
 
 type ScreenId =
   | "articles" | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
-  | "statistics" | "analytics-preview" | "tech-preview";
+  | "company-parents" | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 // Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
 // случайно открыть обычный пользователь и принять за настоящую аналитику.
 const ADMIN_SCREENS = new Set<ScreenId>([
   "sources", "source-candidates", "source-agent", "scoring", "tags", "users", "jobs", "maintenance",
+  // Список «дочка → мать» правят, как теги, только админы (сервер — require_admin).
+  "company-parents",
   // Приём файлов — admin-only и на сервере (POST /api/documents требует require_admin):
   // фронтовый гейт без серверного был бы дырой, а серверный без фронтового — кнопкой,
   // которая у обычного пользователя всегда отвечает 403.
@@ -155,6 +158,15 @@ const screens: ScreenDef[] = [
     status: "Экран активен",
   },
   {
+    id: "company-parents",
+    // Решение владельца 20.10: фильтр «всё про компанию» показывает и дочерние общества по этому списку.
+    label: "Дочерние общества",
+    eyebrow: "Компании",
+    title: "Дочерние общества",
+    description: "Список «дочка → мать» для фильтра «всё про компанию»: правка действует сразу, без выката.",
+    status: "Экран активен",
+  },
+  {
     id: "users",
     label: "Пользователи",
     eyebrow: "Доступ",
@@ -204,7 +216,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Настройки",
-    screens: ["sources", "scoring", "tags"],
+    screens: ["sources", "scoring", "tags", "company-parents"],
   },
   {
     label: "Администрирование",
@@ -370,6 +382,10 @@ export function App() {
 
   if (activeScreen === "tags") {
     currentScreen = <TagsPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "company-parents") {
+    currentScreen = <CompanyParentsPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "jobs") {
@@ -807,6 +823,18 @@ function ScreenIcon(props: { screenId: ScreenId }) {
       <svg {...common}>
         <path d="M3 12.5 6.2 8.5l2.2 2.2L13 5.5" />
         <path d="M10.5 5.5H13v2.5" />
+      </svg>
+    );
+  }
+
+  if (props.screenId === "company-parents") {
+    // Мать сверху, две дочки снизу.
+    return (
+      <svg {...common}>
+        <rect x="5.5" y="2.5" width="5" height="3.5" rx="1" />
+        <rect x="2.5" y="10" width="4.5" height="3.5" rx="1" />
+        <rect x="9" y="10" width="4.5" height="3.5" rx="1" />
+        <path d="M8 6v2H4.8V10M8 8h3.2V10" />
       </svg>
     );
   }

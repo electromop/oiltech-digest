@@ -92,6 +92,9 @@ export type SignalSummary = {
   hidden?: number;
   matching: number;
   themes: Array<{ theme: string; count: number }>;
+  // Фильтр «всё про компанию»: кого он показывает — сама компания первой, затем её дочки по списку
+  // «дочка → мать» (экран «Дочерние общества»). Без фильтра по компании поля нет.
+  company_group?: string[];
 };
 
 export function getSignalSummary(filters: SignalFilters = {}) {
