@@ -29,6 +29,8 @@ CASES = [
     ("Petroleum Development Oman (PDO)", "PDO", True),
     ("Petroleum Development Oman (PDO)", "Petroleum Development Oman", True),
     ("DOE (Department of Energy)", "DOE", True),
+    # Аббревиатуры между собой не сравниваются (решение #121): одна аббревиатура бывает у разных компаний.
+    ("Petroleum Development Oman (PDO)", "Pipeline Development Organization (PDO)", False),
     # Русское слово — в любом падеже.
     ("Роснефтью", "Роснефть", True),
     # Компания — целиком: «Газпром» не «Газпром нефть», дочка не мать.
@@ -99,17 +101,26 @@ def test_exam_counts_one_company_by_the_same_rule(one, other, same):
 
 def test_exam_key_is_one_for_spellings_of_one_company_between_runs():
     # Ключ считает устойчивость экзамена между прогонами и его константу: «X Inc.» в одном прогоне и «X» в
-    # другом, «Petroleum Development Oman (PDO)» и «PDO» дают один ключ; имя справочника или алиасов экзамена
-    # даёт ключ своей записи.
+    # другом дают один ключ; имя справочника или алиасов экзамена даёт ключ своей записи. Аббревиатура в скобках в
+    # ключ не входит (как у #121): «Petroleum Development Oman (PDO)» — ключ полного имени, одна «PDO» — свой.
     names = CompanyNames(load_dictionaries()["companies"], [{"name": "Нефтемаш", "aliases": ["Neftemash"]}])
 
     assert names.key("Atlas Energy Solutions Inc.") == names.key("Atlas Energy Solutions") == (
         "atlas", "energy", "solutions")
-    assert names.key("Petroleum Development Oman (PDO)") == names.key("PDO") == ("pdo",)
+    assert names.key("Petroleum Development Oman (PDO)") == names.key("Petroleum Development Oman") == (
+        "petroleum", "development", "oman")
+    assert names.key("PDO") == ("pdo",)
     assert names.key("Роснефтью") == names.key("НК «Роснефть»") == names.key("Rosneft") == ("роснефть",)
     assert names.key("Neftemash Ltd") == names.key("Нефтемаш (ПАО)") == ("нефтемаш",)
     # Общее пояснение в скобках ключ не сводит: другая компания, другой ключ.
     assert names.key("Oceaneering (США)") != names.key("Halliburton (США)")
+
+
+@pytest.mark.parametrize(("one", "other", "same"), CASES)
+def test_one_exam_key_is_always_one_company(one, other, same):
+    # Общий ключ никогда не склеивает то, что правило разводит: иначе устойчивость спрятала бы смену компании.
+    names = CompanyNames(load_dictionaries()["companies"])
+    assert names.key(one) != names.key(other) or names.same(one, other)
 
 
 TENDER = ("Petroleum Development Oman (PDO) объявила тендер. PDO signed a contract with FleetRabbit. FleetRabbit "

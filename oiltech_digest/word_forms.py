@@ -13,7 +13,8 @@
 2. Одно имя (same_name): те же слова в том же порядке без формы собственности (и с точками: «S.A.»), без различий
    регистра, «ё», кавычек и дефисов; русское слово — в любом падеже.
 3. Справочник: написание совпало с именем записи справочника — к написаниям добавляются все её имена.
-4. Две компании — одна, если совпало хоть одно написание одной с написанием другой.
+4. Две компании — одна, если совпало хоть одно написание одной с написанием другой; аббревиатура сверяется только с
+   полными написаниями другой стороны, аббревиатуры между собой — нет (решение #121): «X (PDO)» — не «Y (PDO)».
 5. Компания — целиком: «Газпром» — не «Газпром нефть», дочка — не мать.
 
 Правило одно у ядра (названа ли компания в цитате участника, повтор участника и издатель — signal_card._participants),
@@ -159,9 +160,12 @@ class Companies:
         return self._parse(name).forms
 
     def same(self, one: str, other: str) -> bool:
-        """Одна ли это компания: хоть одно написание одной — то же имя (same_name), что написание другой."""
-        theirs = self._parse(other).bares
-        return any(_same_bare(mine, bare) for mine in self._parse(one).bares for bare in theirs)
+        """Одна ли это компания: хоть одно написание одной — то же имя (same_name), что написание другой.
+        Аббревиатура одной сверяется только с полными написаниями другой, аббревиатуры между собой — нет (решение
+        #121): одна аббревиатура бывает у разных компаний, «X (PDO)» — не «Y (PDO)», а «PDO» — это «X (PDO)»."""
+        mine, theirs = self._parse(one), self._parse(other)
+        return (_any_same(mine.bares, theirs.bares) or _any_same(mine.short_bares, theirs.bares)
+                or _any_same(mine.bares, theirs.short_bares))
 
     def canonical(self, name: str) -> str | None:
         """Имя записи справочника, к которой относится компания; нет её в справочнике — None."""
@@ -170,11 +174,11 @@ class Companies:
     def key(self, name: str) -> tuple[str, ...]:
         """Одно написание на компанию, для подсчёта по компаниям (устойчивость экзамена и его константа). Имя из
         записи справочника или алиасов: слова для сверки имени записи, «Роснефтью» и «НК «Роснефть»» дают один
-        ключ. Вне справочника: наименьшие слова для сверки среди всех написаний имени (без формы собственности и
-        регистра), так у «Petroleum Development Oman (PDO)» и «PDO» ключ ('pdo',), а у «Atlas Energy Solutions
-        Inc.» и «Atlas Energy Solutions» общий. Отношение same не транзитивно («PDO» не «Petroleum Development
-        Oman», хотя оба это «Petroleum Development Oman (PDO)»), и ключ вне справочника ловит не всё: падеж и
-        полное имя без аббревиатуры дают свои ключи."""
+        ключ. Вне справочника: наименьшие слова для сверки среди полных написаний (без формы собственности,
+        аббревиатуры в скобках и регистра), как у #121: у «Atlas Energy Solutions Inc.» и «Atlas Energy Solutions»
+        ключ общий, у «Petroleum Development Oman (PDO)» — как у «Petroleum Development Oman», а одна аббревиатура
+        «PDO» — свой ключ. Общий ключ — всегда одна компания (same); обратное не всегда: same не транзитивно, и
+        падеж или аббревиатура без имени дают свои ключи."""
         known = self.canonical(name)
         if known:
             forms = _spelled(known)
@@ -182,18 +186,25 @@ class Companies:
         return min(self._parse(name).bares, default=())
 
     def _parse(self, name: str) -> _Parsed:
-        """Разбор имени, с кэшем по имени: свои написания, написания записей справочника, имя записи."""
+        """Разбор имени, с кэшем по имени: свои написания, написания записей справочника, имя записи. Полное имя
+        (первое написание, spellings) и аббревиатура со своими записями справочника — по отдельности: для same."""
         parsed = self._parsed.get(name)
         if parsed is None:
             own = _spelled(name)
-            matched = _unique(index for form in own for index in self._matching(_bare(form)))
+            full, short = self._sides(own[:1]), self._sides(own[1:])
+            matched = _unique([*full[1], *short[1]])
             forms = _unique([*own, *(form for index in matched for form in self._groups[index].forms)])
-            parsed = _Parsed(tuple(forms), tuple(_unique(map(_bare, forms))),
-                             self._groups[matched[0]].name if matched else None)
+            parsed = _Parsed(tuple(forms), full[0], short[0], self._groups[matched[0]].name if matched else None)
             if len(self._parsed) >= _PARSED_LIMIT:
                 self._parsed.clear()
             self._parsed[name] = parsed
         return parsed
+
+    def _sides(self, own: Sequence[tuple[str, ...]]) -> tuple[tuple[tuple[str, ...], ...], list[int]]:
+        """Слова для сверки написаний и всех их записей справочника; номера этих записей."""
+        matched = _unique(index for form in own for index in self._matching(_bare(form)))
+        forms = [*own, *(form for index in matched for form in self._groups[index].forms)]
+        return tuple(_unique(map(_bare, forms))), matched
 
     def _matching(self, bare: tuple[str, ...]) -> list[int]:
         """Записи справочника, у которых есть написание с теми же словами (same_name)."""
@@ -208,8 +219,9 @@ class _Group(NamedTuple):
 
 
 class _Parsed(NamedTuple):
-    forms: tuple[tuple[str, ...], ...]  # написания: слова как написаны
-    bares: tuple[tuple[str, ...], ...]  # их слова для сверки (_bare)
+    forms: tuple[tuple[str, ...], ...]  # все написания с записями справочника: слова как написаны (поиск в тексте)
+    bares: tuple[tuple[str, ...], ...]  # слова для сверки (_bare) полного имени и его записей справочника
+    short_bares: tuple[tuple[str, ...], ...]  # то же у аббревиатуры «Имя (АББР)»: сверяется только с полными
     known: str | None  # имя записи справочника
 
 
@@ -230,6 +242,10 @@ def _spelled(name: str) -> list[tuple[str, ...]]:
 
 def _unique(items: Iterable[Any]) -> list[Any]:
     return list(dict.fromkeys(items))
+
+
+def _any_same(mine: Sequence[tuple[str, ...]], theirs: Sequence[tuple[str, ...]]) -> bool:
+    return any(_same_bare(one, other) for one in mine for other in theirs)
 
 
 def named(name: Sequence[str], text: Sequence[str]) -> bool:
