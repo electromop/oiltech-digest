@@ -23,9 +23,8 @@ import { radarDigestLockedText } from "../articles/feedWindow";
 import { StatCard } from "../shared/StatCard";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { PROFILES } from "../scoring/ScoringPage";
-import { CompanyGroupHint } from "./CompanyGroupHint";
 import { SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
-import { EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
+import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
 
 // Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему

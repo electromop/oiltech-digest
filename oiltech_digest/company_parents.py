@@ -56,9 +56,15 @@ def check_pair(child: str, parent: str, pairs: Sequence[Pair], same: Same) -> st
     return None
 
 
-def check_note(note: str | None) -> str | None:
-    """Почему примечание не подходит, или None."""
-    return f"Примечание длиннее {MAX_NOTE} знаков" if len(clean(note)) > MAX_NOTE else None
+def checked_row(child: str | None, parent: str | None, note: str | None, pairs: Sequence[Pair],
+                same: Same) -> dict[str, Any]:
+    """Строка списка, как её запишут, и её проверка: дочка, мать и примечание без лишних пробелов (clean), пустое
+    примечание None; problem: почему строку нельзя добавить к списку pairs (check_pair, затем длина примечания),
+    или None. Одна проверка у формы на экране и у вставки списком (parse_lines)."""
+    child, parent, note = clean(child), clean(parent), clean(note)
+    problem = check_pair(child, parent, pairs, same) or (
+        f"Примечание длиннее {MAX_NOTE} знаков" if len(note) > MAX_NOTE else None)
+    return {"child_name": child, "parent_name": parent, "note": note or None, "problem": problem}
 
 
 def descendants(name: str, pairs: Sequence[Pair], same: Same) -> list[str]:
@@ -77,10 +83,12 @@ def descendants(name: str, pairs: Sequence[Pair], same: Same) -> list[str]:
 
 def parse_lines(text: str, pairs: Sequence[Pair], same: Same) -> list[dict[str, Any]]:
     """Разбор вставки списком: строка «дочка; мать», третьим полем можно примечание (точку с запятой в нём
-    можно). Пустые строки пропускаются; line — номер строки в тексте. problem — ошибка формата или причина
-    check_pair против списка pairs и строк вставки выше (строка с ошибкой в счёт не идёт), иначе None.
-    ValueError — непустых строк больше MAX_LINES."""
+    можно). Пустые строки пропускаются; line: номер строки в тексте. problem: ошибка формата или причина
+    checked_row против списка pairs и строк вставки выше (строка с ошибкой в счёт не идёт), иначе None.
+    ValueError: непустых строк нет или больше MAX_LINES."""
     numbered = [(number, line) for number, line in enumerate(str(text or "").splitlines(), 1) if line.strip()]
+    if not numbered:
+        raise ValueError("Нет ни одной строки «дочка; мать»")
     if len(numbered) > MAX_LINES:
         raise ValueError(f"Не больше {MAX_LINES} строк за раз, во вставке {len(numbered)}")
     # Одни и те же имена сверяются строка за строкой: правило считаем один раз на пару имён.
@@ -88,14 +96,22 @@ def parse_lines(text: str, pairs: Sequence[Pair], same: Same) -> list[dict[str, 
     known = list(pairs)
     rows: list[dict[str, Any]] = []
     for number, line in numbered:
-        fields = [clean(field) for field in line.split(";", 2)]
-        child, parent, note = (*fields, "", "")[:3]
-        problem = FORMAT if len(fields) < 2 else check_pair(child, parent, known, remembered) or check_note(note)
-        rows.append({"line": number, "child_name": child, "parent_name": parent, "note": note or None,
-                     "problem": problem})
-        if problem is None:
-            known.append((child, parent))
+        child, parent, note = (*line.split(";", 2), "", "")[:3]
+        row = {"line": number, **checked_row(child, parent, note, known, remembered)}
+        if ";" not in line:
+            # Строка не разобрана: ошибка формата, а не проверки пары.
+            row["problem"] = FORMAT
+        elif row["problem"] is None:
+            known.append((row["child_name"], row["parent_name"]))
+        rows.append(row)
     return rows
+
+
+def paste_answer(lines: Sequence[dict[str, Any]], *, applied: bool) -> dict[str, Any]:
+    """Ответ на вставку списком: ok (ошибок нет), applied (строки записаны), problems (строк с ошибками) и разбор
+    строк lines (parse_lines)."""
+    problems = sum(1 for line in lines if line["problem"])
+    return {"ok": not problems, "applied": applied, "problems": problems, "lines": list(lines)}
 
 
 def _walk(start: str, pairs: Sequence[Pair], same: Same, *, up: bool) -> Iterator[list[str]]:

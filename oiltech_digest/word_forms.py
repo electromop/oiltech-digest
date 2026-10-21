@@ -17,7 +17,7 @@
 5. Компания — целиком: «Газпром» — не «Газпром нефть», дочка — не мать.
 
 Правило одно у ядра (названа ли компания в цитате участника, повтор участника и издатель — signal_card._participants),
-у фильтра «всё про компанию» (signal_card_filters.company_names) и у экзамена агента (имена агента и эксперта, есть
+у фильтра «всё про компанию» (signal_card_filters.group_names) и у экзамена агента (имена агента и эксперта, есть
 ли компания в тексте — signal_card_exam_score): экзамен мерит то, что ядро запишет в карточку, а фильтр находит её.
 """
 
@@ -136,18 +136,19 @@ class Companies:
     участников на каждом запросе."""
 
     def __init__(self, entries: Iterable[Mapping[str, Any]]):
-        groups: list[tuple[int, str, list[tuple[str, ...]]]] = []  # (номер первой записи, её имя, написания)
+        groups: list[_Group] = []
         for number, entry in enumerate(entries):
             forms = _unique(form for value in (entry["name"], *entry["aliases"]) for form in _spelled(value))
-            joined = [group for group in groups if any(same_name(a, b) for a in forms for b in group[2])]
+            joined = [group for group in groups if any(same_name(a, b) for a in forms for b in group.forms)]
             groups = [group for group in groups if group not in joined]
-            first, name = min(((group[0], group[1]) for group in joined), default=(number, str(entry["name"])))
-            groups.append((first, name, _unique([*forms, *(form for group in joined for form in group[2])])))
-        self._groups = [(name, tuple(forms)) for _, name, forms in sorted(groups)]
+            first, name = min(((group.first, group.name) for group in joined), default=(number, str(entry["name"])))
+            merged = _unique([*forms, *(form for group in joined for form in group.forms)])
+            groups.append(_Group(first, name, tuple(merged)))
+        self._groups = sorted(groups)
         # Слова для сверки написаний справочника — по их числу: имя сверяется только с написаниями той же длины.
         self._by_length: dict[int, list[tuple[tuple[str, ...], int]]] = defaultdict(list)
-        for index, (_, forms) in enumerate(self._groups):
-            for form in forms:
+        for index, group in enumerate(self._groups):
+            for form in group.forms:
                 bare = _bare(form)
                 self._by_length[len(bare)].append((bare, index))
         self._parsed: dict[str, _Parsed] = {}
@@ -167,14 +168,18 @@ class Companies:
         return self._parse(name).known
 
     def key(self, name: str) -> tuple[str, ...]:
-        """Одно написание на компанию — для подсчёта по компаниям: слова для сверки имени записи справочника, вне
-        справочника — полного имени. «Atlas Energy Solutions Inc.» и «Atlas Energy Solutions», «Роснефтью» и
-        «НК «Роснефть»» — один ключ. Отношение same не транзитивно («PDO» — не «Petroleum Development Oman», хотя
-        оба — «Petroleum Development Oman (PDO)»), и ключ вне справочника ловит не всё: падеж и аббревиатура — разные
-        ключи."""
+        """Одно написание на компанию, для подсчёта по компаниям (устойчивость экзамена и его константа). Имя из
+        записи справочника или алиасов: слова для сверки имени записи, «Роснефтью» и «НК «Роснефть»» дают один
+        ключ. Вне справочника: наименьшие слова для сверки среди всех написаний имени (без формы собственности и
+        регистра), так у «Petroleum Development Oman (PDO)» и «PDO» ключ ('pdo',), а у «Atlas Energy Solutions
+        Inc.» и «Atlas Energy Solutions» общий. Отношение same не транзитивно («PDO» не «Petroleum Development
+        Oman», хотя оба это «Petroleum Development Oman (PDO)»), и ключ вне справочника ловит не всё: падеж и
+        полное имя без аббревиатуры дают свои ключи."""
         known = self.canonical(name)
-        forms = _spelled(known) if known else self.forms(name)
-        return _bare(forms[0]) if forms else ()
+        if known:
+            forms = _spelled(known)
+            return _bare(forms[0]) if forms else ()
+        return min(self._parse(name).bares, default=())
 
     def _parse(self, name: str) -> _Parsed:
         """Разбор имени, с кэшем по имени: свои написания, написания записей справочника, имя записи."""
@@ -182,9 +187,9 @@ class Companies:
         if parsed is None:
             own = _spelled(name)
             matched = _unique(index for form in own for index in self._matching(_bare(form)))
-            forms = _unique([*own, *(form for index in matched for form in self._groups[index][1])])
+            forms = _unique([*own, *(form for index in matched for form in self._groups[index].forms)])
             parsed = _Parsed(tuple(forms), tuple(_unique(map(_bare, forms))),
-                             self._groups[matched[0]][0] if matched else None)
+                             self._groups[matched[0]].name if matched else None)
             if len(self._parsed) >= _PARSED_LIMIT:
                 self._parsed.clear()
             self._parsed[name] = parsed
@@ -193,6 +198,13 @@ class Companies:
     def _matching(self, bare: tuple[str, ...]) -> list[int]:
         """Записи справочника, у которых есть написание с теми же словами (same_name)."""
         return [index for other, index in self._by_length.get(len(bare), ()) if _same_bare(bare, other)]
+
+
+class _Group(NamedTuple):
+    """Компания справочника: записи с общим написанием, слитые в одну."""
+    first: int  # номер её первой записи в справочнике: порядок компаний
+    name: str  # имя первой записи, это имя компании
+    forms: tuple[tuple[str, ...], ...]  # написания всех её записей: слова как написаны
 
 
 class _Parsed(NamedTuple):

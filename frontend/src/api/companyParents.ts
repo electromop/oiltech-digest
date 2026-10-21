@@ -28,8 +28,14 @@ export type CompanyParentsImport = {
   lines: CompanyParentLine[];
 };
 
+// Список и подсказки формы: names, имена участников карточек из базы (справочник отдаёт /api/signals/dictionaries).
+export type CompanyParentsList = {
+  pairs: CompanyParent[];
+  names: string[];
+};
+
 export function listCompanyParents() {
-  return apiFetch<{ pairs: CompanyParent[] }>("/api/company-parents").then((payload) => payload.pairs);
+  return apiFetch<CompanyParentsList>("/api/company-parents");
 }
 
 export function addCompanyParent(pair: { child_name: string; parent_name: string; note: string | null }) {

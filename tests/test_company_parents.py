@@ -1,9 +1,10 @@
 """Список дочерних обществ «дочка → мать» (решение владельца 20.10).
 
-Без базы: проверка новой пары, дочки компании по цепочке и разбор вставки списком — по правилу «одна ли это
-компания», которое API передаёт в company_parents (api._same: полное правило, как у фильтра), и раскрытие компании
-для фильтра «всё про компанию» (signal_card_filters.company_group). На изолированной базе: API экрана «Дочерние
-общества» — вход, добавление, список, удаление, отказы с причиной, вставка с разбором и без записи. Фильтр
+Без базы: проверка новой пары, дочки компании по цепочке и разбор вставки списком по правилу «одна ли это
+компания», которое API передаёт в company_parents (signal_card_filters.company_rule: полное правило, как у
+фильтра), и раскрытие компании для фильтра «всё про компанию» тем же путём, что у api._company_filter
+(company_group, затем group_names). На изолированной базе API экрана «Дочерние общества»: вход, добавление,
+список с именами участников для подсказок, удаление, отказы с причиной, вставка с разбором и без записи. Фильтр
 сигналов с дочками на изолированной базе — tests/test_signal_business_feed.py."""
 
 import pytest
@@ -11,10 +12,11 @@ from fastapi.testclient import TestClient
 
 from oiltech_digest import admission, api
 from oiltech_digest.company_parents import MAX_LINES, check_pair, descendants, parse_lines
-from oiltech_digest.db import company_parents_repo, repository
-from oiltech_digest.signal_card_filters import company_group, company_names
+from oiltech_digest.db import company_parents_repo, repository, signal_card_store
+from oiltech_digest.signal_card_filters import company_group, company_rule, group_names
+from tests.signal_card_support import radar_finding
 
-same = api._same()
+same = company_rule().same
 PASSWORD = "long-enough-password"
 ADMIN = "parents-admin@example.test"
 GAZPROM = [("Газпром нефть", "Газпром"), ("Газпромнефть-Заполярье", "Газпром нефть")]
@@ -106,12 +108,12 @@ def test_daughter_does_not_pull_her_mother_and_company_without_daughters_is_alon
 def test_filter_names_are_participants_of_the_company_and_of_every_daughter():
     known = ["ПАО «Газпром нефть»", "ООО «Газпромнефть-Заполярье»", "Газпромнефть-Хантос", "Роснефть", "Башнефть"]
 
-    assert company_names("Газпром", known, LISTED) == [
+    assert group_names(company_group("Газпром", LISTED), known) == [
         "Газпром", "Газпром нефть", "Газпромнефть-Заполярье", "ООО «Газпромнефть-Заполярье»", "ПАО «Газпром нефть»"]
-    # Дочка мать не тянет; без списка — только сама компания: «Газпром» — не «Газпром нефть».
-    assert company_names("Газпромнефть-Заполярье", known, LISTED) == [
+    # Дочка мать не тянет; без списка только сама компания: «Газпром» не «Газпром нефть».
+    assert group_names(company_group("Газпромнефть-Заполярье", LISTED), known) == [
         "Газпромнефть-Заполярье", "ООО «Газпромнефть-Заполярье»"]
-    assert company_names("Газпром", known) == ["Газпром"]
+    assert group_names(company_group("Газпром", []), known) == ["Газпром"]
 
 
 # --- Вставка списком, без базы -------------------------------------------------------------------
@@ -136,6 +138,8 @@ def test_lines_limit():
     assert len(parse_lines(text + "\n\n\n", [], exact)) == MAX_LINES
     with pytest.raises(ValueError, match="Не больше 500 строк за раз, во вставке 501"):
         parse_lines(text + "\nЕщё одна; Мать", [], exact)
+    with pytest.raises(ValueError, match="Нет ни одной строки «дочка; мать»"):
+        parse_lines(" \n\n", [], exact)
 
 
 def test_lines_conflict_inside_paste():
@@ -215,6 +219,16 @@ def test_add_list_delete(admin):
     assert admin.get("/api/company-parents").json()["pairs"] == []
     missing = admin.delete(f"/api/company-parents/{pair['id']}")
     assert (missing.status_code, missing.json()["detail"]) == (404, "Связь не найдена")
+
+
+def test_list_gives_the_form_participant_names_from_the_cards(admin):
+    # Подсказки формы: имена участников карточек, каждое один раз (справочник экран берёт сам).
+    for key, names in (("drilling", ["ООО «Башнефть-Добыча»", "Роснефть"]), ("repair", ["Роснефть"])):
+        signal_id = radar_finding(key, f"Находка {key}", "Текст находки.")
+        participants = [{"name": name, "quote": f"{name} пробурила скважину", "verified": True} for name in names]
+        assert signal_card_store.write_card(signal_id, {"participants_json": participants}, recipe={"agent": "test"})
+
+    assert sorted(admin.get("/api/company-parents").json()["names"]) == ["ООО «Башнефть-Добыча»", "Роснефть"]
 
 
 def test_refusals_carry_reason_and_write_nothing(admin):

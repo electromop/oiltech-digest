@@ -3,7 +3,8 @@
 Одна таблица случаев прогоняется через три места: ядро (сколько участников останется в карточке, если модель
 назвала обе компании с верными цитатами), фильтр «всё про компанию» (найдёт ли клик по одному имени карточку с
 другим) и экзамен (одна ли это компания у счёта). Новая развилка в одном месте роняет таблицу в другом: это сторож
-одного правила. Ниже — то, что правило меняет в ядре: цитата по любому написанию имени, имя справочника, издатель.
+одного правила. Ниже то, что правило меняет в ядре: цитата по любому написанию имени, имя справочника, издатель;
+и ключ экзамена: одна компания между прогонами.
 """
 
 from datetime import date
@@ -35,6 +36,8 @@ CASES = [
     # Любая другая скобка — пояснение, в имя не входит.
     ("Газпром (ПАО)", "Татнефть (ПАО)", False),
     ("Halliburton (США)", "Chevron (США)", False),
+    ("Нефтемаш (ПАО)", "Газпром (ПАО)", False),
+    ("Oceaneering (США)", "Halliburton (США)", False),
     ("Газпромнефть-Хантос (Газпром нефть)", "Газпром нефть", False),
     ("Journal of Petroleum Technology (SPE)", "SPE", False),
     ("Copernicus/ACP (публикатор)", "alb.aero (публикатор)", False),
@@ -76,16 +79,37 @@ def test_core_keeps_one_participant_for_one_company(one, other, same):
     assert len(_kept(text, [first, second])) == (1 if same else 2)
 
 
+def _found(company, participant):
+    """Найдёт ли фильтр «всё про компанию» карточку с участником: путь api._company_filter (company_group, затем
+    group_names по именам участников в базе) при пустом списке дочек."""
+    group = signal_card_filters.company_group(company, [])
+    return participant in signal_card_filters.group_names(group, [participant])
+
+
 @pytest.mark.parametrize(("one", "other", "same"), CASES)
 def test_filter_finds_the_card_under_another_name_of_the_company(one, other, same):
-    assert (other in signal_card_filters.company_names(one, known=[other])) is same
-    assert (one in signal_card_filters.company_names(other, known=[one])) is same
+    assert (_found(one, other), _found(other, one)) == (same, same)
 
 
 @pytest.mark.parametrize(("one", "other", "same"), CASES)
 def test_exam_counts_one_company_by_the_same_rule(one, other, same):
     names = CompanyNames(load_dictionaries()["companies"])
     assert (names.same(one, other), names.same(other, one)) == (same, same)
+
+
+def test_exam_key_is_one_for_spellings_of_one_company_between_runs():
+    # Ключ считает устойчивость экзамена между прогонами и его константу: «X Inc.» в одном прогоне и «X» в
+    # другом, «Petroleum Development Oman (PDO)» и «PDO» дают один ключ; имя справочника или алиасов экзамена
+    # даёт ключ своей записи.
+    names = CompanyNames(load_dictionaries()["companies"], [{"name": "Нефтемаш", "aliases": ["Neftemash"]}])
+
+    assert names.key("Atlas Energy Solutions Inc.") == names.key("Atlas Energy Solutions") == (
+        "atlas", "energy", "solutions")
+    assert names.key("Petroleum Development Oman (PDO)") == names.key("PDO") == ("pdo",)
+    assert names.key("Роснефтью") == names.key("НК «Роснефть»") == names.key("Rosneft") == ("роснефть",)
+    assert names.key("Neftemash Ltd") == names.key("Нефтемаш (ПАО)") == ("нефтемаш",)
+    # Общее пояснение в скобках ключ не сводит: другая компания, другой ключ.
+    assert names.key("Oceaneering (США)") != names.key("Halliburton (США)")
 
 
 TENDER = ("Petroleum Development Oman (PDO) объявила тендер. PDO signed a contract with FleetRabbit. FleetRabbit "

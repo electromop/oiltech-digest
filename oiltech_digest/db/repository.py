@@ -2187,14 +2187,14 @@ _PARTICIPANTS_SQL = (
     " THEN s.participants_json ELSE '[]'::jsonb END) p"
 )
 # Участник карточки — одно из имён компании (#97): имена участников из базы, которые по правилу «одна компания»
-# та же компания, сверены при запросе (signal_card_filters.company_names), здесь — точное сравнение.
+# та же компания, сверены при запросе (signal_card_filters.group_names), здесь точное сравнение.
 _PARTICIPANT_NAMED_SQL = f"EXISTS (SELECT 1 FROM {_PARTICIPANTS_SQL} WHERE p->>'name' = ANY(%s))"
 
 
 def participant_names() -> list[str]:
     """Все разные имена участников карточек (#97), по всем сигналам: из них фильтр «всё про компанию» берёт те,
-    что по правилу «одна компания» та же компания (signal_card_filters.company_names). Элемент без имени — не
-    в счёт."""
+    что по правилу «одна компания» та же компания (signal_card_filters.group_names); они же подсказки формы на
+    экране «Дочерние общества». Элемент без имени не в счёт."""
     with get_connection() as conn:
         rows = conn.execute(
             f"SELECT DISTINCT p->>'name' FROM signals s, {_PARTICIPANTS_SQL} WHERE p->>'name' IS NOT NULL"
@@ -2232,7 +2232,7 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
-    компания — участник карточки под любым из имён company_names (signal_card_filters.company_names); пустой
+    компания: участник карточки под любым из имён company_names (signal_card_filters.group_names); пустой
     список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра»."""
     clauses = [_showcase_visible_sql(showcase, hidden=hidden)]
     params: list = []

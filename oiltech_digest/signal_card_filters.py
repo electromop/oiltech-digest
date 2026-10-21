@@ -13,9 +13,10 @@ from oiltech_digest.signal_card_pack import UNDEFINED, load_dictionaries
 
 def company_rule() -> word_forms.Companies:
     """Правило «одна компания» (word_forms.Companies: форма собственности, «Имя (АББР)», пояснение в скобках,
-    падеж) со справочником алиасов ядра — одно у фильтра «всё про компанию» и у списка дочерних обществ (api._same).
-    Справочник читается при каждом вызове, разбор имён копится в правиле (word_forms.companies): правило берут раз
-    на запрос, а не на каждое сравнение."""
+    падеж) со справочником алиасов ядра: одно у фильтра «всё про компанию» и у проверок списка дочерних обществ
+    (обработчики api.py, company_parents.checked_row). Справочник читается при каждом вызове, разбор имён копится
+    в правиле (word_forms.companies): правило берут раз на запрос, а не на каждое сравнение (замер 20.10, вставка
+    500 строк: 7,4 с против 0,14 с)."""
     return word_forms.companies(load_dictionaries().get("companies") or [])
 
 
@@ -41,12 +42,6 @@ def group_names(group: Sequence[str], known: Iterable[str]) -> list[str]:
     rule = company_rule()
     return sorted({*group, *(other for other in known
                              if isinstance(other, str) and any(rule.same(member, other) for member in group))})
-
-
-def company_names(name: str, known: Iterable[str], pairs: Sequence[company_parents.Pair] = ()) -> list[str]:
-    """Имена участников для фильтра «всё про компанию» по имени компании — group_names её группы (company_group).
-    Без списка pairs — только сама компания: так фильтр сверяют с ядром и экзаменом (tests/test_word_forms.py)."""
-    return group_names(company_group(name, pairs), known)
 
 
 def checked_choice(column: str, value: str | None) -> str | None:

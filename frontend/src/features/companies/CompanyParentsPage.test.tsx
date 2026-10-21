@@ -17,6 +17,9 @@ const pairsFixture: CompanyParent[] = [
   },
 ];
 
+// Имена участников карточек из базы: «Роснефть» есть и в справочнике, подсказка одна.
+const participants = ["Газпромнефть-Хантос", "Роснефть"];
+
 const checkedLines: CompanyParentLine[] = [
   { line: 1, child_name: "Башнефть", parent_name: "Роснефть", note: null, problem: null },
   { line: 3, child_name: "Газпром", parent_name: "Газпром нефть", note: null, problem: CYCLE },
@@ -38,7 +41,7 @@ function route(input: RequestInfo | URL, init?: RequestInit): Response {
   if (url === "/api/signals/dictionaries") {
     return json({ event_type: [], region: [], technology_class: [], technology_maturity: [], companies: ["Роснефть", "Газпром"] });
   }
-  if (url === "/api/company-parents" && method === "GET") return json({ pairs });
+  if (url === "/api/company-parents" && method === "GET") return json({ pairs, names: participants });
   if (url === "/api/company-parents" && method === "POST") {
     if (addRefusal) return json({ detail: addRefusal }, 400);
     const pair = { id: 10 + pairs.length, ...body, created_by: 5, created_by_email: "admin@example.test", created_at: "2026-10-20T12:00:00+00:00" };
@@ -77,7 +80,7 @@ describe("экран «Дочерние общества»", () => {
     vi.restoreAllMocks();
   });
 
-  it("показывает список «дочка → мать, кто, когда» и подсказывает имена справочника и списка", async () => {
+  it("показывает список «дочка → мать, кто, когда» и подсказывает имена справочника, участников и списка", async () => {
     render(<CompanyParentsPage onUnauthorized={() => {}} showToast={() => {}} />);
 
     const zapolyarye = (await screen.findByRole("cell", { name: "Газпромнефть-Заполярье" })).closest("tr") as HTMLElement;
@@ -88,9 +91,9 @@ describe("экран «Дочерние общества»", () => {
     expect(cellsOf(neft).slice(0, 5)).toEqual(["Газпром нефть", "→Газпром", "контроль 95%", "viktor@example.test", "20.10.2026, 12:30"]);
     expect(screen.getByText("2 связи")).toBeInTheDocument();
 
-    await waitFor(() => expect(document.querySelectorAll("#company-parents-names option")).toHaveLength(4));
+    await waitFor(() => expect(document.querySelectorAll("#company-parents-names option")).toHaveLength(5));
     const options = [...document.querySelectorAll("#company-parents-names option")].map((option) => option.getAttribute("value"));
-    expect(options).toEqual(expect.arrayContaining(["Газпром", "Газпром нефть", "Газпромнефть-Заполярье", "Роснефть"]));
+    expect(options).toEqual(expect.arrayContaining(["Газпром", "Газпром нефть", "Газпромнефть-Заполярье", "Газпромнефть-Хантос", "Роснефть"]));
     expect(screen.getByLabelText("Дочка")).toHaveAttribute("list", "company-parents-names");
   });
 

@@ -43,6 +43,7 @@ function formatMoment(value: string | null): string {
 // сервере, одни для формы и вставки: дочка не мать сама себе, у дочки одна мать, без циклов.
 export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
   const [pairs, setPairs] = useState<CompanyParent[]>([]);
+  const [participants, setParticipants] = useState<string[]>([]);
   const [companies, setCompanies] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -70,7 +71,9 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
   async function reload() {
     try {
       setLoading(true);
-      setPairs(await listCompanyParents());
+      const list = await listCompanyParents();
+      setPairs(list.pairs);
+      setParticipants(list.names);
     } catch (error) {
       handleError(error, "Не удалось загрузить список");
     } finally {
@@ -87,11 +90,13 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
     }
   }
 
-  // Подсказки: справочник и уже введённые имена (мать часто уже есть в списке дочкой другой матери).
+  // Подсказки без повторов: справочник, имена участников карточек (черновик заносят по ним) и уже введённые
+  // имена (мать часто уже есть в списке дочкой другой матери).
   const names = useMemo(() => {
-    const all = new Set([...companies, ...pairs.flatMap((pair) => [pair.child_name, pair.parent_name])]);
+    const listed = pairs.flatMap((pair) => [pair.child_name, pair.parent_name]);
+    const all = new Set([...companies, ...participants, ...listed]);
     return [...all].sort((one, other) => one.localeCompare(other, "ru"));
-  }, [companies, pairs]);
+  }, [companies, participants, pairs]);
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();

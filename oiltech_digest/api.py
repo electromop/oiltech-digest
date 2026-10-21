@@ -1617,14 +1617,7 @@ def delete_tag(tag_id: int, user: dict[str, Any] = Depends(require_admin)) -> di
 # --- Дочерние общества (решение владельца 20.10) ------------------------------------------------
 # Список «дочка → мать» для фильтра «всё про компанию»: ведут на экране, правка действует без выката.
 # Проверки и разбор вставки — company_parents.py, база — db/company_parents_repo.py.
-
-
-def _same() -> company_parents.Same:
-    """Одна ли это компания — для списка дочек: полное правило «одна компания» со справочником алиасов ядра, то же,
-    что у фильтра «всё про компанию» (signal_card_filters.company_rule). Правило берётся раз на запрос, а не на
-    каждое сравнение: справочник читается с диска, а вставка списком сверяет десятки тысяч пар имён (замер 20.10,
-    вставка 500 строк: 7,4 с против 0,14 с)."""
-    return signal_card_filters.company_rule().same
+# Одна ли это компания: правило фильтра (signal_card_filters.company_rule), берётся раз на запрос.
 
 
 class CompanyParentIn(BaseModel):
@@ -1641,20 +1634,18 @@ class CompanyParentsImportIn(BaseModel):
 
 @app.get("/api/company-parents")
 def list_company_parents(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    return {"pairs": [_clean(row) for row in company_parents_repo.list_rows()]}
+    """Список и подсказки формы: names, имена участников карточек (справочник экран берёт сам)."""
+    return {"pairs": [_clean(row) for row in company_parents_repo.list_rows()], "names": repository.participant_names()}
 
 
 @app.post("/api/company-parents")
 def add_company_parent(payload: CompanyParentIn, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Добавить пару «дочка → мать»; отказ — 400 с причиной (company_parents.check_pair)."""
-    row = {"child_name": company_parents.clean(payload.child_name),
-           "parent_name": company_parents.clean(payload.parent_name),
-           "note": company_parents.clean(payload.note) or None}
+    """Добавить пару «дочка → мать»; отказ: 400 с причиной (company_parents.checked_row, как у вставки списком)."""
     with company_parents_repo.editing() as edit:
-        problem = (company_parents.check_pair(row["child_name"], row["parent_name"], edit.pairs(), _same())
-                   or company_parents.check_note(row["note"]))
-        if problem:
-            raise HTTPException(status_code=400, detail=problem)
+        row = company_parents.checked_row(payload.child_name, payload.parent_name, payload.note, edit.pairs(),
+                                          signal_card_filters.company_rule().same)
+        if row["problem"]:
+            raise HTTPException(status_code=400, detail=row["problem"])
         saved = edit.add([row], user_id=int(user["id"]))[0]
     return {"ok": True, "pair": _clean({**saved, "created_by_email": user.get("email")})}
 
@@ -1673,30 +1664,24 @@ def import_company_parents(
     """Вставка списком «дочка; мать»: без apply только разбор строк, в базу ничего. С apply — все строки одной
     транзакцией, если ни в одной нет ошибки; иначе 400 с тем же разбором (и message), ничего не записано."""
     if not payload.apply:
-        return _company_parents_answer(_company_parent_lines(payload.text, company_parents_repo.pairs()), applied=False)
+        return company_parents.paste_answer(_company_parent_lines(payload.text, company_parents_repo.pairs()),
+                                            applied=False)
     with company_parents_repo.editing() as edit:
         lines = _company_parent_lines(payload.text, edit.pairs())
-        refused = _company_parents_answer(lines, applied=False)
+        refused = company_parents.paste_answer(lines, applied=False)
         if refused["problems"]:
             raise HTTPException(status_code=400, detail={
                 **refused, "message": f"Ничего не записано: строк с ошибками {refused['problems']} из {len(lines)}"})
         edit.add(lines, user_id=int(user["id"]))
-    return _company_parents_answer(lines, applied=True)
-
-
-def _company_parents_answer(lines: list[dict[str, Any]], *, applied: bool) -> dict[str, Any]:
-    problems = sum(1 for line in lines if line["problem"])
-    return {"ok": not problems, "applied": applied, "problems": problems, "lines": lines}
+    return company_parents.paste_answer(lines, applied=True)
 
 
 def _company_parent_lines(text: str, pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """Разбор вставки (company_parents.parse_lines); пустая или слишком длинная вставка: 400 с причиной."""
     try:
-        lines = company_parents.parse_lines(text, pairs, _same())
+        return company_parents.parse_lines(text, pairs, signal_card_filters.company_rule().same)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not lines:
-        raise HTTPException(status_code=400, detail="Нет ни одной строки «дочка; мать»")
-    return lines
 
 
 @app.get("/api/scoring-criteria")
