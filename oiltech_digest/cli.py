@@ -2502,10 +2502,11 @@ def cmd_otbor_expert_pack(args: argparse.Namespace) -> None:
 def cmd_otbor_markup_check(args: argparse.Namespace) -> None:
     """Проверка размеченного пакета «Отбора» (#129): отчёт о нарушениях; есть нарушения — код выхода не 0."""
     from oiltech_digest import otbor_markup
+    from oiltech_digest.otbor_pack_format import PackError
 
     try:
         result = otbor_markup.check(args.markup, args.manifest)
-    except (otbor_markup.MarkupError, OSError, json.JSONDecodeError) as exc:
+    except (PackError, OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"otbor-markup-check: {exc}") from exc
     violations, approvals = result["violations"], result["approvals"]
     print(f"otbor-markup-check: строк {result['rows']}, нарушений {len(violations)}")

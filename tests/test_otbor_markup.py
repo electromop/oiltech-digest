@@ -5,15 +5,16 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 
 import openpyxl
 import pytest
 
-from oiltech_digest import otbor_pack
+from oiltech_digest import otbor_markup, otbor_pack_format as pack_format
 from tests.otbor_pack_support import build_corpus, manifest, pack_args, run_check, run_pack
 
-RUBRICS = otbor_pack.load_rubrics()["profiles"]
+RUBRICS = pack_format.load_rubrics()["profiles"]
 BUSINESS = [f"Бизнес: {one['name']}" for one in RUBRICS["business"]]
 TECH = [f"Технология: {one['name']}" for one in RUBRICS["tech_radar"]]
 TAKEN = {"Отрасль": "нефтесервис", "Связь с нефтесервисом": "прямая", "Брать или нет": "брать", "Тема": "Бурение",
@@ -58,8 +59,8 @@ def by_the_rules(items):
 
 
 def fill(out, answers, *, name="otbor_markup_done.xlsx", edit=None):
-    book = openpyxl.load_workbook(out / otbor_pack.WORKBOOK_NAME)
-    sheet = book[otbor_pack.MARKUP_SHEET]
+    book = openpyxl.load_workbook(out / pack_format.WORKBOOK_NAME)
+    sheet = book[pack_format.MARKUP_SHEET]
     header = [cell.value for cell in sheet[1]]
     for row in sheet.iter_rows(min_row=2):
         for column, value in answers.get(row[0].value, {}).items():
@@ -79,6 +80,20 @@ def test_a_markup_by_the_rules_passes(pack, capsys):
     printed = capsys.readouterr().out
     assert "строк 116, нарушений 0" in printed
     assert "Утверждение: «да» 0, правки 0, без решения 18" in printed
+    # Строки с метками в кодах справочников — вход экзамена (#133).
+    labels = {item["id"]: item for item in otbor_markup.check(path)["items"]}
+    answers = by_the_rules(pack["items"])
+    refused = next(item_id for item_id, answer in answers.items()
+                   if answer.get("Причина отказа") == "Нефтегаз без связи с нефтесервисом")
+    taken = next(item_id for item_id, answer in answers.items() if answer.get("Категория") == "бизнес"
+                 and answer["Брать или нет"] == "брать")
+    assert {key: labels[refused][key] for key in ("decision", "reject_reason", "industry", "oilfield_relevance",
+                                                  "category", "overall")} == {
+        "decision": "reject", "reject_reason": "oil_gas_no_link", "industry": "oil_gas", "oilfield_relevance": "none",
+        "category": "business", "overall": "wrong_domain"}
+    assert labels[taken]["scores"] == {**{one["name"]: 70 for one in RUBRICS["business"]},
+                                       **{one["name"]: None for one in RUBRICS["tech_radar"]}}
+    assert labels[taken]["theme"] == "Бурение" and labels[taken]["why"] == TAKEN["Почему такой балл"]
 
 
 def test_every_violation_is_reported_at_once_and_the_check_fails(pack, capsys):
@@ -160,12 +175,27 @@ def test_the_check_needs_the_pack_the_markup_came_from(pack, tmp_path):
         run_check("--markup", str(path), "--manifest", str(pack["corpus"]["card"]["manifest"]))
     assert "не манифест пакета «Отбора»" in str(refused.value)
 
+    # Манифест поправили руками: проверка говорит, чего в нём нет, а не падает на середине.
+    broken = json.loads((pack["out"] / pack_format.MANIFEST_NAME).read_text(encoding="utf-8"))
+    del broken["lists"]
+    broken["items"][0].pop("text_sha256")
+    (tmp_path / "broken.json").write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(SystemExit) as refused:
+        run_check("--markup", str(path), "--manifest", str(tmp_path / "broken.json"))
+    assert "испорчен" in str(refused.value) and "lists" in str(refused.value) and "items" in str(refused.value)
+
+    # Не таблица xlsx: отказ команды, а не трассировка.
+    (tmp_path / "notes.xlsx").write_text("не таблица", encoding="utf-8")
+    with pytest.raises(SystemExit) as refused:
+        run_check("--markup", str(tmp_path / "notes.xlsx"), "--manifest", str(pack["out"] / pack_format.MANIFEST_NAME))
+    assert "не таблица xlsx" in str(refused.value)
+
     def without_sheet(book, sheet, header):
-        del book[otbor_pack.MARKUP_SHEET]
+        del book[pack_format.MARKUP_SHEET]
 
     with pytest.raises(SystemExit) as refused:
         run_check("--markup", str(fill(pack["out"], {}, name="no_sheet.xlsx", edit=without_sheet)))
-    assert f"нет листа «{otbor_pack.MARKUP_SHEET}»" in str(refused.value)
+    assert f"нет листа «{pack_format.MARKUP_SHEET}»" in str(refused.value)
 
     def without_column(book, sheet, header):
         sheet.delete_cols(header.index("Категория") + 1)
@@ -177,8 +207,8 @@ def test_the_check_needs_the_pack_the_markup_came_from(pack, tmp_path):
 
 def test_expert_decisions_on_the_rules_are_summarized(pack, capsys):
     def decide(book, sheet, header):
-        for name, changed in ((otbor_pack.APPROVAL_SHEET, {"Старое событие": "убрать"}),
-                              (otbor_pack.RUBRICS_SHEET, {"Свежесть": "своя правка: от даты события до сегодня"})):
+        for name, changed in ((pack_format.APPROVAL_SHEET, {"Старое событие": "убрать"}),
+                              (pack_format.RUBRICS_SHEET, {"Свежесть": "своя правка: от даты события до сегодня"})):
             approval = book[name]
             columns = [cell.value for cell in approval[1]]
             for row in approval.iter_rows(min_row=2):
@@ -196,8 +226,8 @@ def test_expert_decisions_on_the_rules_are_summarized(pack, capsys):
 
 def test_dictionaries_changed_since_the_pack_are_named(pack, capsys, monkeypatch):
     path = fill(pack["out"], by_the_rules(pack["items"]))
-    current = otbor_pack.load_dictionaries()
-    monkeypatch.setattr(otbor_pack, "load_dictionaries", lambda: {**current, "version": "2099-01-01.1"})
+    current = pack_format.load_dictionaries()
+    monkeypatch.setattr(pack_format, "load_dictionaries", lambda: {**current, "version": "2099-01-01.1"})
 
     run_check("--markup", str(path))
 

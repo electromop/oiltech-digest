@@ -102,9 +102,15 @@ def visible_sql(article: str = "a", card: str = "c", source: str = "s") -> str:
     - перепечатка скрыта: в ленте остаётся одна главная копия группы (08.09). Скрыта
       именно копия — главная (primary_id) в article_reprints не значится. Запись обратима.
     """
+    return f"{card}.relevant IS NOT FALSE AND {ungated_visible_sql(article, source)}"
+
+
+def ungated_visible_sql(article: str = "a", source: str = "s") -> str:
+    """Условие ленты без решения гейта (visible_sql): не помечена на удаление, источник не в
+    архиве, не перепечатка. Отдельно его берёт пакет эксперту «Отбора» (#129): ему нужны и
+    отклонённые гейтом статьи — те, что лента показала бы, если бы гейт их принял."""
     return (
-        f"{card}.relevant IS NOT FALSE"
-        f" AND NOT {article}.pending_deletion"
+        f"NOT {article}.pending_deletion"
         f" AND {source}.archived_at IS NULL"
         f" AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = {article}.id)"
     )

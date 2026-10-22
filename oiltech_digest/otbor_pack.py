@@ -1,55 +1,42 @@
-"""Пакет эксперту для агента «Отбор» (#129, спека #128): справочники, черновики линеек, разметка вслепую.
-
-Справочники «Отбора» (отрасль, связь с нефтесервисом, решение, причины отказа, категория) и черновики линеек
-десяти критериев двух профилей — версионируемые данные в репозитории (`otbor_dictionaries.json`,
-`scoring_rubrics.json`): их же потом читают агенты (#130 — «Отбор», #132 — второй вызов «Карточки»), версии
-идут в рецепт. Причины отказа, границу прямой связи и линейки эксперт утверждает в том же пакете.
+"""Пакет эксперту для агента «Отбор» (#129, спека #128): разметка вслепую, справочники и линейки на утверждение.
 
 Состав — решения владельца 21-22.10 (спека #128, «Набор и экзамен»), около 150-160 строк:
 - прежняя разметка карточки (#94): связь с нефтесервисом у этих строк уже размечена — колонка заполнена
   ответом самого эксперта; входы — из прежнего манифеста (там поправки с первоисточника), а не из базы;
 - случайные статьи ленты за 30 дней до --until: 50 отклонённых гейтом и 30 принятых; окно — в манифесте;
 - 15-20 находок из «Отсеянных и скрытых» радара: брак судьи и ревью пачки, смешанные ссылки, старые события
-  (по очереди из каждого вида);
-- находки радара с несколькими ссылками — для причины «разные события в одной находке»;
+  (по очереди из каждого вида); находки других этапов отсева (поиск, сбой судьи) в пакет не идут;
+- неотсеянные находки радара с несколькими ссылками — для причины «разные события в одной находке»;
 - накопленные материалы коллег, ещё не ставшие сигналом.
 
-Вслепую: в таблице то, что получит агент, — заголовок, текст публикации, ссылка, издатель, дата публикации,
-у находки радара — список её ссылок. Решений гейта, судьи и поиска, сути, темы, оценки автора материала в
-ней нет; группа строки не видна ни колонкой, ни порядком. Правила текста и издателя — как у пакета карточки
-(signal_card_pack): у находки «режима ChatGPT» дата публикации — дата события по версии модели поиска, а имя
-издателя записала модель, поэтому в таблице сайт из ссылки и пустая дата.
+Вслепую: в таблице то, что получит агент, — заголовок, текст публикации, ссылка, издатель, даты публикации и
+поступления, у находки радара — список её ссылок. Решений гейта, судьи и поиска, сути, темы, оценки автора
+материала в ней нет; группа строки не видна ни колонкой, ни порядком. Правила текста и издателя — как у пакета
+карточки (signal_card_pack): у находки «режима ChatGPT» дату публикации дала модель поиска, а имя издателя
+записала модель, поэтому в таблице сайт из ссылки и пустая дата публикации (возраст события — от даты поступления).
 
-Таблица и манифест пишутся вне репозитория — он публичный. Проверка размеченной таблицы — otbor_markup.
+Формат таблицы и манифеста, справочники и линейки — otbor_pack_format; запросы — db.otbor_pack_store. Таблица и
+манифест пишутся вне репозитория — он публичный. Проверка размеченной таблицы — otbor_markup.
 """
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from psycopg.rows import dict_row
-
-from oiltech_digest import colleague_materials, config, feed_window
-from oiltech_digest.db import repository
+from oiltech_digest import feed_window, otbor_pack_workbook
+from oiltech_digest.db import otbor_pack_store, repository
+from oiltech_digest.otbor_pack_format import (GIVEN_COLUMNS, MANIFEST_KIND, MANIFEST_NAME, MARKUP_SHEET, PROFILE_RU,
+                                              RELEVANCE_COLUMN, WORKBOOK_NAME, PackError, answer_columns, fingerprint,
+                                              lists, load_dictionaries, load_rubrics, open_book, score_columns,
+                                              sheet_rows, text)
 from oiltech_digest.scoring_profiles import SCORING_PROFILES
 from oiltech_digest.signal_card_pack import (REPO_ROOT, TEXT_LIMIT, _CONTROL_RE, _file_mark, _markable,
                                              _publisher_label, _rank, publication_day, publication_text)
 
-DICTIONARIES_PATH = Path(__file__).with_name("otbor_dictionaries.json")
-RUBRICS_PATH = Path(__file__).with_name("scoring_rubrics.json")
-WORKBOOK_NAME = "otbor_markup.xlsx"
-MANIFEST_NAME = "otbor_markup_manifest.json"
-MANIFEST_KIND = "otbor_expert_pack"
-MARKUP_SHEET = "Разметка"
-RULES_SHEET = "Правила"
-APPROVAL_SHEET = "На утверждение"
-RUBRICS_SHEET = "Линейки"
-LISTS_SHEET = "_списки"
 GROUPS = {
     "card_markup": "прежняя разметка карточки",
     "feed_rejected": "отклонённые гейтом статьи ленты",
@@ -59,57 +46,17 @@ GROUPS = {
     "materials": "материалы коллег",
 }
 QUOTAS = {"feed_rejected": 50, "feed_accepted": 30, "radar_filtered": 18, "radar_links": 10}
-# Меньше этого экзамену группы не хватит: «Отсеянных» — 15-20 (спека), находок со ссылками — хотя бы пять.
-MINIMUMS = {"feed_rejected": 50, "feed_accepted": 30, "radar_filtered": 15, "radar_links": 5}
+# Меньше этого экзамену группы не хватит: статей — сколько решил владелец, «Отсеянных» — 15-20 (спека), находки со
+# ссылками нужны хотя бы какие-то.
+MINIMUMS = {"feed_rejected": 50, "feed_accepted": 30, "radar_filtered": 15, "radar_links": 1}
 FILTERED_KINDS = {"judge": "брак судьи", "review": "брак ревью пачки", "mixed": "смешанные ссылки",
                   "old": "старые события"}
 FEED_WINDOW_DAYS = 30
 LINKS_LIMIT = 8  # ссылок находки во входе «Отбора» (спека #128)
 DEFAULT_SEED = 20261022
-NO_DATE = "нет даты"
-PROFILE_RU = {"business": "Бизнес", "tech_radar": "Технология"}
-# Профиль баллов — по категории (спека #128): «другое» баллами не оценивается.
-CATEGORY_PROFILE = {"business": "business", "technology": "tech_radar"}
-GIVEN_COLUMNS = ["ID", "Заголовок", "Текст публикации", "Ссылка", "Издатель", "Дата публикации", "Ссылки находки"]
-# Колонки «Отбора» — в порядке его рассуждения (спека #128): отрасль, связь, решение, причина, категория. Тема —
-# от «Карточки», но размечается здесь же: у взятых строк по ней мерится основной вызов «Карточки».
-CHOICE_COLUMNS = [("Отрасль", "industry"), ("Связь с нефтесервисом", "oilfield_relevance"),
-                  ("Брать или нет", "decision"), ("Причина отказа", "reject_reason"), ("Категория", "category"),
-                  ("Тема", "theme")]
-WHY_COLUMN = "Почему такой балл"
-SCALE_COLUMN = "Общая оценка"
-COMMENT_COLUMN = "Комментарий эксперта"
-# Общая оценка строки — шкала эксперта (его список от 13.09, тот же, что у материалов коллег и карточки радара):
-# пункты-оценки. «Не тот блок», «дубль» и «оценка завышена» — действия над сигналом, а не оценка строки.
-EXPERT_SCALE = [one for one in colleague_materials.VERDICTS
-                if one[0] not in ("wrong_block", "merge_duplicate", "overrated")]
 _MANIFEST_KEYS = ("id", "group", "kind", "origin", "article_id", "signal_id", "evidence_id", "material_id", "url",
-                  "title", "text", "text_sha256", "text_chars", "published", "publisher", "publisher_type",
-                  "language", "links", "relevance", "overrides", "override_note", "file_note")
-
-
-class PackError(ValueError):
-    pass
-
-
-def load_dictionaries() -> dict[str, Any]:
-    return json.loads(DICTIONARIES_PATH.read_text(encoding="utf-8"))
-
-
-def load_rubrics() -> dict[str, Any]:
-    return json.loads(RUBRICS_PATH.read_text(encoding="utf-8"))
-
-
-def score_columns(rubrics: dict[str, Any]) -> list[dict[str, Any]]:
-    """Колонки баллов: пять критериев бизнеса и пять технологии; эксперт заполняет колонки своей категории."""
-    return [{"header": f"{PROFILE_RU[profile]}: {criterion['name']}", "profile": profile,
-             "criterion": criterion["name"], "allows_no_date": bool(criterion.get("allows_no_date"))}
-            for profile in SCORING_PROFILES for criterion in rubrics["profiles"][profile]]
-
-
-def answer_columns(rubrics: dict[str, Any]) -> list[str]:
-    return ([name for name, _ in CHOICE_COLUMNS] + [one["header"] for one in score_columns(rubrics)]
-            + [WHY_COLUMN, SCALE_COLUMN, COMMENT_COLUMN])
+                  "title", "text", "text_sha256", "text_chars", "published", "received", "publisher",
+                  "publisher_type", "language", "links", "relevance", "overrides", "override_note", "file_note")
 
 
 def default_until() -> str:
@@ -129,7 +76,7 @@ def export_pack(out_dir: str | Path | None, *, seed: int | None = None, until: s
         card_pack = {**_file_mark("manifest", str(card_manifest)), **_file_mark("markup", str(card_markup))}
     rows = select_rows(seed=seed, since=since, until=until, card=card or [])
     dictionaries, rubrics = load_dictionaries(), load_rubrics()
-    weights, blockers = _criteria(rubrics)
+    blockers = _criteria_problems(rubrics)
     themes = _themes()
     if not themes:
         blockers.append("в базе нет тем (корневых тегов): в колонке «Тема» не из чего выбирать")
@@ -141,23 +88,20 @@ def export_pack(out_dir: str | Path | None, *, seed: int | None = None, until: s
     if missing or blockers:
         raise PackError("пакет не записан: " + "; ".join(missing + blockers))
     out = _checked_out_dir(out_dir)
-    from oiltech_digest import otbor_pack_workbook
-
-    lists = _lists(dictionaries, themes)
+    columns_lists = lists(dictionaries, themes)
     # Строки вперемешку и своим ключом: блоками групп таблица выдавала бы эксперту решение гейта и радара.
     rows = sorted(rows, key=lambda item: _rank("table", seed, item["id"]))
     out.mkdir(parents=True, exist_ok=True)
     otbor_pack_workbook.write(out / WORKBOOK_NAME, rows, dictionaries=dictionaries, rubrics=rubrics, themes=themes,
-                              weights=weights, lists=lists)
+                              lists=columns_lists)
     manifest = {
         "kind": MANIFEST_KIND, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "seed": seed, "window": {"since": since, "until": until, "days": FEED_WINDOW_DAYS},
         "recipe": {"dictionaries_version": dictionaries["version"], "rubrics_version": rubrics["version"],
                    "text_limit": TEXT_LIMIT, "links_limit": LINKS_LIMIT},
-        "card_pack": card_pack,
-        "composition": result["composition"],
+        "card_pack": card_pack, "composition": result["composition"],
         "columns": {"given": GIVEN_COLUMNS, "answers": answer_columns(rubrics)},
-        "lists": lists, "score_columns": score_columns(rubrics),
+        "lists": columns_lists, "score_columns": score_columns(rubrics),
         "items": [{key: item.get(key) for key in _MANIFEST_KEYS} for item in rows],
     }
     (out / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -170,15 +114,15 @@ def select_rows(*, seed: int, since: str, until: str, card: list[dict[str, Any]]
     rows = list(card)
     articles = {item["article_id"] for item in rows if item.get("article_id")}
     signals = {item["signal_id"] for item in rows if item.get("signal_id")}
-    feed = [item for item in _feed_candidates(since, until) if item["article_id"] not in articles and _markable(item)]
+    feed = [item for item in _feed_items(since, until) if item["article_id"] not in articles and _markable(item)]
     for group in ("feed_rejected", "feed_accepted"):
         pool = [item for item in feed if item["group"] == group]
         rows += sorted(pool, key=lambda item: _rank(seed, group, item["id"]))[:QUOTAS[group]]
-    radar = [item for item in _radar_candidates(until) if item["signal_id"] not in signals and _markable(item)]
-    rows += _by_kinds([item for item in radar if item["kind"] in FILTERED_KINDS], QUOTAS["radar_filtered"], seed)
-    with_links = [item for item in radar if item["kind"] is None and item["link_count"] >= 2]
+    radar = [item for item in _radar_items(until) if item["signal_id"] not in signals and _markable(item)]
+    rows += _by_kinds([item for item in radar if item["group"] == "radar_filtered"], QUOTAS["radar_filtered"], seed)
+    with_links = [item for item in radar if item["group"] == "radar_links" and item["link_count"] >= 2]
     rows += sorted(with_links, key=lambda item: _rank(seed, "radar_links", item["id"]))[:QUOTAS["radar_links"]]
-    rows += [item for item in _material_candidates(until) if _markable(item)]
+    rows += [item for item in _material_items(until) if _markable(item)]
     _complete_from_base(rows)
     return rows
 
@@ -223,17 +167,21 @@ def _card_rows(manifest_path: str | Path | None, markup_path: str | Path | None)
             isinstance(item, dict) and {"id", "text", "text_sha256"} <= item.keys() for item in items):
         raise PackError(f"{Path(manifest_path).name}: не манифест пакета карточки, нужен список items с id, text "
                         "и text_sha256")
-    answers = _card_answers(Path(markup_path))
+    markup = Path(markup_path)
+    answers = {row["ID"]: row for row in sheet_rows(open_book(markup), MARKUP_SHEET,
+                                                    ["ID", "Текст публикации", RELEVANCE_COLUMN], markup.name)}
     allowed = {_plain(value["label"]): value["label"] for value in load_dictionaries()["oilfield_relevance"]["values"]}
     rows, problems = [], []
     for item in items:
         answer = answers.get(item["id"])
+        relevance = text(answer.get(RELEVANCE_COLUMN)) if answer else ""
         if answer is None:
             problems.append(f"{item['id']}: нет строки в таблице")
-        elif _sha(item["text"]) != item["text_sha256"] or answer["text_sha256"] != item["text_sha256"]:
+        elif fingerprint(item["text"]) != item["text_sha256"] or fingerprint(
+                answer.get("Текст публикации")) != item["text_sha256"]:
             problems.append(f"{item['id']}: текст не тот, что в манифесте")
-        elif _plain(answer["relevance"]) not in allowed:
-            problems.append(f"{item['id']}: связь «{answer['relevance']}» не из справочника")
+        elif _plain(relevance) not in allowed:
+            problems.append(f"{item['id']}: связь «{relevance}» не из справочника")
         else:
             # Издатель — как его видел эксперт: источник ленты или корпуса, у находки поиска — сайт из ссылки.
             publisher = item.get("publisher") if item.get("publisher_type") else _publisher_label(item)
@@ -241,8 +189,8 @@ def _card_rows(manifest_path: str | Path | None, markup_path: str | Path | None)
                                                             "published", "publisher_type", "override_note")},
                          "id": item["id"], "group": "card_markup", "title": item.get("title") or "",
                          "text": item["text"], "text_sha256": item["text_sha256"], "text_chars": len(item["text"]),
-                         "publisher": publisher or "", "relevance": allowed[_plain(answer["relevance"])],
-                         "overrides": item.get("overrides") or []})
+                         "publisher": publisher or "", "relevance": allowed[_plain(relevance)],
+                         "overrides": item.get("overrides") or [], "links": []})
     extra = sorted(set(answers) - {item["id"] for item in items})
     if extra:
         problems.append("в таблице лишние строки " + ", ".join(extra))
@@ -251,117 +199,32 @@ def _card_rows(manifest_path: str | Path | None, markup_path: str | Path | None)
     return rows
 
 
-def _card_answers(path: Path) -> dict[str, dict[str, str]]:
-    import openpyxl
-
-    book = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    if MARKUP_SHEET not in book.sheetnames:
-        raise PackError(f"{path.name}: нет листа «{MARKUP_SHEET}»")
-    rows = list(book[MARKUP_SHEET].iter_rows(values_only=True))
-    header = [str(cell or "").strip() for cell in rows[0]] if rows else []
-    absent = [name for name in ("ID", "Текст публикации", "Связь с нефтесервисом") if name not in header]
-    if absent:
-        raise PackError(f"{path.name}: нет колонок {', '.join(absent)}")
-    answers = {}
-    for values in rows[1:]:
-        cells = dict(zip(header, values))
-        number = str(cells.get("ID") or "").strip()
-        if number:
-            answers[number] = {"text_sha256": _sha(str(cells.get("Текст публикации") or "")),
-                               "relevance": str(cells.get("Связь с нефтесервисом") or "").strip()}
-    return answers
-
-
-def _feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
-    """Статьи ленты, собранные в окне, о которых гейт уже решил. Условия ленты (feed_window.visible_sql) — кроме
-    решения гейта: отклонённые лента не показывает, а пакету они нужны. Отметки людей выборку не трогают."""
-    with repository.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            SELECT a.id AS article_id, a.title, a.url, a.raw_text AS text, a.language,
-                   COALESCE(a.published_at, a.collected_at) AS published,
-                   s.name AS publisher, COALESCE(s.source_type, '') AS publisher_type, c.relevant
-            FROM articles a
-            JOIN article_cards c ON c.article_id = a.id
-            JOIN sources s ON s.id = a.source_id
-            WHERE c.relevant IS NOT NULL AND NOT a.pending_deletion AND s.archived_at IS NULL
-              AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
-              AND a.collected_at >= %s::date AND a.collected_at < %s::date
-              AND a.full_text_status IS DISTINCT FROM 'mismatch'
-              AND length(btrim(COALESCE(a.raw_text, ''))) >= %s
-            ORDER BY a.id
-            """,
-            (since, until, config.MIN_ARTICLE_TEXT_CHARS),
-        )
-        rows = cur.fetchall()
+def _feed_items(since: str, until: str) -> list[dict[str, Any]]:
     return [_item("feed_accepted" if row.pop("relevant") else "feed_rejected", "feed", f"article:{row['article_id']}",
-                  row) for row in rows]
+                  row) for row in otbor_pack_store.feed_candidates(since, until)]
 
 
-def _radar_candidates(until: str) -> list[dict[str, Any]]:
-    """Находки поиска, поступившие до конца окна, с главной публикацией, текст которой написал издатель (как у
-    пакета карточки). Вид отсева: брак судьи, брак ревью пачки, смешанные ссылки, событие старше срока на день
-    находки (дата судьи или человека, не агента карточки — как у правил показа); прочие этапы отсева — мимо."""
-    from oiltech_digest.signal_research import EVIDENCE_SOURCE
-
-    age = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
-    old = (f"WHEN {repository._judged_sql('s', 'event_date')} < s.first_seen_at::date - {age} THEN 'old'"
-           if age > 0 else "")
-    with repository.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT DISTINCT ON (s.id)
-                   s.id AS signal_id, e.id AS evidence_id, a.id AS article_id, a.language,
-                   COALESCE(a.title, e.title) AS title, COALESCE(a.url, e.source_url) AS url,
-                   COALESCE(a.raw_text, e.extracted_fact) AS text,
-                   CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)
-                        WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %s THEN e.published_at
-                   END AS published,
-                   src.name AS publisher_source, COALESCE(src.source_type, '') AS publisher_type,
-                   CASE WHEN s.filter_stage = 'judge' THEN 'judge'
-                        WHEN s.filter_stage = 'review' THEN 'review'
-                        WHEN s.filter_stage IS NOT NULL THEN 'other_stage'
-                        WHEN s.mixed_events IS TRUE THEN 'mixed'
-                        {old}
-                   END AS kind,
-                   (SELECT count(*) FROM signal_evidence x WHERE x.signal_id = s.id) AS link_count
-            FROM signals s
-            JOIN signal_evidence e ON e.signal_id = s.id
-            LEFT JOIN articles a ON a.id = e.article_id
-            LEFT JOIN sources src ON src.id = a.source_id
-            WHERE {repository.radar_origin_sql("s")} AND s.merged_into_signal_id IS NULL AND s.archived_at IS NULL
-              AND s.first_seen_at < %s::date
-              AND (length(btrim(COALESCE(a.raw_text, ''))) >= %s
-                   OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'
-                       AND length(btrim(COALESCE(e.extracted_fact, ''))) >= %s))
-            ORDER BY s.id, e.strength DESC, e.id
-            """,
-            (EVIDENCE_SOURCE, until, config.MIN_ARTICLE_TEXT_CHARS, config.MIN_ARTICLE_TEXT_CHARS),
-        )
-        rows = cur.fetchall()
+def _radar_items(until: str) -> list[dict[str, Any]]:
+    """Находки радара: виды отсева спеки — в «Отсеянные», неотсеянные — кандидаты в находки со ссылками; находки
+    других этапов отсева (поиск, сбой судьи) не идут никуда."""
     items = []
-    for row in rows:
-        group = "radar_filtered" if row["kind"] in FILTERED_KINDS else "radar_links"
-        items.append(_item(group, "radar", f"signal:{row['signal_id']}", {**row, "publisher": _publisher_label(row)}))
+    for row in otbor_pack_store.radar_candidates(until):
+        group = ("radar_filtered" if row["kind"] in FILTERED_KINDS
+                 else "radar_links" if row["kind"] is None else None)
+        if group:
+            items.append(_item(group, "radar", f"signal:{row['signal_id']}", {**row, "publisher": _publisher_label(row)}))
     return items
 
 
-def _material_candidates(until: str) -> list[dict[str, Any]]:
-    """Материалы коллег со статусом «принят» (сигналом ещё не стали), присланные до конца окна."""
-    with repository.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute("SELECT id, title, description, url, file_path, created_at FROM colleague_materials"
-                    " WHERE signal_id IS NULL AND created_at < %s::date ORDER BY id", (until,))
-        rows = cur.fetchall()
+def _material_items(until: str) -> list[dict[str, Any]]:
     items = []
-    for row in rows:
-        text, note = _material_text(row)
+    for row in otbor_pack_store.material_candidates(until):
+        material_text, note = _material_text(row)
         items.append(_item("materials", "material", f"material:{row['id']}", {
-            "material_id": row["id"], "title": row["title"], "text": text, "url": row["url"],
-            "published": row["created_at"], "publisher": _publisher_label(row) if row["url"] else "",
-            "publisher_type": "", "language": None, "file_note": note}))
+            "material_id": row["id"], "title": row["title"], "text": material_text, "url": row["url"],
+            "published": row["created_at"], "received": row["created_at"],
+            "publisher": _publisher_label(row) if row["url"] else "", "publisher_type": "", "language": None,
+            "file_note": note}))
     return items
 
 
@@ -381,11 +244,12 @@ def _material_text(row: dict[str, Any]) -> tuple[str, str | None]:
 
 
 def _item(group: str, origin: str, item_id: str, row: dict[str, Any]) -> dict[str, Any]:
-    text = publication_text(row.get("text"))
+    body = publication_text(row.get("text"))
     return {**row, "group": group, "kind": row.get("kind") if group == "radar_filtered" else None,
             "origin": origin, "id": item_id, "title": _CONTROL_RE.sub(" ", row.get("title") or "").strip(),
-            "text": text, "text_sha256": _sha(text), "text_chars": len(text),
-            "published": publication_day(row.get("published")), "links": [], "overrides": []}
+            "text": body, "text_sha256": fingerprint(body), "text_chars": len(body),
+            "published": publication_day(row.get("published")), "received": publication_day(row.get("received")),
+            "links": [], "overrides": []}
 
 
 def _by_kinds(items: list[dict[str, Any]], count: int, seed: int) -> list[dict[str, Any]]:
@@ -404,67 +268,49 @@ def _by_kinds(items: list[dict[str, Any]], count: int, seed: int) -> list[dict[s
 
 
 def _complete_from_base(rows: list[dict[str, Any]]) -> None:
-    """Ссылки находки (до LINKS_LIMIT, если их больше одной) — у всех строк радара, в том числе прежних; язык — у
-    прежних строк со статьёй (в прежнем манифесте его нет). Правила заголовка, издателя и даты ссылки — как у
-    главной публикации: у ссылки поиска сайт из адреса и пустая дата."""
-    from oiltech_digest.signal_research import EVIDENCE_SOURCE
-
-    signals = sorted({int(item["signal_id"]) for item in rows if item.get("origin") == "radar" and item.get("signal_id")})
-    articles = sorted({int(item["article_id"]) for item in rows if item.get("article_id") and not item.get("language")})
-    with repository.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            SELECT e.signal_id, COALESCE(a.title, e.title) AS title, COALESCE(a.url, e.source_url) AS url,
-                   src.name AS publisher_source,
-                   CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)
-                        WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %s THEN e.published_at
-                   END AS published
-            FROM signal_evidence e
-            LEFT JOIN articles a ON a.id = e.article_id
-            LEFT JOIN sources src ON src.id = a.source_id
-            WHERE e.signal_id = ANY(%s::bigint[])
-            ORDER BY e.signal_id, e.strength DESC, e.id
-            """,
-            (EVIDENCE_SOURCE, signals),
-        )
-        links: dict[int, list[dict[str, Any]]] = defaultdict(list)
-        for row in cur.fetchall():
-            links[int(row["signal_id"])].append({
-                "url": row["url"], "title": _CONTROL_RE.sub(" ", row["title"] or "").strip(),
-                "publisher": _publisher_label(row), "published": publication_day(row["published"])})
-        cur.execute("SELECT id, language FROM articles WHERE id = ANY(%s::bigint[])", (articles,))
-        languages = {int(row["id"]): row["language"] for row in cur.fetchall()}
+    """Ссылки находки (до LINKS_LIMIT, если их больше одной) — у всех строк радара, в том числе прежних; язык и дата
+    поступления — у прежних строк (в прежнем манифесте их нет). У ссылки поиска — сайт из адреса и пустая дата."""
+    card = [item for item in rows if item["group"] == "card_markup"]
+    articles, signals = otbor_pack_store.card_row_facts(
+        sorted({int(item["article_id"]) for item in card if item.get("article_id")}),
+        sorted({int(item["signal_id"]) for item in card if item.get("signal_id")}))
+    links = otbor_pack_store.evidence_links(
+        sorted({int(item["signal_id"]) for item in rows if item["origin"] == "radar" and item.get("signal_id")}))
     for item in rows:
-        found = links.get(int(item["signal_id"])) if item.get("origin") == "radar" and item.get("signal_id") else None
-        item["links"] = found[:LINKS_LIMIT] if found and len(found) > 1 else []
-        if item.get("article_id") and not item.get("language"):
-            item["language"] = languages.get(int(item["article_id"]))
+        found = links.get(int(item["signal_id"])) if item["origin"] == "radar" and item.get("signal_id") else None
+        item["links"] = [{"url": link["url"], "title": _CONTROL_RE.sub(" ", link["title"] or "").strip(),
+                          "publisher": _publisher_label(link), "published": publication_day(link["published"])}
+                         for link in found[:LINKS_LIMIT]] if found and len(found) > 1 else []
+        if item["group"] != "card_markup":
+            continue
+        article = articles.get(int(item["article_id"])) if item.get("article_id") else None
+        item["language"] = article["language"] if article else None
+        arrived = (signals.get(int(item["signal_id"])) if item["origin"] == "radar" and item.get("signal_id")
+                   else article["collected_at"] if article else None)
+        item["received"] = publication_day(arrived)
 
 
 # --- Справочная часть ----------------------------------------------------------------------------
 
 
-def _criteria(rubrics: dict[str, Any]) -> tuple[dict[tuple[str, str], float], list[str]]:
-    """Веса критериев с экрана «Скоринг» и расхождения его наборов с линейками: баллы эксперта должны быть о тех
-    же критериях, по которым платформа посчитает итог."""
-    weights: dict[tuple[str, str], float] = {}
+def _criteria_problems(rubrics: dict[str, Any]) -> list[str]:
+    """Расхождения наборов экрана «Скоринг» с линейками: баллы эксперта должны быть о тех же критериях, по которым
+    платформа посчитает итог."""
     problems = []
     for profile in SCORING_PROFILES:
-        enabled = repository.list_enabled_scoring_criteria(profile)
-        screen = [str(one["name"]) for one in enabled]
+        screen = [str(one["name"]) for one in repository.list_enabled_scoring_criteria(profile)]
         drafted = [one["name"] for one in rubrics["profiles"][profile]]
         missing = [name for name in drafted if name not in screen]
         extra = [name for name in screen if name not in drafted]
-        if missing or extra:
+        parts = []
+        if missing:
+            parts.append("в линейках есть, на экране нет " + ", ".join(f"«{one}»" for one in missing))
+        if extra:
+            parts.append("на экране есть, в линейках нет " + ", ".join(f"«{one}»" for one in extra))
+        if parts:
             problems.append(f"критерии «{PROFILE_RU[profile]}» на экране «Скоринг» не те, что в линейках: "
-                            + "; ".join(part for part in (
-                                "в линейках есть, на экране нет " + ", ".join(f"«{one}»" for one in missing)
-                                if missing else "",
-                                "на экране есть, в линейках нет " + ", ".join(f"«{one}»" for one in extra)
-                                if extra else "") if part))
-        weights.update({(profile, str(one["name"])): _number(one["weight"]) for one in enabled})
-    return weights, problems
+                            + "; ".join(parts))
+    return problems
 
 
 def _themes() -> list[dict[str, str]]:
@@ -473,22 +319,3 @@ def _themes() -> list[dict[str, str]]:
 
     return [{"name": topic["name"], "description": topic["description"]}
             for topic in topics_from_tags(repository.list_enabled_tags())]
-
-
-def _lists(dictionaries: dict[str, Any], themes: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
-    """Значения выпадающих списков по колонкам: метка — для эксперта, код — для экзамена. Хранятся в манифесте:
-    разметка сверяется с тем, что видел эксперт, даже если справочники потом поменяют."""
-    lists = {column: [{"code": value["code"], "label": value["label"]} for value in dictionaries[key]["values"]]
-             for column, key in CHOICE_COLUMNS if key != "theme"}
-    lists["Тема"] = [{"code": theme["name"], "label": theme["name"]} for theme in themes]
-    lists[SCALE_COLUMN] = [{"code": value, "label": short} for value, short, _ in EXPERT_SCALE]
-    return lists
-
-
-def _number(value: Any) -> float | int:
-    number = float(value or 0)
-    return int(number) if number.is_integer() else number
-
-
-def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()

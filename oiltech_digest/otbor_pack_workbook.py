@@ -1,24 +1,22 @@
 """Таблица пакета эксперту «Отбора» (#129): инструкция, разметка, правила колонок, листы на утверждение и скрытые
-списки. Состав строк и манифест — otbor_pack. Тексты правил берутся из справочников и линеек, а не пишутся здесь:
-одна и та же линейка идёт в правила эксперта и потом в инструкцию модели (спека #128). Тексты для эксперта — без
-длинного и среднего тире."""
+списки. Состав строк и манифест — otbor_pack, формат — otbor_pack_format. Правила колонок со справочником и линейки
+берутся из данных, а не пишутся здесь: одна и та же линейка идёт в правила эксперта и потом в инструкцию модели
+(спека #128). Тексты для эксперта — без длинного и среднего тире."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from oiltech_digest.otbor_pack import (APPROVAL_SHEET, CHOICE_COLUMNS, COMMENT_COLUMN, EXPERT_SCALE, GIVEN_COLUMNS,
-                                       LISTS_SHEET, MARKUP_SHEET, PROFILE_RU, RUBRICS_SHEET, RULES_SHEET,
-                                       SCALE_COLUMN, WHY_COLUMN, answer_columns, score_columns)
+from oiltech_digest.otbor_pack_format import (APPROVAL_SHEET, CHOICE_COLUMNS, COMMENT_COLUMN, EXPERT_SCALE,
+                                              GIVEN_COLUMNS, LISTS_SHEET, MARKUP_SHEET, PROFILE_RU, RELEVANCE_COLUMN,
+                                              RUBRICS_SHEET, RULES_SHEET, SCALE_COLUMN, WHY_COLUMN, answer_columns,
+                                              score_columns)
 from oiltech_digest.scoring_profiles import SCORING_PROFILES
-
-RELEVANCE_COLUMN = "Связь с нефтесервисом"
 
 
 def write(path: Path, rows: list[dict[str, Any]], *, dictionaries: dict[str, Any], rubrics: dict[str, Any],
-          themes: list[dict[str, str]], weights: dict[tuple[str, str], float],
-          lists: dict[str, list[dict[str, str]]]) -> None:
+          themes: list[dict[str, str]], lists: dict[str, list[dict[str, str]]]) -> None:
     import openpyxl
 
     book = openpyxl.Workbook()
@@ -30,7 +28,7 @@ def write(path: Path, rows: list[dict[str, Any]], *, dictionaries: dict[str, Any
     _markup_sheet(book, rows, rubrics, lists)
     _table(book, RULES_SHEET, _rules(dictionaries, themes), (24, 60, 34, 90))
     _table(book, APPROVAL_SHEET, _approval(dictionaries), (26, 36, 70, 60, 14, 40))
-    _table(book, RUBRICS_SHEET, _rubrics(rubrics, weights), (12, 34, 8, 44, 44, 44, 44, 40, 14, 40))
+    _table(book, RUBRICS_SHEET, _rubrics(rubrics), (12, 34, 44, 44, 44, 44, 40, 14, 40))
     book.save(path)
 
 
@@ -47,6 +45,7 @@ def _instruction(dictionaries: dict[str, Any], rubrics: dict[str, Any]) -> list[
         f"«{RULES_SHEET}».",
         "",
         "Размечайте по тексту в таблице: агент получит только его. Ссылка нужна, чтобы проверить контекст.",
+        "Возраст события считайте от даты публикации, а если её нет, от даты поступления на платформу.",
         f"У строк, которые вы уже размечали для карточки сигнала, колонка «{RELEVANCE_COLUMN}» заполнена вашим прежним "
         "ответом. Проверьте его по границе прямой связи и при несогласии исправьте.",
         "Баллы ставятся только у строк «брать» с категорией «бизнес» или «технология»: пять колонок этой категории, "
@@ -82,7 +81,7 @@ def _markup_sheet(book: Any, rows: list[dict[str, Any]], rubrics: dict[str, Any]
         cell.font = Font(bold=True)
     for item in rows:
         sheet.append([item["id"], item["title"], item["text"], item.get("url") or "", item.get("publisher") or "",
-                      item.get("published"), _links_text(item["links"])]
+                      item.get("published"), item.get("received"), _links_text(item["links"])]
                      + [item.get("relevance") if column == RELEVANCE_COLUMN else None
                         for column in header[len(GIVEN_COLUMNS):]])
         for cell in sheet[sheet.max_row]:
@@ -101,7 +100,7 @@ def _markup_sheet(book: Any, rows: list[dict[str, Any]], rubrics: dict[str, Any]
         validation = DataValidation(type="whole", operator="between", formula1="0", formula2="100", allow_blank=True)
         validation.add(f"{letter[one['header']]}2:{letter[one['header']]}{last}")
         sheet.add_data_validation(validation)
-    for name, width in zip(header, [16, 40, 90, 30, 20, 14, 50] + [18] * (len(header) - len(GIVEN_COLUMNS))):
+    for name, width in zip(header, [16, 40, 90, 30, 20, 14, 14, 50] + [18] * (len(header) - len(GIVEN_COLUMNS))):
         sheet.column_dimensions[letter[name]].width = width
     for row in sheet.iter_rows(min_row=2, min_col=2, max_col=len(GIVEN_COLUMNS)):
         for cell in row:
@@ -117,11 +116,13 @@ def _links_text(links: list[dict[str, Any]]) -> str | None:
 
 
 def _rules(dictionaries: dict[str, Any], themes: list[dict[str, str]]) -> list[list[Any]]:
-    """Правило каждой колонки разметки; значения списков — с правилом и примерами, темы — с описанием."""
+    """Правило и пример у каждой колонки разметки; значения списков — с правилом и примерами, темы — с описанием."""
     rows: list[list[Any]] = [["Колонка", "Правило", "Значение", "Пояснение и примеры"]]
     for column, key in CHOICE_COLUMNS:
         if key == "theme":
-            rows.append([column, "Одна из тем по содержанию публикации. Обязательна у строк «брать».", None, None])
+            rows.append([column, "Одна из тем по содержанию публикации, а не по источнику. Обязательна у строк "
+                         "«брать». Пример: новая система управления колтюбингом относится к теме о внутрискважинных "
+                         "работах, даже если её выпустила буровая компания.", None, None])
             rows += [[None, None, theme["name"], theme["description"]] for theme in themes]
             continue
         rule = dictionaries[key]["rule"]
@@ -132,13 +133,21 @@ def _rules(dictionaries: dict[str, Any], themes: list[dict[str, str]]) -> list[l
     rows += [
         ["Баллы по критериям", "Только у строк «брать» с категорией «бизнес» или «технология»: пять колонок этой "
          "категории, целое число от 0 до 100 по линейке с листа «Линейки». Колонки другой категории пустые, у "
-         "категории «другое» баллов нет. «Свежесть»: «нет даты», если даты события в тексте нет.", None, None],
-        [WHY_COLUMN, "Одной-двумя фразами: что в тексте определило баллы. Обязательна, если стоят баллы.", None, None],
-        [SCALE_COLUMN, "Ваша оценка строки по вашей шкале. Обязательна у строк «брать».", None, None],
+         "категории «другое» баллов нет. «Свежесть»: «нет даты», если даты события в тексте нет. Пример: контракт "
+         "на бурение 274 скважин, бизнес: значимость 85, эффект 80, рынок 75, применимость 60, достоверность 90.",
+         None, None],
+        [WHY_COLUMN, "Одной-двумя фразами: что в тексте определило баллы. Обязательна, если стоят баллы. Пример: "
+         "«Трёхлетний контракт на 274 скважины, объём и срок названы; российского аналога подрядчика нет, отсюда "
+         "применимость 60».", None, None],
+        [SCALE_COLUMN, "Ваша оценка строки по вашей шкале. Обязательна у строк «брать». Пример: крупный контракт на "
+         "бурение с цифрами: «Сильный сигнал»; переход буровой на соседнюю скважину: «Наблюдать».", None, None],
         *[[None, None, short, full.replace(" — ", ": ")] for _, short, full in EXPERT_SCALE],
-        [COMMENT_COLUMN, "Свободно: сомнения, замечания к правилам и спискам.", None, None],
+        [COMMENT_COLUMN, "Свободно: сомнения, замечания к правилам и спискам. Пример: «Сомневаюсь в категории: "
+         "это и сделка, и запуск технологии».", None, None],
         ["Ссылки находки", "Заполнять не нужно: ссылки находки радара, если их несколько. По ним ставится причина "
          "«Разные события в одной находке».", None, None],
+        ["Дата поступления", "Заполнять не нужно: когда публикация пришла на платформу. От неё считается возраст "
+         "события, если даты публикации нет.", None, None],
     ]
     return rows
 
@@ -161,14 +170,14 @@ def _approval(dictionaries: dict[str, Any]) -> list[list[Any]]:
     return rows
 
 
-def _rubrics(rubrics: dict[str, Any], weights: dict[tuple[str, str], float]) -> list[list[Any]]:
+def _rubrics(rubrics: dict[str, Any]) -> list[list[Any]]:
     """Линейки на утверждение: строка — критерий, колонки — что значат ступени балла, с примером."""
     bands = rubrics["bands"]
-    rows: list[list[Any]] = [["Профиль", "Критерий", "Вес", *(band["label"] for band in bands), "Примечание",
-                              "Решение", "Комментарий эксперта"]]
+    rows: list[list[Any]] = [["Профиль", "Критерий", *(band["label"] for band in bands), "Примечание", "Решение",
+                              "Комментарий эксперта"]]
     for profile in SCORING_PROFILES:
         for criterion in rubrics["profiles"][profile]:
-            rows.append([PROFILE_RU[profile], criterion["name"], weights.get((profile, criterion["name"])),
+            rows.append([PROFILE_RU[profile], criterion["name"],
                          *(f"{criterion['bands'][band['code']]['rule']} Пример: "
                            f"{criterion['bands'][band['code']]['example']}." for band in bands),
                          criterion.get("note"), None, None])

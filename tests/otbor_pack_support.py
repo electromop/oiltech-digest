@@ -12,7 +12,7 @@ from pathlib import Path
 
 import openpyxl
 
-from oiltech_digest import cli, otbor_pack
+from oiltech_digest import cli, otbor_pack_format as pack_format
 from oiltech_digest.db import repository
 from oiltech_digest.processing import seed
 
@@ -47,12 +47,12 @@ def run_check(*args: str) -> None:
 
 
 def manifest(out: Path) -> dict:
-    return json.loads((out / otbor_pack.MANIFEST_NAME).read_text(encoding="utf-8"))
+    return json.loads((out / pack_format.MANIFEST_NAME).read_text(encoding="utf-8"))
 
 
 def markup(out: Path):
-    book = openpyxl.load_workbook(out / otbor_pack.WORKBOOK_NAME)
-    sheet = book[otbor_pack.MARKUP_SHEET]
+    book = openpyxl.load_workbook(out / pack_format.WORKBOOK_NAME)
+    sheet = book[pack_format.MARKUP_SHEET]
     rows = list(sheet.iter_rows())
     return book, sheet, [cell.value for cell in rows[0]], rows[1:]
 
@@ -173,7 +173,8 @@ def build_corpus(tmp_path: Path) -> dict:
              for i in range(9)]
     links.append(radar("links-many", links=9, corpus_article=corpus_link))
     excluded_radar = [
-        radar("search-stage", stage="search"), radar("judge-error", stage="judge_error"),
+        # Других этапов отсева в пакете нет, сколько бы ссылок у находки ни было.
+        radar("search-stage", stage="search", links=2), radar("judge-error", stage="judge_error", links=2),
         radar("archived-judge", stage="judge", archived=True), radar("not-fetched", stage="judge", fetched=False),
         radar("single-link", links=1), radar("late-judge", stage="judge", seen=UNTIL),
     ]
