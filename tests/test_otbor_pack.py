@@ -202,8 +202,14 @@ def test_links_of_a_find_are_its_input_without_the_search_model_values(corpus, t
     # Ссылка на статью корпуса: заголовок, издатель и дата — статьи.
     assert many["links"][1] == {"url": "https://news.example.org/corpus-link", "title": "Publisher title corpus-link",
                                 "publisher": "World Oil", "published": "2026-09-10"}
+    # Ссылка поиска «режима ChatGPT» без докачки: заголовок написала модель поиска (бывает переводом), он в пакет не
+    # идёт, адрес остаётся. Ссылка обычного поиска без докачки: заголовок из выдачи, его написал издатель.
+    assert many["links"][2] == {"url": "https://www.radar2.example.com/links-many", "title": None,
+                                "publisher": "radar2.example.com", "published": None}
+    assert many["links"][3]["title"] == "Page title links-many #3"
     cell = rows[many["id"]]["Ссылки находки"]
     assert cell.count("\n8. ") == 1 and "9. " not in cell and "Publisher title corpus-link" in cell
+    assert "\n3. заголовок не известен (radar2.example.com, дата не указана)\nhttps://www.radar2.example.com/" in cell
     # Главная публикация находки: издатель — сайт, даты публикации нет, ссылок одна — колонка пуста.
     judge = rows[f"signal:{corpus['filtered']['judge'][0]}"]
     assert judge["Издатель"] == "radar0.example.com" and judge["Дата публикации"] is None
@@ -263,7 +269,7 @@ def test_columns_lists_rules_and_sheets_for_approval(corpus, tmp_path):
 
     run_pack(*pack_args(corpus, out, "--apply"))
 
-    book, sheet, header, _ = markup(out)
+    book, sheet, header, rows = markup(out)
     rubrics = pack_format.load_rubrics()
     scores = ([f"Бизнес: {one['name']}" for one in rubrics["profiles"]["business"]]
               + [f"Технология: {one['name']}" for one in rubrics["profiles"]["tech_radar"]])
@@ -271,6 +277,12 @@ def test_columns_lists_rules_and_sheets_for_approval(corpus, tmp_path):
         "Отрасль", "Связь с нефтесервисом", "Брать или нет", "Причина отказа", "Категория", "Тема", *scores,
         "Почему такой балл", "Общая оценка", "Комментарий эксперта"]
     letter = {name: openpyxl.utils.get_column_letter(index + 1) for index, name in enumerate(header)}
+    # Шапка переносится по словам (длинные имена критериев видны целиком), номер строки — у верхнего края строки,
+    # заголовки колонок дат помещаются в ширину.
+    assert all(cell.alignment.wrap_text and cell.alignment.vertical == "top" for cell in sheet[1])
+    assert all(row[0].alignment.vertical == "top" for row in rows)
+    assert all(sheet.column_dimensions[letter[name]].width >= len(name) + 1
+               for name in ("Дата публикации", "Дата поступления"))
     validated = {openpyxl.utils.get_column_letter(cell_range.min_col): validation.type
                  for validation in sheet.data_validations.dataValidation for cell_range in validation.sqref.ranges}
     for name in ("Отрасль", "Связь с нефтесервисом", "Брать или нет", "Причина отказа", "Категория", "Тема",

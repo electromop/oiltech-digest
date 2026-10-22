@@ -27,7 +27,7 @@ THEMES = {
 MACHINE = [
     "CARD_SUMMARY", "CARD_TITLE_RU", "RELEVANCE_REASON", "TAG_RATIONALE", "JUDGE_TITLE", "JUDGE_SUMMARY",
     "JUDGE_WHY", "JUDGE_APPLICATION", "JudgeCo", "RESEARCH_SUMMARY", "JUDGE_VERDICT", "FILTER_REASON",
-    "MIXED_REASON", "SearchModelPublisher", "AUTHOR_COMMENT", "AuthorCo", "2026-01-03",
+    "MIXED_REASON", "SearchModelPublisher", "AUTHOR_COMMENT", "AuthorCo", "2026-01-03", "MODEL_TITLE",
 ]
 MODEL_DATE = "2026-01-03"  # дата события по версии модели поиска; у «старых» — и дата судьи
 BLOCK_PAGE = "Доступ с вашего IP-адреса ограничен. Отключите VPN/прокси и обновите страницу. " * 3
@@ -84,22 +84,26 @@ def article(conn, source_id, key, day, *, relevant=True, text=None, tag_id=None,
 
 
 def radar(key, *, category="technology", stage=None, mixed=False, old=False, links=1, fetched=True,
-          seen="2026-10-01", archived=False, corpus_article=None) -> int:
+          seen="2026-10-01", archived=False, corpus_article=None, unfetched=(), brave=()) -> int:
     """Находка поиска: ссылки — страницы, которые докачали (текст издателя), дата ссылки — модели поиска.
-    corpus_article — вторая ссылка ведёт на статью корпуса (заголовок и издатель — её)."""
+    corpus_article — вторая ссылка ведёт на статью корпуса (заголовок и издатель — её). unfetched — номера ссылок
+    поиска «режима ChatGPT», которые не докачали: заголовок и текст у них от модели поиска. brave — номера ссылок
+    обычного поиска без докачки: заголовок из выдачи, его написал издатель."""
     signal_id = repository.upsert_signal({
         "signal_key": key, "title": f"JUDGE_TITLE {key}", "title_ru": f"JUDGE_TITLE {key}", "theme": "Бурение",
         "summary": "JUDGE_SUMMARY", "maturity": "watch", "score": 70, "companies": ["JudgeCo"],
     })
     for number in range(links):
+        page = fetched and number not in unfetched and number not in brave
+        title = f"MODEL_TITLE {key} #{number}" if number in unfetched else f"Page title {key} #{number}"
         repository.upsert_signal_evidence(signal_id, {
-            "source_url": f"https://www.radar{number}.example.com/{key}", "title": f"Page title {key} #{number}",
-            "publisher": "SearchModelPublisher", "published_at": MODEL_DATE,
-            "extracted_fact": f"Page text of {key} #{number}. " * 12 if fetched else "JUDGE_SUMMARY",
+            "source_url": f"https://www.radar{number}.example.com/{key}", "title": title,
+            "publisher": "SearchModelPublisher", "published_at": None if number in brave else MODEL_DATE,
+            "extracted_fact": f"Page text of {key} #{number}. " * 12 if page else "JUDGE_SUMMARY",
             "summary_ru": "RESEARCH_SUMMARY", "strength": 0.9 - number * 0.05,
             "article_id": corpus_article if number == 1 else None,
-            "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": fetched,
-                            "research_summary": "RESEARCH_SUMMARY"},
+            "raw_payload": {"evidence_source": "web_search" if number in brave else "openai_web_search",
+                            "full_text_fetched": page, "research_summary": "RESEARCH_SUMMARY"},
         })
     with repository.get_connection() as conn:
         conn.execute(
@@ -171,7 +175,7 @@ def build_corpus(tmp_path: Path) -> dict:
     }
     links = [radar(f"links-{i}", links=2 + i % 2, category=("technology", "business", "other")[i % 3])
              for i in range(9)]
-    links.append(radar("links-many", links=9, corpus_article=corpus_link))
+    links.append(radar("links-many", links=9, corpus_article=corpus_link, unfetched=(2,), brave=(3,)))
     excluded_radar = [
         # Других этапов отсева в пакете нет, сколько бы ссылок у находки ни было.
         radar("search-stage", stage="search", links=2), radar("judge-error", stage="judge_error", links=2),

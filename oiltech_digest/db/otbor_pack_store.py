@@ -25,6 +25,14 @@ _LINK_PUBLISHED_SQL = (
     "CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)"
     " WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %(search_source)s THEN e.published_at END"
 )
+# Заголовок ссылки: у статьи корпуса — её, у страницы, которую докачали, и у выдачи обычного поиска — издателя. У
+# ссылки «режима ChatGPT» без докачки заголовок написала модель поиска (бывает переводом: «SLB выиграла у Aramco…» у
+# английской страницы, проверка пакета 22.10) — его нет: черновые данные поиска в решения агентов не идут (спека #128).
+_LINK_TITLE_SQL = (
+    "CASE WHEN a.id IS NULL AND e.raw_payload_json->>'evidence_source' = %(search_source)s"
+    " AND e.raw_payload_json->>'full_text_fetched' IS DISTINCT FROM 'true' THEN NULL"
+    " ELSE COALESCE(a.title, e.title) END"
+)
 
 
 def feed_candidates(since: str, until: str) -> list[dict[str, Any]]:
@@ -94,7 +102,8 @@ def radar_candidates(until: str) -> list[dict[str, Any]]:
 
 
 def evidence_links(signal_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    """Ссылки находок по силе: у ссылки на статью корпуса заголовок, адрес и издатель — статьи."""
+    """Ссылки находок по силе: у ссылки на статью корпуса заголовок, адрес и издатель — статьи; у ссылки «режима
+    ChatGPT» без докачки заголовка нет (_LINK_TITLE_SQL)."""
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
     links: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -102,7 +111,7 @@ def evidence_links(signal_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT e.signal_id, COALESCE(a.title, e.title) AS title, COALESCE(a.url, e.source_url) AS url,
+            SELECT e.signal_id, {_LINK_TITLE_SQL} AS title, COALESCE(a.url, e.source_url) AS url,
                    src.name AS publisher_source, {_LINK_PUBLISHED_SQL} AS published
             FROM signal_evidence e
             LEFT JOIN articles a ON a.id = e.article_id

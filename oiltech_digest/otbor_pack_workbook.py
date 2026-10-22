@@ -14,6 +14,9 @@ from oiltech_digest.otbor_pack_format import (APPROVAL_SHEET, CHOICE_COLUMNS, CO
                                               score_columns)
 from oiltech_digest.scoring_profiles import SCORING_PROFILES
 
+# Заголовок ссылки, которого нет: страницу не докачали, а заголовок модели поиска в пакет не идёт.
+UNKNOWN_LINK_TITLE = "заголовок не известен"
+
 
 def write(path: Path, rows: list[dict[str, Any]], *, dictionaries: dict[str, Any], rubrics: dict[str, Any],
           themes: list[dict[str, str]], lists: dict[str, list[dict[str, str]]]) -> None:
@@ -78,7 +81,9 @@ def _markup_sheet(book: Any, rows: list[dict[str, Any]], rubrics: dict[str, Any]
     header = GIVEN_COLUMNS + answer_columns(rubrics)
     sheet.append(header)
     for cell in sheet[1]:
+        # Шапка по словам: длинные имена критериев видны целиком при ширине колонки разметки.
         cell.font = Font(bold=True)
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
     for item in rows:
         sheet.append([item["id"], item["title"], item["text"], item.get("url") or "", item.get("publisher") or "",
                       item.get("published"), item.get("received"), _links_text(item["links"])]
@@ -100,9 +105,9 @@ def _markup_sheet(book: Any, rows: list[dict[str, Any]], rubrics: dict[str, Any]
         validation = DataValidation(type="whole", operator="between", formula1="0", formula2="100", allow_blank=True)
         validation.add(f"{letter[one['header']]}2:{letter[one['header']]}{last}")
         sheet.add_data_validation(validation)
-    for name, width in zip(header, [16, 40, 90, 30, 20, 14, 14, 50] + [18] * (len(header) - len(GIVEN_COLUMNS))):
+    for name, width in zip(header, [16, 40, 90, 30, 20, 17, 17, 50] + [18] * (len(header) - len(GIVEN_COLUMNS))):
         sheet.column_dimensions[letter[name]].width = width
-    for row in sheet.iter_rows(min_row=2, min_col=2, max_col=len(GIVEN_COLUMNS)):
+    for row in sheet.iter_rows(min_row=2, min_col=1, max_col=len(GIVEN_COLUMNS)):
         for cell in row:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
     sheet.freeze_panes = "C2"
@@ -111,8 +116,9 @@ def _markup_sheet(book: Any, rows: list[dict[str, Any]], rubrics: dict[str, Any]
 def _links_text(links: list[dict[str, Any]]) -> str | None:
     if not links:
         return None
-    return "\n".join(f"{number}. {link['title']} ({link['publisher']}, {link['published'] or 'дата не указана'})"
-                     f"\n{link['url']}" for number, link in enumerate(links, start=1))
+    return "\n".join(f"{number}. {link['title'] or UNKNOWN_LINK_TITLE} ({link['publisher']}, "
+                     f"{link['published'] or 'дата не указана'})\n{link['url']}"
+                     for number, link in enumerate(links, start=1))
 
 
 def _rules(dictionaries: dict[str, Any], themes: list[dict[str, str]]) -> list[list[Any]]:
@@ -145,7 +151,8 @@ def _rules(dictionaries: dict[str, Any], themes: list[dict[str, str]]) -> list[l
         [COMMENT_COLUMN, "Свободно: сомнения, замечания к правилам и спискам. Пример: «Сомневаюсь в категории: "
          "это и сделка, и запуск технологии».", None, None],
         ["Ссылки находки", "Заполнять не нужно: ссылки находки радара, если их несколько. По ним ставится причина "
-         "«Разные события в одной находке».", None, None],
+         f"«Разные события в одной находке». Если страницу ссылки прочитать не удалось, вместо заголовка написано "
+         f"«{UNKNOWN_LINK_TITLE}»: откройте ссылку.", None, None],
         ["Дата поступления", "Заполнять не нужно: когда публикация пришла на платформу. От неё считается возраст "
          "события, если даты публикации нет.", None, None],
     ]

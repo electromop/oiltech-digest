@@ -269,7 +269,8 @@ def _by_kinds(items: list[dict[str, Any]], count: int, seed: int) -> list[dict[s
 
 def _complete_from_base(rows: list[dict[str, Any]]) -> None:
     """Ссылки находки (до LINKS_LIMIT, если их больше одной) — у всех строк радара, в том числе прежних; язык и дата
-    поступления — у прежних строк (в прежнем манифесте их нет). У ссылки поиска — сайт из адреса и пустая дата."""
+    поступления — у прежних строк (в прежнем манифесте их нет). У ссылки поиска — сайт из адреса и пустая дата, у
+    ссылки «режима ChatGPT» без докачки и заголовок пустой (его написала модель поиска)."""
     card = [item for item in rows if item["group"] == "card_markup"]
     articles, signals = otbor_pack_store.card_row_facts(
         sorted({int(item["article_id"]) for item in card if item.get("article_id")}),
@@ -278,7 +279,8 @@ def _complete_from_base(rows: list[dict[str, Any]]) -> None:
         sorted({int(item["signal_id"]) for item in rows if item["origin"] == "radar" and item.get("signal_id")}))
     for item in rows:
         found = links.get(int(item["signal_id"])) if item["origin"] == "radar" and item.get("signal_id") else None
-        item["links"] = [{"url": link["url"], "title": _CONTROL_RE.sub(" ", link["title"] or "").strip(),
+        item["links"] = [{"url": link["url"],
+                          "title": _CONTROL_RE.sub(" ", link["title"]).strip() if link["title"] else None,
                           "publisher": _publisher_label(link), "published": publication_day(link["published"])}
                          for link in found[:LINKS_LIMIT]] if found and len(found) > 1 else []
         if item["group"] != "card_markup":
