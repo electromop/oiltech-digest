@@ -2472,6 +2472,57 @@ def cmd_signal_card_exam_judge(args: argparse.Namespace) -> None:
     print(json.dumps(values, ensure_ascii=False, indent=1))
 
 
+def cmd_otbor_expert_pack(args: argparse.Namespace) -> None:
+    """Пакет эксперту для «Отбора» (#129): справочники и линейки на утверждение, разметка вслепую."""
+    from oiltech_digest import otbor_pack
+
+    try:
+        result = otbor_pack.export_pack(args.out, seed=args.seed, until=args.until, apply=args.apply,
+                                        card_manifest=args.card_manifest, card_markup=args.card_markup)
+    except (otbor_pack.PackError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"otbor-expert-pack: {exc}") from exc
+    groups, kinds = result["composition"]["group"], result["composition"]["kind"]
+    parts = []
+    for group, label in otbor_pack.GROUPS.items():
+        detail = ", ".join(f"{otbor_pack.FILTERED_KINDS[kind]} {count}" for kind, count in kinds.items())
+        parts.append(f"{label} {groups.get(group, 0)}" + (f" ({detail})" if group == "radar_filtered" and detail else ""))
+    print(f"otbor-expert-pack: строк {result['count']}" + ("" if result["applied"] else ", сухой прогон"))
+    print("Группы: " + "; ".join(parts))
+    print(f"Окно ленты: с {result['since']} по {result['until']}, последний день не входит; зерно {result['seed']}")
+    if result["shortfall"]:
+        print("Не хватает: " + "; ".join(result["shortfall"]))
+    if result["blockers"]:
+        print("Мешает записи: " + "; ".join(result["blockers"]))
+    if result["applied"]:
+        print(f"Таблица: {result['workbook']}\nМанифест: {result['manifest']}")
+    else:
+        print("Записать таблицу и манифест: тот же вызов с --apply и --out вне репозитория.")
+
+
+def cmd_otbor_markup_check(args: argparse.Namespace) -> None:
+    """Проверка размеченного пакета «Отбора» (#129): отчёт о нарушениях; есть нарушения — код выхода не 0."""
+    from oiltech_digest import otbor_markup
+
+    try:
+        result = otbor_markup.check(args.markup, args.manifest)
+    except (otbor_markup.MarkupError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"otbor-markup-check: {exc}") from exc
+    violations, approvals = result["violations"], result["approvals"]
+    print(f"otbor-markup-check: строк {result['rows']}, нарушений {len(violations)}")
+    for line in violations:
+        print(line)
+    print(f"Утверждение: «да» {approvals['approved']}, правки {len(approvals['changes'])}, "
+          f"без решения {approvals['pending']}")
+    for line in approvals["changes"]:
+        print(line)
+    if approvals["missing"]:
+        print("Не найдено: " + "; ".join(approvals["missing"]))
+    for note in result["versions"]:
+        print(f"С выгрузки пакета сменились {note}")
+    if violations:
+        raise SystemExit(f"otbor-markup-check: разметку нужно поправить, нарушений {len(violations)}")
+
+
 def _usd(value: float) -> str:
     return f"${value:.2f}" if value >= 1 else f"${value:.3f}"
 
@@ -3558,6 +3609,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_card_exam_judge.add_argument("--manifest", required=True, help="манифест пакета эксперту или «-» — из stdin")
     p_card_exam_judge.set_defaults(func=cmd_signal_card_exam_judge)
+
+    p_otbor_pack = sub.add_parser(
+        "otbor-expert-pack",
+        help="пакет эксперту для «Отбора» (#129): справочники и линейки на утверждение, разметка вслепую "
+             "(xlsx + манифест); сухой прогон по умолчанию",
+    )
+    p_otbor_pack.add_argument("--out", default=None, help="папка вне репозитория (он публичный)")
+    p_otbor_pack.add_argument("--card-manifest", default=None,
+                              help="манифест прежней разметки карточки (#94), signal_card_markup_manifest.json")
+    p_otbor_pack.add_argument("--card-markup", default=None,
+                              help="заполненная экспертом таблица прежней разметки карточки: связь берётся оттуда")
+    p_otbor_pack.add_argument("--seed", type=int, default=None,
+                              help="зерно выборки: те же зерно и окно дают те же строки (по умолчанию 20261022)")
+    p_otbor_pack.add_argument("--until", type=_iso_date, default=None,
+                              help="конец окна ГГГГ-ММ-ДД, не включая: статьи ленты за 30 дней до него, находки и "
+                                   "материалы до него (по умолчанию сегодня по Москве)")
+    p_otbor_pack.add_argument("--apply", action="store_true", help="записать; без флага только состав")
+    p_otbor_pack.set_defaults(func=cmd_otbor_expert_pack)
+
+    p_otbor_check = sub.add_parser(
+        "otbor-markup-check",
+        help="проверка размеченного пакета «Отбора» (#129): номера и тексты сходятся с манифестом, значения из "
+             "списков, у взятых строк баллы и обоснование; отчёт о нарушениях",
+    )
+    p_otbor_check.add_argument("--markup", required=True, help="таблица, заполненная экспертом")
+    p_otbor_check.add_argument("--manifest", default=None,
+                               help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
+    p_otbor_check.set_defaults(func=cmd_otbor_markup_check)
 
     p_archive_signals = sub.add_parser(
         "archive-signals",
