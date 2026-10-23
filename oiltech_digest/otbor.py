@@ -180,7 +180,8 @@ def _decide(client: Any, item: dict[str, Any], instructions: str, schema: dict[s
         decision["input_tokens"] += int(response.input_tokens or 0)
         decision["output_tokens"] += int(response.output_tokens or 0)
         # Ответ не по правилам не повторяется (решение владельца 23.10); повтор — только при конфликте шагов.
-        found = [] if answer_problem(response.data, dictionaries) else conflicts(response.data, dictionaries)
+        found = ([] if answer_problem(response.data, dictionaries)
+                 else conflicts(response.data, dictionaries, links=len(item.get("links") or [])))
         if not found:
             break
     return decision
@@ -416,19 +417,19 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         if stale:
             reason = (f"справочники сменились после выдачи задачи ({result.get('dictionaries_version')} → "
                       f"{dictionaries.get('version')})")
-            found = Outcome(failure=otbor_store.FAILURE_TECHNICAL, reason=reason,
-                            log=[_step(f"Сбой, «Отбор» не ответил: {reason}")])
+            checked = Outcome(failure=otbor_store.FAILURE_TECHNICAL, reason=reason,
+                              log=[_step(f"Сбой, «Отбор» не ответил: {reason}")])
         else:
-            found = outcome(decision, dictionaries)
-        if found.values is None:
-            if otbor_store.write_failure(article_id, found.failure, found.reason, log=found.log):
+            # У статьи ленты одна публикация: «разные события» ей не ставятся (conflicts).
+            checked = outcome(decision, dictionaries)
+        if checked.values is None:
+            if otbor_store.write_failure(article_id, checked.failure, checked.reason, log=checked.log):
                 applied["failed"] += 1
-            applied["errors"].append({"article_id": article_id, "error": found.reason})
+            applied["errors"].append({"article_id": article_id, "error": checked.reason})
             continue
-        written = otbor_store.write_decision(article_id, found.values, disputed=found.disputed, log=found.log,
-                                             recipe={**recipe, "model": _model_name(decision),
-                                                     "decided_at": datetime.now(timezone.utc).isoformat(
-                                                         timespec="seconds")})
+        decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        written = otbor_store.write_decision(article_id, checked.values, disputed=checked.disputed, log=checked.log,
+                                             recipe={**recipe, "model": _model_name(decision), "decided_at": decided_at})
         applied["decided"] += int(written)
     return applied
 
