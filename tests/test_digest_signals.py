@@ -5,8 +5,16 @@ monthly_digest_items.article_id → articles или молча цепляло ч
 номером, а после сохранения сигнал из выпуска пропадал.
 """
 
+import pytest
+
 from oiltech_digest.processing import digest
 from oiltech_digest.processing.digest import build_digest_content, save_digest_draft
+
+
+@pytest.fixture(autouse=True)
+def _no_item_kinds_lookup(monkeypatch):
+    """Категорию элементов (плашка «Технология / Бизнес») берёт база; эти проверки — без базы."""
+    monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: ({}, {}))
 
 
 def _row(row_id, *, item_type="article", title=None):

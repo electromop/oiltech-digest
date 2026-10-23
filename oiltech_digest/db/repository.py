@@ -2277,15 +2277,22 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
                    hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                    region: str | None = None, technology_class: str | None = None,
                    technology_maturity: str | None = None,
-                   company_names: Sequence[str] | None = None, section=None) -> tuple[list[str], list]:
+                   company_names: Sequence[str] | None = None, section=None,
+                   tile: str | None = None) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
     компания: участник карточки под любым из имён company_names (signal_card_filters.group_names); пустой
-    список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра»."""
+    список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра». tile — плашка над
+    списком (решение владельца 23.10): то же условие, что у её числа в signal_radar_summary."""
     clauses = [_showcase_visible_sql(showcase, hidden=hidden, section=section)]
     params: list = []
+    if tile:
+        tile_sql = RADAR_TILE_SQL.get(tile)
+        if tile_sql is None:
+            raise ValueError(f"Неизвестная плашка радара: {tile!r}")
+        clauses.append(tile_sql)
     if maturity:
         clauses.append("s.maturity = %s")
         params.append(maturity)
@@ -2339,7 +2346,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                  hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                  region: str | None = None, technology_class: str | None = None,
                  technology_maturity: str | None = None, company_names: Sequence[str] | None = None,
-                 section=None) -> list[dict]:
+                 section=None, tile: str | None = None) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
     hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason; section —
@@ -2347,7 +2354,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
-        technology_maturity=technology_maturity, company_names=company_names, section=section,
+        technology_maturity=technology_maturity, company_names=company_names, section=section, tile=tile,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
@@ -2390,6 +2397,14 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
         return [apply_signal_corrections(row) for row in cur.fetchall()]
 
 
+# Плашки над списком радара и бизнес-ленты: число плашки и выборка по её нажатию — одно условие.
+RADAR_TILE_SQL = {
+    "new_7d": "s.first_seen_at >= now() - interval '7 days'",
+    "in_digest": signal_digest_sql("s"),
+    "with_feedback": f"EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})",
+}
+
+
 def signal_radar_summary(**filters) -> dict:
     """Числа над списком радара — той же видимостью карточки, что и список. Плитки — по всему
     радару (поиск их не меняет); «в дайджесте» — по общей отметке, как кнопка на карточке. matching — сколько в текущей выборке (фильтры — как у list_signals)."""
@@ -2402,9 +2417,9 @@ def signal_radar_summary(**filters) -> dict:
         cur.execute(
             f"""
             SELECT COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE s.first_seen_at >= now() - interval '7 days') AS new_7d,
-                   COUNT(*) FILTER (WHERE {signal_digest_sql('s')}) AS in_digest,
-                   COUNT(*) FILTER (WHERE EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})) AS with_feedback
+                   COUNT(*) FILTER (WHERE {RADAR_TILE_SQL['new_7d']}) AS new_7d,
+                   COUNT(*) FILTER (WHERE {RADAR_TILE_SQL['in_digest']}) AS in_digest,
+                   COUNT(*) FILTER (WHERE {RADAR_TILE_SQL['with_feedback']}) AS with_feedback
             FROM signals s
             {marks.signal_mark_join()}
             WHERE {visible}
@@ -7410,6 +7425,33 @@ def get_monthly_digest(month: str) -> dict | None:
             (digest["id"],),
         )
         return {**digest, "items": cur.fetchall()}
+
+
+def digest_item_kinds(article_ids: Sequence[int], signal_ids: Sequence[int]) -> tuple[dict[int, str], dict[int, str]]:
+    """Категория элементов выпуска для плашки «Технология / Бизнес» (решение владельца 23.10). У статьи — категория
+    её сигнала ленты (его ставят «Отбор» и мост ленты), у находки радара — своя; находка радара без категории —
+    технология, как на экране радара. Статья без сигнала ленты категории не получает."""
+    by_article: dict[int, str] = {}
+    by_signal: dict[int, str] = {}
+    with get_connection() as conn:
+        if article_ids:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT ON (origin_article_id) origin_article_id, signal_category
+                FROM signals
+                WHERE origin_article_id = ANY(%s) AND signal_category IS NOT NULL
+                ORDER BY origin_article_id, merged_into_signal_id NULLS FIRST, id
+                """,
+                (list(article_ids),),
+            ).fetchall()
+            by_article = {int(article_id): category for article_id, category in rows}
+        if signal_ids:
+            rows = conn.execute(
+                "SELECT id, COALESCE(signal_category, 'technology') FROM signals WHERE id = ANY(%s)",
+                (list(signal_ids),),
+            ).fetchall()
+            by_signal = {int(signal_id): category for signal_id, category in rows}
+    return by_article, by_signal
 
 
 def digest_items_by_article_ids(article_ids: list[int], *, month: str | None = None) -> list[dict]:

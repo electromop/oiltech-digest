@@ -234,6 +234,71 @@ def get_material(material_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+
+def check_edit(row: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Правка материала на платформе (решение владельца 23.10): те же проверки, что у бота. Тип, файл и отметка
+    сообщения Telegram не меняются: правится то, что автор написал в карточке."""
+    fields: dict[str, Any] = {}
+    if "title" in patch:
+        fields["title"] = check_title(str(patch["title"] or ""))
+    if "description" in patch:
+        fields["description"] = check_description(str(patch["description"] or ""))
+    if "url" in patch:
+        if row["kind"] != "link":
+            raise InvalidMaterial("Ссылка есть только у материала «ссылка»")
+        fields["url"] = check_url(str(patch["url"] or ""))
+    if "companies" in patch:
+        companies = patch["companies"] or []
+        if not isinstance(companies, list):
+            raise InvalidMaterial("Компании — списком")
+        fields["companies_json"] = Jsonb(parse_companies(", ".join(str(item) for item in companies)))
+    if "verdict" in patch:
+        fields["verdict"] = check_verdict(str(patch["verdict"] or ""))
+    if "verdict_comment" in patch:
+        fields["verdict_comment"] = check_comment(patch["verdict_comment"])
+    if not fields:
+        raise InvalidMaterial("Нечего менять: правка пустая")
+    return fields
+
+
+def update_material(material_id: int, patch: dict[str, Any]) -> dict[str, Any] | None:
+    """Записать правку; нет материала — None, правка не по правилам — InvalidMaterial."""
+    row = get_material(material_id)
+    if row is None:
+        return None
+    fields = check_edit(row, patch)
+    assignments = ", ".join(f"{column} = %s" for column in fields)
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"UPDATE colleague_materials SET {assignments} WHERE id = %s RETURNING *",
+            (*fields.values(), material_id),
+        )
+        updated = cur.fetchone()
+        conn.commit()
+    return dict(updated) if updated else None
+
+
+def delete_material(material_id: int) -> bool:
+    """Удалить материал. Файл на диске назван по отпечатку и бывает общим у одинаковых файлов: удаляется,
+    только если на него не ссылается другой материал."""
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("DELETE FROM colleague_materials WHERE id = %s RETURNING file_path", (material_id,))
+        deleted = cur.fetchone()
+        shared = False
+        if deleted and deleted["file_path"]:
+            cur.execute("SELECT 1 FROM colleague_materials WHERE file_path = %s LIMIT 1", (deleted["file_path"],))
+            shared = cur.fetchone() is not None
+        conn.commit()
+    if deleted is None:
+        return False
+    if deleted["file_path"] and not shared:
+        path = Path(deleted["file_path"]).resolve()
+        if str(path).startswith(str(files_dir().resolve())) and path.exists():
+            path.unlink()
+    return True
+
 def brief(row: dict[str, Any]) -> dict[str, Any]:
     """Строка для экрана и бота: без пути на диске."""
     state, state_label = status(row)

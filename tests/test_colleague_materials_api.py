@@ -1,6 +1,7 @@
 """Материалы коллег на ядре: приём от бота NL по токену воркера, повтор без дубля, экран."""
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -134,3 +135,59 @@ def test_bot_history_pages_with_total_and_status(core):
     assert (first["total"], len(first["materials"]), len(rest["materials"])) == (12, 10, 2)
     assert (first["materials"][0]["status"], first["materials"][0]["status_label"]) == ("accepted", "Принят на платформу")
     assert {row["id"] for row in first["materials"]}.isdisjoint(row["id"] for row in rest["materials"])
+
+
+# --- правка и удаление на платформе (решение владельца 23.10): только админ, проверки — те же, что у бота ---
+
+
+def _as(role):
+    api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "role": role}
+
+
+def test_admin_edits_material_with_bot_rules(core):
+    saved = _post(core, _material()).json()["material"]
+    _as("admin")
+
+    response = core.patch(f"/api/materials/{saved['id']}", json={
+        "title": "Татнефть продлила договор по ГРП до 2027 года",
+        "companies": ["Татнефть"], "verdict": "approved", "verdict_comment": "",
+    })
+
+    assert response.status_code == 200, response.text
+    edited = response.json()["material"]
+    assert edited["title"] == "Татнефть продлила договор по ГРП до 2027 года"
+    assert edited["companies"] == ["Татнефть"]
+    assert (edited["verdict"], edited["verdict_comment"]) == ("approved", None)
+    # Поле, которого нет в правке, не меняется.
+    assert edited["description"] == saved["description"]
+    # Короткое описание и ссылка у события — отказ с причиной, как у бота.
+    assert core.patch(f"/api/materials/{saved['id']}", json={"description": "коротко"}).status_code == 422
+    assert core.patch(f"/api/materials/{saved['id']}", json={"url": "https://example.com/x"}).status_code == 422
+    assert core.patch(f"/api/materials/{saved['id']}", json={}).status_code == 422
+    assert core.patch("/api/materials/999999", json={"title": "Такого материала нет вообще"}).status_code == 404
+
+
+def test_only_admin_edits_and_deletes_materials(core):
+    saved = _post(core, _material()).json()["material"]
+    _as("user")
+
+    assert core.patch(f"/api/materials/{saved['id']}", json={"title": "Чужая правка заголовка"}).status_code == 403
+    assert core.delete(f"/api/materials/{saved['id']}").status_code == 403
+    assert colleague_materials.get_material(saved["id"]) is not None
+
+
+def test_delete_removes_material_and_its_file_unless_shared(core):
+    # Файл на диске назван по отпечатку: одинаковый файл двух сообщений — один файл на двоих.
+    first = _post(core, _material(kind="file", tg_message_id=80),
+                  file=("a.pdf", b"%PDF same", "application/pdf")).json()["material"]
+    second = _post(core, _material(kind="file", tg_message_id=81),
+                   file=("b.pdf", b"%PDF same", "application/pdf")).json()["material"]
+    path = Path(colleague_materials.get_material(first["id"])["file_path"])
+    _as("admin")
+
+    assert core.delete(f"/api/materials/{first['id']}").status_code == 200
+    assert colleague_materials.get_material(first["id"]) is None
+    assert path.exists()
+    assert core.delete(f"/api/materials/{second['id']}").status_code == 200
+    assert not path.exists()
+    assert core.delete(f"/api/materials/{second['id']}").status_code == 404
