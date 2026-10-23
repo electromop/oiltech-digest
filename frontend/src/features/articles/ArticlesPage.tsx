@@ -453,10 +453,10 @@ export function ArticlesPage(props: Props) {
       </section>
 
       <div className="viewTabs">
-        <button type="button" className={viewTab === "all" ? "primaryButton" : "ghostButton"} onClick={() => setViewTab("all")}>
+        <button type="button" className={viewTab === "all" ? "primaryButton" : "ghostButton"} aria-pressed={viewTab === "all"} onClick={() => setViewTab("all")}>
           Все
         </button>
-        <button type="button" className={viewTab === "withStatus" ? "primaryButton" : "ghostButton"} onClick={() => setViewTab("withStatus")}>
+        <button type="button" className={viewTab === "withStatus" ? "primaryButton" : "ghostButton"} aria-pressed={viewTab === "withStatus"} onClick={() => setViewTab("withStatus")}>
           Со статусом{statusChangedCount > 0 ? ` (${statusChangedCount})` : ""}
         </button>
         {archiveMonths.length ? (

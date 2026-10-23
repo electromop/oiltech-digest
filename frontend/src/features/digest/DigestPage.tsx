@@ -1014,10 +1014,12 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
         <div className="panelHeader">
           <h2>{viewMode === "issue" ? "Сборка выпуска" : "Оформление выпуска"}</h2>
           {isAdmin ? (
-            <div className="digestModeSwitch" role="tablist" aria-label="Режим экрана дайджеста">
+            <div className="digestModeSwitch" role="group" aria-label="Режим экрана дайджеста">
+              {/* Переключатель режима, а не вкладки: панели вкладки у него нет, поэтому group + aria-pressed. */}
               <button
                 type="button"
                 className={viewMode === "issue" ? "primaryButton" : "ghostButton"}
+                aria-pressed={viewMode === "issue"}
                 onClick={() => setViewMode("issue")}
               >
                 Сборка выпуска
@@ -1025,6 +1027,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
               <button
                 type="button"
                 className={viewMode === "branding" ? "primaryButton" : "ghostButton"}
+                aria-pressed={viewMode === "branding"}
                 onClick={() => setViewMode("branding")}
               >
                 Оформление

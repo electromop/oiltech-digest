@@ -3790,8 +3790,8 @@
   min-width: 0;
   padding: 8px 10px;
   border-radius: var(--ot-radius);
-  background: var(--ot-layer-accent);
-  color: var(--brand);
+  background: var(--sem-info-bg);
+  color: var(--sem-info-fg);
   font-size: var(--ot-size-caption);
   font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
