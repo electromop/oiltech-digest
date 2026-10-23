@@ -394,7 +394,9 @@ def test_hidden_view_lists_only_hidden_cards_with_a_reason(isolated_db):
     }
     assert all(row["hidden_reason"] is None for row in repository.list_signals(limit=50))
     summary = repository.signal_radar_summary(hidden=True)
-    assert (summary["total"], summary["hidden"], summary["matching"]) == (1, 3, 3)
+    # Плашка «Отклонённые» (#130, решение владельца 23.10) считает то, чего нет ни в одной витрине: бизнес-находка
+    # видна в бизнес-ленте и в неё не идёт.
+    assert (summary["total"], summary["hidden"], summary["matching"]) == (1, 2, 3)
 
 
 def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):

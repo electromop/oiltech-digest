@@ -91,6 +91,43 @@ def new_article_ids(*, days: int, limit: int, attempts: int) -> list[int]:
     return [int(row[0]) for row in rows]
 
 
+def unanswered_articles(*, days: int, attempts: int, limit: int) -> list[tuple[int, str]]:
+    """Статьи «Отбора», которые шаг больше не возьмёт, а решения и записанного сбоя у них нет: задачи с ними
+    `attempts` раз упали целиком (сборка воркера, настройка, сбой воркера — итога нет, писать нечего) или статья
+    вышла из окна шага (`days` дней), так и не дождавшись решения. Без пометки её не видно нигде: после попыток
+    статья лежит в разделе «„Отбор“ не ответил» (решение владельца 23.10). Пары (статья, короткая причина)."""
+    with connection.get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            WITH tried AS (
+              SELECT (jsonb_array_elements_text(j.payload_json->'article_ids'))::bigint AS id,
+                     j.status IN ('queued', 'running', 'finalizing') AS pending
+              FROM background_jobs j
+              WHERE j.kind = '{KIND}' AND jsonb_typeof(j.payload_json->'article_ids') = 'array'
+            ),
+            counted AS (SELECT id, count(*) AS tries, bool_or(pending) AS pending FROM tried GROUP BY id)
+            SELECT a.id, COALESCE(t.tries, 0) AS tries
+            FROM articles a
+            LEFT JOIN counted t ON t.id = a.id
+            WHERE a.selector = '{ARTICLE_SELECTOR_OTBOR}'
+              AND NOT a.pending_deletion
+              AND NOT COALESCE(t.pending, FALSE)
+              AND (COALESCE(t.tries, 0) >= %(attempts)s
+                   OR a.collected_at < now() - make_interval(days => %(days)s))
+              AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
+              AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)
+              AND NOT EXISTS (SELECT 1 FROM signals s
+                              WHERE s.origin_article_id = a.id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
+                                AND (s.otbor_decision IS NOT NULL OR s.otbor_failure IS NOT NULL))
+            ORDER BY a.id
+            LIMIT %(limit)s
+            """,
+            {"days": int(days), "attempts": int(attempts), "limit": int(limit)},
+        ).fetchall()
+    return [(int(row[0]), f"задачи «Отбора» с ней падали целиком: {int(row[1])} из {int(attempts)}, решения нет"
+             if int(row[1]) >= int(attempts) else f"не дошла до «Отбора» за {int(days)} дн.") for row in rows]
+
+
 def own_article_ids(article_ids: Sequence[int]) -> list[int]:
     """Из названных статей — те, что решает «Отбор»: решённое гейтом он не пересматривает (проверка на реальных
     данных, #134, пишет свои решения отдельно)."""
@@ -99,7 +136,12 @@ def own_article_ids(article_ids: Sequence[int]) -> list[int]:
         return []
     with connection.get_connection() as conn:
         rows = conn.execute(
-            f"SELECT id FROM articles WHERE id = ANY(%s) AND selector = '{ARTICLE_SELECTOR_OTBOR}' ORDER BY id",
+            f"""
+            SELECT a.id FROM articles a
+            WHERE a.id = ANY(%s) AND a.selector = '{ARTICLE_SELECTOR_OTBOR}'
+              AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)
+            ORDER BY a.id
+            """,
             (ids,),
         ).fetchall()
     return [int(row[0]) for row in rows]

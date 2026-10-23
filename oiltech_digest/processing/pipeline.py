@@ -250,7 +250,8 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
     _validate_weights(criteria)
     stats = {"processed": 0, "fulltext": 0, "summary": 0, "relevant": 0,
              "rejected": 0, "tagged": 0, "translated": 0, "scored": 0, "errors": 0}
-    for article in articles:
+    # Статью, которую держит «Отбор» (#130): отклонённую им и ждущую его решения, — не обрабатываем.
+    for article in [item for item in articles if not repository.held_by_otbor(item)]:
         stats["processed"] += 1
         try:
             # 1. Полный текст из HTML, если RSS отдал только сниппет.

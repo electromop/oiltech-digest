@@ -125,6 +125,7 @@ def test_source_diagnose_endpoint(monkeypatch):
 def test_signal_feedback_endpoint_stores_learning(monkeypatch):
     # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
     monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
+    monkeypatch.setattr(api.repository, "judge_learns_from", lambda signal_id: True)
     app = api.app
     # Отзыв оставляет любой пользователь (коллега заказчика), не только админ.
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "user"}
@@ -171,6 +172,7 @@ def test_signal_feedback_endpoint_stores_learning(monkeypatch):
 def test_signal_feedback_endpoint_accepts_structured_feedback_without_comment(monkeypatch):
     # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
     monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
+    monkeypatch.setattr(api.repository, "judge_learns_from", lambda signal_id: True)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "user"}
 
@@ -204,6 +206,7 @@ def test_signal_feedback_endpoint_accepts_structured_feedback_without_comment(mo
 def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
     # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
     monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
+    monkeypatch.setattr(api.repository, "signal_digest_refusal", lambda signal_id: None)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "admin"}
     monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)
@@ -246,6 +249,7 @@ def test_signal_patch_endpoint_adds_signal_to_digest(monkeypatch):
 def test_signal_patch_unselect_retracts_digest_example(monkeypatch):
     # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
     monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
+    monkeypatch.setattr(api.repository, "signal_digest_refusal", lambda signal_id: None)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
     monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)
@@ -271,6 +275,7 @@ def test_signal_patch_unselect_retracts_digest_example(monkeypatch):
 def test_signal_patch_keeps_status_when_learning_fails(monkeypatch):
     # Карточка радара, не сигнал ленты: у сигнала ленты отметка и отзыв идут своим путём (#130).
     monkeypatch.setattr(api.repository, "feed_signal_article", lambda signal_id: None)
+    monkeypatch.setattr(api.repository, "signal_digest_refusal", lambda signal_id: None)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 3, "email": "editor@example.com", "role": "user"}
     monkeypatch.setattr(api.marks, "signal_digest_state", _signal_of_the_current_month)

@@ -2223,7 +2223,8 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
         return
     queues = sorted({job["queue_name"] for job in result["jobs"]})
     print(f"enqueue-otbor: статей {result['articles']}, задач {len(result['jobs'])}"
-          + (f", очередь {', '.join(queues)}" if queues else ""))
+          + (f", очередь {', '.join(queues)}" if queues else "")
+          + (f", без ответа после попыток {result['unanswered']}" if result.get("unanswered") else ""))
 
 
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:

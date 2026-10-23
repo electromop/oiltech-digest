@@ -52,6 +52,8 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         articles = repository.get_articles_by_ids(article_ids, include_summary=True)
     else:
         articles = repository.get_articles_needing_pipeline(limit)
+    # Явный список не обходит «Отбор» (#130): отклонённую им и ждущую его решения воркер не получает.
+    articles = [article for article in articles if not repository.held_by_otbor(article)]
     if payload.get(fulltext_recompute.PAYLOAD_FLAG) and articles:
         # Пересчёт после полного текста ждал пакет, выданный с обрывком: его гейт мог статью
         # отвергнуть, а месяц — закрыться. За таких модель не платится.

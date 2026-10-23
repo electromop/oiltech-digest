@@ -91,6 +91,26 @@ def test_technical_failure_is_retried_up_to_three_tasks(user, admin, contour, mo
     assert showcase(user) == {}
 
 
+def test_whole_task_failure_leaves_the_article_in_the_no_answer_section_once_the_tries_are_over(
+        user, admin, contour, monkeypatch, capsys):
+    # Задача падает целиком (сборка воркера, настройка, сбой воркера): итога нет, ядро ничего не пишет. После
+    # попыток статья не пропадает, а лежит в разделе «„Отбор“ не ответил» (решение владельца 23.10).
+    article("Задача падает", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
+    client = worker("external-ai")
+    for _ in range(3):
+        cli.main(["enqueue-otbor"])
+        client.fail(client.claim(), "воркер упал", retryable=False)
+    assert api_get("/api/signals", admin, section="otbor_failed") == []
+
+    for _ in range(2):  # следующие циклы: задач больше нет, пометка одна
+        cli.main(["enqueue-otbor"])
+    [card] = api_get("/api/signals", admin, section="otbor_failed")
+    assert card["title"] == "Задача падает"
+    assert "задачи «Отбора» с ней падали целиком: 3 из 3" in card["section_reason"]
+    assert [step["stage"] for step in card["decision_log"]] == ["«Отбор»"]
+    assert len(_jobs(admin)) == 3
+
+
 def test_answer_off_rules_is_not_written_not_retried_and_does_not_drop_the_batch(user, admin, contour, monkeypatch):
     monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
     gate_article = article("Статья гейта", "Weatherford получила контракт на бурение 274 скважин в Омане.")
@@ -138,6 +158,52 @@ def test_step_conflict_gets_one_retry_with_the_conflict_then_the_decision_stays_
     assert cards["Упорствует"]["industry"] == "other_industry"
     assert "прямая связь у другой отрасли" in cards["Упорствует"]["otbor_disputed"]
     assert [step["stage"] for step in cards["Упорствует"]["decision_log"]] == ["«Отбор»"] * 3
+
+
+def test_step_table_approved_23_10_allows_transfer_from_oil_gas_any_category_and_reject_without_one(
+        user, admin, contour, monkeypatch):
+    # Таблица конфликтов шагов утверждена владельцем 23.10 (решение 29 журнала гриля, раздел 5 разбора разметки):
+    # переносимая — и у нефтегаза, при любой категории; категория у «не брать» не обязательна.
+    transfer = {"oilfield_relevance": "transferable", "oilfield_application": "Задача: осмотр без людей на высоте"}
+    article("Экзоскелеты Башнефти", "Башнефть перенесла экзоскелеты с НПЗ на ремонт скважин.")
+    article("Двойники верфей", "Akselos и UPTEC переносят цифровые двойники верфей на морские платформы.")
+    article("Перенос у нефтесервиса", "Weatherford применила на буровой роботов с автозавода.")
+    article("Пожар на буровой", "На буровой в Омане случился пожар, работы остановлены.")
+    article("Старая новость", "Котировки нефти в 2019 году росли после решения ОПЕК.")
+    article("Отказ без категории", "Нефть дешевеет после роста запасов нефти в США.")
+    model = decide(monkeypatch, {
+        "Экзоскелеты Башнефти": answer(category="technology", **transfer),
+        "Двойники верфей": answer(industry="other_industry", category="business", **transfer),
+        "Перенос у нефтесервиса": [answer(industry="oilfield_services", category="technology", **transfer),
+                                   answer(industry="oilfield_services", category="technology")],
+        "Пожар на буровой": [reject("incident_war_politics", industry="oilfield_services",
+                                    oilfield_relevance="direct"),
+                             reject("incident_war_politics", industry="oilfield_services")],
+        "Старая новость": [reject("old_event"), reject("old_event", oilfield_relevance="direct")],
+        "Отказ без категории": reject("oil_gas_no_link", category=""),
+    })
+
+    calls = {}
+    for call in model.calls:
+        title = call["input"].splitlines()[0].removeprefix("Заголовок: ")
+        calls.setdefault(title, []).append(call["input"])
+    # Повтор — только там, где таблица говорит «нет»: перенос у нефтесервиса, происшествие при прямой связи,
+    # старое событие без связи.
+    assert {title: len(inputs) for title, inputs in calls.items()} == {
+        "Экзоскелеты Башнефти": 1, "Двойники верфей": 1, "Перенос у нефтесервиса": 2, "Пожар на буровой": 2,
+        "Старая новость": 2, "Отказ без категории": 1}
+    assert "переносимая связь у нефтесервиса" in calls["Перенос у нефтесервиса"][1]
+    assert "причина «Происшествия, война, политика» при отрасли «нефтесервис» и связи «прямая»" in (
+        calls["Пожар на буровой"][1])
+    technology, business = showcase(user, "technology"), showcase(user)
+    assert (technology["Экзоскелеты Башнефти"]["oilfield_relevance"],
+            technology["Экзоскелеты Башнефти"]["otbor_disputed"]) == ("transferable", None)
+    assert business["Двойники верфей"]["otbor_disputed"] is None
+    assert technology["Перенос у нефтесервиса"]["oilfield_relevance"] == "direct"
+    # Отказ без категории — решение, а не «ответ не по правилам».
+    [no_category] = api_get("/api/signals", admin, section="otbor:oil_gas_no_link")
+    assert (no_category["title"], no_category["signal_category"]) == ("Отказ без категории", None)
+    assert api_get("/api/signals", admin, section="otbor_invalid") == []
 
 
 def test_otbor_spend_is_accounted_under_its_name(user, admin, contour, monkeypatch):

@@ -63,7 +63,7 @@ LEFT JOIN LATERAL (
                                       'rationale', i.rationale) ORDER BY i.criterion_id) AS items
   FROM article_score_items i WHERE i.article_score_id = sc.id
 ) items ON TRUE
-WHERE COALESCE({feed_window.otbor_decision_sql('a')} = 'accept', c.relevant IS TRUE)
+WHERE {feed_window.relevance_sql('a', 'c')} IS TRUE
   AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
   AND (%(create_since)s::date IS NULL OR a.collected_at >= %(create_since)s::date
        OR EXISTS (SELECT 1 FROM signals x WHERE x.signal_key = {_key_sql('a.id')}))
@@ -131,7 +131,7 @@ LEFT JOIN article_cards c ON c.article_id = a.id
 LEFT JOIN article_reprints ar ON ar.article_id = a.id
 JOIN signals target ON target.signal_key = {_key_sql('COALESCE(ar.primary_id, a.id)')}
 WHERE COALESCE(a.url, '') <> ''
-  AND (ar.article_id IS NULL OR c.relevant IS NOT FALSE)
+  AND (ar.article_id IS NULL OR {feed_window.selected_sql('a', 'c')})
 ORDER BY a.url, (ar.article_id IS NULL) DESC, a.id
 ON CONFLICT (source_url) DO UPDATE SET
   signal_id = EXCLUDED.signal_id,

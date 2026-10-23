@@ -2027,10 +2027,18 @@ _SIGNAL_STATUSES = frozenset({"watch", "digest", "archive", "noise", "duplicate"
 def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     if patch.status is not None and patch.status not in _SIGNAL_STATUSES:
         raise HTTPException(status_code=400, detail="Unknown signal status")
+    if patch.status == "digest" or patch.selected_for_digest:
+        refusal = repository.signal_digest_refusal(signal_id)
+        if refusal:
+            raise HTTPException(status_code=409, detail=f"В дайджест не ставится: {refusal}")
     article_id = repository.feed_signal_article(signal_id)
     if article_id is not None:
         # Одна механика на две витрины (решение владельца 23.10): у сигнала ленты отметка — его статьи, та же,
         # что ставит лента статей; там же правило закрытого месяца и журнал. «Наблюдать» у статьи — «новая».
+        # Прочие статусы и комментарий статьи — в ленте статей, витрина их не меняет.
+        if patch.status not in (None, "digest", "watch") or patch.analyst_comment is not None:
+            raise HTTPException(status_code=422,
+                                detail="У сигнала ленты витрина меняет только отметку «в дайджест»")
         status = "new" if patch.status == "watch" else patch.status
         return update_article(article_id, ArticlePatch(status=status, selected_for_digest=patch.selected_for_digest,
                                                        analyst_comment=patch.analyst_comment), user)
@@ -2077,7 +2085,7 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
 # (решение владельца 28.09). До этого форма была только у админа, и ОС коллег не доходила.
 @app.post("/api/signals/feedback")
 def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    from oiltech_digest.signal_feedback import store_signal_feedback
+    from oiltech_digest.signal_feedback import _normalize_verdict, store_signal_feedback
 
     if not any([
         payload.comment.strip(),
@@ -2090,13 +2098,19 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
         raise HTTPException(status_code=400, detail="comment or structured feedback is required")
     if payload.article_id is None and payload.signal_id is None and not payload.source_url:
         raise HTTPException(status_code=400, detail="article_id, signal_id or source_url is required")
-    if payload.signal_id is not None and repository.feed_signal_article(payload.signal_id) is not None:
-        # Блок ОС сигнала ленты (#130, решение владельца 22.10) только хранится и показывается: на отбор и показ он
-        # не влияет, и в память судьи радара не идёт — ею, как и всей ОС, будет управлять сервис ОС.
+    if payload.signal_id is not None and not repository.judge_learns_from(payload.signal_id):
+        # Блок ОС (#130, решение владельца 22.10) — у сигнала ленты и у находки радара в бизнес-ленте: только
+        # хранится и показывается, на отбор и показ не влияет и в память судьи радара не идёт — ею, как и всей ОС,
+        # будет управлять сервис ОС. Правок карточки и «дубля» у блока нет: экран их не предлагает, сервер не
+        # принимает молча.
+        if (payload.corrected_title or "").strip() or (payload.corrected_thesis or "").strip() \
+                or payload.duplicate_of_signal_id:
+            raise HTTPException(status_code=422, detail="Отзыв об этой карточке — оценка, причина и комментарий: "
+                                                        "правки карточки и «дубль» — у находки радара на радаре")
         event_id = repository.record_signal_feedback_event(
             None, "comment_added", signal_id=payload.signal_id, user_id=int(user["id"]),
             signal_title=payload.signal_title, comment=payload.comment.strip(),
-            verdict=(payload.verdict or "").strip().lower() or None, reason=(payload.reason or "").strip() or None,
+            verdict=_normalize_verdict(payload.verdict), reason=(payload.reason or "").strip() or None,
         )
         return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0,
                 "block": _feedback_block(event_id, payload, user)}
@@ -2122,8 +2136,10 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
 
 def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
     """Сохранённый блок ОС (#130) — как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
-    экран добавляет его, не перечитывая витрину."""
-    return {"id": event_id, "author": user.get("email"), "verdict": (payload.verdict or "").strip().lower() or None,
+    экран добавляет его, не перечитывая витрину. Оценка — тем же словарём, каким её сохранили оба пути."""
+    from oiltech_digest.signal_feedback import _normalize_verdict
+
+    return {"id": event_id, "author": user.get("email"), "verdict": _normalize_verdict(payload.verdict),
             "reason": (payload.reason or "").strip() or None, "comment": payload.comment.strip() or None,
             "created_at": datetime.now(timezone.utc).isoformat()}
 

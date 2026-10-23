@@ -28,8 +28,8 @@ from oiltech_digest.processing.pipeline import make_client
 from oiltech_digest.signal_card_pack import publication_day, publication_text
 
 KIND = otbor_store.KIND
-# Версия инструкции (и черновой таблицы конфликтов) — в рецепте решения: другая инструкция — другие решения.
-PROMPT_VERSION = "2026-10-23.1"
+# Версия инструкции (и таблицы конфликтов) — в рецепте решения: другая инструкция — другие решения.
+PROMPT_VERSION = "2026-10-23.2"
 _OUTPUT_TOKENS = 600
 # Шаг «Отбора» в «Ходе решения» сигнала.
 STAGE = "«Отбор»"
@@ -39,19 +39,30 @@ CHOICES = ("industry", "oilfield_relevance", "decision", "reject_reason", "categ
 NO_REASON = "none"
 ACCEPT, REJECT = "accept", "reject"
 DIRECT, TRANSFERABLE, NO_LINK = "direct", "transferable", "none"
-OIL_GAS, OTHER_INDUSTRY = "oil_gas", "other_industry"
+OILFIELD_SERVICES, OIL_GAS, OTHER_INDUSTRY = "oilfield_services", "oil_gas", "other_industry"
 # Потолки длины ответа воркера (недоверенный ввод): обоснование — до 200 знаков (спека), применение — как фраза
 # судьи радара.
 _JUSTIFICATION_CHARS, _APPLICATION_CHARS = 200, 400
 
-# Черновая таблица «причина → допустимые отрасль и связь» (спека #128; утверждает владелец вместе с инструкцией,
-# #133): причина отказа, которая сама о связи, ставится только при этих отрасли и связи. Остальные причины
-# (происшествия, корпоративное, старое событие, разные события) главнее связи: допустимы при любых.
-REASON_STEPS = {
+# Таблица конфликтов шагов утверждена владельцем 23.10 (решение 29 журнала гриля; раздел 5 разбора разметки
+# эксперта). Пар «отрасль + связь», которых не бывает, две: у нефтесервиса связь прямая, другая отрасль только
+# переносится. Переносимая бывает и у нефтегаза (смежные операции: переработка, транспорт, хранение) при любой
+# категории.
+_NO_PAIRS = {(OILFIELD_SERVICES, TRANSFERABLE): "переносимая связь у нефтесервиса: его связь прямая",
+             (OTHER_INDUSTRY, DIRECT): "прямая связь у другой отрасли"}
+LINKED = frozenset({DIRECT, TRANSFERABLE})
+# При каких отрасли и связи допустимы «брать» и каждая причина отказа; None — при любой из допустимых пар. Причина
+# не из таблицы (новая версия справочника) — при любой паре. Тексты причин — в справочнике, здесь только коды.
+DECISION_STEPS = {
+    ACCEPT: (None, LINKED),
     "oil_gas_no_link": ({OIL_GAS}, {NO_LINK}),
     "other_industry_no_transfer": ({OTHER_INDUSTRY}, {NO_LINK}),
+    "incident_war_politics": (None, {NO_LINK}),
+    "corporate_promo": (None, None),
+    "old_event": (None, LINKED),
+    "mixed_events": (None, LINKED),
 }
-# «Разные события в одной находке» — только у публикации с несколькими ссылками (находка радара, #131).
+# «Разные события в одной находке» — только у публикации с двумя и более ссылками (находка радара, #131).
 MIXED_EVENTS = "mixed_events"
 
 
@@ -69,9 +80,15 @@ def enqueue_new_articles() -> dict[str, Any]:
         return {"articles": 0, "jobs": [], "reason": "disabled"}
     # Без модели шаг отказывает в каждом цикле, даже когда новых статей нет: настройка видна сразу.
     configured_model()
+    # Попытки кончились, а итога нет (задачи падали целиком): статья — в раздел «„Отбор“ не ответил».
+    unanswered = otbor_store.unanswered_articles(days=config.OTBOR_NEW_DAYS, attempts=config.OTBOR_ATTEMPTS,
+                                                 limit=config.OTBOR_STEP_LIMIT)
+    for article_id, reason in unanswered:
+        otbor_store.write_failure(article_id, otbor_store.FAILURE_TECHNICAL, reason,
+                                  log=[_step(f"Сбой, «Отбор» не ответил: {reason}")])
     ids = otbor_store.new_article_ids(days=config.OTBOR_NEW_DAYS, limit=config.OTBOR_STEP_LIMIT,
                                       attempts=config.OTBOR_ATTEMPTS)
-    return {"articles": len(ids), "jobs": enqueue(ids, trigger="daily")}
+    return {"articles": len(ids), "jobs": enqueue(ids, trigger="daily"), "unanswered": len(unanswered)}
 
 
 def enqueue(article_ids: list[int], *, trigger: str, bulk: bool = False) -> list[dict[str, Any]]:
@@ -272,6 +289,9 @@ def answer_problem(answer: Any, dictionaries: dict[str, Any]) -> str | None:
     if not isinstance(answer, dict):
         return "не объект"
     for name, spec in _answer_schema(dictionaries)["schema"]["properties"].items():
+        if name == "category" and answer.get("decision") == REJECT:
+            # Категория выбирает витрину, у отклонённого её нет: проверка её не требует (решение владельца 23.10).
+            continue
         value = answer.get(name)
         if not isinstance(value, str):
             return f"нет строки {name}"
@@ -281,8 +301,8 @@ def answer_problem(answer: Any, dictionaries: dict[str, Any]) -> str | None:
 
 
 def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: int = 0) -> list[str]:
-    """Где шаги ответа не сошлись друг с другом (черновая таблица, утверждает владелец, #133). links — ссылок у
-    публикации: «разные события» — только у находки с несколькими ссылками."""
+    """Где шаги ответа не сошлись друг с другом (таблица конфликтов, DECISION_STEPS). links — ссылок у
+    публикации: «разные события» — только у находки с двумя и более ссылками."""
     def label(name: str, code: str) -> str:
         values = (dictionaries.get(name) or {}).get("values") or []
         return next((value["label"] for value in values if value["code"] == code), code)
@@ -290,20 +310,20 @@ def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: in
     industry, relevance = answer["industry"], answer["oilfield_relevance"]
     decision, reason = answer["decision"], answer["reject_reason"]
     found = []
-    if decision == ACCEPT and relevance == NO_LINK:
-        found.append("«брать» при связи «нет связи»")
+    if (industry, relevance) in _NO_PAIRS:
+        found.append(_NO_PAIRS[(industry, relevance)])
     if decision == ACCEPT and reason != NO_REASON:
         found.append(f"у «брать» есть причина отказа «{label('reject_reason', reason)}»")
     if decision == REJECT and reason == NO_REASON:
         found.append("у «не брать» нет причины отказа")
-    if reason in REASON_STEPS and not (industry in REASON_STEPS[reason][0] and relevance in REASON_STEPS[reason][1]):
+    step = ACCEPT if decision == ACCEPT else reason
+    industries, relevances = DECISION_STEPS.get(step, (None, None))
+    if step == ACCEPT and relevance not in relevances:
+        found.append(f"«брать» при связи «{label('oilfield_relevance', relevance)}»")
+    elif (industries is not None and industry not in industries) or (relevances is not None
+                                                                      and relevance not in relevances):
         found.append(f"причина «{label('reject_reason', reason)}» при отрасли «{label('industry', industry)}» "
                      f"и связи «{label('oilfield_relevance', relevance)}»")
-    if relevance == TRANSFERABLE and industry != OTHER_INDUSTRY:
-        found.append(f"переносимая связь у отрасли «{label('industry', industry)}»: переносится технология другой "
-                     "отрасли")
-    if relevance == DIRECT and industry == OTHER_INDUSTRY:
-        found.append("прямая связь у другой отрасли")
     if relevance == TRANSFERABLE and not answer["oilfield_application"].strip():
         found.append("переносимая связь без применения в нефтесервисе")
     if reason == MIXED_EVENTS and links < 2:
@@ -347,17 +367,19 @@ def outcome(decision: dict[str, Any], dictionaries: dict[str, Any], *, links: in
             found = conflicts(answer, dictionaries, links=links)
         if found:
             disputed = "шаги ответа не сошлись и после повтора: " + "; ".join(found)
-    values = _values(answer)
+    values = _values(answer, dictionaries)
     log.append(_step(_decision_text(values, dictionaries)))
     if disputed:
         log.append(_step(f"Спорное: {disputed}"))
     return Outcome(values=values, disputed=disputed, log=log)
 
 
-def _values(answer: dict[str, Any]) -> dict[str, Any]:
-    """Проверенный ответ → значения сигнала. Применение — только у переносимой связи; причина — только у отказа."""
+def _values(answer: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, Any]:
+    """Проверенный ответ → значения сигнала. Применение — только у переносимой связи; причина — только у отказа;
+    категория у отказа — если модель её написала из справочника (её никто не читает)."""
     relevance = answer["oilfield_relevance"]
     reason = answer["reject_reason"]
+    category = answer.get("category")
     return {
         "industry": answer["industry"],
         "oilfield_relevance": relevance,
@@ -365,7 +387,7 @@ def _values(answer: dict[str, Any]) -> dict[str, Any]:
         if relevance == TRANSFERABLE else None,
         "otbor_decision": answer["decision"],
         "reject_reason": reason if answer["decision"] == REJECT and reason != NO_REASON else None,
-        "signal_category": answer["category"],
+        "signal_category": category if category in _codes(dictionaries, "category") else None,
         "verdict_reason": _phrase(answer["justification"], _JUSTIFICATION_CHARS),
     }
 

@@ -3,13 +3,16 @@
 (tests/otbor_support.py).
 """
 
-from fastapi.testclient import TestClient
+import itertools
 
-from oiltech_digest import api, cli, signal_card, signal_research
-from oiltech_digest.db import repository
-from oiltech_digest.db.rejected_sections import UNCONFIRMED_LINK
+from fastapi.testclient import TestClient
+import pytest
+
+from oiltech_digest import api, background_jobs, cli, signal_card
+from oiltech_digest.db import analytics, repository
+from oiltech_digest.signal_research import UNCONFIRMED_LINK
 from oiltech_digest.otbor_pack_format import load_dictionaries
-from oiltech_digest.processing import external_ai
+from oiltech_digest.processing import external_ai, fulltext_recompute
 from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from tests.otbor_support import JUSTIFICATION, answer, article, decide, reject, showcase
@@ -122,6 +125,55 @@ def test_article_accepted_by_otbor_is_processed_without_the_gate_and_stop_words(
     assert card["summary"] == row["summary"] and card["theme"] == DRILLING
 
 
+def test_old_feed_machinery_counts_and_recomputes_by_the_otbor_decision(user, admin, contour, monkeypatch):
+    # Решение владельца 23.10: что остаётся от прежней механики ленты (счётчики, пересчёт, тег и балл), читает
+    # решение «Отбора» из сигнала.
+    seed_default_scoring_criteria()
+    tag(DRILLING)
+    accepted = article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
+    rejected = article("Котировки нефти", "Нефть дешевеет после роста запасов нефти в США.")
+    decide(monkeypatch, {"Программа бурения Equinor": answer(), "Котировки нефти": reject("oil_gas_no_link")})
+    _process_feed()
+
+    # Плитки ленты: принятая обработана.
+    assert api_get("/api/stats", user)["processed_articles"] == 1
+    # Воронка платформы и месячная аналитика: принятая и отклонённая — по решению «Отбора».
+    [platform] = api_get("/api/stats/monthly", admin)["platform"]
+    assert (platform["relevant"], platform["rejected"], platform["summarized"]) == (1, 1, 1)
+    # Аналитика — без стоимости: та за курсом ходит в сеть ЦБ.
+    month = analytics.monthly_analytics(1)["months"][-1]
+    assert (month["relevant"], month["rejected"], month["summarized"], month["sources_relevant"]) == (1, 1, 1, 1)
+    # Пересчёт после полного текста: суть и балл принятой — по новому телу, отклонённой — ничего.
+    monkeypatch.setattr(api.config, "AI_BULK_LANE_ENABLED", True)
+    assert fulltext_recompute.enqueue_after_body([accepted, rejected])["articles"] == [accepted]
+
+
+def test_explicit_article_list_does_not_bypass_otbor(user, admin, contour, monkeypatch, capsys):
+    # Явный список (ручной импорт с обработкой, перекачка тела): ждущую «Отбора» гейт не решает, а за суть, тег и
+    # балл отклонённой модель не платится; принятая «Отбором» обрабатывается без гейта.
+    seed_default_scoring_criteria()
+    tag(DRILLING)
+    waiting = article("Ждёт решения", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
+    rejected = article("Котировки нефти", "Нефть дешевеет после роста запасов нефти в США.")
+    accepted = article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
+    decide(monkeypatch, {"Котировки нефти": reject("oil_gas_no_link"), "Программа бурения Equinor": answer()},
+           "--ids", f"{rejected},{accepted}")
+
+    decision = api.network_policy.route_ai_processing()
+    background_jobs.enqueue("process_articles", {"article_ids": [waiting, rejected, accepted], "offline": True},
+                            queue_name=decision.queue_name, execution_region=decision.execution_region,
+                            capability=decision.capability)
+    [job] = run_worker("external-ai")
+    assert api_get(f"/api/jobs/{job['id']}", admin)["result"]["stats"]["processed"] == 1
+    # Местный конвейер — так же.
+    cli.main(["process-articles", str(waiting), str(rejected), "--offline"])
+    assert "статей=0" in capsys.readouterr().out
+    # Ждущую по-прежнему решит «Отбор»: шаг планировщика её берёт.
+    cli.main(["enqueue-otbor"])
+    [step] = [job for job in api_get("/api/jobs", admin, kind="otbor") if job["payload"]["trigger"] != "manual"]
+    assert step["payload"]["article_ids"] == [waiting]
+
+
 def test_flag_off_keeps_the_old_chain_and_flag_on_runs_the_new_one(user, contour, monkeypatch):
     seed_default_scoring_criteria()
     tag(DRILLING)
@@ -142,10 +194,10 @@ def test_flag_off_keeps_the_old_chain_and_flag_on_runs_the_new_one(user, contour
         "Старая цепочка": None, "Новая цепочка": "accept"}
 
 
-def test_flag_switched_off_returns_the_waiting_article_to_the_gate(user, contour, monkeypatch):
+def test_flag_switched_off_returns_the_waiting_article_to_the_gate(user, admin, contour, monkeypatch, capsys):
     seed_default_scoring_criteria()
     tag(DRILLING)
-    article("Ждёт решения", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
+    waiting = article("Ждёт решения", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
     decide(monkeypatch, {"Ждёт решения": AIClientError("timeout")})
     assert _feed(user) == set()
 
@@ -153,6 +205,13 @@ def test_flag_switched_off_returns_the_waiting_article_to_the_gate(user, contour
     _process_feed()
 
     assert {row["title"]: row["relevant"] for row in api_get("/api/articles", user)} == {"Ждёт решения": True}
+    # Решённое гейтом «Отбор» не пересматривает и командой с номером (проверка на реальных данных, #134, пишет
+    # свои решения отдельно).
+    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    capsys.readouterr()
+    cli.main(["enqueue-otbor", "--ids", str(waiting)])
+    assert "решает не «Отбор» — пропущены" in capsys.readouterr().out
+    assert len(api_get("/api/jobs", admin, kind="otbor")) == 1
 
 
 def test_gate_recheck_leaves_otbor_articles_alone(user, contour, monkeypatch):
@@ -248,6 +307,37 @@ def test_search_and_before_otbor_sections_hold_findings_hidden_by_the_old_rules(
     assert (judged["title"], judged["section_reason"]) == ("Брак судьи", "отсеяно (судья): не технология")
 
 
+def test_one_rejected_list_holds_every_reason_with_the_reason_on_the_card_in_both_feeds(user, admin, contour, monkeypatch):
+    # Единая плашка «Отклонённые» (решение владельца 23.10): все причины одним списком, причина в самой карточке,
+    # число одно в обеих лентах. Видное в витрине в список не идёт.
+    article("Котировки нефти", "Нефть дешевеет после роста запасов нефти в США.")
+    article("Модель молчит", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
+    article("Конференция ассоциации", "Ассоциация проведёт конференцию по менеджменту.")
+    article("Не по схеме", "SLB подписала контракт с Saudi Aramco на бурение 40 скважин.")
+    decide(monkeypatch, {"Котировки нефти": reject("oil_gas_no_link"), "Модель молчит": AIClientError("timeout"),
+                         "Конференция ассоциации": answer(category="other"), "Не по схеме": {"decision": "accept"}})
+    radar_finding("judged", "Брак судьи", "SLB представила новую систему.", filter_stage="judge",
+                  filter_reason="не технология")
+    radar_finding("biz", "Halliburton купила разработчика ПО", "Halliburton купила стартап.",
+                  signal_category="business")
+    assert "Halliburton купила разработчика ПО" in showcase(user)
+
+    reasons = {card["title"]: card["section_reason"] for card in api_get("/api/signals", admin, section="all")}
+    assert reasons == {
+        "Котировки нефти": "«Отбор» → Нефтегаз без связи с нефтесервисом: Котировки нефти без связи с нефтесервисом",
+        "Модель молчит": "Сбой → «Отбор» не ответил: модель: timeout",
+        # Причина раздела в короткой причине не повторяется.
+        "Не по схеме": "Сбой → Ответ не по правилам: нет строки industry",
+        "Конференция ассоциации": f"«Отбор» → Другое: видно только админу: {JUSTIFICATION}",
+        "Брак судьи": "До «Отбора» → Скрыто прежними правилами радара: отсеяно (судья): не технология",
+    }
+    for name in ("technology", "business"):
+        assert api_get("/api/signals/summary", admin, showcase=name)["hidden"] == 5
+    # Разделы идут группами «кто убрал»: «Другое» — среди разделов «Отбора».
+    order = [section["who"] for section in api_get("/api/signals/sections", admin)["sections"]]
+    assert [who for who, _ in itertools.groupby(order)] == ["«Отбор»", "Сбой", "Поиск", "До «Отбора»"]
+
+
 def test_rules_by_relevance_mixed_links_and_age_do_not_hide_what_otbor_accepted(user, contour, monkeypatch):
     article("Пилот робота Equinor", "Equinor испытала робота-бурильщика на платформе в Северном море.")
     decide(monkeypatch, {"Пилот робота Equinor": answer(industry="oilfield_services", category="technology")})
@@ -262,19 +352,38 @@ def test_rules_by_relevance_mixed_links_and_age_do_not_hide_what_otbor_accepted(
     assert card["hidden_reason"] is None
 
 
-def test_unconfirmed_link_section_reads_the_reason_the_radar_search_writes():
-    _, dropped = signal_research.verify_research_evidence([{
-        "source_url": "https://made-up.example/news", "title": "Выдуманная ссылка",
-        "raw_payload": {"evidence_source": signal_research.EVIDENCE_SOURCE}}])
-    assert [item["reason"] for item in dropped] == [UNCONFIRMED_LINK]
+def test_reprint_never_hides_the_accepted_copy_behind_one_otbor_rejected_or_has_not_decided(user, contour, monkeypatch):
+    # Технические правила (перепечатки) — как раньше (спека), но «видна ли главная» решает и «Отбор».
+    rejected = article("Weatherford получила контракт на бурение скважин в Омане", "Котировки нефти и прогноз ОПЕК.",
+                       source="Нефтегаз")
+    accepted = article("Weatherford получила контракт на бурение скважин в Омане до 2027",
+                       "Weatherford получила контракт на бурение 274 скважин в Омане.", source="Oil & Gas")
+    waiting = article("Weatherford получила контракт на бурение скважин в Омане, итоги",
+                      "Weatherford пробурит 274 скважины в Омане.", source="Rigzone")
+    decide(monkeypatch, {"Weatherford получила контракт на бурение скважин в Омане": reject("oil_gas_no_link"),
+                         "Weatherford получила контракт на бурение скважин в Омане до 2027": answer()}, "--ids",
+           f"{rejected},{accepted}")
+
+    # Пар с отклонённой и с ждущей решения нет: модель перепечаток их не увидит.
+    assert {(pair["a_id"], pair["b_id"]) for pair in repository.reprint_candidates()} == set()
+    # Судья назвал главной отклонённую — пометка не ложится: принятая копия остаётся в витрине.
+    for primary in (rejected, waiting):
+        with pytest.raises(ValueError, match="не видна в ленте"):
+            repository.mark_article_reprint(article_id=accepted, primary_id=primary, similarity=0.8,
+                                            reason="одно событие")
+    assert set(showcase(user)) == {"Weatherford получила контракт на бурение скважин в Омане до 2027"}
+
+
+def _request(method, path, user, body):
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        return TestClient(api.app).request(method, path, json=body)
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
 
 
 def _send(method, path, user, body):
-    api.app.dependency_overrides[api.require_user] = lambda: user
-    try:
-        response = TestClient(api.app).request(method, path, json=body)
-    finally:
-        api.app.dependency_overrides.pop(api.require_user, None)
+    response = _request(method, path, user, body)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -302,6 +411,52 @@ def test_digest_button_is_one_mechanism_in_both_showcases(user, contour, monkeyp
     _send("PATCH", f"/api/signals/{business_card['id']}", user, {"selected_for_digest": False})
     assert showcase(user)["Контракт Weatherford"]["selected_for_digest"] is False
     assert [item["title"] for item in api_get("/api/digest-content", user)["news"]] == ["Пилот робота Equinor"]
+
+
+def test_digest_mark_of_a_rejected_or_failed_article_is_refused_by_the_server(user, admin, contour, monkeypatch):
+    # Кнопки «В дайджест» у отклонённого и у сбоя на экране нет; запрос в обход экрана сервер тоже не принимает.
+    article("Котировки нефти", "Нефть дешевеет после роста запасов нефти в США.")
+    article("Модель молчит", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
+    article("Контракт Weatherford", "Weatherford получила контракт на бурение 274 скважин в Омане.")
+    decide(monkeypatch, {"Котировки нефти": reject("oil_gas_no_link"), "Модель молчит": AIClientError("timeout"),
+                         "Контракт Weatherford": answer(industry="oilfield_services")})
+    [rejected] = api_get("/api/signals", admin, section="otbor:oil_gas_no_link")
+    [failed] = api_get("/api/signals", admin, section="otbor_failed")
+    business_card = showcase(user)["Контракт Weatherford"]
+
+    for card in (rejected, failed):
+        response = _request("PATCH", f"/api/signals/{card['id']}", admin, {"selected_for_digest": True})
+        assert response.status_code == 409, response.text
+        assert "«Отбор»" in response.json()["detail"]
+    assert api_get("/api/articles", admin, status="digest") == []
+    # У сигнала ленты меняется только отметка «в дайджест» (одна механика на две витрины, решение 23.10): прочие
+    # статусы статьи — в ленте статей.
+    response = _request("PATCH", f"/api/signals/{business_card['id']}", user, {"status": "noise"})
+    assert response.status_code == 422, response.text
+    assert showcase(user)["Контракт Weatherford"]["user_status"] != "noise"
+
+
+def test_feedback_of_a_card_is_a_stored_block_unless_the_radar_judge_made_it_and_it_is_on_the_radar(
+        user, admin, contour, monkeypatch):
+    # Форма и API ветвятся одинаково: в память судьи радара идёт отзыв только о его находке на радаре. Блок
+    # сигнала ленты и находки радара в бизнес-ленте только хранится (решение владельца 22.10: учить агентов будет
+    # сервис ОС): «Не тот блок» в бизнес-ленте значит «это технология», а судья прочёл бы «это бизнес».
+    article("Пилот робота Equinor", "Equinor испытала робота-бурильщика на платформе в Северном море.")
+    decide(monkeypatch, {"Пилот робота Equinor": answer(industry="oilfield_services", category="technology")})
+    feed_card = showcase(user, "technology")["Пилот робота Equinor"]
+    business_find = radar_finding("biz-1", "Halliburton купила разработчика ПО", "Halliburton купила стартап.",
+                                  signal_category="business")
+
+    saved = _send("POST", "/api/signals/feedback", user, {"signal_id": business_find, "verdict": "не тот блок",
+                                                          "comment": "Это технология"})
+    # Оценка — тем же словарём, что у судьи радара: «не тот блок» → wrong_block, и блок ответа — сохранённый.
+    assert (saved["memories"], saved["block"]["verdict"]) == (0, "wrong_block")
+    assert api_get("/api/signals/memory", admin) == []
+    # Правки карточки и «дубль» — только у находки радара на радаре: у блока их нет, и сервер это говорит.
+    response = _request("POST", "/api/signals/feedback", user, {"signal_id": feed_card["id"],
+                                                               "corrected_title": "Другой заголовок"})
+    assert response.status_code == 422, response.text
+    assert showcase(user, "technology")["Пилот робота Equinor"]["title"] == "Пилот робота Equinor"
 
 
 def test_feedback_blocks_are_listed_on_the_card_in_both_showcases_and_change_nothing(user, admin, contour, monkeypatch):

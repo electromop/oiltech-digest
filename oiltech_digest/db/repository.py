@@ -2421,12 +2421,10 @@ def signal_radar_summary(**filters) -> dict:
             """
         )
         tiles["merged"] = int(cur.fetchone()["merged"])
-        # «Отсеянные и скрытые» есть только у радара (_showcase_visible_sql): все разделы отклонённого (#130).
-        tiles["hidden"] = 0
-        if showcase == "technology":
-            from oiltech_digest.db import rejected_sections
+        # Плашка «Отклонённые» (#130): все разделы отклонённого одним числом, одно в обеих лентах.
+        from oiltech_digest.db import rejected_sections
 
-            tiles["hidden"] = sum(section["count"] for section in rejected_sections.counts())
+        tiles["hidden"] = rejected_sections.total()
         total = tiles["total"]
         matching = total
         # Скрытые и раздел — своя выборка: «N из M» считается по ним даже без других фильтров.
@@ -3044,6 +3042,29 @@ def feed_signal_article(signal_id: int) -> int | None:
     return int(row[0]) if row and row[0] is not None else None
 
 
+def signal_digest_refusal(signal_id: int) -> str | None:
+    """Почему сигнал не ставится «в дайджест» (#130): его отклонил «Отбор» или «Отбор» не дал решения (сбой). У
+    такого и на экране кнопки нет; вернуть отклонённое — #132. None — ставится (или сигнала нет)."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT otbor_decision, otbor_failure FROM signals WHERE id = %s",
+                           (int(signal_id),)).fetchone()
+    if row is None:
+        return None
+    if row[0] == "reject":
+        return "публикацию отклонил «Отбор»"
+    return "«Отбор» не дал решения" if row[0] is None and row[1] else None
+
+
+def judge_learns_from(signal_id: int) -> bool:
+    """Учит ли отзыв о сигнале судью радара (#130): только отзыв о его находке (происхождение «радар») вне бизнес-
+    ленты. Иначе отзыв — блок ОС и только хранится (решение владельца 22.10: учить агентов будет сервис ОС):
+    «Не тот блок» в бизнес-ленте значит «это технология», а судья читает его как «это бизнес», и одобрение
+    бизнес-находки стало бы для него примером технологического сигнала. Сигнала нет — прежний путь."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT origin, signal_category FROM signals WHERE id = %s", (int(signal_id),)).fetchone()
+    return row is None or (row[0] == SIGNAL_ORIGIN_RADAR and row[1] != "business")
+
+
 def set_signal_agent_memory_status(memory_id: int, status: str) -> bool:
     with get_connection() as conn:
         cur = conn.execute(
@@ -3140,7 +3161,7 @@ def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> l
                 a.id,
                 a.source_id,
                 c.summary,
-                c.relevant,
+                {feed_window.relevance_sql('a', 'c')} AS relevant,
                 c.status AS card_status,
                 sc.total_score,
                 {marks.article_marked_sql('a.id', 'digest')} AS user_digest,
@@ -3218,7 +3239,7 @@ def compute_topic_gap_rows(
               SELECT
                 COALESCE(parent.name, t.name) AS topic,
                 a.id AS article_id,
-                c.relevant,
+                {feed_window.relevance_sql('a', 'c')} AS relevant,
                 c.status AS card_status,
                 sc.total_score,
                 {marks.article_marked_sql('a.id', 'digest')} AS user_digest
@@ -4771,13 +4792,13 @@ def get_articles_missing_image(limit: int = 200) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.id, a.url
             FROM articles a
             LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE a.url IS NOT NULL AND COALESCE(a.image_url, '') = ''
               AND NOT a.pending_deletion
-              AND c.relevant IS NOT FALSE
+              AND {feed_window.selected_sql('a', 'c')}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -4930,7 +4951,7 @@ def dashboard_stats(window: FeedWindow | None = None) -> dict:
                    -- Обработано: есть суть, проверена релевантность и есть тег или оценка.
                    COUNT(*) FILTER (
                      WHERE COALESCE(c.summary, '') <> ''
-                       AND c.relevant IS NOT NULL
+                       AND {feed_window.relevance_sql('a', 'c')} IS NOT NULL
                        AND (sc.article_id IS NOT NULL
                             OR EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = a.id))
                    ) AS processed,
@@ -5059,11 +5080,11 @@ def monthly_platform_stats(months: int = 6) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT to_char(a.collected_at, 'YYYY-MM') AS month,
                    count(*) AS collected,
-                   count(*) FILTER (WHERE c.relevant IS TRUE) AS relevant,
-                   count(*) FILTER (WHERE c.relevant IS FALSE) AS rejected,
+                   count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
+                   count(*) FILTER (WHERE rel.relevant IS FALSE) AS rejected,
                    count(*) FILTER (WHERE a.pending_deletion) AS hidden,
                    count(*) FILTER (WHERE COALESCE(c.summary, '') <> '') AS summarized,
                    count(*) FILTER (WHERE sc.total_score IS NOT NULL) AS scored,
@@ -5072,6 +5093,7 @@ def monthly_platform_stats(months: int = 6) -> list[dict]:
             FROM articles a
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
+            LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
             WHERE a.collected_at >= date_trunc('month', now()) - make_interval(months => %s)
             GROUP BY 1
             ORDER BY 1
@@ -5345,7 +5367,7 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            r"""
+            rf"""
             WITH t AS (
               SELECT a.id, a.source_id, a.title, a.published_at,
                      ARRAY(SELECT DISTINCT left(w, 6)
@@ -5365,10 +5387,11 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
                 -- (модель звали впустую), а в 6 главной копией становилась
                 -- невидимая — то есть пометка не схлопывала дубль, а убирала
                 -- новость из ленты совсем. Полезными были 21 пара из 71.
-                -- Условия те же, что в ленте (api.articles_feed) и в выпуске.
+                -- Условия те же, что в ленте (api.articles_feed) и в выпуске; отобрана — с решением
+                -- «Отбора» (#130): отклонённая и ждущая его решения в ленте не видны.
                 AND s.archived_at IS NULL
                 AND NOT a.pending_deletion
-                AND c.relevant IS NOT FALSE
+                AND {feed_window.selected_sql('a', 'c')}
             )
             SELECT x.id AS a_id, y.id AS b_id,
                    x.title AS a_title, y.title AS b_title,
@@ -5442,17 +5465,17 @@ def article_visible_in_feed(conn, article_id: int) -> bool:
     Заведено не ради стройности: перепечатки решает модель на внешнем воркере, а
     её ответ это недоверенный вход. Пометка прячет копию, и если главной окажется
     статья, которой в ленте нет (архивный источник, помечена на удаление, отбита
-    гейтом), то новость исчезнет целиком вместо схлопывания дубля.
+    гейтом или «Отбором», ждёт решения «Отбора»), то новость исчезнет целиком вместо схлопывания дубля.
     """
     row = conn.execute(
-        """
+        f"""
         SELECT 1 FROM articles a
         JOIN sources s ON s.id = a.source_id
         LEFT JOIN article_cards c ON c.article_id = a.id
         WHERE a.id = %s
           AND s.archived_at IS NULL
           AND NOT a.pending_deletion
-          AND c.relevant IS NOT FALSE
+          AND {feed_window.selected_sql('a', 'c')}
         """,
         (int(article_id),),
     ).fetchone()
@@ -5817,14 +5840,14 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE c.summary IS NULL
-              AND c.relevant IS NOT FALSE
+              AND {feed_window.selected_sql('a', 'c')}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -5860,6 +5883,17 @@ def _needs_pipeline_from() -> str:
               ELSE c.relevant IS NULL OR (c.relevant IS TRUE AND {_STAGES_MISSING_SQL}) OR c.article_id IS NULL
             END
 """
+
+
+def held_by_otbor(article: dict) -> bool:
+    """Статью держит «Отбор» (#130) — то же правило, что _needs_pipeline_from, для явного списка статей (ручной
+    импорт, перекачка тела, команда с номерами): отклонённую им обработка ленты не берёт, ждущую его решения —
+    пока он включён. Строка — из get_articles_by_ids с include_summary (решение «Отбора», гейт, путь статьи)."""
+    decision = article.get("otbor_decision")
+    if decision is not None:
+        return decision != "accept"
+    return (bool(config.OTBOR_ENABLED) and article.get("selector") == ARTICLE_SELECTOR_OTBOR
+            and article.get("relevant") is None)
 
 
 def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
@@ -6037,14 +6071,14 @@ def get_articles_needing_tags(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
-            WHERE c.summary IS NOT NULL AND c.relevant IS TRUE AND at.id IS NULL
+            WHERE c.summary IS NOT NULL AND {feed_window.relevance_sql('a', 'c')} IS TRUE AND at.id IS NULL
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -6057,14 +6091,14 @@ def get_articles_needing_scores(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
-            WHERE c.summary IS NOT NULL AND c.relevant IS TRUE AND sc.id IS NULL
+            WHERE c.summary IS NOT NULL AND {feed_window.relevance_sql('a', 'c')} IS TRUE AND sc.id IS NULL
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -7483,13 +7517,15 @@ def max_article_id() -> int | None:
 
 
 def get_articles_needing_summary_after(after_id: int, limit: int = 20) -> list[dict]:
-    """Articles that have no summary yet and whose id > after_id (streaming checkpoint)."""
+    """Articles that have no summary yet and whose id > after_id (streaming checkpoint). Решение гейта и «Отбора»
+    (#130) — конвейеру: статью, которую держит «Отбор», он не обрабатывает (held_by_otbor)."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
+                   s.category AS source_category, c.relevant,
+                   {feed_window.otbor_decision_sql('a')} AS otbor_decision
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id

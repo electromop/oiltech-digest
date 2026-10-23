@@ -914,7 +914,7 @@ WHERE origin = 'radar' AND card_set_by IS NULL;
 -- Агент «Отбор» (#130, ADR 0005): единственный решает «брать или нет». Решение — у сигнала: отрасль, связь и
 -- применение (прежние поля связи, источник «otbor» в card_set_by), категория, код причины отказа; у отклонённой
 -- maturity = 'reject' («Решение платформы»). Нет решения — сбой: технический (шаг повторит) или ответ не по
--- правилам (без повтора). Отклонённое и сбой — разделы для админа (repository.signal_sections).
+-- правилам (без повтора). Отклонённое и сбой — разделы для админа (db/rejected_sections.py).
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS industry TEXT;              -- oilfield_services / oil_gas / other_industry
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_decision TEXT;        -- accept / reject; NULL — «Отбор» не решал
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS reject_reason TEXT;         -- код причины отказа (otbor_dictionaries.json)
