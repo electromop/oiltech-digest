@@ -714,7 +714,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           <span>
             Отсеянные и скрытые по разделам «кто убрал → причина»: отклонённое «Отбором» по причинам, сбои «Отбора»,
             неподтверждённые ссылки поиска, «другое» (его видит только админ) и скрытое прежними правилами радара.
-            Короткая причина — в строке карточки.
+            Короткая причина в строке карточки.
           </span>
         </div>
       ) : null}
@@ -996,6 +996,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
             const tone = scoreTone(signal);
             // Месяц карточки закрыт (признак сервера): отметку «в дайджест» не ставят и не снимают.
             const digestLocked = Boolean(signal.digest_locked);
+            // Отклонённое «Отбором» и не решённое им в выпуск не выбирают: вернуть отклонённое можно только
+            // полями «Отбора» (#132). Скрытое прежними правилами — как раньше, выбранное выходит на радар.
+            const digestOffered = signal.otbor_decision !== "reject" && !(signal.otbor_failure && !signal.otbor_decision);
+            // Поля судьи радара («Почему сейчас», «Переносимость») у статьи сбора пусты — как в ленте, их нет.
+            const judgeFieldsOptional = business || signal.origin === "feed";
             return (
               <article className="articleCardReact" key={signal.id}>
                 {/* Свёрнутая строка, как у «Бизнес-сигналов» (документ заказчика 19.09):
@@ -1050,15 +1055,17 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                     <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
                     {/* «В дайджест» — одна механика в обеих витринах (#130): у сигнала ленты — отметка его
                         статьи, та же, что в ленте статей. */}
-                    <button
-                      type="button"
-                      className={`${signal.selected_for_digest ? "dangerButton" : "primaryButton"} compactButton signalDigestButton`}
-                      disabled={savingThis || digestLocked}
-                      title={digestLocked ? radarDigestLockedText(signal.digest_month ?? "") : undefined}
-                      onClick={() => void setDigest(signal, !signal.selected_for_digest)}
-                    >
-                      {signal.selected_for_digest ? "Убрать" : "В дайджест"}
-                    </button>
+                    {digestOffered ? (
+                      <button
+                        type="button"
+                        className={`${signal.selected_for_digest ? "dangerButton" : "primaryButton"} compactButton signalDigestButton`}
+                        disabled={savingThis || digestLocked}
+                        title={digestLocked ? radarDigestLockedText(signal.digest_month ?? "") : undefined}
+                        onClick={() => void setDigest(signal, !signal.selected_for_digest)}
+                      >
+                        {signal.selected_for_digest ? "Убрать" : "В дайджест"}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1071,7 +1078,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                       </div>
                       <div className="signalRadarFacts">
                         {/* «Почему сейчас» и «Переносимость» — поля судьи радара: у статьи ленты их нет. */}
-                        {business && !signal.why_now ? null : (
+                        {judgeFieldsOptional && !signal.why_now ? null : (
                           <div>
                             <span>Почему сейчас</span>
                             <p>{signal.why_now || "Нет объяснения"}</p>
@@ -1087,7 +1094,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                             <p>{signal.oilfield_application}</p>
                           </div>
                         ) : null}
-                        {business && !signal.transferability ? null : (
+                        {judgeFieldsOptional && !signal.transferability ? null : (
                           <div>
                             <span>Переносимость</span>
                             <p>{signal.transferability || "Нет оценки"}</p>

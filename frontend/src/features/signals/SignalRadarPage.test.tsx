@@ -1002,20 +1002,39 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(lastListQuery().section).toBe("otbor:oil_gas_no_link");
     expect(screen.getByRole("heading", { name: "Отсеянные и скрытые карточки" })).toBeInTheDocument();
     expect(screen.getByText("Причина: Котировки нефти без связи с нефтесервисом")).toBeInTheDocument();
-    // Отклонённое «Отбором» — с «Решением платформы» «Отклонено».
+    // Отклонённое «Отбором» — с «Решением платформы» «Отклонено»; «В дайджест» у него нет: вернуть его можно
+    // только полями «Отбора» (#132).
     expect(screen.getByText(/· Решение платформы: Отклонено ·/)).toBeInTheDocument();
+    const rejected = screen.getByText("Котировки нефти").closest("article") as HTMLElement;
+    expect(within(rejected).queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
 
     fireEvent.click(within(sections).getByRole("button", { name: /^До «Отбора»/ }));
 
     expect(await screen.findByText("SLB получила контракты Aramco")).toBeInTheDocument();
     expect(lastListQuery().section).toBe("before_otbor");
     expect(screen.getByText("Причина: бизнес-сигнал, не технология")).toBeInTheDocument();
+    // Скрытая прежними правилами — с «В дайджест», как раньше: выбранная, она выходит на радар.
+    const hiddenRow = screen.getByText("SLB получила контракты Aramco").closest("article") as HTMLElement;
+    expect(within(hiddenRow).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("кто убрал");
 
     fireEvent.click(screen.getByRole("button", { name: "К радару" }));
 
     expect(await screen.findByText(scored.title_ru as string)).toBeInTheDocument();
     expect(lastListQuery().section).toBeUndefined();
+  });
+
+  it("статья сбора на радаре — без пустых полей судьи «Почему сейчас» и «Переносимость» (#130)", async () => {
+    serveWithHidden([{
+      ...scored, origin: "feed", why_now: null, transferability: null, otbor_decision: "accept",
+    }], []);
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    expect(within(card).queryByText("Почему сейчас")).not.toBeInTheDocument();
+    expect(within(card).queryByText("Переносимость")).not.toBeInTheDocument();
   });
 
   it("пометка «спорное» видна на карточке (#130)", async () => {
