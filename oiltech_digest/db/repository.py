@@ -2078,21 +2078,6 @@ def _any_showcase_quality_sql(alias: str = "s") -> str:
 # «Отсеянных и скрытых»: одобренная или выбранная «в дайджест» отсеянная без ссылки переходит
 # на радар, а не пропадает из обоих списков.
 _RADAR_CARD_SHOWN_SQL = f"({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
-# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
-# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
-# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09). Радар —
-# только находки поиска (#95): сигналы ленты в его списке, числах, «Отсеянных» и снимках не
-# участвуют, и радар выдаёт то же, что до единого хранилища.
-_RADAR_VISIBLE_SQL = (
-    f"{radar_origin_sql()} AND s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}"
-)
-# «Отсеянные и скрытые» (экран, переключатель; только админу — решение 05.10): проверить, не отсеяно
-# ли лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут —
-# их ссылки и так в главной карточке.
-_RADAR_HIDDEN_SQL = (
-    f"{radar_origin_sql()} AND s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()})"
-    f" AND {_RADAR_CARD_SHOWN_SQL}"
-)
 # Сигнал ленты виден, пока видна его статья в ленте (feed_window.visible_sql): отбор передумал,
 # статью пометили на удаление или её источник в архиве — сигнал уходит вместе с ней. Правила
 # качества радара (смешанные ссылки, отсев, «не про нефтесервис», срок события) — о находках
@@ -2103,12 +2088,55 @@ _FEED_ARTICLE_SHOWN_SQL = (
     " LEFT JOIN article_cards fc ON fc.article_id = fa.id"
     f" WHERE fa.id = s.origin_article_id AND {visible_sql('fa', 'fc', 'fs')})"
 )
-# Витрина «бизнес» — сигналы категории «бизнес» обоих происхождений.
+
+
+def signal_digest_sql(alias: str = "s") -> str:
+    """Сигнал выбран «в дайджест» (#111). Одна механика на две витрины (решение владельца 23.10): у сигнала
+    ленты — отметка его статьи, та же, что ставит лента статей (одна отметка на публикацию, выпуск берёт статью
+    один раз); у находки радара — отметка карточки."""
+    return (
+        f"(CASE WHEN {alias}.origin = '{SIGNAL_ORIGIN_FEED}'"
+        f" THEN {marks.article_marked_sql(f'{alias}.origin_article_id', 'digest')}"
+        f" ELSE {_SIGNAL_IN_DIGEST_SQL.format(alias=alias)} END)"
+    )
+
+
+def _otbor_shown_sql(category: str) -> str:
+    """Сигнал с решением «Отбора» (#130, ADR 0005) — в витрине своей категории, для любого происхождения: по
+    смыслу его прячет только «Отбор». Правила качества радара (связь, смешанные ссылки, срок события) его не
+    прячут; технические остаются: архив, дубли и перепечатки, архивный источник (у сигнала ленты — по его
+    статье), карточка без ссылок. Выбранный «в дайджест» не прячет ничто, кроме технических правил статьи."""
+    return (
+        f"s.merged_into_signal_id IS NULL AND s.otbor_decision IS NOT NULL AND s.signal_category = '{category}'"
+        f" AND ({signal_digest_sql('s')} OR (s.archived_at IS NULL AND s.otbor_decision = 'accept'))"
+        f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}' THEN {_FEED_ARTICLE_SHOWN_SQL}"
+        f" ELSE {_RADAR_CARD_SHOWN_SQL} END"
+    )
+
+
+# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
+# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
+# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09). Без
+# решения «Отбора» (#130) радар — только находки поиска (#95) по прежним правилам; с решением —
+# технологии любого происхождения (_otbor_shown_sql).
+_RADAR_VISIBLE_SQL = (
+    f"((s.otbor_decision IS NULL AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
+    f" AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}) OR ({_otbor_shown_sql('technology')}))"
+)
+# «Отсеянные и скрытые» до «Отбора» (раздел «До „Отбора“», rejected_sections; только админу — решение
+# 05.10): проверить, не отсеяно ли лишнее. Та же карточка, что видна бы была, кроме правил качества;
+# дубли сюда не идут — их ссылки и так в главной карточке.
+_RADAR_HIDDEN_SQL = (
+    f"s.otbor_decision IS NULL AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
+    f" AND NOT ({_radar_quality_sql()}) AND {_RADAR_CARD_SHOWN_SQL}"
+)
+# Витрина «бизнес» — сигналы категории «бизнес» обоих происхождений: без решения «Отбора» — по прежним
+# правилам, с решением — по его решению (_otbor_shown_sql).
 _BUSINESS_VISIBLE_SQL = (
-    "s.merged_into_signal_id IS NULL AND s.signal_category = 'business'"
+    "((s.otbor_decision IS NULL AND s.merged_into_signal_id IS NULL AND s.signal_category = 'business'"
     f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}'"
     f" THEN s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}"
-    f" ELSE {_business_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL} END"
+    f" ELSE {_business_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL} END) OR ({_otbor_shown_sql('business')}))"
 )
 SIGNAL_SHOWCASES = ("technology", "business")
 RADAR_FILTER_STAGES = {
@@ -2127,7 +2155,8 @@ RADAR_VERDICT_STAGES = ("judge", "review")
 
 def _radar_hidden_reason_sql() -> str:
     """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql.
-    У видимой причины нет: экран подписывает «Не на радаре: …» любую карточку с причиной."""
+    У видимой причины нет: экран подписывает «Не на радаре: …» любую карточку с причиной. У сигнала
+    с решением «Отбора» (#130) прежних правил нет: почему его нет в витрине, говорит его раздел."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     age = (
         f"CASE WHEN {_judged_sql('s', 'event_date')} < CURRENT_DATE - {age_days}"
@@ -2149,7 +2178,7 @@ def _radar_hidden_reason_sql() -> str:
         "), '') END"
     )
     return (
-        f"CASE WHEN {_radar_quality_sql('s')} THEN NULL ELSE NULLIF(concat_ws('; ',"
+        f"CASE WHEN s.otbor_decision IS NOT NULL OR {_radar_quality_sql('s')} THEN NULL ELSE NULLIF(concat_ws('; ',"
         " CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве' END,"
         f" {machine},"
         f" {age}), '') END"
@@ -2160,16 +2189,30 @@ _RADAR_TOPIC_SQL = (
     "(s.theme IN (SELECT t.name FROM tags t WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s))"
 )
 # Отзыв о карточке — по её номеру или по адресу её ссылки (как «Обратная связь: N» на ней).
-_RADAR_FEEDBACK_SQL = """
-  FROM signal_feedback_events sfe
-  WHERE sfe.signal_id = s.id
+_FEEDBACK_OF_SIGNAL_SQL = """(
+  sfe.signal_id = s.id
      OR (sfe.source_url IS NOT NULL AND EXISTS (
           SELECT 1 FROM signal_evidence se
           WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
         )
         -- Публикация бывает общей у сигнала ленты и карточки радара (#95): отзыв о сигнале
         -- другого происхождения этой карточке не засчитывается.
-        AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin))"""
+        AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin)))"""
+_RADAR_FEEDBACK_SQL = f"""
+  FROM signal_feedback_events sfe
+  WHERE {_FEEDBACK_OF_SIGNAL_SQL}"""
+# Блоки ОС сигнала (#130, решение владельца 22.10): каждый человек добавляет свой блок (оценка, причина,
+# комментарий), чужие не перезаписываются; показываются списком, на отбор и показ не влияют. Автор — почта
+# учётки (другого имени у неё нет).
+_FEEDBACK_BLOCKS_SQL = f"""(
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'id', sfe.id, 'author', u.email, 'verdict', NULLIF(sfe.verdict, ''), 'reason', NULLIF(sfe.reason, ''),
+           'comment', NULLIF(sfe.comment, ''), 'created_at', sfe.created_at) ORDER BY sfe.created_at, sfe.id),
+         '[]'::jsonb)
+  FROM signal_feedback_events sfe
+  LEFT JOIN users u ON u.id = sfe.user_id
+  WHERE {_FEEDBACK_OF_SIGNAL_SQL} AND sfe.event_type = 'comment_added'
+    AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> ''))"""
 # «Поступил» на экране — дата первой находки по Москве (сутки радара — московские).
 _RADAR_ARRIVAL_DATE_SQL = "(s.first_seen_at AT TIME ZONE 'Europe/Moscow')::date"
 RADAR_SORTS = {
@@ -2212,10 +2255,13 @@ def _without_jit(conn) -> None:
     conn.execute("SET LOCAL jit = off")
 
 
-def _showcase_visible_sql(showcase: str, *, hidden: bool = False) -> str:
+def _showcase_visible_sql(showcase: str, *, hidden: bool = False, section=None) -> str:
     """Видимость карточки в витрине: «технологии» — прежний радар (и его «Отсеянные и
     скрытые»), «бизнес» — категория «бизнес» обоих происхождений (#95). Отсеянных у витрины
-    «бизнес» нет: «Отсеянные и скрытые» — разбор работы радара."""
+    «бизнес» нет: «Отсеянные и скрытые» — разбор работы радара. section — раздел отклонённого
+    (rejected_sections.Section, #130): вместо витрины — его сигналы любой категории."""
+    if section is not None:
+        return f"({section.condition})"
     if showcase not in SIGNAL_SHOWCASES:
         raise ValueError(f"Неизвестная витрина сигналов: {showcase!r}")
     if showcase == "business":
@@ -2231,14 +2277,14 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
                    hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                    region: str | None = None, technology_class: str | None = None,
                    technology_maturity: str | None = None,
-                   company_names: Sequence[str] | None = None) -> tuple[list[str], list]:
+                   company_names: Sequence[str] | None = None, section=None) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
     компания: участник карточки под любым из имён company_names (signal_card_filters.group_names); пустой
     список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра»."""
-    clauses = [_showcase_visible_sql(showcase, hidden=hidden)]
+    clauses = [_showcase_visible_sql(showcase, hidden=hidden, section=section)]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -2292,14 +2338,16 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                  max_score: float | None = None, sort: str = "score_desc", offset: int = 0,
                  hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                  region: str | None = None, technology_class: str | None = None,
-                 technology_maturity: str | None = None, company_names: Sequence[str] | None = None) -> list[dict]:
+                 technology_maturity: str | None = None, company_names: Sequence[str] | None = None,
+                 section=None) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
-    hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason."""
+    hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason; section —
+    раздел отклонённого (#130, только админу), с короткой причиной в section_reason."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
-        technology_maturity=technology_maturity, company_names=company_names,
+        technology_maturity=technology_maturity, company_names=company_names, section=section,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
@@ -2314,15 +2362,20 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             SELECT s.*,
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
                    {_radar_hidden_reason_sql() if showcase == "technology" else "NULL"} AS hidden_reason,
+                   {section.short_reason if section is not None else "NULL"} AS section_reason,
                    -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
-                   -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска.
-                   {signal_month_sql('s')} AS digest_month,
+                   -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска. У
+                   -- сигнала ленты — месяц его статьи: «в дайджест» у него — отметка статьи (#130).
+                   CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}'
+                        THEN (SELECT {period_month_sql('da')} FROM articles da WHERE da.id = s.origin_article_id)
+                        ELSE {signal_month_sql('s')} END AS digest_month,
                    {marks.signal_status_sql()} AS user_status,
-                   ({marks.signal_status_sql()} = 'digest') AS selected_for_digest,
+                   {signal_digest_sql('s')} AS selected_for_digest,
                    sm.analyst_comment AS user_comment,
                    sm.updated_at AS user_status_updated_at,
                    (SELECT COUNT(*) {_RADAR_FEEDBACK_SQL}) AS feedback_count,
                    (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
+                   {_FEEDBACK_BLOCKS_SQL} AS feedback_blocks,
                    corr.corrected_title,
                    corr.corrected_thesis
             FROM signals s
@@ -2350,7 +2403,7 @@ def signal_radar_summary(**filters) -> dict:
             f"""
             SELECT COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE s.first_seen_at >= now() - interval '7 days') AS new_7d,
-                   COUNT(*) FILTER (WHERE sm.status = 'digest') AS in_digest,
+                   COUNT(*) FILTER (WHERE {signal_digest_sql('s')}) AS in_digest,
                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})) AS with_feedback
             FROM signals s
             {marks.signal_mark_join()}
@@ -2368,15 +2421,16 @@ def signal_radar_summary(**filters) -> dict:
             """
         )
         tiles["merged"] = int(cur.fetchone()["merged"])
-        # «Отсеянные и скрытые» есть только у радара (_showcase_visible_sql).
+        # «Отсеянные и скрытые» есть только у радара (_showcase_visible_sql): все разделы отклонённого (#130).
         tiles["hidden"] = 0
         if showcase == "technology":
-            cur.execute(f"SELECT COUNT(*) AS hidden FROM signals s WHERE {_RADAR_HIDDEN_SQL}")
-            tiles["hidden"] = int(cur.fetchone()["hidden"])
+            from oiltech_digest.db import rejected_sections
+
+            tiles["hidden"] = sum(section["count"] for section in rejected_sections.counts())
         total = tiles["total"]
         matching = total
-        # Скрытые — своя выборка: «N из M» считается по ним даже без других фильтров.
-        if len(clauses) > 1 or filters.get("hidden"):
+        # Скрытые и раздел — своя выборка: «N из M» считается по ним даже без других фильтров.
+        if len(clauses) > 1 or filters.get("hidden") or filters.get("section") is not None:
             cur.execute(
                 f"""
                 SELECT COUNT(*) AS matching
@@ -2977,6 +3031,17 @@ def get_signal_theme(signal_id: int) -> str | None:
     with get_connection() as conn:
         row = conn.execute("SELECT theme FROM signals WHERE id = %s", (signal_id,)).fetchone()
         return str(row[0]) if row and row[0] else None
+
+
+def feed_signal_article(signal_id: int) -> int | None:
+    """Статья сигнала ленты (#95) — её отметку ставит кнопка «В дайджест» витрины (#130); None — сигнал не ленты
+    или его нет."""
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT origin_article_id FROM signals WHERE id = %s AND origin = '{SIGNAL_ORIGIN_FEED}'",
+            (int(signal_id),),
+        ).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
 
 
 def set_signal_agent_memory_status(memory_id: int, status: str) -> bool:

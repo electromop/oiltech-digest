@@ -25,7 +25,7 @@ from oiltech_digest import admission, auth, background_jobs, backlog, colleague_
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.db import analytics, documents_repo, marks, repository
+from oiltech_digest.db import analytics, documents_repo, marks, rejected_sections, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
 from oiltech_digest import contract, lanes, network_policy, otbor, signal_card, signal_card_filters
@@ -1877,9 +1877,15 @@ def _radar_screen_filters(
     technology_maturity: str | None = Query(None, max_length=100),
     # «Всё про компанию» (#97) — с дочками по списку «дочка → мать» (_company_filter).
     company_filter: dict[str, list[str]] | None = Depends(_company_filter),
+    # Раздел отклонённого «кто убрал → причина» (#130) — только админу: вместо витрины его публикации любой
+    # категории, у каждой короткая причина (section_reason).
+    section: str | None = Query(None, max_length=60),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
+    found_section = rejected_sections.find(section) if section else None
+    if section and found_section is None:
+        raise HTTPException(status_code=422, detail=f"Неизвестный раздел отклонённого: {section}")
     try:
         card = {column: signal_card_filters.checked_choice(column, value) for column, value in (
             ("event_type", event_type), ("region", region), ("technology_class", technology_class),
@@ -1900,6 +1906,7 @@ def _radar_screen_filters(
         **card,
         # Пустой список имён — фильтр, который ничего не нашёл, а не «без фильтра».
         "company_names": None if company_filter is None else company_filter["names"],
+        "section": found_section,
     }
 
 
@@ -1973,8 +1980,15 @@ def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> di
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
-    if filters.get("hidden") and user.get("role") != "admin":
+    if (filters.get("hidden") or filters.get("section") is not None) and user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
+
+
+@app.get("/api/signals/sections")
+def signal_rejected_sections(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Разделы отклонённого «кто убрал → причина» (#130) с числом публикаций — только админу."""
+    found = rejected_sections.counts()
+    return {"sections": found, "total": sum(section["count"] for section in found)}
 
 
 def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> None:
@@ -2006,13 +2020,23 @@ def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> Non
     )
 
 
+_SIGNAL_STATUSES = frozenset({"watch", "digest", "archive", "noise", "duplicate"})
+
+
 @app.patch("/api/signals/{signal_id}")
 def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    if patch.status is not None and patch.status not in _SIGNAL_STATUSES:
+        raise HTTPException(status_code=400, detail="Unknown signal status")
+    article_id = repository.feed_signal_article(signal_id)
+    if article_id is not None:
+        # Одна механика на две витрины (решение владельца 23.10): у сигнала ленты отметка — его статьи, та же,
+        # что ставит лента статей; там же правило закрытого месяца и журнал. «Наблюдать» у статьи — «новая».
+        status = "new" if patch.status == "watch" else patch.status
+        return update_article(article_id, ArticlePatch(status=status, selected_for_digest=patch.selected_for_digest,
+                                                       analyst_comment=patch.analyst_comment), user)
     target_status = patch.status
     if target_status is None and patch.selected_for_digest is not None:
         target_status = "digest" if patch.selected_for_digest else "watch"
-    if target_status is not None and target_status not in {"watch", "digest", "archive", "noise", "duplicate"}:
-        raise HTTPException(status_code=400, detail="Unknown signal status")
     _guard_signal_digest_month(signal_id, target_status)
     try:
         previous = marks.set_signal_mark(
@@ -2066,6 +2090,15 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
         raise HTTPException(status_code=400, detail="comment or structured feedback is required")
     if payload.article_id is None and payload.signal_id is None and not payload.source_url:
         raise HTTPException(status_code=400, detail="article_id, signal_id or source_url is required")
+    if payload.signal_id is not None and repository.feed_signal_article(payload.signal_id) is not None:
+        # Блок ОС сигнала ленты (#130, решение владельца 22.10) только хранится и показывается: на отбор и показ он
+        # не влияет, и в память судьи радара не идёт — ею, как и всей ОС, будет управлять сервис ОС.
+        event_id = repository.record_signal_feedback_event(
+            None, "comment_added", signal_id=payload.signal_id, user_id=int(user["id"]),
+            signal_title=payload.signal_title, comment=payload.comment.strip(),
+            verdict=(payload.verdict or "").strip().lower() or None, reason=(payload.reason or "").strip() or None,
+        )
+        return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0}
     result = store_signal_feedback(
         {
             "article_id": payload.article_id,

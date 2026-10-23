@@ -96,7 +96,8 @@ DAILY_ATTEMPTS = 2
 
 def new_signal_ids(*, days: int, limit: int) -> list[int]:
     """Сигналы для шага планировщика: заведены за `days` дней, без карточки, не дубли, не в задаче
-    агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS)."""
+    агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS). Дальше «Отбора» (#130) идёт
+    только принятое: отклонённое им и сигнал без его решения (сбой) карточку не получают."""
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
@@ -114,6 +115,8 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             FROM signals s
             WHERE s.card_recipe IS NULL AND s.merged_into_signal_id IS NULL
               AND s.created_at >= now() - make_interval(days => %(days)s)
+              AND s.otbor_decision IS DISTINCT FROM 'reject'
+              AND NOT (s.otbor_decision IS NULL AND s.otbor_failure IS NOT NULL)
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id
             LIMIT %(limit)s
