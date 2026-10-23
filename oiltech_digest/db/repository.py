@@ -5028,10 +5028,10 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             """
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
-                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агент
-                   -- «Карточка сигнала» (#96) — своей.
+                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агенты
+                   -- «Карточка сигнала» (#96) и «Отбор» (#130) — своими.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
-                        WHEN stage = 'signal_card' THEN 'signal_card' ELSE 'feed' END AS area,
+                        WHEN stage IN ('signal_card', 'otbor') THEN stage ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs
