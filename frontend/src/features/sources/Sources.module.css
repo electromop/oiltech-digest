@@ -10,9 +10,9 @@
 }
 
 .name {
-  font-weight: 800;
-  font-size: 0.86rem;
-  color: #0f172a;
+  font-weight: var(--ot-weight-bold);
+  font-size: var(--ot-size-body);
+  color: var(--ot-text-primary);
 }
 
 .link {
@@ -22,7 +22,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: var(--ot-size-caption);
   text-decoration: none;
 }
 
@@ -38,7 +38,7 @@
 
 .muted {
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: var(--ot-size-caption);
   white-space: nowrap;
 }
 
@@ -70,7 +70,7 @@
 /* Свёрнутый блок «Добавить источник или статью по ссылке» над таблицей. */
 .addPanel > summary {
   cursor: pointer;
-  font-weight: 800;
+  font-weight: var(--ot-weight-bold);
   color: var(--brand);
   list-style-position: inside;
 }
@@ -97,5 +97,5 @@
 .viewNote {
   margin: 10px 0 0;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--ot-size-body);
 }

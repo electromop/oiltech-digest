@@ -1,583 +1,3 @@
-/* Корпоративная типографика Газпром нефти — GPN Din (бэклог заказчика #17/#10).
-   Веса диапазонами (400 600 / 700 900): шрифт имеет только Regular и Bold, а в UI
-   используются 800/900 — диапазон отдаёт им реальный Bold (font-synthesis: none). */
-@font-face {
-  font-family: "GPN Din";
-  src: url("/fonts/GPN_DIN-Regular.ttf") format("truetype");
-  font-weight: 400 600;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "GPN Din";
-  src: url("/fonts/GPN_DIN-Bold.ttf") format("truetype");
-  font-weight: 700 900;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "GPN Din Condensed";
-  src: url("/fonts/GPN_DIN_Condensed-Regular.ttf") format("truetype");
-  font-weight: 400 600;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "GPN Din Condensed";
-  src: url("/fonts/GPN_DIN_Condensed-Bold.ttf") format("truetype");
-  font-weight: 700 900;
-  font-style: normal;
-  font-display: swap;
-}
-
-/* Форм-контролы по умолчанию НЕ наследуют шрифт страницы — из-за этого текст в
-   полях/кнопках/списках был системным, а не GPN. Принудительно наследуем корпоративный
-   шрифт во всех инпутах/селектах/textarea/кнопках по всей платформе. */
-input,
-select,
-textarea,
-button,
-option {
-  font-family: inherit;
-}
-
-:root {
-  color-scheme: light;
-  font-family: "GPN Din", Inter, "Segoe UI", sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color: #0f172a;
-  background:
-    radial-gradient(circle at top right, rgba(96, 165, 250, 0.16), transparent 26%),
-    linear-gradient(180deg, #f8fbff 0%, #f2f7fd 100%);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  --surface: rgba(255, 255, 255, 0.94);
-  --surface-strong: #ffffff;
-  --surface-accent: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
-  --line: rgba(148, 163, 184, 0.22);
-  --shadow: 0 18px 48px rgba(37, 99, 235, 0.08);
-  --text-soft: #475569;
-  --text-muted: #64748b;
-  --brand: #1d4ed8;
-  --brand-soft: rgba(29, 78, 216, 0.12);
-  --radius: 16px;
-  /* Единая семантика статусов — один источник правды для всех плашек/пилюль.
-     Шкала: ok=хорошо/высокий скор, warn=средне/внимание, bad=плохо/низкий скор,
-     muted=нейтрально/нет данных, info=требует действия (например «есть правки»).
-     Пороги скора согласованы с backend score_label (pipeline.py: 80/65/40). */
-  --sem-ok-fg: #166534;
-  --sem-ok-bg: rgba(34, 197, 94, 0.14);
-  --sem-ok-border: rgba(34, 197, 94, 0.22);
-  --sem-warn-fg: #b45309;
-  --sem-warn-bg: rgba(245, 158, 11, 0.16);
-  --sem-warn-border: rgba(245, 158, 11, 0.24);
-  --sem-bad-fg: #b91c1c;
-  --sem-bad-bg: rgba(239, 68, 68, 0.14);
-  --sem-bad-border: rgba(239, 68, 68, 0.24);
-  --sem-muted-fg: var(--text-muted);
-  --sem-muted-bg: rgba(226, 232, 240, 0.7);
-  --sem-info-fg: var(--brand);
-  --sem-info-bg: var(--brand-soft);
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  min-height: 100%;
-}
-
-body {
-  margin: 0;
-  font-size: 14px;
-  background:
-    radial-gradient(circle at top right, rgba(96, 165, 250, 0.16), transparent 26%),
-    linear-gradient(180deg, #f8fbff 0%, #f2f7fd 100%);
-}
-
-button,
-input,
-select,
-textarea {
-  font: inherit;
-}
-
-button {
-  cursor: pointer;
-}
-
-.shell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
-  transition: grid-template-columns 220ms ease;
-}
-
-.shell.sidebarCollapsed {
-  grid-template-columns: 96px minmax(0, 1fr);
-}
-
-.tasksAppShell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-rows: auto 1fr;
-}
-
-.tasksAppTopbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px clamp(14px, 2vw, 24px);
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(16px);
-}
-
-.tasksAppContent {
-  width: min(1680px, 100%);
-  margin: 0 auto;
-  padding: 18px clamp(14px, 2vw, 24px) 28px;
-}
-
-.sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
-  padding: 18px 14px 16px;
-  border-right: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(16px);
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  transition: padding 220ms ease, gap 220ms ease, background-color 220ms ease;
-}
-
-.sidebarTopRow {
-  display: block;
-}
-
-.brand {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  min-width: 0;
-  transition: gap 220ms ease, justify-content 220ms ease;
-}
-
-.brandText {
-  min-width: 0;
-}
-
-.brandMobileDivider {
-  display: none;
-}
-
-.brandMark {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-weight: 800;
-  background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
-}
-
-.brandTitle {
-  font-size: 0.95rem;
-  font-weight: 800;
-}
-
-/* Фирменный «узкий» GPN Din Condensed — на крупных дисплейных заголовках. */
-.brandTitle,
-.screenHeader h1,
-.pageHeader h1,
-.statValueReact {
-  font-family: "GPN Din Condensed", "GPN Din", Inter, sans-serif;
-  letter-spacing: 0.005em;
-}
-
-.brandSubtitle,
-.sidebarSection,
-.footLabel,
-.eyebrow,
-.panelKicker {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.74rem;
-  color: var(--text-muted);
-}
-
-.sidebarSection {
-  font-weight: 800;
-}
-
-.sidebarGroups {
-  display: grid;
-  gap: 14px;
-}
-
-.sidebarGroup {
-  display: grid;
-  gap: 8px;
-}
-
-.nav {
-  display: grid;
-  gap: 6px;
-}
-
-.navButton {
-  border: 1px solid transparent;
-  background: transparent;
-  color: #0f172a;
-  border-radius: 12px;
-  padding: 10px 12px;
-  text-align: left;
-  font-weight: 700;
-  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition:
-    background-color 140ms ease,
-    border-color 140ms ease,
-    transform 140ms ease,
-    padding 220ms ease,
-    gap 220ms ease,
-    justify-content 220ms ease;
-}
-
-.navButtonIcon {
-  width: 16px;
-  height: 16px;
-  color: var(--brand);
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.navButton:hover {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: var(--line);
-  transform: translateX(2px);
-}
-
-.navButton.active {
-  background: var(--surface-strong);
-  border-color: rgba(29, 78, 216, 0.18);
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.08);
-}
-
-.sidebarFoot {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  transition: padding 220ms ease, border-radius 220ms ease;
-}
-
-.sidebarBottom {
-  margin-top: auto;
-  display: grid;
-  gap: 10px;
-  padding-top: 10px;
-}
-
-.sidebarUtilityActions {
-  display: grid;
-  gap: 6px;
-}
-
-.utilityButton {
-  background: rgba(248, 250, 252, 0.78);
-  border-color: rgba(148, 163, 184, 0.18);
-}
-
-.utilityButton.danger .navButtonIcon,
-.utilityButton.danger .navButtonLabel {
-  color: #1e293b;
-}
-
-.utilityButton.danger:hover {
-  border-color: rgba(239, 68, 68, 0.18);
-  background: rgba(254, 242, 242, 0.9);
-}
-
-.footValue {
-  margin-top: 6px;
-  font-weight: 700;
-}
-
-.content {
-  padding: 16px clamp(14px, 2vw, 22px) 24px;
-  display: grid;
-  align-content: start;
-  gap: 14px;
-}
-
-.mobileNav {
-  display: none;
-}
-
-.screenStack {
-  display: grid;
-  gap: 14px;
-  min-width: 0;
-}
-
-.screenHeader {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: start;
-  flex-wrap: wrap;
-  min-height: 32px;
-}
-
-.panelActions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.pageHeader,
-.heroGrid,
-.panelHeader {
-  display: flex;
-  gap: 12px;
-  row-gap: 10px;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-/* heroGrid — это сетка из двух панелей, не строка действий: align по верху. */
-.heroGrid {
-  align-items: stretch;
-}
-
-.pageHeader h1,
-.panel h2 {
-  margin: 0;
-  font-size: clamp(1.28rem, 1.4vw, 1.65rem);
-  line-height: 1.05;
-}
-
-.pageHeader p,
-.panelText,
-.panel p {
-  margin: 0;
-  color: var(--text-soft);
-  max-width: 64ch;
-}
-
-.statusPill,
-.badge {
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: var(--surface-strong);
-  border: 1px solid var(--line);
-  font-weight: 700;
-  white-space: nowrap;
-  font-size: 0.82rem;
-}
-
-.badge.emphasis {
-  background: var(--brand-soft);
-  color: var(--brand);
-}
-
-.heroGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
-}
-
-.panel {
-  position: relative;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  backdrop-filter: blur(12px);
-  box-shadow: var(--shadow);
-  padding: clamp(14px, 1.6vw, 18px);
-}
-
-.field {
-  display: grid;
-  gap: 6px;
-}
-
-.field span {
-  font-size: 0.74rem;
-  font-weight: 700;
-  color: var(--text-muted);
-}
-
-.field input,
-.field select,
-.authCardReact input {
-  min-height: 34px;
-  border-radius: 9px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(255, 255, 255, 0.9);
-  padding: 0 10px;
-  color: #0f172a;
-}
-
-.field input:disabled {
-  color: var(--text-muted);
-  background: rgba(241, 245, 249, 0.9);
-}
-
-.primaryButton,
-.ghostButton {
-  min-height: 34px;
-  border-radius: 9px;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  font-weight: 700;
-}
-
-.primaryButton {
-  color: #fff;
-  background: linear-gradient(135deg, #0f172a 0%, #2563eb 100%);
-  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.25);
-}
-
-.ghostButton {
-  color: #0f172a;
-  background: rgba(255, 255, 255, 0.88);
-  border-color: rgba(148, 163, 184, 0.25);
-}
-
-.dangerGhostButton {
-  min-height: 34px;
-  border-radius: 9px;
-  padding: 0 12px;
-  border: 1px solid rgba(239, 68, 68, 0.22);
-  color: #b91c1c;
-  background: rgba(254, 242, 242, 0.88);
-  font-weight: 700;
-}
-
-.ghostButton:disabled,
-.dangerGhostButton:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.fullWidth {
-  width: 100%;
-  margin-top: 10px;
-}
-
-.compactField {
-  min-width: 180px;
-}
-
-.accentPanel {
-  color: #fff;
-  background: var(--surface-accent);
-}
-
-.accentPanel p,
-.accentPanel .panelKicker,
-.accentPanel h2 {
-  color: inherit;
-}
-
-.panelHeader h2 {
-  margin: 0;
-  font-size: 1.02rem;
-}
-
-.stepList {
-  margin-top: 14px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
-}
-
-.stepCard {
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid rgba(148, 163, 184, 0.22);
-}
-
-.stepIndex {
-  font-size: 0.85rem;
-  font-weight: 800;
-  color: var(--brand);
-}
-
-.stepText {
-  margin-top: 6px;
-  font-weight: 700;
-}
-
-.shell.sidebarCollapsed .sidebar {
-  padding: 16px 12px 14px;
-}
-
-.shell.sidebarCollapsed .brandText,
-.shell.sidebarCollapsed .sidebarSection,
-.shell.sidebarCollapsed .footLabel,
-.shell.sidebarCollapsed .footValue,
-.shell.sidebarCollapsed .navButtonLabel {
-  display: none;
-}
-
-.shell.sidebarCollapsed .brand {
-  justify-content: center;
-}
-
-.shell.sidebarCollapsed .sidebarTopRow {
-  display: flex;
-  justify-content: center;
-}
-
-.shell.sidebarCollapsed .navButton {
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  min-height: 48px;
-  margin-inline: auto;
-  padding: 0;
-  border-radius: 14px;
-}
-
-.shell.sidebarCollapsed .sidebarFoot {
-  padding: 8px;
-  border-radius: 16px;
-}
-
-.shell.sidebarCollapsed .sidebarUtilityActions {
-  justify-items: center;
-}
-
-.shell.sidebarCollapsed .utilityButton {
-  width: 48px;
-  min-width: 48px;
-}
-
 .sourceCreateGrid {
   margin-top: 12px;
   display: grid;
@@ -613,41 +33,40 @@ button {
   gap: 4px;
   justify-items: start;
   padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(248, 250, 252, 0.9);
-  color: #0f172a;
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-02);
+  color: var(--ot-text-primary);
   text-align: left;
   transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .sourceStatCard:hover {
-  transform: translateY(-1px);
-  border-color: rgba(37, 99, 235, 0.18);
+  border-color: var(--sem-info-border);
 }
 
 .sourceStatCard.active {
-  background: rgba(219, 234, 254, 0.72);
-  border-color: rgba(37, 99, 235, 0.24);
-  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.08);
+  background: var(--ot-layer-accent);
+  border-color: var(--sem-info-border);
+  box-shadow: none;
 }
 
 .sourceStatCard.problem {
-  background: rgba(254, 242, 242, 0.9);
+  background: var(--ot-layer-02);
 }
 
 .sourceStatCard.warning {
-  background: rgba(255, 247, 237, 0.9);
+  background: var(--ot-layer-02);
 }
 
 .sourceStatCard.success {
-  background: rgba(240, 253, 244, 0.92);
+  background: var(--ot-layer-02);
 }
 
 .sourceStatValue {
-  font-size: 1.2rem;
+  font-size: var(--ot-size-heading-03);
   line-height: 1;
-  font-weight: 900;
+  font-weight: var(--ot-weight-bold);
 }
 
 /* Число несёт цвет смысла — иначе бледные фоны фильтров неразличимы. */
@@ -664,9 +83,9 @@ button {
 }
 
 .sourceStatLabel {
-  font-size: 0.74rem;
+  font-size: var(--ot-size-caption);
   color: var(--text-muted);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .digestFiltersGrid {
@@ -733,9 +152,9 @@ button {
   flex-wrap: wrap;
   min-height: 54px;
   padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.82);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-02);
 }
 
 .digestActionGroupPrimary {
@@ -744,12 +163,11 @@ button {
 
 .digestGroupLabel {
   flex: 0 0 100%;
-  font-size: 0.69rem;
+  font-size: var(--ot-size-caption);
   line-height: 1;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #64748b;
+  font-weight: var(--ot-weight-bold);
+  letter-spacing: var(--ot-tracking-caption);
+  color: var(--ot-text-secondary);
 }
 
 .digestDraftInfo {
@@ -760,9 +178,9 @@ button {
 .digestPreviewSurface,
 .digestQueuePanel {
   padding: 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.78);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-02);
 }
 
 .digestControlMeta {
@@ -774,7 +192,7 @@ button {
 }
 
 .digestControlMeta strong {
-  font-size: 1.05rem;
+  font-size: var(--ot-size-body-lg);
   color: var(--text);
 }
 
@@ -789,20 +207,20 @@ button {
   display: grid;
   gap: 4px;
   padding: 14px 16px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
 }
 
 .digestRunCard strong {
-  font-size: 1.15rem;
+  font-size: var(--ot-size-heading-03);
   color: var(--text);
 }
 
 .digestRunFilters {
   margin: -2px 0 14px;
-  color: #64748b;
-  font-size: 0.92rem;
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-body);
 }
 
 .digestBrandingCard {
@@ -840,9 +258,9 @@ button {
 .digestPreviewIframe {
   width: 100%;
   min-height: 1080px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 16px;
-  background: #ffffff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
 }
 
 .digestPreviewLiveFrame {
@@ -1076,9 +494,9 @@ button {
 .digestPickRow,
 .digestPreviewCard {
   padding: 11px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.86);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-01);
 }
 
 .digestPickTop {
@@ -1094,11 +512,11 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
-  background: rgba(219, 234, 254, 0.9);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-accent);
   color: var(--brand);
-  font-weight: 800;
-  font-size: 0.88rem;
+  font-weight: var(--ot-weight-bold);
+  font-size: var(--ot-size-body);
 }
 
 .digestPickMain {
@@ -1121,7 +539,7 @@ button {
 }
 
 .digestPickRow a {
-  color: #0f172a;
+  color: var(--ot-text-primary);
   text-decoration: none;
 }
 
@@ -1131,7 +549,7 @@ button {
 
 .digestPickSummary {
   margin-top: 10px;
-  color: #334155;
+  color: var(--ot-text-primary);
   line-height: 1.45;
 }
 
@@ -1140,14 +558,14 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  color: #64748b;
-  font-size: 0.84rem;
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-body);
 }
 
 .digestAvailablePanel {
   margin-top: 12px;
   padding-top: 8px;
-  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  border-top: 1px solid var(--ot-border-subtle);
 }
 
 .digestAvailableList {
@@ -1161,7 +579,7 @@ button {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid var(--ot-border-subtle);
 }
 
 .digestAvailableRow:last-child {
@@ -1173,33 +591,13 @@ button {
   top: 16px;
 }
 
-.statsGridReact {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-}
-
-.statCardReact {
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.86);
-}
-
-.statValueReact {
-  font-size: 1.5rem;
-  line-height: 1;
-  font-weight: 900;
-  margin-bottom: 4px;
-}
-
 .jobsStats {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .jobsStats .statCardReact strong {
   display: block;
-  font-size: 1.45rem;
+  font-size: var(--ot-size-heading-04);
   line-height: 1;
 }
 
@@ -1207,7 +605,7 @@ button {
   display: block;
   margin-top: 4px;
   color: var(--text-muted);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .jobsFilters {
@@ -1227,7 +625,7 @@ button {
 }
 
 .maintenanceReadonly input {
-  background: rgba(248, 250, 252, 0.85);
+  background: var(--ot-layer-02);
 }
 
 .maintenanceActions {
@@ -1238,9 +636,9 @@ button {
 .maintenanceResult {
   margin-top: 14px;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: var(--ot-radius);
   border: 1px solid var(--line);
-  background: rgba(248, 250, 252, 0.85);
+  background: var(--ot-layer-02);
 }
 
 .maintenanceResultGrid {
@@ -1260,21 +658,8 @@ button {
   gap: 14px;
   flex-wrap: wrap;
   color: var(--text-muted);
-  font-size: 0.84rem;
-  font-weight: 700;
-}
-
-.laneAlerts {
-  display: grid;
-  gap: 6px;
-  margin: 12px 0 0;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--sem-bad-border);
-  background: var(--sem-bad-bg);
-  color: var(--sem-bad-fg);
-  font-size: 0.86rem;
-  line-height: 1.4;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .externalQueueList {
@@ -1289,15 +674,15 @@ button {
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--ot-radius);
   border: 1px solid var(--line);
-  background: rgba(248, 250, 252, 0.85);
-  font-size: 0.82rem;
+  background: var(--ot-layer-02);
+  font-size: var(--ot-size-body);
 }
 
 .externalQueueRow span {
   color: var(--text-muted);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 /* Воркер NL с другим номером контракта, чем у ядра: пересобран не тот или не весь NL. */
@@ -1324,9 +709,9 @@ button {
 
 .benchmarkTable {
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--ot-radius);
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--ot-layer-01);
 }
 
 .benchmarkRow {
@@ -1335,8 +720,8 @@ button {
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
-  font-size: 0.82rem;
+  border-top: 1px solid var(--ot-border-subtle);
+  font-size: var(--ot-size-body);
 }
 
 .benchmarkRow:first-child {
@@ -1344,22 +729,21 @@ button {
 }
 
 .benchmarkHead {
-  background: rgba(248, 250, 252, 0.9);
+  background: var(--ot-layer-02);
   color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
+  letter-spacing: var(--ot-tracking-caption);
 }
 
 .benchmarkOk {
   color: var(--sem-ok-fg);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .benchmarkWarn {
   color: var(--sem-warn-fg);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .jobsTableWrap {
@@ -1376,17 +760,16 @@ button {
 .jobsTable th,
 .jobsTable td {
   padding: 9px 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  border-bottom: 1px solid var(--ot-border-subtle);
   text-align: left;
   vertical-align: middle;
-  font-size: 0.82rem;
+  font-size: var(--ot-size-body);
 }
 
 .jobsTable th {
   color: var(--text-muted);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--ot-size-caption);
+  letter-spacing: var(--ot-tracking-caption);
 }
 
 .jobStatus {
@@ -1394,9 +777,9 @@ button {
   min-width: 78px;
   justify-content: center;
   padding: 4px 8px;
-  border-radius: 999px;
-  font-weight: 800;
-  font-size: 0.74rem;
+  border-radius: var(--ot-radius-pill);
+  font-weight: var(--ot-weight-bold);
+  font-size: var(--ot-size-caption);
 }
 
 .jobStatus.queued {
@@ -1425,7 +808,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #b91c1c;
+  color: var(--sem-bad-fg);
 }
 
 .backlogWorkspace {
@@ -1457,30 +840,30 @@ button {
 }
 
 .backlogProgressHead strong {
-  font-family: "GPN Din Condensed", "GPN Din", Inter, sans-serif;
-  font-size: 2.6rem;
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-heading-05);
   line-height: 0.9;
 }
 
 .backlogProgressHead span,
 .backlogProgressMeta {
   color: var(--text-muted);
-  font-weight: 800;
-  font-size: 0.82rem;
+  font-weight: var(--ot-weight-bold);
+  font-size: var(--ot-size-body);
 }
 
 .backlogProgressTrack {
   height: 10px;
   overflow: hidden;
-  border-radius: 999px;
-  background: rgba(226, 232, 240, 0.88);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-accent);
 }
 
 .backlogProgressTrack div {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #2563eb, #16a34a);
-  transition: width 220ms ease;
+  background: var(--ot-interactive);
+  transition: width var(--ot-duration-moderate-02) var(--ot-ease-standard);
 }
 
 .backlogProgressMeta {
@@ -1496,7 +879,7 @@ button {
 
 .backlogStats .statCardReact strong {
   display: block;
-  font-size: 1.45rem;
+  font-size: var(--ot-size-heading-04);
   line-height: 1;
 }
 
@@ -1504,28 +887,28 @@ button {
   display: block;
   margin-top: 4px;
   color: var(--text-muted);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .backlogStatusStat {
   min-width: 0;
-  border-left: 3px solid rgba(37, 99, 235, 0.3);
+  border-left: 3px solid var(--ot-border-interactive);
 }
 
 .backlogStatusStat.in_progress {
-  border-left-color: #2563eb;
+  border-left-color: var(--ot-border-interactive);
 }
 
 .backlogStatusStat.paused {
-  border-left-color: #eab308;
+  border-left-color: var(--ot-support-warning);
 }
 
 .backlogStatusStat.done {
-  border-left-color: #16a34a;
+  border-left-color: var(--ot-support-success);
 }
 
 .backlogStatusStat.rejected {
-  border-left-color: #dc2626;
+  border-left-color: var(--ot-support-error);
 }
 
 .backlogComposer,
@@ -1570,7 +953,7 @@ button {
 
 .backlogToolbar > div:first-child span {
   color: var(--text-muted);
-  font-weight: 800;
+  font-weight: var(--ot-weight-bold);
 }
 
 .backlogFilters {
@@ -1601,9 +984,9 @@ button {
 
 .backlogColumn {
   min-width: 220px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 12px;
-  background: rgba(248, 250, 252, 0.72);
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
   padding: 10px;
   display: grid;
   gap: 10px;
@@ -1612,9 +995,9 @@ button {
 }
 
 .backlogColumn.dropTarget {
-  border-color: rgba(37, 99, 235, 0.42);
-  background: rgba(219, 234, 254, 0.68);
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.18);
+  border-color: var(--ot-border-interactive);
+  background: var(--ot-selected-subtle);
+  box-shadow: inset 0 0 0 1px var(--ot-border-interactive);
 }
 
 .backlogColumnHeader {
@@ -1632,27 +1015,27 @@ button {
 
 .backlogColumnHeader h3 {
   margin: 0;
-  font-size: 0.96rem;
+  font-size: var(--ot-size-body-lg);
   line-height: 1.15;
 }
 
 .backlogColumnHeader span {
   display: block;
   color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .backlogColumnHeader strong {
   min-width: 28px;
   height: 28px;
-  border-radius: 999px;
+  border-radius: var(--ot-radius-pill);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #ffffff;
+  background: var(--ot-layer-01);
   color: var(--brand);
-  border: 1px solid rgba(29, 78, 216, 0.16);
+  border: 1px solid var(--sem-info-border);
 }
 
 .backlogColumnList {
@@ -1665,34 +1048,33 @@ button {
   gap: 10px;
   min-width: 0;
   padding: 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  background: rgba(255, 255, 255, 0.96);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-01);
   overflow: hidden;
   cursor: grab;
   transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease, transform 160ms ease;
 }
 
 .backlogCard.priority1 {
-  border-top: 3px solid #dc2626;
+  border-top: 3px solid var(--ot-support-error);
 }
 
 .backlogCard.priority2 {
-  border-top: 3px solid #2563eb;
+  border-top: 3px solid var(--ot-border-interactive);
 }
 
 .backlogCard.priority3 {
-  border-top: 3px solid #16a34a;
+  border-top: 3px solid var(--ot-support-success);
 }
 
 .backlogCard.priority4 {
-  border-top: 3px solid #94a3b8;
+  border-top: 3px solid var(--ot-border-strong);
 }
 
 .backlogCard:hover {
-  border-color: rgba(37, 99, 235, 0.26);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-  transform: translateY(-1px);
+  border-color: var(--sem-info-border);
+  box-shadow: none;
 }
 
 .backlogCard.dragging {
@@ -1702,11 +1084,11 @@ button {
 }
 
 .backlogCard.tech {
-  border-left: 3px solid #eab308;
+  border-left: 3px solid var(--ot-support-warning);
 }
 
 .backlogCard.inbox {
-  border-left: 3px solid #38bdf8;
+  border-left: 3px solid var(--viz-s2);
 }
 
 .backlogCardTop,
@@ -1720,15 +1102,15 @@ button {
 
 .backlogCard h4 {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: var(--ot-size-body-lg);
   line-height: 1.28;
   overflow-wrap: anywhere;
 }
 
 .backlogCard p {
   margin: 0;
-  color: #475569;
-  font-size: 0.82rem;
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-body);
   line-height: 1.38;
   overflow-wrap: anywhere;
 }
@@ -1736,11 +1118,11 @@ button {
 .backlogArea {
   min-width: 0;
   padding: 7px 9px;
-  border-radius: 8px;
-  color: #475569;
-  background: rgba(241, 245, 249, 0.88);
-  font-size: 0.78rem;
-  font-weight: 800;
+  border-radius: var(--ot-radius);
+  color: var(--ot-text-secondary);
+  background: var(--ot-layer-02);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -1764,13 +1146,13 @@ button {
   align-items: center;
   justify-content: center;
   padding: 7px 9px;
-  border-radius: 10px;
-  font-size: 0.76rem;
-  font-weight: 900;
+  border-radius: var(--ot-radius);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   white-space: nowrap;
-  background: rgba(241, 245, 249, 0.88);
+  background: var(--ot-layer-02);
   color: var(--text-muted);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--ot-border-subtle);
 }
 
 .backlogDueBadge.ok {
@@ -1801,16 +1183,16 @@ button {
 .backlogComment {
   min-width: 0;
   padding: 8px;
-  border-radius: 9px;
-  background: rgba(248, 250, 252, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
+  border: 1px solid var(--ot-border-subtle);
 }
 
 .backlogComment strong,
 .backlogComment span {
   display: inline-block;
   max-width: 100%;
-  font-size: 0.72rem;
+  font-size: var(--ot-size-caption);
   overflow-wrap: anywhere;
 }
 
@@ -1820,12 +1202,12 @@ button {
 
 .backlogComment span {
   color: var(--text-muted);
-  font-weight: 800;
+  font-weight: var(--ot-weight-bold);
 }
 
 .backlogComment p {
   margin-top: 4px;
-  font-size: 0.78rem;
+  font-size: var(--ot-size-caption);
 }
 
 .backlogCommentComposer {
@@ -1850,8 +1232,8 @@ button {
 .backlogSection,
 .backlogMeta {
   color: var(--text-muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1877,51 +1259,13 @@ button {
 
 .backlogEmpty {
   min-height: 68px;
-  border: 1px dashed rgba(148, 163, 184, 0.35);
-  border-radius: 10px;
+  border: 1px dashed var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
   display: grid;
   place-items: center;
   color: var(--text-muted);
-  font-weight: 700;
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.compactButton {
-  min-height: 28px;
-  padding: 0 9px;
-  border-radius: 8px;
-  font-size: 0.78rem;
-}
-
-.inlineLoader {
-  margin-top: 10px;
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: 999px;
-  background: rgba(219, 234, 254, 0.72);
-  color: #1d4ed8;
-  font-weight: 800;
-}
-
-.loaderDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: currentColor;
-  animation: pulseDot 900ms ease-in-out infinite alternate;
-}
-
-@keyframes pulseDot {
-  from {
-    opacity: 0.35;
-    transform: scale(0.8);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1.1);
-  }
+  font-weight: var(--ot-weight-bold);
+  background: var(--ot-layer-01);
 }
 
 .articlesFiltersGrid {
@@ -1983,10 +1327,10 @@ button {
   max-height: 280px;
   overflow: auto;
   padding: 6px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-01);
+  box-shadow: var(--ot-shadow-raised);
 }
 
 .sourceOptionReact {
@@ -1997,14 +1341,14 @@ button {
   gap: 10px;
   padding: 10px 12px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: transparent;
-  color: #0f172a;
+  color: var(--ot-text-primary);
   text-align: left;
 }
 
 .sourceOptionReact:hover {
-  background: rgba(248, 250, 252, 0.95);
+  background: var(--ot-layer-02);
 }
 
 .advancedToggleRow {
@@ -2027,25 +1371,10 @@ button {
 }
 
 .archiveMonthSelect span {
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.archiveNotice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  border: 1px solid var(--sem-warn-border);
-  border-radius: 12px;
-  background: var(--sem-warn-bg);
-  color: var(--sem-warn-fg);
-  font-weight: 600;
+  letter-spacing: var(--ot-tracking-caption);
 }
 
 .articlesAdvancedGrid {
@@ -2063,10 +1392,10 @@ button {
 }
 
 .articleGroupCard {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 14px;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--ot-layer-01);
 }
 
 .articleGroupHead {
@@ -2075,8 +1404,8 @@ button {
   align-items: center;
   flex-wrap: wrap;
   padding: 8px 10px;
-  background: rgba(248, 250, 252, 0.92);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--ot-layer-02);
+  border-bottom: 1px solid var(--ot-border-subtle);
 }
 
 /* #9: шапка группы-тега как кнопка-аккордеон */
@@ -2095,7 +1424,7 @@ button {
 }
 
 .articleGroupToggle:hover {
-  background: rgba(241, 245, 249, 0.96);
+  background: var(--ot-layer-02);
 }
 
 .articleGroupToggle:not(.open) {
@@ -2125,7 +1454,7 @@ button {
 }
 
 .articleCardReact {
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  border-top: 1px solid var(--ot-border-subtle);
 }
 
 .articleCardReact:first-child {
@@ -2146,28 +1475,6 @@ button {
   gap: 8px;
   flex-wrap: wrap;
   margin-left: auto;
-}
-
-.expandButtonReact {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--text-muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
-}
-
-.expandButtonReact svg {
-  transition: transform 220ms ease;
-}
-
-.expandButtonReact.open svg {
-  transform: rotate(180deg);
 }
 
 .articleCardMain {
@@ -2191,10 +1498,10 @@ button {
 
 .articleTitleReact {
   display: block;
-  color: #0f172a;
+  color: var(--ot-text-primary);
   text-decoration: none;
-  font-weight: 900;
-  font-size: 0.95rem;
+  font-weight: var(--ot-weight-bold);
+  font-size: var(--ot-size-body-lg);
   line-height: 1.25;
 }
 
@@ -2204,12 +1511,12 @@ button {
 
 .articleMetric {
   color: var(--text-muted);
-  font-size: 0.76rem;
+  font-size: var(--ot-size-caption);
 }
 
 .articleCardMain .metaText {
   margin-top: 2px;
-  font-size: 0.73rem;
+  font-size: var(--ot-size-caption);
   line-height: 1.3;
 }
 
@@ -2220,7 +1527,7 @@ button {
 }
 
 .articleCardTop .field span {
-  font-size: 0.68rem;
+  font-size: var(--ot-size-caption);
 }
 
 .articleCardTop .field select {
@@ -2250,10 +1557,10 @@ button {
 
 .articleSummaryBox,
 .criterionCardReact {
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 12px;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
   padding: 12px;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--ot-layer-01);
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -2261,19 +1568,18 @@ button {
 .articleSummaryBox > strong {
   display: inline-block;
   margin-bottom: 2px;
-  font-family: "GPN Din Condensed", "GPN Din", sans-serif;
-  font-size: 0.74rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
+  letter-spacing: var(--ot-tracking-caption);
   color: var(--text-muted);
 }
 
 .articleSummaryBox p {
   margin: 6px 0 10px;
-  font-size: 0.95rem;
+  font-size: var(--ot-size-body-lg);
   line-height: 1.6;
-  color: #1e293b;
+  color: var(--ot-text-primary);
   /* Перенос по ширине блока — длинный текст/слова не вылезают за правый край. */
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -2288,72 +1594,7 @@ button {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-weight: 800;
-}
-
-.barReact {
-  height: 7px;
-  margin: 10px 0;
-  border-radius: 999px;
-  background: rgba(226, 232, 240, 0.9);
-  overflow: hidden;
-}
-
-.barReact span {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, #1d4ed8, #38bdf8);
-}
-
-/* Заливка бара отражает уровень критерия (та же шкала, что у пилюль скора). */
-.barReact.ok span {
-  background: linear-gradient(90deg, #15803d, #22c55e);
-}
-
-.barReact.warn span {
-  background: linear-gradient(90deg, #b45309, #f59e0b);
-}
-
-.barReact.bad span {
-  background: linear-gradient(90deg, #b91c1c, #ef4444);
-}
-
-.loadingOverlay {
-  position: absolute;
-  inset: 0;
-  z-index: 12;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  border-radius: inherit;
-  background: rgba(255, 255, 255, 0.76);
-  backdrop-filter: blur(2px);
-  font-weight: 700;
-  color: var(--brand);
-}
-
-.loadingStateReact {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--brand);
-  font-weight: 700;
-}
-
-.spinnerReact {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  border: 2px solid rgba(37, 99, 235, 0.18);
-  border-top-color: var(--brand);
-  animation: spinReact 0.8s linear infinite;
-}
-
-@keyframes spinReact {
-  to {
-    transform: rotate(360deg);
-  }
+  font-weight: var(--ot-weight-bold);
 }
 
 .showMoreWrap {
@@ -2369,17 +1610,17 @@ button {
 .settingsCard,
 .tagGroupCard {
   padding: 16px 18px;
-  border-radius: 14px;
+  border-radius: var(--ot-radius);
   border: 1px solid var(--line);
   background: var(--surface-strong);
-  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.05);
+  box-shadow: none;
   transition: box-shadow 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
 .settingsCard:hover,
 .tagGroupCard:hover {
-  border-color: rgba(37, 99, 235, 0.28);
-  box-shadow: 0 14px 32px rgba(37, 99, 235, 0.1);
+  border-color: var(--sem-info-border);
+  box-shadow: none;
 }
 
 /* Карточка критерия скоринга: тонкий бренд-акцент слева для визуальной опоры. */
@@ -2392,45 +1633,6 @@ button {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px 16px;
   align-items: start;
-}
-
-.field textarea {
-  min-height: 92px;
-  resize: vertical;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(255, 255, 255, 0.9);
-  padding: 12px 14px;
-  color: #0f172a;
-}
-
-.fieldWide {
-  grid-column: 1 / -1;
-}
-
-.fieldCheckbox {
-  align-self: end;
-}
-
-.checkboxRow {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  border-radius: 9px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  background: rgba(255, 255, 255, 0.9);
-  padding: 0 12px;
-}
-
-.checkboxRow input {
-  margin: 0;
-}
-
-.checkboxRow span {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #0f172a;
 }
 
 .manualArticleGrid {
@@ -2472,17 +1674,6 @@ button {
   border-top: 1px solid var(--line);
 }
 
-.dangerButton {
-  color: var(--sem-bad-fg);
-  border-color: rgba(239, 68, 68, 0.26);
-  background: rgba(254, 242, 242, 0.92);
-}
-
-.warningPill {
-  color: var(--sem-warn-fg);
-  background: var(--sem-warn-bg);
-}
-
 /* Пользователи (админ): форма добавления + строки списка — выровнены по сетке,
    единый стиль с тегами/скорингом (никакого переиспользования тег-сетки). */
 .userAddGrid {
@@ -2504,17 +1695,17 @@ button {
 }
 
 .sourceCardReact {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
   padding: 12px;
   display: grid;
   gap: 10px;
 }
 
 .sourceCardReact.focused {
-  border-color: rgba(37, 99, 235, 0.7);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14), 0 14px 34px rgba(37, 99, 235, 0.14);
+  border-color: var(--ot-border-interactive);
+  box-shadow: inset 0 0 0 1px var(--ot-border-interactive);
 }
 
 .sourceTop {
@@ -2531,13 +1722,13 @@ button {
 }
 
 .sourceName {
-  font-size: 0.95rem;
-  font-weight: 800;
+  font-size: var(--ot-size-body-lg);
+  font-weight: var(--ot-weight-bold);
 }
 
 .sourceLink {
   color: var(--text-muted);
-  font-size: 0.76rem;
+  font-size: var(--ot-size-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2575,28 +1766,28 @@ button {
   display: grid;
   gap: 6px;
   padding: 10px 11px;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(248, 250, 252, 0.72);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-02);
 }
 
 .sourceTriagePanel.ok {
-  border-color: rgba(34, 197, 94, 0.2);
-  background: rgba(240, 253, 244, 0.85);
+  border-color: var(--sem-ok-border);
+  background: var(--ot-layer-02);
 }
 
 .sourceTriagePanel.warn {
-  border-color: rgba(245, 158, 11, 0.22);
-  background: rgba(255, 251, 235, 0.9);
+  border-color: var(--sem-warn-border);
+  background: var(--ot-layer-02);
 }
 
 .sourceTriagePanel.bad {
-  border-color: rgba(239, 68, 68, 0.18);
-  background: rgba(254, 242, 242, 0.92);
+  border-color: var(--sem-bad-border);
+  background: var(--ot-layer-02);
 }
 
 .sourceTriagePanel.muted {
-  background: rgba(248, 250, 252, 0.82);
+  background: var(--ot-layer-02);
 }
 
 .sourceCandidateStats {
@@ -2624,9 +1815,9 @@ button {
   gap: 4px 10px;
   align-items: center;
   width: 100%;
-  border: 1px solid #dbe7f7;
-  border-radius: 8px;
-  background: #f8fbff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
   padding: 10px;
   text-align: left;
   color: var(--text);
@@ -2634,8 +1825,8 @@ button {
 }
 
 .sourceCandidateTriageItem:hover {
-  border-color: rgba(37, 99, 235, 0.34);
-  background: #eef6ff;
+  border-color: var(--ot-border-interactive);
+  background: var(--ot-layer-02);
 }
 
 .sourceCandidateTriageItem span {
@@ -2644,10 +1835,10 @@ button {
   width: 36px;
   height: 36px;
   place-items: center;
-  border-radius: 8px;
+  border-radius: var(--ot-radius);
   background: var(--primary);
-  color: #fff;
-  font-weight: 900;
+  color: var(--ot-text-on-color);
+  font-weight: var(--ot-weight-bold);
 }
 
 .sourceCandidateTriageItem strong,
@@ -2658,19 +1849,19 @@ button {
 }
 
 .sourceCandidateTriageItem strong {
-  font-size: 0.84rem;
+  font-size: var(--ot-size-body);
 }
 
 .sourceCandidateTriageItem em {
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: var(--ot-size-caption);
   font-style: normal;
 }
 
 .sourceCandidateTriageItem small {
-  color: #52627a;
-  font-size: 0.72rem;
-  font-weight: 800;
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .sourceCandidateList {
@@ -2680,10 +1871,10 @@ button {
 
 .sourceCandidateCard {
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
   padding: 14px;
-  box-shadow: 0 10px 28px rgba(37, 99, 235, 0.06);
+  box-shadow: none;
 }
 
 .sourceCandidateTop {
@@ -2710,20 +1901,20 @@ button {
   gap: 8px;
   margin-top: 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ot-size-caption);
 }
 
 .sourceCandidateMetrics span {
-  border: 1px solid #dbe7f7;
-  border-radius: 999px;
-  background: #f8fbff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-02);
   padding: 5px 8px;
 }
 
 .sourceCandidateComment {
   margin-top: 10px;
-  color: #334155;
-  font-size: 13px;
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-body);
   line-height: 1.45;
 }
 
@@ -2740,15 +1931,15 @@ button {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border: 1px solid var(--ot-border-strong);
+  border-radius: var(--ot-radius);
   padding: 10px;
-  background: #f8fbff;
+  background: var(--ot-layer-02);
 }
 
 .sourceCandidateArticle a {
   color: var(--text);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
   text-decoration: none;
 }
 
@@ -2759,7 +1950,7 @@ button {
 .sourceCandidateArticle p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ot-size-caption);
   line-height: 1.45;
 }
 
@@ -2768,13 +1959,13 @@ button {
   gap: 6px;
   align-items: center;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ot-size-caption);
 }
 
 .sourceCandidateArticleMeta span {
-  border: 1px solid #dbe7f7;
-  border-radius: 999px;
-  background: #fff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-01);
   padding: 4px 7px;
 }
 
@@ -2787,86 +1978,25 @@ button {
 }
 
 .sourceTriageTitle {
-  font-weight: 800;
-  color: #0f172a;
+  font-weight: var(--ot-weight-bold);
+  color: var(--ot-text-primary);
   line-height: 1.35;
 }
 
 .sourceTriageAction {
-  color: #475569;
-  font-size: 0.76rem;
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
   line-height: 1.45;
 }
 
-.miniPill {
-  border-radius: 999px;
-  padding: 5px 8px;
-  font-size: 0.72rem;
-  font-weight: 800;
-  border: 1px solid transparent;
-}
-
-.miniPill.ok {
-  color: var(--sem-ok-fg);
-  background: var(--sem-ok-bg);
-}
-
-.miniPill.warn {
-  color: var(--sem-warn-fg);
-  background: var(--sem-warn-bg);
-}
-
-.miniPill.bad {
-  color: var(--sem-bad-fg);
-  background: var(--sem-bad-bg);
-}
-
-.miniPill.muted {
-  color: var(--sem-muted-fg);
-  background: var(--sem-muted-bg);
-}
-
-/* draft/info = намеренный «info»-токен (требует действия), не случайный цвет. */
-.miniPill.draft,
-.miniPill.info {
-  color: var(--sem-info-fg);
-  background: var(--sem-info-bg);
-}
-
-/* Плашка «идёт работа» с живой пульсирующей точкой (без процентов и номеров). */
-.pendingPill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.pendingPill .loaderDot {
-  width: 7px;
-  height: 7px;
-}
-
-.metaText {
-  color: var(--text-muted);
-  font-size: 0.74rem;
-  line-height: 1.3;
-}
-
-.toggleLabel {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
 .sourceAdvancedReact {
-  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  border-top: 1px solid var(--ot-border-subtle);
   padding-top: 10px;
 }
 
 .sourceAdvancedReact summary {
   cursor: pointer;
-  font-weight: 800;
+  font-weight: var(--ot-weight-bold);
   color: var(--text-muted);
 }
 
@@ -2880,9 +2010,9 @@ button {
 .diagnosticsPanel {
   margin-top: 10px;
   padding: 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(248, 250, 252, 0.92);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-02);
 }
 
 .diagnosticsPanel pre {
@@ -2890,126 +2020,13 @@ button {
   white-space: pre-wrap;
   word-break: break-word;
   font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: #334155;
-}
-
-.emptyState,
-.splashScreen {
-  min-height: 180px;
-  display: grid;
-  place-items: center;
-  border: 1px dashed rgba(148, 163, 184, 0.35);
-  border-radius: 18px;
-  color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.68);
-}
-
-.emptyState {
-  padding: 20px;
-  text-align: center;
-}
-
-.emptyState strong,
-.emptyState span {
-  display: block;
-}
-
-.emptyState span {
-  margin-top: 6px;
-}
-
-.authShellReact {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-}
-
-.authCardReact {
-  width: min(100%, 460px);
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: var(--shadow);
-  padding: 24px;
-  display: grid;
-  gap: 14px;
-}
-
-.authCardReact h1 {
-  margin: 0;
-  font-size: 2rem;
-}
-
-.authCardReact p {
-  margin: 0 0 4px;
-  color: var(--text-soft);
-}
-
-.authActions {
-  margin-top: 4px;
-}
-
-.authSwitchText {
-  color: var(--text-muted);
-  font-size: 0.92rem;
-  text-align: center;
-}
-
-.authSwitchLink {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--brand);
-  font-weight: 800;
-}
-
-.authSwitchLink:hover {
-  text-decoration: underline;
-}
-
-.toastReact {
-  position: fixed;
-  right: 20px;
-  bottom: 20px;
-  z-index: 40;
-  max-width: 420px;
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-left: 4px solid #2563eb;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--shadow);
-  padding: 14px 16px;
-  font-weight: 700;
-}
-
-.toastReact.error {
-  border-left-color: #dc2626;
-}
-
-.tasksAppShell .toastReact {
-  top: 82px;
-  right: 20px;
-  bottom: auto;
+  color: var(--ot-text-primary);
 }
 
 /* ≤1100px: сайдбар прячется — и сразу появляется нижняя навигация (раньше в
    диапазоне 721–1100px не было ни того, ни другого). Карточные/статистические
    сетки текучи через auto-fit, поэтому форсим 1fr только у разнородных раскладок. */
 @media (max-width: 1100px) {
-  .shell,
-  .shell.sidebarCollapsed {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    display: none;
-  }
-
-  /* Запас снизу под фиксированную нижнюю навигацию. */
-  .content {
-    padding-bottom: 96px;
-  }
 
   .heroGrid,
   .backlogOverview,
@@ -3046,74 +2063,11 @@ button {
   .digestBuilderSide .digestPreviewSurface {
     position: static;
   }
-
-  .mobileNav {
-    position: fixed;
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
-    z-index: 50;
-    display: flex;
-    gap: 6px;
-    padding: 8px;
-    border-radius: 18px;
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    background: rgba(255, 255, 255, 0.94);
-    backdrop-filter: blur(18px);
-    box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
-    overflow-x: auto;
-  }
-
-  /* flex с равными долями адаптирует панель под любое число пунктов
-     (2 у обычного пользователя, до 6 у администратора). */
-  .mobileNavButton {
-    flex: 1 1 0;
-    min-width: 56px;
-    display: grid;
-    justify-items: center;
-    gap: 5px;
-    padding: 8px 4px 7px;
-    border: 0;
-    border-radius: 14px;
-    background: transparent;
-    color: #64748b;
-    transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
-  }
-
-  .mobileNavButton.active {
-    background: rgba(219, 234, 254, 0.9);
-    color: var(--brand);
-  }
-
-  .mobileNavIcon {
-    width: 18px;
-    height: 18px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .mobileNavLabel {
-    font-size: 0.62rem;
-    line-height: 1.1;
-    font-weight: 800;
-    text-align: center;
-  }
 }
 
 /* ≤720px: телефоны — заголовки в столбик, фильтры в одну колонку, узкие таблицы
    со скроллом. Карточка статьи уже flex и переносится сама, грид не форсим. */
 @media (max-width: 720px) {
-  .content {
-    padding-inline: 12px;
-  }
-
-  .pageHeader,
-  .panelHeader,
-  .screenHeader {
-    flex-direction: column;
-    align-items: flex-start;
-  }
 
   .sourceCreateGrid,
   .sourceFiltersGrid,
@@ -3160,13 +2114,6 @@ button {
     width: 100%;
   }
 
-  .tasksAppShell .toastReact {
-    left: 12px;
-    right: 12px;
-    top: 74px;
-    max-width: none;
-  }
-
   .sourceTop {
     grid-template-columns: 1fr;
   }
@@ -3203,13 +2150,13 @@ button {
 }
 
 .statsTotalRow {
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
   background: var(--surface-strong);
 }
 
 .statsNote {
   margin: 10px 2px 0;
-  font-size: 0.78rem;
+  font-size: var(--ot-size-caption);
   line-height: 1.45;
 }
 
@@ -3225,7 +2172,7 @@ button {
 /* Подсказка об активных фильтрах ленты: дефолтный порог по баллу сужал выдачу молча. */
 .filterHintBadge {
   background: transparent;
-  font-weight: 600;
+  font-weight: var(--ot-weight-bold);
   opacity: 0.75;
 }
 
@@ -3240,8 +2187,8 @@ button {
 .agentCommandCard,
 .agentCandidateQueue {
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.9);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
   box-shadow: var(--shadow-sm);
 }
 
@@ -3254,23 +2201,23 @@ button {
 }
 
 .agentCommandPrimary.good {
-  background: linear-gradient(135deg, #eefdf7 0%, #ffffff 70%);
+  border-inline-start: 3px solid var(--ot-support-success);
 }
 
 .agentCommandPrimary.warning {
-  background: linear-gradient(135deg, #fff8e8 0%, #ffffff 70%);
+  border-inline-start: 3px solid var(--ot-support-warning);
 }
 
 .agentCommandPrimary.bad {
-  background: linear-gradient(135deg, #fff1f2 0%, #ffffff 70%);
+  border-inline-start: 3px solid var(--ot-support-error);
 }
 
 .agentCommandPrimary h2 {
   max-width: 640px;
   margin: 6px 0 8px;
   color: var(--text);
-  font-size: clamp(1.25rem, 1.8vw, 1.85rem);
-  line-height: 1.08;
+  font-size: var(--ot-size-heading-04);
+  line-height: var(--ot-leading-heading);
   letter-spacing: 0;
 }
 
@@ -3278,17 +2225,16 @@ button {
 .agentCommandCard p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: var(--ot-size-body);
   line-height: 1.5;
-  font-weight: 650;
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentCommandKicker {
   color: var(--brand);
-  font-size: 0.72rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .agentCommandActions {
@@ -3309,9 +2255,9 @@ button {
 
 .agentCommandCard strong {
   color: var(--text);
-  font-size: 1rem;
+  font-size: var(--ot-size-body-lg);
   line-height: 1.25;
-  font-weight: 900;
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentCommandMetric {
@@ -3319,20 +2265,20 @@ button {
   align-items: end;
   gap: 8px;
   color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentCommandMetric span {
   color: var(--brand);
-  font-size: 1.65rem;
+  font-size: var(--ot-size-heading-04);
   line-height: 1;
-  font-weight: 900;
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentCommandMetric small {
   padding-bottom: 2px;
-  font-size: 0.75rem;
+  font-size: var(--ot-size-caption);
 }
 
 .agentCandidateQueue {
@@ -3344,8 +2290,8 @@ button {
   gap: 10px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.9);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
   box-shadow: var(--shadow-sm);
 }
 
@@ -3356,25 +2302,25 @@ button {
   align-items: end;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.9);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
   box-shadow: var(--shadow-sm);
 }
 
 .agentSeedPanel h2 {
   margin: 4px 0 6px;
   color: var(--text);
-  font-size: 1rem;
+  font-size: var(--ot-size-body-lg);
   line-height: 1.2;
-  font-weight: 900;
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentSeedPanel p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--ot-size-caption);
   line-height: 1.45;
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentSeedForm {
@@ -3401,19 +2347,18 @@ button {
   align-items: center;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--muted);
   text-decoration: none;
-  font-size: 0.78rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .agentCandidateQueueRow:hover {
-  border-color: rgba(37, 99, 235, 0.28);
+  border-color: var(--sem-info-border);
   box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
 }
 
 .agentCandidateQueueRow strong {
@@ -3421,7 +2366,7 @@ button {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 0.86rem;
+  font-size: var(--ot-size-body);
 }
 
 .agentCandidateQueueRow small {
@@ -3429,7 +2374,7 @@ button {
   margin-top: 2px;
   overflow-wrap: anywhere;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: var(--ot-size-caption);
 }
 
 .agentWatchedSourceRow {
@@ -3439,26 +2384,26 @@ button {
   align-items: center;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
 .agentWatchedSourceRow.muted {
-  border-color: rgba(245, 158, 11, 0.24);
-  background: #fffaf0;
+  border-color: var(--sem-warn-border);
+  background: var(--sem-warn-bg);
 }
 
 .agentWatchedSourceRow.active {
-  border-color: rgba(34, 197, 94, 0.22);
-  background: #f8fffb;
+  border-color: var(--sem-ok-border);
+  background: var(--sem-ok-bg);
 }
 
 .agentWatchedSourceRow strong {
   display: block;
   min-width: 0;
   color: var(--text);
-  font-size: 0.84rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -3466,21 +2411,21 @@ button {
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentWatchedSourceRow > span {
   color: var(--brand);
-  font-size: 0.78rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentWatchedSourceRow p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -3490,10 +2435,10 @@ button {
   width: 34px;
   height: 34px;
   place-items: center;
-  border-radius: 9px;
-  background: #eaf2ff;
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
   color: var(--brand);
-  font-weight: 900;
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentOperatorBoard {
@@ -3517,71 +2462,71 @@ button {
   gap: 4px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--text);
   text-decoration: none;
 }
 
 .agentOperatorRow.good {
-  border-color: rgba(34, 197, 94, 0.24);
-  background: #f8fffb;
+  border-color: var(--sem-ok-border);
+  background: var(--sem-ok-bg);
 }
 
 .agentOperatorRow.warning {
-  border-color: rgba(245, 158, 11, 0.3);
-  background: #fffaf0;
+  border-color: var(--sem-warn-border);
+  background: var(--sem-warn-bg);
 }
 
 .agentOperatorRow.bad {
-  border-color: rgba(239, 68, 68, 0.24);
-  background: #fff7f7;
+  border-color: var(--sem-bad-border);
+  background: var(--sem-bad-bg);
 }
 
 .agentOperatorRow.linkRow:hover {
-  border-color: rgba(37, 99, 235, 0.36);
-  background: #f4f8ff;
+  border-color: var(--ot-border-interactive);
+  background: var(--ot-layer-02);
 }
 
 .agentOperatorRow span {
   color: var(--brand);
-  font-size: 0.68rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .agentOperatorRow strong {
   min-width: 0;
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .agentOperatorRow p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
 .agentOperatorRow .agentOperatorComment {
   padding: 7px 8px;
-  border-radius: 8px;
-  background: rgba(37, 99, 235, 0.07);
-  color: #334155;
-  font-size: 0.7rem;
+  border-radius: var(--ot-radius);
+  background: var(--ot-selected-subtle);
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-caption);
 }
 
 .agentDecisionBox {
   display: grid;
   gap: 7px;
   padding: 8px;
-  border: 1px solid rgba(37, 99, 235, 0.13);
-  border-radius: 9px;
-  background: rgba(37, 99, 235, 0.06);
+  border: 1px solid var(--sem-info-border);
+  border-radius: var(--ot-radius);
+  background: var(--ot-selected-subtle);
 }
 
 .agentDecisionBox > div {
@@ -3591,23 +2536,22 @@ button {
 .agentDecisionBox span {
   display: block;
   margin-bottom: 2px;
-  color: #2563eb;
-  font-size: 0.62rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  color: var(--ot-link);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentDecisionBox strong {
   display: block;
   margin-bottom: 2px;
-  color: #0f172a;
-  font-size: 0.76rem;
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-caption);
 }
 
 .agentDecisionBox p {
-  color: #334155;
-  font-size: 0.68rem;
-  font-weight: 750;
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.35;
 }
 
@@ -3621,10 +2565,10 @@ button {
   display: inline-flex;
   margin: 0;
   padding: 3px 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #475569;
-  font-size: 0.62rem;
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-01);
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
   text-transform: none;
 }
 
@@ -3638,30 +2582,29 @@ button {
 .miniActionButton {
   min-height: 26px;
   padding: 5px 8px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--sem-info-border);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
   color: var(--brand);
-  font-size: 0.68rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   cursor: pointer;
   transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
 }
 
 .miniActionButton:hover:not(:disabled) {
-  border-color: rgba(37, 99, 235, 0.36);
-  background: #eef5ff;
-  transform: translateY(-1px);
+  border-color: var(--ot-border-interactive);
+  background: var(--ot-layer-02);
 }
 
 .miniActionButton.good {
-  border-color: rgba(34, 197, 94, 0.24);
-  color: #15803d;
+  border-color: var(--sem-ok-border);
+  color: var(--sem-ok-fg);
 }
 
 .miniActionButton.bad {
-  border-color: rgba(239, 68, 68, 0.24);
-  color: #b91c1c;
+  border-color: var(--sem-bad-border);
+  color: var(--sem-bad-fg);
 }
 
 .miniActionButton:disabled {
@@ -3682,22 +2625,22 @@ button {
   display: grid;
   gap: 5px;
   padding: 12px;
-  border: 1px dashed rgba(37, 99, 235, 0.34);
-  border-radius: 10px;
-  background: #f8fbff;
+  border: 1px dashed var(--ot-border-interactive);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .agentDryRunIntro strong {
   color: var(--text);
-  font-size: 0.86rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentDryRunIntro p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.4;
 }
 
@@ -3715,23 +2658,23 @@ button {
 .agentDryRunMetrics div {
   min-width: 0;
   padding: 10px;
-  border: 1px solid #dbe7f7;
-  border-radius: 9px;
-  background: #f8fbff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .agentDryRunMetrics span {
   display: block;
   color: var(--brand);
-  font-size: 1rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body-lg);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentDryRunMetrics p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentDryRunMeta {
@@ -3743,11 +2686,11 @@ button {
 .agentDryRunMeta span {
   max-width: 100%;
   padding: 5px 8px;
-  border-radius: 999px;
-  background: rgba(37, 99, 235, 0.08);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-selected-subtle);
   color: var(--brand);
-  font-size: 0.7rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -3764,18 +2707,18 @@ button {
   align-items: center;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentDryRunObservation strong {
   min-width: 0;
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -3806,32 +2749,32 @@ button {
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
 .agentReflectionColumn.good {
-  border-color: rgba(34, 197, 94, 0.22);
-  background: #f8fffb;
+  border-color: var(--sem-ok-border);
+  background: var(--sem-ok-bg);
 }
 
 .agentReflectionColumn.warning {
-  border-color: rgba(245, 158, 11, 0.28);
-  background: #fffaf0;
+  border-color: var(--sem-warn-border);
+  background: var(--sem-warn-bg);
 }
 
 .agentReflectionColumn h3 {
   margin: 0;
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentReflectionColumn p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.35;
 }
 
@@ -3839,24 +2782,24 @@ button {
   display: grid;
   gap: 3px;
   padding: 8px;
-  border: 1px solid rgba(203, 213, 225, 0.72);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid var(--ot-border-strong);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
 }
 
 .agentReflectionRow strong {
   min-width: 0;
   color: var(--text);
-  font-size: 0.78rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .agentReflectionRow span {
   min-width: 0;
   color: var(--muted);
-  font-size: 0.7rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -3879,11 +2822,11 @@ button {
   gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 700;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .checkField input {
@@ -3922,18 +2865,18 @@ button {
   align-items: center;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentQualityRow strong {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 0.82rem;
+  font-size: var(--ot-size-body);
 }
 
 .agentQueryMemoryList {
@@ -3948,27 +2891,27 @@ button {
   align-items: center;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentQueryMemoryRow strong {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 0.82rem;
+  font-size: var(--ot-size-body);
 }
 
 .agentQueryMemoryRow.muted {
-  background: #f8fafc;
-  color: #718096;
+  background: var(--ot-layer-02);
+  color: var(--ot-text-secondary);
 }
 
 .agentQueryMemoryRow.muted strong {
-  color: #52627a;
+  color: var(--ot-text-secondary);
 }
 
 .agentLearningStrip {
@@ -3977,8 +2920,8 @@ button {
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.82);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
 }
 
 .agentLearningStrip div {
@@ -3988,15 +2931,15 @@ button {
 .agentLearningStrip span {
   display: block;
   color: var(--brand);
-  font-size: 1rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body-lg);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentLearningStrip p {
   margin: 2px 0 0;
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentEvaluationPanel {
@@ -4018,23 +2961,23 @@ button {
 .agentEvaluationMetrics div {
   min-width: 0;
   padding: 10px;
-  border: 1px solid #dbe7f7;
-  border-radius: 9px;
-  background: #f8fbff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .agentEvaluationMetrics span {
   display: block;
   color: var(--brand);
-  font-size: 1rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body-lg);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentEvaluationMetrics p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentEvaluationGrid {
@@ -4050,15 +2993,15 @@ button {
   gap: 7px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
 .agentEvaluationGrid h3 {
   margin: 0;
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentEvaluationRow {
@@ -4067,27 +3010,27 @@ button {
   gap: 8px;
   align-items: center;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentEvaluationRow strong {
   min-width: 0;
   color: var(--text);
-  font-size: 0.76rem;
+  font-size: var(--ot-size-caption);
   overflow-wrap: anywhere;
 }
 
 .agentEvaluationRow span {
   color: var(--brand);
-  font-weight: 900;
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentEvaluationNote {
   margin: 0;
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentInsightPanel {
@@ -4113,30 +3056,30 @@ button {
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #f8fbff;
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .agentInsightColumn.good {
-  border-color: rgba(34, 197, 94, 0.22);
-  background: #f8fffb;
+  border-color: var(--sem-ok-border);
+  background: var(--sem-ok-bg);
 }
 
 .agentInsightColumn.bad {
-  border-color: rgba(239, 68, 68, 0.2);
-  background: #fff8f8;
+  border-color: var(--sem-bad-border);
+  background: var(--sem-bad-bg);
 }
 
 .agentInsightColumn.warning {
-  border-color: rgba(245, 158, 11, 0.24);
-  background: #fffaf0;
+  border-color: var(--sem-warn-border);
+  background: var(--sem-warn-bg);
 }
 
 .agentInsightColumn h3 {
   margin: 0;
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentInsightRow {
@@ -4144,31 +3087,31 @@ button {
   display: grid;
   gap: 3px;
   padding: 8px;
-  border: 1px solid rgba(203, 213, 225, 0.78);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid var(--ot-border-strong);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
 }
 
 .agentInsightRow strong {
   min-width: 0;
   color: var(--text);
-  font-size: 0.78rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .agentInsightRow span {
   color: var(--brand);
-  font-size: 0.7rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .agentInsightRow p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -4185,35 +3128,35 @@ button {
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
 .agentComboRow.active {
-  border-color: rgba(34, 197, 94, 0.24);
-  background: #f8fffb;
+  border-color: var(--sem-ok-border);
+  background: var(--sem-ok-bg);
 }
 
 .agentComboRow.muted,
 .agentComboRow.rejected {
-  border-color: rgba(239, 68, 68, 0.2);
-  background: #fff8f8;
+  border-color: var(--sem-bad-border);
+  background: var(--sem-bad-bg);
 }
 
 .agentComboRow strong {
   display: block;
   min-width: 0;
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .agentComboRow p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -4227,14 +3170,14 @@ button {
 
 .agentComboScore span {
   color: var(--brand);
-  font-size: 0.92rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentComboScore small {
   color: var(--muted);
-  font-size: 0.64rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentFunnel {
@@ -4247,11 +3190,11 @@ button {
 .agentFunnel span {
   min-height: 22px;
   padding: 4px 7px;
-  border-radius: 999px;
-  background: rgba(37, 99, 235, 0.08);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-selected-subtle);
   color: var(--brand);
-  font-size: 0.68rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentActionList,
@@ -4268,7 +3211,7 @@ button {
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
@@ -4277,16 +3220,16 @@ button {
   height: 36px;
   display: grid;
   place-items: center;
-  border-radius: 10px;
-  background: rgba(37, 99, 235, 0.12);
+  border-radius: var(--ot-radius);
+  background: var(--ot-selected-subtle);
   color: var(--brand);
-  font-size: 0.86rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentActionTitle {
-  font-size: 0.88rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentActionTitleRow {
@@ -4301,34 +3244,34 @@ button {
   align-items: center;
   min-height: 22px;
   padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.06);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-hover);
   color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   line-height: 1;
 }
 
 .agentPolicyBadge.auto {
-  background: rgba(22, 163, 74, 0.12);
-  color: #15803d;
+  background: var(--sem-ok-bg);
+  color: var(--sem-ok-fg);
 }
 
 .agentPolicyBadge.human_review {
-  background: rgba(245, 158, 11, 0.16);
-  color: #b45309;
+  background: var(--sem-warn-bg);
+  color: var(--sem-warn-fg);
 }
 
 .agentPolicyBadge.blocked {
-  background: rgba(239, 68, 68, 0.12);
-  color: #b91c1c;
+  background: var(--sem-bad-bg);
+  color: var(--sem-bad-fg);
 }
 
 .agentActionTarget {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentQueryHints {
@@ -4341,11 +3284,11 @@ button {
 .agentQueryHints span {
   max-width: 100%;
   padding: 4px 7px;
-  border-radius: 999px;
-  background: rgba(37, 99, 235, 0.08);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-selected-subtle);
   color: var(--brand);
-  font-size: 0.7rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -4365,18 +3308,18 @@ button {
 
 .agentPlanMemoryExplain strong {
   color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentPlanMemoryExplain span {
   max-width: 100%;
   padding: 4px 7px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.05);
-  color: #334155;
-  font-size: 0.68rem;
-  font-weight: 800;
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-hover);
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -4385,14 +3328,14 @@ button {
 .agentOpsPanel p {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--ot-size-body);
   line-height: 1.45;
 }
 
 .agentActionCard .agentPolicyReason {
   margin-top: 4px;
   color: var(--text);
-  font-size: 0.76rem;
+  font-size: var(--ot-size-caption);
 }
 
 .agentOperatorLink {
@@ -4402,18 +3345,18 @@ button {
   min-height: 30px;
   margin-top: 8px;
   padding: 6px 10px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  border-radius: 8px;
-  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid var(--sem-info-border);
+  border-radius: var(--ot-radius);
+  background: var(--ot-selected-subtle);
   color: var(--brand);
-  font-size: 0.76rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   text-decoration: none;
 }
 
 .agentOperatorLink:hover {
-  border-color: rgba(37, 99, 235, 0.34);
-  background: rgba(37, 99, 235, 0.12);
+  border-color: var(--ot-border-interactive);
+  background: var(--ot-selected-subtle);
 }
 
 .compactFilters {
@@ -4428,9 +3371,9 @@ button {
   align-items: end;
   margin-bottom: 12px;
   padding: 10px;
-  border: 1px solid #dbe7f7;
-  border-radius: 10px;
-  background: #f8fbff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .agentMemoryRow {
@@ -4439,7 +3382,7 @@ button {
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
@@ -4448,14 +3391,14 @@ button {
   gap: 6px;
   align-content: start;
   color: var(--brand);
-  font-size: 0.84rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentMemoryRow strong {
   display: block;
   overflow-wrap: anywhere;
-  font-size: 0.88rem;
+  font-size: var(--ot-size-body);
 }
 
 .agentHistoryRow {
@@ -4465,35 +3408,35 @@ button {
   align-items: start;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
 .agentHistoryRow.good {
-  border-color: rgba(34, 197, 94, 0.28);
-  background: #f8fefb;
+  border-color: var(--sem-ok-border);
+  background: var(--ot-layer-02);
 }
 
 .agentHistoryRow.warning {
-  border-color: rgba(245, 158, 11, 0.34);
-  background: #fffaf0;
+  border-color: var(--sem-warn-border);
+  background: var(--sem-warn-bg);
 }
 
 .agentHistoryRow.bad {
-  border-color: rgba(239, 68, 68, 0.28);
-  background: #fff7f7;
+  border-color: var(--sem-bad-border);
+  background: var(--sem-bad-bg);
 }
 
 .agentHistoryTime {
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentHistoryRow strong {
   display: block;
   overflow-wrap: anywhere;
-  font-size: 0.84rem;
+  font-size: var(--ot-size-body);
 }
 
 .agentHistoryActionType {
@@ -4501,11 +3444,11 @@ button {
   width: fit-content;
   margin-top: 7px;
   padding: 3px 7px;
-  border-radius: 999px;
-  background: rgba(219, 234, 254, 0.75);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-accent);
   color: var(--brand);
-  font-size: 0.64rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentHistoryAuditTrail {
@@ -4518,11 +3461,11 @@ button {
 .agentHistoryAuditTrail span {
   max-width: 100%;
   padding: 4px 7px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.05);
-  color: #334155;
-  font-size: 0.66rem;
-  font-weight: 800;
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-hover);
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -4531,8 +3474,8 @@ button {
   gap: 5px;
   justify-items: end;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentRunRow {
@@ -4543,7 +3486,7 @@ button {
   align-items: center;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--text);
   text-align: left;
@@ -4553,19 +3496,19 @@ button {
 
 .agentRunRow:hover,
 .agentRunRow.active {
-  border-color: rgba(37, 99, 235, 0.35);
-  background: rgba(219, 234, 254, 0.34);
+  border-color: var(--ot-border-interactive);
+  background: var(--ot-layer-accent);
 }
 
 .agentRunRow strong {
   display: block;
-  font-size: 0.86rem;
+  font-size: var(--ot-size-body);
 }
 
 .agentRunRow p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--ot-size-caption);
   line-height: 1.35;
 }
 
@@ -4575,33 +3518,33 @@ button {
   justify-content: center;
   min-height: 26px;
   padding: 5px 8px;
-  border-radius: 999px;
-  background: rgba(100, 116, 139, 0.12);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-accent);
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentRunStatus.ok {
-  background: rgba(22, 163, 74, 0.12);
-  color: #15803d;
+  background: var(--sem-ok-bg);
+  color: var(--sem-ok-fg);
 }
 
 .agentRunStatus.failed {
-  background: rgba(220, 38, 38, 0.12);
-  color: #b91c1c;
+  background: var(--sem-bad-bg);
+  color: var(--sem-bad-fg);
 }
 
 .agentRunStatus.running {
-  background: rgba(37, 99, 235, 0.12);
+  background: var(--ot-selected-subtle);
   color: var(--brand);
 }
 
 .agentRunDate {
   justify-self: end;
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentLoopReport,
@@ -4620,25 +3563,25 @@ button {
 .agentLoopSummary div {
   min-width: 0;
   padding: 10px;
-  border: 1px solid #dbe7f7;
-  border-radius: 9px;
-  background: #f8fbff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .agentLoopSummary span {
   display: block;
   min-width: 0;
   color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .agentLoopSummary p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentLoopIteration,
@@ -4647,7 +3590,7 @@ button {
   gap: 8px;
   padding: 11px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   background: var(--surface);
 }
 
@@ -4656,8 +3599,8 @@ button {
   justify-content: space-between;
   gap: 10px;
   color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentLoopIterationHead strong {
@@ -4675,8 +3618,8 @@ button {
   gap: 8px;
   align-items: center;
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentLoopObservation strong {
@@ -4689,36 +3632,36 @@ button {
   grid-template-columns: minmax(0, 1.4fr) 78px 78px 78px 86px auto;
   align-items: center;
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentStrategyMemoryRow.active {
-  border-color: rgba(34, 197, 94, 0.24);
-  background: #f8fffb;
+  border-color: var(--sem-ok-border);
+  background: var(--sem-ok-bg);
 }
 
 .agentStrategyMemoryRow.muted {
-  background: #f8fafc;
+  background: var(--ot-layer-02);
 }
 
 .agentStrategyMemoryRow.rejected {
-  border-color: rgba(239, 68, 68, 0.22);
-  background: #fff7f7;
+  border-color: var(--sem-bad-border);
+  background: var(--sem-bad-bg);
 }
 
 .agentStrategyMemoryRow strong {
   display: block;
   min-width: 0;
   color: var(--text);
-  font-size: 0.84rem;
+  font-size: var(--ot-size-body);
   overflow-wrap: anywhere;
 }
 
 .agentStrategyMemoryRow p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: var(--ot-size-caption);
 }
 
 .agentStrategyActions {
@@ -4738,37 +3681,36 @@ button {
   display: grid;
   gap: 4px;
   padding: 10px 12px;
-  border: 1px solid #dbe7f7;
-  border-radius: 9px;
-  background: #f8fbff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .agentReadinessStatus strong {
   color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentReadinessStatus span {
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentReadinessStatus.ready {
-  border-color: rgba(34, 197, 94, 0.24);
-  background: #f0fdf4;
+  border-color: var(--sem-ok-border);
+  background: var(--sem-ok-bg);
 }
 
 .agentReadinessStatus.degraded {
-  border-color: rgba(245, 158, 11, 0.3);
-  background: #fffbeb;
+  border-color: var(--sem-warn-border);
+  background: var(--ot-layer-02);
 }
 
 .agentReadinessStatus.blocked {
-  border-color: rgba(239, 68, 68, 0.24);
-  background: #fef2f2;
+  border-color: var(--sem-bad-border);
+  background: var(--sem-bad-bg);
 }
 
 .agentBudgetStrip {
@@ -4782,21 +3724,21 @@ button {
   display: grid;
   gap: 3px;
   padding: 9px 10px;
-  border: 1px solid #dbe7f7;
-  border-radius: 9px;
-  background: #ffffff;
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
 }
 
 .agentBudgetStrip strong {
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 900;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentBudgetStrip span {
   color: var(--muted);
-  font-size: 0.66rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentReadinessList {
@@ -4811,16 +3753,15 @@ button {
   gap: 8px;
   align-items: center;
   padding: 7px 9px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border: 1px solid var(--ot-border-strong);
+  border-radius: var(--ot-radius);
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 .agentReadinessIssue span {
   color: var(--brand);
-  text-transform: uppercase;
 }
 
 .agentReadinessIssue strong {
@@ -4838,11 +3779,11 @@ button {
 .agentOpsGrid span {
   min-width: 0;
   padding: 8px 10px;
-  border-radius: 9px;
-  background: rgba(219, 234, 254, 0.7);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-accent);
   color: var(--brand);
-  font-size: 0.72rem;
-  font-weight: 900;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -4946,10 +3887,10 @@ button {
   height: auto;
   width: 100%;
   padding: 9px 10px;
-  font-size: 0.82rem;
-  border: 1px dashed rgba(148, 163, 184, 0.5);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.9);
+  font-size: var(--ot-size-body);
+  border: 1px dashed var(--ot-border-strong);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
 }
 
 .documentFileMeta {
@@ -4957,13 +3898,13 @@ button {
   gap: 2px;
   min-height: 34px;
   align-content: center;
-  font-size: 0.82rem;
-  color: #0f172a;
+  font-size: var(--ot-size-body);
+  color: var(--ot-text-primary);
 }
 
 .documentFileMeta span {
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--ot-size-caption);
 }
 
 .attestRow {
@@ -4972,9 +3913,9 @@ button {
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  background: rgba(255, 255, 255, 0.9);
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-01);
   cursor: pointer;
 }
 
@@ -4983,31 +3924,10 @@ button {
 }
 
 .attestRow span {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
   line-height: 1.4;
-  color: #0f172a;
-}
-
-.documentAlert {
-  margin-top: 10px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  font-size: 0.82rem;
-  font-weight: 600;
-  line-height: 1.45;
-}
-
-.documentAlert.bad {
-  color: var(--sem-bad-fg);
-  background: var(--sem-bad-bg);
-  border: 1px solid var(--sem-bad-border);
-}
-
-.documentAlert.warn {
-  color: var(--sem-warn-fg);
-  background: var(--sem-warn-bg);
-  border: 1px solid var(--sem-warn-border);
+  color: var(--ot-text-primary);
 }
 
 .documentsTable {
@@ -5019,7 +3939,7 @@ button {
   border: none;
   padding: 0;
   font: inherit;
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
   color: var(--brand);
   text-align: left;
   cursor: pointer;
@@ -5037,8 +3957,8 @@ button {
 }
 
 .documentLink {
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   color: var(--brand);
 }
 
@@ -5078,8 +3998,8 @@ button {
   display: grid;
   gap: 2px;
   padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(241, 245, 249, 0.7);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 /* Якоря без текста — предупреждение, а не нейтральный факт: на реальном заключении
@@ -5089,7 +4009,7 @@ button {
   align-items: center;
   gap: 8px;
   margin: 0 0 10px;
-  font-size: 0.82rem;
+  font-size: var(--ot-size-body);
   color: var(--text-soft);
   cursor: pointer;
 }
@@ -5100,27 +4020,26 @@ button {
 }
 
 .documentPassportItem.warn {
-  background: rgba(254, 243, 199, 0.85);
+  background: var(--sem-warn-bg);
 }
 
 .documentPassportLabel {
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
+  letter-spacing: var(--ot-tracking-caption);
   color: var(--text-muted);
 }
 
 .documentPassportValue {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #0f172a;
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
+  color: var(--ot-text-primary);
   overflow-wrap: anywhere;
 }
 
 .documentBlock h3 {
   margin: 0 0 6px;
-  font-size: 0.95rem;
+  font-size: var(--ot-size-body-lg);
 }
 
 /* Селектор с ДВУМЯ классами намеренно: `.panel p` (класс + элемент) специфичнее
@@ -5129,7 +4048,7 @@ button {
    Одинаковые по смыслу блоки не должны быть разной ширины без причины. */
 .documentBlock .documentEssence {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: var(--ot-size-body);
   line-height: 1.5;
   max-width: none;
 }
@@ -5139,7 +4058,7 @@ button {
   padding-left: 18px;
   display: grid;
   gap: 4px;
-  font-size: 0.85rem;
+  font-size: var(--ot-size-body);
   line-height: 1.45;
 }
 
@@ -5159,7 +4078,7 @@ button {
 }
 
 .factValue {
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .factValue.unverified {
@@ -5171,9 +4090,9 @@ button {
 .factFlag {
   display: inline-flex;
   padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 800;
+  border-radius: var(--ot-radius-pill);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   white-space: nowrap;
 }
 
@@ -5217,7 +4136,7 @@ button {
 
 .signalFilterChip {
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--ot-size-caption);
   cursor: pointer;
 }
 
@@ -5229,7 +4148,7 @@ button {
 .signalFilterPanel {
   margin-top: 8px;
   padding: 10px 12px 12px;
-  border-radius: 14px;
+  border-radius: var(--ot-radius);
   background: var(--sem-muted-bg);
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5276,10 +4195,9 @@ button {
 }
 
 .signalRadarFacts span {
-  font-size: 0.72rem;
-  font-weight: 800;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   color: var(--text-muted);
-  text-transform: uppercase;
   letter-spacing: 0;
 }
 
@@ -5287,7 +4205,7 @@ button {
    и раскрытая часть. Номер моноширинный и выделяется целиком: его переносят в «ID дубля». */
 .signalIdText {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #0f172a;
+  color: var(--ot-text-primary);
   user-select: all;
 }
 
@@ -5322,12 +4240,12 @@ button {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-size: 0.86rem;
+  font-size: var(--ot-size-body);
 }
 
 .signalScoreBreakdown li span {
   font-size: inherit;
-  font-weight: 400;
+  font-weight: var(--ot-weight-regular);
   color: inherit;
   text-transform: none;
 }
@@ -5359,7 +4277,7 @@ button {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
   margin-top: 10px;
-  font-size: 0.88rem;
+  font-size: var(--ot-size-body);
 }
 
 .signalWeeklyBody ol,
@@ -5382,7 +4300,7 @@ button {
   padding-left: 20px;
   display: grid;
   gap: 4px;
-  font-size: 0.88rem;
+  font-size: var(--ot-size-body);
 }
 
 .signalDecisionLog li {
@@ -5394,19 +4312,19 @@ button {
   flex: 0 0 auto;
   min-width: 96px;
   color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
 }
 
 /* Причина скрытия — только в выборке «Скрытые» (админ). */
 .signalHiddenReason {
-  color: #b45309;
+  color: var(--sem-warn-fg);
 }
 
 /* «Спорное» (#130): «Отбор» сам себе противоречил и после повтора — проверять первым. */
 .signalDisputed {
-  color: #b45309;
-  font-weight: 600;
+  color: var(--sem-warn-fg);
+  font-weight: var(--ot-weight-bold);
 }
 
 /* Блоки ОС на карточке (#130): кто и когда — подписью, оценка, причина и комментарий — следом. */
@@ -5419,7 +4337,7 @@ button {
   padding-left: 20px;
   display: grid;
   gap: 4px;
-  font-size: 0.88rem;
+  font-size: var(--ot-size-body);
 }
 
 .signalFeedbackBlocks li {
@@ -5444,10 +4362,10 @@ button {
   gap: 4px;
   padding: 2px 8px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--ot-radius-pill);
   background: var(--sem-muted-bg);
   color: var(--text-soft);
-  font-size: 0.72rem;
+  font-size: var(--ot-size-caption);
   line-height: 1.4;
 }
 
@@ -5457,7 +4375,7 @@ button {
 
 .signalChip.gap {
   border-style: dashed;
-  border-color: rgba(148, 163, 184, 0.7);
+  border-color: var(--ot-border-strong);
   background: transparent;
   color: var(--text-muted);
 }
@@ -5465,11 +4383,11 @@ button {
 .signalCompanyButton {
   padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--ot-radius-pill);
   background: var(--brand-soft);
   color: var(--brand);
   font: inherit;
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
   cursor: pointer;
 }
 
@@ -5511,13 +4429,13 @@ button {
 .signalRadarFacts > div {
   min-width: 0;
   padding-left: 10px;
-  border-left: 2px solid rgba(148, 163, 184, 0.34);
+  border-left: 2px solid var(--ot-border-subtle);
 }
 
 .signalRadarFacts p {
   margin: 3px 0 0;
   max-width: none;
-  font-size: 0.82rem;
+  font-size: var(--ot-size-body);
   line-height: 1.45;
   color: var(--text-soft);
 }
@@ -5529,10 +4447,9 @@ button {
 }
 
 .signalEvidenceHeading {
-  font-size: 0.74rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
+  letter-spacing: var(--ot-tracking-caption);
   color: var(--text-muted);
 }
 
@@ -5540,33 +4457,33 @@ button {
   display: grid;
   gap: 3px;
   padding: 8px 10px;
-  border: 1px solid rgba(203, 213, 225, 0.55);
-  border-radius: 8px;
+  border: 1px solid var(--ot-border-strong);
+  border-radius: var(--ot-radius);
   color: inherit;
   text-decoration: none;
-  background: rgba(248, 250, 252, 0.7);
+  background: var(--ot-layer-02);
 }
 
 .signalEvidenceRow:hover {
-  border-color: rgba(0, 61, 166, 0.35);
-  background: rgba(239, 246, 255, 0.75);
+  border-color: var(--ot-border-interactive);
+  background: var(--ot-layer-02);
 }
 
 /* «издатель · дата публикации» — обычным регистром: домен и дату так читать проще. */
 .signalEvidenceRow span {
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   color: var(--text-muted);
 }
 
 .signalEvidenceRow strong {
-  font-size: 0.88rem;
+  font-size: var(--ot-size-body);
   line-height: 1.35;
 }
 
 .signalEvidenceRow small {
   color: var(--text-soft);
-  font-size: 0.8rem;
+  font-size: var(--ot-size-body);
   line-height: 1.4;
 }
 
@@ -5577,9 +4494,9 @@ button {
   display: grid;
   gap: 12px;
   padding: 12px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 12px;
-  background: rgba(248, 250, 252, 0.7);
+  border: 1px solid var(--ot-border-subtle);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-02);
 }
 
 .signalFeedbackGrid {
@@ -5618,7 +4535,7 @@ button {
   align-items: center;
   gap: 10px;
   padding-top: 4px;
-  border-top: 1px solid rgba(226, 232, 240, 0.65);
+  border-top: 1px solid var(--ot-border-strong);
 }
 
 /* Телефон: шапка панели уже в столбик (правило ≤720px выше). Кнопки шапки — ровной
@@ -5663,7 +4580,7 @@ button {
   margin-top: 16px;
   padding: 14px 16px;
   border: 1px solid var(--sem-muted-bg);
-  border-radius: 12px;
+  border-radius: var(--ot-radius);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -5676,8 +4593,8 @@ button {
 }
 
 .feedbackTitle {
-  font-weight: 800;
-  font-size: 0.85rem;
+  font-weight: var(--ot-weight-bold);
+  font-size: var(--ot-size-body);
 }
 
 .feedbackReasons {
@@ -5687,10 +4604,10 @@ button {
 }
 
 .feedbackChip {
-  border-radius: 999px;
+  border-radius: var(--ot-radius-pill);
   padding: 5px 10px;
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
   cursor: pointer;
   color: var(--text-muted);
   background: transparent;
@@ -5702,8 +4619,8 @@ button {
 }
 
 .feedbackChip.active {
-  color: var(--sem-info-fg, #1d4ed8);
-  background: var(--sem-info-bg, #eff6ff);
+  color: var(--sem-info-fg, var(--ot-link));
+  background: var(--sem-info-bg, var(--ot-selected-subtle));
   border-color: currentColor;
 }
 
@@ -5715,7 +4632,7 @@ button {
 }
 
 .feedbackScaleLabel {
-  font-size: 0.78rem;
+  font-size: var(--ot-size-caption);
   color: var(--text-muted);
   min-width: 180px;
 }
@@ -5729,14 +4646,14 @@ button {
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 1.05rem;
+  font-size: var(--ot-size-body-lg);
   line-height: 1;
   padding: 2px;
   color: var(--sem-muted-bg);
 }
 
 .feedbackStar.on {
-  color: #f59e0b;
+  color: var(--sem-warn-fg);
 }
 
 .feedbackStar:disabled {
@@ -5746,17 +4663,17 @@ button {
 .feedbackComment {
   width: 100%;
   resize: vertical;
-  border-radius: 10px;
+  border-radius: var(--ot-radius);
   border: 1px solid var(--sem-muted-bg);
   padding: 8px 10px;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--ot-size-body);
 }
 
 .sourceFeedbackReact > summary {
   cursor: pointer;
-  font-weight: 700;
-  font-size: 0.82rem;
+  font-weight: var(--ot-weight-bold);
+  font-size: var(--ot-size-body);
   color: var(--text-muted);
   padding: 6px 0;
 }
@@ -5776,7 +4693,7 @@ button {
 
 .materialCard {
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--ot-radius);
   background: var(--surface-strong);
   padding: 12px 14px;
   min-width: 0;
@@ -5791,7 +4708,7 @@ button {
 
 .materialCard h3 {
   margin: 8px 0 4px;
-  font-size: 1rem;
+  font-size: var(--ot-size-body-lg);
 }
 
 .materialDescription {
@@ -5805,16 +4722,16 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 14px;
-  font-size: 0.82rem;
+  font-size: var(--ot-size-body);
   color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
 .materialVerdict {
   padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 700;
+  border-radius: var(--ot-radius-pill);
+  font-size: var(--ot-size-body);
+  font-weight: var(--ot-weight-bold);
   border: 1px solid var(--sem-muted-bg);
   background: var(--sem-muted-bg);
   color: var(--sem-muted-fg);

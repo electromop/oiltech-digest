@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, type FormEvent } from "react";
 import { listArticles } from "../api/articles";
 import { ApiError } from "../api/client";
 import { admit, getSession, login, logout, register } from "../api/auth";
@@ -244,6 +244,10 @@ export function App() {
   const isTasksApp = window.location.pathname.replace(/\/+$/, "") === "/tasks";
   const [activeScreen, setActiveScreen] = useState<ScreenId>(initialScreenFromUrl);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Мобильное меню (до 1056px): кнопка в шапке раскрывает список разделов поверх экрана.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -272,11 +276,31 @@ export function App() {
     if (user && !screenEnabled(activeScreen)) switchScreen("articles");
   }, [user, archivedModules, activeScreen]);
 
+  // Обычное уведомление уходит само через 2,8 с; ошибка остаётся, пока её не закроют:
+  // за 2,8 с текст ошибки не всегда успевают прочитать.
   useEffect(() => {
-    if (!toast) return;
+    if (!toast || toast.tone === "error") return;
     const timer = window.setTimeout(() => setToast(null), 2800);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  // Заголовок вкладки браузера называет текущий экран.
+  useEffect(() => {
+    document.title = user ? `${active.label} · OilTech Digest` : "Вход · OilTech Digest";
+  }, [user, active.label]);
+
+  // Escape закрывает мобильное меню и возвращает фокус на кнопку меню.
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileNavOpen(false);
+        menuButtonRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileNavOpen]);
 
   let currentScreen = (
     <section className="screenStack">
@@ -438,6 +462,10 @@ export function App() {
 
   function switchScreen(screenId: ScreenId) {
     setActiveScreen(screenId);
+    setMobileNavOpen(false);
+    // Переход по меню переносит фокус на экран: клавиатура и чтение с экрана начинают
+    // с нового содержимого, а не с конца меню.
+    window.requestAnimationFrame(() => mainRef.current?.focus({ preventScroll: true }));
     if (URL_ADDRESSABLE.includes(screenId)) {
       window.history.replaceState(null, "", `?screen=${screenId}`);
       return;
@@ -466,7 +494,8 @@ export function App() {
     }
   }
 
-  async function submitAuth() {
+  async function submitAuth(event?: FormEvent) {
+    event?.preventDefault();
     try {
       const payload = authMode === "register" ? await register(email.trim(), password) : await login(email.trim(), password);
       if ("admission_required" in payload) {
@@ -480,7 +509,8 @@ export function App() {
     }
   }
 
-  async function submitAdmission() {
+  async function submitAdmission(event?: FormEvent) {
+    event?.preventDefault();
     try {
       await enter(await admit(email.trim(), password, admissionCode), "Допуск получен, вход выполнен");
     } catch (error) {
@@ -540,38 +570,49 @@ export function App() {
     setToast({ text, tone });
   }
 
+  const toastRegion = <ToastRegion toast={toast} onClose={() => setToast(null)} />;
+
   if (authLoading) {
-    return <div className="splashScreen">Проверяем сессию…</div>;
+    return (
+      <div className="splashScreen" role="status">
+        <span className="spinnerReact" aria-hidden="true" />
+        Проверяем сессию…
+      </div>
+    );
   }
 
   if (!user && admissionNotice !== null) {
     return (
       <div className="authShellReact">
-        <div className="authCardReact">
+        <main className="authCardReact">
           <div className="eyebrow">OilTech Digest</div>
           <h1>Код допуска</h1>
           <p>{admissionNotice}</p>
           <p>Учётка ещё не допущена к платформе. Введите код, который передали подтверждающие: он действует сутки, попыток ввода — пять.</p>
-          <label className="field">
-            <span>Код допуска</span>
-            <input
-              value={admissionCode}
-              onChange={(event) => setAdmissionCode(event.target.value)}
-              placeholder="8 цифр"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-            />
-          </label>
-          <div className="authActions">
-            <button type="button" className="primaryButton" onClick={() => void submitAdmission()}>
-              Подтвердить
-            </button>
-            <button type="button" className="ghostButton" onClick={leaveAdmission}>
-              Назад ко входу
-            </button>
-          </div>
-        </div>
-        {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
+          <form noValidate onSubmit={(event) => void submitAdmission(event)}>
+            <label className="field">
+              <span>Код допуска</span>
+              <input
+                name="admission-code"
+                value={admissionCode}
+                onChange={(event) => setAdmissionCode(event.target.value)}
+                placeholder="8 цифр"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                spellCheck={false}
+              />
+            </label>
+            <div className="authActions">
+              <button type="submit" className="primaryButton">
+                Подтвердить
+              </button>
+              <button type="button" className="ghostButton" onClick={leaveAdmission}>
+                Назад ко входу
+              </button>
+            </div>
+          </form>
+        </main>
+        {toastRegion}
       </div>
     );
   }
@@ -579,7 +620,7 @@ export function App() {
   if (!user) {
     return (
       <div className="authShellReact">
-        <div className="authCardReact">
+        <main className="authCardReact">
           <div className="eyebrow">OilTech Digest</div>
           <h1>{authMode === "register" ? "Регистрация" : isTasksApp ? "Вход в трекер задач" : "Вход в админ-панель"}</h1>
           <p>
@@ -589,32 +630,46 @@ export function App() {
                 ? "Войдите в аккаунт, чтобы открыть скрытую доску проекта."
                 : "Войдите в аккаунт, чтобы продолжить работу с редакторской панелью."}
           </p>
-          <label className="field">
-            <span>Эл. почта</span>
-            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" />
-          </label>
-          <label className="field">
-            <span>Пароль</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Не короче 8 символов"
-            />
-          </label>
-          <div className="authActions">
-            <button type="button" className="primaryButton" onClick={() => void submitAuth()}>
-              {authMode === "register" ? "Зарегистрироваться" : "Войти"}
-            </button>
-          </div>
+          {/* Форма: Enter в поле пароля отправляет вход (раньше срабатывала только кнопка). */}
+          <form noValidate onSubmit={(event) => void submitAuth(event)}>
+            <label className="field">
+              <span>Эл. почта</span>
+              <input
+                type="email"
+                name="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@example.com"
+                autoComplete="username"
+                inputMode="email"
+                spellCheck={false}
+              />
+            </label>
+            <label className="field">
+              <span>Пароль</span>
+              <input
+                type="password"
+                name="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Не короче 8 символов"
+                autoComplete={authMode === "register" ? "new-password" : "current-password"}
+              />
+            </label>
+            <div className="authActions">
+              <button type="submit" className="primaryButton">
+                {authMode === "register" ? "Зарегистрироваться" : "Войти"}
+              </button>
+            </div>
+          </form>
           {/* Переключателя «Зарегистрироваться» больше нет: самостоятельная
               регистрация закрыта (#33), и кнопка вела в 403. Учётки заводит
               администратор — экран «Пользователи» или CLI create-user. */}
           <div className="authSwitchText">
             Нет доступа? Обратитесь к администратору платформы.
           </div>
-        </div>
-        {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
+        </main>
+        {toastRegion}
       </div>
     );
   }
@@ -622,44 +677,59 @@ export function App() {
   if (isTasksApp) {
     return (
       <div className="tasksAppShell">
-        <header className="tasksAppTopbar">
+        <a className="skipLink" href="#main-content">Перейти к содержимому</a>
+        <header className="shellHeader">
           <div className="brand">
-            <div className="brandMark">OT</div>
-            <div className="brandText">
-              <div className="brandTitle">OilTech Digest</div>
-              <div className="brandSubtitle">Трекер задач</div>
-            </div>
+            <span className="brandTitle">OilTech Digest</span>
+            <span className="brandSubtitle">Трекер задач</span>
           </div>
-          <div className="panelActions">
-            <div className="statusPill">{user.email}</div>
-            <button type="button" className="ghostButton compactButton" onClick={() => void handleLogout()}>
+          <div className="shellHeaderActions">
+            <span className="shellUser">{user.email}</span>
+            <button type="button" className="shellHeaderButton" onClick={() => void handleLogout()}>
+              <UtilityIcon kind="logout" collapsed={false} />
               Выйти
             </button>
           </div>
         </header>
-        <main className="tasksAppContent">
+        <main id="main-content" className="tasksAppContent" tabIndex={-1}>
           <BacklogPage onUnauthorized={resetSession} showToast={showToast} />
         </main>
-        {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
+        {toastRegion}
       </div>
     );
   }
 
+  const shellClass = ["shell", sidebarCollapsed ? "sidebarCollapsed" : "", mobileNavOpen ? "mobileNavOpen" : ""].filter(Boolean).join(" ");
+
   return (
-    <div className={sidebarCollapsed ? "shell sidebarCollapsed" : "shell"}>
-      <aside className="sidebar">
-        <div className="sidebarTopRow">
-          <div className="brand">
-            <div className="brandMark">OT</div>
-            <div className="brandText">
-              <div className="brandTitle">OilTech Digest</div>
-              <div className="brandSubtitle">Админ-панель</div>
-            </div>
-          </div>
+    <div className={shellClass}>
+      <a className="skipLink" href="#main-content">Перейти к содержимому</a>
+      <header className="shellHeader">
+        <button
+          ref={menuButtonRef}
+          type="button"
+          className="shellMenuButton"
+          aria-label={mobileNavOpen ? "Закрыть меню разделов" : "Открыть меню разделов"}
+          aria-expanded={mobileNavOpen}
+          aria-controls="mobile-nav"
+          onClick={() => setMobileNavOpen((value) => !value)}
+        >
+          <MenuIcon open={mobileNavOpen} />
+        </button>
+        <div className="brand">
+          <span className="brandTitle">OilTech Digest</span>
+          <span className="brandSubtitle">Админ-панель</span>
         </div>
+        <div className="shellHeaderActions">
+          <span className="shellUser" title={user.email}>{user.email}</span>
+          <button type="button" className="shellHeaderButton" onClick={() => void handleLogout()}>
+            <UtilityIcon kind="logout" collapsed={false} />
+            Выйти
+          </button>
+        </div>
+      </header>
 
-        <div className="brandMobileDivider" />
-
+      <aside className="sidebar" aria-label="Разделы">
         <div className="sidebarGroups">
           {navGroups.map((group) => {
             const visibleScreens = group.screens.filter(screenInMenu);
@@ -678,8 +748,9 @@ export function App() {
                       className={screen.id === activeScreen ? "navButton active" : "navButton"}
                       onClick={() => switchScreen(screen.id)}
                       title={sidebarCollapsed ? screen.label : undefined}
+                      aria-current={screen.id === activeScreen ? "page" : undefined}
                     >
-                      <span className="navButtonIcon">
+                      <span className="navButtonIcon" aria-hidden="true">
                         <ScreenIcon screenId={screen.id} />
                       </span>
                       <span className="navButtonLabel">{screen.label}</span>
@@ -693,11 +764,6 @@ export function App() {
         </div>
 
         <div className="sidebarBottom">
-          <div className="sidebarFoot">
-            <div className="footLabel">{user.email}</div>
-            <div className="footValue">Сессия активна</div>
-          </div>
-
           <div className="sidebarUtilityActions">
             <button
               type="button"
@@ -706,50 +772,71 @@ export function App() {
               aria-label={sidebarCollapsed ? "Развернуть сайдбар" : "Свернуть сайдбар"}
               title={sidebarCollapsed ? "Развернуть сайдбар" : undefined}
             >
-              <span className="navButtonIcon">
+              <span className="navButtonIcon" aria-hidden="true">
                 <UtilityIcon kind="toggle" collapsed={sidebarCollapsed} />
               </span>
               <span className="navButtonLabel">{sidebarCollapsed ? "Развернуть меню" : "Свернуть меню"}</span>
-            </button>
-            <button
-              type="button"
-              className="navButton utilityButton danger"
-              onClick={() => void handleLogout()}
-              title={sidebarCollapsed ? "Выйти" : undefined}
-            >
-              <span className="navButtonIcon">
-                <UtilityIcon kind="logout" collapsed={sidebarCollapsed} />
-              </span>
-              <span className="navButtonLabel">Выйти</span>
             </button>
           </div>
         </div>
       </aside>
 
-      <main className="content">{currentScreen}</main>
-      <nav className="mobileNav">
+      <main id="main-content" ref={mainRef} className="content" tabIndex={-1}>{currentScreen}</main>
+      <nav id="mobile-nav" className="mobileNav" aria-label="Разделы">
         {screens.filter((screen) => screenInMenu(screen.id)).map((screen) => (
           <button
             key={screen.id}
             type="button"
             className={screen.id === activeScreen ? "mobileNavButton active" : "mobileNavButton"}
             onClick={() => switchScreen(screen.id)}
-            aria-label={screen.label}
+            aria-current={screen.id === activeScreen ? "page" : undefined}
           >
-            <span className="mobileNavIcon">
+            <span className="mobileNavIcon" aria-hidden="true">
               <ScreenIcon screenId={screen.id} />
             </span>
             <span className="mobileNavLabel">{screen.label}</span>
           </button>
         ))}
       </nav>
-      {toast ? <div className={`toastReact ${toast.tone === "error" ? "error" : ""}`}>{toast.text}</div> : null}
+      <div className="mobileNavScrim" aria-hidden="true" onClick={() => setMobileNavOpen(false)} />
+      {toastRegion}
     </div>
   );
 }
 
+// Область уведомлений всегда в DOM (role="status"): так чтение с экрана объявляет каждое
+// новое сообщение. Ошибка закрывается кнопкой, обычное сообщение уходит само.
+function ToastRegion(props: { toast: { text: string; tone: "default" | "error" } | null; onClose: () => void }) {
+  return (
+    <div className="toastRegion" role="status" aria-live="polite">
+      {props.toast ? (
+        <div className={`toastReact ${props.toast.tone === "error" ? "error" : ""}`}>
+          <span className="toastText">{props.toast.text}</span>
+          <button type="button" className="toastClose" aria-label="Закрыть уведомление" onClick={props.onClose}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MenuIcon(props: { open: boolean }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden="true">
+      {props.open ? (
+        <path d="M5 5l10 10M15 5L5 15" strokeLinecap="round" />
+      ) : (
+        <path d="M3 5.5h14M3 10h14M3 14.5h14" strokeLinecap="round" />
+      )}
+    </svg>
+  );
+}
+
 function UtilityIcon(props: { kind: "toggle" | "logout"; collapsed: boolean }) {
-  const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.7 };
+  const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.7, "aria-hidden": true };
 
   if (props.kind === "toggle") {
     return (
@@ -771,7 +858,7 @@ function UtilityIcon(props: { kind: "toggle" | "logout"; collapsed: boolean }) {
 }
 
 function ScreenIcon(props: { screenId: ScreenId }) {
-  const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.6 };
+  const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true };
 
   if (props.screenId === "articles") {
     return (

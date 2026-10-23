@@ -1,0 +1,755 @@
+/* Дизайн-система v2: общие компоненты (Carbon productive).
+   Прямоугольные кнопки и поля, метки-пилюли, глубина — слоями фона, тени только у плавающего.
+   Экранные правила в globals.css идут после этого файла и уточняют компоненты под экран. */
+
+/* --- Заголовок экрана --- */
+.screenStack {
+  display: grid;
+  gap: var(--ot-space-05);
+  min-width: 0;
+}
+
+.screenHeader,
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--ot-space-04) var(--ot-space-05);
+  flex-wrap: wrap;
+}
+
+.screenHeader h1,
+.pageHeader h1 {
+  margin: 0;
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-heading-05);
+  font-weight: var(--ot-weight-bold);
+  line-height: var(--ot-leading-heading);
+  letter-spacing: 0;
+}
+
+.screenHeader p,
+.pageHeader p {
+  margin: var(--ot-space-02) 0 0;
+  max-width: 72ch;
+  color: var(--ot-text-secondary);
+}
+
+.eyebrow,
+.panelKicker,
+.footLabel {
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  line-height: var(--ot-leading-caption);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+/* --- Панель --- */
+.panel {
+  position: relative;
+  min-width: 0;
+  padding: var(--ot-space-05);
+  background: var(--ot-layer-01);
+  border: 1px solid var(--ot-border-subtle);
+}
+
+.panelHeader,
+.heroGrid {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--ot-space-04) var(--ot-space-05);
+  flex-wrap: wrap;
+}
+
+.panel h2,
+.panelHeader h2 {
+  margin: 0;
+  font-size: var(--ot-size-heading-03);
+  font-weight: var(--ot-weight-regular);
+  line-height: 1.4;
+}
+
+.panelText,
+.panel p {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--ot-text-secondary);
+}
+
+.panelActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-03);
+  flex-wrap: wrap;
+}
+
+.heroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  align-items: stretch;
+}
+
+.accentPanel {
+  background: var(--ot-interactive);
+  border-color: var(--ot-interactive);
+  color: var(--ot-text-on-color);
+}
+
+.accentPanel p,
+.accentPanel .panelKicker,
+.accentPanel h2 {
+  color: inherit;
+}
+
+.stepList {
+  margin-top: var(--ot-space-05);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--ot-space-03);
+}
+
+.stepCard {
+  padding: var(--ot-space-05);
+  background: var(--ot-layer-02);
+}
+
+.stepIndex {
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-heading-03);
+  font-weight: var(--ot-weight-bold);
+  color: var(--ot-link);
+}
+
+.stepText {
+  margin-top: var(--ot-space-02);
+}
+
+/* --- Метки (Carbon tag): пилюля 24px, смысл всегда подписью, цвет — второй канал --- */
+.statusPill,
+.badge,
+.miniPill,
+.warningPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-02);
+  min-height: var(--ot-control-xs);
+  padding: 0 var(--ot-space-03);
+  border: 0;
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-selected);
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-regular);
+  line-height: var(--ot-leading-caption);
+  letter-spacing: var(--ot-tracking-caption);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge.emphasis,
+.miniPill.draft,
+.miniPill.info {
+  background: var(--sem-info-bg);
+  color: var(--sem-info-fg);
+}
+
+.miniPill.ok {
+  background: var(--sem-ok-bg);
+  color: var(--sem-ok-fg);
+}
+
+.miniPill.warn,
+.warningPill {
+  background: var(--sem-warn-bg);
+  color: var(--sem-warn-fg);
+}
+
+.miniPill.bad {
+  background: var(--sem-bad-bg);
+  color: var(--sem-bad-fg);
+}
+
+.miniPill.muted {
+  background: var(--ot-layer-selected);
+  color: var(--sem-muted-fg);
+}
+
+.pendingPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-02);
+}
+
+.pendingPill .loaderDot {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+.metaText {
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  line-height: var(--ot-leading-caption);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+/* --- Кнопки: primary — синяя заливка, ghostButton — Carbon tertiary (синий контур),
+   опасные — красный контур, при наведении заливка. Высота 40px, в карточках 32px. --- */
+.primaryButton,
+.ghostButton,
+.dangerButton,
+.dangerGhostButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ot-space-03);
+  min-height: var(--ot-control-md);
+  padding: 0 var(--ot-space-05);
+  border: 1px solid transparent;
+  border-radius: var(--ot-radius);
+  font-weight: var(--ot-weight-regular);
+  line-height: var(--ot-leading-compact);
+  text-align: center;
+  text-decoration: none;
+  transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard),
+    border-color var(--ot-duration-fast-02) var(--ot-ease-standard),
+    color var(--ot-duration-fast-02) var(--ot-ease-standard);
+}
+
+.primaryButton {
+  background: var(--ot-button-primary);
+  color: var(--ot-text-on-color);
+}
+
+.ghostButton {
+  background: transparent;
+  border-color: var(--ot-button-tertiary);
+  color: var(--ot-button-tertiary);
+}
+
+.dangerButton,
+.ghostButton.dangerButton,
+.dangerGhostButton {
+  background: transparent;
+  border-color: var(--ot-button-danger);
+  color: var(--ot-button-danger);
+}
+
+@media (hover: hover) {
+  .primaryButton:not(:disabled):hover {
+    background: var(--ot-button-primary-hover);
+  }
+
+  .ghostButton:not(:disabled):hover {
+    background: var(--ot-button-tertiary-hover);
+    border-color: var(--ot-button-tertiary-hover);
+    color: var(--ot-text-on-color);
+  }
+
+  .dangerButton:not(:disabled):hover,
+  .ghostButton.dangerButton:not(:disabled):hover,
+  .dangerGhostButton:not(:disabled):hover {
+    background: var(--ot-button-danger-hover);
+    border-color: var(--ot-button-danger-hover);
+    color: var(--ot-text-on-color);
+  }
+}
+
+.primaryButton:not(:disabled):active {
+  background: var(--ot-button-primary-active);
+}
+
+.ghostButton:not(:disabled):active {
+  background: var(--ot-button-tertiary-active);
+  border-color: var(--ot-button-tertiary-active);
+  color: var(--ot-text-on-color);
+}
+
+.dangerButton:not(:disabled):active,
+.dangerGhostButton:not(:disabled):active {
+  background: var(--ot-button-danger-active);
+  border-color: var(--ot-button-danger-active);
+  color: var(--ot-text-on-color);
+}
+
+.primaryButton:disabled {
+  background: var(--ot-button-disabled);
+  color: var(--ot-button-disabled-text);
+}
+
+.ghostButton:disabled,
+.dangerButton:disabled,
+.dangerGhostButton:disabled {
+  background: transparent;
+  border-color: var(--ot-border-disabled);
+  color: var(--ot-text-disabled);
+}
+
+.compactButton {
+  min-height: var(--ot-control-sm);
+  padding: 0 var(--ot-space-04);
+}
+
+.fullWidth {
+  width: 100%;
+  margin-top: var(--ot-space-04);
+}
+
+/* Вкладки и переключатели режима (role="tab", «Все / Со статусом») — Carbon content switcher:
+   выбранный пункт тёмный, остальные с рамкой; выбор виден не только цветом. */
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+}
+
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > :is(.primaryButton, .ghostButton) {
+  min-height: var(--ot-control-md);
+  border: 1px solid var(--ot-border-inverse);
+  background: transparent;
+  color: var(--ot-text-primary);
+}
+
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > :is(.primaryButton, .ghostButton) + :is(.primaryButton, .ghostButton) {
+  margin-inline-start: -1px;
+}
+
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > .primaryButton {
+  background: var(--ot-border-inverse);
+  color: var(--ot-text-on-color);
+  font-weight: var(--ot-weight-bold);
+}
+
+@media (hover: hover) {
+  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > .ghostButton:not(:disabled):hover {
+    background: var(--ot-layer-hover);
+    border-color: var(--ot-border-inverse);
+    color: var(--ot-text-primary);
+  }
+
+  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > .primaryButton:not(:disabled):hover {
+    background: var(--gray-80);
+  }
+}
+
+/* --- Поля (Carbon field): серая заливка, нижняя линия 3:1, синий контур в фокусе --- */
+.field {
+  display: grid;
+  gap: var(--ot-space-03);
+  min-width: 0;
+}
+
+.field span {
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-regular);
+  line-height: var(--ot-leading-caption);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+.field input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"]),
+.field select,
+.field textarea,
+.authCardReact input {
+  width: 100%;
+  min-height: var(--ot-control-md);
+  padding: 0 var(--ot-space-05);
+  border: 0;
+  border-bottom: 1px solid var(--ot-border-strong);
+  border-radius: var(--ot-radius);
+  background: var(--ot-field-02);
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-body);
+  transition: background-color var(--ot-duration-fast-01) var(--ot-ease-standard);
+}
+
+.field textarea {
+  min-height: 5.75rem;
+  padding: var(--ot-space-04) var(--ot-space-05);
+  line-height: var(--ot-leading-body);
+  resize: vertical;
+}
+
+.field select {
+  appearance: none;
+  padding-inline-end: var(--ot-space-08);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%23161616' d='M8 11 3 6l.7-.7L8 9.6l4.3-4.3.7.7z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--ot-space-05) center;
+  text-overflow: ellipsis;
+}
+
+@media (hover: hover) {
+  .field input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"]):not(:disabled):hover,
+  .field select:not(:disabled):hover,
+  .field textarea:not(:disabled):hover {
+    background-color: var(--ot-field-hover);
+  }
+}
+
+.field input::placeholder,
+.field textarea::placeholder,
+.authCardReact input::placeholder {
+  color: var(--ot-text-placeholder);
+  opacity: 1;
+}
+
+.field input:disabled,
+.field select:disabled,
+.field textarea:disabled {
+  color: var(--ot-text-disabled);
+  border-bottom-color: transparent;
+  cursor: not-allowed;
+}
+
+.field input[aria-invalid="true"],
+.field select[aria-invalid="true"],
+.field textarea[aria-invalid="true"] {
+  outline: 2px solid var(--ot-support-error);
+  outline-offset: -2px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ot-interactive);
+}
+
+.compactField {
+  min-width: 180px;
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
+.fieldCheckbox {
+  align-self: end;
+}
+
+.checkboxRow,
+.toggleLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-03);
+  min-height: var(--ot-control-sm);
+  white-space: nowrap;
+}
+
+.checkboxRow span,
+.toggleLabel span {
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-body);
+}
+
+/* --- Счётчики (плашки): плитки в одну линию, разделены волосяной линией --- */
+.statsGridReact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 1px;
+  padding: 1px;
+}
+
+.statCardReact {
+  min-width: 0;
+  padding: var(--ot-space-05);
+  background: var(--ot-layer-01);
+  outline: 1px solid var(--ot-border-subtle);
+}
+
+.statValueReact {
+  margin-bottom: var(--ot-space-02);
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-heading-04);
+  font-weight: var(--ot-weight-bold);
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Уведомления в потоке (Carbon inline notification, низкий контраст) --- */
+.archiveNotice,
+.documentAlert,
+.laneAlerts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ot-space-04);
+  flex-wrap: wrap;
+  padding: var(--ot-space-04) var(--ot-space-05);
+  border-radius: var(--ot-radius);
+  font-weight: var(--ot-weight-regular);
+}
+
+/* Цвет у .documentAlert — только у вариантов: «хорошо» задаёт CSS-модуль экрана (fineAlert),
+   а модули стоят в сборке раньше этого файла. */
+.archiveNotice,
+.documentAlert.warn {
+  border: 1px solid var(--sem-warn-border);
+  border-inline-start: 3px solid var(--ot-support-warning);
+  background: var(--sem-warn-bg);
+  color: var(--ot-text-primary);
+}
+
+.documentAlert.bad,
+.laneAlerts {
+  border: 1px solid var(--sem-bad-border);
+  border-inline-start: 3px solid var(--ot-support-error);
+  background: var(--sem-bad-bg);
+  color: var(--ot-text-primary);
+}
+
+.documentAlert {
+  margin-top: var(--ot-space-04);
+}
+
+.laneAlerts {
+  display: grid;
+  margin-top: var(--ot-space-04);
+}
+
+/* --- Пусто и загрузка --- */
+.emptyState {
+  min-height: 10rem;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--ot-space-03);
+  padding: var(--ot-space-07) var(--ot-space-05);
+  background: var(--ot-layer-02);
+  color: var(--ot-text-secondary);
+  text-align: center;
+}
+
+.emptyState strong {
+  display: block;
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-body-lg);
+  font-weight: var(--ot-weight-bold);
+}
+
+.emptyState span {
+  display: block;
+}
+
+.inlineLoader {
+  margin-top: var(--ot-space-04);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-03);
+  padding: var(--ot-space-03) var(--ot-space-04);
+  background: var(--sem-info-bg);
+  color: var(--sem-info-fg);
+}
+
+.loaderDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .loaderDot {
+    animation: pulseDot 900ms var(--ot-ease-standard) infinite alternate;
+  }
+}
+
+@keyframes pulseDot {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.loadingOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ot-space-04);
+  background: var(--ot-overlay-light);
+  color: var(--ot-text-primary);
+}
+
+.loadingStateReact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-04);
+  color: var(--ot-text-secondary);
+}
+
+.spinnerReact {
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  border: 2px solid var(--ot-border-subtle);
+  border-top-color: var(--ot-interactive);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .spinnerReact {
+    animation: spinReact 700ms linear infinite;
+  }
+}
+
+@keyframes spinReact {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Полосы уровня (критерии балла): цвет по той же шкале, что у меток --- */
+.barReact {
+  height: 0.5rem;
+  margin: var(--ot-space-04) 0;
+  background: var(--ot-layer-accent);
+  overflow: hidden;
+}
+
+.barReact span {
+  display: block;
+  height: 100%;
+  background: var(--ot-interactive);
+}
+
+.barReact.ok span {
+  background: var(--ot-support-success);
+}
+
+.barReact.warn span {
+  background: var(--ot-support-warning);
+}
+
+.barReact.bad span {
+  background: var(--ot-support-error);
+}
+
+/* --- Кнопка «раскрыть» (иконка) --- */
+.expandButtonReact {
+  flex: none;
+  width: var(--ot-control-sm);
+  height: var(--ot-control-sm);
+  min-height: var(--ot-control-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ot-radius);
+  background: transparent;
+  color: var(--ot-icon-primary);
+  transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard);
+}
+
+@media (hover: hover) {
+  .expandButtonReact:hover {
+    background: var(--ot-layer-hover);
+  }
+}
+
+.expandButtonReact svg {
+  transition: transform var(--ot-duration-moderate-01) var(--ot-ease-standard);
+}
+
+.expandButtonReact.open svg {
+  transform: rotate(180deg);
+}
+
+/* --- Всплывающее уведомление (Carbon toast): тёмное, справа под шапкой.
+   Область всегда в DOM — чтение с экрана объявляет каждое новое сообщение. --- */
+.toastRegion {
+  position: fixed;
+  top: calc(var(--ot-header-height) + var(--ot-space-05));
+  right: var(--ot-space-05);
+  z-index: 60;
+  display: grid;
+  gap: var(--ot-space-03);
+  width: min(24rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.toastReact {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ot-space-04);
+  padding: var(--ot-space-04) var(--ot-space-02) var(--ot-space-04) var(--ot-space-05);
+  border-inline-start: 3px solid var(--blue-40);
+  background: var(--ot-inverse-bg);
+  color: var(--ot-inverse-text);
+  box-shadow: var(--ot-shadow-raised);
+}
+
+.toastReact.error {
+  border-inline-start-color: var(--red-50);
+}
+
+.toastText {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-block: var(--ot-space-02);
+  overflow-wrap: anywhere;
+}
+
+.toastClose {
+  flex: none;
+  width: var(--ot-control-sm);
+  height: var(--ot-control-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.toastClose:focus-visible {
+  outline-color: var(--ot-focus-inset);
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .toastClose:hover {
+    background: var(--gray-80-hover);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .toastReact {
+    animation: toastIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
+  }
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+}
+
+/* --- Адаптив общих блоков --- */
+@media (max-width: 1100px) {
+  .heroGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .pageHeader,
+  .panelHeader,
+  .screenHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .screenHeader h1,
+  .pageHeader h1 {
+    font-size: var(--ot-size-heading-04);
+  }
+}
