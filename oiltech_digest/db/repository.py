@@ -948,10 +948,14 @@ def list_signal_article_evidence(
 
 
 # Кто поставил значение карточки сигнала (#96, signals.card_set_by): агент «Карточка сигнала», судья
-# радара или человек (правки людей внесёт сервис ОС).
+# радара, агент «Отбор» (#130: отрасль, связь и применение, категория) или человек (правки людей внесёт
+# сервис ОС).
 CARD_SET_BY_AGENT = "agent"
 CARD_SET_BY_JUDGE = "radar_judge"
+CARD_SET_BY_OTBOR = "otbor"
 CARD_SET_BY_HUMAN = "human"
+# Статья, которую решает агент «Отбор», а не гейт ленты (articles.selector, #130): вставлена при включённом флаге.
+ARTICLE_SELECTOR_OTBOR = "otbor"
 # Поля карточки сигнала, которые ставит судья радара: их значения агент у находки радара не
 # перезаписывает, а пустые — заполняет.
 RADAR_JUDGE_CARD_FIELDS = ("event_date", "oilfield_relevance", "oilfield_application", "why_interesting")
@@ -4628,6 +4632,9 @@ def insert_article(rec: dict) -> bool:
 
     Решение «вставлять или нет» — insert_verdict (рубежи в одном месте, их же читает
     проба источника); ON CONFLICT (url) остаётся страховкой от гонки двух вставок.
+
+    При включённом «Отборе» (OTBOR_ENABLED, #130) новая статья идёт через него, а не через гейт ленты
+    (articles.selector): пока «Отбор» не решил, лента её не показывает.
     """
     with get_connection() as conn:
         verdict = insert_verdict(conn, rec)
@@ -4642,15 +4649,16 @@ def insert_article(rec: dict) -> bool:
         if verdict.verdict != verdicts.WOULD_INSERT:
             return False
         rec = {**rec, "image_url": rec.get("image_url"),
-               "body_hash": verdict.body_hash, "url_key": verdict.url_key}
+               "body_hash": verdict.body_hash, "url_key": verdict.url_key,
+               "selector": ARTICLE_SELECTOR_OTBOR if config.OTBOR_ENABLED else None}
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, url_key, published_at,
                                   raw_text, text_truncated, language, content_hash, image_url,
-                                  body_hash)
+                                  body_hash, selector)
             VALUES (%(source_id)s, %(title)s, %(url)s, %(url_key)s, %(published_at)s,
                     %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s,
-                    %(content_hash)s, %(image_url)s, %(body_hash)s)
+                    %(content_hash)s, %(image_url)s, %(body_hash)s, %(selector)s)
             ON CONFLICT (url) DO NOTHING
             RETURNING id
             """,
@@ -5538,8 +5546,10 @@ def get_article(article_id: int) -> dict | None:
 def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -> list[dict]:
     if not article_ids:
         return []
+    # Решение «Отбора» (#130) — воркеру: у решённой им статьи гейта и стоп-слов нет (external_ai._stages_left).
     summary_select = (
-        ", c.summary, c.relevant, c.title_ru, at.id AS existing_tag_id, sc.id AS existing_score_id"
+        ", c.summary, c.relevant, c.title_ru, at.id AS existing_tag_id, sc.id AS existing_score_id,"
+        f" {feed_window.otbor_decision_sql('a')} AS otbor_decision"
         if include_summary else ""
     )
     summary_join = (
@@ -5587,9 +5597,10 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
     FK на articles в основном БЕЗ ON DELETE CASCADE, поэтому удаляем детей вручную
     в правильном порядке (отметка статьи каскадится сама). По умолчанию НЕ удаляем
     статью из выпуска (сохранённый черновик или отметка «в дайджест») — чтобы не
-    рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста)."""
+    рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста).
+    Статью агента «Отбор» (#130) удаление по гейту не трогает и с force: её решает не гейт."""
     with get_connection() as conn:
-        if not force and _in_some_issue(conn, article_id):
+        if _is_otbor_article(conn, article_id) or (not force and _in_some_issue(conn, article_id)):
             return False
         conn.execute(
             """
@@ -5613,8 +5624,11 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
 def mark_article_for_deletion(article_id: int, reason: str | None, *, force: bool = False) -> str:
     """Пометить статью на удаление (мягко, без физического DELETE). Возвращает
     'marked' либо 'skipped_in_digest' (статья в выпуске — сохранённый черновик или
-    отметка «в дайджест», force=False)."""
+    отметка «в дайджест», force=False), либо 'skipped_otbor' — статью решает агент «Отбор» (#130), а не
+    гейт."""
     with get_connection() as conn:
+        if _is_otbor_article(conn, article_id):
+            return "skipped_otbor"
         if not force and _in_some_issue(conn, article_id):
             return "skipped_in_digest"
         conn.execute(
@@ -5669,10 +5683,23 @@ def unmark_all_pending_deletion() -> int:
         return cur.rowcount
 
 
+def otbor_article_sql(alias: str = "a") -> str:
+    """Статья агента «Отбор» (#130): решает он (вставлена при включённом флаге) или уже решил. Механизмы гейта
+    ленты — перепроверка с удалением — такую статью не трогают."""
+    return (f"({alias}.selector IS NOT DISTINCT FROM '{ARTICLE_SELECTOR_OTBOR}'"
+            f" OR {feed_window.otbor_decision_sql(alias)} IS NOT NULL)")
+
+
+def _is_otbor_article(conn, article_id: int) -> bool:
+    return conn.execute(f"SELECT 1 FROM articles a WHERE a.id = %s AND {otbor_article_sql('a')}",
+                        (int(article_id),)).fetchone() is not None
+
+
 def all_article_ids() -> list[int]:
-    """Все id статей по возрастанию — для батч-перепрогона релевантности."""
+    """Все id статей по возрастанию — для батч-перепрогона релевантности. Статьи «Отбора» (#130) — мимо:
+    гейт их не решает."""
     with get_connection() as conn:
-        cur = conn.execute("SELECT id FROM articles ORDER BY id ASC")
+        cur = conn.execute(f"SELECT a.id FROM articles a WHERE NOT {otbor_article_sql('a')} ORDER BY a.id ASC")
         return [row[0] for row in cur.fetchall()]
 
 
@@ -5692,16 +5719,16 @@ def article_ids_needing_title_ru() -> list[int]:
 
 def get_articles_for_recheck(after_id: int = 0, limit: int = 100) -> list[dict]:
     """Все статьи по возрастанию id после чекпоинта — для локального перепрогона
-    релевантности на сыром тексте (независимо от наличия карточки)."""
+    релевантности на сыром тексте (независимо от наличия карточки). Статьи «Отбора» (#130) — мимо."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
-            WHERE a.id > %s
+            WHERE a.id > %s AND NOT {otbor_article_sql('a')}
             ORDER BY a.id ASC
             LIMIT %s
             """,
@@ -5741,25 +5768,32 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
         return cur.fetchall()
 
 
-_NEEDS_PIPELINE_FROM = """
+# Каких стадий нет у статьи: сути, перевода, тега или балла.
+_STAGES_MISSING_SQL = "(c.summary IS NULL OR c.title_ru IS NULL OR at.id IS NULL OR sc.id IS NULL)"
+
+
+def _needs_pipeline_from() -> str:
+    """Статьи, которым не хватает стадий обработки ленты, — FROM и WHERE для выборки.
+
+    Решение «Отбора» (#130) главнее гейта: принятая им статья получает недостающие суть, перевод, тег и
+    балл без гейта, отклонённая — ничего. Статья, которую решает «Отбор», пока решения нет, обработку не
+    проходит, пока он включён: её решит он, а не гейт; выключили — её решит гейт (решение владельца 23.10).
+    Остальные — как до «Отбора»: ещё не проверенные гейтом и принятые им без какой-нибудь стадии. Флаг
+    читается при каждом вызове."""
+    awaiting = "FALSE" if config.OTBOR_ENABLED else "TRUE"
+    return f"""
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
-            WHERE (
-                  c.relevant IS NULL
-               OR (
-                    c.relevant IS TRUE
-                    AND (
-                        c.summary IS NULL
-                        OR c.title_ru IS NULL
-                        OR at.id IS NULL
-                        OR sc.id IS NULL
-                    )
-               )
-               OR c.article_id IS NULL
-            )
+            LEFT JOIN LATERAL (SELECT {feed_window.otbor_decision_sql('a')} AS decision) od ON TRUE
+            WHERE CASE
+              WHEN od.decision IS NOT NULL
+                THEN od.decision = 'accept' AND (c.article_id IS NULL OR {_STAGES_MISSING_SQL})
+              WHEN a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND c.relevant IS NULL THEN {awaiting}
+              ELSE c.relevant IS NULL OR (c.relevant IS TRUE AND {_STAGES_MISSING_SQL}) OR c.article_id IS NULL
+            END
 """
 
 
@@ -5776,8 +5810,8 @@ def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
             SELECT a.*, c.summary, c.relevant, c.title_ru,
                    at.id AS existing_tag_id, sc.id AS existing_score_id,
                    s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
-            {_NEEDS_PIPELINE_FROM}
+                   s.category AS source_category, od.decision AS otbor_decision
+            {_needs_pipeline_from()}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -5848,7 +5882,7 @@ def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] 
                 for row in conn.execute(
                     f"""
                     SELECT a.id
-                    {_NEEDS_PIPELINE_FROM}
+                    {_needs_pipeline_from()}
                       AND a.id <> ALL(%s::bigint[])
                     ORDER BY a.published_at DESC NULLS LAST, a.id DESC
                     LIMIT %s

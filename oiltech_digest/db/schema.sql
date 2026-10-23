@@ -911,6 +911,21 @@ UPDATE signals SET card_set_by = jsonb_strip_nulls(jsonb_build_object(
     'oilfield_application', CASE WHEN COALESCE(oilfield_application, '') <> '' THEN 'radar_judge' END,
     'why_interesting', CASE WHEN COALESCE(why_interesting, '') <> '' THEN 'radar_judge' END))
 WHERE origin = 'radar' AND card_set_by IS NULL;
+-- Агент «Отбор» (#130, ADR 0005): единственный решает «брать или нет». Решение — у сигнала: отрасль, связь и
+-- применение (прежние поля связи, источник «otbor» в card_set_by), категория, код причины отказа; у отклонённой
+-- maturity = 'reject' («Решение платформы»). Нет решения — сбой: технический (шаг повторит) или ответ не по
+-- правилам (без повтора). Отклонённое и сбой — разделы для админа (repository.signal_sections).
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS industry TEXT;              -- oilfield_services / oil_gas / other_industry
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_decision TEXT;        -- accept / reject; NULL — «Отбор» не решал
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS reject_reason TEXT;         -- код причины отказа (otbor_dictionaries.json)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_disputed TEXT;        -- пометка «спорное»: почему
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_failure TEXT;         -- technical / invalid_answer, пока решения нет
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_failure_reason TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_recipe JSONB;         -- инструкция, модель, справочники, время, задача
+-- Статью, вставленную при включённом «Отборе» (OTBOR_ENABLED), решает он, а не гейт ленты: пока решения нет,
+-- её не видно (feed_window.visible_sql) и обработка ленты её не берёт.
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS selector TEXT;             -- otbor; NULL — гейт ленты
+CREATE INDEX IF NOT EXISTS idx_articles_otbor ON articles(collected_at) WHERE selector = 'otbor';
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;

@@ -28,7 +28,7 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, marks, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import contract, lanes, network_policy, signal_card, signal_card_filters
+from oiltech_digest import contract, lanes, network_policy, otbor, signal_card, signal_card_filters
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -2533,6 +2533,11 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         applied = signal_card.apply_result(result, job_id=job_id,
                                            signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
         result = {"signal_card": True, "applied": applied}
+    if job.get("kind") == otbor.KIND and result.get("otbor"):
+        # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели уже разобраны в решения сигналов и «Ход решения».
+        applied = otbor.apply_result(result, job_id=job_id,
+                                     article_ids=(job.get("payload_json") or {}).get("article_ids") or [])
+        result = {"otbor": True, "applied": applied}
     return result
 
 
@@ -3027,6 +3032,8 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "signal_discovery": lambda payload, job_id: _signal_discovery_payload(payload),
     # Агент «Карточка сигнала» (#96): публикации и справочники — воркеру без базы.
     "signal_card": lambda payload, job_id: signal_card.build_payload(payload),
+    # Агент «Отбор» (#130): публикации, справочники и приёмщик ОС — воркеру без базы.
+    "otbor": lambda payload, job_id: otbor.build_payload(payload),
 }
 
 

@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from datetime import date
 import logging
 
+from oiltech_digest import feed_window
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED, signal_publication_count_sql
 
@@ -38,7 +39,9 @@ def _key_sql(article_sql: str) -> str:
 
 # Принятая статья, которая не перепечатка, — свой сигнал. Тема — корневая тематика тега
 # статьи (у дочернего тега — его корень), без тега — «не классифицировано»: тема у сигнала
-# обязательна, а тег приходит позже отбора. Балл с подпунктами — как у статьи.
+# обязательна, а тег приходит позже отбора. Балл с подпунктами — как у статьи. Принятая — по
+# решению агента «Отбор» (#130), без него — по гейту: отклонённую и ждущую «Отбора» статью
+# заводит хранилище «Отбора» (otbor_store), а мост ей суть, тему и балл не пишет.
 _UPSERT_SIGNALS = f"""
 INSERT INTO signals (
   signal_key, origin, origin_article_id, signal_category, title, title_ru, theme, summary,
@@ -50,7 +53,7 @@ SELECT {_key_sql('a.id')}, '{SIGNAL_ORIGIN_FEED}', a.id, '{FEED_CATEGORY}', a.ti
        COALESCE(a.collected_at, now()), COALESCE(a.collected_at, now())
 FROM feed_scope f
 JOIN articles a ON a.id = f.id
-JOIN article_cards c ON c.article_id = a.id AND c.relevant IS TRUE
+JOIN article_cards c ON c.article_id = a.id
 LEFT JOIN article_tags at ON at.article_id = a.id
 LEFT JOIN tags t ON t.id = at.tag_id
 LEFT JOIN tags root ON root.id = t.parent_id
@@ -60,7 +63,8 @@ LEFT JOIN LATERAL (
                                       'rationale', i.rationale) ORDER BY i.criterion_id) AS items
   FROM article_score_items i WHERE i.article_score_id = sc.id
 ) items ON TRUE
-WHERE NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
+WHERE COALESCE({feed_window.otbor_decision_sql('a')} = 'accept', c.relevant IS TRUE)
+  AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
   AND (%(create_since)s::date IS NULL OR a.collected_at >= %(create_since)s::date
        OR EXISTS (SELECT 1 FROM signals x WHERE x.signal_key = {_key_sql('a.id')}))
 ON CONFLICT (signal_key) DO UPDATE SET

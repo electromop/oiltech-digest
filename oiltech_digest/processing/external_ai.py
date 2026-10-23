@@ -152,11 +152,16 @@ def _stages_left(article: dict[str, Any], stages: frozenset[str]) -> frozenset[s
 
     Как локальный конвейер (pipeline.process_pipeline_articles): записанные вердикт гейта,
     суть, перевод, тег и балл заново не зовутся, отвергнутая гейтом статья дальше не идёт.
-    Поля кладёт ядро (repository.get_articles_by_ids с include_summary)."""
-    if article.get("relevant") is False:
+    Решение «Отбора» (#130) главнее гейта: принятая им статья гейт не проходит, отклонённая
+    дальше не идёт. Поля кладёт ядро (repository.get_articles_by_ids с include_summary)."""
+    decision = article.get("otbor_decision")
+    if decision is not None:
+        if decision != "accept":
+            return frozenset()
+    elif article.get("relevant") is False:
         return frozenset()
     done = {
-        "relevance": article.get("relevant") is True,
+        "relevance": decision is not None or article.get("relevant") is True,
         "summary": bool(article.get("summary")),
         "translation": bool(article.get("title_ru")),
         "tagging": article.get("existing_tag_id") is not None,
@@ -229,8 +234,12 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         todo = _stages_left(article, stages) if scheduler_batch else stages
+        # Решённую «Отбором» статью (#130) не решают ни гейт, ни стоп-слова: «по смыслу прячет только «Отбор»».
+        otbor_decided = article.get("otbor_decision") is not None
+        if otbor_decided:
+            todo = todo - {"relevance"}
         try:
-            if "relevance" in stages:
+            if "relevance" in stages and not otbor_decided:
                 # Стоп-слова родительских тегов: отсекаем статью ДО любых AI-вызовов (бэклог #6).
                 blocked_reason = _negative_keyword_block(article, tags)
                 if blocked_reason:
