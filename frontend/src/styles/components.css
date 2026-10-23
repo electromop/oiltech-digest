@@ -295,42 +295,47 @@
   margin-top: var(--ot-space-04);
 }
 
-/* Вкладки и переключатели режима (role="tab", «Все / Со статусом») — Carbon content switcher:
+/* Вкладки и переключатели режима (role="tab", «Все / Со статусом», период статистики) — Carbon content switcher:
    выбранный пункт тёмный, остальные с рамкой; выбор виден не только цветом. */
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) {
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0;
 }
 
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > :is(.primaryButton, .ghostButton) {
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > :is(.primaryButton, .ghostButton) {
   min-height: var(--ot-control-md);
   border: 1px solid var(--ot-border-inverse);
   background: transparent;
   color: var(--ot-text-primary);
 }
 
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > :is(.primaryButton, .ghostButton) + :is(.primaryButton, .ghostButton) {
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > :is(.primaryButton, .ghostButton) + :is(.primaryButton, .ghostButton) {
   margin-inline-start: -1px;
 }
 
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > .primaryButton {
+:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > .primaryButton {
   background: var(--ot-border-inverse);
   color: var(--ot-text-on-color);
   font-weight: var(--ot-weight-bold);
 }
 
 @media (hover: hover) {
-  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > .ghostButton:not(:disabled):hover {
+  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > .ghostButton:not(:disabled):hover {
     background: var(--ot-layer-hover);
     border-color: var(--ot-border-inverse);
     color: var(--ot-text-primary);
   }
 
-  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs) > .primaryButton:not(:disabled):hover {
+  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > .primaryButton:not(:disabled):hover {
     background: var(--gray-80);
   }
+}
+
+/* Переключатель периода стоит в общей строке действий (.settingsActions): зазор там обнуляем явно. */
+.settingsActions.periodSwitch {
+  gap: 0;
 }
 
 /* --- Поля (Carbon field): серая заливка, нижняя линия 3:1, синий контур в фокусе --- */
@@ -456,6 +461,7 @@ input[type="radio"] {
 .statCardReact {
   min-width: 0;
   padding: var(--ot-space-05);
+  border: 0;
   background: var(--ot-layer-01);
   outline: 1px solid var(--ot-border-subtle);
 }

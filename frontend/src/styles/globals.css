@@ -1861,7 +1861,7 @@
 .sourceCandidateTriageItem small {
   color: var(--ot-text-secondary);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .sourceCandidateList {
@@ -1931,7 +1931,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
-  border: 1px solid var(--ot-border-strong);
+  border: 1px solid var(--ot-border-subtle);
   border-radius: var(--ot-radius);
   padding: 10px;
   background: var(--ot-layer-02);
@@ -2227,7 +2227,7 @@
   color: var(--muted);
   font-size: var(--ot-size-body);
   line-height: 1.5;
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentCommandKicker {
@@ -2320,14 +2320,24 @@
   color: var(--muted);
   font-size: var(--ot-size-caption);
   line-height: 1.45;
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentSeedForm {
-  display: grid;
-  grid-template-columns: minmax(170px, 0.8fr) minmax(260px, 1.4fr) repeat(2, minmax(150px, auto)) minmax(150px, auto);
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
-  align-items: end;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.agentSeedForm > .field {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.agentSeedForm > .field:nth-child(2) {
+  flex: 2 1 16rem;
 }
 
 .agentCandidateQueueList {
@@ -2412,7 +2422,7 @@
   margin-top: 2px;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentWatchedSourceRow > span {
@@ -2425,7 +2435,7 @@
   margin: 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -2507,7 +2517,7 @@
   margin: 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -2551,7 +2561,7 @@
 .agentDecisionBox p {
   color: var(--ot-text-primary);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.35;
 }
 
@@ -2640,7 +2650,7 @@
   margin: 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.4;
 }
 
@@ -2674,7 +2684,7 @@
   margin: 3px 0 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentDryRunMeta {
@@ -2774,7 +2784,7 @@
   margin: 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.35;
 }
 
@@ -2782,7 +2792,7 @@
   display: grid;
   gap: 3px;
   padding: 8px;
-  border: 1px solid var(--ot-border-strong);
+  border: 1px solid var(--ot-border-subtle);
   border-radius: var(--ot-radius);
   background: var(--ot-layer-01);
 }
@@ -2816,17 +2826,17 @@
 }
 
 .checkField {
-  min-height: 42px;
+  min-height: var(--ot-control-md);
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--ot-radius);
   background: var(--surface);
   color: var(--text);
   font-size: var(--ot-size-body);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .checkField input {
@@ -2939,7 +2949,7 @@
   margin: 2px 0 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentEvaluationPanel {
@@ -2977,7 +2987,7 @@
   margin: 3px 0 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentEvaluationGrid {
@@ -3087,7 +3097,7 @@
   display: grid;
   gap: 3px;
   padding: 8px;
-  border: 1px solid var(--ot-border-strong);
+  border: 1px solid var(--ot-border-subtle);
   border-radius: var(--ot-radius);
   background: var(--ot-layer-01);
 }
@@ -3111,7 +3121,7 @@
   margin: 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -3156,7 +3166,7 @@
   margin: 4px 0 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -3177,7 +3187,7 @@
 .agentComboScore small {
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentFunnel {
@@ -3581,7 +3591,7 @@
   margin: 4px 0 0;
   color: var(--muted);
   font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
 }
 
 .agentLoopIteration,
@@ -3753,7 +3763,7 @@
   gap: 8px;
   align-items: center;
   padding: 7px 9px;
-  border: 1px solid var(--ot-border-strong);
+  border: 1px solid var(--ot-border-subtle);
   border-radius: var(--ot-radius);
   color: var(--muted);
   font-size: var(--ot-size-caption);
@@ -3888,7 +3898,7 @@
   width: 100%;
   padding: 9px 10px;
   font-size: var(--ot-size-body);
-  border: 1px dashed var(--ot-border-strong);
+  border: 1px dashed var(--ot-border-subtle);
   border-radius: var(--ot-radius);
   background: var(--ot-layer-01);
 }
@@ -3925,7 +3935,7 @@
 
 .attestRow span {
   font-size: var(--ot-size-body);
-  font-weight: var(--ot-weight-bold);
+  font-weight: var(--ot-weight-regular);
   line-height: 1.4;
   color: var(--ot-text-primary);
 }
@@ -4149,7 +4159,7 @@
   margin-top: 8px;
   padding: 10px 12px 12px;
   border-radius: var(--ot-radius);
-  background: var(--sem-muted-bg);
+  background: var(--ot-layer-02);
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -4178,8 +4188,14 @@
 }
 
 .statCardButton[aria-pressed="true"] {
-  border-color: var(--brand);
-  background: var(--brand-soft);
+  background: var(--ot-selected-subtle);
+  box-shadow: inset 0 -3px 0 var(--ot-border-interactive);
+}
+
+@media (hover: hover) {
+  .statCardButton:hover {
+    background: var(--ot-layer-hover);
+  }
 }
 
 .statCardButton:focus-visible {
@@ -4211,9 +4227,24 @@
 
 /* «В дайджест» / «Убрать» у карточки закрытого месяца неактивна (решение владельца 29.09): у
    .primaryButton и .dangerButton своего вида для disabled нет — гасим, как .ghostButton. */
-.signalDigestButton:disabled {
-  cursor: default;
-  opacity: 0.55;
+.signalDigestButton.primaryButton {
+  background: transparent;
+  border-color: var(--ot-button-tertiary);
+  color: var(--ot-button-tertiary);
+}
+
+@media (hover: hover) {
+  .signalDigestButton.primaryButton:not(:disabled):hover {
+    background: var(--ot-button-tertiary-hover);
+    border-color: var(--ot-button-tertiary-hover);
+    color: var(--ot-text-on-color);
+  }
+}
+
+.signalDigestButton.primaryButton:disabled {
+  background: transparent;
+  border-color: var(--ot-border-disabled);
+  color: var(--ot-text-disabled);
 }
 
 .signalRadarDetail {
@@ -4375,7 +4406,7 @@
 
 .signalChip.gap {
   border-style: dashed;
-  border-color: var(--ot-border-strong);
+  border-color: var(--ot-border-subtle);
   background: transparent;
   color: var(--text-muted);
 }
@@ -4457,7 +4488,7 @@
   display: grid;
   gap: 3px;
   padding: 8px 10px;
-  border: 1px solid var(--ot-border-strong);
+  border: 1px solid var(--ot-border-subtle);
   border-radius: var(--ot-radius);
   color: inherit;
   text-decoration: none;
@@ -4535,7 +4566,7 @@
   align-items: center;
   gap: 10px;
   padding-top: 4px;
-  border-top: 1px solid var(--ot-border-strong);
+  border-top: 1px solid var(--ot-border-subtle);
 }
 
 /* Телефон: шапка панели уже в столбик (правило ≤720px выше). Кнопки шапки — ровной
@@ -4579,7 +4610,7 @@
 .feedbackPanel {
   margin-top: 16px;
   padding: 14px 16px;
-  border: 1px solid var(--sem-muted-bg);
+  border: 1px solid var(--ot-border-subtle);
   border-radius: var(--ot-radius);
   display: flex;
   flex-direction: column;
@@ -4609,9 +4640,9 @@
   font-size: var(--ot-size-caption);
   font-weight: var(--ot-weight-bold);
   cursor: pointer;
-  color: var(--text-muted);
+  color: var(--ot-text-primary);
   background: transparent;
-  border: 1px solid var(--sem-muted-bg);
+  border: 1px solid var(--ot-border-strong);
 }
 
 .feedbackChip:hover:not(:disabled) {
@@ -4619,9 +4650,9 @@
 }
 
 .feedbackChip.active {
-  color: var(--sem-info-fg, var(--ot-link));
-  background: var(--sem-info-bg, var(--ot-selected-subtle));
-  border-color: currentColor;
+  color: var(--sem-info-fg);
+  background: var(--sem-info-bg);
+  border-color: var(--ot-border-interactive);
 }
 
 .feedbackScale {
@@ -4649,11 +4680,11 @@
   font-size: var(--ot-size-body-lg);
   line-height: 1;
   padding: 2px;
-  color: var(--sem-muted-bg);
+  color: var(--ot-border-strong);
 }
 
 .feedbackStar.on {
-  color: var(--sem-warn-fg);
+  color: var(--ot-support-warning);
 }
 
 .feedbackStar:disabled {
@@ -4664,7 +4695,9 @@
   width: 100%;
   resize: vertical;
   border-radius: var(--ot-radius);
-  border: 1px solid var(--sem-muted-bg);
+  border: 0;
+  border-bottom: 1px solid var(--ot-border-strong);
+  background: var(--ot-field-02);
   padding: 8px 10px;
   font: inherit;
   font-size: var(--ot-size-body);

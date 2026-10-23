@@ -782,21 +782,35 @@ export function App() {
       </aside>
 
       <main id="main-content" ref={mainRef} className="content" tabIndex={-1}>{currentScreen}</main>
+      {/* Мобильное меню — те же группы, что в боковой навигации. */}
       <nav id="mobile-nav" className="mobileNav" aria-label="Разделы">
-        {screens.filter((screen) => screenInMenu(screen.id)).map((screen) => (
-          <button
-            key={screen.id}
-            type="button"
-            className={screen.id === activeScreen ? "mobileNavButton active" : "mobileNavButton"}
-            onClick={() => switchScreen(screen.id)}
-            aria-current={screen.id === activeScreen ? "page" : undefined}
-          >
-            <span className="mobileNavIcon" aria-hidden="true">
-              <ScreenIcon screenId={screen.id} />
-            </span>
-            <span className="mobileNavLabel">{screen.label}</span>
-          </button>
-        ))}
+        {navGroups.map((group) => {
+          const visibleScreens = group.screens.filter(screenInMenu);
+          if (!visibleScreens.length) return null;
+          return (
+            <section className="mobileNavGroup" key={group.label}>
+              <div className="sidebarSection">{group.label}</div>
+              {visibleScreens.map((screenId) => {
+                const screen = screens.find((item) => item.id === screenId);
+                if (!screen) return null;
+                return (
+                  <button
+                    key={screen.id}
+                    type="button"
+                    className={screen.id === activeScreen ? "mobileNavButton active" : "mobileNavButton"}
+                    onClick={() => switchScreen(screen.id)}
+                    aria-current={screen.id === activeScreen ? "page" : undefined}
+                  >
+                    <span className="mobileNavIcon" aria-hidden="true">
+                      <ScreenIcon screenId={screen.id} />
+                    </span>
+                    <span className="mobileNavLabel">{screen.label}</span>
+                  </button>
+                );
+              })}
+            </section>
+          );
+        })}
       </nav>
       <div className="mobileNavScrim" aria-hidden="true" onClick={() => setMobileNavOpen(false)} />
       {toastRegion}

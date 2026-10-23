@@ -154,8 +154,8 @@
   --sem-bad-bg: var(--red-10);
   --sem-bad-border: var(--red-20);
   --sem-muted-fg: var(--gray-70);
-  --sem-muted-bg: var(--gray-10);
-  --sem-muted-border: var(--gray-20);
+  --sem-muted-bg: var(--gray-20);
+  --sem-muted-border: var(--gray-30);
   --sem-info-fg: var(--blue-70);
   --sem-info-bg: var(--blue-10);
   --sem-info-border: var(--blue-20);
