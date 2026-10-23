@@ -16,7 +16,9 @@
    ему ошибкой «Unsupported external job kind», поэтому шаг планировщика включается флагом
    SIGNAL_CARD_ENABLED только после пересборки NL;
    3 — вид задачи admission_notify, код допуска в Telegram (#113) в очереди external-notify: её
-   слушает воркер сбора, отправку включает флаг ADMISSION_NOTIFY_ENABLED после пересборки NL.
+   слушает воркер сбора, отправку включает флаг ADMISSION_NOTIFY_ENABLED после пересборки NL;
+   4 — вид задачи otbor, агент «Отбор» (#130): решение «брать или нет» у статей ленты; шаг
+   планировщика включается флагом OTBOR_ENABLED только после пересборки NL.
    Совместимые добавки номер не меняют — старая сторона их молча пропускает: 28.09 — поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002) — profile у критериев в payload и profile + criteria_snapshot в
@@ -36,7 +38,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 3
+CONTRACT = 4
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
 
@@ -59,8 +61,8 @@ PROCESS_LIMIT_DEFAULT = 5
 _ARTICLE_BATCHES = frozenset({"process_articles", "recheck_relevance", "translate_titles"})
 # Виды, чей частичный итог ядро принимает. Сбор ИИ не зовёт — повторить его дёшево;
 # итог документа — одна карточка на весь файл, половина карточки не нужна никому. Карточки
-# сигналов (#96) — по строке на сигнал, как статьи.
-PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card"}
+# сигналов (#96) — по строке на сигнал, как статьи; решения «Отбора» (#130) — по строке на публикацию.
+PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card", "otbor"}
 
 
 def accepts_partial(kind: str | None, result: dict[str, Any] | None,
@@ -83,9 +85,28 @@ def without_reservation(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def done_count(result: dict[str, Any] | None) -> int:
-    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи или карточек сигналов."""
+    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи, карточек сигналов или решений
+    «Отбора»."""
     result = result or {}
-    return len(result.get("articles") or result.get("verdicts") or result.get("cards") or [])
+    return len(result.get("articles") or result.get("verdicts") or result.get("cards")
+               or result.get("decisions") or [])
+
+
+
+def article_ref(article_id: Any) -> str:
+    """Номер публикации в задаче «Отбора» (#130): «article:<id>» — во входе воркера, в его итоге и в остатке задачи."""
+    return f"article:{int(article_id)}"
+
+
+def ref_article_id(ref: Any) -> int | None:
+    """Статья по номеру публикации «Отбора»; None — номер не статьи (находки радара — свой вид, #131)."""
+    kind, _, number = str(ref or "").partition(":")
+    if kind != "article":
+        return None
+    try:
+        return int(number)
+    except ValueError:
+        return None
 
 
 def remaining_after_partial(kind: str | None, payload: dict[str, Any],
@@ -99,7 +120,8 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
       сама обходит записанные;
     - пары судьи перепечаток — без рассуженных;
     - сигналы карточек — без тех, на которые модель уже ответила (в том числе ответом не по схеме:
-      вызов оплачен).
+      вызов оплачен);
+    - статьи «Отбора» — без тех, о которых воркер вернул строку (ответ или сбой модели).
     """
     rest = without_reservation(payload)
     if not accepts_partial(kind, result, payload):
@@ -109,6 +131,10 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
         answered = {str(card.get("signal_id")) for card in result.get("cards") or [] if isinstance(card, dict)}
         left = [signal_id for signal_id in rest.get("signal_ids") or [] if str(signal_id) not in answered]
         return {**rest, "signal_ids": left} if left else None
+    if kind == "otbor":
+        answered = {str(item.get("ref")) for item in result.get("decisions") or [] if isinstance(item, dict)}
+        left = [article_id for article_id in rest.get("article_ids") or [] if article_ref(article_id) not in answered]
+        return {**rest, "article_ids": left} if left else None
     if kind in _ARTICLE_BATCHES:
         done = {int(item["article_id"]) for item in result.get("articles") or []}
         article_ids = [int(item) for item in rest.get("article_ids") or []]

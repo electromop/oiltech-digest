@@ -227,10 +227,12 @@ def test_business_showcase_has_radar_business_finds_and_its_own_summary(user, ad
 
     summary = _rows(_get("/api/signals/summary", user, showcase="business"))
     assert summary["total"] == 2 and summary["matching"] == 2
-    assert _rows(_get("/api/signals/summary", admin, showcase="business"))["hidden"] == 0
+    # Плашка «Отклонённые» одна в обеих лентах (#130, решение владельца 23.10): смешанная бизнес-находка не видна
+    # ни в одной витрине и считается в ней.
+    assert _rows(_get("/api/signals/summary", admin, showcase="business"))["rejected"] == 1
     assert summary["themes"] == [{"theme": DRILLING, "count": 2}]
     assert _rows(_get("/api/signals/summary", user, showcase="business", min_score=60))["matching"] == 1
-    # Отсеянных у бизнес-витрины нет: это разбор работы радара.
+    # Прежний просмотр «скрытое правилами радара» (hidden=true) — разбор работы радара: у бизнес-витрины его нет.
     assert _get("/api/signals", user, showcase="business", hidden=True).status_code == 422
 
 

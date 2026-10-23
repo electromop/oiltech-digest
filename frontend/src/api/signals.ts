@@ -1,11 +1,11 @@
 import { apiFetch } from "./client";
-import type { Signal, SignalFeedbackPayload, SignalPatch } from "./types";
+import type { Signal, SignalFeedbackBlock, SignalFeedbackPayload, SignalPatch } from "./types";
 
 // Витрина (#95): технологический радар или бизнес-лента — сигналы категории «бизнес».
 export type SignalShowcase = "technology" | "business";
 
 // Выборка экрана радара — на сервере, по всей базе (замечание заказчика 19.09): поиск,
-// тема, решение радара, период «Поступил» (даты ГГГГ-ММ-ДД по Москве) и балл.
+// тема, решение платформы, период «Поступил» (даты ГГГГ-ММ-ДД по Москве) и балл.
 export type SignalFilters = {
   // Без витрины — технологический радар.
   showcase?: SignalShowcase;
@@ -16,8 +16,10 @@ export type SignalFilters = {
   until?: string;
   minScore?: number;
   maxScore?: number;
-  // Отсеянные и скрытые (не на радаре) — всем: заказчик разбирает всё отсеянное.
+  // Отсеянные и скрытые (не на радаре) — только админу (решение владельца 05.10).
   hidden?: boolean;
+  // Раздел отклонённого «кто убрал → причина» (#130, только админу): вместо витрины — его публикации.
+  section?: string;
   // Атрибуты карточки (#97): значение справочника или «не определено»; компания — под любым из её имён.
   eventType?: string;
   region?: string;
@@ -47,6 +49,7 @@ function filterParams(filters: SignalFilters) {
   if (filters.minScore != null) params.set("min_score", String(filters.minScore));
   if (filters.maxScore != null) params.set("max_score", String(filters.maxScore));
   if (filters.hidden) params.set("hidden", "true");
+  if (filters.section) params.set("section", filters.section);
   if (filters.eventType) params.set("event_type", filters.eventType);
   if (filters.region) params.set("region", filters.region);
   if (filters.technologyClass) params.set("technology_class", filters.technologyClass);
@@ -88,8 +91,8 @@ export type SignalSummary = {
   in_digest: number;
   with_feedback: number;
   merged: number;
-  // Отсеяно и скрыто — не на радаре.
-  hidden?: number;
+  // «Отклонённые» (#130): все разделы отклонённого одним числом, одно в обеих лентах; только админу.
+  rejected?: number;
   matching: number;
   themes: Array<{ theme: string; count: number }>;
   // Фильтр «всё про компанию»: кого он показывает — сама компания первой, затем её дочки по списку
@@ -158,6 +161,8 @@ export function createSignalFeedback(payload: SignalFeedbackPayload) {
     merged?: boolean;
     // «Дубль» не скрыл карточку: она выбрана в дайджест или главной с таким номером нет.
     merge_skipped?: boolean;
+    // Сохранённый блок ОС (#130) — экран добавляет его в список на карточке, не перечитывая витрину.
+    block?: SignalFeedbackBlock;
   }>("/api/signals/feedback", {
     method: "POST",
     body: JSON.stringify(payload),

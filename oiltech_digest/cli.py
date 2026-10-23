@@ -2200,6 +2200,37 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
           + (f", очередь {', '.join(queues)}" if queues else ""))
 
 
+def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
+    """Шаг планировщика «Отбор» (#130): новые статьи, которые решает агент «Отбор», — в его задачи по полосе
+    ежедневной обработки. За флагом OTBOR_ENABLED. С --ids — названные статьи «Отбора» по полосе пересчётов:
+    повтор после разбора сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
+    from oiltech_digest import otbor
+    from oiltech_digest.db import otbor_store
+
+    try:
+        if args.ids:
+            named = [int(value) for value in args.ids.split(",") if value.strip()]
+            ids = otbor_store.own_article_ids(named)
+            chosen = otbor_store.chosen_for_digest(named)
+            if chosen:
+                print(f"enqueue-otbor: статьи {chosen[:20]} выбраны в дайджест, их решение «Отбор» не пересматривает")
+            other = sorted(set(named) - set(ids) - set(chosen))
+            if other:
+                print(f"enqueue-otbor: статьи {other[:20]} решает не «Отбор» — пропущены")
+            result = {"articles": len(ids), "jobs": otbor.enqueue(ids, trigger="manual", bulk=True)}
+        else:
+            result = otbor.scheduler_step()
+    except otbor.OtborSetupError as exc:
+        raise SystemExit(f"enqueue-otbor: {exc}") from exc
+    if result.get("reason"):
+        print(f"enqueue-otbor: skipped reason={result['reason']}")
+        return
+    queues = sorted({job["queue_name"] for job in result["jobs"]})
+    print(f"enqueue-otbor: статей {result['articles']}, задач {len(result['jobs'])}"
+          + (f", очередь {', '.join(queues)}" if queues else "")
+          + (f", без ответа после попыток {result['unanswered']}" if result.get("unanswered") else ""))
+
+
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
     """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе
     пересчётов, сначала текущее окно ленты и радар. По умолчанию сухой прогон: число сигналов и цена."""
@@ -3465,6 +3496,15 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="пересчитать карточки названных сигналов (номера через запятую) — "
                                       "по полосе пересчётов")
     p_enqueue_cards.set_defaults(func=cmd_enqueue_signal_cards)
+
+    p_enqueue_otbor = sub.add_parser(
+        "enqueue-otbor",
+        help="шаг планировщика «Отбор»: новые статьи — агенту «Отбор» (за флагом OTBOR_ENABLED)",
+    )
+    p_enqueue_otbor.add_argument("--ids", default="",
+                                 help="повторить «Отбор» названных статей (номера через запятую) — по полосе "
+                                      "пересчётов")
+    p_enqueue_otbor.set_defaults(func=cmd_enqueue_otbor)
 
     p_card_history = sub.add_parser(
         "enqueue-signal-card-history",

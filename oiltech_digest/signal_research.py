@@ -25,6 +25,9 @@ from oiltech_digest.processing.openai_client import AIClientError, output_budget
 from oiltech_digest.processing.pipeline import make_client
 
 EVIDENCE_SOURCE = "openai_web_search"
+# Причина отсева ссылки, которую не подтвердили ни страница, ни источники поиска: по ней же раздел «Ссылка не
+# подтверждена» (rejected_sections, #130).
+UNCONFIRMED_LINK = "страница не открылась и адрес не из найденного"
 # Тип события от модели поиска. not_technology — поиск сам признал событие не технологическим
 # (премия, контракт без технологии, сделка): отбрасывается до судьи, чтобы бизнес-новости не
 # тратили вызовы судьи (прогон 01.10: 29 бизнес-карточек из 62). other — технологическое событие
@@ -317,7 +320,7 @@ def verify_research_evidence(evidence: list[dict[str, Any]]) -> tuple[list[dict[
             kept.append({**item, "summary_ru": payload.get("research_summary") or item.get("summary_ru")})
         else:
             dropped.append({"title": str(item.get("title") or "")[:300], "url": item.get("source_url"),
-                            "reason": "страница не открылась и адрес не из найденного",
+                            "reason": UNCONFIRMED_LINK,
                             "summary": str(payload.get("research_summary") or item.get("extracted_fact") or "")[:900],
                             "publisher": item.get("publisher"), "event_date": item.get("published_at")})
     return kept, dropped

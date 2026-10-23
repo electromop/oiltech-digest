@@ -597,6 +597,18 @@ def _run_signal_card(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     return {"signal_card": True, "applied": applied}
 
 
+def _run_otbor(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Агент «Отбор» в местном контуре (#130) — как карточка сигнала: без внешних воркеров маршрут ИИ ставит
+    задачу в местную очередь ai."""
+    from oiltech_digest import otbor
+
+    repository.update_background_job_progress(job_id, 20)
+    result = otbor.process_payload(otbor.build_payload(payload))
+    applied = otbor.apply_result(result, job_id=job_id, article_ids=payload.get("article_ids") or [])
+    repository.update_background_job_progress(job_id, 95)
+    return {"otbor": True, "applied": applied}
+
+
 def _run_admission_notify(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     """Код допуска отправляет только воркер NL (#113): с РФ-ядра Telegram недоступен. Вид
     зарегистрирован, чтобы ядро могло поставить задачу; очередь external-notify здесь не исполняется."""
@@ -616,5 +628,6 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "discover_source_candidates": _run_discover_source_candidates,
     "signal_discovery": _run_signal_discovery,
     "signal_card": _run_signal_card,
+    "otbor": _run_otbor,
     "admission_notify": _run_admission_notify,
 }

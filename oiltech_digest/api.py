@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import hmac
@@ -25,10 +25,10 @@ from oiltech_digest import admission, auth, background_jobs, backlog, colleague_
 from oiltech_digest.benchmarks import run_readiness_benchmark
 from oiltech_digest.config import REPO_ROOT
 from oiltech_digest.db.connection import get_connection
-from oiltech_digest.db import analytics, documents_repo, marks, repository
+from oiltech_digest.db import analytics, documents_repo, marks, rejected_sections, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import contract, lanes, network_policy, signal_card, signal_card_filters
+from oiltech_digest import contract, lanes, network_policy, otbor, signal_card, signal_card_filters
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -1877,9 +1877,15 @@ def _radar_screen_filters(
     technology_maturity: str | None = Query(None, max_length=100),
     # «Всё про компанию» (#97) — с дочками по списку «дочка → мать» (_company_filter).
     company_filter: dict[str, list[str]] | None = Depends(_company_filter),
+    # Раздел отклонённого «кто убрал → причина» (#130) — только админу: вместо витрины его публикации любой
+    # категории, у каждой короткая причина (section_reason).
+    section: str | None = Query(None, max_length=60),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
+    found_section = rejected_sections.find(section) if section else None
+    if section and found_section is None:
+        raise HTTPException(status_code=422, detail=f"Неизвестный раздел отклонённого: {section}")
     try:
         card = {column: signal_card_filters.checked_choice(column, value) for column, value in (
             ("event_type", event_type), ("region", region), ("technology_class", technology_class),
@@ -1900,6 +1906,7 @@ def _radar_screen_filters(
         **card,
         # Пустой список имён — фильтр, который ничего не нашёл, а не «без фильтра».
         "company_names": None if company_filter is None else company_filter["names"],
+        "section": found_section,
     }
 
 
@@ -1960,7 +1967,7 @@ def signal_radar_summary(
     summary = repository.signal_radar_summary(**filters)
     if user.get("role") != "admin":
         # Число отсеянных и скрытых — служебное, как и сами карточки.
-        summary.pop("hidden", None)
+        summary.pop("rejected", None)
     if company_filter is not None:
         summary["company_group"] = company_filter["group"]
     return _clean(summary)
@@ -1973,7 +1980,7 @@ def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> di
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
-    if filters.get("hidden") and user.get("role") != "admin":
+    if (filters.get("hidden") or filters.get("section") is not None) and user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
 
 
@@ -2006,13 +2013,31 @@ def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> Non
     )
 
 
+_SIGNAL_STATUSES = frozenset({"watch", "digest", "archive", "noise", "duplicate"})
+
+
 @app.patch("/api/signals/{signal_id}")
 def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    if patch.status is not None and patch.status not in _SIGNAL_STATUSES:
+        raise HTTPException(status_code=400, detail="Unknown signal status")
+    if patch.status == "digest" or patch.selected_for_digest:
+        refusal = repository.signal_digest_refusal(signal_id)
+        if refusal:
+            raise HTTPException(status_code=409, detail=f"В дайджест не ставится: {refusal}")
+    article_id = repository.feed_signal_article(signal_id)
+    if article_id is not None:
+        # Одна механика на две витрины (решение владельца 23.10): у сигнала ленты отметка — его статьи, та же,
+        # что ставит лента статей; там же правило закрытого месяца и журнал. «Наблюдать» у статьи — «новая».
+        # Прочие статусы и комментарий статьи — в ленте статей, витрина их не меняет.
+        if patch.status not in (None, "digest", "watch") or patch.analyst_comment is not None:
+            raise HTTPException(status_code=422,
+                                detail="У сигнала ленты витрина меняет только отметку «в дайджест»")
+        status = "new" if patch.status == "watch" else patch.status
+        return update_article(article_id, ArticlePatch(status=status, selected_for_digest=patch.selected_for_digest,
+                                                       analyst_comment=patch.analyst_comment), user)
     target_status = patch.status
     if target_status is None and patch.selected_for_digest is not None:
         target_status = "digest" if patch.selected_for_digest else "watch"
-    if target_status is not None and target_status not in {"watch", "digest", "archive", "noise", "duplicate"}:
-        raise HTTPException(status_code=400, detail="Unknown signal status")
     _guard_signal_digest_month(signal_id, target_status)
     try:
         previous = marks.set_signal_mark(
@@ -2053,7 +2078,7 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
 # (решение владельца 28.09). До этого форма была только у админа, и ОС коллег не доходила.
 @app.post("/api/signals/feedback")
 def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    from oiltech_digest.signal_feedback import store_signal_feedback
+    from oiltech_digest.signal_feedback import _normalize_verdict, store_signal_feedback
 
     if not any([
         payload.comment.strip(),
@@ -2066,6 +2091,26 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
         raise HTTPException(status_code=400, detail="comment or structured feedback is required")
     if payload.article_id is None and payload.signal_id is None and not payload.source_url:
         raise HTTPException(status_code=400, detail="article_id, signal_id or source_url is required")
+    if payload.signal_id is not None and not repository.judge_learns_from(payload.signal_id):
+        # Блок ОС (#130, решение владельца 22.10) — у сигнала ленты и у находки радара в бизнес-ленте: только
+        # хранится и показывается, на отбор и показ не влияет и в память судьи радара не идёт — ею, как и всей ОС,
+        # будет управлять сервис ОС. Правок карточки и «дубля» у блока нет: экран их не предлагает, сервер не
+        # принимает молча.
+        if (payload.corrected_title or "").strip() or (payload.corrected_thesis or "").strip() \
+                or payload.duplicate_of_signal_id:
+            raise HTTPException(status_code=422, detail="Отзыв об этой карточке — оценка, причина и комментарий: "
+                                                        "правки карточки и «дубль» — у находки радара на радаре")
+        # Пустой блок не пишется: неизвестная оценка — не оценка, как на пути радара (store_signal_feedback).
+        verdict = _normalize_verdict(payload.verdict)
+        if not (payload.comment.strip() or verdict or (payload.reason or "").strip()):
+            raise HTTPException(status_code=400, detail="comment or structured feedback is required")
+        event_id = repository.record_signal_feedback_event(
+            None, "comment_added", signal_id=payload.signal_id, user_id=int(user["id"]),
+            signal_title=payload.signal_title, comment=payload.comment.strip(),
+            verdict=verdict, reason=(payload.reason or "").strip() or None,
+        )
+        return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0,
+                "block": _feedback_block(event_id, payload, user)}
     result = store_signal_feedback(
         {
             "article_id": payload.article_id,
@@ -2083,7 +2128,17 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
         },
         user_id=int(user["id"]),
     )
-    return {"ok": True, **result}
+    return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user)}
+
+
+def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
+    """Сохранённый блок ОС (#130) — как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
+    экран добавляет его, не перечитывая витрину. Оценка — тем же словарём, каким её сохранили оба пути."""
+    from oiltech_digest.signal_feedback import _normalize_verdict
+
+    return {"id": event_id, "author": user.get("email"), "verdict": _normalize_verdict(payload.verdict),
+            "reason": (payload.reason or "").strip() or None, "comment": payload.comment.strip() or None,
+            "created_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/signals/memory")
@@ -2533,6 +2588,11 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         applied = signal_card.apply_result(result, job_id=job_id,
                                            signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
         result = {"signal_card": True, "applied": applied}
+    if job.get("kind") == otbor.KIND and result.get("otbor"):
+        # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели уже разобраны в решения сигналов и «Ход решения».
+        applied = otbor.apply_result(result, job_id=job_id,
+                                     article_ids=(job.get("payload_json") or {}).get("article_ids") or [])
+        result = {"otbor": True, "applied": applied}
     return result
 
 
@@ -3027,6 +3087,8 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "signal_discovery": lambda payload, job_id: _signal_discovery_payload(payload),
     # Агент «Карточка сигнала» (#96): публикации и справочники — воркеру без базы.
     "signal_card": lambda payload, job_id: signal_card.build_payload(payload),
+    # Агент «Отбор» (#130): публикации, справочники и приёмщик ОС — воркеру без базы.
+    "otbor": lambda payload, job_id: otbor.build_payload(payload),
 }
 
 

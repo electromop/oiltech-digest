@@ -298,7 +298,29 @@ export type Signal = {
   // Кто поставил значение поля карточки: agent, radar_judge или human.
   card_set_by?: Record<string, string> | null;
   card_recipe?: Record<string, unknown> | null;
+  // Агент «Отбор» (#130): отрасль, решение и код причины отказа; «спорное» — почему; сбой без решения.
+  industry?: "oilfield_services" | "oil_gas" | "other_industry" | string | null;
+  otbor_decision?: "accept" | "reject" | string | null;
+  reject_reason?: string | null;
+  otbor_disputed?: string | null;
+  otbor_failure?: "technical" | "invalid_answer" | string | null;
+  otbor_failure_reason?: string | null;
+  // Короткая причина публикации в разделе отклонённого «кто убрал → причина» (только админу).
+  section_reason?: string | null;
+  // Блоки ОС: каждый человек добавляет свой (оценка, причина, комментарий), чужие не перезаписываются;
+  // на отбор и показ они не влияют.
+  feedback_blocks?: SignalFeedbackBlock[];
   evidence?: SignalEvidence[];
+};
+
+export type SignalFeedbackBlock = {
+  id: number | null;
+  // Почта учётки автора: другого имени у неё нет.
+  author: string | null;
+  verdict: string | null;
+  reason: string | null;
+  comment: string | null;
+  created_at: string | null;
 };
 
 export type SignalScoreItem = {

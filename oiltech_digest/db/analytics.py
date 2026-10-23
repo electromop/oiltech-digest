@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from psycopg.rows import dict_row
 
-from oiltech_digest import config, fx
+from oiltech_digest import config, feed_window, fx
 from oiltech_digest.db import connection, marks
 
 TZ = "Europe/Moscow"
@@ -50,9 +50,9 @@ _COUNTERS_SQL = f"""
            count(*) AS collected,
            count(*) FILTER (WHERE a.language = 'en') AS en,
            count(*) FILTER (WHERE a.full_text_status = 'ok') AS full_text,
-           count(*) FILTER (WHERE c.relevant IS TRUE) AS relevant,
-           count(*) FILTER (WHERE c.relevant IS FALSE) AS rejected,
-           count(*) FILTER (WHERE c.relevant IS TRUE AND COALESCE(c.summary, '') <> '') AS summarized,
+           count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
+           count(*) FILTER (WHERE rel.relevant IS FALSE) AS rejected,
+           count(*) FILTER (WHERE rel.relevant IS TRUE AND COALESCE(c.summary, '') <> '') AS summarized,
            count(*) FILTER (WHERE s.total_score IS NOT NULL) AS scored,
            count(*) FILTER (WHERE s.total_score >= 60) AS strong,
            count(*) FILTER (WHERE s.total_score >= 70) AS top,
@@ -60,12 +60,13 @@ _COUNTERS_SQL = f"""
            count(*) FILTER (WHERE r.article_id IS NOT NULL) AS reprints,
            count(*) FILTER (WHERE d.article_id IS NOT NULL OR c.status = 'digest') AS digest_selected,
            count(DISTINCT a.source_id) AS sources_active,
-           count(DISTINCT a.source_id) FILTER (WHERE c.relevant IS TRUE) AS sources_relevant,
+           count(DISTINCT a.source_id) FILTER (WHERE rel.relevant IS TRUE) AS sources_relevant,
            count(DISTINCT a.source_id) FILTER (WHERE s.total_score >= 60) AS sources_strong,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY {_SPEED_HOURS}) FILTER (WHERE {_SPEED_FILTER}) AS speed_p50_hours,
            percentile_cont(0.9) WITHIN GROUP (ORDER BY {_SPEED_HOURS}) FILTER (WHERE {_SPEED_FILTER}) AS speed_p90_hours
     FROM articles a
     LEFT JOIN article_cards c ON c.article_id = a.id
+    LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
     LEFT JOIN article_scores s ON s.article_id = a.id
     LEFT JOIN article_reprints r ON r.article_id = a.id
     LEFT JOIN (SELECT a_d.id AS article_id FROM articles a_d
@@ -108,10 +109,11 @@ _EXPORTS_SQL = f"""
 # релевантного ещё не размечено по новым темам, вместо смешения двух классификаций.
 _THEMES_SQL = f"""
     SELECT {_MONTH} AS month, root.id AS tag_id, root.name AS tag,
-           count(*) FILTER (WHERE c.relevant IS TRUE) AS relevant,
+           count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
            count(*) FILTER (WHERE s.total_score >= 60) AS strong
     FROM articles a
     JOIN article_cards c ON c.article_id = a.id
+    LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
     JOIN article_tags at ON at.article_id = a.id
     JOIN tags t ON t.id = at.tag_id
     JOIN tags root ON root.id = COALESCE(t.parent_id, t.id)
@@ -126,16 +128,17 @@ _TOP_SOURCES_SQL = f"""
     FROM (
         SELECT {_MONTH} AS month, a.source_id, src.name AS source,
                count(*) FILTER (WHERE s.total_score >= 60) AS strong,
-               count(*) FILTER (WHERE c.relevant IS TRUE) AS relevant,
+               count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
                count(*) AS collected,
                row_number() OVER (
                    PARTITION BY {_MONTH}
                    ORDER BY count(*) FILTER (WHERE s.total_score >= 60) DESC,
-                            count(*) FILTER (WHERE c.relevant IS TRUE) DESC, src.name
+                            count(*) FILTER (WHERE rel.relevant IS TRUE) DESC, src.name
                ) AS place
         FROM articles a
         JOIN sources src ON src.id = a.source_id
         LEFT JOIN article_cards c ON c.article_id = a.id
+        LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
         LEFT JOIN article_scores s ON s.article_id = a.id
         WHERE a.collected_at >= {_SINCE}
         GROUP BY 1, 2, 3

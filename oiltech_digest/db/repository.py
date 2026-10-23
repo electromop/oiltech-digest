@@ -948,10 +948,14 @@ def list_signal_article_evidence(
 
 
 # Кто поставил значение карточки сигнала (#96, signals.card_set_by): агент «Карточка сигнала», судья
-# радара или человек (правки людей внесёт сервис ОС).
+# радара, агент «Отбор» (#130: отрасль, связь и применение, категория) или человек (правки людей внесёт
+# сервис ОС).
 CARD_SET_BY_AGENT = "agent"
 CARD_SET_BY_JUDGE = "radar_judge"
+CARD_SET_BY_OTBOR = "otbor"
 CARD_SET_BY_HUMAN = "human"
+# Статья, которую решает агент «Отбор», а не гейт ленты (articles.selector, #130): вставлена при включённом флаге.
+ARTICLE_SELECTOR_OTBOR = "otbor"
 # Поля карточки сигнала, которые ставит судья радара: их значения агент у находки радара не
 # перезаписывает, а пустые — заполняет.
 RADAR_JUDGE_CARD_FIELDS = ("event_date", "oilfield_relevance", "oilfield_application", "why_interesting")
@@ -2074,21 +2078,6 @@ def _any_showcase_quality_sql(alias: str = "s") -> str:
 # «Отсеянных и скрытых»: одобренная или выбранная «в дайджест» отсеянная без ссылки переходит
 # на радар, а не пропадает из обоих списков.
 _RADAR_CARD_SHOWN_SQL = f"({_radar_card_evidence_exists()} OR s.filter_stage IS NOT NULL)"
-# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
-# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
-# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09). Радар —
-# только находки поиска (#95): сигналы ленты в его списке, числах, «Отсеянных» и снимках не
-# участвуют, и радар выдаёт то же, что до единого хранилища.
-_RADAR_VISIBLE_SQL = (
-    f"{radar_origin_sql()} AND s.merged_into_signal_id IS NULL AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}"
-)
-# «Отсеянные и скрытые» (экран, переключатель; только админу — решение 05.10): проверить, не отсеяно
-# ли лишнее. Та же карточка, что видна бы была, кроме правил качества; дубли сюда не идут —
-# их ссылки и так в главной карточке.
-_RADAR_HIDDEN_SQL = (
-    f"{radar_origin_sql()} AND s.merged_into_signal_id IS NULL AND NOT ({_radar_quality_sql()})"
-    f" AND {_RADAR_CARD_SHOWN_SQL}"
-)
 # Сигнал ленты виден, пока видна его статья в ленте (feed_window.visible_sql): отбор передумал,
 # статью пометили на удаление или её источник в архиве — сигнал уходит вместе с ней. Правила
 # качества радара (смешанные ссылки, отсев, «не про нефтесервис», срок события) — о находках
@@ -2099,12 +2088,55 @@ _FEED_ARTICLE_SHOWN_SQL = (
     " LEFT JOIN article_cards fc ON fc.article_id = fa.id"
     f" WHERE fa.id = s.origin_article_id AND {visible_sql('fa', 'fc', 'fs')})"
 )
-# Витрина «бизнес» — сигналы категории «бизнес» обоих происхождений.
+
+
+def signal_digest_sql(alias: str = "s") -> str:
+    """Сигнал выбран «в дайджест» (#111). Одна механика на две витрины (решение владельца 23.10): у сигнала
+    ленты — отметка его статьи, та же, что ставит лента статей (одна отметка на публикацию, выпуск берёт статью
+    один раз); у находки радара — отметка карточки."""
+    return (
+        f"(CASE WHEN {alias}.origin = '{SIGNAL_ORIGIN_FEED}'"
+        f" THEN {marks.article_marked_sql(f'{alias}.origin_article_id', 'digest')}"
+        f" ELSE {_SIGNAL_IN_DIGEST_SQL.format(alias=alias)} END)"
+    )
+
+
+def _otbor_shown_sql(category: str) -> str:
+    """Сигнал с решением «Отбора» (#130, ADR 0005) — в витрине своей категории, для любого происхождения: по
+    смыслу его прячет только «Отбор». Правила качества радара (связь, смешанные ссылки, срок события) его не
+    прячут; технические остаются: архив, дубли и перепечатки, архивный источник (у сигнала ленты — по его
+    статье), карточка без ссылок. Выбранный «в дайджест» не прячет ничто, кроме технических правил статьи."""
+    return (
+        f"s.merged_into_signal_id IS NULL AND s.otbor_decision IS NOT NULL AND s.signal_category = '{category}'"
+        f" AND ({signal_digest_sql('s')} OR (s.archived_at IS NULL AND s.otbor_decision = '{feed_window.OTBOR_ACCEPT}'))"
+        f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}' THEN {_FEED_ARTICLE_SHOWN_SQL}"
+        f" ELSE {_RADAR_CARD_SHOWN_SQL} END"
+    )
+
+
+# Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
+# Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
+# (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09). Без
+# решения «Отбора» (#130) радар — только находки поиска (#95) по прежним правилам; с решением —
+# технологии любого происхождения (_otbor_shown_sql).
+_RADAR_VISIBLE_SQL = (
+    f"((s.otbor_decision IS NULL AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
+    f" AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}) OR ({_otbor_shown_sql('technology')}))"
+)
+# «Отсеянные и скрытые» до «Отбора» (раздел «До „Отбора“», rejected_sections; только админу — решение
+# 05.10): проверить, не отсеяно ли лишнее. Та же карточка, что видна бы была, кроме правил качества;
+# дубли сюда не идут — их ссылки и так в главной карточке.
+_RADAR_HIDDEN_SQL = (
+    f"s.otbor_decision IS NULL AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
+    f" AND NOT ({_radar_quality_sql()}) AND {_RADAR_CARD_SHOWN_SQL}"
+)
+# Витрина «бизнес» — сигналы категории «бизнес» обоих происхождений: без решения «Отбора» — по прежним
+# правилам, с решением — по его решению (_otbor_shown_sql).
 _BUSINESS_VISIBLE_SQL = (
-    "s.merged_into_signal_id IS NULL AND s.signal_category = 'business'"
+    "((s.otbor_decision IS NULL AND s.merged_into_signal_id IS NULL AND s.signal_category = 'business'"
     f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}'"
     f" THEN s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}"
-    f" ELSE {_business_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL} END"
+    f" ELSE {_business_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL} END) OR ({_otbor_shown_sql('business')}))"
 )
 SIGNAL_SHOWCASES = ("technology", "business")
 RADAR_FILTER_STAGES = {
@@ -2123,7 +2155,8 @@ RADAR_VERDICT_STAGES = ("judge", "review")
 
 def _radar_hidden_reason_sql() -> str:
     """Почему карточка не на радаре — по-русски, теми же правилами, что _radar_quality_sql.
-    У видимой причины нет: экран подписывает «Не на радаре: …» любую карточку с причиной."""
+    У видимой причины нет: экран подписывает «Не на радаре: …» любую карточку с причиной. У сигнала
+    с решением «Отбора» (#130) прежних правил нет: почему его нет в витрине, говорит его раздел."""
     age_days = int(config.SIGNAL_RADAR_MAX_EVENT_AGE_DAYS)
     age = (
         f"CASE WHEN {_judged_sql('s', 'event_date')} < CURRENT_DATE - {age_days}"
@@ -2145,7 +2178,7 @@ def _radar_hidden_reason_sql() -> str:
         "), '') END"
     )
     return (
-        f"CASE WHEN {_radar_quality_sql('s')} THEN NULL ELSE NULLIF(concat_ws('; ',"
+        f"CASE WHEN s.otbor_decision IS NOT NULL OR {_radar_quality_sql('s')} THEN NULL ELSE NULLIF(concat_ws('; ',"
         " CASE WHEN s.archived_at IS NOT NULL THEN 'в архиве' END,"
         f" {machine},"
         f" {age}), '') END"
@@ -2156,16 +2189,30 @@ _RADAR_TOPIC_SQL = (
     "(s.theme IN (SELECT t.name FROM tags t WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s))"
 )
 # Отзыв о карточке — по её номеру или по адресу её ссылки (как «Обратная связь: N» на ней).
-_RADAR_FEEDBACK_SQL = """
-  FROM signal_feedback_events sfe
-  WHERE sfe.signal_id = s.id
+_FEEDBACK_OF_SIGNAL_SQL = """(
+  sfe.signal_id = s.id
      OR (sfe.source_url IS NOT NULL AND EXISTS (
           SELECT 1 FROM signal_evidence se
           WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
         )
         -- Публикация бывает общей у сигнала ленты и карточки радара (#95): отзыв о сигнале
         -- другого происхождения этой карточке не засчитывается.
-        AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin))"""
+        AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin)))"""
+_RADAR_FEEDBACK_SQL = f"""
+  FROM signal_feedback_events sfe
+  WHERE {_FEEDBACK_OF_SIGNAL_SQL}"""
+# Блоки ОС сигнала (#130, решение владельца 22.10): каждый человек добавляет свой блок (оценка, причина,
+# комментарий), чужие не перезаписываются; показываются списком, на отбор и показ не влияют. Автор — почта
+# учётки (другого имени у неё нет).
+_FEEDBACK_BLOCKS_SQL = f"""(
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'id', sfe.id, 'author', u.email, 'verdict', NULLIF(sfe.verdict, ''), 'reason', NULLIF(sfe.reason, ''),
+           'comment', NULLIF(sfe.comment, ''), 'created_at', sfe.created_at) ORDER BY sfe.created_at, sfe.id),
+         '[]'::jsonb)
+  FROM signal_feedback_events sfe
+  LEFT JOIN users u ON u.id = sfe.user_id
+  WHERE {_FEEDBACK_OF_SIGNAL_SQL} AND sfe.event_type = 'comment_added'
+    AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> ''))"""
 # «Поступил» на экране — дата первой находки по Москве (сутки радара — московские).
 _RADAR_ARRIVAL_DATE_SQL = "(s.first_seen_at AT TIME ZONE 'Europe/Moscow')::date"
 RADAR_SORTS = {
@@ -2208,10 +2255,13 @@ def _without_jit(conn) -> None:
     conn.execute("SET LOCAL jit = off")
 
 
-def _showcase_visible_sql(showcase: str, *, hidden: bool = False) -> str:
+def _showcase_visible_sql(showcase: str, *, hidden: bool = False, section=None) -> str:
     """Видимость карточки в витрине: «технологии» — прежний радар (и его «Отсеянные и
     скрытые»), «бизнес» — категория «бизнес» обоих происхождений (#95). Отсеянных у витрины
-    «бизнес» нет: «Отсеянные и скрытые» — разбор работы радара."""
+    «бизнес» нет: «Отсеянные и скрытые» — разбор работы радара. section — раздел отклонённого
+    (rejected_sections.Section, #130): вместо витрины — его сигналы любой категории."""
+    if section is not None:
+        return f"({section.condition})"
     if showcase not in SIGNAL_SHOWCASES:
         raise ValueError(f"Неизвестная витрина сигналов: {showcase!r}")
     if showcase == "business":
@@ -2227,14 +2277,14 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
                    hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                    region: str | None = None, technology_class: str | None = None,
                    technology_maturity: str | None = None,
-                   company_names: Sequence[str] | None = None) -> tuple[list[str], list]:
+                   company_names: Sequence[str] | None = None, section=None) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
     компания: участник карточки под любым из имён company_names (signal_card_filters.group_names); пустой
     список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра»."""
-    clauses = [_showcase_visible_sql(showcase, hidden=hidden)]
+    clauses = [_showcase_visible_sql(showcase, hidden=hidden, section=section)]
     params: list = []
     if maturity:
         clauses.append("s.maturity = %s")
@@ -2288,14 +2338,16 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                  max_score: float | None = None, sort: str = "score_desc", offset: int = 0,
                  hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                  region: str | None = None, technology_class: str | None = None,
-                 technology_maturity: str | None = None, company_names: Sequence[str] | None = None) -> list[dict]:
+                 technology_maturity: str | None = None, company_names: Sequence[str] | None = None,
+                 section=None) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
-    hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason."""
+    hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason; section —
+    раздел отклонённого (#130, только админу), с короткой причиной в section_reason."""
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
-        technology_maturity=technology_maturity, company_names=company_names,
+        technology_maturity=technology_maturity, company_names=company_names, section=section,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
@@ -2310,15 +2362,20 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             SELECT s.*,
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
                    {_radar_hidden_reason_sql() if showcase == "technology" else "NULL"} AS hidden_reason,
+                   {section.short_reason if section is not None else "NULL"} AS section_reason,
                    -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
-                   -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска.
-                   {signal_month_sql('s')} AS digest_month,
+                   -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска. У
+                   -- сигнала ленты — месяц его статьи: «в дайджест» у него — отметка статьи (#130).
+                   CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}'
+                        THEN (SELECT {period_month_sql('da')} FROM articles da WHERE da.id = s.origin_article_id)
+                        ELSE {signal_month_sql('s')} END AS digest_month,
                    {marks.signal_status_sql()} AS user_status,
-                   ({marks.signal_status_sql()} = 'digest') AS selected_for_digest,
+                   {signal_digest_sql('s')} AS selected_for_digest,
                    sm.analyst_comment AS user_comment,
                    sm.updated_at AS user_status_updated_at,
                    (SELECT COUNT(*) {_RADAR_FEEDBACK_SQL}) AS feedback_count,
                    (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
+                   {_FEEDBACK_BLOCKS_SQL} AS feedback_blocks,
                    corr.corrected_title,
                    corr.corrected_thesis
             FROM signals s
@@ -2346,7 +2403,7 @@ def signal_radar_summary(**filters) -> dict:
             f"""
             SELECT COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE s.first_seen_at >= now() - interval '7 days') AS new_7d,
-                   COUNT(*) FILTER (WHERE sm.status = 'digest') AS in_digest,
+                   COUNT(*) FILTER (WHERE {signal_digest_sql('s')}) AS in_digest,
                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})) AS with_feedback
             FROM signals s
             {marks.signal_mark_join()}
@@ -2364,15 +2421,14 @@ def signal_radar_summary(**filters) -> dict:
             """
         )
         tiles["merged"] = int(cur.fetchone()["merged"])
-        # «Отсеянные и скрытые» есть только у радара (_showcase_visible_sql).
-        tiles["hidden"] = 0
-        if showcase == "technology":
-            cur.execute(f"SELECT COUNT(*) AS hidden FROM signals s WHERE {_RADAR_HIDDEN_SQL}")
-            tiles["hidden"] = int(cur.fetchone()["hidden"])
+        # Плашка «Отклонённые» (#130): все разделы отклонённого одним числом, одно в обеих лентах.
+        from oiltech_digest.db import rejected_sections
+
+        tiles["rejected"] = rejected_sections.total()
         total = tiles["total"]
         matching = total
-        # Скрытые — своя выборка: «N из M» считается по ним даже без других фильтров.
-        if len(clauses) > 1 or filters.get("hidden"):
+        # Скрытые и раздел — своя выборка: «N из M» считается по ним даже без других фильтров.
+        if len(clauses) > 1 or filters.get("hidden") or filters.get("section") is not None:
             cur.execute(
                 f"""
                 SELECT COUNT(*) AS matching
@@ -2975,6 +3031,40 @@ def get_signal_theme(signal_id: int) -> str | None:
         return str(row[0]) if row and row[0] else None
 
 
+def feed_signal_article(signal_id: int) -> int | None:
+    """Статья сигнала ленты (#95) — её отметку ставит кнопка «В дайджест» витрины (#130); None — сигнал не ленты
+    или его нет."""
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT origin_article_id FROM signals WHERE id = %s AND origin = '{SIGNAL_ORIGIN_FEED}'",
+            (int(signal_id),),
+        ).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def signal_digest_refusal(signal_id: int) -> str | None:
+    """Почему сигнал не ставится «в дайджест» (#130): его отклонил «Отбор» или «Отбор» не дал решения (сбой). У
+    такого и на экране кнопки нет; вернуть отклонённое — #132. None — ставится (или сигнала нет)."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT otbor_decision, otbor_failure FROM signals WHERE id = %s",
+                           (int(signal_id),)).fetchone()
+    if row is None:
+        return None
+    if row[0] == feed_window.OTBOR_REJECT:
+        return "публикацию отклонил «Отбор»"
+    return "«Отбор» не дал решения" if row[0] is None and row[1] else None
+
+
+def judge_learns_from(signal_id: int) -> bool:
+    """Учит ли отзыв о сигнале судью радара (#130): только отзыв о его находке (происхождение «радар») вне бизнес-
+    ленты. Иначе отзыв — блок ОС и только хранится (решение владельца 22.10: учить агентов будет сервис ОС):
+    «Не тот блок» в бизнес-ленте значит «это технология», а судья читает его как «это бизнес», и одобрение
+    бизнес-находки стало бы для него примером технологического сигнала. Сигнала нет — прежний путь."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT origin, signal_category FROM signals WHERE id = %s", (int(signal_id),)).fetchone()
+    return row is None or (row[0] == SIGNAL_ORIGIN_RADAR and row[1] != "business")
+
+
 def set_signal_agent_memory_status(memory_id: int, status: str) -> bool:
     with get_connection() as conn:
         cur = conn.execute(
@@ -3071,7 +3161,7 @@ def compute_source_quality_rows(period_from: datetime, period_to: datetime) -> l
                 a.id,
                 a.source_id,
                 c.summary,
-                c.relevant,
+                {feed_window.relevance_sql('a', 'c')} AS relevant,
                 c.status AS card_status,
                 sc.total_score,
                 {marks.article_marked_sql('a.id', 'digest')} AS user_digest,
@@ -3149,7 +3239,7 @@ def compute_topic_gap_rows(
               SELECT
                 COALESCE(parent.name, t.name) AS topic,
                 a.id AS article_id,
-                c.relevant,
+                {feed_window.relevance_sql('a', 'c')} AS relevant,
                 c.status AS card_status,
                 sc.total_score,
                 {marks.article_marked_sql('a.id', 'digest')} AS user_digest
@@ -4628,6 +4718,9 @@ def insert_article(rec: dict) -> bool:
 
     Решение «вставлять или нет» — insert_verdict (рубежи в одном месте, их же читает
     проба источника); ON CONFLICT (url) остаётся страховкой от гонки двух вставок.
+
+    При включённом «Отборе» (OTBOR_ENABLED, #130) новая статья идёт через него, а не через гейт ленты
+    (articles.selector): пока «Отбор» не решил, лента её не показывает.
     """
     with get_connection() as conn:
         verdict = insert_verdict(conn, rec)
@@ -4642,15 +4735,16 @@ def insert_article(rec: dict) -> bool:
         if verdict.verdict != verdicts.WOULD_INSERT:
             return False
         rec = {**rec, "image_url": rec.get("image_url"),
-               "body_hash": verdict.body_hash, "url_key": verdict.url_key}
+               "body_hash": verdict.body_hash, "url_key": verdict.url_key,
+               "selector": ARTICLE_SELECTOR_OTBOR if config.OTBOR_ENABLED else None}
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, url_key, published_at,
                                   raw_text, text_truncated, language, content_hash, image_url,
-                                  body_hash)
+                                  body_hash, selector)
             VALUES (%(source_id)s, %(title)s, %(url)s, %(url_key)s, %(published_at)s,
                     %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s,
-                    %(content_hash)s, %(image_url)s, %(body_hash)s)
+                    %(content_hash)s, %(image_url)s, %(body_hash)s, %(selector)s)
             ON CONFLICT (url) DO NOTHING
             RETURNING id
             """,
@@ -4698,13 +4792,13 @@ def get_articles_missing_image(limit: int = 200) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.id, a.url
             FROM articles a
             LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE a.url IS NOT NULL AND COALESCE(a.image_url, '') = ''
               AND NOT a.pending_deletion
-              AND c.relevant IS NOT FALSE
+              AND {feed_window.selected_sql('a', 'c')}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -4857,7 +4951,7 @@ def dashboard_stats(window: FeedWindow | None = None) -> dict:
                    -- Обработано: есть суть, проверена релевантность и есть тег или оценка.
                    COUNT(*) FILTER (
                      WHERE COALESCE(c.summary, '') <> ''
-                       AND c.relevant IS NOT NULL
+                       AND {feed_window.relevance_sql('a', 'c')} IS NOT NULL
                        AND (sc.article_id IS NOT NULL
                             OR EXISTS (SELECT 1 FROM article_tags at WHERE at.article_id = a.id))
                    ) AS processed,
@@ -4986,11 +5080,11 @@ def monthly_platform_stats(months: int = 6) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT to_char(a.collected_at, 'YYYY-MM') AS month,
                    count(*) AS collected,
-                   count(*) FILTER (WHERE c.relevant IS TRUE) AS relevant,
-                   count(*) FILTER (WHERE c.relevant IS FALSE) AS rejected,
+                   count(*) FILTER (WHERE rel.relevant IS TRUE) AS relevant,
+                   count(*) FILTER (WHERE rel.relevant IS FALSE) AS rejected,
                    count(*) FILTER (WHERE a.pending_deletion) AS hidden,
                    count(*) FILTER (WHERE COALESCE(c.summary, '') <> '') AS summarized,
                    count(*) FILTER (WHERE sc.total_score IS NOT NULL) AS scored,
@@ -4999,6 +5093,7 @@ def monthly_platform_stats(months: int = 6) -> list[dict]:
             FROM articles a
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
+            LEFT JOIN LATERAL (SELECT {feed_window.relevance_sql('a', 'c')} AS relevant) rel ON TRUE
             WHERE a.collected_at >= date_trunc('month', now()) - make_interval(months => %s)
             GROUP BY 1
             ORDER BY 1
@@ -5020,10 +5115,10 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             """
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
-                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агент
-                   -- «Карточка сигнала» (#96) — своей.
+                   -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агенты
+                   -- «Карточка сигнала» (#96) и «Отбор» (#130) — своими.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
-                        WHEN stage = 'signal_card' THEN 'signal_card' ELSE 'feed' END AS area,
+                        WHEN stage IN ('signal_card', 'otbor') THEN stage ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs
@@ -5272,7 +5367,7 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            r"""
+            rf"""
             WITH t AS (
               SELECT a.id, a.source_id, a.title, a.published_at,
                      ARRAY(SELECT DISTINCT left(w, 6)
@@ -5292,10 +5387,11 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
                 -- (модель звали впустую), а в 6 главной копией становилась
                 -- невидимая — то есть пометка не схлопывала дубль, а убирала
                 -- новость из ленты совсем. Полезными были 21 пара из 71.
-                -- Условия те же, что в ленте (api.articles_feed) и в выпуске.
+                -- Условия те же, что в ленте (api.articles_feed) и в выпуске; отобрана — с решением
+                -- «Отбора» (#130): отклонённая и ждущая его решения в ленте не видны.
                 AND s.archived_at IS NULL
                 AND NOT a.pending_deletion
-                AND c.relevant IS NOT FALSE
+                AND {feed_window.selected_sql('a', 'c')}
             )
             SELECT x.id AS a_id, y.id AS b_id,
                    x.title AS a_title, y.title AS b_title,
@@ -5369,17 +5465,17 @@ def article_visible_in_feed(conn, article_id: int) -> bool:
     Заведено не ради стройности: перепечатки решает модель на внешнем воркере, а
     её ответ это недоверенный вход. Пометка прячет копию, и если главной окажется
     статья, которой в ленте нет (архивный источник, помечена на удаление, отбита
-    гейтом), то новость исчезнет целиком вместо схлопывания дубля.
+    гейтом или «Отбором», ждёт решения «Отбора»), то новость исчезнет целиком вместо схлопывания дубля.
     """
     row = conn.execute(
-        """
+        f"""
         SELECT 1 FROM articles a
         JOIN sources s ON s.id = a.source_id
         LEFT JOIN article_cards c ON c.article_id = a.id
         WHERE a.id = %s
           AND s.archived_at IS NULL
           AND NOT a.pending_deletion
-          AND c.relevant IS NOT FALSE
+          AND {feed_window.selected_sql('a', 'c')}
         """,
         (int(article_id),),
     ).fetchone()
@@ -5538,8 +5634,10 @@ def get_article(article_id: int) -> dict | None:
 def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -> list[dict]:
     if not article_ids:
         return []
+    # Решение «Отбора» (#130) — воркеру: у решённой им статьи гейта и стоп-слов нет (external_ai._stages_left).
     summary_select = (
-        ", c.summary, c.relevant, c.title_ru, at.id AS existing_tag_id, sc.id AS existing_score_id"
+        ", c.summary, c.relevant, c.title_ru, at.id AS existing_tag_id, sc.id AS existing_score_id,"
+        f" {feed_window.otbor_decision_sql('a')} AS otbor_decision"
         if include_summary else ""
     )
     summary_join = (
@@ -5587,9 +5685,10 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
     FK на articles в основном БЕЗ ON DELETE CASCADE, поэтому удаляем детей вручную
     в правильном порядке (отметка статьи каскадится сама). По умолчанию НЕ удаляем
     статью из выпуска (сохранённый черновик или отметка «в дайджест») — чтобы не
-    рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста)."""
+    рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста).
+    Статью агента «Отбор» (#130) удаление по гейту не трогает и с force: её решает не гейт."""
     with get_connection() as conn:
-        if not force and _in_some_issue(conn, article_id):
+        if _is_otbor_article(conn, article_id) or (not force and _in_some_issue(conn, article_id)):
             return False
         conn.execute(
             """
@@ -5613,8 +5712,11 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
 def mark_article_for_deletion(article_id: int, reason: str | None, *, force: bool = False) -> str:
     """Пометить статью на удаление (мягко, без физического DELETE). Возвращает
     'marked' либо 'skipped_in_digest' (статья в выпуске — сохранённый черновик или
-    отметка «в дайджест», force=False)."""
+    отметка «в дайджест», force=False), либо 'skipped_otbor' — статью решает агент «Отбор» (#130), а не
+    гейт."""
     with get_connection() as conn:
+        if _is_otbor_article(conn, article_id):
+            return "skipped_otbor"
         if not force and _in_some_issue(conn, article_id):
             return "skipped_in_digest"
         conn.execute(
@@ -5669,10 +5771,23 @@ def unmark_all_pending_deletion() -> int:
         return cur.rowcount
 
 
+def otbor_article_sql(alias: str = "a") -> str:
+    """Статья агента «Отбор» (#130): решает он (вставлена при включённом флаге) или уже решил. Механизмы гейта
+    ленты — перепроверка с удалением — такую статью не трогают."""
+    return (f"({alias}.selector IS NOT DISTINCT FROM '{ARTICLE_SELECTOR_OTBOR}'"
+            f" OR {feed_window.otbor_decision_sql(alias)} IS NOT NULL)")
+
+
+def _is_otbor_article(conn, article_id: int) -> bool:
+    return conn.execute(f"SELECT 1 FROM articles a WHERE a.id = %s AND {otbor_article_sql('a')}",
+                        (int(article_id),)).fetchone() is not None
+
+
 def all_article_ids() -> list[int]:
-    """Все id статей по возрастанию — для батч-перепрогона релевантности."""
+    """Все id статей по возрастанию — для батч-перепрогона релевантности. Статьи «Отбора» (#130) — мимо:
+    гейт их не решает."""
     with get_connection() as conn:
-        cur = conn.execute("SELECT id FROM articles ORDER BY id ASC")
+        cur = conn.execute(f"SELECT a.id FROM articles a WHERE NOT {otbor_article_sql('a')} ORDER BY a.id ASC")
         return [row[0] for row in cur.fetchall()]
 
 
@@ -5692,16 +5807,16 @@ def article_ids_needing_title_ru() -> list[int]:
 
 def get_articles_for_recheck(after_id: int = 0, limit: int = 100) -> list[dict]:
     """Все статьи по возрастанию id после чекпоинта — для локального перепрогона
-    релевантности на сыром тексте (независимо от наличия карточки)."""
+    релевантности на сыром тексте (независимо от наличия карточки). Статьи «Отбора» (#130) — мимо."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
-            WHERE a.id > %s
+            WHERE a.id > %s AND NOT {otbor_article_sql('a')}
             ORDER BY a.id ASC
             LIMIT %s
             """,
@@ -5725,14 +5840,14 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
             WHERE c.summary IS NULL
-              AND c.relevant IS NOT FALSE
+              AND {feed_window.selected_sql('a', 'c')}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -5741,26 +5856,51 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
         return cur.fetchall()
 
 
-_NEEDS_PIPELINE_FROM = """
+# Каких стадий нет у статьи: сути, перевода, тега или балла.
+_STAGES_MISSING_SQL = "(c.summary IS NULL OR c.title_ru IS NULL OR at.id IS NULL OR sc.id IS NULL)"
+
+
+def _needs_pipeline_from() -> str:
+    """Статьи, которым не хватает стадий обработки ленты, — FROM и WHERE для выборки.
+
+    Решение «Отбора» (#130) главнее гейта: принятая им статья получает недостающие суть, перевод, тег и
+    балл без гейта, отклонённая — ничего. Статья, которую решает «Отбор», пока решения нет, обработку не
+    проходит, пока он включён: её решит он, а не гейт; выключили — её решит гейт (решение владельца 23.10).
+    Остальные — как до «Отбора»: ещё не проверенные гейтом и принятые им без какой-нибудь стадии. Флаг
+    читается при каждом вызове. То же правило для явного списка статей — held_by_otbor."""
+    waiting_goes_to_gate = "FALSE" if config.OTBOR_ENABLED else "TRUE"
+    return f"""
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
-            WHERE (
-                  c.relevant IS NULL
-               OR (
-                    c.relevant IS TRUE
-                    AND (
-                        c.summary IS NULL
-                        OR c.title_ru IS NULL
-                        OR at.id IS NULL
-                        OR sc.id IS NULL
-                    )
-               )
-               OR c.article_id IS NULL
-            )
+            LEFT JOIN LATERAL (SELECT {feed_window.otbor_decision_sql('a')} AS decision) od ON TRUE
+            WHERE CASE
+              WHEN od.decision IS NOT NULL
+                THEN od.decision = '{feed_window.OTBOR_ACCEPT}' AND (c.article_id IS NULL OR {_STAGES_MISSING_SQL})
+              WHEN a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND c.relevant IS NULL THEN {waiting_goes_to_gate}
+              ELSE c.relevant IS NULL OR (c.relevant IS TRUE AND {_STAGES_MISSING_SQL}) OR c.article_id IS NULL
+            END
 """
+
+
+def otbor_verdict(article: dict) -> bool | None:
+    """Решение «Отбора» о статье строки выборки (#130): True — принял, False — отклонил, None — не решал. Им
+    обработка ленты заменяет гейт у решённой «Отбором» статьи (здесь, на воркере и в местном конвейере)."""
+    decision = article.get("otbor_decision")
+    return None if decision is None else decision == feed_window.OTBOR_ACCEPT
+
+
+def held_by_otbor(article: dict) -> bool:
+    """Статью держит «Отбор» (#130) — правило _needs_pipeline_from для явного списка статей (ручной импорт,
+    перекачка тела, команда с номерами): отклонённую им обработка ленты не берёт, ждущую его решения — пока он
+    включён. Строка — из get_articles_by_ids с include_summary (решение «Отбора», гейт, путь статьи)."""
+    verdict = otbor_verdict(article)
+    if verdict is not None:
+        return not verdict
+    return (bool(config.OTBOR_ENABLED) and article.get("selector") == ARTICLE_SELECTOR_OTBOR
+            and article.get("relevant") is None)
 
 
 def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
@@ -5776,8 +5916,8 @@ def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
             SELECT a.*, c.summary, c.relevant, c.title_ru,
                    at.id AS existing_tag_id, sc.id AS existing_score_id,
                    s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
-            {_NEEDS_PIPELINE_FROM}
+                   s.category AS source_category, od.decision AS otbor_decision
+            {_needs_pipeline_from()}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -5848,7 +5988,7 @@ def reserve_process_articles(job_id: int, *, limit: int, article_ids: list[int] 
                 for row in conn.execute(
                     f"""
                     SELECT a.id
-                    {_NEEDS_PIPELINE_FROM}
+                    {_needs_pipeline_from()}
                       AND a.id <> ALL(%s::bigint[])
                     ORDER BY a.published_at DESC NULLS LAST, a.id DESC
                     LIMIT %s
@@ -5889,17 +6029,22 @@ def defer_claimed_background_job(job_id: int, *, seconds: int = 120) -> bool:
 
 
 def get_articles_needing_relevance(limit: int = 20) -> list[dict]:
-    """Статьи с готовой сутью, но без проверки релевантности (card.relevant IS NULL)."""
+    """Статьи с готовой сутью, но без проверки релевантности (card.relevant IS NULL). Решённые «Отбором» и ждущие
+    его решения, пока он включён, гейт не берёт (#130): агент включается, прежняя релевантность для его статей
+    выключается (решение владельца 23.10)."""
+    otbor_on = "TRUE" if config.OTBOR_ENABLED else "FALSE"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             WHERE c.summary IS NOT NULL AND c.relevant IS NULL
+              AND {feed_window.otbor_decision_sql('a')} IS NULL
+              AND NOT (a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND {otbor_on})
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -5938,14 +6083,14 @@ def get_articles_needing_tags(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_tags at ON at.article_id = a.id
-            WHERE c.summary IS NOT NULL AND c.relevant IS TRUE AND at.id IS NULL
+            WHERE c.summary IS NOT NULL AND {feed_window.relevance_sql('a', 'c')} IS TRUE AND at.id IS NULL
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -5958,14 +6103,14 @@ def get_articles_needing_scores(limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_scores sc ON sc.article_id = a.id
-            WHERE c.summary IS NOT NULL AND c.relevant IS TRUE AND sc.id IS NULL
+            WHERE c.summary IS NOT NULL AND {feed_window.relevance_sql('a', 'c')} IS TRUE AND sc.id IS NULL
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
@@ -7384,13 +7529,15 @@ def max_article_id() -> int | None:
 
 
 def get_articles_needing_summary_after(after_id: int, limit: int = 20) -> list[dict]:
-    """Articles that have no summary yet and whose id > after_id (streaming checkpoint)."""
+    """Articles that have no summary yet and whose id > after_id (streaming checkpoint). Решение гейта и «Отбора»
+    (#130) — конвейеру: статью, которую держит «Отбор», он не обрабатывает (held_by_otbor)."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
+                   s.category AS source_category, c.relevant,
+                   {feed_window.otbor_decision_sql('a')} AS otbor_decision
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id

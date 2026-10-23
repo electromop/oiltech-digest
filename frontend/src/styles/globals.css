@@ -5187,10 +5187,92 @@ button {
   background: var(--sem-bad-bg);
 }
 
-/* Фильтры радара — сетка ленты (.articlesFiltersRow): вторая строка («Зрелость»,
-   «Сортировка») — те же колонки, что у первой, со своим отступом. */
-.signalRadarFiltersSecondary {
+/* Строка радара и бизнес-ленты (вариант A, решение владельца 23.10): поиск, тема, сортировка и «Фильтры · N»
+   в одну строку; остальные фильтры — в панели под ней, включённые — чипами со снятием. */
+.signalToolbar {
+  grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, 0.8fr) auto;
+}
+
+.signalFiltersButton {
+  min-height: 40px;
+}
+
+/* Поле не шире своей колонки: длинные названия тем иначе растягивают список и он заезжает на соседей. */
+.signalToolbar select,
+.signalToolbar input,
+.signalFilterPanel select,
+.signalFilterPanel input {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.signalActiveFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   margin-top: 8px;
+}
+
+.signalFilterChip {
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.signalFilterChip:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.signalFilterPanel {
+  margin-top: 8px;
+  padding: 10px 12px 12px;
+  border-radius: 14px;
+  background: var(--sem-muted-bg);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+/* Поля атрибутов карточки — ячейками той же сетки, что «Решение платформы». */
+.signalFilterPanel .signalCardFilters {
+  display: contents;
+}
+
+.signalFilterPanel > .field {
+  min-width: 0;
+}
+
+/* Плашка «Отклонённые» (#130): кнопка-счётчик, открывает их список; открыт — подсвечена. */
+.statCardButton {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.statCardButton > span {
+  display: block;
+}
+
+.statCardButton[aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.statCardButton:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .signalToolbar,
+  .signalFilterPanel {
+    grid-template-columns: 1fr;
+  }
 }
 
 .signalRadarFacts span {
@@ -5319,6 +5401,31 @@ button {
 /* Причина скрытия — только в выборке «Скрытые» (админ). */
 .signalHiddenReason {
   color: #b45309;
+}
+
+/* «Спорное» (#130): «Отбор» сам себе противоречил и после повтора — проверять первым. */
+.signalDisputed {
+  color: #b45309;
+  font-weight: 600;
+}
+
+/* Блоки ОС на карточке (#130): кто и когда — подписью, оценка, причина и комментарий — следом. */
+.signalFeedbackBlocks {
+  margin-top: 12px;
+}
+
+.signalFeedbackBlocks ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+  font-size: 0.88rem;
+}
+
+.signalFeedbackBlocks li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* Атрибуты карточки сигнала (#97) — чипы под строкой карточки на обоих экранах. «Не определено» —

@@ -94,6 +94,8 @@ def visible_sql(article: str = "a", card: str = "c", source: str = "s") -> str:
     архивных источников считал, свежие без карточки — нет), а в выпуск шла статья,
     помеченная на удаление, которую лента давно прятала.
 
+    - решение агента «Отбор» (#130, selected_sql) главнее гейта: статья видна, только если он её
+      принял; статью, которую решает он, пока решения нет, не показываем;
     - отклонённое гейтом релевантности (relevant = false) не показываем; ещё не проверенное
       (NULL) — показываем;
     - помеченное на удаление перепроверкой (recheck --mark) скрыто до purge/unmark;
@@ -102,7 +104,42 @@ def visible_sql(article: str = "a", card: str = "c", source: str = "s") -> str:
     - перепечатка скрыта: в ленте остаётся одна главная копия группы (08.09). Скрыта
       именно копия — главная (primary_id) в article_reprints не значится. Запись обратима.
     """
-    return f"{card}.relevant IS NOT FALSE AND {ungated_visible_sql(article, source)}"
+    return f"{selected_sql(article, card)} AND {ungated_visible_sql(article, source)}"
+
+
+# Решение агента «Отбор» о статье (#130): коды справочника decision. Здесь, в самом нижнем модуле, — их берут и
+# слой базы, и сам агент.
+OTBOR_ACCEPT, OTBOR_REJECT = "accept", "reject"
+
+
+def otbor_decision_sql(article: str = "a") -> str:
+    """Решение агента «Отбор» о статье (#130) — у её сигнала ленты: accept / reject; NULL — не решал.
+    'feed' — repository.SIGNAL_ORIGIN_FEED (модуль базы импортирует этот, а не наоборот)."""
+    return (
+        f"(SELECT os.otbor_decision FROM signals os WHERE os.origin_article_id = {article}.id"
+        " AND os.origin = 'feed' AND os.otbor_decision IS NOT NULL LIMIT 1)"
+    )
+
+
+def relevance_sql(article: str = "a", card: str = "c") -> str:
+    """Решение о статье для прежней механики ленты (счётчики, пересчёт после полного текста, тег и балл): у решённой
+    «Отбором» (#130) — его решение, без него — гейт. TRUE — принята, FALSE — отклонена, NULL — не решена. Стоит
+    вместо `card.relevant` (решение владельца 23.10: решение «Отбора» живёт только в сигнале, механика читает его
+    оттуда)."""
+    return f"COALESCE({otbor_decision_sql(article)} = '{OTBOR_ACCEPT}', {card}.relevant)"
+
+
+def selected_sql(article: str = "a", card: str = "c") -> str:
+    """Отобрана ли статья в ленту. Решение «Отбора» главнее гейта (решение владельца 23.10: решённое до
+    «Отбора» — по гейту, новое — по «Отбору»): принял — да, отклонил — нет. Статья, которую решает он
+    (articles.selector = 'otbor': вставлена при включённом флаге), пока решения нет, не отобрана, если гейт её
+    тоже не решал (флаг выключили — её решит гейт). Остальные — по гейту: отклонённое (false) нет, ещё не
+    проверенное (NULL) да."""
+    return (
+        f"COALESCE({otbor_decision_sql(article)} = '{OTBOR_ACCEPT}',"
+        f" CASE WHEN {article}.selector = 'otbor' AND {card}.relevant IS NULL THEN FALSE"
+        f" ELSE {card}.relevant IS NOT FALSE END)"
+    )
 
 
 def ungated_visible_sql(article: str = "a", source: str = "s") -> str:

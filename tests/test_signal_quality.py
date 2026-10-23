@@ -394,7 +394,9 @@ def test_hidden_view_lists_only_hidden_cards_with_a_reason(isolated_db):
     }
     assert all(row["hidden_reason"] is None for row in repository.list_signals(limit=50))
     summary = repository.signal_radar_summary(hidden=True)
-    assert (summary["total"], summary["hidden"], summary["matching"]) == (1, 3, 3)
+    # Плашка «Отклонённые» (#130, решение владельца 23.10) считает то, чего нет ни в одной витрине: бизнес-находка
+    # видна в бизнес-ленте и в неё не идёт.
+    assert (summary["total"], summary["rejected"], summary["matching"]) == (1, 2, 3)
 
 
 def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
@@ -406,7 +408,7 @@ def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
     seen = {}
     monkeypatch.setattr(api.repository, "list_signals", lambda **kwargs: seen.update(kwargs) or [])
     monkeypatch.setattr(api.repository, "signal_radar_summary",
-                        lambda **kwargs: {"total": 1, "hidden": 3, "matching": 1, "themes": []})
+                        lambda **kwargs: {"total": 1, "rejected": 3, "matching": 1, "themes": []})
     monkeypatch.setattr(api.repository, "radar_weekly_summary", lambda **kwargs: {
         "days": 7, "on_radar": 2, "filtered": 5, "filtered_reasons": [{"reason": "отсеяно (судья)", "count": 5}],
         "top": [], "awaiting_review": 1, "feedback": 0, "feedback_verdicts": []})
@@ -416,7 +418,7 @@ def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
         assert client.get("/api/signals?hidden=true").status_code == 403
         assert client.get("/api/signals/summary?hidden=true").status_code == 403
         # Обычному пользователю и число отсеянных не показываем — ни над списком, ни в итогах недели.
-        assert "hidden" not in client.get("/api/signals/summary").json()
+        assert "rejected" not in client.get("/api/signals/summary").json()
         weekly = client.get("/api/signals/weekly").json()
         assert "filtered" not in weekly and "filtered_reasons" not in weekly
         assert weekly["on_radar"] == 2
@@ -424,7 +426,7 @@ def test_filtered_and_hidden_cards_are_for_admin_only(monkeypatch):
         api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "a@example.com", "role": "admin"}
         assert client.get("/api/signals?hidden=true").status_code == 200
         assert seen["hidden"] is True
-        assert client.get("/api/signals/summary").json()["hidden"] == 3
+        assert client.get("/api/signals/summary").json()["rejected"] == 3
         assert client.get("/api/signals/weekly").json()["filtered"] == 5
     finally:
         api.app.dependency_overrides.pop(api.require_user, None)

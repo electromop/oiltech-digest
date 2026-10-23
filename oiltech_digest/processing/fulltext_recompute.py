@@ -3,7 +3,7 @@
 Суть, тег и балл считаются по тексту статьи (pipeline._article_prompt), а лента часто отдаёт
 только анонс. Полное тело приходит позже: локальная дозагрузка (fetch-full-text) и зарубежный
 воркер (refetch_text — для источников network_region='external'). Выдача ИИ-пакета берёт статью,
-которой не хватает стадий, не глядя на дозагрузку (repository._NEEDS_PIPELINE_FROM), а
+которой не хватает стадий, не глядя на дозагрузку (repository._needs_pipeline_from), а
 enqueue-external-refetch стоит в цикле планировщика ПОСЛЕ enqueue-process: пакет дня, выданный с
 анонсом, идёт десятки минут, и его суть ложится уже после того, как полное тело записано.
 
@@ -121,7 +121,7 @@ def enqueue_after_body(article_ids: Iterable[int], *, batch_size: int = BATCH_SI
             WHERE a.id = ANY(%s)
               AND {_allowed_sql()}
               AND (
-                    (c.relevant IS TRUE AND (
+                    ({feed_window.relevance_sql('a', 'c')} IS TRUE AND (
                         c.summary IS NOT NULL
                         OR EXISTS (SELECT 1 FROM article_tags t WHERE t.article_id = a.id)
                         OR EXISTS (SELECT 1 FROM article_scores sc WHERE sc.article_id = a.id)))
@@ -186,7 +186,7 @@ def still_applicable(article_ids: list[int]) -> set[int]:
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
-            WHERE a.id = ANY(%s) AND c.relevant IS TRUE AND {_allowed_sql()}
+            WHERE a.id = ANY(%s) AND {feed_window.relevance_sql('a', 'c')} IS TRUE AND {_allowed_sql()}
             """,
             (list(article_ids),),
         ).fetchall()

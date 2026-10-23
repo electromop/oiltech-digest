@@ -250,7 +250,8 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
     _validate_weights(criteria)
     stats = {"processed": 0, "fulltext": 0, "summary": 0, "relevant": 0,
              "rejected": 0, "tagged": 0, "translated": 0, "scored": 0, "errors": 0}
-    for article in articles:
+    # Статью, которую держит «Отбор» (#130): отклонённую им и ждущую его решения, — не обрабатываем.
+    for article in [item for item in articles if not repository.held_by_otbor(item)]:
         stats["processed"] += 1
         try:
             # 1. Полный текст из HTML, если RSS отдал только сниппет.
@@ -266,14 +267,18 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
                     stats["fulltext"] += 1
 
             # 2. Релевантность ПЕРВОЙ — на сыром тексте, до сути (без bias и без лишних
-            #    AI-вызовов на нерелевантном).
-            blocked_reason = _negative_keyword_block(article, tags)
+            #    AI-вызовов на нерелевантном). Решение «Отбора» (#130) главнее гейта: решённую им
+            #    статью не решают ни стоп-слова, ни гейт.
+            verdict = repository.otbor_verdict(article)
+            blocked_reason = None if verdict is not None else _negative_keyword_block(article, tags)
             if blocked_reason:
                 repository.set_article_relevance(article["id"], False, blocked_reason, "negative-keyword")
                 stats["rejected"] += 1
                 continue
 
-            if article.get("relevant") is True:
+            if verdict is not None:
+                relevant = verdict
+            elif article.get("relevant") is True:
                 relevant = True
             elif article.get("relevant") is False:
                 relevant = False

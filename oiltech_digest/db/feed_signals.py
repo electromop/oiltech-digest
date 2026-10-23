@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from datetime import date
 import logging
 
+from oiltech_digest import feed_window
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED, signal_publication_count_sql
 
@@ -38,7 +39,9 @@ def _key_sql(article_sql: str) -> str:
 
 # Принятая статья, которая не перепечатка, — свой сигнал. Тема — корневая тематика тега
 # статьи (у дочернего тега — его корень), без тега — «не классифицировано»: тема у сигнала
-# обязательна, а тег приходит позже отбора. Балл с подпунктами — как у статьи.
+# обязательна, а тег приходит позже отбора. Балл с подпунктами — как у статьи. Принятая — по
+# решению агента «Отбор» (#130), без него — по гейту: отклонённую и ждущую «Отбора» статью
+# заводит хранилище «Отбора» (otbor_store), а мост ей суть, тему и балл не пишет.
 _UPSERT_SIGNALS = f"""
 INSERT INTO signals (
   signal_key, origin, origin_article_id, signal_category, title, title_ru, theme, summary,
@@ -50,7 +53,7 @@ SELECT {_key_sql('a.id')}, '{SIGNAL_ORIGIN_FEED}', a.id, '{FEED_CATEGORY}', a.ti
        COALESCE(a.collected_at, now()), COALESCE(a.collected_at, now())
 FROM feed_scope f
 JOIN articles a ON a.id = f.id
-JOIN article_cards c ON c.article_id = a.id AND c.relevant IS TRUE
+JOIN article_cards c ON c.article_id = a.id
 LEFT JOIN article_tags at ON at.article_id = a.id
 LEFT JOIN tags t ON t.id = at.tag_id
 LEFT JOIN tags root ON root.id = t.parent_id
@@ -60,7 +63,8 @@ LEFT JOIN LATERAL (
                                       'rationale', i.rationale) ORDER BY i.criterion_id) AS items
   FROM article_score_items i WHERE i.article_score_id = sc.id
 ) items ON TRUE
-WHERE NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
+WHERE {feed_window.relevance_sql('a', 'c')} IS TRUE
+  AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
   AND (%(create_since)s::date IS NULL OR a.collected_at >= %(create_since)s::date
        OR EXISTS (SELECT 1 FROM signals x WHERE x.signal_key = {_key_sql('a.id')}))
 ON CONFLICT (signal_key) DO UPDATE SET
@@ -81,6 +85,32 @@ WHERE (signals.title, signals.title_ru, signals.theme, signals.summary, signals.
       (EXCLUDED.title, EXCLUDED.title_ru, EXCLUDED.theme, EXCLUDED.summary, EXCLUDED.score,
        EXCLUDED.score_profile, EXCLUDED.criteria_snapshot, EXCLUDED.score_items_json)
 RETURNING (xmax = 0) AS inserted
+"""
+
+# Сигнал статьи без сути, темы и балла: его заводит хранилище «Отбора» при первом решении или сбое (otbor_store),
+# у отклонённой и ждущей решения статьи другого нет. Тема «не классифицировано» (тема у сигнала обязательна, тег
+# придёт позже); суть, тему и балл принятой допишет _UPSERT_SIGNALS. Параметры: id статьи и unclassified.
+BASE_SIGNAL_INSERT = f"""
+INSERT INTO signals (signal_key, origin, origin_article_id, signal_category, title, theme, maturity,
+                     first_seen_at, last_seen_at)
+SELECT {_key_sql('a.id')}, '{SIGNAL_ORIGIN_FEED}', a.id, '{FEED_CATEGORY}', a.title, %(unclassified)s,
+       'watch', COALESCE(a.collected_at, now()), COALESCE(a.collected_at, now())
+FROM articles a WHERE a.id = %(id)s
+ON CONFLICT (signal_key) DO NOTHING
+"""
+
+# Сбой «Отбора» у статьи, которую потом решил гейт (флаг «Отбора» выключили: работает прежняя цепочка, решение
+# владельца 23.10), снимается: статья живёт по решению гейта, с «В дайджест» и «Карточкой», как все.
+_CLEAR_GATE_DECIDED_FAILURES = f"""
+UPDATE signals s
+SET otbor_failure = NULL, otbor_failure_reason = NULL,
+    decision_log = COALESCE(s.decision_log, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+      'stage', '«Отбор»', 'text', 'Статью решил гейт («Отбор» выключен): сбой снят')),
+    updated_at = now()
+FROM feed_scope f
+JOIN article_cards c ON c.article_id = f.id
+WHERE s.signal_key = {_key_sql('f.id')}
+  AND s.otbor_decision IS NULL AND s.otbor_failure IS NOT NULL AND c.relevant IS NOT NULL
 """
 
 # Пометку перепечатки сняли — статья снова главная своего сигнала.
@@ -127,7 +157,7 @@ LEFT JOIN article_cards c ON c.article_id = a.id
 LEFT JOIN article_reprints ar ON ar.article_id = a.id
 JOIN signals target ON target.signal_key = {_key_sql('COALESCE(ar.primary_id, a.id)')}
 WHERE COALESCE(a.url, '') <> ''
-  AND (ar.article_id IS NULL OR c.relevant IS NOT FALSE)
+  AND (ar.article_id IS NULL OR {feed_window.selected_sql('a', 'c')})
 ORDER BY a.url, (ar.article_id IS NULL) DESC, a.id
 ON CONFLICT (source_url) DO UPDATE SET
   signal_id = EXCLUDED.signal_id,
@@ -211,6 +241,7 @@ def sync_feed_signals(
             """
         )
         upserted = conn.execute(_UPSERT_SIGNALS, params).fetchall()
+        conn.execute(_CLEAR_GATE_DECIDED_FAILURES)
         unmerged = conn.execute(_UNMERGE_FORMER_REPRINTS).rowcount
         merged = conn.execute(_MERGE_REPRINTS).rowcount
         publications = conn.execute(_UPSERT_PUBLICATIONS).rowcount

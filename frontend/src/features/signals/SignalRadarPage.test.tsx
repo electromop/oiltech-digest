@@ -489,7 +489,8 @@ describe("SignalRadarPage", () => {
       renderRadar(false);
       await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
 
-      fireEvent.change(screen.getByRole("combobox", { name: /^Решение радара/ }), { target: { value: "proven" } });
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "proven" } });
 
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: /группу Бурение/ })).not.toBeInTheDocument(),
@@ -538,7 +539,8 @@ describe("SignalRadarPage", () => {
       await screen.findByRole("button", { name: "В дайджест" });
       const stale = deferred<Signal[]>();
       vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
-      fireEvent.change(screen.getByRole("combobox", { name: /^Решение радара/ }), { target: { value: "watch" } });
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "watch" } });
       await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
 
       fireEvent.click(screen.getByRole("button", { name: "В дайджест" }));
@@ -560,7 +562,8 @@ describe("SignalRadarPage", () => {
       fireEvent.change(screen.getByLabelText("Оценка сигнала"), { target: { value: "approved" } });
       const stale = deferred<Signal[]>();
       vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
-      fireEvent.change(screen.getByRole("combobox", { name: /^Решение радара/ }), { target: { value: "watch" } });
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "watch" } });
       await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -637,34 +640,37 @@ describe("SignalRadarPage", () => {
       expect(await screen.findByText("1 из 2 сигналов")).toBeInTheDocument();
     });
 
-    it("расширенные фильтры: балл и период «Поступил» уходят на сервер, «Сбросить» возвращает всё", async () => {
-      const fresh = { ...ecology, first_seen_at: "2026-09-27T09:00:00Z" };
-      serve([drilling, fresh]);
+    it("на виду поиск, тема и сортировка; остальное — за «Фильтры · N», условия — чипами со снятием", async () => {
+      serve([drilling, { ...ecology, maturity: "proven" }]);
       renderRadar(false);
       await screen.findByRole("button", { name: "Раскрыть группу Экология" });
 
+      // Вариант A (решение владельца 23.10): строка из трёх полей и кнопки; полей балла и дат нет.
+      expect(screen.getByRole("textbox", { name: /^Поиск/ })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /^Тема/ })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: /^Решение платформы/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Расширенные фильтры" })).not.toBeInTheDocument();
+
       fireEvent.change(screen.getByRole("combobox", { name: /^Сортировка/ }), { target: { value: "score_asc" } });
-      fireEvent.click(screen.getByRole("button", { name: "Расширенные фильтры" }));
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Балл от" }), { target: { value: "70" } });
-      await waitFor(() => expect(lastListQuery()).toMatchObject({ minScore: 70, sort: "score_asc" }));
-      await waitFor(() =>
-        expect(screen.queryByRole("button", { name: /группу Экология/ })).not.toBeInTheDocument(),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "proven" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "proven", sort: "score_asc" }));
+      expect(screen.getByRole("button", { name: "Фильтры · 1" })).toHaveAttribute("aria-expanded", "true");
 
-      fireEvent.change(screen.getByLabelText("Поступил с"), { target: { value: "2026-09-26" } });
-      await waitFor(() => expect(lastListQuery()).toMatchObject({ minScore: 70, since: "2026-09-26" }));
-      expect(await screen.findByText("Сигналов по выбранным фильтрам нет.")).toBeInTheDocument();
+      // Условие — чипом; крестик снимает его.
+      fireEvent.click(screen.getByRole("button", { name: "Снять: Решение платформы: Подтверждено" }));
+      await waitFor(() => expect(lastListQuery().maturity).toBeUndefined());
+      expect(screen.getByRole("button", { name: "Фильтры" })).toBeInTheDocument();
 
+      // «Сбросить» снимает всё и возвращает порядок.
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "proven" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Тема/ }), { target: { value: "Экология" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "proven", theme: "Экология" }));
       fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
-
-      expect(await screen.findByRole("button", { name: /группу Экология/ })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /группу Бурение/ })).toBeInTheDocument();
+      await waitFor(() => expect(lastListQuery().maturity).toBeUndefined());
       const query = lastListQuery();
-      expect([query.minScore, query.maxScore, query.since, query.until, query.theme, query.q]).toEqual(
-        [undefined, undefined, undefined, undefined, undefined, undefined],
-      );
-      expect(query.sort ?? "score_desc").toBe("score_desc");
-      expect(screen.getByRole("spinbutton", { name: "Балл от" })).toHaveValue(0);
+      expect([query.theme, query.q, query.sort ?? "score_desc"]).toEqual([undefined, undefined, "score_desc"]);
       expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toHaveValue("score_desc");
     });
 
@@ -722,7 +728,7 @@ describe("SignalRadarPage", () => {
       const title = screen.getByRole("link", { name: "Роботизированная буровая установка" });
       expect(title).toHaveAttribute("href", "https://worldoil.com/a");
       expect(title).toHaveAttribute("target", "_blank");
-      expect(screen.getByText(/^Бурение · 2 ссылки · Решение радара: Наблюдать ·/)).toBeInTheDocument();
+      expect(screen.getByText(/^Бурение · 2 ссылки · Решение платформы: Наблюдать ·/)).toBeInTheDocument();
       expect(screen.getByText("#21")).toBeInTheDocument();
       // Тело свёрнуто: суть, «Почему сейчас» и ссылки — только по раскрытию.
       expect(screen.queryByText("Спутник мониторинга метана перестал выходить на связь.")).not.toBeInTheDocument();
@@ -903,16 +909,42 @@ describe("качество радара на экране (Виктор 29.09)",
     hidden_reason: "бизнес-сигнал, не технология",
   };
 
-  function serveWithHidden(visible: Signal[], hidden: Signal[]) {
-    vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => (query.hidden ? hidden : visible).map((card) => ({ ...card })));
+  // Разделы отклонённого «кто убрал → причина» (#130) — как их отдаёт сервер, с короткой причиной у публикаций.
+  const rejectedCard: Signal = {
+    ...baseSignal,
+    id: 602,
+    signal_key: "feed:602",
+    title_ru: "Котировки нефти",
+    origin: "feed",
+    maturity: "reject",
+    otbor_decision: "reject",
+    reject_reason: "oil_gas_no_link",
+    section_reason: "Котировки нефти без связи с нефтесервисом",
+  };
+
+  function serveWithHidden(visible: Signal[], hidden: Signal[], rejected: Signal[] = []) {
+    // Плашка «Отклонённые» (#130): все разделы одним списком, причина — «кто убрал → причина: коротко».
+    const bySection: Record<string, Signal[]> = {
+      all: [
+        ...rejected.map((card) => ({
+          ...card, section_reason: `«Отбор» → Нефтегаз без связи с нефтесервисом: ${card.section_reason}`,
+        })),
+        ...hidden.map((card) => ({
+          ...card, section_reason: `До «Отбора» → Скрыто прежними правилами радара: ${card.hidden_reason}`,
+        })),
+      ],
+    };
+    const total = hidden.length + rejected.length;
+    vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) =>
+      (query.section ? bySection[query.section] ?? [] : visible).map((card) => ({ ...card })));
     vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => ({
       total: visible.length,
       new_7d: 0,
       in_digest: 0,
       with_feedback: 0,
       merged: 0,
-      hidden: hidden.length,
-      matching: query.hidden ? hidden.length : visible.length,
+      rejected: total,
+      matching: query.section ? (bySection[query.section] ?? []).length : visible.length,
       themes: [],
     }));
   }
@@ -951,31 +983,116 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(within(card).queryByText("Балл по критериям")).not.toBeInTheDocument();
   });
 
-  it("админ открывает отсеянные и скрытые с причиной и возвращается к радару", async () => {
+  it("плашка «Отклонённые» у админа: все причины одним списком, причина — в карточке; возврат к радару (#130)", async () => {
+    serveWithHidden([scored, legacy], [hiddenCard], [rejectedCard]);
     renderRadar(true);
     await screen.findByText(scored.title_ru as string);
-    expect(tileValue("Отсеяно и скрыто")).toBe("1");
+    expect(tileValue("Отклонённые")).toBe("2");
 
-    fireEvent.click(screen.getByRole("button", { name: "Отсеянные и скрытые (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Отклонённые: 2" }));
 
-    expect(await screen.findByText("SLB получила контракты Aramco")).toBeInTheDocument();
-    expect(lastListQuery().hidden).toBe(true);
-    expect(screen.getByRole("heading", { name: "Отсеянные и скрытые карточки" })).toBeInTheDocument();
-    expect(screen.getByText("Не на радаре: бизнес-сигнал, не технология")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("отсеянное поиском и судьёй");
+    expect(await screen.findByText("Котировки нефти")).toBeInTheDocument();
+    expect(lastListQuery().section).toBe("all");
+    expect(screen.getByRole("heading", { name: "Отклонённые" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Отклонённые: 2" })).toHaveAttribute("aria-pressed", "true");
+    // Кнопок разделов нет: причина — в самой карточке (решение владельца 23.10).
+    expect(screen.queryByRole("group", { name: "Разделы отклонённого" })).not.toBeInTheDocument();
+    expect(screen.getByText(
+      "Причина: «Отбор» → Нефтегаз без связи с нефтесервисом: Котировки нефти без связи с нефтесервисом",
+    )).toBeInTheDocument();
+    expect(screen.getByText("Причина: До «Отбора» → Скрыто прежними правилами радара: бизнес-сигнал, не технология"))
+      .toBeInTheDocument();
+    // Отклонённое «Отбором» — с «Решением платформы» «Отклонено» и без «В дайджест» (вернуть его — #132).
+    expect(screen.getByText(/· Решение платформы: Отклонено ·/)).toBeInTheDocument();
+    const rejected = screen.getByText("Котировки нефти").closest("article") as HTMLElement;
+    expect(within(rejected).queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
+    // Скрытая прежними правилами — с «В дайджест», как раньше: выбранная, она выходит на радар.
+    const hiddenRow = screen.getByText("SLB получила контракты Aramco").closest("article") as HTMLElement;
+    expect(within(hiddenRow).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "К радару" }));
 
     expect(await screen.findByText(scored.title_ru as string)).toBeInTheDocument();
-    expect(lastListQuery().hidden).toBeUndefined();
+    expect(lastListQuery().section).toBeUndefined();
   });
 
-  it("обычный пользователь не видит ни переключателя, ни плитки «Отсеяно и скрыто» (решение 05.10)", async () => {
+  it("статья сбора на радаре — без пустых полей судьи «Почему сейчас» и «Переносимость» (#130)", async () => {
+    serveWithHidden([{
+      ...scored, origin: "feed", why_now: null, transferability: null, otbor_decision: "accept",
+    }], []);
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    expect(within(card).queryByText("Почему сейчас")).not.toBeInTheDocument();
+    expect(within(card).queryByText("Переносимость")).not.toBeInTheDocument();
+  });
+
+  it("пометка «спорное» видна на карточке (#130)", async () => {
+    serveWithHidden([{
+      ...scored,
+      otbor_decision: "accept",
+      otbor_disputed: "шаги ответа не сошлись и после повтора: прямая связь у другой отрасли",
+    }], []);
+    renderRadar(false);
+
+    expect(await screen.findByText("Спорное: шаги ответа не сошлись и после повтора: прямая связь у другой отрасли"))
+      .toBeInTheDocument();
+  });
+
+  it("блоки ОС — списком на раскрытой карточке; сохранённый блок добавляется к ним (#130)", async () => {
+    serveWithHidden([{
+      ...scored,
+      feedback_blocks: [{
+        id: 1, author: "expert@example.test", verdict: "strong_signal", reason: "внедрение у оператора",
+        comment: null, created_at: "2026-10-20T09:00:00Z",
+      }],
+    }], []);
+    vi.mocked(createSignalFeedback).mockResolvedValue({
+      ok: true, event_id: 2, memory_ids: [], memories: 0,
+      block: { id: 2, author: "colleague@example.test", verdict: null, reason: null, comment: "Уже было в сентябре",
+               created_at: "2026-10-23T09:00:00Z" },
+    });
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    const blocks = within(card).getByRole("list", { name: "Оценки людей" });
+    expect(within(blocks).getByText("expert@example.test · 20.10.2026")).toBeInTheDocument();
+    expect(within(blocks).getByText("Сильный сигнал")).toBeInTheDocument();
+    expect(within(blocks).getByText("Причина: внедрение у оператора")).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
+    fireEvent.change(within(card).getByLabelText("Рекомендации AI-агенту"), { target: { value: "Уже было в сентябре" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => expect(within(blocks).getAllByRole("listitem")).toHaveLength(2));
+    expect(within(blocks).getByText("Уже было в сентябре")).toBeInTheDocument();
+  });
+
+  it("обычный пользователь плашки «Отклонённые» не видит (решение 05.10)", async () => {
     renderRadar(false);
     await screen.findByText(scored.title_ru as string);
-    expect(screen.queryByRole("button", { name: /^Отсеянные и скрытые/ })).not.toBeInTheDocument();
-    expect(screen.queryByText("Отсеяно и скрыто")).not.toBeInTheDocument();
-    expect(lastListQuery().hidden).toBeUndefined();
+    expect(screen.queryByText("Отклонённые")).not.toBeInTheDocument();
+    expect([lastListQuery().hidden, lastListQuery().section]).toEqual([undefined, undefined]);
+  });
+
+  it("у статьи сбора на радаре отзыв — блок ОС: без правок карточки и «дубля», агента он не учит (#130)", async () => {
+    serveWithHidden([{ ...scored, origin: "feed", signal_category: "technology", otbor_decision: "accept" }], []);
+    const toasts: string[] = [];
+    vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 3, memory_ids: [], memories: 0 });
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} />);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
+
+    expect(within(card).queryByLabelText("ID дубля")).not.toBeInTheDocument();
+    expect(within(card).queryByLabelText("Рекомендуемый заголовок")).not.toBeInTheDocument();
+    fireEvent.change(within(card).getByLabelText("Комментарий"), { target: { value: "Уже было" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => expect(toasts).toContain("Отзыв сохранён"));
   });
 });
 

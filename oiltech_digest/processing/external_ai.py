@@ -52,6 +52,8 @@ def build_process_articles_payload(payload: dict[str, Any], *, job_id: int | Non
         articles = repository.get_articles_by_ids(article_ids, include_summary=True)
     else:
         articles = repository.get_articles_needing_pipeline(limit)
+    # Явный список не обходит «Отбор» (#130): отклонённую им и ждущую его решения воркер не получает.
+    articles = [article for article in articles if not repository.held_by_otbor(article)]
     if payload.get(fulltext_recompute.PAYLOAD_FLAG) and articles:
         # Пересчёт после полного текста ждал пакет, выданный с обрывком: его гейт мог статью
         # отвергнуть, а месяц — закрыться. За таких модель не платится.
@@ -152,11 +154,13 @@ def _stages_left(article: dict[str, Any], stages: frozenset[str]) -> frozenset[s
 
     Как локальный конвейер (pipeline.process_pipeline_articles): записанные вердикт гейта,
     суть, перевод, тег и балл заново не зовутся, отвергнутая гейтом статья дальше не идёт.
-    Поля кладёт ядро (repository.get_articles_by_ids с include_summary)."""
-    if article.get("relevant") is False:
+    Решение «Отбора» (#130) главнее гейта: принятая им статья гейт не проходит, отклонённая
+    дальше не идёт. Поля кладёт ядро (repository.get_articles_by_ids с include_summary)."""
+    verdict = repository.otbor_verdict(article)
+    if verdict is False or (verdict is None and article.get("relevant") is False):
         return frozenset()
     done = {
-        "relevance": article.get("relevant") is True,
+        "relevance": verdict is not None or article.get("relevant") is True,
         "summary": bool(article.get("summary")),
         "translation": bool(article.get("title_ru")),
         "tagging": article.get("existing_tag_id") is not None,
@@ -229,8 +233,12 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         item: dict[str, Any] = {"article_id": int(article["id"]), "errors": []}
         result["stats"]["processed"] += 1
         todo = _stages_left(article, stages) if scheduler_batch else stages
+        # Решённую «Отбором» статью (#130) не решают ни гейт, ни стоп-слова: «по смыслу прячет только «Отбор»».
+        otbor_decided = article.get("otbor_decision") is not None
+        if otbor_decided:
+            todo = todo - {"relevance"}
         try:
-            if "relevance" in stages:
+            if "relevance" in stages and not otbor_decided:
                 # Стоп-слова родительских тегов: отсекаем статью ДО любых AI-вызовов (бэклог #6).
                 blocked_reason = _negative_keyword_block(article, tags)
                 if blocked_reason:

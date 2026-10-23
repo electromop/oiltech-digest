@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import requests
 
-from oiltech_digest import admission, config, contract, signal_card, signal_discovery, worker_shutdown
+from oiltech_digest import admission, config, contract, otbor, signal_card, signal_discovery, worker_shutdown
 from oiltech_digest.ingestion import external_fetch
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
@@ -285,8 +285,9 @@ _JOB_STALL_SECONDS = {
     # между ними один вызов модели или одна страница, как у ИИ-видов.
     "source_candidate_evaluate": 1200,
     "signal_discovery": 1200,
-    # Карточка сигнала: шаг — один вызов модели на сигнал.
+    # Карточка сигнала: шаг — один вызов модели на сигнал; «Отбор» — один-два на публикацию.
     "signal_card": 1200,
+    "otbor": 1200,
 }
 # Процесс перед перезапуском перестаёт брать задачи и ждёт соседние потоки полосы: выход
 # рвал бы их здоровые задачи (ждали бы истечения аренды и теряли попытку).
@@ -441,6 +442,8 @@ _HANDLERS: dict[str, tuple[Any, str]] = {
     "signal_discovery": (signal_discovery, "process_external_payload"),
     # Агент «Карточка сигнала» (#96, контракт 2): поток дня и полоса пересчётов.
     "signal_card": (signal_card, "process_payload"),
+    # Агент «Отбор» (#130, контракт 4): поток дня и полоса пересчётов.
+    "otbor": (otbor, "process_payload"),
     # Код допуска в чат подтверждающих (#113, контракт 3): воркер сбора, полоса external-notify.
     "admission_notify": (admission, "send_notification"),
 }
