@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
 import {
   createSignalFeedback,
   getSignalDictionaries,
-  getSignalSections,
   getSignalSearchHealth,
   getSignalSummary,
   getSignalWeekly,
@@ -14,7 +13,6 @@ import type {
   SignalDictionaries,
   SignalFilters,
   SignalSearchHealth,
-  SignalSection,
   SignalShowcase,
   SignalSort,
   SignalSummary,
@@ -25,7 +23,7 @@ import { radarDigestLockedText } from "../articles/feedWindow";
 import { StatCard } from "../shared/StatCard";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { PROFILES } from "../scoring/ScoringPage";
-import { SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
+import { CHOICE_FIELDS, SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
 import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
 
@@ -36,9 +34,6 @@ export const RADAR_PAGE_SIZE = 100;
 const RADAR_MAX_PAGE = 200;
 // Задержка серверного поиска — как у ленты бизнес-сигналов: запрос не на каждую букву.
 const SEARCH_DELAY_MS = 400;
-// Без фильтров видно всё: в отличие от ленты, радар слабые карточки по умолчанию не прячет.
-const SCORE_MIN = 0;
-const SCORE_MAX = 100;
 const DEFAULT_SORT: SignalSort = "score_desc";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
@@ -127,13 +122,20 @@ const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> 
   { value: "overrated", label: "Оценка завышена — сигнал годный, балл слишком высокий" },
 ];
 
-// Блок ОС в ленте (#130) — оценка, причина и комментарий: правок карточки и «дубля» (он прячет карточку) у
-// ленты нет. «Не тот блок» в ленте — наоборот: технология, а не бизнес.
-function verdictOptions(business: boolean): typeof VERDICT_LABELS {
-  if (!business) return VERDICT_LABELS;
-  return VERDICT_LABELS.filter((item) => item.value !== "merge_duplicate").map((item) =>
-    item.value === "wrong_block" ? { ...item, label: "Не тот блок — технологический сигнал, а не бизнес" } : item,
-  );
+// Отзыв учит судью радара только о его находке вне бизнес-ленты (#130, repository.judge_learns_from): у неё
+// полная форма. У остальных (сигнал ленты, находка в бизнес-ленте) отзыв — блок ОС: оценка, причина и
+// комментарий, правок карточки и «дубля» (он прячет карточку) нет; блок только хранится.
+function judgeFeedback(signal: Signal): boolean {
+  return signal.origin !== "feed" && signal.signal_category !== "business";
+}
+
+// «Не тот блок» у бизнес-карточки — наоборот: технология, а не бизнес.
+function verdictOptions(signal: Signal): typeof VERDICT_LABELS {
+  const labels = signal.signal_category === "business"
+    ? VERDICT_LABELS.map((item) =>
+      item.value === "wrong_block" ? { ...item, label: "Не тот блок — технологический сигнал, а не бизнес" } : item)
+    : VERDICT_LABELS;
+  return judgeFeedback(signal) ? labels : labels.filter((item) => item.value !== "merge_duplicate");
 }
 
 // Оценка человека в списке блоков — коротко: первая часть подписи шкалы («Сильный сигнал»).
@@ -209,14 +211,6 @@ function signalsAfterFrom(count: number): string {
   return count % 10 === 1 && count % 100 !== 11 ? "сигнала" : "сигналов";
 }
 
-// Балл карточки — 0–100: поле пустое или вне шкалы — край шкалы, а не ошибка сервера.
-function clampScore(value: string, fallback: number): number {
-  if (value.trim() === "") return fallback;
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(SCORE_MIN, Math.min(SCORE_MAX, number));
-}
-
 // Слово при числе: «1 ссылка», «2 ссылки», «5 ссылок».
 function pluralWord(count: number, one: string, few: string, many: string): string {
   const tens = count % 100;
@@ -229,15 +223,15 @@ function pluralWord(count: number, one: string, few: string, many: string): stri
 const LINK_WORDS = ["ссылка", "ссылки", "ссылок"] as const;
 const PUBLICATION_WORDS = ["публикация", "публикации", "публикаций"] as const;
 
-// Мета под заголовком карточки: «тема · N ссылок · решение платформы · » — номер карточки следом.
-// Решение платформы (наблюдать / кандидат / подтверждено / отклонено; до 22.10 — «Решение радара») — оценка
-// машины, а не зрелость технологии (та — чипом карточки); оценка человека в ОС — «Оценка сигнала». У сигнала
-// ленты его посчитает код из ступени балла (#132): пока его в ленте нет; ссылки — публикации.
+// Мета под заголовком карточки: «тема · N ссылок · решение платформы · » — номер карточки следом, в обеих
+// витринах одинаково (решение владельца 23.10). Решение платформы (наблюдать / кандидат / подтверждено /
+// отклонено; до 22.10 — «Решение радара») — оценка машины, а не зрелость технологии (та — чипом карточки);
+// оценка человека в ОС — «Оценка сигнала». У события ленты ссылки — публикации.
 function cardMeta(signal: Signal, business: boolean): string {
   const links = Number(signal.evidence_count || 0);
-  if (business) return `${signal.theme} · ${links} ${pluralWord(links, ...PUBLICATION_WORDS)} · `;
+  const [one, few, many] = business ? PUBLICATION_WORDS : LINK_WORDS;
   const maturity = MATURITY_LABELS[signal.maturity] || signal.maturity;
-  return `${signal.theme} · ${links} ${pluralWord(links, ...LINK_WORDS)} · Решение платформы: ${maturity} · `;
+  return `${signal.theme} · ${links} ${pluralWord(links, one, few, many)} · Решение платформы: ${maturity} · `;
 }
 
 // Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
@@ -294,11 +288,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const [theme, setTheme] = useState("");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SignalSort>(DEFAULT_SORT);
-  const [scoreMin, setScoreMin] = useState(SCORE_MIN);
-  const [scoreMax, setScoreMax] = useState(SCORE_MAX);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  // Вариант A (решение владельца 23.10): на виду поиск, тема и сортировка, остальные фильтры — в панели.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersPanelId = useId();
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -309,12 +301,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
   const [weekly, setWeekly] = useState<SignalWeekly | null>(null);
   const [weeklyOpen, setWeeklyOpen] = useState(false);
-  // «Отсеянные и скрытые» — только админу (решение владельца 05.10; заказчик Виктор — админ): разделы
-  // «кто убрал → причина» (#130) — «Отбор» по причинам, сбой, поиск, «другое», скрытое прежними правилами.
+  // «Отклонённые» — только админу (решение владельца 05.10; заказчик Виктор — админ): все разделы «кто убрал →
+  // причина» (#130) одним списком в обеих витринах, причина — в самой карточке (решение владельца 23.10).
   const [showHidden, setShowHidden] = useState(false);
-  const [sections, setSections] = useState<SignalSection[] | null>(null);
-  // Открытый раздел; пока разделы не пришли — прежний список скрытого радаром.
-  const [section, setSection] = useState("before_otbor");
   // Фильтры атрибутов карточки (#97) и справочники для их списков.
   const [cardFilters, setCardFilters] = useState<CardFilterValues>(EMPTY_CARD_FILTERS);
   const [dictionaries, setDictionaries] = useState<SignalDictionaries | null>(null);
@@ -325,18 +314,14 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       q: search.trim() || undefined,
       theme: theme || undefined,
       maturity: maturity || undefined,
-      minScore: scoreMin !== SCORE_MIN ? scoreMin : undefined,
-      maxScore: scoreMax !== SCORE_MAX ? scoreMax : undefined,
-      since: dateFrom || undefined,
-      until: dateTo || undefined,
-      section: (isAdmin && showHidden && section) || undefined,
+      section: isAdmin && showHidden ? "all" : undefined,
       eventType: cardFilters.eventType || undefined,
       region: cardFilters.region || undefined,
       technologyClass: cardFilters.technologyClass || undefined,
       technologyMaturity: cardFilters.technologyMaturity || undefined,
       company: cardFilters.company.trim() || undefined,
     }),
-    [business, search, theme, maturity, scoreMin, scoreMax, dateFrom, dateTo, isAdmin, showHidden, section, cardFilters],
+    [business, search, theme, maturity, isAdmin, showHidden, cardFilters],
   );
   // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
   // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
@@ -406,18 +391,6 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   }, [business]);
 
   useEffect(() => {
-    // Разделы отклонённого — с числами; открыт первый непустой. Не пришли — остаётся прежний список скрытого.
-    if (!isAdmin || !showHidden) return;
-    getSignalSections()
-      .then((response) => {
-        setSections(response.sections);
-        const first = response.sections.find((item) => item.count > 0);
-        if (first) setSection(first.key);
-      })
-      .catch(() => setSections(null));
-  }, [isAdmin, showHidden]);
-
-  useEffect(() => {
     // Обычный пользователь здоровье поиска не запрашивает: эндпоинт только для админа. Поиск — радара.
     if (!isAdmin || business) return;
     getSignalSearchHealth()
@@ -469,10 +442,6 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     setTheme("");
     setMaturity("");
     setCardFilters(EMPTY_CARD_FILTERS);
-    setScoreMin(SCORE_MIN);
-    setScoreMax(SCORE_MAX);
-    setDateFrom("");
-    setDateTo("");
   }
 
   function resetFilters() {
@@ -624,10 +593,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           ? "Отзыв сохранён: карточка скрыта как дубль, её ссылки — в главной карточке"
           : result.merge_skipped
             ? "Отзыв сохранён, карточка не скрыта: она уже скрыта, выбрана в дайджест или главной с таким номером нет"
-            // Блок ОС сигнала ленты только хранится: учить им агентов будет сервис ОС.
-            : business
-              ? "Отзыв сохранён"
-              : "Отзыв сохранён — агент учтёт его в следующем прогоне радара",
+            // Блок ОС только хранится: учить им агентов будет сервис ОС.
+            : judgeFeedback(signal)
+              ? "Отзыв сохранён — агент учтёт его в следующем прогоне радара"
+              : "Отзыв сохранён",
       );
       if (result.merged) {
         // Список заново: у главной карточки растёт «Объединено дублей» и появляются ссылки дубля.
@@ -693,13 +662,26 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   }
 
   const searchNotice = isAdmin ? searchHealthNotice(searchHealth) : "";
-  // «N из M сигналов»: N — в выборке по фильтрам, M — весь радар (оба числа — с сервера).
+  // «N из M сигналов»: N — в выборке по фильтрам, M — вся витрина (оба числа — с сервера). У «Отклонённых» — их
+  // число: с витриной его не сравнить.
   const countBadge = searching
     ? "Обновляем выборку…"
     : summary
-      ? `${summary.matching} из ${summary.total} ${signalsAfterFrom(summary.total)}` +
+      ? (showHidden ? `Отклонённых: ${summary.matching}` : `${summary.matching} из ${summary.total} ${signalsAfterFrom(summary.total)}`) +
         (remaining > 0 ? ` · показаны ${visibleSignals.length}` : "")
       : "";
+  // Включённые условия панели «Фильтры» — чипами со снятием; их число — на кнопке (вариант A, 23.10).
+  const activeFilters: Array<{ key: string; label: string; clear: () => void }> = [
+    ...(maturity
+      ? [{ key: "maturity", label: `Решение платформы: ${MATURITY_LABELS[maturity] || maturity}`, clear: () => setMaturity("") }]
+      : []),
+    ...CHOICE_FIELDS.filter(({ filter }) => cardFilters[filter]).map(({ filter, label }) => ({
+      key: filter, label: `${label}: ${cardFilters[filter]}`, clear: () => updateCardFilters({ [filter]: "" }),
+    })),
+    ...(cardFilters.company.trim()
+      ? [{ key: "company", label: `Компания: ${cardFilters.company.trim()}`, clear: () => updateCardFilters({ company: "" }) }]
+      : []),
+  ];
 
   return (
     <section className="screenStack">
@@ -712,9 +694,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       {showHidden ? (
         <div className="archiveNotice" role="status">
           <span>
-            Отсеянные и скрытые по разделам «кто убрал → причина»: отклонённое «Отбором» по причинам, сбои «Отбора»,
-            неподтверждённые ссылки поиска, «другое» (его видит только админ) и скрытое прежними правилами радара.
-            Короткая причина в строке карточки.
+            Отклонённые одним списком: что убрали «Отбор» и поиск радара, сбои «Отбора» и скрытое прежними
+            правилами радара. Причина у каждой карточки: «кто убрал → причина».
           </span>
         </div>
       ) : null}
@@ -772,8 +753,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         </section>
       ) : null}
 
-      {/* Плитки, как у «Бизнес-сигналов» (документ заказчика 19.09), — по всему радару:
-          поиск и фильтры сужают список, но не эти числа. «В дайджест» и ОС — в обеих витринах (#130). */}
+      {/* Плитки — по всей витрине: поиск и фильтры сужают список, но не эти числа. «Отклонённые» — админу, одна
+          плашка в обеих витринах (#130, решение владельца 23.10): по ней открывается их список. */}
       {summary ? (
         <section className="statsGridReact" aria-label={screenText.summary}>
           <StatCard label="Всего сигналов" value={summary.total} />
@@ -781,31 +762,29 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           <StatCard label="В дайджесте" value={summary.in_digest} />
           <StatCard label="С обратной связью" value={summary.with_feedback} />
           <StatCard label="Объединено дублей" value={summary.merged} />
-          {isAdmin && !business && summary.hidden != null ? (
-            <StatCard label="Отсеяно и скрыто" value={summary.hidden} />
+          {isAdmin && summary.hidden != null ? (
+            <button
+              type="button"
+              className="statCardReact statCardButton"
+              aria-pressed={showHidden}
+              aria-label={`Отклонённые: ${summary.hidden}`}
+              onClick={() => setShowHidden((current) => !current)}
+            >
+              <span className="statValueReact">{summary.hidden}</span>
+              <span className="metaText">Отклонённые</span>
+            </button>
           ) : null}
         </section>
       ) : null}
 
-      {/* Раскладка — как у «Бизнес-сигналов» (документ заказчика 19.09): действия в шапке
-          панели, поиск и тема первой строкой, решение платформы и сортировка второй, атрибуты
-          карточки третьей, остальное — в «Расширенных фильтрах». */}
       <section className="panel">
         <div className="panelHeader">
-          <h2>
-            {showHidden ? "Отсеянные и скрытые карточки" : screenText.catalog}
-          </h2>
+          <h2>{showHidden ? "Отклонённые" : screenText.catalog}</h2>
           <div className="settingsActions signalRadarPanelActions">
             {countBadge ? <span className="badge">{countBadge}</span> : null}
-            {/* «Отсеянные и скрытые» — разбор работы радара: у ленты их нет (API отвечает 422). */}
-            {isAdmin && !business ? (
-              <button
-                type="button"
-                className={showHidden ? "primaryButton" : "ghostButton"}
-                aria-pressed={showHidden}
-                onClick={() => setShowHidden((current) => !current)}
-              >
-                {showHidden ? "К радару" : `Отсеянные и скрытые${summary?.hidden != null ? ` (${summary.hidden})` : ""}`}
+            {showHidden ? (
+              <button type="button" className="primaryButton" onClick={() => setShowHidden(false)}>
+                {business ? "К ленте" : "К радару"}
               </button>
             ) : null}
             {groups.length ? (
@@ -838,24 +817,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           </div>
         </div>
 
-        {showHidden && sections ? (
-          // Разделы отклонённого «кто убрал → причина» (#130): у каждого — число публикаций.
-          <div className="signalSections" role="group" aria-label="Разделы отклонённого">
-            {sections.map((item) => (
-              <button
-                type="button"
-                key={item.key}
-                className={item.key === section ? "primaryButton compactButton" : "ghostButton compactButton"}
-                aria-pressed={item.key === section}
-                onClick={() => setSection(item.key)}
-              >
-                {`${item.who} → ${item.reason}: ${item.count}`}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="articlesFiltersRow">
+        {/* Вариант A (решение владельца 23.10): на виду поиск, тема и сортировка, остальные фильтры — в панели
+            «Фильтры · N», включённые — чипами со снятием. Поля балла и дат сняты. */}
+        <div className="articlesFiltersRow signalToolbar">
           <label className="field">
             <span>Поиск</span>
             <input
@@ -873,11 +837,46 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
               {themes.map((item) => <option value={item} key={item}>{item}</option>)}
             </select>
           </label>
+          <label className="field">
+            <span>Сортировка</span>
+            <select value={sort} onChange={(event) => setSort(event.target.value as SignalSort)}>
+              <option value="score_desc">Балл: по убыванию</option>
+              <option value="date_desc">Сначала новые</option>
+              <option value="score_asc">Балл: по возрастанию</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className={filtersOpen ? "primaryButton signalFiltersButton" : "ghostButton signalFiltersButton"}
+            aria-expanded={filtersOpen}
+            aria-controls={filtersPanelId}
+            onClick={() => setFiltersOpen((current) => !current)}
+          >
+            {activeFilters.length ? `Фильтры · ${activeFilters.length}` : "Фильтры"}
+          </button>
         </div>
 
-        <div className="articlesFiltersRow signalRadarFiltersSecondary">
-          {/* Решение платформы у сигнала ленты посчитает код из ступени балла (#132): пока фильтр — у радара. */}
-          {business ? null : (
+        {activeFilters.length ? (
+          <div className="signalActiveFilters" role="group" aria-label="Включённые фильтры">
+            {activeFilters.map((item) => (
+              <button
+                type="button"
+                key={item.key}
+                className="signalChip signalFilterChip"
+                aria-label={`Снять: ${item.label}`}
+                onClick={item.clear}
+              >
+                {item.label} <span aria-hidden="true">×</span>
+              </button>
+            ))}
+            <button type="button" className="ghostButton compactButton" onClick={resetFilters}>
+              Сбросить
+            </button>
+          </div>
+        ) : null}
+
+        {filtersOpen ? (
+          <div className="signalFilterPanel" id={filtersPanelId} role="group" aria-label="Фильтры">
             <label className="field">
               <span>Решение платформы</span>
               <select value={maturity} onChange={(event) => setMaturity(event.target.value)}>
@@ -888,64 +887,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                 <option value="reject">Отклонено</option>
               </select>
             </label>
-          )}
-          <label className="field">
-            <span>Сортировка</span>
-            <select value={sort} onChange={(event) => setSort(event.target.value as SignalSort)}>
-              <option value="score_desc">Балл: по убыванию</option>
-              <option value="date_desc">Сначала новые</option>
-              <option value="score_asc">Балл: по возрастанию</option>
-            </select>
-          </label>
-        </div>
-
-        <SignalCardFilters dictionaries={dictionaries} values={cardFilters} onChange={updateCardFilters} />
-        <CompanyGroupHint company={cardFilters.company} group={summary?.company_group} />
-
-        <div className="advancedToggleRow">
-          <button type="button" className="ghostButton" onClick={() => setShowAdvancedFilters((current) => !current)}>
-            {showAdvancedFilters ? "Скрыть расширенные фильтры" : "Расширенные фильтры"}
-          </button>
-        </div>
-
-        {showAdvancedFilters ? (
-          <div className="articlesAdvancedGrid">
-            <label className="field">
-              <span>Балл от</span>
-              <input
-                type="number"
-                min={SCORE_MIN}
-                max={SCORE_MAX}
-                value={scoreMin}
-                onChange={(event) => setScoreMin(clampScore(event.target.value, SCORE_MIN))}
-              />
-            </label>
-            <label className="field">
-              <span>Балл до</span>
-              <input
-                type="number"
-                min={SCORE_MIN}
-                max={SCORE_MAX}
-                value={scoreMax}
-                onChange={(event) => setScoreMax(clampScore(event.target.value, SCORE_MAX))}
-              />
-            </label>
-            <label className="field">
-              <span>Поступил с</span>
-              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-            </label>
-            <label className="field">
-              <span>Поступил по</span>
-              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-            </label>
-            <div className="field">
-              <span>&nbsp;</span>
-              <button type="button" className="ghostButton" onClick={resetFilters}>
-                Сбросить
-              </button>
-            </div>
+            <SignalCardFilters dictionaries={dictionaries} values={cardFilters} onChange={updateCardFilters} />
           </div>
         ) : null}
+        {/* Кого добавил фильтр «всё про компанию» (дочки) — видно и при закрытой панели. */}
+        <CompanyGroupHint company={cardFilters.company} group={summary?.company_group} />
 
         {!loaded ? (
           <div className="emptyState">Загружаем сигналы...</div>
@@ -1190,7 +1136,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                       </div>
                     ) : null}
 
-                    {/* Форма блока ОС — в обеих витринах (#130); у ленты — оценка, причина и комментарий. */}
+                    {/* Форма ОС — в обеих витринах (#130): у находки судьи радара вне бизнес-ленты — полная, у
+                        остальных — блок ОС (оценка, причина и комментарий). */}
                     {isFeedbackOpen ? (
                       // Форма ОС (документ заказчика 19.09: «сделать поприятнее оформление»):
                       // на десктопе две колонки — пары полей одной высоты, подписи как в
@@ -1205,12 +1152,12 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                                 updateFeedbackDraft(signal.id, { verdict: event.target.value as FeedbackDraft["verdict"] })
                               }
                             >
-                              {verdictOptions(business).map((item) => (
+                              {verdictOptions(signal).map((item) => (
                                 <option value={item.value} key={item.value || "empty"}>{item.label}</option>
                               ))}
                             </select>
                           </label>
-                          {business ? null : (
+                          {judgeFeedback(signal) ? (
                             <label className="field signalFeedbackDuplicate">
                               <span>ID дубля</span>
                               <input
@@ -1220,7 +1167,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                                 placeholder="номер главной карточки, если это дубль"
                               />
                             </label>
-                          )}
+                          ) : null}
                           <label className="field">
                             <span>Обоснование оценки</span>
                             <input
@@ -1229,7 +1176,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                               placeholder="чем обоснована оценка"
                             />
                           </label>
-                          {business ? null : (
+                          {judgeFeedback(signal) ? (
                             <>
                               <label className="field">
                                 <span>Рекомендуемый заголовок</span>
@@ -1248,13 +1195,13 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                                 />
                               </label>
                             </>
-                          )}
+                          ) : null}
                           <label className="field">
-                            <span>{business ? "Комментарий" : "Рекомендации AI-агенту"}</span>
+                            <span>{judgeFeedback(signal) ? "Рекомендации AI-агенту" : "Комментарий"}</span>
                             <textarea
                               value={draftOf(signal.id).comment}
                               onChange={(event) => updateFeedbackDraft(signal.id, { comment: event.target.value })}
-                              placeholder={business ? "что важно знать о сигнале" : "термины, поисковый угол, сильный источник..."}
+                              placeholder={judgeFeedback(signal) ? "термины, поисковый угол, сильный источник..." : "что важно знать о сигнале"}
                             />
                           </label>
                         </div>

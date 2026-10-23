@@ -202,8 +202,8 @@ describe("бизнес-лента", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
     expect(lastListQuery()).toMatchObject({ showcase: "business" });
-    // «Решение платформы» у сигнала ленты посчитает код из ступени балла (#132): пока его на карточке нет.
-    expect(within(card).getByText(/^Бурение · 2 публикации ·/)).not.toHaveTextContent("Решение платформы");
+    // Лента устроена так же, как радар (решение владельца 23.10): и «Решение платформы» на карточке.
+    expect(within(card).getByText(/^Бурение · 2 публикации · Решение платформы: Наблюдать ·/)).toBeInTheDocument();
     expect(within(card).getByText("Событие: 24.09.2026 · из текста")).toBeInTheDocument();
     expect(within(card).getByTitle("Балл по профилю «Бизнес-сигналы»")).toHaveTextContent("74");
     expect(within(card).getByText("Выше средней")).toBeInTheDocument();
@@ -222,10 +222,11 @@ describe("бизнес-лента", () => {
     ]);
     // Блок ОС оставляет каждый, как на радаре (#130).
     expect(within(card).getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
-    // Служебное радара — «Итоги недели», здоровье поиска, «Отсеянные и скрытые» — не про ленту.
+    // Служебное радара — «Итоги недели», здоровье поиска — не про ленту; плашки и «Отклонённые» — те же.
     expect(getSignalWeekly).not.toHaveBeenCalled();
     expect(getSignalSearchHealth).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: /^Отсеянные и скрытые/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Отклонённые: 0" })).toBeInTheDocument();
+    expect(screen.getByText("Объединено дублей")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("1 из 1 сигнала")).toBeInTheDocument());
   });
 
@@ -281,6 +282,7 @@ describe("бизнес-лента", () => {
     it("справочники — в списках фильтров сверху, выбор уходит на сервер", async () => {
       renderFeed();
       fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
 
       const eventType = await screen.findByRole("combobox", { name: "Тип события" });
       expect(within(eventType).getAllByRole("option").map((option) => option.textContent)).toEqual([
@@ -300,13 +302,14 @@ describe("бизнес-лента", () => {
         region: "Ближний Восток", technologyClass: "неприменимо", technologyMaturity: "не определено",
       }));
       expect(lastListQuery().eventType).toBeUndefined();
-      // «Решение платформы» у сигнала ленты посчитает код (#132): фильтра по нему в ленте пока нет.
-      expect(screen.queryByRole("combobox", { name: "Решение платформы" })).not.toBeInTheDocument();
+      // Те же фильтры, что на радаре, и «Решение платформы» тоже.
+      expect(screen.getByRole("combobox", { name: "Решение платформы" })).toBeInTheDocument();
     });
 
     it("клик по компании — все сигналы с её участием, в любой теме; «Сбросить» возвращает всё", async () => {
       renderFeed();
       fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
       // Выбраны тема и регион, порядок — «сначала новые»: «всё про компанию» снимает фильтры, порядок оставляет.
       fireEvent.change(screen.getByRole("combobox", { name: /^Тема/ }), { target: { value: "Бурение" } });
       fireEvent.change(await screen.findByRole("combobox", { name: "Регион" }), { target: { value: "Ближний Восток" } });
@@ -329,7 +332,7 @@ describe("бизнес-лента", () => {
       const input = screen.getByRole("combobox", { name: "Компания" });
       const suggestions = document.getElementById(input.getAttribute("list") ?? "") as HTMLDataListElement;
       expect([...suggestions.options].map((option) => option.value)).toEqual(DICTIONARIES.companies);
-      fireEvent.click(screen.getByRole("button", { name: "Расширенные фильтры" }));
+      expect(screen.getByRole("button", { name: "Снять: Компания: SLB" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
 
       await waitFor(() => expect(lastListQuery().company).toBeUndefined());
@@ -348,6 +351,7 @@ describe("бизнес-лента", () => {
       }));
       renderFeed();
       await screen.findByRole("button", { name: "Развернуть всё" });
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
       const input = screen.getByRole("combobox", { name: "Компания" });
 
       fireEvent.change(input, { target: { value: " Газпром нефть " } });
@@ -366,6 +370,7 @@ describe("бизнес-лента", () => {
     it("компания — по имени целиком: пустая выборка подсказывает взять имя из подсказок", async () => {
       renderFeed();
       await screen.findByRole("button", { name: "Развернуть всё" });
+      fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
 
       fireEvent.change(screen.getByRole("combobox", { name: "Компания" }), { target: { value: "Газпром" } });
 
@@ -403,6 +408,21 @@ describe("бизнес-лента", () => {
     const blocks = await within(card).findByRole("list", { name: "Оценки людей" });
     expect(within(blocks).getByText("analyst@example.test · 23.10.2026")).toBeInTheDocument();
     expect(within(blocks).getByText("Полезный сигнал")).toBeInTheDocument();
+  });
+
+  it("у находки радара в ленте отзыв — тоже блок ОС: судью радара он не учит (#130)", async () => {
+    const radarDeal: Signal = { ...contract, id: 9011, signal_key: "zena", origin: "radar",
+                                title_ru: "ZenaTech купила Velocity Geomatics", evidence: [publication(8, {})] };
+    serve([radarDeal]);
+    vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 9, memory_ids: [], memories: 0 });
+    renderFeed();
+    const card = await cardOf("ZenaTech купила Velocity Geomatics");
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
+
+    expect(within(card).queryByLabelText("ID дубля")).not.toBeInTheDocument();
+    const verdicts = within(within(card).getByLabelText("Оценка сигнала")).getAllByRole("option").map((item) => item.textContent);
+    expect(verdicts).toContain("Не тот блок — технологический сигнал, а не бизнес");
   });
 
   it("«В дайджест» в ленте — та же кнопка, что на радаре (#130)", async () => {
@@ -516,6 +536,7 @@ describe("технологический радар", () => {
     // Ревью пачки «почему интересно» не дало — пустое поле заполнил агент: это «почему важно».
     expect(within(card).getByText("Почему важно").nextSibling).toHaveTextContent("Крупнейший контракт");
 
+    fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
     expect(screen.getByRole("combobox", { name: "Решение платформы" })).toBeInTheDocument();
     fireEvent.change(await screen.findByRole("combobox", { name: "Зрелость" }), { target: { value: "пилот/ОПИ" } });
     await waitFor(() => expect(lastListQuery()).toMatchObject({ technologyMaturity: "пилот/ОПИ" }));

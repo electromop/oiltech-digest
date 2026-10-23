@@ -122,13 +122,6 @@ export function getSignalWeekly(days = 7) {
   return apiFetch<SignalWeekly>(`/api/signals/weekly?days=${days}`);
 }
 
-// Разделы отклонённого «кто убрал → причина» (#130) с числом публикаций — только админу.
-export type SignalSection = { key: string; who: string; reason: string; count: number };
-
-export function getSignalSections() {
-  return apiFetch<{ sections: SignalSection[]; total: number }>("/api/signals/sections");
-}
-
 export function updateSignal(signalId: number, payload: SignalPatch) {
   return apiFetch<{ ok: boolean }>(`/api/signals/${signalId}`, {
     method: "PATCH",
