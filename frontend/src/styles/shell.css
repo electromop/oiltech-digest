@@ -268,10 +268,16 @@
 .tasksAppShell {
   min-height: 100vh;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--ot-header-height) minmax(0, 1fr);
+  grid-template-areas:
+    "header"
+    "main";
 }
 
 .tasksAppContent {
+  grid-area: main;
+  min-width: 0;
   width: min(1680px, 100%);
   margin: 0 auto;
   padding: var(--ot-space-06) var(--ot-space-07) var(--ot-space-08);
