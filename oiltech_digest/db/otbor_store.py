@@ -17,7 +17,7 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest.db import connection, feed_signals
+from oiltech_digest.db import connection, feed_signals, marks
 from oiltech_digest.db.repository import (ARTICLE_SELECTOR_OTBOR, CARD_SET_BY_HUMAN, CARD_SET_BY_OTBOR,
                                           SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED)
 
@@ -27,6 +27,14 @@ KIND = "otbor"
 # схеме, не из справочника) — нет (решение владельца 23.10).
 FAILURE_TECHNICAL = "technical"
 FAILURE_INVALID = "invalid_answer"
+# Итог записи решения: записано; не изменено — статью выбрали «в дайджест», а повтор «Отбора» решения людей не
+# перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»).
+DECIDED, KEPT_IN_DIGEST = "decided", "kept_in_digest"
+# Статья, уже решённая «Отбором» и выбранная «в дайджест»: её решение повтор не пересматривает.
+_DECIDED_IN_DIGEST_SQL = (
+    f"({marks.article_marked_sql('a.id', 'digest')} AND EXISTS (SELECT 1 FROM signals os"
+    f" WHERE os.origin_article_id = a.id AND os.origin = '{SIGNAL_ORIGIN_FEED}' AND os.otbor_decision IS NOT NULL))"
+)
 # Поля решения «Отбора» в прежних колонках сигнала: кто поставил значение — в card_set_by.
 _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category")
 _KEY_SQL = f"'{feed_signals.FEED_KEY_PREFIX}' || a.id"
@@ -130,7 +138,7 @@ def unanswered_articles(*, days: int, attempts: int, limit: int) -> list[tuple[i
 
 def own_article_ids(article_ids: Sequence[int]) -> list[int]:
     """Из названных статей — те, что решает «Отбор»: решённое гейтом он не пересматривает (проверка на реальных
-    данных, #134, пишет свои решения отдельно)."""
+    данных, #134, пишет свои решения отдельно), решённое им и выбранное «в дайджест» тоже (chosen_for_digest)."""
     ids = sorted({int(value) for value in article_ids})
     if not ids:
         return []
@@ -140,9 +148,22 @@ def own_article_ids(article_ids: Sequence[int]) -> list[int]:
             SELECT a.id FROM articles a
             WHERE a.id = ANY(%s) AND a.selector = '{ARTICLE_SELECTOR_OTBOR}'
               AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)
+              AND NOT {_DECIDED_IN_DIGEST_SQL}
             ORDER BY a.id
             """,
             (ids,),
+        ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def chosen_for_digest(article_ids: Sequence[int]) -> list[int]:
+    """Из названных статей — решённые «Отбором» и выбранные «в дайджест»: повтор их решение не пересматривает."""
+    ids = sorted({int(value) for value in article_ids})
+    if not ids:
+        return []
+    with connection.get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT a.id FROM articles a WHERE a.id = ANY(%s) AND {_DECIDED_IN_DIGEST_SQL} ORDER BY a.id", (ids,),
         ).fetchall()
     return [int(row[0]) for row in rows]
 
@@ -169,8 +190,9 @@ def _signal_for_update(cur, article_id: int) -> dict[str, Any] | None:
 
 
 def write_decision(article_id: int, values: dict[str, Any], *, disputed: str | None,
-                   log: list[dict[str, str]], recipe: dict[str, Any]) -> bool:
-    """Записать проверенное решение «Отбора» в сигнал статьи. False — статьи нет.
+                   log: list[dict[str, str]], recipe: dict[str, Any]) -> str | None:
+    """Записать проверенное решение «Отбора» в сигнал статьи: DECIDED, KEPT_IN_DIGEST (статья выбрана «в дайджест»,
+    повтор её решение не меняет, шаги ложатся в «Ход решения»); None — статьи нет.
 
     Отрасль, связь и применение, категория — в прежние колонки, источник «otbor» (card_set_by); значение
     человека не перезаписывается никогда. У отклонённой «Решение платформы» (maturity) — «отклонено», у принятой
@@ -179,7 +201,18 @@ def write_decision(article_id: int, values: dict[str, Any], *, disputed: str | N
         cur = conn.cursor(row_factory=dict_row)
         row = _signal_for_update(cur, article_id)
         if row is None:
-            return False
+            return None
+        if row["otbor_decision"] not in (None, values["otbor_decision"]):
+            cur.execute(f"SELECT {marks.article_marked_sql('%(id)s', 'digest')} AS chosen", {"id": int(article_id)})
+            if cur.fetchone()["chosen"]:
+                kept = {"stage": "«Отбор»", "text": "Статья выбрана «в дайджест»: решение не изменено"}
+                cur.execute(
+                    "UPDATE signals SET decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb,"
+                    " updated_at = now() WHERE id = %s",
+                    (Json([*log, kept]), row["id"]),
+                )
+                conn.commit()
+                return KEPT_IN_DIGEST
         set_by = dict(row["card_set_by"] or {})
         updates: dict[str, Any] = {}
         for column in _SET_BY_COLUMNS:
@@ -207,7 +240,7 @@ def write_decision(article_id: int, values: dict[str, Any], *, disputed: str | N
         conn.commit()
     # Публикация статьи — к её сигналу, у принятой — и суть, тема, балл, когда они есть.
     feed_signals.sync_quietly([int(article_id)])
-    return True
+    return DECIDED
 
 
 def write_failure(article_id: int, kind: str, reason: str, *, log: list[dict[str, str]]) -> bool:

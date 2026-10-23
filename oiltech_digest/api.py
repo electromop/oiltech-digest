@@ -2107,10 +2107,14 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
                 or payload.duplicate_of_signal_id:
             raise HTTPException(status_code=422, detail="Отзыв об этой карточке — оценка, причина и комментарий: "
                                                         "правки карточки и «дубль» — у находки радара на радаре")
+        # Пустой блок не пишется: неизвестная оценка — не оценка, как на пути радара (store_signal_feedback).
+        verdict = _normalize_verdict(payload.verdict)
+        if not (payload.comment.strip() or verdict or (payload.reason or "").strip()):
+            raise HTTPException(status_code=400, detail="comment or structured feedback is required")
         event_id = repository.record_signal_feedback_event(
             None, "comment_added", signal_id=payload.signal_id, user_id=int(user["id"]),
             signal_title=payload.signal_title, comment=payload.comment.strip(),
-            verdict=_normalize_verdict(payload.verdict), reason=(payload.reason or "").strip() or None,
+            verdict=verdict, reason=(payload.reason or "").strip() or None,
         )
         return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0,
                 "block": _feedback_block(event_id, payload, user)}

@@ -87,6 +87,20 @@ WHERE (signals.title, signals.title_ru, signals.theme, signals.summary, signals.
 RETURNING (xmax = 0) AS inserted
 """
 
+# Сбой «Отбора» у статьи, которую потом решил гейт (флаг «Отбора» выключили: работает прежняя цепочка, решение
+# владельца 23.10), снимается: статья живёт по решению гейта, с «В дайджест» и «Карточкой», как все.
+_CLEAR_GATE_DECIDED_FAILURES = f"""
+UPDATE signals s
+SET otbor_failure = NULL, otbor_failure_reason = NULL,
+    decision_log = COALESCE(s.decision_log, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+      'stage', '«Отбор»', 'text', 'Статью решил гейт («Отбор» выключен): сбой снят')),
+    updated_at = now()
+FROM feed_scope f
+JOIN article_cards c ON c.article_id = f.id
+WHERE s.signal_key = {_key_sql('f.id')}
+  AND s.otbor_decision IS NULL AND s.otbor_failure IS NOT NULL AND c.relevant IS NOT NULL
+"""
+
 # Пометку перепечатки сняли — статья снова главная своего сигнала.
 _UNMERGE_FORMER_REPRINTS = f"""
 UPDATE signals s
@@ -215,6 +229,7 @@ def sync_feed_signals(
             """
         )
         upserted = conn.execute(_UPSERT_SIGNALS, params).fetchall()
+        conn.execute(_CLEAR_GATE_DECIDED_FAILURES)
         unmerged = conn.execute(_UNMERGE_FORMER_REPRINTS).rowcount
         merged = conn.execute(_MERGE_REPRINTS).rowcount
         publications = conn.execute(_UPSERT_PUBLICATIONS).rowcount

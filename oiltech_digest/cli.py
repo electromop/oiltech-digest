@@ -2211,8 +2211,12 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
         if args.ids:
             named = [int(value) for value in args.ids.split(",") if value.strip()]
             ids = otbor_store.own_article_ids(named)
-            if len(ids) < len(set(named)):
-                print(f"enqueue-otbor: статьи {sorted(set(named) - set(ids))[:20]} решает не «Отбор» — пропущены")
+            chosen = otbor_store.chosen_for_digest(named)
+            if chosen:
+                print(f"enqueue-otbor: статьи {chosen[:20]} выбраны в дайджест, их решение «Отбор» не пересматривает")
+            other = sorted(set(named) - set(ids) - set(chosen))
+            if other:
+                print(f"enqueue-otbor: статьи {other[:20]} решает не «Отбор» — пропущены")
             result = {"articles": len(ids), "jobs": otbor.enqueue(ids, trigger="manual", bulk=True)}
         else:
             result = otbor.enqueue_new_articles()

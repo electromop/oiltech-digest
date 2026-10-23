@@ -1,13 +1,14 @@
 """Общее для тестов агента «Отбор» (#130, спека #128): подставная модель «Отбора», статьи сбора, вставленные
 так, как их вставляет сбор (repository.insert_article: при включённом флаге статья идёт через «Отбор»), и
 настоящий клиент воркера NL против тестового ядра (signal_card_support.worker). Сами тесты —
-test_otbor_feed.py (шов 1: контур целиком, витрины и разделы) и test_otbor_worker.py (шов 1: воркер, контракт,
-сбои).
+test_otbor_feed.py (шов 1: контур целиком, витрины и разделы), test_otbor_feed_machinery.py (шов 1: прежняя
+механика ленты при «Отборе») и test_otbor_worker.py (шов 1: воркер, контракт, сбои).
 """
 
 from datetime import datetime, timezone
 import itertools
 
+from fastapi.testclient import TestClient
 import pytest
 
 from oiltech_digest import api, cli, otbor
@@ -97,3 +98,19 @@ def decide(monkeypatch, answers, *args):
 
 def showcase(user, name="business", **params):
     return {card["title"]: card for card in api_get("/api/signals", user, showcase=name, **params)}
+
+
+def api_request(method, path, user, body):
+    """Запрос к API от имени пользователя; ответ как есть."""
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        return TestClient(api.app).request(method, path, json=body)
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+
+
+def api_send(method, path, user, body):
+    """Запрос к API от имени пользователя, который обязан пройти; тело ответа."""
+    response = api_request(method, path, user, body)
+    assert response.status_code == 200, response.text
+    return response.json()

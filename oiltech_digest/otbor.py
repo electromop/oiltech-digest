@@ -430,7 +430,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     stale = result.get("dictionaries_version") != dictionaries.get("version")
     recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
               "dictionaries_version": dictionaries.get("version"), "job_id": job_id}
-    applied = {"decided": 0, "failed": 0, "errors": []}
+    applied = {"decided": 0, "failed": 0, "kept_in_digest": 0, "errors": []}
     for decision in decisions:
         article_id = _article_id(decision)
         if not _in_job(article_id, expected):
@@ -452,7 +452,8 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         written = otbor_store.write_decision(article_id, checked.values, disputed=checked.disputed, log=checked.log,
                                              recipe={**recipe, "model": _model_name(decision), "decided_at": decided_at})
-        applied["decided"] += int(written)
+        if written:
+            applied[written] += 1
     return applied
 
 

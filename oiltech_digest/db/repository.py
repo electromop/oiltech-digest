@@ -6022,17 +6022,22 @@ def defer_claimed_background_job(job_id: int, *, seconds: int = 120) -> bool:
 
 
 def get_articles_needing_relevance(limit: int = 20) -> list[dict]:
-    """Статьи с готовой сутью, но без проверки релевантности (card.relevant IS NULL)."""
+    """Статьи с готовой сутью, но без проверки релевантности (card.relevant IS NULL). Решённые «Отбором» и ждущие
+    его решения, пока он включён, гейт не берёт (#130): агент включается, прежняя релевантность для его статей
+    выключается (решение владельца 23.10)."""
+    otbor_on = "TRUE" if config.OTBOR_ENABLED else "FALSE"
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
+            f"""
             SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             WHERE c.summary IS NOT NULL AND c.relevant IS NULL
+              AND {feed_window.otbor_decision_sql('a')} IS NULL
+              AND NOT (a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND {otbor_on})
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s
             """,
