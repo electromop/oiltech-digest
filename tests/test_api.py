@@ -156,7 +156,12 @@ def test_signal_feedback_endpoint_stores_learning(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "event_id": 11, "memory_ids": [21, 22], "memories": 2}
+    body = response.json()
+    # Сохранённый блок ОС (#130) — для списка на карточке: экран добавляет его, не перечитывая витрину.
+    block = body.pop("block")
+    assert body == {"ok": True, "event_id": 11, "memory_ids": [21, 22], "memories": 2}
+    assert {key: block[key] for key in ("id", "author", "verdict", "reason")} == {
+        "id": 11, "author": "test@example.com", "verdict": "approved", "reason": "Есть внедрение"}
     assert captured["row"]["signal_id"] == 7
     assert captured["row"]["verdict"] == "approved"
     assert captured["row"]["corrected_title"] == "Управление бурением с замкнутым контуром"

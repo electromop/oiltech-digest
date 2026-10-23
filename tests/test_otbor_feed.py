@@ -312,8 +312,11 @@ def test_feedback_blocks_are_listed_on_the_card_in_both_showcases_and_change_not
     card = showcase(user, "technology")["Пилот робота Equinor"]
     [rejected] = api_get("/api/signals", admin, section="otbor:oil_gas_no_link")
 
-    _send("POST", "/api/signals/feedback", user, {"signal_id": card["id"], "verdict": "reject", "reason": "шум",
-                                                  "comment": "Рано, только испытание"})
+    saved = _send("POST", "/api/signals/feedback", user, {"signal_id": card["id"], "verdict": "reject",
+                                                          "reason": "шум", "comment": "Рано, только испытание"})
+    # Ответ несёт сохранённый блок: экран добавляет его в список, не перечитывая витрину.
+    assert {key: saved["block"][key] for key in ("author", "verdict", "reason", "comment")} == {
+        "author": user["email"], "verdict": "reject", "reason": "шум", "comment": "Рано, только испытание"}
     _send("POST", "/api/signals/feedback", admin, {"signal_id": card["id"], "verdict": "strong_signal",
                                                    "comment": "Берём в выпуск"})
     _send("POST", "/api/signals/feedback", admin, {"signal_id": rejected["id"], "verdict": "approved"})

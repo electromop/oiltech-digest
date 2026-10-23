@@ -126,6 +126,9 @@ SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
 # Агент «Карточка сигнала» (#96): новые сигналы — в задачи агента на NL. По умолчанию выключен:
 # включать после пересборки NL (контракт 2) — старая сборка такие задачи отказывает.
 SIGNAL_CARD_ENABLED="${SIGNAL_CARD_ENABLED:-0}"
+# Агент «Отбор» (#130): статьи, вставленные при включённом флаге, решает он, а не гейт ленты. По умолчанию
+# выключен: включать после пересборки NL (контракт 4) и экзамена (#133) — флаг и для вставки статей (ядро).
+OTBOR_ENABLED="${OTBOR_ENABLED:-0}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -187,6 +190,11 @@ while true; do
         log "SKIP process: OPENAI_API_KEY is empty"
       fi
     fi
+  fi
+
+  if [ "$OTBOR_ENABLED" = "1" ]; then
+    # Новые статьи — агенту «Отбор» на NL; принятые получат суть, тег и балл обработкой ленты следующего цикла.
+    run_step "enqueue-otbor" python -m oiltech_digest.cli enqueue-otbor
   fi
 
   if [ "$FETCH_EXTERNAL_ENABLED" = "1" ]; then

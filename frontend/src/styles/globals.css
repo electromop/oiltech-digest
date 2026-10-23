@@ -5321,6 +5321,39 @@ button {
   color: #b45309;
 }
 
+/* «Спорное» (#130): «Отбор» сам себе противоречил и после повтора — проверять первым. */
+.signalDisputed {
+  color: #b45309;
+  font-weight: 600;
+}
+
+/* Разделы отклонённого «кто убрал → причина» (#130): кнопки с числом публикаций над фильтрами. */
+.signalSections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+/* Блоки ОС на карточке (#130): кто и когда — подписью, оценка, причина и комментарий — следом. */
+.signalFeedbackBlocks {
+  margin-top: 12px;
+}
+
+.signalFeedbackBlocks ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+  font-size: 0.88rem;
+}
+
+.signalFeedbackBlocks li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* Атрибуты карточки сигнала (#97) — чипы под строкой карточки на обоих экранах. «Не определено» —
    пробел карточки: пунктирная рамка вместо пропуска. Компания — кнопка «всё про компанию». */
 .signalCardChips {

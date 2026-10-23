@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import hmac
@@ -2098,7 +2098,8 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
             signal_title=payload.signal_title, comment=payload.comment.strip(),
             verdict=(payload.verdict or "").strip().lower() or None, reason=(payload.reason or "").strip() or None,
         )
-        return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0}
+        return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0,
+                "block": _feedback_block(event_id, payload, user)}
     result = store_signal_feedback(
         {
             "article_id": payload.article_id,
@@ -2116,7 +2117,15 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
         },
         user_id=int(user["id"]),
     )
-    return {"ok": True, **result}
+    return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user)}
+
+
+def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
+    """Сохранённый блок ОС (#130) — как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
+    экран добавляет его, не перечитывая витрину."""
+    return {"id": event_id, "author": user.get("email"), "verdict": (payload.verdict or "").strip().lower() or None,
+            "reason": (payload.reason or "").strip() or None, "comment": payload.comment.strip() or None,
+            "created_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/signals/memory")

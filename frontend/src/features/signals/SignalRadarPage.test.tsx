@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSignalFeedback,
+  getSignalSections,
   getSignalSearchHealth,
   getSignalSummary,
   getSignalWeekly,
@@ -44,6 +45,7 @@ vi.mock("../../api/signals", () => ({
   updateSignal: vi.fn(),
   createSignalFeedback: vi.fn(),
   getSignalSearchHealth: vi.fn(),
+  getSignalSections: vi.fn(),
   // Итоги недели по умолчанию не пришли — блока нет, остальные тесты экрана его не видят.
   getSignalWeekly: vi.fn(() => Promise.reject(new Error("нет итогов"))),
   // Справочники атрибутов карточки (#97) — тоже: списков атрибутов нет, остальное как было.
@@ -489,7 +491,7 @@ describe("SignalRadarPage", () => {
       renderRadar(false);
       await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
 
-      fireEvent.change(screen.getByRole("combobox", { name: /^Решение радара/ }), { target: { value: "proven" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "proven" } });
 
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: /группу Бурение/ })).not.toBeInTheDocument(),
@@ -538,7 +540,7 @@ describe("SignalRadarPage", () => {
       await screen.findByRole("button", { name: "В дайджест" });
       const stale = deferred<Signal[]>();
       vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
-      fireEvent.change(screen.getByRole("combobox", { name: /^Решение радара/ }), { target: { value: "watch" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "watch" } });
       await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
 
       fireEvent.click(screen.getByRole("button", { name: "В дайджест" }));
@@ -560,7 +562,7 @@ describe("SignalRadarPage", () => {
       fireEvent.change(screen.getByLabelText("Оценка сигнала"), { target: { value: "approved" } });
       const stale = deferred<Signal[]>();
       vi.mocked(listSignals).mockImplementationOnce(() => stale.promise);
-      fireEvent.change(screen.getByRole("combobox", { name: /^Решение радара/ }), { target: { value: "watch" } });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Решение платформы/ }), { target: { value: "watch" } });
       await waitFor(() => expect(lastListQuery()).toMatchObject({ maturity: "watch" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -722,7 +724,7 @@ describe("SignalRadarPage", () => {
       const title = screen.getByRole("link", { name: "Роботизированная буровая установка" });
       expect(title).toHaveAttribute("href", "https://worldoil.com/a");
       expect(title).toHaveAttribute("target", "_blank");
-      expect(screen.getByText(/^Бурение · 2 ссылки · Решение радара: Наблюдать ·/)).toBeInTheDocument();
+      expect(screen.getByText(/^Бурение · 2 ссылки · Решение платформы: Наблюдать ·/)).toBeInTheDocument();
       expect(screen.getByText("#21")).toBeInTheDocument();
       // Тело свёрнуто: суть, «Почему сейчас» и ссылки — только по раскрытию.
       expect(screen.queryByText("Спутник мониторинга метана перестал выходить на связь.")).not.toBeInTheDocument();
@@ -903,18 +905,46 @@ describe("качество радара на экране (Виктор 29.09)",
     hidden_reason: "бизнес-сигнал, не технология",
   };
 
-  function serveWithHidden(visible: Signal[], hidden: Signal[]) {
-    vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => (query.hidden ? hidden : visible).map((card) => ({ ...card })));
+  // Разделы отклонённого «кто убрал → причина» (#130) — как их отдаёт сервер, с короткой причиной у публикаций.
+  const rejectedCard: Signal = {
+    ...baseSignal,
+    id: 602,
+    signal_key: "feed:602",
+    title_ru: "Котировки нефти",
+    origin: "feed",
+    maturity: "reject",
+    otbor_decision: "reject",
+    reject_reason: "oil_gas_no_link",
+    section_reason: "Котировки нефти без связи с нефтесервисом",
+  };
+  const SECTIONS = [
+    { key: "otbor:oil_gas_no_link", who: "«Отбор»", reason: "Нефтегаз без связи с нефтесервисом" },
+    { key: "otbor_failed", who: "Сбой", reason: "«Отбор» не ответил" },
+    { key: "before_otbor", who: "До «Отбора»", reason: "Скрыто прежними правилами радара" },
+  ];
+
+  function serveWithHidden(visible: Signal[], hidden: Signal[], rejected: Signal[] = []) {
+    const bySection: Record<string, Signal[]> = {
+      "otbor:oil_gas_no_link": rejected,
+      before_otbor: hidden.map((card) => ({ ...card, section_reason: card.hidden_reason })),
+    };
+    const total = hidden.length + rejected.length;
+    vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) =>
+      (query.section ? bySection[query.section] ?? [] : visible).map((card) => ({ ...card })));
     vi.mocked(getSignalSummary).mockImplementation(async (query: SignalQuery = {}) => ({
       total: visible.length,
       new_7d: 0,
       in_digest: 0,
       with_feedback: 0,
       merged: 0,
-      hidden: hidden.length,
-      matching: query.hidden ? hidden.length : visible.length,
+      hidden: total,
+      matching: query.section ? (bySection[query.section] ?? []).length : visible.length,
       themes: [],
     }));
+    vi.mocked(getSignalSections).mockResolvedValue({
+      sections: SECTIONS.map((section) => ({ ...section, count: (bySection[section.key] ?? []).length })),
+      total,
+    });
   }
 
   beforeEach(() => {
@@ -951,23 +981,83 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(within(card).queryByText("Балл по критериям")).not.toBeInTheDocument();
   });
 
-  it("админ открывает отсеянные и скрытые с причиной и возвращается к радару", async () => {
+  it("админ открывает разделы «кто убрал → причина» с короткой причиной и возвращается к радару (#130)", async () => {
+    serveWithHidden([scored, legacy], [hiddenCard], [rejectedCard]);
     renderRadar(true);
     await screen.findByText(scored.title_ru as string);
-    expect(tileValue("Отсеяно и скрыто")).toBe("1");
+    expect(tileValue("Отсеяно и скрыто")).toBe("2");
 
-    fireEvent.click(screen.getByRole("button", { name: "Отсеянные и скрытые (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Отсеянные и скрытые (2)" }));
+
+    // Разделы — все, с числом публикаций; открыт первый непустой.
+    const sections = await screen.findByRole("group", { name: "Разделы отклонённого" });
+    await waitFor(() =>
+      expect(within(sections).getAllByRole("button").map((button) => button.textContent)).toEqual([
+        "«Отбор» → Нефтегаз без связи с нефтесервисом: 1",
+        "Сбой → «Отбор» не ответил: 0",
+        "До «Отбора» → Скрыто прежними правилами радара: 1",
+      ]),
+    );
+    expect(await screen.findByText("Котировки нефти")).toBeInTheDocument();
+    expect(lastListQuery().section).toBe("otbor:oil_gas_no_link");
+    expect(screen.getByRole("heading", { name: "Отсеянные и скрытые карточки" })).toBeInTheDocument();
+    expect(screen.getByText("Причина: Котировки нефти без связи с нефтесервисом")).toBeInTheDocument();
+    // Отклонённое «Отбором» — с «Решением платформы» «Отклонено».
+    expect(screen.getByText(/· Решение платформы: Отклонено ·/)).toBeInTheDocument();
+
+    fireEvent.click(within(sections).getByRole("button", { name: /^До «Отбора»/ }));
 
     expect(await screen.findByText("SLB получила контракты Aramco")).toBeInTheDocument();
-    expect(lastListQuery().hidden).toBe(true);
-    expect(screen.getByRole("heading", { name: "Отсеянные и скрытые карточки" })).toBeInTheDocument();
-    expect(screen.getByText("Не на радаре: бизнес-сигнал, не технология")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("отсеянное поиском и судьёй");
+    expect(lastListQuery().section).toBe("before_otbor");
+    expect(screen.getByText("Причина: бизнес-сигнал, не технология")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("кто убрал");
 
     fireEvent.click(screen.getByRole("button", { name: "К радару" }));
 
     expect(await screen.findByText(scored.title_ru as string)).toBeInTheDocument();
-    expect(lastListQuery().hidden).toBeUndefined();
+    expect(lastListQuery().section).toBeUndefined();
+  });
+
+  it("пометка «спорное» видна на карточке (#130)", async () => {
+    serveWithHidden([{
+      ...scored,
+      otbor_decision: "accept",
+      otbor_disputed: "шаги ответа не сошлись и после повтора: прямая связь у другой отрасли",
+    }], []);
+    renderRadar(false);
+
+    expect(await screen.findByText("Спорное: шаги ответа не сошлись и после повтора: прямая связь у другой отрасли"))
+      .toBeInTheDocument();
+  });
+
+  it("блоки ОС — списком на раскрытой карточке; сохранённый блок добавляется к ним (#130)", async () => {
+    serveWithHidden([{
+      ...scored,
+      feedback_blocks: [{
+        id: 1, author: "expert@example.test", verdict: "strong_signal", reason: "внедрение у оператора",
+        comment: null, created_at: "2026-10-20T09:00:00Z",
+      }],
+    }], []);
+    vi.mocked(createSignalFeedback).mockResolvedValue({
+      ok: true, event_id: 2, memory_ids: [], memories: 0,
+      block: { id: 2, author: "colleague@example.test", verdict: null, reason: null, comment: "Уже было в сентябре",
+               created_at: "2026-10-23T09:00:00Z" },
+    });
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    const blocks = within(card).getByRole("list", { name: "Оценки людей" });
+    expect(within(blocks).getByText("expert@example.test · 20.10.2026")).toBeInTheDocument();
+    expect(within(blocks).getByText("Сильный сигнал")).toBeInTheDocument();
+    expect(within(blocks).getByText("Причина: внедрение у оператора")).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
+    fireEvent.change(within(card).getByLabelText("Рекомендации AI-агенту"), { target: { value: "Уже было в сентябре" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => expect(within(blocks).getAllByRole("listitem")).toHaveLength(2));
+    expect(within(blocks).getByText("Уже было в сентябре")).toBeInTheDocument();
   });
 
   it("обычный пользователь не видит ни переключателя, ни плитки «Отсеяно и скрыто» (решение 05.10)", async () => {

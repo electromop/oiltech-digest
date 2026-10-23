@@ -310,6 +310,20 @@ def test_signal_card_step_runs_only_behind_its_flag(tmp_path, monkeypatch, flag,
         _cleanup(proc)
 
 
+@pytest.mark.parametrize(("flag", "runs"), [(None, False), ("0", False), ("1", True)])
+def test_otbor_step_runs_only_behind_its_flag(tmp_path, monkeypatch, flag, runs):
+    """Шаг «Отбор» (#130) — за флагом, по умолчанию выключен: флаг включают после пересборки NL (контракт 4)
+    и экзамена, иначе старая сборка отказывала бы каждой задаче."""
+    monkeypatch.delenv("OTBOR_ENABLED", raising=False)
+    proc = _scheduler(tmp_path, **({} if flag is None else {"OTBOR_ENABLED": flag}))
+    try:
+        assert _wait(lambda: "Cycle finished" in proc.out_path.read_text(), 20), proc.out_path.read_text()
+        names = [name for name, _pid in _fake_steps(proc.steps_path)]
+        assert ("enqueue-otbor" in names) is runs
+    finally:
+        _cleanup(proc)
+
+
 def test_failed_step_reports_its_real_exit_code(tmp_path):
     """`code="$?"` сразу после `if ...; fi` давал 0: по POSIX так выходит `if` без ветки.
     Лог писал «FAIL … exit=0», и run_required_step не останавливал скрипт никогда."""
