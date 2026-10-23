@@ -15,7 +15,7 @@ from psycopg.types.json import Json
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import (_FEED_ARTICLE_SHOWN_SQL, CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN,
                                           SIGNAL_ORIGIN_FEED, radar_origin_sql)
-from oiltech_digest.feed_window import FeedWindow
+from oiltech_digest.feed_window import OTBOR_REJECT, FeedWindow
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "signal_card"
@@ -115,7 +115,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             FROM signals s
             WHERE s.card_recipe IS NULL AND s.merged_into_signal_id IS NULL
               AND s.created_at >= now() - make_interval(days => %(days)s)
-              AND s.otbor_decision IS DISTINCT FROM 'reject'
+              AND s.otbor_decision IS DISTINCT FROM '{OTBOR_REJECT}'
               AND NOT (s.otbor_decision IS NULL AND s.otbor_failure IS NOT NULL)
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id

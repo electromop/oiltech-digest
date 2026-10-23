@@ -2219,7 +2219,7 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
                 print(f"enqueue-otbor: статьи {other[:20]} решает не «Отбор» — пропущены")
             result = {"articles": len(ids), "jobs": otbor.enqueue(ids, trigger="manual", bulk=True)}
         else:
-            result = otbor.enqueue_new_articles()
+            result = otbor.scheduler_step()
     except otbor.OtborSetupError as exc:
         raise SystemExit(f"enqueue-otbor: {exc}") from exc
     if result.get("reason"):

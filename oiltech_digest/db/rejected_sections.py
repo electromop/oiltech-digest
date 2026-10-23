@@ -12,10 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from psycopg.rows import dict_row
-
 from oiltech_digest.db import connection
 from oiltech_digest.db.otbor_store import FAILURE_INVALID, FAILURE_TECHNICAL
+from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 from oiltech_digest.db.repository import (_BUSINESS_VISIBLE_SQL, _RADAR_HIDDEN_SQL, _RADAR_VISIBLE_SQL,
                                           _radar_hidden_reason_sql, signal_digest_sql)
 from oiltech_digest.otbor_pack_format import load_dictionaries
@@ -46,7 +45,7 @@ ALL = "all"
 def sections() -> list[Section]:
     """Все разделы по порядку экрана, группами «кто убрал»: «Отбор» (причины справочника, без причины, «Другое»),
     сбой, поиск, «До „Отбора“»."""
-    rejected = f"{_NOT_SHOWN_SQL} AND s.otbor_decision = 'reject'"
+    rejected = f"{_NOT_SHOWN_SQL} AND s.otbor_decision = '{OTBOR_REJECT}'"
     undecided = f"{_NOT_SHOWN_SQL} AND s.otbor_decision IS NULL"
     reasons = load_dictionaries()["reject_reason"]["values"]
     return [
@@ -56,7 +55,7 @@ def sections() -> list[Section]:
         Section("otbor_no_reason", "«Отбор»", "Без причины (спорное)", f"{rejected} AND s.reject_reason IS NULL",
                 "COALESCE(s.otbor_disputed, s.verdict_reason)"),
         Section("other", "«Отбор»", "Другое: видно только админу",
-                f"{_NOT_SHOWN_SQL} AND s.otbor_decision = 'accept' AND s.signal_category = 'other'"
+                f"{_NOT_SHOWN_SQL} AND s.otbor_decision = '{OTBOR_ACCEPT}' AND s.signal_category = 'other'"
                 f" AND (s.archived_at IS NULL OR {signal_digest_sql('s')})", "s.verdict_reason"),
         Section("otbor_failed", "Сбой", "«Отбор» не ответил",
                 f"{undecided} AND s.otbor_failure = '{FAILURE_TECHNICAL}'", "s.otbor_failure_reason"),
@@ -101,17 +100,3 @@ def total() -> int:
         conn.execute("SET LOCAL jit = off")
         row = conn.execute(f"SELECT COUNT(*) FROM signals s WHERE {everything().condition}").fetchone()
     return int(row[0])
-
-
-def counts() -> list[dict]:
-    """Разделы с числом публикаций в каждом — для экрана админа, все, и пустые тоже."""
-    found = sections()
-    select = ", ".join(f"COUNT(*) FILTER (WHERE {section.condition}) AS c{number}"
-                       for number, section in enumerate(found))
-    with connection.get_connection() as conn:
-        conn.execute("SET LOCAL jit = off")
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(f"SELECT {select} FROM signals s")
-        row = cur.fetchone()
-    return [{"key": section.key, "who": section.who, "reason": section.reason, "count": int(row[f"c{number}"])}
-            for number, section in enumerate(found)]

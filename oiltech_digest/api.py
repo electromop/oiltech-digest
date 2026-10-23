@@ -1967,7 +1967,7 @@ def signal_radar_summary(
     summary = repository.signal_radar_summary(**filters)
     if user.get("role") != "admin":
         # Число отсеянных и скрытых — служебное, как и сами карточки.
-        summary.pop("hidden", None)
+        summary.pop("rejected", None)
     if company_filter is not None:
         summary["company_group"] = company_filter["group"]
     return _clean(summary)
@@ -1982,13 +1982,6 @@ def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> di
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
     if (filters.get("hidden") or filters.get("section") is not None) and user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Отсеянные и скрытые карточки радара доступны только администратору")
-
-
-@app.get("/api/signals/sections")
-def signal_rejected_sections(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Разделы отклонённого «кто убрал → причина» (#130) с числом публикаций — только админу."""
-    found = rejected_sections.counts()
-    return {"sections": found, "total": sum(section["count"] for section in found)}
 
 
 def _guard_signal_digest_month(signal_id: int, target_status: str | None) -> None:

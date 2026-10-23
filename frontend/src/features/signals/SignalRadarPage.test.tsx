@@ -943,7 +943,7 @@ describe("качество радара на экране (Виктор 29.09)",
       in_digest: 0,
       with_feedback: 0,
       merged: 0,
-      hidden: total,
+      rejected: total,
       matching: query.section ? (bySection[query.section] ?? []).length : visible.length,
       themes: [],
     }));

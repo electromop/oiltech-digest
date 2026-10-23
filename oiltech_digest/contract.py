@@ -92,6 +92,23 @@ def done_count(result: dict[str, Any] | None) -> int:
                or result.get("decisions") or [])
 
 
+
+def article_ref(article_id: Any) -> str:
+    """Номер публикации в задаче «Отбора» (#130): «article:<id>» — во входе воркера, в его итоге и в остатке задачи."""
+    return f"article:{int(article_id)}"
+
+
+def ref_article_id(ref: Any) -> int | None:
+    """Статья по номеру публикации «Отбора»; None — номер не статьи (находки радара — свой вид, #131)."""
+    kind, _, number = str(ref or "").partition(":")
+    if kind != "article":
+        return None
+    try:
+        return int(number)
+    except ValueError:
+        return None
+
+
 def remaining_after_partial(kind: str | None, payload: dict[str, Any],
                             result: dict[str, Any] | None) -> dict[str, Any] | None:
     """Что осталось задаче после частичного итога; None — ничего, задача выполнена.
@@ -116,7 +133,7 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
         return {**rest, "signal_ids": left} if left else None
     if kind == "otbor":
         answered = {str(item.get("ref")) for item in result.get("decisions") or [] if isinstance(item, dict)}
-        left = [article_id for article_id in rest.get("article_ids") or [] if f"article:{article_id}" not in answered]
+        left = [article_id for article_id in rest.get("article_ids") or [] if article_ref(article_id) not in answered]
         return {**rest, "article_ids": left} if left else None
     if kind in _ARTICLE_BATCHES:
         done = {int(item["article_id"]) for item in result.get("articles") or []}

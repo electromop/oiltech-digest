@@ -20,6 +20,7 @@ from psycopg.types.json import Json
 from oiltech_digest.db import connection, feed_signals, marks
 from oiltech_digest.db.repository import (ARTICLE_SELECTOR_OTBOR, CARD_SET_BY_HUMAN, CARD_SET_BY_OTBOR,
                                           SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED)
+from oiltech_digest.feed_window import OTBOR_REJECT
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "otbor"
@@ -30,14 +31,33 @@ FAILURE_INVALID = "invalid_answer"
 # Итог записи решения: записано; не изменено — статью выбрали «в дайджест», а повтор «Отбора» решения людей не
 # перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»).
 DECIDED, KEPT_IN_DIGEST = "decided", "kept_in_digest"
-# Статья, уже решённая «Отбором» и выбранная «в дайджест»: её решение повтор не пересматривает.
-_DECIDED_IN_DIGEST_SQL = (
-    f"({marks.article_marked_sql('a.id', 'digest')} AND EXISTS (SELECT 1 FROM signals os"
-    f" WHERE os.origin_article_id = a.id AND os.origin = '{SIGNAL_ORIGIN_FEED}' AND os.otbor_decision IS NOT NULL))"
-)
 # Поля решения «Отбора» в прежних колонках сигнала: кто поставил значение — в card_set_by.
 _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category")
-_KEY_SQL = f"'{feed_signals.FEED_KEY_PREFIX}' || a.id"
+# Задачи агента со статьёй: строка на статью задачи и идёт ли такая задача сейчас.
+_TRIED_SQL = (
+    "SELECT (jsonb_array_elements_text(j.payload_json->'article_ids'))::bigint AS id,"
+    " j.status IN ('queued', 'running', 'finalizing') AS pending"
+    f" FROM background_jobs j WHERE j.kind = '{KIND}' AND jsonb_typeof(j.payload_json->'article_ids') = 'array'"
+)
+# Статья, которую решает «Отбор»: вставлена при включённом флаге, и гейт её не решал (флаг выключали — её решил он).
+_OTBOR_ARTICLE_SQL = (
+    f"a.selector = '{ARTICLE_SELECTOR_OTBOR}'"
+    " AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)"
+)
+# Перепечатка не в счёт: её публикация — у сигнала главной.
+_NOT_REPRINT_SQL = "NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)"
+
+
+def _signal_has(condition: str) -> str:
+    """У сигнала статьи (os) есть условие."""
+    return (f"EXISTS (SELECT 1 FROM signals os WHERE os.origin_article_id = a.id AND os.origin = '{SIGNAL_ORIGIN_FEED}'"
+            f" AND ({condition}))")
+
+
+# Статья, уже решённая «Отбором» и выбранная «в дайджест»: её решение повтор не пересматривает.
+_DECIDED_IN_DIGEST_SQL = (
+    f"({marks.article_marked_sql('a.id', 'digest')} AND {_signal_has('os.otbor_decision IS NOT NULL')})"
+)
 
 
 def article_inputs(article_ids: Sequence[int]) -> list[dict[str, Any]]:
@@ -70,26 +90,16 @@ def new_article_ids(*, days: int, limit: int, attempts: int) -> list[int]:
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
-            WITH tried AS (
-              SELECT (jsonb_array_elements_text(j.payload_json->'article_ids'))::bigint AS id,
-                     j.status IN ('queued', 'running', 'finalizing') AS pending
-              FROM background_jobs j
-              WHERE j.kind = '{KIND}' AND j.created_at >= now() - make_interval(days => %(window)s)
-                AND jsonb_typeof(j.payload_json->'article_ids') = 'array'
-            ),
+            WITH tried AS ({_TRIED_SQL} AND j.created_at >= now() - make_interval(days => %(window)s)),
             taken AS (
               SELECT id FROM tried GROUP BY id HAVING bool_or(pending) OR count(*) >= %(attempts)s
             )
             SELECT a.id
             FROM articles a
-            WHERE a.selector = '{ARTICLE_SELECTOR_OTBOR}'
+            WHERE {_OTBOR_ARTICLE_SQL} AND {_NOT_REPRINT_SQL}
               AND a.collected_at >= now() - make_interval(days => %(days)s)
               AND NOT a.pending_deletion
-              AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
-              AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)
-              AND NOT EXISTS (SELECT 1 FROM signals s
-                              WHERE s.origin_article_id = a.id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
-                                AND (s.otbor_decision IS NOT NULL OR s.otbor_failure = '{FAILURE_INVALID}'))
+              AND NOT {_signal_has(f"os.otbor_decision IS NOT NULL OR os.otbor_failure = '{FAILURE_INVALID}'")}
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = a.id)
             ORDER BY a.id
             LIMIT %(limit)s
@@ -107,26 +117,18 @@ def unanswered_articles(*, days: int, attempts: int, limit: int) -> list[tuple[i
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
-            WITH tried AS (
-              SELECT (jsonb_array_elements_text(j.payload_json->'article_ids'))::bigint AS id,
-                     j.status IN ('queued', 'running', 'finalizing') AS pending
-              FROM background_jobs j
-              WHERE j.kind = '{KIND}' AND jsonb_typeof(j.payload_json->'article_ids') = 'array'
-            ),
-            counted AS (SELECT id, count(*) AS tries, bool_or(pending) AS pending FROM tried GROUP BY id)
+            WITH counted AS (
+              SELECT id, count(*) AS tries, bool_or(pending) AS pending FROM ({_TRIED_SQL}) tried GROUP BY id
+            )
             SELECT a.id, COALESCE(t.tries, 0) AS tries
             FROM articles a
             LEFT JOIN counted t ON t.id = a.id
-            WHERE a.selector = '{ARTICLE_SELECTOR_OTBOR}'
+            WHERE {_OTBOR_ARTICLE_SQL} AND {_NOT_REPRINT_SQL}
               AND NOT a.pending_deletion
               AND NOT COALESCE(t.pending, FALSE)
               AND (COALESCE(t.tries, 0) >= %(attempts)s
                    OR a.collected_at < now() - make_interval(days => %(days)s))
-              AND NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)
-              AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)
-              AND NOT EXISTS (SELECT 1 FROM signals s
-                              WHERE s.origin_article_id = a.id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
-                                AND (s.otbor_decision IS NOT NULL OR s.otbor_failure IS NOT NULL))
+              AND NOT {_signal_has("os.otbor_decision IS NOT NULL OR os.otbor_failure IS NOT NULL")}
             ORDER BY a.id
             LIMIT %(limit)s
             """,
@@ -146,9 +148,7 @@ def own_article_ids(article_ids: Sequence[int]) -> list[int]:
         rows = conn.execute(
             f"""
             SELECT a.id FROM articles a
-            WHERE a.id = ANY(%s) AND a.selector = '{ARTICLE_SELECTOR_OTBOR}'
-              AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)
-              AND NOT {_DECIDED_IN_DIGEST_SQL}
+            WHERE a.id = ANY(%s) AND {_OTBOR_ARTICLE_SQL} AND NOT {_DECIDED_IN_DIGEST_SQL}
             ORDER BY a.id
             """,
             (ids,),
@@ -169,19 +169,9 @@ def chosen_for_digest(article_ids: Sequence[int]) -> list[int]:
 
 
 def _signal_for_update(cur, article_id: int) -> dict[str, Any] | None:
-    """Сигнал статьи под замком; нет — заводится: заголовок статьи, тема «не классифицировано» (тема у сигнала
-    обязательна, тег придёт позже), прочее — как у моста «лента → сигнал». None — статьи нет."""
-    cur.execute(
-        f"""
-        INSERT INTO signals (signal_key, origin, origin_article_id, signal_category, title, theme, maturity,
-                             first_seen_at, last_seen_at)
-        SELECT {_KEY_SQL}, '{SIGNAL_ORIGIN_FEED}', a.id, '{feed_signals.FEED_CATEGORY}', a.title, %(unclassified)s,
-               'watch', COALESCE(a.collected_at, now()), COALESCE(a.collected_at, now())
-        FROM articles a WHERE a.id = %(id)s
-        ON CONFLICT (signal_key) DO NOTHING
-        """,
-        {"id": int(article_id), "unclassified": SYSTEM_TAG_UNCLASSIFIED},
-    )
+    """Сигнал статьи под замком; нет — его заводит мост «лента → сигнал» (feed_signals.BASE_SIGNAL_INSERT): суть,
+    тему и балл принятой он допишет позже. None — статьи нет."""
+    cur.execute(feed_signals.BASE_SIGNAL_INSERT, {"id": int(article_id), "unclassified": SYSTEM_TAG_UNCLASSIFIED})
     cur.execute(
         "SELECT id, maturity, card_set_by, otbor_decision FROM signals WHERE signal_key = %s FOR UPDATE",
         (f"{feed_signals.FEED_KEY_PREFIX}{int(article_id)}",),
@@ -223,7 +213,7 @@ def write_decision(article_id: int, values: dict[str, Any], *, disputed: str | N
                 set_by[column] = CARD_SET_BY_OTBOR
             elif set_by.get(column) == CARD_SET_BY_OTBOR:
                 set_by.pop(column)
-        rejected = values["otbor_decision"] == "reject"
+        rejected = values["otbor_decision"] == OTBOR_REJECT
         maturity = "reject" if rejected else ("watch" if row["maturity"] == "reject" else row["maturity"])
         updates.update({
             "otbor_decision": values["otbor_decision"], "reject_reason": values.get("reject_reason"),

@@ -3,8 +3,6 @@
 (tests/otbor_support.py).
 """
 
-import itertools
-
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api, cli, signal_card
@@ -52,10 +50,6 @@ def test_feed_article_accepted_by_otbor_is_in_the_business_feed_with_its_decisio
         assert all(code in call["instructions"] for code in codes)
 
 
-def _sections(admin):
-    return {section["key"]: section for section in api_get("/api/signals/sections", admin)["sections"]}
-
-
 def _status(path, user, **params):
     api.app.dependency_overrides[api.require_user] = lambda: user
     try:
@@ -76,10 +70,9 @@ def test_showcase_is_chosen_by_category_for_feed_articles_and_other_is_admin_onl
     assert set(showcase(user, "technology")) == {"Пилот робота Equinor"}
     assert set(showcase(user, "business")) == {"Контракт Weatherford"}
     # «Другое» — ни в одной витрине, только админу, в разделах.
-    assert _sections(admin)["other"]["count"] == 1
     assert [card["title"] for card in api_get("/api/signals", admin, section="other")] == ["Интервью о кадрах"]
     assert _status("/api/signals", user, section="other") == 403
-    assert _status("/api/signals/sections", user) == 403
+    assert _status("/api/signals", user, section="all") == 403
 
 
 def test_rejected_and_failed_articles_lie_in_sections_by_who_removed_them_with_a_short_reason(
@@ -90,14 +83,13 @@ def test_rejected_and_failed_articles_lie_in_sections_by_who_removed_them_with_a
     decide(monkeypatch, {"Котировки нефти": reject("oil_gas_no_link"), "Модель молчит": AIClientError("timeout"),
                          "Не по схеме": {"decision": "accept"}})
 
-    sections = _sections(admin)
-    reasons = {value["code"]: value["label"] for value in load_dictionaries()["reject_reason"]["values"]}
-    # «Отбор» — по разделу на каждую из шести причин, сбой — свои разделы.
-    assert {key: (section["who"], section["reason"]) for key, section in sections.items()
-            if key.startswith("otbor:")} == {f"otbor:{code}": ("«Отбор»", label) for code, label in reasons.items()}
-    assert {key: section["count"] for key, section in sections.items() if section["count"]} == {
-        "otbor:oil_gas_no_link": 1, "otbor_failed": 1, "otbor_invalid": 1}
-    assert (sections["otbor_failed"]["who"], sections["otbor_failed"]["reason"]) == ("Сбой", "«Отбор» не ответил")
+    # «Отбор» — по разделу на каждую из шести причин справочника, сбой — свои разделы.
+    for value in load_dictionaries()["reject_reason"]["values"]:
+        assert _status("/api/signals", admin, section=f"otbor:{value['code']}") == 200
+    assert {card["title"]: card["section_reason"].split(":")[0]
+            for card in api_get("/api/signals", admin, section="all")} == {
+        "Котировки нефти": "«Отбор» → Нефтегаз без связи с нефтесервисом", "Модель молчит": "Сбой → «Отбор» не ответил",
+        "Не по схеме": "Сбой → Ответ не по правилам"}
     # Отклонённая статья хранится сигналом с «Решением платформы» = «отклонено» и короткой причиной.
     [rejected] = api_get("/api/signals", admin, section="otbor:oil_gas_no_link")
     assert (rejected["title"], rejected["maturity"], rejected["section_reason"]) == (
@@ -115,11 +107,10 @@ def test_search_and_before_otbor_sections_hold_findings_hidden_by_the_old_rules(
     radar_finding("judged", "Брак судьи", "SLB представила новую систему.", filter_stage="judge",
                   filter_reason="не технология")
 
-    sections = _sections(admin)
-    assert (sections["search_unconfirmed"]["who"], sections["search_unconfirmed"]["reason"],
-            sections["search_unconfirmed"]["count"]) == ("Поиск", "Ссылка не подтверждена", 1)
     assert [card["title"] for card in api_get("/api/signals", admin, section="search_unconfirmed")] == [
         "Выдуманная ссылка"]
+    assert {card["title"]: card["section_reason"] for card in api_get("/api/signals", admin, section="all")}[
+        "Выдуманная ссылка"] == f"Поиск → Ссылка не подтверждена: {UNCONFIRMED_LINK}"
     [judged] = api_get("/api/signals", admin, section="before_otbor")
     assert (judged["title"], judged["section_reason"]) == ("Брак судьи", "отсеяно (судья): не технология")
 
@@ -149,10 +140,7 @@ def test_one_rejected_list_holds_every_reason_with_the_reason_on_the_card_in_bot
         "Брак судьи": "До «Отбора» → Скрыто прежними правилами радара: отсеяно (судья): не технология",
     }
     for name in ("technology", "business"):
-        assert api_get("/api/signals/summary", admin, showcase=name)["hidden"] == 5
-    # Разделы идут группами «кто убрал»: «Другое» — среди разделов «Отбора».
-    order = [section["who"] for section in api_get("/api/signals/sections", admin)["sections"]]
-    assert [who for who, _ in itertools.groupby(order)] == ["«Отбор»", "Сбой", "Поиск", "До «Отбора»"]
+        assert api_get("/api/signals/summary", admin, showcase=name)["rejected"] == 5
 
 
 def test_rules_by_relevance_mixed_links_and_age_do_not_hide_what_otbor_accepted(user, contour, monkeypatch):

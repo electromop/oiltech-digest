@@ -762,15 +762,15 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           <StatCard label="В дайджесте" value={summary.in_digest} />
           <StatCard label="С обратной связью" value={summary.with_feedback} />
           <StatCard label="Объединено дублей" value={summary.merged} />
-          {isAdmin && summary.hidden != null ? (
+          {isAdmin && summary.rejected != null ? (
             <button
               type="button"
               className="statCardReact statCardButton"
               aria-pressed={showHidden}
-              aria-label={`Отклонённые: ${summary.hidden}`}
+              aria-label={`Отклонённые: ${summary.rejected}`}
               onClick={() => setShowHidden((current) => !current)}
             >
-              <span className="statValueReact">{summary.hidden}</span>
+              <span className="statValueReact">{summary.rejected}</span>
               <span className="metaText">Отклонённые</span>
             </button>
           ) : null}

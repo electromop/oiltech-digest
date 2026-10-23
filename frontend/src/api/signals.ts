@@ -91,8 +91,8 @@ export type SignalSummary = {
   in_digest: number;
   with_feedback: number;
   merged: number;
-  // Отсеяно и скрыто — не на радаре.
-  hidden?: number;
+  // «Отклонённые» (#130): все разделы отклонённого одним числом, одно в обеих лентах; только админу.
+  rejected?: number;
   matching: number;
   themes: Array<{ theme: string; count: number }>;
   // Фильтр «всё про компанию»: кого он показывает — сама компания первой, затем её дочки по списку

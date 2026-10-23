@@ -152,7 +152,7 @@ export function serve(cards: Signal[]) {
     in_digest: 0,
     with_feedback: 0,
     merged: 1,
-    hidden: 0,
+    rejected: 0,
     matching: cards.filter((card) => matches(card, query)).length,
     themes: [...new Set(cards.map((card) => card.theme))].map((theme) => ({ theme, count: 1 })),
   }));

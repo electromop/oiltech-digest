@@ -107,6 +107,11 @@ def visible_sql(article: str = "a", card: str = "c", source: str = "s") -> str:
     return f"{selected_sql(article, card)} AND {ungated_visible_sql(article, source)}"
 
 
+# Решение агента «Отбор» о статье (#130): коды справочника decision. Здесь, в самом нижнем модуле, — их берут и
+# слой базы, и сам агент.
+OTBOR_ACCEPT, OTBOR_REJECT = "accept", "reject"
+
+
 def otbor_decision_sql(article: str = "a") -> str:
     """Решение агента «Отбор» о статье (#130) — у её сигнала ленты: accept / reject; NULL — не решал.
     'feed' — repository.SIGNAL_ORIGIN_FEED (модуль базы импортирует этот, а не наоборот)."""
@@ -121,7 +126,7 @@ def relevance_sql(article: str = "a", card: str = "c") -> str:
     «Отбором» (#130) — его решение, без него — гейт. TRUE — принята, FALSE — отклонена, NULL — не решена. Стоит
     вместо `card.relevant` (решение владельца 23.10: решение «Отбора» живёт только в сигнале, механика читает его
     оттуда)."""
-    return f"COALESCE({otbor_decision_sql(article)} = 'accept', {card}.relevant)"
+    return f"COALESCE({otbor_decision_sql(article)} = '{OTBOR_ACCEPT}', {card}.relevant)"
 
 
 def selected_sql(article: str = "a", card: str = "c") -> str:
@@ -131,7 +136,7 @@ def selected_sql(article: str = "a", card: str = "c") -> str:
     тоже не решал (флаг выключили — её решит гейт). Остальные — по гейту: отклонённое (false) нет, ещё не
     проверенное (NULL) да."""
     return (
-        f"COALESCE({otbor_decision_sql(article)} = 'accept',"
+        f"COALESCE({otbor_decision_sql(article)} = '{OTBOR_ACCEPT}',"
         f" CASE WHEN {article}.selector = 'otbor' AND {card}.relevant IS NULL THEN FALSE"
         f" ELSE {card}.relevant IS NOT FALSE END)"
     )

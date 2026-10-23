@@ -156,14 +156,11 @@ def _stages_left(article: dict[str, Any], stages: frozenset[str]) -> frozenset[s
     суть, перевод, тег и балл заново не зовутся, отвергнутая гейтом статья дальше не идёт.
     Решение «Отбора» (#130) главнее гейта: принятая им статья гейт не проходит, отклонённая
     дальше не идёт. Поля кладёт ядро (repository.get_articles_by_ids с include_summary)."""
-    decision = article.get("otbor_decision")
-    if decision is not None:
-        if decision != "accept":
-            return frozenset()
-    elif article.get("relevant") is False:
+    verdict = repository.otbor_verdict(article)
+    if verdict is False or (verdict is None and article.get("relevant") is False):
         return frozenset()
     done = {
-        "relevance": decision is not None or article.get("relevant") is True,
+        "relevance": verdict is not None or article.get("relevant") is True,
         "summary": bool(article.get("summary")),
         "translation": bool(article.get("title_ru")),
         "tagging": article.get("existing_tag_id") is not None,

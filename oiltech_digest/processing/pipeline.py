@@ -269,14 +269,15 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
             # 2. Релевантность ПЕРВОЙ — на сыром тексте, до сути (без bias и без лишних
             #    AI-вызовов на нерелевантном). Решение «Отбора» (#130) главнее гейта: решённую им
             #    статью не решают ни стоп-слова, ни гейт.
-            blocked_reason = None if article.get("otbor_decision") else _negative_keyword_block(article, tags)
+            verdict = repository.otbor_verdict(article)
+            blocked_reason = None if verdict is not None else _negative_keyword_block(article, tags)
             if blocked_reason:
                 repository.set_article_relevance(article["id"], False, blocked_reason, "negative-keyword")
                 stats["rejected"] += 1
                 continue
 
-            if article.get("otbor_decision"):
-                relevant = article["otbor_decision"] == "accept"
+            if verdict is not None:
+                relevant = verdict
             elif article.get("relevant") is True:
                 relevant = True
             elif article.get("relevant") is False:

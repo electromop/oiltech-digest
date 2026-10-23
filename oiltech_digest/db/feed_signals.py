@@ -87,6 +87,18 @@ WHERE (signals.title, signals.title_ru, signals.theme, signals.summary, signals.
 RETURNING (xmax = 0) AS inserted
 """
 
+# Сигнал статьи без сути, темы и балла: его заводит хранилище «Отбора» при первом решении или сбое (otbor_store),
+# у отклонённой и ждущей решения статьи другого нет. Тема «не классифицировано» (тема у сигнала обязательна, тег
+# придёт позже); суть, тему и балл принятой допишет _UPSERT_SIGNALS. Параметры: id статьи и unclassified.
+BASE_SIGNAL_INSERT = f"""
+INSERT INTO signals (signal_key, origin, origin_article_id, signal_category, title, theme, maturity,
+                     first_seen_at, last_seen_at)
+SELECT {_key_sql('a.id')}, '{SIGNAL_ORIGIN_FEED}', a.id, '{FEED_CATEGORY}', a.title, %(unclassified)s,
+       'watch', COALESCE(a.collected_at, now()), COALESCE(a.collected_at, now())
+FROM articles a WHERE a.id = %(id)s
+ON CONFLICT (signal_key) DO NOTHING
+"""
+
 # Сбой «Отбора» у статьи, которую потом решил гейт (флаг «Отбора» выключили: работает прежняя цепочка, решение
 # владельца 23.10), снимается: статья живёт по решению гейта, с «В дайджест» и «Карточкой», как все.
 _CLEAR_GATE_DECIDED_FAILURES = f"""

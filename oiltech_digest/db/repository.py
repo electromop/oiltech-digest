@@ -2108,7 +2108,7 @@ def _otbor_shown_sql(category: str) -> str:
     статье), карточка без ссылок. Выбранный «в дайджест» не прячет ничто, кроме технических правил статьи."""
     return (
         f"s.merged_into_signal_id IS NULL AND s.otbor_decision IS NOT NULL AND s.signal_category = '{category}'"
-        f" AND ({signal_digest_sql('s')} OR (s.archived_at IS NULL AND s.otbor_decision = 'accept'))"
+        f" AND ({signal_digest_sql('s')} OR (s.archived_at IS NULL AND s.otbor_decision = '{feed_window.OTBOR_ACCEPT}'))"
         f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}' THEN {_FEED_ARTICLE_SHOWN_SQL}"
         f" ELSE {_RADAR_CARD_SHOWN_SQL} END"
     )
@@ -2424,7 +2424,7 @@ def signal_radar_summary(**filters) -> dict:
         # Плашка «Отклонённые» (#130): все разделы отклонённого одним числом, одно в обеих лентах.
         from oiltech_digest.db import rejected_sections
 
-        tiles["hidden"] = rejected_sections.total()
+        tiles["rejected"] = rejected_sections.total()
         total = tiles["total"]
         matching = total
         # Скрытые и раздел — своя выборка: «N из M» считается по ним даже без других фильтров.
@@ -3050,7 +3050,7 @@ def signal_digest_refusal(signal_id: int) -> str | None:
                            (int(signal_id),)).fetchone()
     if row is None:
         return None
-    if row[0] == "reject":
+    if row[0] == feed_window.OTBOR_REJECT:
         return "публикацию отклонил «Отбор»"
     return "«Отбор» не дал решения" if row[0] is None and row[1] else None
 
@@ -5867,8 +5867,8 @@ def _needs_pipeline_from() -> str:
     балл без гейта, отклонённая — ничего. Статья, которую решает «Отбор», пока решения нет, обработку не
     проходит, пока он включён: её решит он, а не гейт; выключили — её решит гейт (решение владельца 23.10).
     Остальные — как до «Отбора»: ещё не проверенные гейтом и принятые им без какой-нибудь стадии. Флаг
-    читается при каждом вызове."""
-    awaiting = "FALSE" if config.OTBOR_ENABLED else "TRUE"
+    читается при каждом вызове. То же правило для явного списка статей — held_by_otbor."""
+    waiting_goes_to_gate = "FALSE" if config.OTBOR_ENABLED else "TRUE"
     return f"""
             FROM articles a
             JOIN sources s ON s.id = a.source_id
@@ -5878,20 +5878,27 @@ def _needs_pipeline_from() -> str:
             LEFT JOIN LATERAL (SELECT {feed_window.otbor_decision_sql('a')} AS decision) od ON TRUE
             WHERE CASE
               WHEN od.decision IS NOT NULL
-                THEN od.decision = 'accept' AND (c.article_id IS NULL OR {_STAGES_MISSING_SQL})
-              WHEN a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND c.relevant IS NULL THEN {awaiting}
+                THEN od.decision = '{feed_window.OTBOR_ACCEPT}' AND (c.article_id IS NULL OR {_STAGES_MISSING_SQL})
+              WHEN a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND c.relevant IS NULL THEN {waiting_goes_to_gate}
               ELSE c.relevant IS NULL OR (c.relevant IS TRUE AND {_STAGES_MISSING_SQL}) OR c.article_id IS NULL
             END
 """
 
 
-def held_by_otbor(article: dict) -> bool:
-    """Статью держит «Отбор» (#130) — то же правило, что _needs_pipeline_from, для явного списка статей (ручной
-    импорт, перекачка тела, команда с номерами): отклонённую им обработка ленты не берёт, ждущую его решения —
-    пока он включён. Строка — из get_articles_by_ids с include_summary (решение «Отбора», гейт, путь статьи)."""
+def otbor_verdict(article: dict) -> bool | None:
+    """Решение «Отбора» о статье строки выборки (#130): True — принял, False — отклонил, None — не решал. Им
+    обработка ленты заменяет гейт у решённой «Отбором» статьи (здесь, на воркере и в местном конвейере)."""
     decision = article.get("otbor_decision")
-    if decision is not None:
-        return decision != "accept"
+    return None if decision is None else decision == feed_window.OTBOR_ACCEPT
+
+
+def held_by_otbor(article: dict) -> bool:
+    """Статью держит «Отбор» (#130) — правило _needs_pipeline_from для явного списка статей (ручной импорт,
+    перекачка тела, команда с номерами): отклонённую им обработка ленты не берёт, ждущую его решения — пока он
+    включён. Строка — из get_articles_by_ids с include_summary (решение «Отбора», гейт, путь статьи)."""
+    verdict = otbor_verdict(article)
+    if verdict is not None:
+        return not verdict
     return (bool(config.OTBOR_ENABLED) and article.get("selector") == ARTICLE_SELECTOR_OTBOR
             and article.get("relevant") is None)
 
