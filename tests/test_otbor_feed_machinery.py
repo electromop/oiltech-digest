@@ -11,7 +11,7 @@ from oiltech_digest.db import analytics, repository
 from oiltech_digest.processing import external_ai, fulltext_recompute
 from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
-from tests.otbor_support import OtborModel, answer, api_send, article, decide, reject, showcase
+from tests.otbor_support import JUSTIFICATION, OtborModel, answer, api_send, article, decide, reject, showcase
 from tests.otbor_support import contour  # noqa: F401 — фикстура
 from tests.signal_card_support import DRILLING, admin, api_get, run_worker, tag, user  # noqa: F401 — фикстуры
 
@@ -83,6 +83,31 @@ def test_article_accepted_by_otbor_is_processed_without_the_gate_and_stop_words(
     # Мост «лента → сигнал» дописал принятой суть и тему.
     card = showcase(user)["Программа бурения Equinor"]
     assert card["summary"] == row["summary"] and card["theme"] == DRILLING
+
+
+def test_summary_of_an_article_gets_the_otbor_category_and_link_but_not_its_decision(user, contour, monkeypatch):
+    # «Суть и перевод» (#131): на вход — категория, связь и применение «Отбора», без решения и обоснования.
+    seed_default_scoring_criteria()
+    tag(DRILLING)
+    article("Роботы-бурильщики Equinor", "Equinor испытала робота-бурильщика на платформе в Северном море.")
+    decide(monkeypatch, {"Роботы-бурильщики Equinor": answer(
+        industry="other_industry", oilfield_relevance="transferable", oilfield_application="Роботизация буровой",
+        category="technology")})
+    offline = external_ai.make_client(True)
+    inputs = []
+
+    class Recording:
+        def complete_json(self, instructions, user_input, schema, **kwargs):
+            inputs.append((schema["name"], user_input))
+            return offline.complete_json(instructions, user_input, schema, **kwargs)
+
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: Recording())
+    _process_feed()
+
+    [summary] = [text for name, text in inputs if name == "article_summary"]
+    assert ("category: technology" in summary and "oilfield_relevance: transferable" in summary
+            and "oilfield_application: Роботизация буровой" in summary)
+    assert JUSTIFICATION not in summary and "accept" not in summary
 
 
 def test_old_feed_machinery_counts_and_recomputes_by_the_otbor_decision(user, admin, contour, monkeypatch):

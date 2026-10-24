@@ -14,7 +14,7 @@ from psycopg.types.json import Json
 
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import (_FEED_ARTICLE_SHOWN_SQL, CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN,
-                                          SIGNAL_ORIGIN_FEED, radar_origin_sql)
+                                          SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_MATERIAL, radar_origin_sql)
 from oiltech_digest.feed_window import OTBOR_REJECT, FeedWindow
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
@@ -86,7 +86,29 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
             {"ids": ids, "model_dated": EVIDENCE_SOURCE},
         )
         rows += cur.fetchall()
+        # Материал коллеги (#131): публикация — сам материал, как во входе «Отбора».
+        cur.execute(
+            f"""
+            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
+                   'material:' || m.id AS publication, m.title, m.description, m.url, m.file_path,
+                   m.created_at AS published
+            FROM signals s
+            JOIN colleague_materials m ON m.signal_id = s.id
+            WHERE s.id = ANY(%(ids)s) AND s.origin = '{SIGNAL_ORIGIN_MATERIAL}'
+            """,
+            {"ids": ids},
+        )
+        rows += [_material_publication(row) for row in cur.fetchall()]
     return sorted(rows, key=lambda row: row["signal_id"])
+
+
+def _material_publication(row: dict[str, Any]) -> dict[str, Any]:
+    """Материал как публикация «Карточки»: текст — описание автора и текст файла, издатель — сайт ссылки."""
+    from oiltech_digest.colleague_materials import publication_text
+    from oiltech_digest.signal_card_pack import _publisher_label
+
+    return {**row, "text": publication_text(row)[0], "publisher": _publisher_label(row) if row.get("url") else "",
+            "publisher_type": ""}
 
 
 # Сколько задач шаг планировщика ставит одному сигналу: вторая — на случай сбоя модели или смены
@@ -97,7 +119,8 @@ DAILY_ATTEMPTS = 2
 def new_signal_ids(*, days: int, limit: int) -> list[int]:
     """Сигналы для шага планировщика: заведены за `days` дней, без карточки, не дубли, не в задаче
     агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS). Дальше «Отбора» (#130) идёт
-    только принятое: отклонённое им и сигнал без его решения (сбой) карточку не получают."""
+    только принятое: отклонённое им и сигнал без его решения (сбой) карточку не получают, как и находка
+    или материал, которые его решения ещё ждут (#131, метка пути selector)."""
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
@@ -117,6 +140,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
               AND s.created_at >= now() - make_interval(days => %(days)s)
               AND s.otbor_decision IS DISTINCT FROM '{OTBOR_REJECT}'
               AND NOT (s.otbor_decision IS NULL AND s.otbor_failure IS NOT NULL)
+              AND (s.selector IS NULL OR s.otbor_decision IS NOT NULL)
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id
             LIMIT %(limit)s

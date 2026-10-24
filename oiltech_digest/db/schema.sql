@@ -926,6 +926,16 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_recipe JSONB;         -- ин
 -- её не видно (feed_window.visible_sql) и обработка ленты её не берёт.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS selector TEXT;             -- otbor; NULL — гейт ленты
 CREATE INDEX IF NOT EXISTS idx_articles_otbor ON articles(collected_at) WHERE selector = 'otbor';
+-- Радар и материалы коллег через «Отбор» (#131): находку поиска и материал коллеги, заведённые при включённом
+-- флаге, решает он (signals.selector = 'otbor'); пока решения нет, сигнал не виден нигде. Материал коллеги —
+-- сигнал происхождения material; какой итог «Отбора» автору уже сообщил бот — notified_outcome; оценка автора —
+-- блок ОС с его именем из Telegram (author).
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS selector TEXT;              -- otbor; NULL — прежние правила
+CREATE INDEX IF NOT EXISTS idx_signals_otbor_waiting ON signals(created_at)
+  WHERE selector = 'otbor' AND otbor_decision IS NULL;
+ALTER TABLE colleague_materials ADD COLUMN IF NOT EXISTS notified_outcome TEXT;
+ALTER TABLE colleague_materials ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS author TEXT; -- кто оставил блок, если не учётка
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;

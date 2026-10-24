@@ -2201,14 +2201,15 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
-    """Шаг планировщика «Отбор» (#130): новые статьи, которые решает агент «Отбор», — в его задачи по полосе
-    ежедневной обработки. За флагом OTBOR_ENABLED. С --ids — названные статьи «Отбора» по полосе пересчётов:
-    повтор после разбора сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
+    """Шаг планировщика «Отбор» (#130, #131): новые статьи, находки поиска и материалы коллег, которые решает агент
+    «Отбор», — в его задачи по полосе ежедневной обработки. За флагом OTBOR_ENABLED. С --ids (статьи) и
+    --signal-ids (находки и материалы) — названные публикации «Отбора» по полосе пересчётов: повтор после разбора
+    сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
     from oiltech_digest import otbor
     from oiltech_digest.db import otbor_store
 
     try:
-        if args.ids:
+        if args.ids or args.signal_ids:
             named = [int(value) for value in args.ids.split(",") if value.strip()]
             ids = otbor_store.own_article_ids(named)
             chosen = otbor_store.chosen_for_digest(named)
@@ -2217,7 +2218,14 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
             other = sorted(set(named) - set(ids) - set(chosen))
             if other:
                 print(f"enqueue-otbor: статьи {other[:20]} решает не «Отбор» — пропущены")
-            result = {"articles": len(ids), "jobs": otbor.enqueue(ids, trigger="manual", bulk=True)}
+            named_signals = [int(value) for value in args.signal_ids.split(",") if value.strip()]
+            signal_ids = otbor_store.own_signal_ids(named_signals)
+            skipped = sorted(set(named_signals) - set(signal_ids))
+            if skipped:
+                print(f"enqueue-otbor: сигналы {skipped[:20]} «Отбор» не пересматривает (не его или выбраны в дайджест)"
+                      " — пропущены")
+            result = {"articles": len(ids), "signals": len(signal_ids),
+                      "jobs": otbor.enqueue(ids, signal_ids=signal_ids, trigger="manual", bulk=True)}
         else:
             result = otbor.scheduler_step()
     except otbor.OtborSetupError as exc:
@@ -2226,9 +2234,51 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
         print(f"enqueue-otbor: skipped reason={result['reason']}")
         return
     queues = sorted({job["queue_name"] for job in result["jobs"]})
-    print(f"enqueue-otbor: статей {result['articles']}, задач {len(result['jobs'])}"
+    print(f"enqueue-otbor: статей {result['articles']}, находок и материалов {result['signals']},"
+          f" задач {len(result['jobs'])}"
           + (f", очередь {', '.join(queues)}" if queues else "")
           + (f", без ответа после попыток {result['unanswered']}" if result.get("unanswered") else ""))
+
+
+def cmd_otbor_materials(args: argparse.Namespace) -> None:
+    """Накопленные материалы коллег (#131): присланные до включения «Отбора» и не ставшие сигналом проходят конвейер
+    один раз. По умолчанию сухой прогон — сколько материалов и оценка цены «Отбора», ничего не пишет; --apply —
+    сигналы материалов и задачи «Отбора» по полосе пересчётов (только при включённом флаге)."""
+    from oiltech_digest import material_signals, otbor
+
+    try:
+        result = material_signals.convert_accumulated(apply=args.apply)
+    except otbor.OtborSetupError as exc:
+        raise SystemExit(f"otbor-materials: {exc}") from exc
+    price = (f", «Отбор» около ${result['cost_usd']:.4f} ({result['model']})" if result["model"]
+             else ", модель «Отбора» не задана (OTBOR_MODEL)")
+    if not result["applied"]:
+        print(f"otbor-materials: накопленных материалов {result['materials']}{price}; сухой прогон, ничего не записано"
+              " (--apply — провести через конвейер)")
+        return
+    print(f"otbor-materials: сигналов материалов {len(result['signal_ids'])}, задач «Отбора» {result['jobs']}{price}")
+
+
+def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
+    """Шаг планировщика «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», без сути или
+    русского заголовка — в задачи по полосе ежедневной обработки. За флагом OTBOR_ENABLED. С --ids — названные
+    сигналы по полосе пересчётов (повтор после сбоя модели)."""
+    from oiltech_digest import signal_summary
+
+    try:
+        if args.ids:
+            ids = [int(value) for value in args.ids.split(",") if value.strip()]
+            result = {"signals": len(ids), "jobs": signal_summary.enqueue(ids, trigger="manual", bulk=True)}
+        else:
+            result = signal_summary.scheduler_step()
+    except signal_summary.SummarySetupError as exc:
+        raise SystemExit(f"enqueue-signal-summary: {exc}") from exc
+    if result.get("reason"):
+        print(f"enqueue-signal-summary: skipped reason={result['reason']}")
+        return
+    queues = sorted({job["queue_name"] for job in result["jobs"]})
+    print(f"enqueue-signal-summary: сигналов {result['signals']}, задач {len(result['jobs'])}"
+          + (f", очередь {', '.join(queues)}" if queues else ""))
 
 
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
@@ -3499,12 +3549,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_enqueue_otbor = sub.add_parser(
         "enqueue-otbor",
-        help="шаг планировщика «Отбор»: новые статьи — агенту «Отбор» (за флагом OTBOR_ENABLED)",
+        help="шаг планировщика «Отбор»: новые статьи, находки поиска и материалы коллег — агенту «Отбор» "
+             "(за флагом OTBOR_ENABLED)",
     )
     p_enqueue_otbor.add_argument("--ids", default="",
                                  help="повторить «Отбор» названных статей (номера через запятую) — по полосе "
                                       "пересчётов")
+    p_enqueue_otbor.add_argument("--signal-ids", default="",
+                                 help="повторить «Отбор» названных находок и материалов (номера сигналов через "
+                                      "запятую) — по полосе пересчётов")
     p_enqueue_otbor.set_defaults(func=cmd_enqueue_otbor)
+
+    p_enqueue_summary = sub.add_parser(
+        "enqueue-signal-summary",
+        help="шаг планировщика «Суть и перевод» сигналов: принятые «Отбором» находки и материалы без сути или "
+             "русского заголовка (за флагом OTBOR_ENABLED)",
+    )
+    p_enqueue_summary.add_argument("--ids", default="",
+                                   help="повторить для названных сигналов (номера через запятую) — по полосе "
+                                        "пересчётов")
+    p_enqueue_summary.set_defaults(func=cmd_enqueue_signal_summary)
+
+    p_otbor_materials = sub.add_parser(
+        "otbor-materials",
+        help="накопленные материалы коллег — один раз через «Отбор» (по умолчанию сухой прогон: число и цена)",
+    )
+    p_otbor_materials.add_argument("--apply", action="store_true",
+                                   help="завести сигналы материалов и задачи «Отбора»; без флага ничего не пишет")
+    p_otbor_materials.set_defaults(func=cmd_otbor_materials)
 
     p_card_history = sub.add_parser(
         "enqueue-signal-card-history",

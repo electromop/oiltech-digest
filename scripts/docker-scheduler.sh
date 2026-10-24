@@ -193,8 +193,10 @@ while true; do
   fi
 
   if [ "$OTBOR_ENABLED" = "1" ]; then
-    # Новые статьи — агенту «Отбор» на NL; принятые получат суть, тег и балл обработкой ленты следующего цикла.
+    # Новые статьи, находки поиска и материалы коллег — агенту «Отбор» на NL; принятые статьи получат суть, тег и
+    # балл обработкой ленты следующего цикла, находки и материалы — суть и русский заголовок своим шагом (#131).
     run_step "enqueue-otbor" python -m oiltech_digest.cli enqueue-otbor
+    run_step "enqueue-signal-summary" python -m oiltech_digest.cli enqueue-signal-summary
   fi
 
   if [ "$FETCH_EXTERNAL_ENABLED" = "1" ]; then

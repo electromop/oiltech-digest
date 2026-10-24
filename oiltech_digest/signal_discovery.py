@@ -31,6 +31,7 @@ from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glo
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, output_budget
 from oiltech_digest import scoring_profiles
 from oiltech_digest.processing.pipeline import make_client, normalize_score_payload
+from oiltech_digest.signal_card_pack import TEXT_LIMIT
 from oiltech_digest.signal_feedback import (
     apply_feedback_glossary,
     feedback_prompt_block,
@@ -622,6 +623,10 @@ class SignalDiscoveryConfig:
     # brave / openai_web / both; пусто — SIGNAL_SEARCH_MODE ядра (config_from_payload кладёт
     # решение ядра в задачу, чтобы NL не решал по своему .env).
     search_mode: str = ""
+    # «Отбор» решает находки (#131): поиск GPT только находит — ни судьи, ни ревью пачки, ни проверки темы.
+    # Решение ядра (OTBOR_ENABLED) едет в задаче, как search_mode; сборка NL до #131 поле не знает и гонит
+    # прежнюю цепочку — ядро пишет каждую находку по её метке (candidate["otbor"]), а не по задаче.
+    otbor: bool = False
 
 
 def seed_default_radar_topics() -> int:
@@ -712,7 +717,8 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
     if not topics:
         topics = [{"name": config.topic or "HSE technology radar", "query_seeds_json": []}]
     article_evidence: dict[str, list[dict[str, Any]]] = {}
-    if not config.web_only:
+    # При «Отборе» статьи корпуса находками не становятся: их решает он сам на пути ленты (#130, #131).
+    if not config.web_only and not config.otbor:
         for topic in topics:
             name = _topic_name(topic, config)
             article_evidence[name] = repository.list_signal_article_evidence(
@@ -865,7 +871,7 @@ def _run_discovery_topics(
             db_evidence = [_article_to_evidence(row, topic_name) for row in article_rows if _has_industry_context(row)]
             evidence = list(db_evidence)
             web_search = None
-            if config.web_search or config.web_only:
+            if config.web_search or config.web_only or config.otbor:
                 known_titles = _known_titles(snapshot, topic_name, since=research_start)
                 web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat, known_titles=known_titles)
                 evidence.extend(web_search["evidence"])
@@ -879,7 +885,6 @@ def _run_discovery_topics(
             fresh = [item for item in evidence if _normalize_url_for_key(str(item.get("source_url") or "")) not in known_urls]
             skipped_reviewed = len(evidence) - len(fresh)
             clusters = _cluster_evidence(fresh, topic_name)
-            candidates = []
             judge_errors: list[str] = []
             # Что не дошло до карточки: отсеяно поиском или судья не ответил. Ядро сохранит
             # их карточками «Отсеяно» — заказчик просматривает всё, а не только принятое.
@@ -890,45 +895,16 @@ def _run_discovery_topics(
                 {"stage": "search", **item}
                 for item in ((web_search or {}).get("research") or {}).get("unverified") or []
             ]
-            # «Режим ChatGPT»: событие — свой кластер, и модель уже отобрала главное. Лимит
-            # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
-            research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
-            selected = _clusters_for_judging(clusters, max(config.max_signals, research_events))
-            judged_clusters = _judge_clusters(selected, topic_name, offline=config.offline, beat=beat,
-                                              errors=judge_errors)
-            # У каждого кластера без ответа — ровно одна ошибка, в порядке кластеров: своя причина,
-            # а не последняя на все (судьи идут параллельно и пишут ошибки до разбора итога).
-            cluster_errors = iter(judge_errors)
-            for cluster, judged in judged_clusters:
-                if judged is None:
-                    first = cluster[0] if cluster else {}
-                    filtered_findings.append({
-                        "stage": "judge_error", "reason": next(cluster_errors, ""),
-                        "title": first.get("title_ru") or first.get("title") or "", "url": first.get("source_url") or "",
-                        "summary": first.get("summary_ru") or first.get("extracted_fact") or "",
-                        "publisher": first.get("publisher"), "event_date": first.get("published_at"),
-                    })
-                    continue
-                signal, raw_output = judged
-                if topic.get("tag_id") is not None:
-                    # Тема радара = тематика заказчика: фильтр «Тема» на экране — это его 13 тегов,
-                    # а не свободный текст модели (было 34 разных «темы» на 38 сигналов).
-                    # Какая из 13 — по содержанию: выбор судьи из списка, проверенный кодом;
-                    # нет выбора (офлайн, старая схема) — по ключам тематик.
-                    signal["theme"], theme_choice = _choose_theme(signal, raw_output, cluster, topic_name, tag_topic_names)
-                    raw_output = {**raw_output, "theme_choice": theme_choice}
-                raw_output = _apply_profile_score(signal, raw_output, cluster)
-                signal["signal_key"] = _signal_key(signal, cluster)
-                signal["evidence_count"] = len({str(item.get("source_url") or "") for item in cluster if item.get("source_url")})
-                signal["evidence"] = cluster
-                candidates.append({
-                    "signal": signal,
-                    "raw_output": raw_output,
-                    "rejected": _is_rejected_signal(signal),
-                    "training_input": _training_input_payload(topic_name, cluster, web_search, offline=config.offline),
-                })
-            beat()
-            batch_review = _batch_review_candidates(candidates, topic_name, offline=config.offline)
+            if config.otbor:
+                # Поиск только находит (#131): судья, ревью пачки и проверка темы не зовутся, потолка числа находок
+                # нет — каждая находка ждёт решения «Отбора».
+                candidates = [_finding_candidate(cluster, topic, topic_name, tag_topic_names) for cluster in clusters]
+                batch_review = None
+            else:
+                candidates = _judged_candidates(clusters, topic, topic_name, tag_topic_names, config, web_search,
+                                                beat, judge_errors, filtered_findings)
+                beat()
+                batch_review = _batch_review_candidates(candidates, topic_name, offline=config.offline)
             topics_out.append({
                 "topic": topic_name,
                 "article_evidence": len(db_evidence),
@@ -950,6 +926,75 @@ def _run_discovery_topics(
         raise JudgeUnavailable(f"Судья не ответил ни на один из {errors_total} кластеров: {first}")
     dedup = _dedupe_run(config, snapshot, topics_out, beat)
     return {"topics": topics_out, "dedup": dedup, "ai_usage": list((_USAGE.get() or {}).values())}
+
+
+def _judged_candidates(
+    clusters: list[list[dict[str, Any]]],
+    topic: dict[str, Any],
+    topic_name: str,
+    tag_topic_names: list[str],
+    config: SignalDiscoveryConfig,
+    web_search: dict[str, Any] | None,
+    beat: Callable[[], None],
+    judge_errors: list[str],
+    filtered_findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Прежняя цепочка (флаг «Отбора» выключен): судья по кластерам темы, тема, балл профиля. Кластер без ответа
+    судьи — в filtered_findings («судья не ответил»), его ошибка — в judge_errors."""
+    candidates: list[dict[str, Any]] = []
+    # «Режим ChatGPT»: событие — свой кластер, и модель уже отобрала главное. Лимит
+    # max_signals (на проде 6) отрезал бы половину из 12 событий темы до судьи.
+    research_events = int(((web_search or {}).get("research") or {}).get("evidence_count") or 0)
+    selected = _clusters_for_judging(clusters, max(config.max_signals, research_events))
+    judged_clusters = _judge_clusters(selected, topic_name, offline=config.offline, beat=beat, errors=judge_errors)
+    # У каждого кластера без ответа — ровно одна ошибка, в порядке кластеров: своя причина,
+    # а не последняя на все (судьи идут параллельно и пишут ошибки до разбора итога).
+    cluster_errors = iter(judge_errors)
+    for cluster, judged in judged_clusters:
+        if judged is None:
+            first = cluster[0] if cluster else {}
+            filtered_findings.append({
+                "stage": "judge_error", "reason": next(cluster_errors, ""),
+                "title": first.get("title_ru") or first.get("title") or "", "url": first.get("source_url") or "",
+                "summary": first.get("summary_ru") or first.get("extracted_fact") or "",
+                "publisher": first.get("publisher"), "event_date": first.get("published_at"),
+            })
+            continue
+        signal, raw_output = judged
+        if topic.get("tag_id") is not None:
+            # Тема радара = тематика заказчика: фильтр «Тема» на экране — это его 13 тегов,
+            # а не свободный текст модели (было 34 разных «темы» на 38 сигналов).
+            # Какая из 13 — по содержанию: выбор судьи из списка, проверенный кодом;
+            # нет выбора (офлайн, старая схема) — по ключам тематик.
+            signal["theme"], theme_choice = _choose_theme(signal, raw_output, cluster, topic_name, tag_topic_names)
+            raw_output = {**raw_output, "theme_choice": theme_choice}
+        raw_output = _apply_profile_score(signal, raw_output, cluster)
+        signal["signal_key"] = _signal_key(signal, cluster)
+        signal["evidence_count"] = len({str(item.get("source_url") or "") for item in cluster if item.get("source_url")})
+        signal["evidence"] = cluster
+        candidates.append({
+            "signal": signal,
+            "raw_output": raw_output,
+            "rejected": _is_rejected_signal(signal),
+            "training_input": _training_input_payload(topic_name, cluster, web_search, offline=config.offline),
+        })
+    return candidates
+
+
+def _finding_candidate(cluster: list[dict[str, Any]], topic: dict[str, Any], topic_name: str,
+                       tag_topic_names: list[str]) -> dict[str, Any]:
+    """Находка поиска при «Отборе» (#131): решения у неё нет, его примет «Отбор». Сигнал несёт только то, что о
+    публикации известно без модели: заголовок страницы и тему по ключам тематик (тему ставит «Карточка», #132).
+    Черновые данные поиска (тип события, компания, суть, «почему важно») остаются в ссылке и в сигнал не идут."""
+    best = max(cluster, key=lambda item: float(item.get("strength") or 0))
+    signal: dict[str, Any] = {"title": _trim(str(best.get("title") or ""), 220), "theme": topic_name, "summary": "",
+                              "companies": [], "maturity": "watch", "score": 0}
+    if topic.get("tag_id") is not None:
+        signal["theme"], _ = _content_theme(signal, cluster, topic_name, tag_topic_names)
+    signal["signal_key"] = _signal_key(signal, cluster)
+    signal["evidence_count"] = len({str(item.get("source_url") or "") for item in cluster if item.get("source_url")})
+    signal["evidence"] = cluster
+    return {"signal": signal, "raw_output": {}, "rejected": False, "otbor": True}
 
 
 def _judge_clusters(
@@ -1246,6 +1291,8 @@ def _store_candidate(
     candidate: dict[str, Any],
     generation_run_id: int | None,
 ) -> int | None:
+    if candidate.get("otbor"):
+        return _store_otbor_finding(config, candidate)
     signal = candidate["signal"]
     cluster = signal.get("evidence") or []
     rejected = bool(candidate.get("rejected"))
@@ -1291,6 +1338,41 @@ def _store_candidate(
             normalized_output=signal,
         )
     return signal_id
+
+
+def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any]) -> int | None:
+    """Находка при «Отборе» (#131) — сигнал радара с меткой пути «Отбора»: пока решения нет, его не видно нигде, и
+    решит его «Отбор» (шаг планировщика). Найденная снова (тот же ключ) только отмечается: решённое «Отбором» или
+    прежними правилами второй раз не решается и не оплачивается. Все ссылки уже у видимых карточек — отмечается
+    карточка, которая их держит, как у прежней цепочки."""
+    if config.dry_run:
+        return None
+    signal = candidate["signal"]
+    cluster = signal.get("evidence") or []
+    repeat_of = _repeat_of_existing_card(signal, cluster)
+    if repeat_of is not None:
+        repository.touch_signal(repeat_of)
+        signal["id"] = repeat_of
+        return repeat_of
+    signal_id, created = repository.insert_otbor_finding({**signal, "decision_log": _otbor_finding_log(cluster)})
+    if created:
+        for item in cluster:
+            repository.upsert_signal_evidence(signal_id, item)
+        signal["evidence_count"] = repository.refresh_signal_evidence_count(signal_id)
+    else:
+        repository.touch_signal(signal_id)
+    signal["id"] = signal_id
+    return signal_id
+
+
+def _otbor_finding_log(cluster: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """«Ход решения» находки при «Отборе»: что нашёл поиск (заголовок и сайт ссылки). Решения поиска нет."""
+    return [{"stage": "поиск", "text": f"Найдено: {item.get('title') or item.get('source_url') or ''}"
+             + (f" ({_domain_of(str(item['source_url']))})" if item.get("source_url") else "")} for item in cluster]
+
+
+def _domain_of(url: str) -> str:
+    return _normalize_url_for_key(url).split("/", 1)[0]
 
 
 def _links_held_elsewhere(urls: list[str], signal_key: str) -> dict[str, dict]:
@@ -1487,7 +1569,8 @@ def _merge_duplicate(
     if owner_id and owner_id != target_id:
         repository.refresh_signal_evidence_count(int(owner_id))
     repository.touch_signal(target_id)
-    if generation_run_id is not None:
+    # Пример обучения судьи — только из прежней цепочки: при «Отборе» (#131) судьи нет.
+    if generation_run_id is not None and not candidate.get("otbor"):
         repository.create_signal_training_example(
             generation_run_id=generation_run_id,
             signal_id=target_id,
@@ -1560,6 +1643,8 @@ def config_from_payload(payload: dict[str, Any], *, background_job_id: int | Non
         ),
         background_job_id=background_job_id,
         search_mode=_search_mode(payload.get("search_mode")),
+        # Флаг ядра в момент выдачи (#131): NL своего .env для этого не читает.
+        otbor=bool(payload["otbor"]) if "otbor" in payload else app_config.OTBOR_ENABLED,
     )
 
 
@@ -2707,9 +2792,11 @@ def _topic_web_evidence(
     heartbeat: Callable[[], None],
     known_titles: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Находки темы из веба по режиму прогона: Brave, «режим ChatGPT» или оба."""
+    """Находки темы из веба по режиму прогона: Brave, «режим ChatGPT» или оба. При «Отборе» (#131) — только поиск
+    GPT, и он только находит (signal_research, finds_only): Brave во вход «Отбора» не подключается, текст страницы
+    хранится до предела входа агента (TEXT_LIMIT, как у статьи сбора), а в прежней цепочке — прежним обрывком."""
     mode = _search_mode(config.search_mode)
-    if mode == "brave":
+    if mode == "brave" and not config.otbor:
         return _search_web_evidence(topic, config, heartbeat=heartbeat)
     heartbeat()
     context = _topic_tag_context(topic_name)
@@ -2719,18 +2806,21 @@ def _topic_web_evidence(
     ) if part.strip() and not part.endswith(": "))
     research = signal_research.research_topic(topic_name, days=_research_days(config),
                                               topic_context=topic_context, heartbeat=heartbeat,
-                                              feedback=research_feedback_block(topic_name, known_titles=known_titles))
+                                              feedback=research_feedback_block(topic_name, known_titles=known_titles),
+                                              finds_only=config.otbor)
     heartbeat()
-    # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье.
+    # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье или «Отбору».
     events = research.pop("evidence")
-    found, fulltext = _enrich_web_evidence_with_full_text(events, topic_name, limit=len(events), heartbeat=heartbeat)
-    verified, unverified = signal_research.verify_research_evidence(found)
+    found, fulltext = _enrich_web_evidence_with_full_text(
+        events, topic_name, limit=len(events), heartbeat=heartbeat,
+        text_chars=TEXT_LIMIT if config.otbor else WEB_EVIDENCE_FULLTEXT_CHARS)
+    verified, unverified = signal_research.verify_research_evidence(found, finds_only=config.otbor)
     research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))
     _record_usage("radar_research", research.get("model"), calls=int(research.get("attempts") or 0),
                   input_tokens=int(research.get("input_tokens") or 0),
                   output_tokens=int(research.get("output_tokens") or 0),
                   web_search_calls=int(research.get("web_search_calls") or 0))
-    if mode == "openai_web":
+    if mode == "openai_web" or config.otbor:
         return {"status": research["status"], "provider": "openai_web_search", "queries": [], "research": research,
                 "evidence": verified}
     brave = _search_web_evidence(topic, config, heartbeat=heartbeat)
@@ -3157,8 +3247,9 @@ def _enrich_web_evidence_with_full_text(
     heartbeat: Callable[[], None] | None = None,
     budget_seconds: float | None = None,
     clock: Callable[[], float] = time.monotonic,
+    text_chars: int = WEB_EVIDENCE_FULLTEXT_CHARS,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Заменить сниппет реальным текстом статьи там, где это удаётся и оправдано.
+    """Заменить сниппет реальным текстом статьи там, где это удаётся и оправдано. Текста — до text_chars знаков.
 
     Раньше evidence из web-поиска несло только заголовок и обрывок сниппета — судья и
     кластеризация не видели ни контракта, ни KPI, ни настоящей даты события, только то,
@@ -3208,7 +3299,7 @@ def _enrich_web_evidence_with_full_text(
 
         stats["fetched"] += 1
         title = fetched.get("title") or item.get("title") or ""
-        fact = raw_text[:WEB_EVIDENCE_FULLTEXT_CHARS]
+        fact = raw_text[:text_chars]
         context = {"title": title, "raw_text": f"{title}\n{fact}", "language": "mixed"}
         enriched.append({
             **item,

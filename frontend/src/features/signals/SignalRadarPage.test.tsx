@@ -1078,8 +1078,10 @@ describe("качество радара на экране (Виктор 29.09)",
     expect([lastListQuery().hidden, lastListQuery().section]).toEqual([undefined, undefined]);
   });
 
-  it("у статьи сбора на радаре отзыв — блок ОС: без правок карточки и «дубля», агента он не учит (#130)", async () => {
-    serveWithHidden([{ ...scored, origin: "feed", signal_category: "technology", otbor_decision: "accept" }], []);
+  // Статья сбора (#130) и материал коллеги (#131) на радаре: отзыв о них судью не учит (repository.judge_learns_from).
+  it.each(["feed", "material"])("у сигнала происхождения %s на радаре отзыв — блок ОС: без правок карточки и «дубля»",
+    async (origin) => {
+    serveWithHidden([{ ...scored, origin, signal_category: "technology", otbor_decision: "accept" }], []);
     const toasts: string[] = [];
     vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 3, memory_ids: [], memories: 0 });
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} />);
