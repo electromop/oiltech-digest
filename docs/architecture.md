@@ -36,7 +36,6 @@
 | `oiltech_worker` | фоновые задачи, очереди `default`, `ai` | — |
 | `oiltech_playwright_worker` | очередь `playwright`: JS-сайты и рендер PDF | — |
 | `oiltech_tasks` | трекер задач (тот же образ, `TASKS_APP_MODE=1`) | `127.0.0.1:8010` |
-| `oiltech_docs` | справка на mkdocs-material | `127.0.0.1:8081` |
 | `oiltech_bootstrap` | одноразовый: `init-db` + сиды, затем выходит | — |
 
 Наружу открыт только Caddy. Всё остальное слушает loopback — БД снаружи недоступна.
