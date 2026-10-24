@@ -2,6 +2,11 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
+> **This repo has no `CONTEXT.md`.** The glossary and ADRs from 0003 on are kept in the project's private
+> documents (owner's decision, 14.10); the path is in the owner's desktop rules. Only `docs/adr/0001` and
+> `docs/adr/0002` live here. Read the glossary there, and do not create `CONTEXT.md` or new ADRs in this
+> public repo.
+
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root, or
