@@ -88,389 +88,148 @@
   font-weight: var(--ot-weight-bold);
 }
 
-.digestFiltersGrid {
-  margin-top: 12px;
+/* Месячный дайджест (пересмотр 23.10). Выпуск выбирается в шапке; слева состав и порядок, справа тот же выпуск
+   в PDF и действия с ним, правая колонка прилипает при прокрутке состава. Уже 1100px — колонки друг под другом. */
+.digestHeaderControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.digestMonthField {
+  min-width: 14rem;
+}
+
+.digestWorkspace {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) 180px 180px 140px 140px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--ot-space-05);
+  align-items: start;
+}
+
+.digestComposition {
+  container-type: inline-size;
+}
+
+.digestPreviewSide {
+  position: sticky;
+  top: calc(var(--ot-header-height) + var(--ot-space-05));
+  display: grid;
+  gap: var(--ot-space-04);
+}
+
+.digestActionBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  align-items: end;
+  padding-bottom: var(--ot-space-04);
+  border-bottom: 1px solid var(--ot-border-subtle);
+}
+
+.digestActionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.digestExportGroup {
+  margin-inline-start: auto;
+}
+
+.digestPdfPane {
+  display: grid;
+  gap: var(--ot-space-04);
+}
+
+.digestPdfFrameWrap {
+  position: relative;
+  min-height: 24rem;
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-02);
+}
+
+.digestPdfFrame {
+  display: block;
+  width: 100%;
+  height: max(28rem, calc(100dvh - 17rem));
+  border: 0;
+  background: var(--ot-layer-02);
+  transition: opacity var(--ot-duration-moderate-01) var(--ot-ease-standard);
+}
+
+.digestPdfFrameWrap.busy .digestPdfFrame {
+  opacity: 0.55;
+}
+
+.digestPdfFrameWrap > .skeletonList,
+.digestPdfFrameWrap > .emptyState {
+  padding: var(--ot-space-05);
+}
+
+.digestPdfBusy {
+  position: absolute;
+  top: var(--ot-space-04);
+  inset-inline: 0;
+  width: fit-content;
+  margin-inline: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--ot-inverse-bg);
+  color: var(--ot-inverse-text);
+  box-shadow: var(--ot-shadow-raised);
+}
+
+.digestArchiveTable th[scope="row"] {
+  font-weight: var(--ot-weight-bold);
+  text-align: start;
+  white-space: nowrap;
+}
+
+.digestArchiveActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .digestFiltersRow {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: minmax(0, 1.9fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.5fr) minmax(6rem, 1fr) minmax(6rem, 1fr);
   gap: 8px;
   align-items: end;
 }
 
-.digestFiltersRowSecondary {
-  margin-top: 8px;
-  grid-template-columns: minmax(0, 1.1fr) minmax(140px, 0.6fr) minmax(140px, 0.6fr);
+/* Узкая колонка — по два поля в ряд; совсем узкая (телефон) — поиск и тема во всю ширину, баллы парой. */
+@container (max-width: 34rem) {
+  .digestFiltersRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.digestModeSwitch {
-  display: inline-flex;
-  gap: 8px;
-  flex-wrap: wrap;
+@container (max-width: 24rem) {
+  .digestFiltersRow > .field:not(.digestScoreField) {
+    grid-column: 1 / -1;
+  }
 }
 
-.digestBuilderMain {
-  min-width: 0;
-}
-
-.digestBuilderSide {
-  min-width: 0;
-  display: grid;
-  gap: 12px;
-  align-content: start;
-}
-
-.digestBrandingWorkspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
-  gap: 14px;
-  align-items: start;
-}
-
-.digestToolbar {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.digestToolbarStack {
-  grid-template-columns: 1fr;
-  margin-top: 0;
-}
-
-.digestActionGroup {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-height: 54px;
-  padding: 10px 12px;
-  border-radius: var(--ot-radius);
-  border: 1px solid var(--ot-border-subtle);
-  background: var(--ot-layer-02);
-}
-
-.digestActionGroupPrimary {
-  justify-content: flex-end;
-}
-
-.digestGroupLabel {
-  flex: 0 0 100%;
-  font-size: var(--ot-size-caption);
-  line-height: 1;
-  font-weight: var(--ot-weight-bold);
-  letter-spacing: var(--ot-tracking-caption);
-  color: var(--ot-text-secondary);
-}
-
-.digestDraftInfo {
-  margin-top: 8px;
-}
-
-.digestControlCard,
-.digestPreviewSurface,
 .digestQueuePanel {
+  margin-top: 12px;
   padding: 14px;
   border-radius: var(--ot-radius);
   border: 1px solid var(--ot-border-subtle);
   background: var(--ot-layer-02);
 }
 
-.digestControlMeta {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-  align-items: baseline;
-}
-
-.digestControlMeta strong {
-  font-size: var(--ot-size-body-lg);
-  color: var(--text);
-}
-
-.digestRunSummary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 8px 0 14px;
-}
-
-.digestRunCard {
-  display: grid;
-  gap: 4px;
-  padding: 14px 16px;
-  border: 1px solid var(--ot-border-subtle);
-  border-radius: var(--ot-radius);
-  background: var(--ot-layer-01);
-}
-
-.digestRunCard strong {
-  font-size: var(--ot-size-heading-03);
-  color: var(--text);
-}
-
-.digestRunFilters {
-  margin: -2px 0 14px;
-  color: var(--ot-text-secondary);
-  font-size: var(--ot-size-body);
-}
-
-.digestBrandingCard {
-  margin-top: 14px;
-}
-
-.digestBrandingCard .panelHeader {
-  margin-bottom: 10px;
-}
-
-.digestSocialsEditor {
-  margin-top: 14px;
-  display: grid;
-  gap: 10px;
-}
-
-.digestSocialsList {
-  display: grid;
-  gap: 8px;
-}
-
-.digestSocialRow {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) 110px 120px auto;
-  gap: 8px;
-  align-items: end;
-}
-
-.digestPreviewLive {
-  margin-top: 16px;
-  display: grid;
-  gap: 10px;
-}
-
-.digestPreviewIframe {
-  width: 100%;
-  min-height: 1080px;
-  border: 1px solid var(--ot-border-subtle);
-  border-radius: var(--ot-radius);
-  background: var(--ot-layer-01);
-}
-
-.digestPreviewLiveFrame {
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 16px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.92);
-}
-
-.digestPreviewHeader {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  padding: 16px 18px;
-  color: var(--brand);
-  font-weight: 800;
-}
-
-.digestPreviewBrandLine {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.digestPreviewBrandLine strong {
-  font-size: 1rem;
-}
-
-.digestPreviewDept {
-  font-size: 0.8rem;
-  text-align: right;
-}
-
-.digestPreviewHero {
-  position: relative;
-  overflow: hidden;
-  padding: 24px 18px 22px;
-  background: linear-gradient(180deg, rgba(29, 78, 216, 0.88) 0%, rgba(15, 23, 42, 0.92) 100%);
-  color: #ffffff;
-}
-
-.digestPreviewHeroImage {
-  position: absolute;
-  inset: 0;
-  background-position: center;
-  background-size: cover;
-  opacity: 0.22;
-}
-
-.digestPreviewBadge {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  padding: 8px 14px;
-  border-radius: 0 0 12px 12px;
-  background: #e83d08;
-  font-size: 0.8rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.digestPreviewHeadline {
-  position: relative;
-  z-index: 1;
-  margin-top: 18px;
-  font-size: 1.9rem;
-  line-height: 1.05;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.digestPreviewSubtitle {
-  position: relative;
-  z-index: 1;
-  margin-top: 10px;
-  max-width: 560px;
-  font-size: 1rem;
-  color: rgba(255, 255, 255, 0.92);
-}
-
-.digestPreviewSectionTitle {
-  padding: 16px 18px 0;
-  font-size: 1rem;
-  font-weight: 900;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--brand);
-}
-
-.digestPreviewHighlights {
-  padding: 12px 18px 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 8px;
-}
-
-.digestPreviewHighlight {
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(248, 250, 252, 0.94);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  display: grid;
-  gap: 4px;
-}
-
-.digestPreviewHighlight strong {
-  font-size: 1.4rem;
-  color: var(--brand);
-}
-
-.digestPreviewHighlight span {
-  font-size: 0.76rem;
-  color: var(--text-muted);
-  font-weight: 700;
-}
-
-.digestPreviewCards {
-  padding: 12px 18px 18px;
-  display: grid;
-  gap: 10px;
-}
-
-.digestPreviewLiveCard {
-  padding: 12px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.94);
-  display: grid;
-  gap: 8px;
-}
-
-.digestPreviewLiveMeta {
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--brand);
-}
-
-.digestPreviewLiveTitle {
-  font-size: 1rem;
-  line-height: 1.3;
-  font-weight: 900;
-  color: #0f172a;
-}
-
-.digestPreviewLiveSummary {
-  color: #334155;
-  line-height: 1.45;
-}
-
-.digestPreviewLiveFooter {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-weight: 700;
-}
-
-.digestPreviewFooter {
-  padding: 16px 18px 18px;
-  background: #003da6;
-  color: #ffffff;
-  display: grid;
-  gap: 12px;
-}
-
-.digestPreviewSocials {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.digestPreviewSocial {
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  background: #ffffff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.82rem;
-  font-weight: 800;
-}
-
-.digestPreviewContact {
-  display: grid;
-  gap: 4px;
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 0.8rem;
-}
-
-.digestPreviewEmpty {
-  padding: 20px 0 4px;
-  color: var(--text-muted);
-}
-
-.digestLayout {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: minmax(300px, 0.92fr) minmax(360px, 1.08fr);
-  gap: 14px;
-  align-items: start;
-}
-
-.digestPickListReact,
-.digestPreviewGrid {
+.digestPickListReact {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
   display: grid;
   gap: 10px;
 }
@@ -491,9 +250,8 @@
   justify-content: flex-end;
 }
 
-.digestPickRow,
-.digestPreviewCard {
-  padding: 11px 12px;
+.digestPickRow {
+  padding: 12px;
   border-radius: var(--ot-radius);
   border: 1px solid var(--ot-border-subtle);
   background: var(--ot-layer-01);
@@ -507,16 +265,18 @@
 }
 
 .digestPickIndex {
-  min-width: 38px;
-  height: 38px;
+  min-width: 2.5rem;
+  height: 2.5rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--ot-radius);
   background: var(--ot-layer-accent);
-  color: var(--brand);
+  color: var(--ot-text-primary);
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-body-lg);
   font-weight: var(--ot-weight-bold);
-  font-size: var(--ot-size-body);
+  font-variant-numeric: tabular-nums;
 }
 
 .digestPickMain {
@@ -525,47 +285,62 @@
   gap: 6px;
 }
 
-.digestPickActions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
 .digestPickMetaRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 6px 8px;
 }
 
 .digestPickRow a {
   color: var(--ot-text-primary);
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 
-.digestPickRow a:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .digestPickRow a:hover {
+    text-decoration: underline;
+  }
 }
 
-.digestPickSummary {
-  margin-top: 10px;
+.digestPickRow .digestPickSummary {
+  margin: 10px 0 0;
   color: var(--ot-text-primary);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .digestPickFooter {
   margin-top: 10px;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  align-items: center;
+  gap: 8px 12px;
   color: var(--ot-text-secondary);
   font-size: var(--ot-size-body);
+}
+
+.digestPickActions {
+  margin-inline-start: auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .digestAvailablePanel {
   margin-top: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--ot-border-subtle);
+}
+
+.digestAvailablePanel > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--ot-control-sm);
+  font-weight: var(--ot-weight-bold);
+  cursor: pointer;
 }
 
 .digestAvailableList {
@@ -586,9 +361,26 @@
   border-bottom: 0;
 }
 
-.digestBuilderSide .digestPreviewSurface {
-  position: sticky;
-  top: 16px;
+.digestAvailableRow .metaText {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+@media (max-width: 1100px) {
+  .digestWorkspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .digestPreviewSide {
+    position: static;
+  }
+
+  .digestPdfFrame {
+    height: 70vh;
+  }
 }
 
 .jobsStats {
@@ -1292,7 +1084,6 @@
 .articlesFiltersRow > .field,
 .articlesFiltersRowSecondary > .field,
 .digestFiltersRow > .field,
-.digestFiltersRowSecondary > .field,
 .articlesFiltersRow .sourceComboReact,
 .articlesFiltersRowSecondary .sourceComboReact {
   min-width: 0;
@@ -1436,6 +1227,14 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+/* Длинное имя темы («Бурение, направленное бурение, буровые растворы…») на узком экране переносится, а не
+   обрезается краем карточки. */
+.articleGroupHeadMain .miniPill {
+  min-width: 0;
+  white-space: normal;
+  text-align: start;
 }
 
 .groupChevron {
@@ -2027,15 +1826,9 @@
    диапазоне 721–1100px не было ни того, ни другого). Карточные/статистические
    сетки текучи через auto-fit, поэтому форсим 1fr только у разнородных раскладок. */
 @media (max-width: 1100px) {
-
   .heroGrid,
   .backlogOverview,
   .sourceConfigGridReact,
-  .digestToolbar,
-  .digestRunSummary,
-  .digestBrandingWorkspace,
-  .digestSocialRow,
-  .digestLayout,
   .userAddGrid,
   .userRow,
   .articleDetailGrid {
@@ -2047,7 +1840,6 @@
      (на ≤720px ниже они уже сворачиваются в одну колонку). */
   .sourceCreateGrid,
   .sourceFiltersGrid,
-  .digestFiltersGrid,
   .articlesFiltersGrid,
   .jobsFilters,
   .backlogStats,
@@ -2059,16 +1851,11 @@
     min-width: 0;
     grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(118px, auto));
   }
-
-  .digestBuilderSide .digestPreviewSurface {
-    position: static;
-  }
 }
 
 /* ≤720px: телефоны — заголовки в столбик, фильтры в одну колонку, узкие таблицы
    со скроллом. Карточка статьи уже flex и переносится сама, грид не форсим. */
 @media (max-width: 720px) {
-
   .sourceCreateGrid,
   .sourceFiltersGrid,
   .jobsFilters,
@@ -2076,9 +1863,6 @@
   .backlogCreateGrid,
   .backlogFilters,
   .maintenanceGrid,
-  .digestFiltersGrid,
-  .digestFiltersRow,
-  .digestFiltersRowSecondary,
   .articlesAdvancedGrid,
   .articlesFiltersRow,
   .articlesFiltersRowSecondary,
@@ -3940,58 +3724,6 @@
   color: var(--ot-text-primary);
 }
 
-.documentsTable {
-  min-width: 940px;
-}
-
-.documentNameButton {
-  background: transparent;
-  border: none;
-  padding: 0;
-  font: inherit;
-  font-weight: var(--ot-weight-bold);
-  color: var(--brand);
-  text-align: left;
-  cursor: pointer;
-}
-
-.documentRow.active {
-  background: var(--brand-soft);
-}
-
-.documentRowActions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.documentLink {
-  font-size: var(--ot-size-caption);
-  font-weight: var(--ot-weight-bold);
-  color: var(--brand);
-}
-
-.documentStatus.ok {
-  color: var(--sem-ok-fg);
-  background: var(--sem-ok-bg);
-}
-
-.documentStatus.warn {
-  color: var(--sem-warn-fg);
-  background: var(--sem-warn-bg);
-}
-
-.documentStatus.bad {
-  color: var(--sem-bad-fg);
-  background: var(--sem-bad-bg);
-}
-
-.documentStatus.muted {
-  color: var(--sem-muted-fg);
-  background: var(--sem-muted-bg);
-}
-
 .documentCard {
   display: grid;
   gap: 14px;
@@ -4285,66 +4017,117 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* «Итоги недели» радара: строка-сводка, по клику — лучшие новые и причины отсева. */
-.signalWeekly {
-  padding: 10px 14px;
-}
-
-.signalWeeklyHead {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.signalWeeklyBody {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  margin-top: 10px;
-  font-size: var(--ot-size-body);
-}
-
-.signalWeeklyBody ol,
-.signalWeeklyBody ul {
-  margin: 4px 0 0;
-  padding-left: 20px;
-}
-
-/* Ход решения карточки: этап — подпись слева, текст шага справа. */
+/* Ход решения карточки (пересмотр 23.10): причина видна сразу, шаги свёрнуты под кнопкой и раскрываются лентой —
+   точка на линии, этап подписью слева, текст шага справа; на телефоне этап над текстом. */
 .signalDecision {
   margin-top: 12px;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
 }
 
 .signalDecisionReason {
-  margin: 0 0 8px;
+  margin: 0;
+}
+
+.signalDecisionToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--ot-control-sm);
+  padding: 0 10px 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ot-link);
+  font: inherit;
+  font-weight: var(--ot-weight-bold);
+  cursor: pointer;
+  transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard),
+    color var(--ot-duration-fast-02) var(--ot-ease-standard);
+}
+
+.signalDecisionToggle .groupChevron {
+  color: currentColor;
+}
+
+.signalDecisionToggle[aria-expanded="true"] .groupChevron {
+  transform: rotate(0deg);
+}
+
+.signalDecisionToggle .metaText {
+  font-weight: var(--ot-weight-regular);
+}
+
+/* На сером фоне наведения синий 60 даёт 4.1:1 — текст темнеет до синего 70 (6.4:1). */
+@media (hover: hover) {
+  .signalDecisionToggle:hover {
+    background: var(--ot-layer-hover);
+    color: var(--ot-link-hover);
+  }
 }
 
 .signalDecisionLog {
-  margin: 4px 0 0;
-  padding-left: 20px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   display: grid;
-  gap: 4px;
   font-size: var(--ot-size-body);
 }
 
 .signalDecisionLog li {
-  display: flex;
-  gap: 8px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr);
+  gap: 12px;
+  padding: 6px 0 6px 24px;
+}
+
+/* Точка шага и линия до следующего: решение читается как путь, а не как список. */
+.signalDecisionLog li::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  left: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ot-interactive);
+}
+
+.signalDecisionLog li::after {
+  content: "";
+  position: absolute;
+  top: 22px;
+  bottom: -10px;
+  left: 9px;
+  width: 2px;
+  background: var(--ot-border-subtle);
+}
+
+.signalDecisionLog li:last-child::after {
+  display: none;
 }
 
 .signalDecisionStage {
-  flex: 0 0 auto;
-  min-width: 96px;
-  color: var(--text-muted);
+  padding-top: 1px;
+  color: var(--ot-text-secondary);
   font-size: var(--ot-size-caption);
   font-weight: var(--ot-weight-bold);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+.signalDecisionText {
+  min-width: 0;
+  color: var(--ot-text-primary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .signalDecisionLog li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
 }
 
 /* Причина скрытия — только в выборке «Скрытые» (админ). */
@@ -4377,15 +4160,73 @@
   gap: 8px;
 }
 
-/* Атрибуты карточки сигнала (#97) — чипы под строкой карточки на обоих экранах. «Не определено» —
-   пробел карточки: пунктирная рамка вместо пропуска. Компания — кнопка «всё про компанию». */
-.signalCardChips {
+/* Карточка сигнала (пересмотр 23.10: «много флагов и плашек»). Под заголовком — одна строка «о чём»: тема,
+   компании, регион, дата события через точку. Атрибуты (#97) — в раскрытой карточке таблицей «подпись: значение»;
+   «не определено» — пробел карточки, пунктир слева вместо пропуска. Компания — кнопка «всё про компанию». */
+.signalCardLine {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
+  align-items: baseline;
+  row-gap: 2px;
+  margin-top: 4px;
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-body);
+  line-height: 1.5;
 }
 
+.signalCardLine > * + *::before {
+  content: "·";
+  content: "·" / "";
+  margin-inline: 8px;
+  color: var(--ot-text-secondary);
+}
+
+.signalCardLineCompanies {
+  min-width: 0;
+}
+
+.signalCardStatus {
+  margin-top: 4px;
+  font-size: var(--ot-size-body);
+}
+
+.signalAttributes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+
+.signalAttribute {
+  min-width: 0;
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--ot-border-subtle);
+}
+
+.signalAttribute dt {
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+.signalAttribute dd {
+  margin: 2px 0 0;
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-body);
+  overflow-wrap: anywhere;
+}
+
+.signalAttribute.gap {
+  border-inline-start-style: dashed;
+  border-inline-start-color: var(--ot-border-strong);
+}
+
+.signalAttribute.gap dd {
+  color: var(--ot-text-secondary);
+  font-style: italic;
+}
+
+/* Чипы включённых фильтров над списком. */
 .signalChip {
   display: inline-flex;
   flex-wrap: wrap;
@@ -4398,17 +4239,6 @@
   color: var(--text-soft);
   font-size: var(--ot-size-caption);
   line-height: 1.4;
-}
-
-.signalChipLabel {
-  color: var(--text-muted);
-}
-
-.signalChip.gap {
-  border-style: dashed;
-  border-color: var(--ot-border-subtle);
-  background: transparent;
-  color: var(--text-muted);
 }
 
 .signalCompanyButton {
@@ -4495,9 +4325,11 @@
   background: var(--ot-layer-02);
 }
 
-.signalEvidenceRow:hover {
-  border-color: var(--ot-border-interactive);
-  background: var(--ot-layer-02);
+@media (hover: hover) {
+  .signalEvidenceRow:hover {
+    border-color: var(--ot-border-interactive);
+    background: var(--ot-layer-02);
+  }
 }
 
 /* «издатель · дата публикации» — обычным регистром: домен и дату так читать проще. */
@@ -4711,12 +4543,20 @@
   padding: 6px 0;
 }
 
-/* Материалы коллег из Telegram (ColleagueMaterialsPage). */
+/* Материалы (пересмотр 23.10): один раздел — присланное боту в Telegram и внесённое на платформе. Откуда запись,
+   видно подписью и полосой слева; правка, разбор и удаление — строкой действий внизу карточки. */
+.materialsBotHint {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--ot-text-secondary);
+}
+
 .materialsFilters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
-  margin-bottom: 12px;
+  align-items: end;
+  margin: 12px 0;
 }
 
 .materialsList {
@@ -4725,11 +4565,20 @@
 }
 
 .materialCard {
-  border: 1px solid var(--line);
-  border-radius: var(--ot-radius);
-  background: var(--surface-strong);
-  padding: 12px 14px;
   min-width: 0;
+  padding: 12px 14px 12px 16px;
+  border: 1px solid var(--ot-border-subtle);
+  border-inline-start: 3px solid var(--ot-border-strong);
+  border-radius: var(--ot-radius);
+  background: var(--ot-layer-01);
+}
+
+.materialCard.telegram {
+  border-inline-start-color: var(--ot-origin-telegram);
+}
+
+.materialCard.upload {
+  border-inline-start-color: var(--ot-origin-upload);
 }
 
 .materialCardTop {
@@ -4739,51 +4588,111 @@
   gap: 8px;
 }
 
+.materialOrigin {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ot-control-xs);
+  padding: 0 var(--ot-space-03);
+  border-radius: var(--ot-radius-pill);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
+  line-height: var(--ot-leading-caption);
+  white-space: nowrap;
+}
+
+.materialOrigin.telegram {
+  background: var(--ot-origin-telegram-bg);
+  color: var(--ot-origin-telegram-fg);
+}
+
+.materialOrigin.upload {
+  background: var(--ot-origin-upload-bg);
+  color: var(--ot-origin-upload-fg);
+}
+
 .materialCard h3 {
   margin: 8px 0 4px;
   font-size: var(--ot-size-body-lg);
-}
-
-.materialDescription {
-  margin: 0 0 8px;
-  white-space: pre-wrap;
-  color: var(--text-soft);
+  line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
+.materialCard .materialDescription {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  color: var(--ot-text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Подпись над значением, ячейки в строку; длинная ссылка переносится, а не раздвигает карточку. */
 .materialMeta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
+  gap: 6px 24px;
+  margin: 0;
   font-size: var(--ot-size-body);
-  color: var(--text-muted);
+}
+
+.materialMeta > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.materialMeta dt {
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+.materialMeta dd {
+  margin: 0;
   overflow-wrap: anywhere;
 }
 
-.materialVerdict {
-  padding: 4px 10px;
-  border-radius: var(--ot-radius-pill);
-  font-size: var(--ot-size-body);
-  font-weight: var(--ot-weight-bold);
-  border: 1px solid var(--sem-muted-bg);
-  background: var(--sem-muted-bg);
-  color: var(--sem-muted-fg);
+.materialActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ot-border-subtle);
 }
 
-.materialVerdict.strong {
-  background: var(--sem-info-bg);
-  color: var(--sem-info-fg);
-  border-color: var(--sem-info-bg);
+.materialUploadForm,
+.materialEditForm {
+  display: grid;
+  gap: var(--ot-space-05);
 }
 
-.materialVerdict.good {
-  background: var(--sem-ok-bg);
-  color: var(--sem-ok-fg);
-  border-color: var(--sem-ok-border);
+.materialEditGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ot-space-04);
 }
 
-.materialVerdict.watch {
-  background: var(--sem-warn-bg);
-  color: var(--sem-warn-fg);
-  border-color: var(--sem-warn-border);
+@media (max-width: 720px) {
+  .materialEditGrid {
+    grid-template-columns: 1fr;
+  }
 }
+
+/* Текст в карточках — во всю ширину карточки и по ширине (решение владельца 23.10): предел строки 72ch держит
+   заголовки экранов и пояснения, а суть, факты и описание занимают отведённую им площадь. На узком экране —
+   по левому краю: при двух-трёх словах в строке выключка растягивает пробелы. */
+.panel :is(.articleSummaryBox, .signalRadarFacts, .materialCard, .digestPickRow) p {
+  max-width: none;
+}
+
+:is(.articleSummaryBox p, .signalRadarFacts p, .signalEvidenceRow small, .materialDescription, .digestPickSummary) {
+  text-align: justify;
+  hyphens: auto;
+  text-wrap: pretty;
+}
+
+@media (max-width: 30rem) {
+  :is(.articleSummaryBox p, .signalRadarFacts p, .signalEvidenceRow small, .materialDescription, .digestPickSummary) {
+    text-align: start;
+  }
+}
+

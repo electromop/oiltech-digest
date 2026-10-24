@@ -5,7 +5,6 @@ import {
   getSignalDictionaries,
   getSignalSearchHealth,
   getSignalSummary,
-  getSignalWeekly,
   listSignals,
   updateSignal,
 } from "../../api/signals";
@@ -16,14 +15,15 @@ import type {
   SignalShowcase,
   SignalSort,
   SignalSummary,
-  SignalWeekly,
+  SignalTile,
 } from "../../api/signals";
 import type { Signal, SignalEvidence, SignalFeedbackBlock, SignalFeedbackPayload } from "../../api/types";
 import { radarDigestLockedText } from "../articles/feedWindow";
-import { StatCard } from "../shared/StatCard";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
+import { SkeletonList } from "../shared/Skeleton";
 import { PROFILES } from "../scoring/ScoringPage";
-import { CHOICE_FIELDS, SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
+import { CHOICE_FIELDS, SignalAttributes, SignalCardLine, whyBlock } from "./SignalCardChips";
+import { SignalDecisionLog } from "./SignalDecisionLog";
 import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
 
@@ -84,6 +84,20 @@ const MATURITY_LABELS: Record<string, string> = {
   shortlist: "Кандидат",
   proven: "Подтверждено",
   reject: "Отклонено",
+};
+
+// Плашки над списком и их фильтры: «Всего» снимает фильтр плашки.
+const TILES: Array<{ tile: SignalTile | ""; label: string }> = [
+  { tile: "", label: "Всего сигналов" },
+  { tile: "new_7d", label: "Новые за 7 дней" },
+  { tile: "in_digest", label: "В дайджесте" },
+  { tile: "with_feedback", label: "С обратной связью" },
+];
+
+const TILE_EMPTY: Record<SignalTile, string> = {
+  new_7d: "Новых за 7 дней сигналов здесь нет.",
+  in_digest: "Отмеченных в дайджест сигналов здесь нет. Отметить можно кнопкой «В дайджест» на карточке.",
+  with_feedback: "Сигналов с обратной связью здесь нет.",
 };
 
 type FeedbackDraft = {
@@ -299,8 +313,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, FeedbackDraft>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [searchHealth, setSearchHealth] = useState<SignalSearchHealth | null>(null);
-  const [weekly, setWeekly] = useState<SignalWeekly | null>(null);
-  const [weeklyOpen, setWeeklyOpen] = useState(false);
+  // Плашки над списком — фильтры (решение владельца 23.10): по нажатию список тех же карточек, что плашка посчитала;
+  // «Всего сигналов» — без фильтра, «Отклонённые» — их список (только админу).
+  const [tile, setTile] = useState<SignalTile | "">("");
+  // Отметка «В дайджест» только что поставлена — короткая подсветка кнопки карточки и плашки «В дайджесте».
+  const [digestFlash, setDigestFlash] = useState<number | null>(null);
   // «Отклонённые» — только админу (решение владельца 05.10; заказчик Виктор — админ): все разделы «кто убрал →
   // причина» (#130) одним списком в обеих витринах, причина — в самой карточке (решение владельца 23.10).
   const [showHidden, setShowHidden] = useState(false);
@@ -320,8 +337,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       technologyClass: cardFilters.technologyClass || undefined,
       technologyMaturity: cardFilters.technologyMaturity || undefined,
       company: cardFilters.company.trim() || undefined,
+      tile: !showHidden && tile ? tile : undefined,
     }),
-    [business, search, theme, maturity, isAdmin, showHidden, cardFilters],
+    [business, search, theme, maturity, isAdmin, showHidden, cardFilters, tile],
   );
   // Номер последнего запроса выборки: ответ на устаревший запрос не применяется — иначе при
   // быстрой смене фильтров поздний ответ старой выборки встал бы поверх новой.
@@ -381,14 +399,6 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       .then(setDictionaries)
       .catch(() => setDictionaries(null));
   }, []);
-
-  useEffect(() => {
-    // Итоги недели — служебный блок радара: не загрузились — его просто нет.
-    if (business) return;
-    getSignalWeekly()
-      .then(setWeekly)
-      .catch(() => setWeekly(null));
-  }, [business]);
 
   useEffect(() => {
     // Обычный пользователь здоровье поиска не запрашивает: эндпоинт только для админа. Поиск — радара.
@@ -535,6 +545,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         ),
       );
       showToast(selected ? "Сигнал добавлен в дайджест" : "Сигнал убран из дайджеста");
+      if (selected) {
+        setDigestFlash(signal.id);
+        window.setTimeout(() => setDigestFlash((current) => (current === signal.id ? null : current)), 1200);
+      }
       afterListChange();
     } catch (error) {
       handleError(error, "Не удалось обновить статус сигнала");
@@ -707,68 +721,41 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         </div>
       ) : null}
 
-      {/* «Итоги недели» (03.10): что вышло, что отсеяно и почему, что ждёт разбора — для
-          еженедельного разбора с заказчиком. */}
-      {weekly ? (
-        <section className="panel signalWeekly" aria-label="Итоги недели">
-          <button
-            type="button"
-            className="signalWeeklyHead"
-            aria-expanded={weeklyOpen}
-            onClick={() => setWeeklyOpen((current) => !current)}
-          >
-            <strong>Итоги за {weekly.days} дн.</strong>
-            <span>
-              на радаре новых: {weekly.on_radar}
-              {weekly.filtered != null ? ` · отсеяно и скрыто: ${weekly.filtered}` : ""} · ждут разбора:{" "}
-              {weekly.awaiting_review} · отзывов: {weekly.feedback}
-            </span>
-          </button>
-          {weeklyOpen ? (
-            <div className="signalWeeklyBody">
-              {weekly.top.length ? (
-                <div>
-                  <div className="signalEvidenceHeading">Лучшие новые</div>
-                  <ol>
-                    {weekly.top.map((row) => (
-                      <li key={row.id}>
-                        <span className="signalIdText">#{row.id}</span> {row.title} · {Math.round(Number(row.score || 0))}
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              ) : null}
-              {weekly.filtered_reasons?.length ? (
-                <div>
-                  <div className="signalEvidenceHeading">Почему отсеяно</div>
-                  <ul>
-                    {weekly.filtered_reasons.map((row) => (
-                      <li key={row.reason}>{row.reason}: {row.count}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {/* Плитки — по всей витрине: поиск и фильтры сужают список, но не эти числа. «Отклонённые» — админу, одна
-          плашка в обеих витринах (#130, решение владельца 23.10): по ней открывается их список. */}
+      {/* Плашки — по всей витрине (поиск и фильтры их не меняют) и они же фильтры (решение владельца 23.10): нажатая
+          показывает свои карточки. «Отклонённые» — админу, одна плашка в обеих витринах (#130). */}
       {summary ? (
-        <section className="statsGridReact" aria-label={screenText.summary}>
-          <StatCard label="Всего сигналов" value={summary.total} />
-          <StatCard label="Новые за 7 дней" value={summary.new_7d} />
-          <StatCard label="В дайджесте" value={summary.in_digest} />
-          <StatCard label="С обратной связью" value={summary.with_feedback} />
-          <StatCard label="Объединено дублей" value={summary.merged} />
+        <section className="statsGridReact signalTiles" aria-label={screenText.summary}>
+          {TILES.map((item) => {
+            const pressed = item.tile === "" ? !tile && !showHidden : tile === item.tile && !showHidden;
+            const value = item.tile === "" ? summary.total : summary[item.tile];
+            return (
+              <button
+                key={item.label}
+                type="button"
+                className="statCardReact statCardButton"
+                aria-pressed={pressed}
+                onClick={() => {
+                  setShowHidden(false);
+                  setTile(item.tile === "" || pressed ? "" : item.tile);
+                }}
+              >
+                <span key={item.tile === "in_digest" ? value : undefined} className={item.tile === "in_digest" && digestFlash ? "statValueReact statValueFlash" : "statValueReact"}>
+                  {value}
+                </span>
+                <span className="metaText">{item.label}</span>
+              </button>
+            );
+          })}
           {isAdmin && summary.rejected != null ? (
             <button
               type="button"
               className="statCardReact statCardButton"
               aria-pressed={showHidden}
               aria-label={`Отклонённые: ${summary.rejected}`}
-              onClick={() => setShowHidden((current) => !current)}
+              onClick={() => {
+                setTile("");
+                setShowHidden((current) => !current);
+              }}
             >
               <span className="statValueReact">{summary.rejected}</span>
               <span className="metaText">Отклонённые</span>
@@ -876,7 +863,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         ) : null}
 
         {filtersOpen ? (
-          <div className="signalFilterPanel" id={filtersPanelId} role="group" aria-label="Фильтры">
+          <div className="signalFilterPanel revealIn" id={filtersPanelId} role="group" aria-label="Фильтры">
             <label className="field">
               <span>Решение платформы</span>
               <select value={maturity} onChange={(event) => setMaturity(event.target.value)}>
@@ -894,7 +881,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         <CompanyGroupHint company={cardFilters.company} group={summary?.company_group} />
 
         {!loaded ? (
-          <div className="emptyState">Загружаем сигналы...</div>
+          <SkeletonList rows={5} label="Загружаем сигналы" />
         ) : visibleSignals.length ? (
           <div className="articleGroupsStack">
           {groups.map(([group, groupSignals]) => {
@@ -926,7 +913,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                 </span>
               </button>
               {groupOpen ? (
-              <div className="articleRows">
+              <div className="articleRows revealIn">
               {groupSignals.map((signal) => {
             const isExpanded = expanded.has(signal.id);
             const isFeedbackOpen = feedbackOpen.has(signal.id);
@@ -934,8 +921,6 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
             const title = signal.title_ru || signal.title;
             const primaryUrl = signal.evidence?.[0]?.source_url;
             const arrival = formatArrival(signal);
-            // Дата самого события, а не поступления («Поступил» говорит, когда нашли).
-            const eventDate = eventDateLabel(signal);
             const breakdown = scoreBreakdown(signal);
             const why = whyBlock(signal, business);
             const morePublications = Number(signal.evidence_count || 0) - (signal.evidence?.length ?? 0);
@@ -971,40 +956,32 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                     ) : (
                       <span className="articleTitleReact">{title}</span>
                     )}
-                    <div className="metaText">
-                      {cardMeta(signal, business)}
-                      {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}
-                      <span className="signalIdText">#{signal.id}</span>
-                      {/* Дубли того же события скрыты, их ссылки — в этой карточке. */}
-                      {Number(signal.merged_count || 0) > 0 ? ` · объединено дублей: ${signal.merged_count}` : ""}
-                    </div>
-                    <SignalCardChips signal={signal} onCompany={showCompany} />
+                    {/* Под заголовком — только «о чём»: тема, компании, регион, дата события (пересмотр 23.10). */}
+                    <SignalCardLine signal={signal} onCompany={showCompany} />
                     {/* В разделе отклонённого — его короткая причина (#130); иначе — почему не на радаре. */}
                     {signal.section_reason ? (
-                      <div className="metaText signalHiddenReason">Причина: {signal.section_reason}</div>
+                      <div className="signalCardStatus signalHiddenReason">Причина: {signal.section_reason}</div>
                     ) : signal.hidden_reason ? (
-                      <div className="metaText signalHiddenReason">Не на радаре: {signal.hidden_reason}</div>
+                      <div className="signalCardStatus signalHiddenReason">Не на радаре: {signal.hidden_reason}</div>
                     ) : null}
                     {/* «Отбор» сам себе противоречил и после повтора (#130): проверять первым. */}
                     {signal.otbor_disputed ? (
-                      <div className="metaText signalDisputed">Спорное: {signal.otbor_disputed}</div>
+                      <div className="signalCardStatus signalDisputed">Спорное: {signal.otbor_disputed}</div>
                     ) : null}
                   </div>
                   <div className="articleCardMetrics">
-                    {eventDate ? (
-                      <div className={eventDate.gap ? "articleMetric gap" : "articleMetric"}>{eventDate.text}</div>
-                    ) : null}
-                    {arrival ? <div className="articleMetric">Поступил: {arrival}</div> : null}
-                    <div className={`miniPill ${tone}`} title={scoreTitle(signal, breakdown.length > 0)}>
-                      {Math.round(Number(signal.score || 0))}
-                    </div>
-                    <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
+                    {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}
+                    <span className="signalIdText metaText">№{signal.id}</span>
+                    <span className={`scoreBadge ${tone}`} title={scoreTitle(signal, breakdown.length > 0)}>
+                      <strong>{Math.round(Number(signal.score || 0))}</strong>
+                      <span>{signal.score_label || "—"}</span>
+                    </span>
                     {/* «В дайджест» — одна механика в обеих витринах (#130): у сигнала ленты — отметка его
                         статьи, та же, что в ленте статей. */}
                     {digestOffered ? (
                       <button
                         type="button"
-                        className={`${signal.selected_for_digest ? "dangerButton" : "primaryButton"} compactButton signalDigestButton`}
+                        className={`${signal.selected_for_digest ? "dangerButton" : "primaryButton"} compactButton signalDigestButton${digestFlash === signal.id ? " justAdded" : ""}`}
                         disabled={savingThis || digestLocked}
                         title={digestLocked ? radarDigestLockedText(signal.digest_month ?? "") : undefined}
                         onClick={() => void setDigest(signal, !signal.selected_for_digest)}
@@ -1016,85 +993,70 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                 </div>
 
                 {isExpanded ? (
-                  <div className="articleDetailReact signalRadarDetail">
-                    <div className="articleDetailGrid">
-                      <div className="articleSummaryBox">
-                        <strong>Суть</strong>
-                        <p>{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
-                      </div>
-                      <div className="signalRadarFacts">
-                        {/* «Почему сейчас» и «Переносимость» — поля судьи радара: у статьи ленты их нет. */}
-                        {judgeFieldsOptional && !signal.why_now ? null : (
-                          <div>
-                            <span>Почему сейчас</span>
-                            <p>{signal.why_now || "Нет объяснения"}</p>
-                          </div>
-                        )}
-                        {/* «Релевантности мало» (Виктор 29.09): судья называет, где это применить. */}
-                        {signal.oilfield_application ? (
-                          <div>
-                            <span>
-                              Применение в нефтесервисе
-                              {signal.oilfield_relevance === "transferable" ? " · перенос из другой отрасли" : ""}
-                            </span>
-                            <p>{signal.oilfield_application}</p>
-                          </div>
-                        ) : null}
-                        {judgeFieldsOptional && !signal.transferability ? null : (
-                          <div>
-                            <span>Переносимость</span>
-                            <p>{signal.transferability || "Нет оценки"}</p>
-                          </div>
-                        )}
-                        {/* Сравнение внутри пачки прогона, а не абсолютная оценка судьи:
-                            поэтому рядом с баллом, но порядок списка — по баллу. */}
-                        {/* Ответ на «оценки завышены» (Виктор 29.09): видно, за что балл. Итог —
-                            сумма «балл × вес / 100», как у статей ленты. */}
-                        {breakdown.length ? (
-                          <div className="signalScoreBreakdown">
-                            <span>Балл по критериям</span>
-                            <ul>
-                              {breakdown.map((item) => (
-                                <li key={item.id}>
-                                  <span>{item.name}{item.weight ? ` · вес ${item.weight}` : ""}</span>
-                                  <strong>{item.score}</strong>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-                        {why ? (
-                          <div>
-                            <span>{why.label}</span>
-                            <p>{why.text}</p>
-                          </div>
-                        ) : null}
-                      </div>
+                  <div className="articleDetailReact signalRadarDetail revealIn">
+                    <div className="articleSummaryBox">
+                      <strong>Суть</strong>
+                      <p>{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
+                    </div>
+                    <SignalAttributes
+                      signal={signal}
+                      onCompany={showCompany}
+                      extra={[
+                        { key: "decision", label: "Решение платформы", value: MATURITY_LABELS[signal.maturity] || signal.maturity },
+                        ...(arrival ? [{ key: "arrival", label: "Поступил", value: arrival }] : []),
+                        { key: "links", label: business ? "Публикаций" : "Ссылок", value: String(Number(signal.evidence_count || 0)) },
+                        ...(Number(signal.merged_count || 0) > 0 ? [{ key: "merged", label: "Объединено дублей", value: String(signal.merged_count) }] : []),
+                      ]}
+                    />
+                    <div className="signalRadarFacts">
+                      {/* «Почему сейчас» и «Переносимость» — поля судьи радара: у статьи ленты их нет. */}
+                      {judgeFieldsOptional && !signal.why_now ? null : (
+                        <div>
+                          <span>Почему сейчас</span>
+                          <p>{signal.why_now || "Нет объяснения"}</p>
+                        </div>
+                      )}
+                      {/* «Релевантности мало» (Виктор 29.09): судья называет, где это применить. */}
+                      {signal.oilfield_application ? (
+                        <div>
+                          <span>
+                            Применение в нефтесервисе
+                            {signal.oilfield_relevance === "transferable" ? " · перенос из другой отрасли" : ""}
+                          </span>
+                          <p>{signal.oilfield_application}</p>
+                        </div>
+                      ) : null}
+                      {judgeFieldsOptional && !signal.transferability ? null : (
+                        <div>
+                          <span>Переносимость</span>
+                          <p>{signal.transferability || "Нет оценки"}</p>
+                        </div>
+                      )}
+                      {why ? (
+                        <div>
+                          <span>{why.label}</span>
+                          <p>{why.text}</p>
+                        </div>
+                      ) : null}
+                      {/* Ответ на «оценки завышены» (Виктор 29.09): видно, за что балл. Итог — сумма «балл × вес / 100»,
+                          как у статей ленты. */}
+                      {breakdown.length ? (
+                        <div className="signalScoreBreakdown">
+                          <span>Балл по критериям</span>
+                          <ul>
+                            {breakdown.map((item) => (
+                              <li key={item.id}>
+                                <span>{item.name}{item.weight ? ` · вес ${item.weight}` : ""}</span>
+                                <strong>{item.score}</strong>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
                     </div>
 
-                    {/* Почему принята или отсеяна (решение 03.10): заказчик видит причину и шаги. */}
-                    {signal.verdict_reason || signal.decision_log?.length ? (
-                      <div className="signalDecision">
-                        {signal.verdict_reason ? (
-                          <p className="signalDecisionReason">
-                            <strong>Почему такое решение:</strong> {signal.verdict_reason}
-                          </p>
-                        ) : null}
-                        {signal.decision_log?.length ? (
-                          <>
-                            <div className="signalEvidenceHeading">Ход решения</div>
-                            <ol className="signalDecisionLog">
-                              {signal.decision_log.map((step, index) => (
-                                <li key={index}>
-                                  <span className="signalDecisionStage">{step.stage}</span>
-                                  <span>{step.text}</span>
-                                </li>
-                              ))}
-                            </ol>
-                          </>
-                        ) : null}
-                      </div>
-                    ) : null}
+                    {/* Почему принята или отсеяна (решение 03.10): причина видна сразу, шаги — по кнопке. */}
+                    <SignalDecisionLog signal={signal} />
 
                     {signal.evidence?.length ? (
                       <div className="signalEvidenceList">
@@ -1248,10 +1210,19 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         ) : (
           <div className="emptyState">
             {/* Компания — целиком, а не подстрокой («Газпром» — не «Газпром нефть»): часть имени ничего
-                не найдёт, и это не «сигналов нет». */}
-            {cardFilters.company.trim()
-              ? "Сигналов по выбранным фильтрам нет. Компания ищется по имени целиком — выберите её из подсказок поля «Компания»."
-              : "Сигналов по выбранным фильтрам нет."}
+                не найдёт, и это не «сигналов нет». Пусто под нажатой плиткой — сказать какой и дать выход. */}
+            {tile && !showHidden ? (
+              <>
+                <span>{TILE_EMPTY[tile]}</span>
+                <button type="button" className="ghostButton compactButton" onClick={() => setTile("")}>
+                  Показать все сигналы
+                </button>
+              </>
+            ) : cardFilters.company.trim() ? (
+              "Сигналов по выбранным фильтрам нет. Компания ищется по имени целиком — выберите её из подсказок поля «Компания»."
+            ) : (
+              "Сигналов по выбранным фильтрам нет."
+            )}
           </div>
         )}
       </section>

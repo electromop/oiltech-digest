@@ -65,6 +65,7 @@
   --cyan-50: #1192e8;
   --cyan-70: #00539a;
 
+  --teal-10: #d9fbfb;
   --teal-50: #009d9a;
   --teal-70: #005d5d;
 
@@ -162,6 +163,20 @@
   --sem-special-fg: var(--purple-70);
   --sem-special-bg: var(--purple-10);
   --sem-special-border: var(--purple-20);
+
+  /* --- Категории (не статусы): откуда материал и вид элемента выпуска.
+     Полоса к белому 3.3:1 и выше, текст к своей заливке 7:1 и выше; смысл всегда ещё и подписью. --- */
+  --ot-origin-telegram: var(--teal-50);
+  --ot-origin-telegram-bg: var(--teal-10);
+  --ot-origin-telegram-fg: var(--teal-70);
+  --ot-origin-upload: var(--purple-50);
+  --ot-origin-upload-bg: var(--purple-10);
+  --ot-origin-upload-fg: var(--purple-70);
+  /* Плашка «Технология / Бизнес» — те же тона, что в самом выпуске (синий заголовков, оранжевый «Читать далее»). */
+  --ot-kind-technology-bg: var(--blue-10);
+  --ot-kind-technology-fg: var(--blue-70);
+  --ot-kind-business-bg: var(--orange-10);
+  --ot-kind-business-fg: var(--orange-70);
 
   /* --- Графики: категориальная палитра Carbon, уровни — синие --- */
   --viz-surface: var(--white);

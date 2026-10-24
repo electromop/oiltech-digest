@@ -4,7 +4,6 @@ import {
   createSignalFeedback,
   getSignalSearchHealth,
   getSignalSummary,
-  getSignalWeekly,
   listSignals,
   updateSignal,
   type SignalQuery,
@@ -44,8 +43,6 @@ vi.mock("../../api/signals", () => ({
   updateSignal: vi.fn(),
   createSignalFeedback: vi.fn(),
   getSignalSearchHealth: vi.fn(),
-  // Итоги недели по умолчанию не пришли — блока нет, остальные тесты экрана его не видят.
-  getSignalWeekly: vi.fn(() => Promise.reject(new Error("нет итогов"))),
   // Справочники атрибутов карточки (#97) — тоже: списков атрибутов нет, остальное как было.
   getSignalDictionaries: vi.fn(() => Promise.reject(new Error("нет справочников"))),
 }));
@@ -126,6 +123,12 @@ function deferred<T>() {
 
 function tileValue(label: string) {
   return screen.getByText(label).closest(".statCardReact")?.querySelector(".statValueReact")?.textContent;
+}
+
+// Значение атрибута раскрытой карточки: таблица «подпись: значение» (пересмотр 23.10).
+function attribute(root: HTMLElement, label: string) {
+  const cell = within(root.querySelector(".signalAttributes") as HTMLElement).getByText(label).closest(".signalAttribute");
+  return cell?.querySelector("dd")?.textContent;
 }
 
 function lastListQuery(): SignalQuery {
@@ -602,9 +605,10 @@ describe("SignalRadarPage", () => {
         "Новые за 7 дней": "18",
         "В дайджесте": "3",
         "С обратной связью": "12",
-        "Объединено дублей": "5",
       };
       for (const [label, value] of Object.entries(tiles)) expect(tileValue(label)).toBe(value);
+      // Плитки «Объединено дублей» нет (решение владельца 23.10): число дублей — в раскрытой карточке.
+      expect(screen.queryByText("Объединено дублей")).not.toBeInTheDocument();
       // Строки-сводки «N сигналов · N в дайджесте · обратная связь: N» больше нет.
       expect(container.querySelector(".signalRadarHeaderStats")).toBeNull();
 
@@ -612,6 +616,27 @@ describe("SignalRadarPage", () => {
       await waitFor(() => expect(lastListQuery().q).toBe("буровая"));
       expect(await screen.findByText("1 из 76 сигналов")).toBeInTheDocument();
       expect(tileValue("Всего сигналов")).toBe("76");
+    });
+
+    it("плитки — они же фильтры: нажатая показывает свои карточки, повторное нажатие снимает (23.10)", async () => {
+      serve([drilling, ecology], { total: 76, new_7d: 18, in_digest: 3, with_feedback: 12 });
+      renderRadar(false);
+      const all = await screen.findByRole("button", { name: /Всего сигналов/ });
+      expect(all).toHaveAttribute("aria-pressed", "true");
+      expect(lastListQuery().tile).toBeUndefined();
+
+      const fresh = screen.getByRole("button", { name: /Новые за 7 дней/ });
+      fireEvent.click(fresh);
+      await waitFor(() => expect(lastListQuery().tile).toBe("new_7d"));
+      expect(fresh).toHaveAttribute("aria-pressed", "true");
+      expect(all).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(screen.getByRole("button", { name: /С обратной связью/ }));
+      await waitFor(() => expect(lastListQuery().tile).toBe("with_feedback"));
+
+      fireEvent.click(screen.getByRole("button", { name: /С обратной связью/ }));
+      await waitFor(() => expect(lastListQuery().tile).toBeUndefined());
+      expect(all).toHaveAttribute("aria-pressed", "true");
     });
 
     it("выбор в дайджест обновляет плитку «В дайджесте»", async () => {
@@ -728,8 +753,11 @@ describe("SignalRadarPage", () => {
       const title = screen.getByRole("link", { name: "Роботизированная буровая установка" });
       expect(title).toHaveAttribute("href", "https://worldoil.com/a");
       expect(title).toHaveAttribute("target", "_blank");
-      expect(screen.getByText(/^Бурение · 2 ссылки · Решение платформы: Наблюдать ·/)).toBeInTheDocument();
-      expect(screen.getByText("#21")).toBeInTheDocument();
+      // Под заголовком — только «о чём» (пересмотр 23.10): решение платформы, ссылки и поступление — в раскрытой.
+      const line = container.querySelector(".signalCardLine") as HTMLElement;
+      expect(line).toHaveTextContent("Бурение");
+      expect(line).not.toHaveTextContent(/Решение платформы|ссылк|Поступил/);
+      expect(screen.getByText("№21")).toBeInTheDocument();
       // Тело свёрнуто: суть, «Почему сейчас» и ссылки — только по раскрытию.
       expect(screen.queryByText("Спутник мониторинга метана перестал выходить на связь.")).not.toBeInTheDocument();
       expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
@@ -742,6 +770,9 @@ describe("SignalRadarPage", () => {
       expect(screen.getByText("Переносимость")).toBeInTheDocument();
       expect(screen.getByText("Robotic rig")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Обратная связь" })).toBeInTheDocument();
+      expect(attribute(container, "Решение платформы")).toBe("Наблюдать");
+      expect(attribute(container, "Ссылок")).toBe("2");
+      expect(attribute(container, "Поступил")).toBe("25.09.2026");
 
       fireEvent.click(screen.getByRole("button", { name: "Свернуть сигнал" }));
       expect(screen.queryByText("Почему сейчас")).not.toBeInTheDocument();
@@ -759,10 +790,10 @@ describe("SignalRadarPage", () => {
       serve([{ ...drilling, score, score_label: label }]);
       renderRadar(false);
 
-      const pill = await screen.findByTitle("Балл судьи радара");
-      expect(pill).toHaveTextContent(String(score));
-      expect(pill).toHaveClass("miniPill", tone);
-      expect(screen.getByText(label, { selector: ".miniPill" })).toHaveClass(tone);
+      const badge = await screen.findByTitle("Балл судьи радара");
+      expect(badge).toHaveTextContent(String(score));
+      expect(badge).toHaveTextContent(label);
+      expect(badge).toHaveClass("scoreBadge", tone);
     });
 
     it("ссылки-доказательства — «издатель · дата публикации», под ними заголовок", async () => {
@@ -790,14 +821,17 @@ describe("SignalRadarPage", () => {
       expect(screen.queryByText("article")).not.toBeInTheDocument();
     });
 
-    it("вместо строки издателей — число ссылок и дата поступления", async () => {
+    it("вместо строки издателей — число ссылок и дата поступления, в раскрытой карточке", async () => {
       const { container } = render(
         <SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />,
       );
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
-
-      expect(screen.getByText("Поступил: 25.09.2026")).toBeInTheDocument();
       expect(container.querySelector(".signalPublisherChip")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+
+      expect(attribute(container, "Поступил")).toBe("25.09.2026");
+      expect(attribute(container, "Ссылок")).toBe("2");
     });
   });
 
@@ -960,9 +994,9 @@ describe("качество радара на экране (Виктор 29.09)",
   it("строка карточки показывает дату самого события, если судья её поставил", async () => {
     renderRadar(false);
     const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
-    expect(within(card).getByText("Событие: 10.09.2026")).toBeInTheDocument();
+    expect(within(card).getByText("событие 10.09.2026")).toBeInTheDocument();
     const old = screen.getByText("Карточка до правки").closest("article") as HTMLElement;
-    expect(within(old).queryByText(/Событие:/)).not.toBeInTheDocument();
+    expect(within(old).queryByText(/событие/)).not.toBeInTheDocument();
   });
 
   it("раскрытая карточка показывает разбивку балла по критериям с весами из снимка", async () => {
@@ -1003,9 +1037,10 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(screen.getByText("Причина: До «Отбора» → Скрыто прежними правилами радара: бизнес-сигнал, не технология"))
       .toBeInTheDocument();
     // Отклонённое «Отбором» — с «Решением платформы» «Отклонено» и без «В дайджест» (вернуть его — #132).
-    expect(screen.getByText(/· Решение платформы: Отклонено ·/)).toBeInTheDocument();
     const rejected = screen.getByText("Котировки нефти").closest("article") as HTMLElement;
     expect(within(rejected).queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
+    fireEvent.click(within(rejected).getByRole("button", { name: "Раскрыть сигнал" }));
+    expect(attribute(rejected, "Решение платформы")).toBe("Отклонено");
     // Скрытая прежними правилами — с «В дайджест», как раньше: выбранная, она выходит на радар.
     const hiddenRow = screen.getByText("SLB получила контракты Aramco").closest("article") as HTMLElement;
     expect(within(hiddenRow).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
@@ -1150,13 +1185,22 @@ describe("ход решения на карточке (03.10)", () => {
 
     const card = screen.getByText("Отсеянный обзор рынка").closest("article") as HTMLElement;
     expect(within(card).getByText("Почему такое решение:")).toBeInTheDocument();
+    // Шаги свёрнуты (пересмотр 23.10): причина видна сразу, ход — по кнопке.
+    expect(within(card).queryAllByRole("listitem")).toHaveLength(0);
+    const toggle = within(card).getByRole("button", { name: /Ход решения/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("2 шага");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     const steps = within(card).getAllByRole("listitem").map((item) => item.textContent);
     expect(steps).toEqual([
       "судьяСобытие: отчёт аналитиков о рынке бурения",
       "отсевОтсеяно (судья): обзор рынка без конкретного события",
     ]);
     const legacy = screen.getByText("Карточка до правки").closest("article") as HTMLElement;
-    expect(within(legacy).queryByText("Ход решения")).not.toBeInTheDocument();
+    expect(within(legacy).queryByRole("button", { name: /Ход решения/ })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(within(card).queryAllByRole("listitem")).toHaveLength(0);
   });
 });
 
@@ -1168,34 +1212,9 @@ describe("итоги недели (03.10)", () => {
     serve(DEFAULT_CARDS);
   });
 
-  it("строка-сводка, по клику — лучшие новые и причины отсева", async () => {
-    vi.mocked(getSignalWeekly).mockResolvedValueOnce({
-      days: 7, on_radar: 35, filtered: 17, awaiting_review: 35, feedback: 0, feedback_verdicts: [],
-      filtered_reasons: [{ reason: "бизнес-сигнал", count: 13 }, { reason: "ссылки о разных событиях", count: 2 }],
-      top: [{ id: 26, title: "STEP: рекордная досягаемость колтюбинга", theme: "КРС", score: 79, event_date: null }],
-    });
+  it("строки «Итоги за 7 дн.» на экране нет: плитки над списком — они же фильтры (решение владельца 23.10)", async () => {
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
-
-    const head = await screen.findByRole("button", { name: /Итоги за 7 дн\./ });
-    expect(head).toHaveTextContent("на радаре новых: 35 · отсеяно и скрыто: 17 · ждут разбора: 35 · отзывов: 0");
-    expect(screen.queryByText("Почему отсеяно")).not.toBeInTheDocument();
-
-    fireEvent.click(head);
-
-    expect(screen.getByText("бизнес-сигнал: 13")).toBeInTheDocument();
-    expect(screen.getByText(/STEP: рекордная досягаемость колтюбинга · 79/)).toBeInTheDocument();
-  });
-
-  it("пользователю сервер отсеянное не отдаёт — в строке его нет, причин нет", async () => {
-    vi.mocked(getSignalWeekly).mockResolvedValueOnce({
-      days: 7, on_radar: 35, awaiting_review: 35, feedback: 0, feedback_verdicts: [],
-      top: [{ id: 26, title: "STEP: рекордная досягаемость колтюбинга", theme: "КРС", score: 79, event_date: null }],
-    });
-    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
-
-    const head = await screen.findByRole("button", { name: /Итоги за 7 дн\./ });
-    expect(head).toHaveTextContent("на радаре новых: 35 · ждут разбора: 35 · отзывов: 0");
-    fireEvent.click(head);
-    expect(screen.queryByText("Почему отсеяно")).not.toBeInTheDocument();
+    await screen.findByText("Всего сигналов");
+    expect(screen.queryByText(/Итоги за 7 дн/)).not.toBeInTheDocument();
   });
 });

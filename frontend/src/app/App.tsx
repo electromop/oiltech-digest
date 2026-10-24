@@ -8,9 +8,8 @@ import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles
 import { BacklogPage } from "../features/backlog/BacklogPage";
 import { CompanyParentsPage } from "../features/companies/CompanyParentsPage";
 import { DigestPage } from "../features/digest/DigestPage";
-import { DocumentsPage } from "../features/documents/DocumentsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
-import { ColleagueMaterialsPage } from "../features/materials/ColleagueMaterialsPage";
+import { MaterialsPage } from "../features/materials/MaterialsPage";
 import { StatisticsPage } from "../features/statistics/StatisticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { ScoringPage } from "../features/scoring/ScoringPage";
@@ -41,10 +40,6 @@ const ADMIN_SCREENS = new Set<ScreenId>([
   "sources", "source-candidates", "source-agent", "scoring", "tags", "users", "jobs", "maintenance",
   // Список «дочка → мать» правят, как теги, только админы (сервер — require_admin).
   "company-parents",
-  // Приём файлов — admin-only и на сервере (POST /api/documents требует require_admin):
-  // фронтовый гейт без серверного был бы дырой, а серверный без фронтового — кнопкой,
-  // которая у обычного пользователя всегда отвечает 403.
-  "documents",
   // Статистика сводная (видно работу КАЖДОГО пользователя) — решение владельца:
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
   // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
@@ -54,7 +49,8 @@ const ADMIN_SCREENS = new Set<ScreenId>([
 
 // Архивные модули (утверждены владельцем 23.09): из меню и маршрутов убраны, код оставлен.
 // Экран виден, только если сервер включил его флагом ARCHIVED_MODULES (приходит с сессией).
-const ARCHIVED_SCREENS = new Set<ScreenId>(["analytics-preview", "tech-preview"]);
+// «Бизнес-сигналы» (старый список статей) — архивный с 23.10 (решение владельца: экран не используется).
+const ARCHIVED_SCREENS = new Set<ScreenId>(["analytics-preview", "tech-preview", "articles"]);
 
 type ScreenDef = {
   id: ScreenId;
@@ -109,20 +105,13 @@ const screens: ScreenDef[] = [
     status: "Экран активен",
   },
   {
-    id: "documents",
-    label: "Материалы",
-    eyebrow: "Документы",
-    title: "Материалы",
-    description: "Загрузка внутренних документов и их разбор: паспорт, суть, сводка и факты с привязкой к месту в файле.",
-    status: "Экран активен",
-  },
-  {
     id: "colleague-materials",
-    // Бот «Материалы коллег» в рабочей группе Telegram: ссылки, файлы, события с оценкой автора.
-    label: "Материалы коллег",
-    eyebrow: "Telegram",
-    title: "Материалы коллег",
-    description: "Ссылки, файлы и события, присланные сотрудниками боту в Telegram, с оценкой по шкале платформы.",
+    // Один раздел «Материалы» (решение владельца 23.10): материалы из бота Telegram и документы, внесённые на
+    // платформе; у каждой записи видно, откуда она. Прежний адрес ?screen=documents ведёт сюда же.
+    label: "Материалы",
+    eyebrow: "Материалы",
+    title: "Материалы",
+    description: "Что коллеги прислали боту в Telegram, и документы, внесённые на платформе.",
     status: "Экран активен",
   },
   {
@@ -212,7 +201,7 @@ const appHighlights = [
 const navGroups: NavGroup[] = [
   {
     label: "Работа",
-    screens: ["articles", "business-feed", "signal-radar", "digest", "documents", "colleague-materials"],
+    screens: ["business-feed", "signal-radar", "digest", "colleague-materials", "articles"],
   },
   {
     label: "Настройки",
@@ -232,12 +221,22 @@ const navGroups: NavGroup[] = [
 ];
 
 // Экраны, адресуемые через ?screen=<id>. jobs/maintenance в меню нет (служебные, только по ссылке);
-// прототипы в меню есть, но параметр им нужен, чтобы ссылкой можно было поделиться для показа.
-const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "sources", "documents", "source-candidates", "source-agent", "signal-radar", "business-feed", "colleague-materials"];
+// прототипы и прежний список статей — за флагом, параметр нужен, чтобы ссылкой можно было поделиться, а без флага
+// ссылка честно сменилась на ленту. ?screen=documents (прежний раздел документов) ведёт в «Материалы».
+const URL_ADDRESSABLE: ScreenId[] = ["jobs", "maintenance", "tech-preview", "analytics-preview", "articles", "sources", "source-candidates", "source-agent", "signal-radar", "business-feed", "digest", "colleague-materials"];
+
+// Первый экран — «Бизнес-лента» (23.10: «Бизнес-сигналы» убраны в архивные модули).
+const DEFAULT_SCREEN: ScreenId = "business-feed";
+
+function screenFromUrl(): ScreenId | null {
+  const value = new URLSearchParams(window.location.search).get("screen");
+  // Прежние «Материалы» (загрузка документов) — теперь часть общего раздела «Материалы».
+  if (value === "documents") return "colleague-materials";
+  return URL_ADDRESSABLE.find((id) => id === value) ?? null;
+}
 
 function initialScreenFromUrl(): ScreenId {
-  const value = new URLSearchParams(window.location.search).get("screen");
-  return URL_ADDRESSABLE.find((id) => id === value) ?? "articles";
+  return screenFromUrl() ?? DEFAULT_SCREEN;
 }
 
 export function App() {
@@ -273,7 +272,7 @@ export function App() {
   // Прямая ссылка на архивный экран (?screen=tech-preview) без флага ведёт в ленту:
   // модуля для посетителя нет, как нет и пункта меню.
   useEffect(() => {
-    if (user && !screenEnabled(activeScreen)) switchScreen("articles");
+    if (user && !screenEnabled(activeScreen)) switchScreen(DEFAULT_SCREEN);
   }, [user, archivedModules, activeScreen]);
 
   // Обычное уведомление уходит само через 2,8 с; ошибка остаётся, пока её не закроют:
@@ -361,12 +360,8 @@ export function App() {
     currentScreen = <SourceAgentPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
-  if (activeScreen === "documents") {
-    currentScreen = <DocumentsPage onUnauthorized={resetSession} showToast={showToast} />;
-  }
-
-  if (activeScreen === "colleague-materials") {
-    currentScreen = <ColleagueMaterialsPage onUnauthorized={resetSession} showToast={showToast} />;
+  if (activeScreen === "colleague-materials" || activeScreen === "documents") {
+    currentScreen = <MaterialsPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
   }
 
   if (activeScreen === "articles") {
@@ -397,7 +392,7 @@ export function App() {
   }
 
   if (activeScreen === "digest") {
-    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} isAdmin={isAdmin} />;
+    currentScreen = <DigestPage onUnauthorized={resetSession} showToast={showToast} onArticlesChanged={() => void loadDashboardData()} />;
   }
 
   if (activeScreen === "scoring") {
@@ -479,10 +474,10 @@ export function App() {
     try {
       setAuthLoading(true);
       const payload = await getSession();
-      setArchivedModules(payload.archived_modules ?? []);
+      applyArchivedModules(payload.archived_modules ?? []);
       setUser(payload.user);
       if (!isTasksApp) {
-        await loadDashboardData();
+        await loadDashboardData(payload.archived_modules ?? []);
       }
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 401) {
@@ -525,12 +520,12 @@ export function App() {
   }
 
   async function enter(payload: AuthResponse, message: string) {
-    setArchivedModules(payload.archived_modules ?? []);
+    applyArchivedModules(payload.archived_modules ?? []);
     setUser(payload.user);
     setAdmissionNotice(null);
     setAdmissionCode("");
     if (!isTasksApp) {
-      await loadDashboardData();
+      await loadDashboardData(payload.archived_modules ?? []);
     }
     setPassword("");
     showToast(message);
@@ -560,7 +555,16 @@ export function App() {
     }
   }
 
-  async function loadDashboardData() {
+  // Архивные модули с сессией. Включённый флагом «articles» возвращает и прежний первый экран — «Бизнес-сигналы»,
+  // если адрес не просит другой: модуль из архива работает так, как работал.
+  function applyArchivedModules(modules: string[]) {
+    setArchivedModules(modules);
+    if (modules.includes("articles") && screenFromUrl() === null) setActiveScreen("articles");
+  }
+
+  // Данные «Бизнес-сигналов» (сотни статей и счётчики) грузятся, только если экран включён.
+  async function loadDashboardData(modules: string[] = archivedModules) {
+    if (!modules.includes("articles")) return;
     const [articlesPayload, statsPayload] = await Promise.all([listArticles(DEFAULT_SIGNAL_ARTICLE_QUERY), getDashboardStats()]);
     setArticles(articlesPayload);
     setStats(statsPayload);
@@ -910,7 +914,7 @@ function ScreenIcon(props: { screenId: ScreenId }) {
     );
   }
 
-  if (props.screenId === "documents") {
+  if (props.screenId === "documents" || props.screenId === "colleague-materials") {
     return (
       <svg {...common}>
         <path d="M4 2.5h5l3 3v8H4z" strokeLinejoin="round" />

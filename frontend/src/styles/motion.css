@@ -1,0 +1,178 @@
+/* Дизайн-система v2: движение. Точечно, там, где оно объясняет, что произошло (решение владельца 23.10):
+   раскрытие карточек и панелей, отметка «В дайджест», подокно и меню, скелеты загрузки, нажатие кнопки.
+   Перемещение и масштаб — только при prefers-reduced-motion: no-preference; при «уменьшить движение» —
+   короткое проявление прозрачностью или ничего. Длительности и кривые — токены Carbon (tokens.css).
+   Ни одно состояние не передаётся одним движением: подпись, цвет или значок остаются и без анимации. */
+
+/* --- Раскрытие: карточка, ход решения, панель фильтров, группа, строка выпуска --- */
+@media (prefers-reduced-motion: no-preference) {
+  .revealIn,
+  .digestAvailablePanel[open] > .digestAvailableList {
+    animation: otRevealIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .revealIn,
+  .digestAvailablePanel[open] > .digestAvailableList {
+    animation: otFadeIn var(--ot-duration-moderate-01) linear both;
+  }
+
+  /* Поворот шеврона — тоже движение. */
+  .groupChevron,
+  .expandButtonReact svg {
+    transition: none;
+  }
+}
+
+/* --- Подокно: всплывает на 12px, затемнение проявляется; закрывается сразу --- */
+@media (prefers-reduced-motion: no-preference) {
+  .dialog[open] {
+    animation: otDialogIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
+  }
+
+  /* ::backdrop не везде видит переменные :root — значения записаны числами (moderate-02, entrance). */
+  .dialog[open]::backdrop {
+    animation: otFadeIn 240ms cubic-bezier(0, 0, 0.38, 0.9) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog[open] {
+    animation: otFadeIn var(--ot-duration-moderate-01) linear both;
+  }
+
+  .dialog[open]::backdrop {
+    animation: otFadeIn 150ms linear both;
+  }
+}
+
+/* --- Мобильное меню: выезжает слева, подложка проявляется (на широком экране меню скрыто) --- */
+@media (prefers-reduced-motion: no-preference) {
+  .shell.mobileNavOpen .mobileNav {
+    animation: otDrawerIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
+  }
+
+  .shell.mobileNavOpen .mobileNavScrim {
+    animation: otFadeIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell.mobileNavOpen .mobileNav,
+  .shell.mobileNavOpen .mobileNavScrim {
+    animation: otFadeIn var(--ot-duration-moderate-01) linear both;
+  }
+}
+
+/* --- Скелет загрузки: светлая полоса проходит по заготовкам; при «уменьшить движение» — просто серые --- */
+@media (prefers-reduced-motion: no-preference) {
+  .skeletonLine {
+    background-image: linear-gradient(90deg, transparent 0%, var(--ot-layer-02) 50%, transparent 100%);
+    background-repeat: no-repeat;
+    background-size: 200% 100%;
+    animation: otShimmer 1.4s var(--ot-ease-standard) infinite;
+  }
+}
+
+/* --- Отметка «В дайджест»: кнопка отзывается зелёным кольцом, число на плашке «В дайджесте» подпрыгивает.
+   Без движения остаются новая подпись кнопки («Убрать») и новое число. --- */
+@media (prefers-reduced-motion: no-preference) {
+  .justAdded {
+    animation: otRing 700ms var(--ot-ease-entrance);
+  }
+
+  .statValueFlash {
+    animation: otValueBump 700ms var(--ot-ease-standard) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statValueFlash {
+    animation: otValueTint 700ms linear both;
+  }
+}
+
+/* --- Плашки-фильтры радара: смена выбора и наведение — цветом, без сдвига --- */
+.statCardButton {
+  transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard),
+    box-shadow var(--ot-duration-fast-02) var(--ot-ease-standard);
+}
+
+/* --- Нажатие кнопки: короткое сжатие до 0.96; неактивная не сжимается --- */
+@media (prefers-reduced-motion: no-preference) {
+  :is(.primaryButton, .ghostButton, .dangerButton, .dangerGhostButton) {
+    transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard),
+      border-color var(--ot-duration-fast-02) var(--ot-ease-standard),
+      color var(--ot-duration-fast-02) var(--ot-ease-standard),
+      scale 150ms ease-out;
+  }
+
+  :is(.primaryButton, .ghostButton, .dangerButton, .dangerGhostButton):not(:disabled):active {
+    scale: 0.96;
+  }
+}
+
+@keyframes otFadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes otRevealIn {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+}
+
+@keyframes otDialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+}
+
+@keyframes otDrawerIn {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes otShimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+@keyframes otRing {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ot-support-success) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 0.5rem color-mix(in srgb, var(--ot-support-success) 0%, transparent);
+  }
+}
+
+@keyframes otValueBump {
+  0% {
+    opacity: 0;
+    transform: translateY(-0.375rem);
+    color: var(--ot-support-success);
+  }
+  45% {
+    opacity: 1;
+    transform: none;
+    color: var(--ot-support-success);
+  }
+}
+
+@keyframes otValueTint {
+  0%,
+  45% {
+    color: var(--ot-support-success);
+  }
+}

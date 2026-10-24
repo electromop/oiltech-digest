@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { SkeletonList } from "../shared/Skeleton";
 import { ApiError } from "../../api/client";
 import {
   approveSourceCandidate,
@@ -304,7 +305,7 @@ export function SourceCandidatesPage({ onUnauthorized, showToast }: Props) {
       </section>
 
       <section className="sourceCandidateList">
-        {loading && !candidates.length ? <div className="emptyState">Загружаем кандидатов…</div> : null}
+        {loading && !candidates.length ? <SkeletonList rows={4} label="Загружаем кандидатов…" /> : null}
         {!loading && !candidates.length ? <div className="emptyState">Кандидатов пока нет.</div> : null}
         {candidates.map((candidate) => {
           const isExpanded = expandedId === candidate.id;

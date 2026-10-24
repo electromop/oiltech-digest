@@ -297,38 +297,38 @@
 
 /* Вкладки и переключатели режима (role="tab", «Все / Со статусом», период статистики) — Carbon content switcher:
    выбранный пункт тёмный, остальные с рамкой; выбор виден не только цветом. */
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) {
+:is(.scoringProfileTabs, .viewTabs, .periodSwitch) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0;
 }
 
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > :is(.primaryButton, .ghostButton) {
+:is(.scoringProfileTabs, .viewTabs, .periodSwitch) > :is(.primaryButton, .ghostButton) {
   min-height: var(--ot-control-md);
   border: 1px solid var(--ot-border-inverse);
   background: transparent;
   color: var(--ot-text-primary);
 }
 
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > :is(.primaryButton, .ghostButton) + :is(.primaryButton, .ghostButton) {
+:is(.scoringProfileTabs, .viewTabs, .periodSwitch) > :is(.primaryButton, .ghostButton) + :is(.primaryButton, .ghostButton) {
   margin-inline-start: -1px;
 }
 
-:is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > .primaryButton {
+:is(.scoringProfileTabs, .viewTabs, .periodSwitch) > .primaryButton {
   background: var(--ot-border-inverse);
   color: var(--ot-text-on-color);
   font-weight: var(--ot-weight-bold);
 }
 
 @media (hover: hover) {
-  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > .ghostButton:not(:disabled):hover {
+  :is(.scoringProfileTabs, .viewTabs, .periodSwitch) > .ghostButton:not(:disabled):hover {
     background: var(--ot-layer-hover);
     border-color: var(--ot-border-inverse);
     color: var(--ot-text-primary);
   }
 
-  :is(.scoringProfileTabs, .digestModeSwitch, .viewTabs, .periodSwitch) > .primaryButton:not(:disabled):hover {
+  :is(.scoringProfileTabs, .viewTabs, .periodSwitch) > .primaryButton:not(:disabled):hover {
     background: var(--gray-80);
   }
 }
@@ -737,6 +737,182 @@ input[type="radio"] {
     opacity: 0;
     transform: translateY(-0.5rem);
   }
+}
+
+/* --- Балл (Carbon tag): число крупно, оценка подписью; тон — по той же шкале, что у меток --- */
+.scoreBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-02);
+  min-height: var(--ot-control-sm);
+  padding: 0 var(--ot-space-03);
+  border-radius: var(--ot-radius-pill);
+  background: var(--ot-layer-selected);
+  color: var(--ot-text-primary);
+  font-size: var(--ot-size-caption);
+  line-height: var(--ot-leading-caption);
+  white-space: nowrap;
+}
+
+.scoreBadge strong {
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-body-lg);
+  font-weight: var(--ot-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.scoreBadge.ok {
+  background: var(--sem-ok-bg);
+  color: var(--sem-ok-fg);
+}
+
+.scoreBadge.warn {
+  background: var(--sem-warn-bg);
+  color: var(--sem-warn-fg);
+}
+
+.scoreBadge.bad {
+  background: var(--sem-bad-bg);
+  color: var(--sem-bad-fg);
+}
+
+.scoreBadge.muted {
+  color: var(--sem-muted-fg);
+}
+
+/* --- Плашка «Технология / Бизнес» у элемента выпуска: та же, что в самом выпуске --- */
+.kindBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ot-control-xs);
+  padding: 0 var(--ot-space-03);
+  border-radius: var(--ot-radius-pill);
+  font-size: var(--ot-size-caption);
+  font-weight: var(--ot-weight-bold);
+  line-height: var(--ot-leading-caption);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.kindBadge.technology {
+  background: var(--ot-kind-technology-bg);
+  color: var(--ot-kind-technology-fg);
+}
+
+.kindBadge.business {
+  background: var(--ot-kind-business-bg);
+  color: var(--ot-kind-business-fg);
+}
+
+/* --- Подокно (Carbon modal): нативный <dialog> с showModal, затемнение, шапка с крестиком --- */
+.dialog {
+  width: min(40rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 4rem);
+  padding: 0;
+  border: 1px solid transparent;
+  background: var(--ot-layer-01);
+  color: var(--ot-text-primary);
+  box-shadow: var(--ot-shadow-raised);
+  overflow: hidden;
+}
+
+.dialogWide {
+  width: min(64rem, calc(100vw - 2rem));
+}
+
+/* ::backdrop не везде наследует переменные :root — цвет затемнения задан значением (--ot-overlay). */
+.dialog::backdrop {
+  background: rgba(22, 22, 22, 0.5);
+}
+
+.dialogSurface {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 4rem);
+}
+
+.dialogHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ot-space-04);
+  padding: var(--ot-space-04) var(--ot-space-02) var(--ot-space-04) var(--ot-space-05);
+  border-bottom: 1px solid var(--ot-border-subtle);
+}
+
+.dialogHeader h2 {
+  margin: 0;
+  font-size: var(--ot-size-heading-03);
+  font-weight: var(--ot-weight-regular);
+  line-height: 1.4;
+  text-wrap: balance;
+}
+
+.dialogClose {
+  flex: none;
+  width: var(--ot-control-md);
+  height: var(--ot-control-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--ot-icon-primary);
+  transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard);
+}
+
+@media (hover: hover) {
+  .dialogClose:hover {
+    background: var(--ot-layer-hover);
+  }
+}
+
+.dialogBody {
+  min-height: 0;
+  padding: var(--ot-space-05);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--ot-space-03);
+  margin-top: var(--ot-space-05);
+}
+
+/* --- Скелет загрузки: заготовки строк на месте списка; перелив — в motion.css --- */
+.skeletonList {
+  display: grid;
+  gap: var(--ot-space-03);
+}
+
+.skeletonCard {
+  display: grid;
+  gap: var(--ot-space-03);
+  padding: var(--ot-space-05);
+  border: 1px solid var(--ot-border-subtle);
+  background: var(--ot-layer-01);
+}
+
+.skeletonLine {
+  display: block;
+  width: 100%;
+  height: 0.75rem;
+  background: var(--ot-layer-selected);
+}
+
+.skeletonLineShort {
+  width: 32%;
+  height: 1rem;
+}
+
+.skeletonLineMedium {
+  width: 68%;
 }
 
 /* --- Адаптив общих блоков --- */

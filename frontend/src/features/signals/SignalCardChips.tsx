@@ -1,7 +1,8 @@
 import { Fragment } from "react";
 import type { Signal } from "../../api/types";
 
-// Атрибуты карточки сигнала (#97, спека #93) — чипами на обоих экранах: бизнес-ленте и радаре.
+// Атрибуты карточки сигнала (#97, спека #93) на обоих экранах: бизнес-ленте и радаре. С пересмотра 23.10 — строкой
+// под заголовком (тема, компании, регион, дата события) и таблицей в раскрытой карточке, а не рядом чипов.
 // Значения ставит агент «Карточка сигнала» (#96) из справочников; «не определено» — его ответ «по тексту
 // понять нельзя». Это пробел карточки, и его видно, а не прячется.
 
@@ -90,37 +91,80 @@ type Props = {
   onCompany: (name: string) => void;
 };
 
-export function SignalCardChips({ signal, onCompany }: Props) {
-  const companies = (signal.participants_json || []).map((item) => item.name).filter(Boolean);
+function companiesOf(signal: Signal): string[] {
+  return (signal.participants_json || []).map((item) => item.name).filter(Boolean);
+}
+
+function CompanyButtons({ names, onCompany }: { names: string[]; onCompany: (name: string) => void }) {
   return (
-    <div className="signalCardChips" role="group" aria-label="Атрибуты сигнала">
-      {cardChips(signal).map((chip) => (
-        <span key={chip.key} className={chip.gap ? "signalChip gap" : "signalChip"} title={chip.gap ? GAP_HINT : undefined}>
-          <span className="signalChipLabel">{chip.label}:</span> {chip.value}
-        </span>
+    <>
+      {names.map((name, index) => (
+        <Fragment key={name}>
+          {index ? ", " : ""}
+          <button type="button" className="signalCompanyButton" title={`Все сигналы с участием ${name}`} onClick={() => onCompany(name)}>
+            {name}
+          </button>
+        </Fragment>
       ))}
+    </>
+  );
+}
+
+// Строка под заголовком свёрнутой карточки (пересмотр 23.10: «много флагов и плашек — непонятно, о чём речь»):
+// только то, что отвечает на «о чём это» — тема, кто, где, когда. Пробелы и служебное — в раскрытой карточке.
+export function SignalCardLine({ signal, onCompany }: Props) {
+  const companies = companiesOf(signal);
+  const region = signal.region && signal.region !== UNDEFINED ? signal.region : "";
+  const day = formatEventDate(signal.event_date);
+  return (
+    <div className="signalCardLine">
+      {signal.theme ? <span>{signal.theme}</span> : null}
       {companies.length ? (
-        <span className="signalChip signalChipCompanies">
-          <span className="signalChipLabel">Компании:</span>
-          {companies.map((name) => (
-            <Fragment key={name}>
-              {" "}
-              <button
-                type="button"
-                className="signalCompanyButton"
-                title={`Все сигналы с участием ${name}`}
-                onClick={() => onCompany(name)}
-              >
-                {name}
-              </button>
-            </Fragment>
-          ))}
-        </span>
-      ) : isGap(signal, "participants", signal.participants_json) ? (
-        <span className="signalChip gap" title={GAP_HINT}>
-          <span className="signalChipLabel">Компании:</span> {UNDEFINED}
+        <span className="signalCardLineCompanies">
+          <CompanyButtons names={companies.slice(0, 3)} onCompany={onCompany} />
+          {companies.length > 3 ? ` и ещё ${companies.length - 3}` : ""}
         </span>
       ) : null}
+      {region ? <span>{region}</span> : null}
+      {day ? <span>событие {day}</span> : null}
     </div>
+  );
+}
+
+type Extra = { key: string; label: string; value: string };
+
+// Атрибуты раскрытой карточки — таблица «подпись: значение» вместо ряда чипов. «Не определено» — видимый
+// пробел карточки (пунктир), а не пропуск.
+export function SignalAttributes({ signal, onCompany, extra = [] }: Props & { extra?: Extra[] }) {
+  const companies = companiesOf(signal);
+  const companiesGap = !companies.length && isGap(signal, "participants", signal.participants_json);
+  const date = eventDateLabel(signal);
+  return (
+    <dl className="signalAttributes">
+      {cardChips(signal).map((chip) => (
+        <div key={chip.key} className={chip.gap ? "signalAttribute gap" : "signalAttribute"} title={chip.gap ? GAP_HINT : undefined}>
+          <dt>{chip.label}</dt>
+          <dd>{chip.value}</dd>
+        </div>
+      ))}
+      {companies.length || companiesGap ? (
+        <div className={companiesGap ? "signalAttribute gap" : "signalAttribute"} title={companiesGap ? GAP_HINT : undefined}>
+          <dt>Компании</dt>
+          <dd>{companiesGap ? UNDEFINED : <CompanyButtons names={companies} onCompany={onCompany} />}</dd>
+        </div>
+      ) : null}
+      {date ? (
+        <div className={date.gap ? "signalAttribute gap" : "signalAttribute"}>
+          <dt>Событие</dt>
+          <dd>{date.text.replace(/^Событие: /, "")}</dd>
+        </div>
+      ) : null}
+      {extra.map((item) => (
+        <div key={item.key} className="signalAttribute">
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

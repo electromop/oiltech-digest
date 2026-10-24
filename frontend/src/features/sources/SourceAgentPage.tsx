@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { SkeletonList } from "../shared/Skeleton";
 import { ApiError } from "../../api/client";
 import {
   approveSourceCandidate,
@@ -1560,7 +1561,7 @@ export function SourceAgentPage({ onUnauthorized, showToast }: Props) {
             </button>
           </div>
           <div className="agentMemoryList">
-            {loadingMemory && !memory.length ? <div className="emptyState">Загружаем память…</div> : null}
+            {loadingMemory && !memory.length ? <SkeletonList rows={3} label="Загружаем память…" /> : null}
             {!loadingMemory && !memory.length ? <div className="emptyState">Память пока пустая. Запустите планирование.</div> : null}
             {memory.map((item) => (
               <div className="agentMemoryRow" key={item.id}>
@@ -1605,7 +1606,7 @@ export function SourceAgentPage({ onUnauthorized, showToast }: Props) {
             </button>
           </div>
           <div className="agentRunList">
-            {loadingRuns && !runs.length ? <div className="emptyState">Загружаем циклы…</div> : null}
+            {loadingRuns && !runs.length ? <SkeletonList rows={3} label="Загружаем циклы…" /> : null}
             {!loadingRuns && !runs.length ? <div className="emptyState">Циклов пока нет. Поставьте план в очередь.</div> : null}
             {runs.map((run) => (
               <button
@@ -1830,7 +1831,7 @@ export function SourceAgentPage({ onUnauthorized, showToast }: Props) {
             ) : null}
           </div>
           <div className="agentHistoryList">
-            {loadingActions && !actions.length ? <div className="emptyState">Загружаем историю…</div> : null}
+            {loadingActions && !actions.length ? <SkeletonList rows={3} label="Загружаем историю…" /> : null}
             {!loadingActions && !actions.length ? <div className="emptyState">История пока пустая.</div> : null}
             {actions.map((item) => (
               <div className={`agentHistoryRow ${item.decision_tone || "neutral"}`} key={item.id}>

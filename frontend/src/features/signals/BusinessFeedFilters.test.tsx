@@ -15,7 +15,6 @@ vi.mock("../../api/signals", () => ({
   updateSignal: vi.fn(),
   createSignalFeedback: vi.fn(),
   getSignalSearchHealth: vi.fn(),
-  getSignalWeekly: vi.fn(),
 }));
 
 beforeEach(resetBusinessFeedApi);

@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listArticles, updateArticle } from "../../api/articles";
-import { enqueueDigestExport, getDigestBranding, getDigestContent, getDigestEmailHtml, getMonthlyDigest, saveDigestBranding, updateMonthlyDigest } from "../../api/digest";
-import { downloadJobResult, getJob } from "../../api/jobs";
-import type { Article, DigestBranding, DigestBrandingSocial, DigestContent, DigestDraftSaveResult, DigestHighlightCard, MonthlyDigestDraft } from "../../api/types";
+import { updateSignal } from "../../api/signals";
+import { getDigestContent, getMonthlyDigest, updateMonthlyDigest } from "../../api/digest";
+import type { Article, DigestContent, DigestDraftSaveResult, MonthlyDigestDraft } from "../../api/types";
 import { monthLabel, useFeedWindow } from "../articles/feedWindow";
+import { SkeletonList } from "../shared/Skeleton";
+import { DigestArchive } from "./DigestArchive";
+import { exportDigestFile, type DigestExportFormat } from "./digestExport";
+import { DigestActions, DigestHeader, DigestViewSwitch, type DigestView } from "./DigestHeader";
+import { DigestPdfPreview } from "./DigestPdfPreview";
+import { DigestFilters, DigestQueue, DigestRadarItems, type IssueItem } from "./DigestQueue";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -11,7 +17,6 @@ type Props = {
   onUnauthorized: () => void;
   showToast: ToastWriter;
   onArticlesChanged?: () => void;
-  isAdmin?: boolean;
 };
 
 const DIGEST_PREVIEW_LIMIT = 500;
@@ -20,15 +25,14 @@ const DIGEST_PREVIEW_LIMIT = 500;
 // звал бы setManualOrderIds снова и снова — бесконечный цикл рендеров.
 const NO_ARTICLES: Article[] = [];
 
-export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdmin = false }: Props) {
+// Месячный дайджест (пересмотр 23.10): слева состав выпуска, справа — тот же выпуск в PDF и действия с ним;
+// выпуск выбирается в шапке, прошлые — во вкладке «Архив выпусков». Оформление выпуска с экрана убрано
+// (решение владельца 23.10): шапка и подвал берутся из сохранённого на сервере оформления.
+export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
-  const [branding, setBranding] = useState<DigestBranding | null>(null);
   const [digestPreview, setDigestPreview] = useState<DigestContent | null>(null);
-  const [digestPreviewHtml, setDigestPreviewHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [brandingBusy, setBrandingBusy] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
   const [lastSavedDraft, setLastSavedDraft] = useState<DigestDraftSaveResult | null>(null);
   const [savedDraft, setSavedDraft] = useState<MonthlyDigestDraft | null>(null);
@@ -36,12 +40,15 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   const [draftDirty, setDraftDirty] = useState(false);
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
-  const [tagQuery, setTagQuery] = useState("");
-  const [showTagOptions, setShowTagOptions] = useState(false);
   const [month, setMonth] = useState("");
   const [scoreMin, setScoreMin] = useState(0);
   const [scoreMax, setScoreMax] = useState(100);
-  const [viewMode, setViewMode] = useState<"issue" | "branding">("issue");
+  const [view, setView] = useState<DigestView>("issue");
+  // PDF собирается заново, когда растёт число: открытие, смена выпуска, сохранённый черновик, «Обновить PDF».
+  const [pdfToken, setPdfToken] = useState(0);
+  // Фильтры, с которыми собран показанный PDF: сменились — PDF устарел до «Обновить PDF».
+  const filterSignature = JSON.stringify([scoreMin, scoreMax, search, tag]);
+  const [pdfFilterSignature, setPdfFilterSignature] = useState(filterSignature);
   // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML») — без понятий
   // «задача/очередь/№N»: пользователь видит процесс и результат, а не job-runner.
   const [exporting, setExporting] = useState<string | null>(null);
@@ -51,9 +58,8 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   // черновик не меняются, сервер такие правки отклоняет.
   const feedWindow = useFeedWindow();
   const firstOpenMonth = feedWindow?.months?.[0] ?? "";
-  // Выпуск по умолчанию — тот, что сейчас собирается: первый открытый месяц окна (1–4 числа —
-  // прошлый месяц, дальше — текущий). На «Все месяцы» превью и выгрузка брали отметки за всё
-  // время вместе с архивом, а черновик уходил в месяц по часам браузера (29.09).
+  // Выпуск по умолчанию — тот, что сейчас собирается: первый открытый месяц окна (1–10 числа —
+  // прошлый месяц, дальше — текущий).
   const defaultMonthApplied = useRef(false);
   useEffect(() => {
     if (defaultMonthApplied.current || !firstOpenMonth) return;
@@ -111,67 +117,37 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     void loadDigestPreview();
   }, [loading, month, scoreMin, scoreMax, search, tag]);
 
+  // PDF — заново на открытии экрана и при смене выпуска; фильтры его только помечают устаревшим. Ждём окно
+  // месяца и выпуск по умолчанию: иначе первый PDF собрался бы за все месяцы и сразу ещё раз — за выпуск.
+  const windowKnown = feedWindow !== null;
+  useEffect(() => {
+    if (loading || !windowKnown || (!month && firstOpenMonth)) return;
+    rebuildPdf();
+  }, [loading, month, windowKnown, firstOpenMonth]);
+
+  function rebuildPdf() {
+    setPdfFilterSignature(filterSignature);
+    setPdfToken((current) => current + 1);
+  }
+
   useEffect(() => {
     if (loading) return;
     void loadSavedDraft(activeMonth);
   }, [loading, activeMonth]);
+
+  const previewFilters = { month, limit: DIGEST_PREVIEW_LIMIT, minScore: scoreMin, maxScore: scoreMax, search, topTag: tag };
 
   async function reload() {
     try {
       setLoading(true);
       // Грузим ВСЕ статьи со статусом «digest» с сервера (а не топ-2000 по score),
       // иначе низкоскоринговые материалы выпадают из дайджеста и их не убрать.
-      const [articleRows, brandingPayload] = await Promise.all([
+      const [articleRows, preview] = await Promise.all([
         listArticles({ status: "digest", limit: 5000 }),
-        getDigestBranding(),
+        getDigestContent(previewFilters),
       ]);
       setArticles(articleRows);
-      setBranding({
-        ...brandingPayload,
-        issue: {
-          title_template: brandingPayload.issue?.title_template || "Нефтесервисный дайджест",
-          title_template_with_month: brandingPayload.issue?.title_template_with_month || "Нефтесервисный дайджест · {month}",
-          period_label_all: brandingPayload.issue?.period_label_all || "за всё время",
-          preheader: brandingPayload.issue?.preheader || "Ключевые новости и обзоры нефтесервисного рынка",
-          intro_template:
-            brandingPayload.issue?.intro_template ||
-            "Уважаемые коллеги! Представляем ключевые новости и обзоры нефтесервисного рынка, которые помогают отслеживать технологические тренды, рыночную динамику и возможности для развития бизнеса.",
-          intro_template_with_month:
-            brandingPayload.issue?.intro_template_with_month ||
-            "Уважаемые коллеги! Представляем ключевые новости и обзоры за {month}, которые помогают отслеживать технологические тренды, рыночную динамику и возможности для развития нефтесервисного бизнеса.",
-          highlights_title: brandingPayload.issue?.highlights_title || "Главное за период",
-          news_title: brandingPayload.issue?.news_title || "Новости",
-          read_more_label: brandingPayload.issue?.read_more_label || "ЧИТАТЬ ДАЛЕЕ",
-          empty_summary_text: brandingPayload.issue?.empty_summary_text || "Суть ещё не сформирована.",
-          preview_empty_text: brandingPayload.issue?.preview_empty_text || "В текущей выборке нет сигналов для превью.",
-        },
-        highlights: {
-          analytics_source_keywords: brandingPayload.highlights?.analytics_source_keywords || [],
-          analytics_category_keywords: brandingPayload.highlights?.analytics_category_keywords || [],
-          business_category_keywords: brandingPayload.highlights?.business_category_keywords || [],
-          cards: brandingPayload.highlights?.cards || defaultHighlightCards(),
-        },
-      });
-      const [preview, previewHtml] = await Promise.all([
-        getDigestContent({
-          month,
-          limit: DIGEST_PREVIEW_LIMIT,
-          minScore: scoreMin,
-          maxScore: scoreMax,
-          search,
-          topTag: tag,
-        }),
-        getDigestEmailHtml({
-          month,
-          limit: DIGEST_PREVIEW_LIMIT,
-          minScore: scoreMin,
-          maxScore: scoreMax,
-          search,
-          topTag: tag,
-        }),
-      ]);
       setDigestPreview(preview);
-      setDigestPreviewHtml(previewHtml);
     } catch (error) {
       handleError(error, "Не удалось загрузить статьи для дайджеста");
     } finally {
@@ -181,31 +157,9 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
 
   async function loadDigestPreview() {
     try {
-      setPreviewLoading(true);
-      const [preview, previewHtml] = await Promise.all([
-        getDigestContent({
-          month,
-          limit: DIGEST_PREVIEW_LIMIT,
-          minScore: scoreMin,
-          maxScore: scoreMax,
-          search,
-          topTag: tag,
-        }),
-        getDigestEmailHtml({
-          month,
-          limit: DIGEST_PREVIEW_LIMIT,
-          minScore: scoreMin,
-          maxScore: scoreMax,
-          search,
-          topTag: tag,
-        }),
-      ]);
-      setDigestPreview(preview);
-      setDigestPreviewHtml(previewHtml);
+      setDigestPreview(await getDigestContent(previewFilters));
     } catch (error) {
-      handleError(error, "Не удалось обновить предпросмотр дайджеста");
-    } finally {
-      setPreviewLoading(false);
+      handleError(error, "Не удалось обновить состав выпуска");
     }
   }
 
@@ -213,13 +167,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     try {
       const draft = await getMonthlyDigest(targetMonth);
       setSavedDraft(draft);
-      setLastSavedDraft({
-        id: draft.id,
-        month: draft.month,
-        title: draft.title,
-        status: draft.status,
-        items: draft.items.length,
-      });
+      setLastSavedDraft({ id: draft.id, month: draft.month, title: draft.title, status: draft.status, items: draft.items.length });
       setManualOrderIds(draft.items.map((item) => item.article_id));
       setDraftDirty(false);
     } catch (error) {
@@ -231,6 +179,21 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
         return;
       }
       handleError(error, "Не удалось загрузить сохранённый черновик");
+    }
+  }
+
+  // Сигнал радара снят из дайджеста: выпуск на сервере сменился — состав и PDF собираются заново.
+  async function removeSignalFromDigest(signalId: number) {
+    try {
+      setBusy(true);
+      await updateSignal(signalId, { selected_for_digest: false });
+      await loadDigestPreview();
+      rebuildPdf();
+      showToast("Сигнал убран из дайджеста");
+    } catch (error) {
+      handleError(error, "Не удалось убрать сигнал из дайджеста");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -274,7 +237,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
   }, [sourceArticles, month, scoreMax, scoreMin, search, tag]);
 
   // Месяцы выпуска: открытые месяцы окна (даже без отметок — выпуск из одних сигналов радара),
-  // месяцы выбранных статей ленты и прошлые выпуски, в которых у этого человека есть выбранные.
+  // месяцы выбранных статей ленты и прошлые выпуски, в которых есть выбранные.
   const months = useMemo(() => {
     const open = articles.filter((article) => article.digest).map((article) => String(article.date || "").slice(0, 7));
     return [...new Set([...(feedWindow?.months ?? []), ...open, ...archiveIssueMonths].filter(Boolean))].sort().reverse();
@@ -284,15 +247,22 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     const names = [...new Set(sourceArticles.map((article) => article.tag).filter(Boolean))].sort();
     return [...new Set(names.map((name) => name.split(" / ")[0]))];
   }, [sourceArticles]);
-  const filteredTagOptions = useMemo(() => {
-    const q = tagQuery.trim().toLowerCase();
-    return topTags.filter((option) => !q || option.toLowerCase().includes(q));
-  }, [tagQuery, topTags]);
   // useMemo обязателен: пока превью не пришло, `|| []` давал НОВЫЙ массив на каждом рендере,
   // цепочка useMemo до previewCandidateIds пересчитывалась, а эффект синхронизации очереди
-  // звал setManualOrderIds с новым массивом — рендер за рендером, пока не придёт превью.
-  // В браузере это крутило процессор на время загрузки, в тестах — вешало прогон (23.09).
+  // звал setManualOrderIds с новым массивом — рендер за рендером, пока не придёт превью (23.09).
   const exportPreviewItems = useMemo(() => digestPreview?.news || [], [digestPreview]);
+  const radarItems = useMemo(() => exportPreviewItems.filter((item) => item.item_type === "signal"), [exportPreviewItems]);
+  // Материал, как он выйдет в выпуске (состав на сервере): плашка «Технология / Бизнес» и суть, сжатая под площадь
+  // карточки выпуска, — очередь показывает то же, что уйдёт в PDF.
+  const issueItems = useMemo(() => {
+    const map = new Map<number, IssueItem>();
+    for (const item of exportPreviewItems) {
+      if (item.article_id) {
+        map.set(item.article_id, { kind: item.kind ?? null, label: item.kind_label ?? null, summary: item.summary || null });
+      }
+    }
+    return map;
+  }, [exportPreviewItems]);
   const previewOrderedCandidates = useMemo(() => {
     const byId = new Map(digestCandidates.map((article) => [article.id, article]));
     const ordered = exportPreviewItems
@@ -323,120 +293,18 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     setManualOrderIds(baseIds);
   }, [draftDirty, previewCandidateIds, savedDraftVisibleIds]);
 
-  function updateBrandingSection<K extends keyof DigestBranding>(section: K, value: DigestBranding[K]) {
-    setBranding((prev) => (prev ? { ...prev, [section]: value } : prev));
-  }
-
-  function updateFooterSocial(index: number, field: keyof DigestBrandingSocial, value: string) {
-    setBranding((prev) => {
-      if (!prev) return prev;
-      const socials = prev.footer.socials.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, [field]: value } : item,
-      );
-      return { ...prev, footer: { ...prev.footer, socials } };
-    });
-  }
-
-  function addFooterSocial() {
-    setBranding((prev) =>
-      prev
-        ? {
-            ...prev,
-            footer: {
-              ...prev.footer,
-              socials: [...prev.footer.socials, { label: "", accent: "#003da6", text: "" }],
-            },
-          }
-        : prev,
-    );
-  }
-
-  function removeFooterSocial(index: number) {
-    setBranding((prev) =>
-      prev
-        ? {
-            ...prev,
-            footer: {
-              ...prev.footer,
-              socials: prev.footer.socials.filter((_, itemIndex) => itemIndex !== index),
-            },
-          }
-        : prev,
-    );
-  }
-
-  async function handleSaveBranding() {
-    if (!branding) return;
-    try {
-      setBrandingBusy(true);
-      const payload = {
-        ...branding,
-        footer: {
-          ...branding.footer,
-          socials: branding.footer.socials.filter((item) => item.label.trim() || item.text.trim()),
-        },
-      };
-      const saved = await saveDigestBranding(payload);
-      setBranding({
-        ...saved.branding,
-        issue: {
-          title_template: saved.branding.issue?.title_template || "Нефтесервисный дайджест",
-          title_template_with_month: saved.branding.issue?.title_template_with_month || "Нефтесервисный дайджест · {month}",
-          period_label_all: saved.branding.issue?.period_label_all || "за всё время",
-          preheader: saved.branding.issue?.preheader || "Ключевые новости и обзоры нефтесервисного рынка",
-          intro_template:
-            saved.branding.issue?.intro_template ||
-            "Уважаемые коллеги! Представляем ключевые новости и обзоры нефтесервисного рынка, которые помогают отслеживать технологические тренды, рыночную динамику и возможности для развития бизнеса.",
-          intro_template_with_month:
-            saved.branding.issue?.intro_template_with_month ||
-            "Уважаемые коллеги! Представляем ключевые новости и обзоры за {month}, которые помогают отслеживать технологические тренды, рыночную динамику и возможности для развития нефтесервисного бизнеса.",
-          highlights_title: saved.branding.issue?.highlights_title || "Главное за период",
-          news_title: saved.branding.issue?.news_title || "Новости",
-          read_more_label: saved.branding.issue?.read_more_label || "ЧИТАТЬ ДАЛЕЕ",
-          empty_summary_text: saved.branding.issue?.empty_summary_text || "Суть ещё не сформирована.",
-          preview_empty_text: saved.branding.issue?.preview_empty_text || "В текущей выборке нет сигналов для превью.",
-        },
-        highlights: {
-          analytics_source_keywords: saved.branding.highlights?.analytics_source_keywords || [],
-          analytics_category_keywords: saved.branding.highlights?.analytics_category_keywords || [],
-          business_category_keywords: saved.branding.highlights?.business_category_keywords || [],
-          cards: saved.branding.highlights?.cards || defaultHighlightCards(),
-        },
-      });
-      await loadDigestPreview();
-      showToast("Оформление дайджеста сохранено");
-    } catch (error) {
-      handleError(error, "Не удалось сохранить оформление дайджеста");
-    } finally {
-      setBrandingBusy(false);
-    }
-  }
-
-  async function handleDigestExport(format: "pdf" | "docx" | "html") {
+  // Выгрузка выпуска файлом. monthOverride — выпуск из архива: целиком, без фильтров экрана.
+  async function handleDigestExport(format: DigestExportFormat, monthOverride?: string) {
     try {
       setBusy(true);
       setExporting(format.toUpperCase());
-      // Документ собирается на сервере; для пользователя это просто ожидание файла.
-      const queued = await enqueueDigestExport(month, DIGEST_PREVIEW_LIMIT, scoreMin, format, {
-        maxScore: scoreMax,
-        search,
-        topTag: tag,
-      });
-      const finished = await waitForExportJob(queued.job.id);
-      if (finished.status !== "ok") {
-        throw new Error(finished.error || "Не удалось подготовить документ");
-      }
-
-      const file = await downloadJobResult(finished.id);
-      const url = window.URL.createObjectURL(file.blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = file.filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      showToast(`Документ готов: ${file.filename}`);
+      const filename = await exportDigestFile(
+        format,
+        monthOverride
+          ? { month: monthOverride, limit: DIGEST_PREVIEW_LIMIT, minScore: 0, maxScore: 100 }
+          : { month, limit: DIGEST_PREVIEW_LIMIT, minScore: scoreMin, maxScore: scoreMax, search, topTag: tag },
+      );
+      showToast(`Документ готов: ${filename}`);
     } catch (error) {
       handleError(error, "Не удалось подготовить документ");
     } finally {
@@ -465,7 +333,9 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
       setLastSavedDraft(saved);
       await loadSavedDraft(draftMonth);
       await loadDigestPreview();
-      showToast(`Draft сохранён: ${saved.month}`);
+      // Порядок выпуска на сервере сменился — PDF собирается заново.
+      rebuildPdf();
+      showToast(`Черновик сохранён: ${monthLabel(saved.month)}`);
     } catch (error) {
       handleError(error, "Не удалось сохранить черновик дайджеста");
     } finally {
@@ -503,574 +373,124 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged, isAdm
     setDraftDirty(false);
   }
 
-  // Ждём готовности файла, опрашивая сервер. Прогресс/номер наружу не показываем —
-  // только нейтральный спиннер «Готовим документ…».
-  async function waitForExportJob(jobId: number) {
-    for (let attempt = 0; attempt < 80; attempt += 1) {
-      const job = await getJob(jobId);
-      if (job.status === "ok" || job.status === "failed") {
-        return job;
-      }
-      await sleep(2000);
-    }
-    throw new Error("Документ готовится дольше обычного — попробуйте ещё раз чуть позже");
+  function openArchiveIssue(target: string) {
+    setMonth(target);
+    setView("issue");
   }
 
-  const filterSummary = [
-    tag ? `тег: ${tag}` : "",
-    search.trim() ? `поиск: ${search.trim()}` : "",
-    scoreMin > 0 || scoreMax < 100 ? `балл ${scoreMin}–${scoreMax}` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  const issueWorkspace = (
-    <div className="digestLayout">
-      <section className="digestBuilderMain">
-        <div className="panelHeader">
-          <h2>Выборка дайджеста</h2>
-          {previewLoading ? <span className="metaText">Обновляем предпросмотр выпуска…</span> : null}
-        </div>
-
-        {isArchiveMonth ? (
-          <div className="archiveNotice" role="status">
-            <span>Выпуск за {monthLabel(month)} в архиве: его можно смотреть и выгружать, но не менять.</span>
-          </div>
-        ) : null}
-
-        <div className="digestRunSummary">
-          <div className="digestRunCard">
-            <div className="metaText">Текущий выпуск</div>
-            <strong>{activeMonth}</strong>
-            <span className="metaText">{digestCandidates.length} статей в подборке</span>
-          </div>
-          <div className="digestRunCard">
-            <div className="metaText">Предпросмотр и выгрузка</div>
-            <strong>{exportPreviewItems.length}</strong>
-            <span className="metaText">материалов вернёт сервер</span>
-          </div>
-          <div className="digestRunCard">
-            <div className="metaText">Последний черновик</div>
-            <strong>{lastSavedDraft ? lastSavedDraft.month : "ещё не сохранён"}</strong>
-            <span className="metaText">
-              {lastSavedDraft ? `${lastSavedDraft.items} материалов · статус ${lastSavedDraft.status}` : "Можно сохранить текущую выборку как выпуск"}
-            </span>
-          </div>
-        </div>
-        {filterSummary ? <div className="digestRunFilters">{filterSummary}</div> : null}
-
-        <div className="digestFiltersRow">
-          <label className="field">
-            <span>Поиск</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти статью" />
-          </label>
-          <div className="field sourceComboReact">
-            <span>Тег</span>
-            <input
-              value={tag || tagQuery}
-              onChange={(event) => {
-                setTag("");
-                setTagQuery(event.target.value);
-                setShowTagOptions(true);
-              }}
-              onFocus={() => setShowTagOptions(true)}
-              onBlur={() => {
-                window.setTimeout(() => setShowTagOptions(false), 120);
-              }}
-              placeholder="Все теги"
-            />
-            {showTagOptions ? (
-              <div className="sourcePopoverReact">
-                <button
-                  type="button"
-                  className="sourceOptionReact"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    setTag("");
-                    setTagQuery("");
-                    setShowTagOptions(false);
-                  }}
-                >
-                  <span>Все теги</span>
-                  <span className="metaText">сброс</span>
-                </button>
-                {filteredTagOptions.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    className="sourceOptionReact"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      setTag(option);
-                      setTagQuery(option);
-                      setShowTagOptions(false);
-                    }}
-                  >
-                    <span>{option}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="digestFiltersRow digestFiltersRowSecondary">
-          <label className="field">
-            <span>Месяц</span>
-            <select value={month} onChange={(event) => setMonth(event.target.value)}>
-              <option value="">Все месяцы</option>
-              {months.map((option) => (
-                <option key={option} value={option}>
-                  {firstOpenMonth && option < firstOpenMonth ? `${option} · архив` : option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Оценка от</span>
-            <input type="number" value={scoreMin} onChange={(event) => setScoreMin(Number(event.target.value || 0))} />
-          </label>
-          <label className="field">
-            <span>Оценка до</span>
-            <input type="number" value={scoreMax} onChange={(event) => setScoreMax(Number(event.target.value || 100))} />
-          </label>
-        </div>
-
-        {loading ? (
-          <div className="emptyState"><LoadingState label="Загружаем бизнес-сигналы…" /></div>
-        ) : digestCandidates.length ? (
-            <div className="digestQueuePanel">
-              <div className="digestQueueHeader">
-                <div>
-                  <strong>Очередь выпуска</strong>
-                  <div className="metaText">
-                    {savedDraft?.month === activeMonth ? "Порядок можно менять вручную и сохранять в черновик" : "Стартовый порядок совпадает с предпросмотром сервера"}
-                  </div>
-                </div>
-                <div className="digestQueueHeaderMeta">
-                  {hasManualChanges ? <span className="miniPill warn">есть несохранённые изменения</span> : null}
-                  <span className="badge">{orderedDigestCandidates.length}</span>
-                </div>
-              </div>
-              <div className="digestPickListReact">
-              {orderedDigestCandidates.map((article, index) => (
-                <article className="digestPickRow" key={article.id}>
-                  <div className="digestPickTop">
-                    <div className="digestPickIndex">{String(index + 1).padStart(2, "0")}</div>
-                    <div className="digestPickMain">
-                      <div className="digestPickMetaRow">
-                        <span className="miniPill muted">{article.tag}</span>
-                        <span className="miniPill ok">{Math.round(Number(article.score || 0))}</span>
-                      </div>
-                      <a href={article.url} target="_blank" rel="noreferrer">
-                        <strong>{article.title}</strong>
-                      </a>
-                    </div>
-                    {isArchiveMonth ? null : (
-                    <div className="digestPickActions">
-                      <button
-                        type="button"
-                        className="ghostButton compactButton"
-                        disabled={index === 0}
-                        onClick={() => moveDigestItem(article.id, -1)}
-                        aria-label="Поднять материал выше"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        className="ghostButton compactButton"
-                        disabled={index === orderedDigestCandidates.length - 1}
-                        onClick={() => moveDigestItem(article.id, 1)}
-                        aria-label="Опустить материал ниже"
-                      >
-                        ↓
-                      </button>
-                      <button type="button" className="ghostButton compactButton" onClick={() => removeFromIssue(article.id)}>
-                        Из выпуска
-                      </button>
-                      <button type="button" className="ghostButton compactButton" disabled={busy} onClick={() => void removeFromDigest(article.id)}>
-                        Из дайджеста
-                      </button>
-                    </div>
-                    )}
-                  </div>
-                  <div className="digestPickSummary">{article.summary || branding?.issue.empty_summary_text || "Суть ещё не сформирована."}</div>
-                  <div className="digestPickFooter">
-                    <span>{article.source}</span>
-                    <span>{formatDate(article.date)}</span>
-                    <span>{article.raw_text_chars || 0} симв.</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-            {availableDigestCandidates.length && !isArchiveMonth ? (
-              <div className="digestAvailablePanel">
-                <div className="panelHeader">
-                  <h3>Доступные материалы</h3>
-                  <span className="metaText">Можно добавить в сохранённый выпуск без смены фильтров</span>
-                </div>
-                <div className="digestAvailableList">
-                  {availableDigestCandidates.slice(0, 12).map((article) => (
-                    <div className="digestAvailableRow" key={article.id}>
-                      <div>
-                        <strong>{article.title}</strong>
-                        <div className="metaText">{article.tag} · {article.source}</div>
-                      </div>
-                      <button type="button" className="ghostButton compactButton" onClick={() => addToIssue(article.id)}>
-                        Добавить
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          <div className="emptyState">Нет статей со статусом «В дайджест» по текущим фильтрам.</div>
-        )}
-      </section>
-
-      <aside className="digestBuilderSide">
-        <section className="digestControlCard">
-          <div className="panelHeader">
-            <h3>Действия по выпуску</h3>
-            <span className="metaText">Черновик и выгрузка работают по текущей выборке</span>
-          </div>
-          <div className="digestToolbar digestToolbarStack">
-            {isArchiveMonth ? null : (
-              <div className="digestActionGroup">
-                <span className="digestGroupLabel">Сохранение</span>
-                <button type="button" className="ghostButton" disabled={draftBusy} onClick={() => void handleSaveDraft()}>
-                  {draftBusy ? "Сохраняем черновик…" : "Сохранить черновик"}
-                </button>
-                <button type="button" className="ghostButton" disabled={!hasManualChanges} onClick={resetDraftQueue}>
-                  Сбросить изменения
-                </button>
-              </div>
-            )}
-            <div className="digestActionGroup">
-              <span className="digestGroupLabel">Экспорт</span>
-              <button type="button" className="primaryButton" onClick={() => void handleDigestExport("pdf")}>
-                PDF
-              </button>
-              <button type="button" className="ghostButton" onClick={() => void handleDigestExport("docx")}>
-                DOCX
-              </button>
-              <button type="button" className="ghostButton" onClick={() => void handleDigestExport("html")}>
-                HTML
-              </button>
-            </div>
-          </div>
-          <div className="digestControlMeta">
-            <div><strong>{activeMonth}</strong></div>
-            <div className="metaText">Месяц выпуска</div>
-            <div><strong>{exportPreviewItems.length}</strong></div>
-            <div className="metaText">Карточек в итоговом предпросмотре</div>
-            <div><strong>{hasManualChanges ? "локальные правки" : "предпросмотр сервера"}</strong></div>
-            <div className="metaText">
-              {hasManualChanges
-                ? "Порядок или состав уже изменён на экране, предпросмотр обновится после сохранения черновика"
-                : "Предпросмотр совпадает с сохранённым черновиком или текущей выборкой"}
-            </div>
-          </div>
-        </section>
-
-        <section className="digestPreviewSurface">
-          <div className="panelHeader">
-            <h3>Предпросмотр выпуска</h3>
-            <span className="metaText">Тот же HTML, что пойдёт в экспорт</span>
-          </div>
-          {digestPreviewHtml ? (
-            <iframe
-              className="digestPreviewIframe"
-              title="Предпросмотр дайджеста"
-              srcDoc={digestPreviewHtml}
-              sandbox=""
-            />
-          ) : (
-            <div className="digestPreviewEmpty">{branding?.issue.preview_empty_text || "В текущей выборке нет сигналов для превью."}</div>
-          )}
-        </section>
-      </aside>
-    </div>
-  );
-
-  const brandingWorkspace = isAdmin && branding ? (
-    <div className="digestBrandingWorkspace">
-      <section className="settingsCard digestBrandingCard">
-        <div className="panelHeader">
-          <h2>Оформление выпуска</h2>
-          <button type="button" className="primaryButton" disabled={brandingBusy} onClick={() => void handleSaveBranding()}>
-            Сохранить оформление
-          </button>
-        </div>
-        <div className="settingsGrid">
-          <label className="field">
-            <span>Бренд</span>
-            <input
-              value={branding.header.brand_text}
-              onChange={(event) => updateBrandingSection("header", { ...branding.header, brand_text: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Слоган</span>
-            <input
-              value={branding.header.brand_suffix}
-              onChange={(event) => updateBrandingSection("header", { ...branding.header, brand_suffix: event.target.value })}
-            />
-          </label>
-          <label className="field fieldWide">
-            <span>Подразделение</span>
-            <input
-              value={branding.header.department_text}
-              onChange={(event) => updateBrandingSection("header", { ...branding.header, department_text: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Плашка шапки</span>
-            <input
-              value={branding.hero.badge}
-              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, badge: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Заголовок шапки</span>
-            <input
-              value={branding.hero.headline}
-              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, headline: event.target.value })}
-            />
-          </label>
-          <label className="field fieldWide">
-            <span>Подзаголовок шапки</span>
-            <input
-              value={branding.hero.subtitle}
-              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, subtitle: event.target.value })}
-            />
-          </label>
-          <label className="field fieldWide">
-            <span>Ссылка на изображение шапки</span>
-            <input
-              value={branding.hero.image_url}
-              onChange={(event) => updateBrandingSection("hero", { ...branding.hero, image_url: event.target.value })}
-              placeholder="https://example.com/hero.jpg"
-            />
-          </label>
-          <label className="field">
-            <span>Текст предпросмотра письма</span>
-            <input
-              value={branding.issue.preheader}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, preheader: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Шаблон заголовка</span>
-            <input
-              value={branding.issue.title_template}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Шаблон заголовка с месяцем</span>
-            <input
-              value={branding.issue.title_template_with_month}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, title_template_with_month: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Заголовок новостей</span>
-            <input
-              value={branding.issue.news_title}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, news_title: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Призыв к действию</span>
-            <input
-              value={branding.issue.read_more_label}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, read_more_label: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Запасной текст сути</span>
-            <input
-              value={branding.issue.empty_summary_text}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, empty_summary_text: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Пустое превью</span>
-            <input
-              value={branding.issue.preview_empty_text}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, preview_empty_text: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Период без месяца</span>
-            <input
-              value={branding.issue.period_label_all}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, period_label_all: event.target.value })}
-            />
-          </label>
-          <label className="field fieldWide">
-            <span>Шаблон вступления</span>
-            <textarea
-              value={branding.issue.intro_template}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template: event.target.value })}
-            />
-          </label>
-          <label className="field fieldWide">
-            <span>Шаблон вступления с месяцем</span>
-            <textarea
-              value={branding.issue.intro_template_with_month}
-              onChange={(event) => updateBrandingSection("issue", { ...branding.issue, intro_template_with_month: event.target.value })}
-              placeholder="Используйте {month}"
-            />
-          </label>
-          <label className="field fieldWide">
-            <span>Контактный текст</span>
-            <textarea
-              value={branding.footer.contact_text}
-              onChange={(event) => updateBrandingSection("footer", { ...branding.footer, contact_text: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Эл. почта</span>
-            <input
-              value={branding.footer.contact_email}
-              onChange={(event) => updateBrandingSection("footer", { ...branding.footer, contact_email: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Примечание</span>
-            <input
-              value={branding.footer.note}
-              onChange={(event) => updateBrandingSection("footer", { ...branding.footer, note: event.target.value })}
-            />
-          </label>
-        </div>
-        <div className="digestSocialsEditor">
-          <div className="panelHeader">
-            <h3>Соцсети и каналы</h3>
-            <button type="button" className="ghostButton" onClick={addFooterSocial}>
-              Добавить
-            </button>
-          </div>
-          <div className="digestSocialsList">
-            {branding.footer.socials.map((item, index) => (
-              <div className="digestSocialRow" key={`${item.label}-${index}`}>
-                <label className="field">
-                  <span>Название</span>
-                  <input value={item.label} onChange={(event) => updateFooterSocial(index, "label", event.target.value)} />
-                </label>
-                <label className="field">
-                  <span>Текст</span>
-                  <input value={item.text} onChange={(event) => updateFooterSocial(index, "text", event.target.value)} />
-                </label>
-                <label className="field">
-                  <span>Цвет</span>
-                  <input value={item.accent} onChange={(event) => updateFooterSocial(index, "accent", event.target.value)} />
-                </label>
-                <button type="button" className="ghostButton compactButton" onClick={() => removeFooterSocial(index)}>
-                  Удалить
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="digestPreviewSurface">
-        <div className="panelHeader">
-          <h3>Предпросмотр оформления</h3>
-          <span className="metaText">Сразу видно, как изменится финальный HTML</span>
-        </div>
-        {digestPreviewHtml ? (
-          <iframe
-            className="digestPreviewIframe"
-            title="Предпросмотр дайджеста"
-            srcDoc={digestPreviewHtml}
-            sandbox=""
-          />
-        ) : (
-          <div className="digestPreviewEmpty">{branding.issue.preview_empty_text || "В текущей выборке нет сигналов для превью."}</div>
-        )}
-      </section>
-    </div>
-  ) : null;
+  const draftInfo = isArchiveMonth
+    ? "Прошлый выпуск: только просмотр и выгрузка"
+    : savedDraft?.month === activeMonth
+      ? "Порядок можно менять стрелками; «Сохранить черновик» закрепляет его в выпуске"
+      : "Порядок как в выпуске на сервере; черновик ещё не сохранён";
+  const issueCount = orderedDigestCandidates.length + radarItems.length;
+  const statusText = lastSavedDraft ? `Черновик сохранён · ${lastSavedDraft.items} в выпуске` : "Черновик не сохранён";
+  // PDF собран из сохранённого черновика: несохранённый порядок в нём не виден, сменившиеся фильтры — тоже.
+  const pdfStaleReason = pdfToken === 0 ? null : draftDirty ? "order" : pdfFilterSignature !== filterSignature ? "filters" : null;
 
   return (
     <section className="screenStack">
-      <header className="screenHeader">
-        <div>
-          <h1>Месячный дайджест</h1>
-          <p>Сборка выпуска, сохранение черновика и выгрузка — на одном экране.</p>
-        </div>
-        <div className="statusPill">{digestCandidates.length} статей</div>
-      </header>
+      <DigestHeader
+        activeMonth={activeMonth}
+        issueCount={issueCount}
+        month={month}
+        months={months}
+        firstOpenMonth={firstOpenMonth}
+        statusText={statusText}
+        onMonthChange={setMonth}
+      />
 
-      <section className="panel">
-        {busy ? <InlineLoader label={exporting ? `Готовим документ ${exporting}…` : "Готовим документ…"} /> : null}
-        <div className="panelHeader">
-          <h2>{viewMode === "issue" ? "Сборка выпуска" : "Оформление выпуска"}</h2>
-          {isAdmin ? (
-            <div className="digestModeSwitch" role="group" aria-label="Режим экрана дайджеста">
-              {/* Переключатель режима, а не вкладки: панели вкладки у него нет, поэтому group + aria-pressed. */}
-              <button
-                type="button"
-                className={viewMode === "issue" ? "primaryButton" : "ghostButton"}
-                aria-pressed={viewMode === "issue"}
-                onClick={() => setViewMode("issue")}
-              >
-                Сборка выпуска
-              </button>
-              <button
-                type="button"
-                className={viewMode === "branding" ? "primaryButton" : "ghostButton"}
-                aria-pressed={viewMode === "branding"}
-                onClick={() => setViewMode("branding")}
-              >
-                Оформление
-              </button>
+      <DigestViewSwitch view={view} archiveCount={archiveIssueMonths.length} onChange={setView} />
+
+      {view === "archive" ? (
+        <section className="panel">
+          <div className="panelHeader">
+            <h2>Архив выпусков</h2>
+          </div>
+          <DigestArchive months={feedWindow?.archive ?? []} rolloverDay={feedWindow?.rollover_day} busy={busy}
+            onOpen={openArchiveIssue} onDownload={(target) => void handleDigestExport("pdf", target)} />
+        </section>
+      ) : (
+        <div className="digestWorkspace">
+          <section className="panel digestComposition">
+            {busy ? (
+              <div className="loadingOverlay" role="status">
+                <span className="spinnerReact" aria-hidden="true" />
+                <span>{exporting ? `Готовим документ ${exporting}…` : "Обновляем выпуск…"}</span>
+              </div>
+            ) : null}
+            <div className="panelHeader">
+              <h2>Состав выпуска</h2>
+              <span className="badge">{digestCandidates.length} отмечено</span>
             </div>
-          ) : null}
+            {isArchiveMonth ? (
+              <div className="archiveNotice" role="status">
+                <span>Выпуск за {monthLabel(month)} в архиве: его можно смотреть и выгружать, но не менять.</span>
+              </div>
+            ) : null}
+            <DigestFilters
+              search={search}
+              tag={tag}
+              topTags={topTags}
+              scoreMin={scoreMin}
+              scoreMax={scoreMax}
+              onSearch={setSearch}
+              onTag={setTag}
+              onScoreMin={setScoreMin}
+              onScoreMax={setScoreMax}
+            />
+            {loading ? (
+              <SkeletonList rows={4} label="Загружаем материалы выпуска" />
+            ) : orderedDigestCandidates.length || availableDigestCandidates.length || radarItems.length ? (
+              <>
+                <DigestQueue
+                  items={orderedDigestCandidates}
+                  available={availableDigestCandidates}
+                  issueItems={issueItems}
+                  readOnly={isArchiveMonth}
+                  busy={busy}
+                  hasManualChanges={hasManualChanges}
+                  draftInfo={draftInfo}
+                  onMove={moveDigestItem}
+                  onRemoveFromIssue={removeFromIssue}
+                  onRemoveFromDigest={(articleId) => void removeFromDigest(articleId)}
+                  onAdd={addToIssue}
+                />
+                <DigestRadarItems
+                  items={radarItems}
+                  readOnly={isArchiveMonth}
+                  busy={busy}
+                  onRemove={(signalId) => void removeSignalFromDigest(signalId)}
+                />
+              </>
+            ) : (
+              <div className="emptyState">
+                <strong>В выпуске пока нет материалов</strong>
+                <span>Отметьте сигналы кнопкой «В дайджест» в бизнес-ленте или на радаре.</span>
+              </div>
+            )}
+          </section>
+
+          <aside className="panel digestPreviewSide">
+            <DigestActions
+              archive={isArchiveMonth}
+              busy={busy}
+              draftBusy={draftBusy}
+              hasManualChanges={hasManualChanges}
+              onSave={() => void handleSaveDraft()}
+              onReset={resetDraftQueue}
+              onExport={(format) => void handleDigestExport(format)}
+            />
+            <DigestPdfPreview
+              filters={previewFilters}
+              refreshToken={pdfToken}
+              staleReason={pdfStaleReason}
+              onRefresh={rebuildPdf}
+              onError={(error) => handleError(error, "Не удалось собрать PDF выпуска")}
+            />
+          </aside>
         </div>
-        {viewMode === "issue" ? issueWorkspace : brandingWorkspace}
-      </section>
+      )}
     </section>
-  );
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function defaultHighlightCards(): DigestHighlightCard[] {
-  return [
-    { metric: "total", icon: "doc", prefix: "", suffix: "", noun_one: "новость", noun_few: "новости", noun_many: "новостей" },
-    { metric: "analytics", icon: "chart", prefix: "аналитических", suffix: "", noun_one: "материал", noun_few: "материала", noun_many: "материалов" },
-    { metric: "business", icon: "people", prefix: "", suffix: "для бизнеса", noun_one: "возможность", noun_few: "возможности", noun_many: "возможностей" },
-  ];
-}
-
-function formatDate(value: string | null) {
-  return value ? new Date(`${value}T00:00:00`).toLocaleDateString("ru-RU") : "—";
-}
-
-function InlineLoader(props: { label: string }) {
-  return (
-    <div className="loadingOverlay">
-      <div className="spinnerReact" />
-      <span>{props.label}</span>
-    </div>
-  );
-}
-
-function LoadingState(props: { label: string }) {
-  return (
-    <div className="loadingStateReact">
-      <div className="spinnerReact" />
-      <span>{props.label}</span>
-    </div>
   );
 }
