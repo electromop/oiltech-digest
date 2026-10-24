@@ -8,8 +8,8 @@ import { DigestPage } from "./DigestPage";
 // сами пользователи). Раньше экран открывался на «Все месяцы»: превью и выгрузка брали
 // отметки за всё время, включая архив, а «Сохранить draft» клал черновик в месяц по часам
 // браузера (UTC) — 1–4 октября это октябрь, хотя собирается сентябрьский выпуск.
-// С пересмотра 23.10 выпуск — всегда месяц: «Все месяцы» в списке нет, предпросмотр — сразу PDF,
-// прошлые выпуски — во вкладке «Архив выпусков».
+// С пересмотра 23-24.10 выбора выпуска на экране нет: собирается выпуск первого открытого месяца окна, прошлые —
+// только во вкладке «Архив выпусков» и только на просмотр; предпросмотр — сразу PDF.
 
 const baseArticle: Article = {
   id: 0,
@@ -99,10 +99,10 @@ describe("экран выпуска: какой месяц открыт по у�
     const user = userEvent.setup();
     render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
 
-    const monthSelect = await screen.findByDisplayValue("сентябрь 2026");
-    expect(within(monthSelect).getByRole("option", { name: "октябрь 2026" })).toBeInTheDocument();
-    expect(within(monthSelect).queryByRole("option", { name: "Все месяцы" })).not.toBeInTheDocument();
-    expect(await screen.findByText("Сентябрьская статья")).toBeInTheDocument();
+    expect(await screen.findByText(/Выпуск за сентябрь 2026/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Выпуск" })).not.toBeInTheDocument();
+    // Пока очередь не собрана, статья видна в «Отмечено, но не в выпуске» — ждём её в самой очереди.
+    await waitFor(() => expect(screen.getByText("Сентябрьская статья").closest("li")).not.toBeNull());
     expect(screen.queryByText("Октябрьская статья")).not.toBeInTheDocument();
     await waitFor(() => expect(requested()).toContain("/api/monthly-digests/2026-09"));
     await waitFor(() =>
@@ -123,14 +123,17 @@ describe("экран выпуска: какой месяц открыт по у�
     openMonths = ["2026-10"];
     archive = [{ month: "2026-09", articles: 120, digest: 1 }];
     marked = [];
+
+    const user = userEvent.setup();
     render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
 
-    const monthSelect = await screen.findByDisplayValue("октябрь 2026");
-    expect(within(monthSelect).getByRole("option", { name: "сентябрь 2026 · архив" })).toBeInTheDocument();
+    expect(await screen.findByText(/Выпуск за октябрь 2026/)).toBeInTheDocument();
     await waitFor(() => expect(requested()).toContain("/api/monthly-digests/2026-10"));
+    await user.click(screen.getByRole("button", { name: /Архив выпусков/ }));
+    expect(screen.getByRole("rowheader", { name: "сентябрь 2026" })).toBeInTheDocument();
   });
 
-  it("архив выпусков: прошлые выпуски списком, «Открыть» — выпуск на просмотр, без правки", async () => {
+  it("архив выпусков: прошлые выпуски списком, «Открыть» — выпуск на просмотр в той же вкладке, без правки", async () => {
     openMonths = ["2026-10"];
     archive = [
       { month: "2026-08", articles: 300, digest: 4 },
@@ -151,10 +154,19 @@ describe("экран выпуска: какой месяц открыт по у�
     await user.click(within(september2026).getByRole("button", { name: "Открыть" }));
 
     expect(await screen.findByText(/Выпуск за сентябрь 2026 в архиве/)).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Выпуск" })).toHaveValue("2026-09");
+    expect(screen.getByText(/Прошлый выпуск за сентябрь 2026/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Архив выпусков/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: "Сохранить черновик" })).not.toBeInTheDocument();
-    expect(await screen.findByText("Сентябрьская статья")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Сентябрьская статья")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Из дайджеста" })).not.toBeInTheDocument();
+    await waitFor(() => expect(requested().some((url) => url.startsWith("/api/articles") && url.includes("month=2026-09"))).toBe(true));
+
+    // Назад — к списку выпусков; «Сборка выпуска» — снова текущий выпуск.
+    await user.click(screen.getByRole("button", { name: "← Все выпуски" }));
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Сборка выпуска" }));
+    expect(await screen.findByText(/Выпуск за октябрь 2026/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeInTheDocument();
   });
 
   it("плашка «Технология / Бизнес» у материала — из состава выпуска на сервере", async () => {
@@ -175,7 +187,7 @@ describe("экран выпуска: какой месяц открыт по у�
     expect(within(second).getByText("Бизнес")).toHaveClass("kindBadge", "business");
   });
 
-  it("сигналы радара в выпуске видны в составе с плашкой и снимаются из дайджеста", async () => {
+  it("сигналы радара — в том же списке после статей, с плашкой; снимаются из дайджеста", async () => {
     openMonths = ["2026-09"];
     archive = [];
     marked = [september];
@@ -187,9 +199,15 @@ describe("экран выпуска: какой месяц открыт по у�
     const user = userEvent.setup();
     render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
 
-    const radar = await screen.findByRole("region", { name: "Сигналы радара в выпуске" });
+    // Отдельного блока нет (решение владельца 24.10): одна очередь, сигнал — после статьи, различает плашка.
+    expect(screen.queryByRole("region", { name: "Сигналы радара в выпуске" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Цифровой двойник скважины").closest("li")).not.toBeNull());
+    const rows = screen.getAllByRole("listitem").filter((row) => row.classList.contains("digestPickRow"));
+    expect(rows.map((row) => row.querySelector("strong")?.textContent)).toEqual(["Сентябрьская статья", "Цифровой двойник скважины"]);
+    const radar = rows[1];
     expect(within(radar).getByText("Технология")).toHaveClass("kindBadge", "technology");
     expect(within(radar).getByText("Оператор испытал цифрового двойника.")).toBeInTheDocument();
+    expect(within(radar).queryByRole("button", { name: "Поднять материал выше" })).not.toBeInTheDocument();
     // В выпуске два материала: статья очереди и сигнал радара.
     expect(screen.getByText(/2 материала в выпуске/)).toBeInTheDocument();
 

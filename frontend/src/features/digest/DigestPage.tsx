@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listArticles, updateArticle } from "../../api/articles";
 import { updateSignal } from "../../api/signals";
 import { getDigestContent, getMonthlyDigest, updateMonthlyDigest } from "../../api/digest";
-import type { Article, DigestContent, DigestDraftSaveResult, MonthlyDigestDraft } from "../../api/types";
+import type { Article, DigestContent, MonthlyDigestDraft } from "../../api/types";
 import { monthLabel, useFeedWindow } from "../articles/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
 import { DigestArchive } from "./DigestArchive";
 import { exportDigestFile, type DigestExportFormat } from "./digestExport";
 import { DigestActions, DigestHeader, DigestViewSwitch, type DigestView } from "./DigestHeader";
 import { DigestPdfPreview } from "./DigestPdfPreview";
-import { DigestFilters, DigestQueue, DigestRadarItems, type IssueItem } from "./DigestQueue";
+import { DigestFilters, DigestQueue, type IssueItem } from "./DigestQueue";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -25,25 +25,25 @@ const DIGEST_PREVIEW_LIMIT = 500;
 // звал бы setManualOrderIds снова и снова — бесконечный цикл рендеров.
 const NO_ARTICLES: Article[] = [];
 
-// Месячный дайджест (пересмотр 23.10): слева состав выпуска, справа — тот же выпуск в PDF и действия с ним;
-// выпуск выбирается в шапке, прошлые — во вкладке «Архив выпусков». Оформление выпуска с экрана убрано
-// (решение владельца 23.10): шапка и подвал берутся из сохранённого на сервере оформления.
+// Месячный дайджест (пересмотр 23-24.10): «Сборка выпуска» — всегда выпуск, который собирается сейчас: слева состав,
+// справа тот же выпуск в PDF и действия с ним. Прошлые выпуски — только во вкладке «Архив выпусков» и только на
+// просмотр (решение владельца 24.10). Оформление выпуска с экрана убрано: шапка и подвал — из сохранённого на сервере.
 export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Props) {
   const [articles, setArticles] = useState<Article[]>([]);
   const [digestPreview, setDigestPreview] = useState<DigestContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
-  const [lastSavedDraft, setLastSavedDraft] = useState<DigestDraftSaveResult | null>(null);
   const [savedDraft, setSavedDraft] = useState<MonthlyDigestDraft | null>(null);
   const [manualOrderIds, setManualOrderIds] = useState<number[]>([]);
   const [draftDirty, setDraftDirty] = useState(false);
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
-  const [month, setMonth] = useState("");
   const [scoreMin, setScoreMin] = useState(0);
   const [scoreMax, setScoreMax] = useState(100);
   const [view, setView] = useState<DigestView>("issue");
+  // Прошлый выпуск, открытый во вкладке архива; null — список архива.
+  const [archiveOpen, setArchiveOpen] = useState<string | null>(null);
   // PDF собирается заново, когда растёт число: открытие, смена выпуска, сохранённый черновик, «Обновить PDF».
   const [pdfToken, setPdfToken] = useState(0);
   // Фильтры, с которыми собран показанный PDF: сменились — PDF устарел до «Обновить PDF».
@@ -52,20 +52,15 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML») — без понятий
   // «задача/очередь/№N»: пользователь видит процесс и результат, а не job-runner.
   const [exporting, setExporting] = useState<string | null>(null);
-  const activeMonth = month || new Date().toISOString().slice(0, 7);
   // Окно месяца (ADR 0001, п. 6): открытые месяцы и прошлые выпуски с выбранными статьями.
   // Прошлый выпуск — только просмотр и выгрузка (решение владельца 23.09): статусы и
   // черновик не меняются, сервер такие правки отклоняет.
   const feedWindow = useFeedWindow();
   const firstOpenMonth = feedWindow?.months?.[0] ?? "";
-  // Выпуск по умолчанию — тот, что сейчас собирается: первый открытый месяц окна (1–10 числа —
-  // прошлый месяц, дальше — текущий).
-  const defaultMonthApplied = useRef(false);
-  useEffect(() => {
-    if (defaultMonthApplied.current || !firstOpenMonth) return;
-    defaultMonthApplied.current = true;
-    setMonth((current) => current || firstOpenMonth);
-  }, [firstOpenMonth]);
+  // Собирается выпуск первого открытого месяца окна (1–10 числа — прошлый месяц, дальше — текущий); прошлый
+  // выпуск — только открытый во вкладке архива.
+  const month = view === "archive" && archiveOpen ? archiveOpen : firstOpenMonth;
+  const activeMonth = month || new Date().toISOString().slice(0, 7);
   const archiveIssueMonths = useMemo(
     () => (feedWindow?.archive ?? []).filter((item) => item.digest > 0).map((item) => item.month),
     [feedWindow],
@@ -167,14 +162,12 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     try {
       const draft = await getMonthlyDigest(targetMonth);
       setSavedDraft(draft);
-      setLastSavedDraft({ id: draft.id, month: draft.month, title: draft.title, status: draft.status, items: draft.items.length });
       setManualOrderIds(draft.items.map((item) => item.article_id));
       setDraftDirty(false);
     } catch (error) {
       const status = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
       if (status === 404) {
         setSavedDraft(null);
-        setLastSavedDraft(null);
         setDraftDirty(false);
         return;
       }
@@ -235,13 +228,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
       );
     });
   }, [sourceArticles, month, scoreMax, scoreMin, search, tag]);
-
-  // Месяцы выпуска: открытые месяцы окна (даже без отметок — выпуск из одних сигналов радара),
-  // месяцы выбранных статей ленты и прошлые выпуски, в которых есть выбранные.
-  const months = useMemo(() => {
-    const open = articles.filter((article) => article.digest).map((article) => String(article.date || "").slice(0, 7));
-    return [...new Set([...(feedWindow?.months ?? []), ...open, ...archiveIssueMonths].filter(Boolean))].sort().reverse();
-  }, [articles, archiveIssueMonths, feedWindow]);
 
   const topTags = useMemo(() => {
     const names = [...new Set(sourceArticles.map((article) => article.tag).filter(Boolean))].sort();
@@ -318,8 +304,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     if (isArchiveMonth) return;
     try {
       setDraftBusy(true);
-      const draftMonth = month || new Date().toISOString().slice(0, 7);
-      if (!month) setMonth(draftMonth);
+      const draftMonth = activeMonth;
       const orderedItems = orderedDigestCandidates.map((article) => ({
         article_id: article.id,
         section: article.tag,
@@ -330,7 +315,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
         status: "draft",
         items: orderedItems,
       });
-      setLastSavedDraft(saved);
       await loadSavedDraft(draftMonth);
       await loadDigestPreview();
       // Порядок выпуска на сервере сменился — PDF собирается заново.
@@ -373,123 +357,120 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     setDraftDirty(false);
   }
 
-  function openArchiveIssue(target: string) {
-    setMonth(target);
-    setView("issue");
+  function switchView(next: DigestView) {
+    setView(next);
+    setArchiveOpen(null);
   }
 
   const draftInfo = isArchiveMonth
     ? "Прошлый выпуск: только просмотр и выгрузка"
-    : savedDraft?.month === activeMonth
-      ? "Порядок можно менять стрелками; «Сохранить черновик» закрепляет его в выпуске"
-      : "Порядок как в выпуске на сервере; черновик ещё не сохранён";
+    : (savedDraft?.month === activeMonth
+        ? "Порядок статей меняется стрелками; «Сохранить черновик» закрепляет его в выпуске."
+        : "Порядок как в выпуске на сервере; черновик ещё не сохранён.") +
+      (radarItems.length ? " Сигналы радара идут после статей, по баллу." : "");
   const issueCount = orderedDigestCandidates.length + radarItems.length;
-  const statusText = lastSavedDraft ? `Черновик сохранён · ${lastSavedDraft.items} в выпуске` : "Черновик не сохранён";
   // PDF собран из сохранённого черновика: несохранённый порядок в нём не виден, сменившиеся фильтры — тоже.
   const pdfStaleReason = pdfToken === 0 ? null : draftDirty ? "order" : pdfFilterSignature !== filterSignature ? "filters" : null;
 
+  const workspace = (
+    <div className="digestWorkspace">
+      <section className="panel digestComposition">
+        {busy ? (
+          <div className="loadingOverlay" role="status">
+            <span className="spinnerReact" aria-hidden="true" />
+            <span>{exporting ? `Готовим документ ${exporting}…` : "Обновляем выпуск…"}</span>
+          </div>
+        ) : null}
+        <div className="panelHeader">
+          <h2>Состав выпуска</h2>
+          <span className="badge">{digestCandidates.length + radarItems.length} отмечено</span>
+        </div>
+        {isArchiveMonth ? (
+          <div className="archiveNotice" role="status">
+            <span>Выпуск за {monthLabel(month)} в архиве: его можно смотреть и выгружать, но не менять.</span>
+          </div>
+        ) : null}
+        <DigestFilters
+          search={search}
+          tag={tag}
+          topTags={topTags}
+          scoreMin={scoreMin}
+          scoreMax={scoreMax}
+          onSearch={setSearch}
+          onTag={setTag}
+          onScoreMin={setScoreMin}
+          onScoreMax={setScoreMax}
+        />
+        {loading ? (
+          <SkeletonList rows={4} label="Загружаем материалы выпуска" />
+        ) : orderedDigestCandidates.length || availableDigestCandidates.length || radarItems.length ? (
+          <DigestQueue
+            items={orderedDigestCandidates}
+            radarItems={radarItems}
+            available={availableDigestCandidates}
+            issueItems={issueItems}
+            readOnly={isArchiveMonth}
+            busy={busy}
+            hasManualChanges={hasManualChanges}
+            draftInfo={draftInfo}
+            onMove={moveDigestItem}
+            onRemoveFromIssue={removeFromIssue}
+            onRemoveFromDigest={(articleId) => void removeFromDigest(articleId)}
+            onRemoveSignal={(signalId) => void removeSignalFromDigest(signalId)}
+            onAdd={addToIssue}
+          />
+        ) : (
+          <div className="emptyState">
+            <strong>В выпуске пока нет материалов</strong>
+            <span>Отметьте сигналы кнопкой «В дайджест» в бизнес-ленте или на радаре.</span>
+          </div>
+        )}
+      </section>
+
+      <aside className="panel digestPreviewSide">
+        <DigestActions
+          archive={isArchiveMonth}
+          busy={busy}
+          draftBusy={draftBusy}
+          hasManualChanges={hasManualChanges}
+          onSave={() => void handleSaveDraft()}
+          onReset={resetDraftQueue}
+          onExport={(format) => void handleDigestExport(format)}
+        />
+        <DigestPdfPreview
+          filters={previewFilters}
+          refreshToken={pdfToken}
+          staleReason={pdfStaleReason}
+          onRefresh={rebuildPdf}
+          onError={(error) => handleError(error, "Не удалось собрать PDF выпуска")}
+        />
+      </aside>
+    </div>
+  );
+
   return (
     <section className="screenStack">
-      <DigestHeader
-        activeMonth={activeMonth}
-        issueCount={issueCount}
-        month={month}
-        months={months}
-        firstOpenMonth={firstOpenMonth}
-        statusText={statusText}
-        onMonthChange={setMonth}
-      />
+      <DigestHeader activeMonth={activeMonth} issueCount={issueCount} archive={isArchiveMonth} />
 
-      <DigestViewSwitch view={view} archiveCount={archiveIssueMonths.length} onChange={setView} />
+      <DigestViewSwitch view={view} archiveCount={archiveIssueMonths.length} onChange={switchView} />
 
-      {view === "archive" ? (
+      {view === "issue" ? workspace : archiveOpen ? (
+        <>
+          <div className="digestArchiveBar">
+            <button type="button" className="ghostButton compactButton" onClick={() => setArchiveOpen(null)}>
+              ← Все выпуски
+            </button>
+          </div>
+          {workspace}
+        </>
+      ) : (
         <section className="panel">
           <div className="panelHeader">
             <h2>Архив выпусков</h2>
           </div>
           <DigestArchive months={feedWindow?.archive ?? []} rolloverDay={feedWindow?.rollover_day} busy={busy}
-            onOpen={openArchiveIssue} onDownload={(target) => void handleDigestExport("pdf", target)} />
+            onOpen={setArchiveOpen} onDownload={(target) => void handleDigestExport("pdf", target)} />
         </section>
-      ) : (
-        <div className="digestWorkspace">
-          <section className="panel digestComposition">
-            {busy ? (
-              <div className="loadingOverlay" role="status">
-                <span className="spinnerReact" aria-hidden="true" />
-                <span>{exporting ? `Готовим документ ${exporting}…` : "Обновляем выпуск…"}</span>
-              </div>
-            ) : null}
-            <div className="panelHeader">
-              <h2>Состав выпуска</h2>
-              <span className="badge">{digestCandidates.length} отмечено</span>
-            </div>
-            {isArchiveMonth ? (
-              <div className="archiveNotice" role="status">
-                <span>Выпуск за {monthLabel(month)} в архиве: его можно смотреть и выгружать, но не менять.</span>
-              </div>
-            ) : null}
-            <DigestFilters
-              search={search}
-              tag={tag}
-              topTags={topTags}
-              scoreMin={scoreMin}
-              scoreMax={scoreMax}
-              onSearch={setSearch}
-              onTag={setTag}
-              onScoreMin={setScoreMin}
-              onScoreMax={setScoreMax}
-            />
-            {loading ? (
-              <SkeletonList rows={4} label="Загружаем материалы выпуска" />
-            ) : orderedDigestCandidates.length || availableDigestCandidates.length || radarItems.length ? (
-              <>
-                <DigestQueue
-                  items={orderedDigestCandidates}
-                  available={availableDigestCandidates}
-                  issueItems={issueItems}
-                  readOnly={isArchiveMonth}
-                  busy={busy}
-                  hasManualChanges={hasManualChanges}
-                  draftInfo={draftInfo}
-                  onMove={moveDigestItem}
-                  onRemoveFromIssue={removeFromIssue}
-                  onRemoveFromDigest={(articleId) => void removeFromDigest(articleId)}
-                  onAdd={addToIssue}
-                />
-                <DigestRadarItems
-                  items={radarItems}
-                  readOnly={isArchiveMonth}
-                  busy={busy}
-                  onRemove={(signalId) => void removeSignalFromDigest(signalId)}
-                />
-              </>
-            ) : (
-              <div className="emptyState">
-                <strong>В выпуске пока нет материалов</strong>
-                <span>Отметьте сигналы кнопкой «В дайджест» в бизнес-ленте или на радаре.</span>
-              </div>
-            )}
-          </section>
-
-          <aside className="panel digestPreviewSide">
-            <DigestActions
-              archive={isArchiveMonth}
-              busy={busy}
-              draftBusy={draftBusy}
-              hasManualChanges={hasManualChanges}
-              onSave={() => void handleSaveDraft()}
-              onReset={resetDraftQueue}
-              onExport={(format) => void handleDigestExport(format)}
-            />
-            <DigestPdfPreview
-              filters={previewFilters}
-              refreshToken={pdfToken}
-              staleReason={pdfStaleReason}
-              onRefresh={rebuildPdf}
-              onError={(error) => handleError(error, "Не удалось собрать PDF выпуска")}
-            />
-          </aside>
-        </div>
       )}
     </section>
   );

@@ -25,6 +25,11 @@
   }
 }
 
+/* Таблица под плиткой-фильтром проявляется заново (только прозрачность — без сдвига, и при «уменьшить движение»). */
+.revealFade {
+  animation: otFadeIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
+}
+
 /* --- Подокно: всплывает на 12px, затемнение проявляется; закрывается сразу --- */
 @media (prefers-reduced-motion: no-preference) {
   .dialog[open] {

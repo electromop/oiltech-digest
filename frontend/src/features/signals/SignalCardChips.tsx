@@ -131,7 +131,8 @@ export function SignalCardLine({ signal, onCompany }: Props) {
   );
 }
 
-type Extra = { key: string; label: string; value: string };
+// wide — значение во всю строку таблицы (длинная причина отклонения).
+type Extra = { key: string; label: string; value: string; wide?: boolean };
 
 // Атрибуты раскрытой карточки — таблица «подпись: значение» вместо ряда чипов. «Не определено» — видимый
 // пробел карточки (пунктир), а не пропуск.
@@ -160,7 +161,7 @@ export function SignalAttributes({ signal, onCompany, extra = [] }: Props & { ex
         </div>
       ) : null}
       {extra.map((item) => (
-        <div key={item.key} className="signalAttribute">
+        <div key={item.key} className={item.wide ? "signalAttribute wide" : "signalAttribute"}>
           <dt>{item.label}</dt>
           <dd>{item.value}</dd>
         </div>

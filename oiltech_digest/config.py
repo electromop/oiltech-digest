@@ -410,10 +410,12 @@ SOURCE_STALE_DAYS = max(1, int(os.environ.get("SOURCE_STALE_DAYS", "7")))
 #   backlog           — трекер задач: /tasks и /api/backlog* (сервис tasks — профиль
 #                       compose `archive`, флаг у него уже прописан);
 #   articles          — прежний экран «Бизнес-сигналы» (список статей ленты; убран из меню
-#                       решением владельца 23.10, вход открывается «Бизнес-лентой»).
+#                       решением владельца 23.10, вход открывается «Бизнес-лентой»);
+#   source-agent      — экраны «Агент источников» и «Кандидаты источников» (убраны из меню
+#                       решением владельца 24.10; сам агент работает по SOURCE_DISCOVERY_ENABLED).
 # У справки /help (сервис docs) кода в приложении нет: она возвращается профилем compose
 # `archive` и блоком /help* в Caddyfile. Незнакомые ключи игнорируются.
-ARCHIVED_MODULE_KEYS = ("analytics-preview", "tech-preview", "backlog", "articles")
+ARCHIVED_MODULE_KEYS = ("analytics-preview", "tech-preview", "backlog", "articles", "source-agent")
 
 
 def parse_archived_modules(raw: str) -> frozenset[str]:

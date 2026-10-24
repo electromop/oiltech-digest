@@ -50,7 +50,11 @@ const ADMIN_SCREENS = new Set<ScreenId>([
 // Архивные модули (утверждены владельцем 23.09): из меню и маршрутов убраны, код оставлен.
 // Экран виден, только если сервер включил его флагом ARCHIVED_MODULES (приходит с сессией).
 // «Бизнес-сигналы» (старый список статей) — архивный с 23.10 (решение владельца: экран не используется).
-const ARCHIVED_SCREENS = new Set<ScreenId>(["analytics-preview", "tech-preview", "articles"]);
+// «Агент источников» с его кандидатами — архивный с 24.10 (решение владельца): экраны убраны, сам агент на сервере
+// работает по своему флагу SOURCE_DISCOVERY_ENABLED.
+const ARCHIVED_SCREENS = new Set<ScreenId>(["analytics-preview", "tech-preview", "articles", "source-agent", "source-candidates"]);
+// Ключ флага, которым экран возвращается, если он не равен имени экрана: кандидаты — часть агента.
+const SCREEN_MODULE: Partial<Record<ScreenId, string>> = { "source-candidates": "source-agent" };
 
 type ScreenDef = {
   id: ScreenId;
@@ -259,7 +263,8 @@ export function App() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [archivedModules, setArchivedModules] = useState<string[]>([]);
-  const screenEnabled = (screenId: ScreenId) => !ARCHIVED_SCREENS.has(screenId) || archivedModules.includes(screenId);
+  const screenEnabled = (screenId: ScreenId) =>
+    !ARCHIVED_SCREENS.has(screenId) || archivedModules.includes(SCREEN_MODULE[screenId] ?? screenId);
   const active = screens.find((screen) => screen.id === activeScreen) ?? screens[0];
   const isAdmin = (user?.role ?? "user") === "admin";
   // Пункт меню виден: роль пускает и модуль не в архиве (или включён флагом).

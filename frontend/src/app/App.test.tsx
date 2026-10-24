@@ -791,27 +791,40 @@ describe("App smoke", () => {
     expect(screen.getAllByRole("button", { name: heading }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("админ видит экран агента источников в навигации", async () => {
+  // «Агент источников» с кандидатами — архивный модуль с 24.10 (решение владельца): без флага его нет ни в меню,
+  // ни по прямой ссылке; с флагом ARCHIVED_MODULES=source-agent админ видит его, как прежде.
+  it("без флага агента источников нет ни в меню, ни по ссылке; с флагом админ его видит", async () => {
+    window.history.replaceState(null, "", "/?screen=source-candidates");
     const user = userEvent.setup();
-    render(<App />);
-
-    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
-    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
-    await user.click(screen.getByRole("button", { name: "Войти" }));
+    const { unmount } = render(<App />);
+    await logIn(user);
 
     expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
-    // В едином контуре радар и агент источников — родные экраны, не ссылки на поддомен.
+    expect(window.location.search).not.toContain("source-candidates");
+    expect(screen.queryAllByRole("button", { name: "Агент источников" })).toHaveLength(0);
     expect(screen.getAllByRole("button", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
+    unmount();
+
+    archivedModulesFixture = ["source-agent"];
+    window.history.replaceState(null, "", "/");
+    render(<App />);
+    await logIn(userEvent.setup());
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Агент источников" }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("обычный пользователь не видит экран агента и не открывает его по прямой ссылке", async () => {
     window.history.replaceState(null, "", "/?screen=source-agent");
 
+    // Модуль включён флагом — проверяем именно гард роли.
     const adminImpl = fetchMock.getMockImplementation();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
-        return Promise.resolve(jsonResponse({ ok: true, user: { id: 2, email: "user@example.com", role: "user" } }));
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          user: { id: 2, email: "user@example.com", role: "user" },
+          archived_modules: ["source-agent"],
+        }));
       }
       return adminImpl!(input, init);
     });
@@ -1064,14 +1077,15 @@ describe("App smoke", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
-    // Открыт выпуск, который собирается сейчас, — первый открытый месяц окна (29.09).
-    const monthSelect = await screen.findByRole("combobox", { name: "Выпуск" });
-    await waitFor(() => expect(monthSelect).toHaveValue("2026-09"));
-    // Прошлый выпуск есть в списке месяцев, с пометкой архива.
-    expect(within(monthSelect).getByRole("option", { name: "август 2026 · архив" })).toBeInTheDocument();
+    // Собирается выпуск первого открытого месяца окна (29.09); выбора выпуска на экране нет (24.10).
+    expect(await screen.findByText(/Выпуск за сентябрь 2026/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Выпуск" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeInTheDocument();
 
-    await user.selectOptions(monthSelect, "2026-08");
+    // Прошлый выпуск — во вкладке архива, только на просмотр.
+    await user.click(screen.getByRole("button", { name: /Архив выпусков/ }));
+    const august = screen.getByRole("rowheader", { name: "август 2026" }).closest("tr") as HTMLElement;
+    await user.click(within(august).getByRole("button", { name: "Открыть" }));
 
     expect(await screen.findByText(/Выпуск за август 2026 в архиве/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Сохранить черновик" })).not.toBeInTheDocument();
@@ -1118,7 +1132,7 @@ describe("App smoke", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
-    await screen.findByDisplayValue("сентябрь 2026");
+    await screen.findByText(/Выпуск за сентябрь 2026/);
     const digestListCalls = () =>
       fetchMock.mock.calls.filter(([input]) => String(input) === "/api/articles?limit=5000&status=digest").length;
     await waitFor(() => expect(digestListCalls()).toBe(1));

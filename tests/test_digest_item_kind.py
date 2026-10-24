@@ -35,8 +35,9 @@ def test_items_carry_kind_and_the_issue_shows_the_badge(monkeypatch):
 
     content = build_digest_content("2026-10")
 
+    # Сигнал радара — после статей (24.10), у статьи без сигнала ленты плашки нет.
     assert [(item["kind"], item["kind_label"]) for item in content["news"]] == [
-        ("business", "Бизнес"), ("technology", "Технология"), (None, None),
+        ("business", "Бизнес"), (None, None), ("technology", "Технология"),
     ]
     html = render_digest_export_html(content)
     assert html.count('class="news-card-kind"') == 2

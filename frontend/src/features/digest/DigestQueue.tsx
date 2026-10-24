@@ -7,6 +7,8 @@ export type IssueItem = ItemKind & { summary: string | null };
 
 type Props = {
   items: Article[];
+  // Сигналы радара, отмеченные в дайджест: в черновике не хранятся, в выпуске идут после статей, по баллу.
+  radarItems: DigestContentItem[];
   available: Article[];
   issueItems: Map<number, IssueItem>;
   readOnly: boolean;
@@ -16,6 +18,7 @@ type Props = {
   onMove: (articleId: number, direction: -1 | 1) => void;
   onRemoveFromIssue: (articleId: number) => void;
   onRemoveFromDigest: (articleId: number) => void;
+  onRemoveSignal: (signalId: number) => void;
   onAdd: (articleId: number) => void;
 };
 
@@ -70,10 +73,11 @@ export function KindBadge({ kind }: { kind?: ItemKind }) {
   return <span className={`kindBadge ${kind.kind}`}>{kind.label}</span>;
 }
 
-// Состав выпуска: порядок, «Из выпуска» (только из этого выпуска) и «Из дайджеста» (снять отметку), ниже —
-// отмеченное, но не вошедшее в выпуск. Суть — та же, что в PDF: сжатая под площадь карточки, по ширине.
+// Состав выпуска одним списком в порядке PDF (решение владельца 24.10): статьи очереди, за ними сигналы радара;
+// откуда материал, говорит плашка «Технология / Бизнес». Статьи двигаются стрелками, «Из выпуска» убирает только
+// из этого выпуска, «Из дайджеста» снимает отметку; ниже — отмеченное, но не вошедшее в выпуск. Суть та же, что в PDF.
 export function DigestQueue(props: Props) {
-  const { items, available, issueItems, readOnly, busy } = props;
+  const { items, radarItems, available, issueItems, readOnly, busy } = props;
   return (
     <div className="digestQueuePanel">
       <div className="digestQueueHeader">
@@ -83,7 +87,7 @@ export function DigestQueue(props: Props) {
         </div>
         <div className="digestQueueHeaderMeta">
           {props.hasManualChanges ? <span className="miniPill warn">есть несохранённые изменения</span> : null}
-          <span className="badge">{items.length}</span>
+          <span className="badge">{items.length + radarItems.length}</span>
         </div>
       </div>
       <ol className="digestPickListReact">
@@ -139,6 +143,37 @@ export function DigestQueue(props: Props) {
             </div>
           </li>
         ))}
+        {radarItems.map((item, index) => (
+          <li className="digestPickRow revealIn" key={`signal-${item.signal_id ?? item.url}`}>
+            <div className="digestPickTop">
+              <div className="digestPickIndex" aria-hidden="true">{String(items.length + index + 1).padStart(2, "0")}</div>
+              <div className="digestPickMain">
+                <div className="digestPickMetaRow">
+                  <KindBadge kind={{ kind: item.kind ?? null, label: item.kind_label ?? null }} />
+                  <span className="metaText">{item.category}</span>
+                </div>
+                <a href={item.url} target="_blank" rel="noreferrer">
+                  <strong>{item.title}</strong>
+                </a>
+              </div>
+              <span className={`scoreBadge ${scoreClass(Number(item.score || 0))}`} title="Балл сигнала">
+                <strong>{Math.round(Number(item.score || 0))}</strong>
+              </span>
+            </div>
+            <p className="digestPickSummary">{item.summary || "Суть ещё не сформирована."}</p>
+            <div className="digestPickFooter">
+              {item.source ? <span>{item.source}</span> : null}
+              {item.published_at ? <span>{formatDate(item.published_at)}</span> : null}
+              {readOnly || item.signal_id == null ? null : (
+                <span className="digestPickActions">
+                  <button type="button" className="dangerButton compactButton" disabled={busy} onClick={() => props.onRemoveSignal(Number(item.signal_id))}>
+                    Из дайджеста
+                  </button>
+                </span>
+              )}
+            </div>
+          </li>
+        ))}
       </ol>
       {available.length && !readOnly ? (
         <details className="digestAvailablePanel">
@@ -163,64 +198,5 @@ export function DigestQueue(props: Props) {
         </details>
       ) : null}
     </div>
-  );
-}
-
-type RadarProps = {
-  items: DigestContentItem[];
-  readOnly: boolean;
-  busy: boolean;
-  onRemove: (signalId: number) => void;
-};
-
-// Сигналы радара, отмеченные в дайджест, идут в выпуск рядом со статьями очереди, но в черновике не хранятся:
-// их место задаёт сервер (с черновиком — после статей очереди, без него — по баллу вместе с ними). Здесь они видны
-// с той же плашкой и сутью, что в PDF, и снимаются из дайджеста.
-export function DigestRadarItems({ items, readOnly, busy, onRemove }: RadarProps) {
-  if (!items.length) return null;
-  return (
-    <section className="digestQueuePanel digestRadarPanel" aria-label="Сигналы радара в выпуске">
-      <div className="digestQueueHeader">
-        <div>
-          <strong>Сигналы радара в выпуске</strong>
-          <div className="metaText">С черновиком идут после статей очереди, без черновика — по баллу вместе с ними.</div>
-        </div>
-        <span className="badge">{items.length}</span>
-      </div>
-      <ul className="digestPickListReact">
-        {items.map((item) => (
-          <li className="digestPickRow revealIn" key={item.signal_id ?? item.url}>
-            <div className="digestPickTop digestRadarTop">
-              <div className="digestPickMain">
-                <div className="digestPickMetaRow">
-                  <KindBadge kind={{ kind: item.kind ?? null, label: item.kind_label ?? null }} />
-                  <span className="metaText">{item.category}</span>
-                </div>
-                <a href={item.url} target="_blank" rel="noreferrer">
-                  <strong>{item.title}</strong>
-                </a>
-              </div>
-              {item.score != null ? (
-                <span className={`scoreBadge ${scoreClass(Number(item.score))}`} title="Балл сигнала">
-                  <strong>{Math.round(Number(item.score))}</strong>
-                </span>
-              ) : null}
-            </div>
-            <p className="digestPickSummary">{item.summary || "Суть ещё не сформирована."}</p>
-            <div className="digestPickFooter">
-              {item.source ? <span>{item.source}</span> : null}
-              {item.published_at ? <span>{formatDate(item.published_at)}</span> : null}
-              {readOnly || item.signal_id == null ? null : (
-                <span className="digestPickActions">
-                  <button type="button" className="dangerButton compactButton" disabled={busy} onClick={() => onRemove(Number(item.signal_id))}>
-                    Из дайджеста
-                  </button>
-                </span>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }

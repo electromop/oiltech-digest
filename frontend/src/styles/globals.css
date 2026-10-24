@@ -16,9 +16,19 @@
 
 .sourceHealthStats {
   margin-top: 12px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
+}
+
+/* Плитки-фильтры: число несёт цвет смысла, как метки состояния в таблице. */
+.statCardButton.problem .statValueReact {
+  color: var(--sem-bad-fg);
+}
+
+.statCardButton.warning .statValueReact {
+  color: var(--sem-warn-fg);
+}
+
+.statCardButton.success .statValueReact {
+  color: var(--sem-ok-fg);
 }
 
 .sourceTriageStats {
@@ -88,17 +98,14 @@
   font-weight: var(--ot-weight-bold);
 }
 
-/* Месячный дайджест (пересмотр 23.10). Выпуск выбирается в шапке; слева состав и порядок, справа тот же выпуск
-   в PDF и действия с ним, правая колонка прилипает при прокрутке состава. Уже 1100px — колонки друг под другом. */
-.digestHeaderControls {
+/* Месячный дайджест (пересмотр 23-24.10). Собирается текущий выпуск, прошлые — во вкладке архива; слева состав и
+   порядок, справа тот же выпуск в PDF и действия с ним, правая колонка прилипает при прокрутке состава. Уже 1100px —
+   колонки друг под другом. */
+/* Открытый прошлый выпуск во вкладке архива: возврат к списку выпусков над составом. */
+.digestArchiveBar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   gap: 12px;
-}
-
-.digestMonthField {
-  min-width: 14rem;
 }
 
 .digestWorkspace {
@@ -4201,6 +4208,29 @@
   min-width: 0;
   padding-inline-start: 10px;
   border-inline-start: 2px solid var(--ot-border-subtle);
+}
+
+.signalAttribute.wide {
+  grid-column: 1 / -1;
+}
+
+/* Раскрытая карточка (решение владельца 24.10, как в прежней версии): суть слева и шире, флаги карточки справа
+   двумя столбцами; уже 900px — друг под другом. */
+.signalDetailTop {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(17rem, 1fr);
+  gap: 12px;
+}
+
+.signalFlagsBox .signalAttributes {
+  margin-top: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .signalDetailTop {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .signalAttribute dt {

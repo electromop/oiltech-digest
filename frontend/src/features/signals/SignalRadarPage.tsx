@@ -249,6 +249,11 @@ function cardMeta(signal: Signal, business: boolean): string {
 }
 
 // Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
+// «Спорный сигнал: …» — коротко, без служебного зачина «шаги ответа не сошлись и после повтора» (otbor.py).
+function disputedWhy(text: string): string {
+  return text.replace(/^шаги ответа не сошлись(?: и после повтора)?:\s*/i, "") || text;
+}
+
 function scoreTone(signal: Signal): string {
   return signal.score_label ? ratingClass(signal.score_label) : scoreClass(Number(signal.score || 0));
 }
@@ -709,7 +714,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         <div className="archiveNotice" role="status">
           <span>
             Отклонённые одним списком: что убрали «Отбор» и поиск радара, сбои «Отбора» и скрытое прежними
-            правилами радара. Причина у каждой карточки: «кто убрал → причина».
+            правилами радара. Причина у каждой карточки во флагах раскрытой карточки: «кто убрал → причина».
           </span>
         </div>
       ) : null}
@@ -958,15 +963,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                     )}
                     {/* Под заголовком — только «о чём»: тема, компании, регион, дата события (пересмотр 23.10). */}
                     <SignalCardLine signal={signal} onCompany={showCompany} />
-                    {/* В разделе отклонённого — его короткая причина (#130); иначе — почему не на радаре. */}
-                    {signal.section_reason ? (
-                      <div className="signalCardStatus signalHiddenReason">Причина: {signal.section_reason}</div>
-                    ) : signal.hidden_reason ? (
-                      <div className="signalCardStatus signalHiddenReason">Не на радаре: {signal.hidden_reason}</div>
-                    ) : null}
-                    {/* «Отбор» сам себе противоречил и после повтора (#130): проверять первым. */}
+                    {/* Под заголовком — только итог, коротко (решение владельца 24.10): «Отбор» сам себе противоречил
+                        и после повтора (#130) — спорный сигнал и почему. Причина отклонения или скрытия — флагом
+                        в раскрытой карточке. */}
                     {signal.otbor_disputed ? (
-                      <div className="signalCardStatus signalDisputed">Спорное: {signal.otbor_disputed}</div>
+                      <div className="signalCardStatus signalDisputed">Спорный сигнал: {disputedWhy(signal.otbor_disputed)}</div>
                     ) : null}
                   </div>
                   <div className="articleCardMetrics">
@@ -994,20 +995,32 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
 
                 {isExpanded ? (
                   <div className="articleDetailReact signalRadarDetail revealIn">
-                    <div className="articleSummaryBox">
-                      <strong>Суть</strong>
-                      <p>{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
+                    {/* Как в прежней карточке (решение владельца 24.10): суть слева и шире, все флаги карточки справа. */}
+                    <div className="signalDetailTop">
+                      <div className="articleSummaryBox">
+                        <strong>Суть</strong>
+                        <p>{signal.summary || signal.thesis || "Суть сигнала ещё не сформирована."}</p>
+                      </div>
+                      <div className="articleSummaryBox signalFlagsBox">
+                        <strong>Флаги</strong>
+                        <SignalAttributes
+                          signal={signal}
+                          onCompany={showCompany}
+                          extra={[
+                            { key: "decision", label: "Решение платформы", value: MATURITY_LABELS[signal.maturity] || signal.maturity },
+                            ...(arrival ? [{ key: "arrival", label: "Поступил", value: arrival }] : []),
+                            { key: "links", label: business ? "Публикаций" : "Ссылок", value: String(Number(signal.evidence_count || 0)) },
+                            ...(Number(signal.merged_count || 0) > 0 ? [{ key: "merged", label: "Объединено дублей", value: String(signal.merged_count) }] : []),
+                            // Раздел отклонённого — короткая причина «кто убрал → причина» (#130); иначе — почему не на радаре.
+                            ...(signal.section_reason
+                              ? [{ key: "reason", label: "Причина", value: signal.section_reason, wide: true }]
+                              : signal.hidden_reason
+                                ? [{ key: "hidden", label: "Не на радаре", value: signal.hidden_reason, wide: true }]
+                                : []),
+                          ]}
+                        />
+                      </div>
                     </div>
-                    <SignalAttributes
-                      signal={signal}
-                      onCompany={showCompany}
-                      extra={[
-                        { key: "decision", label: "Решение платформы", value: MATURITY_LABELS[signal.maturity] || signal.maturity },
-                        ...(arrival ? [{ key: "arrival", label: "Поступил", value: arrival }] : []),
-                        { key: "links", label: business ? "Публикаций" : "Ссылок", value: String(Number(signal.evidence_count || 0)) },
-                        ...(Number(signal.merged_count || 0) > 0 ? [{ key: "merged", label: "Объединено дублей", value: String(signal.merged_count) }] : []),
-                      ]}
-                    />
                     <div className="signalRadarFacts">
                       {/* «Почему сейчас» и «Переносимость» — поля судьи радара: у статьи ленты их нет. */}
                       {judgeFieldsOptional && !signal.why_now ? null : (

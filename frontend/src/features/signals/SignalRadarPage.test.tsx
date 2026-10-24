@@ -1029,21 +1029,21 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(lastListQuery().section).toBe("all");
     expect(screen.getByRole("heading", { name: "Отклонённые" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Отклонённые: 2" })).toHaveAttribute("aria-pressed", "true");
-    // Кнопок разделов нет: причина — в самой карточке (решение владельца 23.10).
+    // Кнопок разделов нет: причина — в самой карточке (решение владельца 23.10), с 24.10 — флагом раскрытой
+    // карточки, а не строкой под заголовком.
     expect(screen.queryByRole("group", { name: "Разделы отклонённого" })).not.toBeInTheDocument();
-    expect(screen.getByText(
-      "Причина: «Отбор» → Нефтегаз без связи с нефтесервисом: Котировки нефти без связи с нефтесервисом",
-    )).toBeInTheDocument();
-    expect(screen.getByText("Причина: До «Отбора» → Скрыто прежними правилами радара: бизнес-сигнал, не технология"))
-      .toBeInTheDocument();
+    expect(screen.queryByText(/^Причина:/)).not.toBeInTheDocument();
     // Отклонённое «Отбором» — с «Решением платформы» «Отклонено» и без «В дайджест» (вернуть его — #132).
     const rejected = screen.getByText("Котировки нефти").closest("article") as HTMLElement;
     expect(within(rejected).queryByRole("button", { name: "В дайджест" })).not.toBeInTheDocument();
     fireEvent.click(within(rejected).getByRole("button", { name: "Раскрыть сигнал" }));
     expect(attribute(rejected, "Решение платформы")).toBe("Отклонено");
+    expect(attribute(rejected, "Причина")).toBe("«Отбор» → Нефтегаз без связи с нефтесервисом: Котировки нефти без связи с нефтесервисом");
     // Скрытая прежними правилами — с «В дайджест», как раньше: выбранная, она выходит на радар.
     const hiddenRow = screen.getByText("SLB получила контракты Aramco").closest("article") as HTMLElement;
     expect(within(hiddenRow).getByRole("button", { name: "В дайджест" })).toBeInTheDocument();
+    fireEvent.click(within(hiddenRow).getByRole("button", { name: "Раскрыть сигнал" }));
+    expect(attribute(hiddenRow, "Причина")).toBe("До «Отбора» → Скрыто прежними правилами радара: бизнес-сигнал, не технология");
 
     fireEvent.click(screen.getByRole("button", { name: "К радару" }));
 
@@ -1072,8 +1072,8 @@ describe("качество радара на экране (Виктор 29.09)",
     }], []);
     renderRadar(false);
 
-    expect(await screen.findByText("Спорное: шаги ответа не сошлись и после повтора: прямая связь у другой отрасли"))
-      .toBeInTheDocument();
+    // Под заголовком — коротко (24.10): «спорный сигнал» и почему, без служебного зачина «Отбора».
+    expect(await screen.findByText("Спорный сигнал: прямая связь у другой отрасли")).toBeInTheDocument();
   });
 
   it("блоки ОС — списком на раскрытой карточке; сохранённый блок добавляется к ним (#130)", async () => {

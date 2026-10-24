@@ -13,12 +13,14 @@ type Props = {
   expandedId: number | null;
   onToggle: (sourceId: number) => void;
   renderDetails: (source: Source) => ReactNode;
+  // Выбранная плитка-фильтр: при смене строки проявляются заново — видно, что список сменился.
+  filterKey?: string;
 };
 
 // Таблица по документу заказчика (19.09): «экран выглядит очень административно —
 // перейти к таблице». Колонки — его. Всё, что было на карточке (сбор вкл/выкл,
 // настройка, диагностика, архив, обратная связь), — в раскрытой строке.
-export function SourcesTable({ sources, healthById, diagnostics, loadedAt, expandedId, onToggle, renderDetails }: Props) {
+export function SourcesTable({ sources, healthById, diagnostics, loadedAt, expandedId, onToggle, renderDetails, filterKey }: Props) {
   return (
     <div className="jobsTableWrap">
       <table className={`jobsTable ${styles.table}`}>
@@ -33,7 +35,7 @@ export function SourcesTable({ sources, healthById, diagnostics, loadedAt, expan
             <th scope="col" aria-label="Настройка" />
           </tr>
         </thead>
-        <tbody>
+        <tbody key={filterKey ?? ""} className="revealFade">
           {sources.map((source) => {
             const health = healthById.get(source.id);
             const state = sourceState(source, health);

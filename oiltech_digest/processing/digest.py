@@ -327,6 +327,12 @@ def build_digest_content(
             search=search,
             top_tag=top_tag,
         )
+        # Сигналы радара в черновике не хранятся и с черновиком идут после его статей. Без черновика — так же
+        # (решение владельца 24.10: один список на экране в порядке PDF): статьи по баллу, за ними сигналы по баллу.
+        rows = [
+            *(row for row in rows if row.get("item_type") != "signal"),
+            *(row for row in rows if row.get("item_type") == "signal"),
+        ]
     news = []
     for row in rows:
         tag = row.get("tag_name") or "Без тега"

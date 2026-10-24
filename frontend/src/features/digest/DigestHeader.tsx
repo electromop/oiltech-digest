@@ -6,38 +6,20 @@ export type DigestView = "issue" | "archive";
 type Props = {
   activeMonth: string;
   issueCount: number;
-  month: string;
-  months: string[];
-  firstOpenMonth: string;
-  statusText: string;
-  onMonthChange: (month: string) => void;
+  archive: boolean;
 };
 
-// Шапка дайджеста (пересмотр 23.10): какой выпуск открыт и сколько в нём материалов, выбор выпуска и статус черновика.
-// Выпуск — месяц; прошлые помечены «архив», «Все месяцы» остаются, только пока окно месяца неизвестно.
-export function DigestHeader({ activeMonth, issueCount, month, months, firstOpenMonth, statusText, onMonthChange }: Props) {
+// Шапка дайджеста: какой выпуск открыт и сколько в нём материалов. Выбора выпуска здесь нет (решение владельца 24.10):
+// собирается текущий, прошлые — во вкладке «Архив выпусков» и только на просмотр.
+export function DigestHeader({ activeMonth, issueCount, archive }: Props) {
   return (
     <header className="screenHeader digestHeader">
       <div>
         <h1>Месячный дайджест</h1>
         <p>
-          Выпуск за {monthLabel(activeMonth)}: {issueCount} {materialsWord(issueCount)} в выпуске. Предпросмотр PDF
-          показывает выпуск таким, каким он уйдёт.
+          {archive ? "Прошлый выпуск" : "Выпуск"} за {monthLabel(activeMonth)}: {issueCount} {materialsWord(issueCount)} в выпуске.
+          {archive ? " Только просмотр и выгрузка." : " Предпросмотр PDF показывает выпуск таким, каким он уйдёт."}
         </p>
-      </div>
-      <div className="digestHeaderControls">
-        <label className="field digestMonthField">
-          <span>Выпуск</span>
-          <select value={month} onChange={(event) => onMonthChange(event.target.value)}>
-            {months.length ? null : <option value="">Все месяцы</option>}
-            {months.map((option) => (
-              <option key={option} value={option}>
-                {firstOpenMonth && option < firstOpenMonth ? `${monthLabel(option)} · архив` : monthLabel(option)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="statusPill">{statusText}</span>
       </div>
     </header>
   );

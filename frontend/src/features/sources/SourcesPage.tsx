@@ -354,15 +354,16 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
   function tile(key: StateFilter, value: number, label: string, tone: string, extraClass = "") {
     const active = stateFilter === key;
     return (
+      // Те же плитки-фильтры, что на радаре (пересмотр 24.10): наведение, нажатие и выбранное состояние одни на все экраны.
       <button
         type="button"
         key={key || "all"}
         aria-pressed={active}
-        className={["sourceStatCard", tone, active ? "active" : "", extraClass].filter(Boolean).join(" ")}
+        className={["statCardReact statCardButton", tone, extraClass].filter(Boolean).join(" ")}
         onClick={() => setStateFilter(active && key !== "" ? "" : key)}
       >
-        <span className="sourceStatValue">{value}</span>
-        <span className="sourceStatLabel">{label}</span>
+        <span className="statValueReact">{value}</span>
+        <span className="metaText">{label}</span>
       </button>
     );
   }
@@ -405,7 +406,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
           </button>
         </div>
 
-        <div className="sourceHealthStats" aria-label="Состояние источников">
+        <div className="statsGridReact sourceHealthStats" role="group" aria-label="Состояние источников">
           {tile("", counts.total, "Всего источников", "")}
           {SOURCE_STATES.filter((item) => item.state !== "archived").map((item) =>
             tile(item.state, counts[item.state], item.tile, tileTone[item.tone]),
@@ -444,6 +445,7 @@ export function SourcesPage({ onUnauthorized, showToast }: Props) {
             expandedId={expandedId}
             onToggle={(sourceId) => setExpandedId((current) => (current === sourceId ? null : sourceId))}
             renderDetails={renderDetails}
+            filterKey={stateFilter}
           />
         ) : (
           <div className="emptyState">Источники не найдены.</div>

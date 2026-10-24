@@ -105,3 +105,18 @@ def test_hidden_draft_articles_fall_back_to_current_selection(monkeypatch):
         ("article", 12),
         ("signal", 7),
     ]
+
+
+def test_without_draft_radar_signals_follow_articles(monkeypatch):
+    """Без черновика сигналы радара идут после статей, как и с черновиком (решение владельца 24.10): экран
+    показывает выпуск одним списком в порядке PDF, а сигналы в черновике не хранятся."""
+    _patch(monkeypatch, candidates=[_row(7, item_type="signal"), _row(10), _row(8, item_type="signal"), _row(11)])
+
+    content = build_digest_content("2026-09")
+
+    assert [(item["item_type"], item["article_id"] or item["signal_id"]) for item in content["news"]] == [
+        ("article", 10),
+        ("article", 11),
+        ("signal", 7),
+        ("signal", 8),
+    ]
