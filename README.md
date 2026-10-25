@@ -12,7 +12,7 @@ Telegram), очищает и оценивает их с помощью AI, а р
 источники → поиск RSS → парсинг → полный текст → AI-суть → релевантность → теги → скоринг → дайджест
 ```
 
-> 📋 **Задачи, замечания и пожелания** — в [`BACKLOG.md`](BACKLOG.md). Впишите комментарий, команда возьмёт в работу и обновит статус.
+> 📋 **Задачи и замечания** ведутся в [GitHub Issues](https://github.com/electromop/oiltech-digest/issues).
 
 ---
 
@@ -29,7 +29,7 @@ Telegram), очищает и оценивает их с помощью AI, а р
 Пользователи → 🇷🇺 РФ-core (БД + UI + РФ-парсинг)  ⇄ HTTPS task-API ⇄  🌍 NL-воркер (OpenAI + иностранные сайты)
 ```
 
-Всё за флагами (`EXTERNAL_WORKERS_ENABLED`, `AI_EXECUTION_REGION`, `FETCH_EXTERNAL_ENABLED`) — по умолчанию **single-server** режим, когда один сервер делает всё. Детали: [`docs/archive/geodistributed_architecture_plan.md`](docs/archive/geodistributed_architecture_plan.md), [`docs/external_worker_deploy.md`](docs/external_worker_deploy.md).
+Всё за флагами (`EXTERNAL_WORKERS_ENABLED`, `AI_EXECUTION_REGION`, `FETCH_EXTERNAL_ENABLED`) — по умолчанию **single-server** режим, когда один сервер делает всё. Детали: [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -71,10 +71,8 @@ docker compose --profile pipeline up -d --build
 Откройте интерфейс: **http://127.0.0.1:8000** (при первом входе зарегистрируйтесь —
 панель защищена `email + пароль`). Через Caddy интерфейс также доступен на **http://127.0.0.1/**.
 
-Документация работает отдельным контейнером `docs` на MkDocs Material: **http://127.0.0.1/help** или напрямую **http://127.0.0.1:8081/help/**.
-
 ```bash
-docker compose ps               # db/app/docs/scheduler = running, bootstrap = exited(0)
+docker compose ps               # db/app/scheduler = running, bootstrap = exited(0)
 docker compose logs -f scheduler # лог авто-сбора
 docker compose down             # остановить   (down -v — со сбросом БД)
 ```
