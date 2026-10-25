@@ -111,8 +111,9 @@ function CompanyButtons({ names, onCompany }: { names: string[]; onCompany: (nam
 }
 
 // Под заголовком свёрнутой карточки (пересмотр 23-25.10: «много флагов и плашек — непонятно, о чём речь»): тема
-// строкой, ниже — кто, где и когда с подписями и без точек-разделителей: «SLB  Страна: …  Дата события: …».
-// Пробелы и служебное — в раскрытой карточке. «Страна» — поле региона карточки (решение владельца 25.10).
+// строкой, ниже — кто, где и когда с подписями и без точек-разделителей: «SLB  Регион: …  Дата события: …».
+// Пробелы и служебное — в раскрытой карточке. Подпись «Регион», как у поля карточки (решение владельца 25.10): страны
+// у карточки пока нет (#128).
 export function SignalCardLine({ signal, onCompany }: Props) {
   const companies = companiesOf(signal);
   const region = signal.region && signal.region !== UNDEFINED ? signal.region : "";
@@ -130,7 +131,7 @@ export function SignalCardLine({ signal, onCompany }: Props) {
           ) : null}
           {region ? (
             <span>
-              <span className="signalCardLabel">Страна:</span> {region}
+              <span className="signalCardLabel">Регион:</span> {region}
             </span>
           ) : null}
           {day ? (
