@@ -1112,7 +1112,7 @@ describe("App smoke", () => {
 
     const frame = await screen.findByTitle("Предпросмотр выпуска в PDF");
     expect(frame.tagName).toBe("IFRAME");
-    expect(frame).toHaveAttribute("src", "blob:test");
+    expect(frame).toHaveAttribute("src", "blob:test#navpanes=0&view=FitH");
     expect(screen.queryByRole("button", { name: "Оформление" })).not.toBeInTheDocument();
     const requested = fetchMock.mock.calls.map(([input]) => String(input));
     expect(requested.filter((url) => url.startsWith("/api/digest-preview.pdf?"))).toHaveLength(1);

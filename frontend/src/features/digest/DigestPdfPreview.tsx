@@ -89,7 +89,8 @@ export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh
       {failed ? <div className="documentAlert bad" role="alert">{failed}</div> : null}
       <div className={loading ? "digestPdfFrameWrap busy" : "digestPdfFrameWrap"}>
         {url ? (
-          <iframe className="digestPdfFrame" title="Предпросмотр выпуска в PDF" src={url} />
+          // Без панели миниатюр и по ширине окна: в узкой колонке миниатюры съедали половину места (25.10).
+          <iframe className="digestPdfFrame" title="Предпросмотр выпуска в PDF" src={`${url}#navpanes=0&view=FitH`} />
         ) : loading ? (
           <SkeletonList rows={4} label="Собираем PDF выпуска" />
         ) : (

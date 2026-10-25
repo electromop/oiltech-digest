@@ -262,7 +262,7 @@ describe("экран выпуска: какой месяц открыт по у�
       render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
 
       const frame = await screen.findByTitle("Предпросмотр выпуска в PDF");
-      await waitFor(() => expect(frame).toHaveAttribute("src", "blob:pdf-1"));
+      await waitFor(() => expect(frame).toHaveAttribute("src", "blob:pdf-1#navpanes=0&view=FitH"));
       // Один PDF на открытие — за выпуск по умолчанию, а не сначала «за все месяцы».
       expect(pdfRequests()).toHaveLength(1);
       expect(pdfRequests()[0]).toContain("month=2026-09");
@@ -273,7 +273,7 @@ describe("экран выпуска: какой месяц открыт по у�
       await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
 
       await waitFor(() => expect(pdfRequests()).toHaveLength(2));
-      await waitFor(() => expect(screen.getByTitle("Предпросмотр выпуска в PDF")).toHaveAttribute("src", "blob:pdf-2"));
+      await waitFor(() => expect(screen.getByTitle("Предпросмотр выпуска в PDF")).toHaveAttribute("src", "blob:pdf-2#navpanes=0&view=FitH"));
       expect(screen.queryByText(/Порядок изменён, но не сохранён/)).not.toBeInTheDocument();
     });
   });
