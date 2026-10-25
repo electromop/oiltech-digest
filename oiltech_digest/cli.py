@@ -2262,13 +2262,12 @@ def cmd_otbor_materials(args: argparse.Namespace) -> None:
 def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
     """Шаг планировщика «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», без сути или
     русского заголовка — в задачи по полосе ежедневной обработки. За флагом OTBOR_ENABLED. С --ids — названные
-    сигналы по полосе пересчётов (повтор после сбоя модели)."""
+    сигналы по полосе пересчётов (повтор после сбоя модели), только принятые «Отбором»."""
     from oiltech_digest import signal_summary
 
     try:
         if args.ids:
-            ids = [int(value) for value in args.ids.split(",") if value.strip()]
-            result = {"signals": len(ids), "jobs": signal_summary.enqueue(ids, trigger="manual", bulk=True)}
+            result = signal_summary.enqueue_named([int(value) for value in args.ids.split(",") if value.strip()])
         else:
             result = signal_summary.scheduler_step()
     except signal_summary.SummarySetupError as exc:
@@ -2279,11 +2278,14 @@ def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
     queues = sorted({job["queue_name"] for job in result["jobs"]})
     print(f"enqueue-signal-summary: сигналов {result['signals']}, задач {len(result['jobs'])}"
           + (f", очередь {', '.join(queues)}" if queues else ""))
+    if result.get("skipped"):
+        print(f"  пропущены (не приняты «Отбором», дубль или нет такого): {', '.join(map(str, result['skipped']))}")
 
 
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
-    """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе
-    пересчётов, сначала текущее окно ленты и радар. По умолчанию сухой прогон: число сигналов и цена."""
+    """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы коллег (дальше
+    «Отбора» — только принятое им) — по полосе пересчётов, сначала текущее окно ленты, радар и материалы. По умолчанию
+    сухой прогон: число сигналов и цена."""
     from oiltech_digest import signal_card, signal_card_history
 
     try:
@@ -2293,10 +2295,11 @@ def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
     estimate, count = plan["estimate"], len(plan["first"]) + len(plan["rest"])
     print(f"enqueue-signal-card-history: модель {plan['model']}, инструкция {plan['prompt_version']}, "
           f"справочники {plan['dictionaries_version']}")
-    print(f"  история — лента с {plan['since']} (по дате сбора статьи) и весь радар, без дублей: сигналов "
-          f"{plan['signals']}; заполнены этим рецептом — {plan['filled']}, уже в задачах агента — {plan['pending']}, "
-          f"без главной публикации — {plan['no_publication']}")
-    print(f"  к заполнению {count}: сначала текущее окно ленты ({', '.join(plan['months'])}) и радар — "
+    print(f"  история — лента с {plan['since']} (по дате сбора статьи), весь радар и материалы коллег, дальше "
+          f"«Отбора» — только принятое им, без дублей: сигналов {plan['signals']}; заполнены этим рецептом — "
+          f"{plan['filled']}, уже в задачах агента — {plan['pending']}, без главной публикации — "
+          f"{plan['no_publication']}")
+    print(f"  к заполнению {count}: сначала текущее окно ленты ({', '.join(plan['months'])}), радар и материалы — "
           f"{len(plan['first'])}, затем остальное — {len(plan['rest'])}")
     print(f"  цена ≈ {_usd(estimate['cost_usd'])}: вызовов {estimate['calls']}, токенов ≈ "
           f"{estimate['input_tokens'] // 1000} тыс. входа и {estimate['output_tokens'] // 1000} тыс. выхода "
@@ -3580,8 +3583,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_card_history = sub.add_parser(
         "enqueue-signal-card-history",
-        help="прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе "
-             "пересчётов; по умолчанию сухой прогон — число сигналов и цена",
+        help="прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы "
+             "коллег — по полосе пересчётов; по умолчанию сухой прогон — число сигналов и цена",
     )
     p_card_history.add_argument("--apply", action="store_true",
                                 help="поставить задачи (только при включённом агенте); без флага — число и цена")

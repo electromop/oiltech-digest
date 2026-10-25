@@ -139,10 +139,7 @@ CASE
   WHEN s.otbor_decision = '{OTBOR_ACCEPT}' THEN 'accept:' || COALESCE(s.signal_category, '')
   WHEN s.otbor_decision = '{OTBOR_REJECT}' THEN 'reject:' || COALESCE(s.reject_reason, '')
   WHEN s.otbor_failure = '{otbor_store.FAILURE_INVALID}' THEN 'failed:{otbor_store.FAILURE_INVALID}'
-  WHEN s.otbor_failure = '{otbor_store.FAILURE_TECHNICAL}'
-       AND NOT EXISTS (SELECT 1 FROM tried t WHERE t.id = s.id AND t.pending)
-       AND ((SELECT count(*) FROM tried t WHERE t.id = s.id) >= %(attempts)s
-            OR s.created_at < now() - make_interval(days => %(days)s))
+  WHEN s.otbor_failure = '{otbor_store.FAILURE_TECHNICAL}' AND {otbor_store.signal_tries_over_sql('t')}
     THEN 'failed:{otbor_store.FAILURE_TECHNICAL}'
 END"""
 
@@ -154,13 +151,14 @@ def pending_notices(*, limit: int = 20) -> list[dict[str, Any]]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            WITH tried AS ({otbor_store._TRIED_SIGNALS_SQL}),
+            WITH counted AS ({otbor_store.SIGNAL_TRIES_SQL}),
             outcomes AS (
               SELECT m.id, m.title, m.tg_chat_id, m.tg_message_id, m.tg_user_id, m.tg_author, m.notified_outcome,
                      s.signal_category, s.reject_reason, s.verdict_reason, s.otbor_disputed, s.otbor_failure_reason,
                      {_OUTCOME_SQL} AS outcome
               FROM colleague_materials m
               JOIN signals s ON s.id = m.signal_id
+              LEFT JOIN counted t ON t.id = s.id
             )
             SELECT * FROM outcomes
             WHERE outcome IS NOT NULL AND outcome IS DISTINCT FROM notified_outcome

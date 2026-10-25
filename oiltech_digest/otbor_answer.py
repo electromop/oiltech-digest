@@ -164,6 +164,9 @@ def outcome(decision: dict[str, Any], dictionaries: dict[str, Any], *, links: in
         if found:
             disputed = "шаги ответа не сошлись и после повтора: " + "; ".join(found)
     values = _values(answer, dictionaries)
+    if values["reject_reason"] == MIXED_EVENTS and links < 2:
+        # Причина невозможна (публикация одна) и после повтора не пишется: отказ остаётся спорным, но без неё.
+        values["reject_reason"] = None
     log.append(step(_decision_text(values, dictionaries)))
     if disputed:
         log.append(step(f"Спорное: {disputed}"))

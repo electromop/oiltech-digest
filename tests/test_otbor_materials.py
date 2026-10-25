@@ -221,6 +221,25 @@ def test_radar_does_not_bring_back_the_link_of_a_material(user, contour, monkeyp
     assert again.calls == []
 
 
+def test_card_history_run_takes_only_what_otbor_accepted(user, contour, monkeypatch, capsys):
+    rejected, failed = "https://slb.example/news/rejected", "https://slb.example/news/silent"
+    _send(_material())
+    run_radar(monkeypatch, [event("SLB quarterly results beat expectations", rejected),
+                            event("SLB opens a digital drilling centre in Oman", failed)],
+              {rejected: page("SLB quarterly results beat expectations"),
+               failed: page("SLB opens a digital drilling centre in Oman")})
+    decide(monkeypatch, {TITLE: answer(), "SLB quarterly results beat expectations": reject("oil_gas_no_link"),
+                         "SLB opens a digital drilling centre in Oman": AIClientError("timeout")})
+    monkeypatch.setattr(api.config, "SIGNAL_CARD_MODEL", "gpt-5.5")
+    capsys.readouterr()
+
+    cli.main(["enqueue-signal-card-history"])
+
+    # Дальше «Отбора» идут только принятые: прогон по истории берёт материал и не платит за отклонённую находку и
+    # находку без решения.
+    assert "к заполнению 1:" in capsys.readouterr().out
+
+
 def test_accumulated_materials_go_through_once_with_a_dry_run_by_default(user, admin, contour, monkeypatch, capsys):
     monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
     material = _send(_material())

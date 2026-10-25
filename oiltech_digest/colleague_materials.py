@@ -242,6 +242,13 @@ def publication_text(row: dict[str, Any]) -> tuple[str, str | None]:
     return row["description"] + "\n\n" + "\n".join(anchor.text for anchor in document.anchors), None
 
 
+def as_publication(row: dict[str, Any]) -> dict[str, Any]:
+    """Строка материала как публикация агентов (#131) и пакета эксперту (#129): text — publication_text, file_note —
+    почему файл не прочитан. Издатель — сайт ссылки (signal_card_pack._publisher_label): источника у материала нет."""
+    text, note = publication_text(row)
+    return {**row, "text": text, "file_note": note}
+
+
 def get_material(material_id: int) -> dict[str, Any] | None:
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

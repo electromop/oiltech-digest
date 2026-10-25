@@ -27,19 +27,22 @@ STAGES = ("summary", "translation")
 DAILY_ATTEMPTS = 2
 # Поле этапа → колонка сигнала.
 COLUMNS = {"summary": "summary", "translation": "title_ru"}
+# Дальше «Отбора» идут только принятые им находки и материалы — и шагом дня, и по названным номерам, и в пакете.
+_ACCEPTED_SQL = (f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL"
+                 f" AND s.otbor_decision = '{OTBOR_ACCEPT}'")
 
 
 def summary_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
     """Публикация сигнала (как у «Отбора») и его поля: суть, русский заголовок, кто их поставил, категория, связь и
-    применение «Отбора»."""
+    применение «Отбора». Только принятые им (_ACCEPTED_SQL)."""
     rows = otbor_store.signal_inputs(signal_ids)
     if not rows:
         return []
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            "SELECT id, summary, title_ru, card_set_by, signal_category, oilfield_relevance, oilfield_application"
-            " FROM signals WHERE id = ANY(%s)",
+            "SELECT s.id, s.summary, s.title_ru, s.card_set_by, s.signal_category, s.oilfield_relevance,"
+            f" s.oilfield_application FROM signals s WHERE s.id = ANY(%s) AND {_ACCEPTED_SQL}",
             ([int(row["signal_id"]) for row in rows],),
         )
         fields = {int(row["id"]): row for row in cur.fetchall()}
@@ -72,8 +75,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             )
             SELECT s.id
             FROM signals s
-            WHERE s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL
-              AND s.otbor_decision = '{OTBOR_ACCEPT}'
+            WHERE {_ACCEPTED_SQL}
               AND ((COALESCE(btrim(s.summary), '') = ''
                     AND s.card_set_by->>'summary' IS DISTINCT FROM '{CARD_SET_BY_HUMAN}')
                    OR (COALESCE(btrim(s.title_ru), '') = ''
@@ -86,6 +88,15 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             {"days": int(days), "window": int(days) + 1, "limit": int(limit), "attempts": DAILY_ATTEMPTS},
         ).fetchall()
     return [int(row[0]) for row in rows]
+
+
+def accepted_ids(signal_ids: Sequence[int]) -> list[int]:
+    """Из названных сигналов — принятые «Отбором» находки и материалы, в порядке названия."""
+    with connection.get_connection() as conn:
+        found = {int(row[0]) for row in conn.execute(
+            f"SELECT s.id FROM signals s WHERE s.id = ANY(%s) AND {_ACCEPTED_SQL}", ([int(one) for one in signal_ids],),
+        ).fetchall()}
+    return [int(one) for one in signal_ids if int(one) in found]
 
 
 def write_summary(signal_id: int, values: dict[str, str], *, log: list[dict[str, str]]) -> list[str]:

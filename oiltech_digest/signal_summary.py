@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from oiltech_digest import colleague_materials, config
+from oiltech_digest import config
 from oiltech_digest.db import repository, signal_summary_store
 from oiltech_digest.processing.external_ai import StopRequested, _core_glossary
 from oiltech_digest.processing.pipeline import make_client, summarize_article, title_ru_for_article
@@ -43,6 +43,14 @@ def scheduler_step() -> dict[str, Any]:
     return {"signals": len(ids), "jobs": enqueue(ids, trigger="daily")}
 
 
+def enqueue_named(signal_ids: list[int]) -> dict[str, Any]:
+    """Названные сигналы (повтор после сбоя модели) — по полосе пересчётов. Дальше «Отбора» идут только принятые:
+    остальные — мимо (skipped), за них не платим."""
+    accepted = signal_summary_store.accepted_ids(signal_ids)
+    return {"signals": len(accepted), "skipped": [one for one in signal_ids if one not in accepted],
+            "jobs": enqueue(accepted, trigger="manual", bulk=True)}
+
+
 def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[dict[str, Any]]:
     """Задачи этапа пачками по OTBOR_BATCH; bulk — названные сигналы, по полосе пересчётов."""
     from oiltech_digest import network_policy
@@ -66,25 +74,23 @@ def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации сигналов, поля «Отбора», чего не хватает."""
     items = [_item(row) for row in signal_summary_store.summary_inputs(job_payload.get("signal_ids") or [])]
-    return {"kind": KIND, "offline": bool(job_payload.get("offline", False)), "items": [item for item in items
-                                                                                       if item["needs"]]}
+    return {"kind": KIND, "items": [item for item in items if item["needs"]]}
 
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
-    """Публикация сигнала так, как её видит этап, — поля статьи ленты (pipeline._article_prompt): у материала текст —
-    описание автора и текст файла, издатель — сайт ссылки; поля «Отбора» — ключами сигнала (pipeline.OTBOR_FIELDS)."""
-    material = row["origin"] == repository.SIGNAL_ORIGIN_MATERIAL
-    text = colleague_materials.publication_text(row)[0] if material else row.get("text")
+    """Публикация сигнала так, как её видит этап, — поля статьи ленты (pipeline._article_prompt), публикация та же, что
+    у «Отбора» (у материала — colleague_materials.as_publication); поля «Отбора» — ключами сигнала
+    (pipeline.OTBOR_FIELDS)."""
     return {
         "signal_id": int(row["signal_id"]),
         "needs": signal_summary_store.missing(row),
         "title": publication_text(row.get("title"))[:500],
-        "source_name": (_publisher_label(row) if row.get("url") else "") if material else _publisher_label(row),
+        "source_name": _publisher_label(row),
         "url": row.get("url") or "",
         "language": row.get("language") or "",
         "published_at": publication_day(row.get("published")) or "",
         "summary": None,
-        "raw_text": publication_text(text),
+        "raw_text": publication_text(row.get("text")),
         "signal_category": row.get("signal_category"),
         "oilfield_relevance": row.get("oilfield_relevance"),
         "oilfield_application": row.get("oilfield_application"),
@@ -96,7 +102,7 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
 
 def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | None = None) -> dict[str, Any]:
     """Сторона воркера: суть и перевод заголовка — что нужно сигналу; ответы модели — как есть."""
-    client = make_client(bool(payload.get("offline", False)))
+    client = make_client()
     summaries: list[dict[str, Any]] = []
     result = {"signal_summary": True, "kind": KIND, "summaries": summaries}
     for item in payload.get("items") or []:

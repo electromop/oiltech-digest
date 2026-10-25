@@ -103,24 +103,29 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
 
 
 def _material_publication(row: dict[str, Any]) -> dict[str, Any]:
-    """Материал как публикация «Карточки»: текст — описание автора и текст файла, издатель — сайт ссылки."""
-    from oiltech_digest.colleague_materials import publication_text
+    """Материал как публикация «Карточки» — та же, что у «Отбора» (colleague_materials.as_publication)."""
+    from oiltech_digest.colleague_materials import as_publication
     from oiltech_digest.signal_card_pack import _publisher_label
 
-    return {**row, "text": publication_text(row)[0], "publisher": _publisher_label(row) if row.get("url") else "",
-            "publisher_type": ""}
+    return {**as_publication(row), "publisher": _publisher_label(row), "publisher_type": ""}
 
 
 # Сколько задач шаг планировщика ставит одному сигналу: вторая — на случай сбоя модели или смены
 # справочников посреди задачи; дальше сигнал добирает прогон по истории (#98), а не каждые полчаса.
 DAILY_ATTEMPTS = 2
+# Дальше «Отбора» (#130, #131) идёт только принятое: отклонённое им, сигнал без его решения со сбоем и находка или
+# материал, которые его решения ещё ждут (метка пути selector), карточку не получают — ни шагом дня, ни по истории.
+_PAST_OTBOR_SQL = (
+    f"(s.otbor_decision IS DISTINCT FROM '{OTBOR_REJECT}'"
+    " AND NOT (s.otbor_decision IS NULL AND (s.otbor_failure IS NOT NULL OR s.selector IS NOT NULL)))"
+)
+_RADAR_OR_MATERIAL_SQL = f"({radar_origin_sql('s')} OR s.origin = '{SIGNAL_ORIGIN_MATERIAL}')"
 
 
 def new_signal_ids(*, days: int, limit: int) -> list[int]:
     """Сигналы для шага планировщика: заведены за `days` дней, без карточки, не дубли, не в задаче
-    агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS). Дальше «Отбора» (#130) идёт
-    только принятое: отклонённое им и сигнал без его решения (сбой) карточку не получают, как и находка
-    или материал, которые его решения ещё ждут (#131, метка пути selector)."""
+    агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS). Дальше «Отбора» — только
+    принятое (_PAST_OTBOR_SQL)."""
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
@@ -138,9 +143,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             FROM signals s
             WHERE s.card_recipe IS NULL AND s.merged_into_signal_id IS NULL
               AND s.created_at >= now() - make_interval(days => %(days)s)
-              AND s.otbor_decision IS DISTINCT FROM '{OTBOR_REJECT}'
-              AND NOT (s.otbor_decision IS NULL AND s.otbor_failure IS NOT NULL)
-              AND (s.selector IS NULL OR s.otbor_decision IS NOT NULL)
+              AND {_PAST_OTBOR_SQL}
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id
             LIMIT %(limit)s
@@ -153,8 +156,9 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
 def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
     """Сигналы прогона по истории (#98, спека #93): ленты — принятые статьи, собранные с `since` (сигнал не в
     архиве, а статью показывает лента — как у витрины «бизнес»: за карточку, которую никто не увидит, не платим),
-    и все находки радара; дубли — мимо. first — радар или статья в текущем окне ленты (window): их карточки
-    ставятся первыми; pending — сигнал в задаче агента, которая ещё идёт. По порядку постановки."""
+    все находки радара и материалы коллег; дальше «Отбора» — только принятое (_PAST_OTBOR_SQL), дубли — мимо.
+    first — радар, материал или статья в текущем окне ленты (window): их карточки ставятся первыми; pending —
+    сигнал в задаче агента, которая ещё идёт. По порядку постановки."""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -166,12 +170,12 @@ def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
                 AND jsonb_typeof(j.payload_json->'signal_ids') = 'array'
             )
             SELECT s.id, s.card_recipe,
-                   ({radar_origin_sql("s")} OR COALESCE({window.sql("a")}, FALSE)) AS first,
+                   ({_RADAR_OR_MATERIAL_SQL} OR COALESCE({window.sql("a")}, FALSE)) AS first,
                    EXISTS (SELECT 1 FROM pending p WHERE p.id = s.id) AS pending
             FROM signals s
             LEFT JOIN articles a ON a.id = s.origin_article_id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
-            WHERE s.merged_into_signal_id IS NULL
-              AND ({radar_origin_sql("s")}
+            WHERE s.merged_into_signal_id IS NULL AND {_PAST_OTBOR_SQL}
+              AND ({_RADAR_OR_MATERIAL_SQL}
                    OR (a.collected_at >= %(since)s AND s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}))
             ORDER BY first DESC, s.id
             """,

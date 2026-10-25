@@ -2809,10 +2809,12 @@ def _topic_web_evidence(
                                               feedback=research_feedback_block(topic_name, known_titles=known_titles),
                                               finds_only=config.otbor)
     heartbeat()
-    # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье или «Отбору».
+    # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье или «Отбору». При «Отборе» срока
+    # на тему нет: находка без страницы во вход агента не идёт, и срезать её по времени значило бы потерять её молча
+    # (признак продвижения подаётся перед каждой страницей, аренда держится).
     events = research.pop("evidence")
     found, fulltext = _enrich_web_evidence_with_full_text(
-        events, topic_name, limit=len(events), heartbeat=heartbeat,
+        events, topic_name, limit=len(events), heartbeat=heartbeat, budget_seconds=0 if config.otbor else None,
         text_chars=TEXT_LIMIT if config.otbor else WEB_EVIDENCE_FULLTEXT_CHARS)
     verified, unverified = signal_research.verify_research_evidence(found, finds_only=config.otbor)
     research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))

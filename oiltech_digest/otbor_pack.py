@@ -219,12 +219,12 @@ def _radar_items(until: str) -> list[dict[str, Any]]:
 def _material_items(until: str) -> list[dict[str, Any]]:
     items = []
     for row in otbor_pack_store.material_candidates(until):
-        material_text, note = colleague_materials.publication_text(row)
+        material = colleague_materials.as_publication(row)
         items.append(_item("materials", "material", f"material:{row['id']}", {
-            "material_id": row["id"], "title": row["title"], "text": material_text, "url": row["url"],
+            "material_id": row["id"], "title": row["title"], "text": material["text"], "url": row["url"],
             "published": row["created_at"], "received": row["created_at"],
-            "publisher": _publisher_label(row) if row["url"] else "", "publisher_type": "", "language": None,
-            "file_note": note}))
+            "publisher": _publisher_label(row), "publisher_type": "", "language": None,
+            "file_note": material["file_note"]}))
     return items
 
 

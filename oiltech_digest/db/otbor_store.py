@@ -59,6 +59,19 @@ _OTBOR_ARTICLE_SQL = (
 # Сигнал, который решает «Отбор» (#131): находка поиска или материал коллеги, заведённые при включённом флаге. Дубль
 # не в счёт: его ссылки — у главной карточки.
 _OTBOR_SIGNAL_SQL = f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL"
+# Задачи «Отбора» у находки или материала: сколько их было и идёт ли одна сейчас — строка на сигнал (LEFT JOIN по s.id).
+SIGNAL_TRIES_SQL = (f"SELECT id, count(*) AS tries, bool_or(pending) AS pending FROM ({_TRIED_SIGNALS_SQL}) tried"
+                    " GROUP BY id")
+
+
+def signal_tries_over_sql(tries: str) -> str:
+    """Шаг больше не возьмёт сигнал (#131): задача о нём не идёт, а попытки кончились (%(attempts)s) или сигнал старше
+    окна шага (%(days)s). Одно правило для раздела «„Отбор“ не ответил» (unanswered_signals) и итога автору материала
+    (material_signals). tries — алиас строки SIGNAL_TRIES_SQL."""
+    return (f"(NOT COALESCE({tries}.pending, FALSE) AND (COALESCE({tries}.tries, 0) >= %(attempts)s"
+            " OR s.created_at < now() - make_interval(days => %(days)s)))")
+
+
 # Перепечатка не в счёт: её публикация — у сигнала главной.
 _NOT_REPRINT_SQL = "NOT EXISTS (SELECT 1 FROM article_reprints ar WHERE ar.article_id = a.id)"
 
@@ -105,7 +118,8 @@ def signal_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
     (otbor_pack): у находки главная публикация с текстом издателя (статья корпуса или докачанная страница — раньше
     сводки модели поиска, затем по силе, как у «Карточки»), дата публикации — только издателя (у ссылки поиска
     «режима ChatGPT» её дала модель поиска, во вход она не идёт), поступление — день находки, ссылки находки — если их
-    больше одной; у материала — строка материала (текст собирает colleague_materials.publication_text)."""
+    больше одной; у материала — строка материала как публикация (colleague_materials.as_publication)."""
+    from oiltech_digest.colleague_materials import as_publication
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
     ids = sorted({int(value) for value in signal_ids})
@@ -143,7 +157,7 @@ def signal_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
             """,
             {"ids": ids},
         )
-        rows += cur.fetchall()
+        rows += [as_publication(row) for row in cur.fetchall()]
     links = evidence_links([int(row["signal_id"]) for row in rows if row["origin"] != SIGNAL_ORIGIN_MATERIAL])
     for row in rows:
         found = links.get(int(row["signal_id"])) or []
@@ -151,7 +165,7 @@ def signal_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: row["signal_id"])
 
 
-def link_counts(signal_ids: Sequence[int]) -> dict[int, int]:
+def links_in_input(signal_ids: Sequence[int]) -> dict[int, int]:
     """Сколько ссылок у каждой находки во входе «Отбора» (0 — ссылка одна): «разные события в одной находке» —
     причина только у находки с несколькими ссылками. Ядро считает сама, ответ воркера — недоверенный ввод."""
     found = evidence_links(sorted({int(value) for value in signal_ids}))
@@ -248,15 +262,11 @@ def unanswered_signals(*, days: int, attempts: int, limit: int) -> list[tuple[in
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
-            WITH counted AS (
-              SELECT id, count(*) AS tries, bool_or(pending) AS pending FROM ({_TRIED_SIGNALS_SQL}) tried GROUP BY id
-            )
+            WITH counted AS ({SIGNAL_TRIES_SQL})
             SELECT s.id, COALESCE(t.tries, 0) AS tries
             FROM signals s
             LEFT JOIN counted t ON t.id = s.id
-            WHERE {_OTBOR_SIGNAL_SQL}
-              AND NOT COALESCE(t.pending, FALSE)
-              AND (COALESCE(t.tries, 0) >= %(attempts)s OR s.created_at < now() - make_interval(days => %(days)s))
+            WHERE {_OTBOR_SIGNAL_SQL} AND {signal_tries_over_sql('t')}
               AND s.otbor_decision IS NULL AND s.otbor_failure IS NULL
             ORDER BY s.id
             LIMIT %(limit)s

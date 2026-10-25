@@ -20,11 +20,10 @@ from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 from oiltech_digest.db.repository import (_BUSINESS_VISIBLE_SQL, _RADAR_HIDDEN_SQL, _RADAR_VISIBLE_SQL,
                                           _radar_hidden_reason_sql, signal_digest_sql)
 from oiltech_digest.otbor_pack_format import load_dictionaries
-from oiltech_digest.signal_research import (LIST_PAGE, NO_LINK_OR_TITLE, PAGE_NOT_FETCHED, TECHNICAL_REASONS,
-                                            UNCONFIRMED_LINK)
+from oiltech_digest.signal_research import LIST_PAGE, NO_LINK_OR_TITLE, PAGE_NOT_FETCHED, UNCONFIRMED_LINK
 
-# Технический отсев поиска (#130, #131) — свой раздел у каждой причины: «Поиск → …». Отсев поиска по смыслу (прежняя
-# цепочка, до «Отбора») — в разделе «До „Отбора“».
+# Технический отсев поиска (#130, #131) — свой раздел у каждой причины: «Поиск → …»; список причин — только здесь.
+# Отсев поиска по смыслу (прежняя цепочка, до «Отбора») — в разделе «До „Отбора“».
 SEARCH_SECTIONS = (("search_unconfirmed", "Ссылка не подтверждена", UNCONFIRMED_LINK),
                    ("search_no_text", "Текст страницы не получен", PAGE_NOT_FETCHED),
                    ("search_list_page", "Страница-список", LIST_PAGE),
@@ -38,7 +37,7 @@ def _search_drop_sql(*reasons: str) -> str:
     return f"(s.filter_stage IS NOT DISTINCT FROM 'search' AND COALESCE(s.filter_reason IN ({listed}), FALSE))"
 
 
-_TECHNICAL_SQL = _search_drop_sql(*TECHNICAL_REASONS)
+_TECHNICAL_SQL = _search_drop_sql(*(reason for _key, _label, reason in SEARCH_SECTIONS))
 # Не видна ни в одной витрине и не дубль: только такую раздел и держит (находку радара в бизнес-ленте — тоже нет).
 _NOT_SHOWN_SQL = (f"s.merged_into_signal_id IS NULL AND NOT ({_RADAR_VISIBLE_SQL})"
                   f" AND NOT ({_BUSINESS_VISIBLE_SQL})")

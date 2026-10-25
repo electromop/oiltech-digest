@@ -5,13 +5,13 @@
 
 from pathlib import Path
 
-from oiltech_digest import signal_discovery
-from oiltech_digest.db import repository, signal_card_store
-from oiltech_digest.signal_research import LIST_PAGE, NO_LINK_OR_TITLE, PAGE_NOT_FETCHED, UNCONFIRMED_LINK
+from oiltech_digest import background_jobs, cli, signal_card, signal_discovery
+from oiltech_digest.db import repository
+from oiltech_digest.signal_research import LIST_PAGE, PAGE_NOT_FETCHED, UNCONFIRMED_LINK
 from tests.otbor_radar_support import DRAFT_SUMMARY, DRAFT_WHY, PAGE_TEXT, event, page, run_radar, summarize
 from tests.otbor_support import answer, decide, reject, showcase
 from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import admin, api_get, user  # noqa: F401 — фикстуры
+from tests.signal_card_support import FakeModel, admin, api_get, run_worker, user, worker  # noqa: F401 — фикстуры
 
 CONTRACT_URL = "https://adnoc.example/news/hail-ghasha-drilling"
 CONTRACT_TITLE = "ADNOC Drilling awards SLB a contract to drill 40 wells for Hail and Ghasha"
@@ -77,7 +77,6 @@ def test_technical_drops_of_the_search_lie_in_search_sections_and_never_reach_ot
         # Причина раздела в короткой причине не повторяется.
         "Broken link rig news": "Поиск → Нет ссылки или заголовка",
     }
-    assert NO_LINK_OR_TITLE == "нет ссылки или заголовка"
     assert showcase(user, "technology") == {} and showcase(user, "business") == {}
 
 
@@ -115,6 +114,8 @@ def test_mixed_events_is_a_reason_only_for_a_finding_with_several_links(user, ad
 
 def test_no_cap_on_findings_of_a_topic_every_one_reaches_otbor(user, contour, monkeypatch):
     monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_RESEARCH_EVENTS_PER_TOPIC", 1)
+    # Срок докачки страниц темы кончился сразу: при «Отборе» он находки не срезает — без страницы им нечего дать.
+    monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS", 1e-9)
     first, second = "https://slb.example/news/rig", "https://halliburton.example/news/frac"
     run_radar(monkeypatch, [event("SLB opens a rig automation centre in Oman", first),
                             event("Halliburton completes its first electric frac fleet job", second)],
@@ -127,6 +128,60 @@ def test_no_cap_on_findings_of_a_topic_every_one_reaches_otbor(user, contour, mo
 
     # Потолок числа событий в задании поиска остался, но то, что поиск принёс сверх него, не отрезается.
     assert len(model.calls) == 2
+
+
+def test_mixed_events_never_lands_on_a_finding_with_one_link_even_when_the_model_insists(
+        user, admin, contour, monkeypatch):
+    url = "https://equinor.example/news/robot-drilling"
+    run_radar(monkeypatch, [event("Equinor tests a drilling robot offshore Norway", url)],
+              {url: page("Equinor tests a drilling robot offshore Norway")})
+
+    decide(monkeypatch, {"Equinor tests a drilling robot offshore Norway": reject(
+        "mixed_events", industry="oilfield_services", oilfield_relevance="direct")})
+
+    # Модель дважды ставит невозможную причину: отказ остаётся спорным, но без неё — раздел «Без причины».
+    assert _sections(admin)["Equinor tests a drilling robot offshore Norway"].startswith(
+        "«Отбор» → Без причины (спорное)")
+
+
+def test_chinese_headline_is_not_a_list_page(user, admin, contour, monkeypatch):
+    url = "https://cnpc.example/news/2026/10/20/frac.html"
+    title = "中国石油完成首个页岩气压裂作业"
+    run_radar(monkeypatch, [event(title, url)], {url: page(title)})
+
+    model = decide(monkeypatch, {title: answer(category="technology")})
+
+    # Иероглиф — слово: короткий по пробелам китайский заголовок новости — не лента и не оглавление.
+    assert len(model.calls) == 1 and _sections(admin) == {}
+
+
+def test_old_worker_build_is_refused_the_radar_run_and_the_otbor_of_findings(user, contour, monkeypatch):
+    run_radar(monkeypatch, [event(CONTRACT_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)})
+    cli.main(["enqueue-otbor"])
+    background_jobs.enqueue_daily_signal_discovery(force=True)
+
+    # Сборка NL контракта 4 не знает ни прогона радара при «Отборе», ни «Ссылок находки»: задачи она не получает,
+    # и они падают с явной причиной (история 50 спеки), а не идут прежней цепочкой мимо «Отбора».
+    assert [worker(queue, contract_number=4).claim() for queue in ("external-ai", "external-agents")] == [None, None]
+    with repository.get_connection() as conn:
+        failed = conn.execute("SELECT kind, error_message FROM background_jobs WHERE status = 'failed'").fetchall()
+    assert sorted(kind for kind, _ in failed) == ["otbor", "signal_discovery"]
+    assert all("контракт 5" in message for _, message in failed)
+
+
+def test_summary_by_number_is_not_paid_for_a_finding_otbor_rejected(user, contour, monkeypatch, capsys):
+    run_radar(monkeypatch, [event(CONTRACT_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)})
+    decide(monkeypatch, {CONTRACT_TITLE: reject("oil_gas_no_link")})
+    with repository.get_connection() as conn:
+        [signal_id] = [row[0] for row in conn.execute("SELECT id FROM signals WHERE selector = 'otbor'")]
+    capsys.readouterr()
+
+    model = summarize(monkeypatch, {CONTRACT_TITLE: (CONTRACT_RU, "суть")})
+    cli.main(["enqueue-signal-summary", "--ids", str(signal_id)])
+    run_worker("external-ai")
+
+    # Дальше «Отбора» идут только принятые — и по названным номерам.
+    assert model.calls == [] and "пропущены" in capsys.readouterr().out
 
 
 def test_finding_found_again_is_not_decided_twice(user, admin, contour, monkeypatch):
@@ -142,10 +197,18 @@ def test_finding_found_again_is_not_decided_twice(user, admin, contour, monkeypa
 
 def test_finding_waiting_for_otbor_is_shown_nowhere_and_gets_no_card(user, admin, contour, monkeypatch):
     run_radar(monkeypatch, [event(CONTRACT_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)})
+    monkeypatch.setattr(signal_card.config, "SIGNAL_CARD_ENABLED", True)
+    monkeypatch.setattr(signal_card.config, "SIGNAL_CARD_MODEL", "gpt-5.5")
+    model = FakeModel({})
+    monkeypatch.setattr(signal_card, "make_client", lambda: model)
+
+    cli.main(["enqueue-signal-cards"])
+    run_worker("external-ai")
 
     assert showcase(user, "technology") == {} and showcase(user, "business") == {}
     assert _sections(admin) == {}
-    assert signal_card_store.new_signal_ids(days=7, limit=10) == []
+    # «Карточка» берёт только принятое «Отбором»: ждущей его решения находке модель не платится.
+    assert model.calls == []
 
 
 def test_before_deploy_sql_adds_the_columns_to_the_old_schema_and_repeats_safely(isolated_db):

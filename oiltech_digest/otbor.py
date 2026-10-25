@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from functools import partial
 from typing import Any, Callable
 
-from oiltech_digest import colleague_materials, config, contract
+from oiltech_digest import config, contract
 from oiltech_digest.db import otbor_store, repository
 from oiltech_digest.otbor_answer import NO_REASON, answer_problem, answer_schema, conflicts, outcome, technical_failure
 from oiltech_digest.otbor_pack_format import load_dictionaries
@@ -135,19 +135,14 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
 
 def _signal_item(row: dict[str, Any]) -> dict[str, Any]:
     """Находка или материал (#131) так, как их видит модель, — как строка радара и материала в пакете эксперту
-    (otbor_pack): издатель находки — источник статьи корпуса или сайт из ссылки (имя издателя у ссылки поиска
-    записала модель поиска); у материала текст — описание автора и текст файла (colleague_materials.publication_text),
-    издатель — сайт ссылки, если она есть. Ссылки находки — заголовок, издатель и дата каждой, до 8."""
-    if row["origin"] == repository.SIGNAL_ORIGIN_MATERIAL:
-        text, _note = colleague_materials.publication_text(row)
-        publisher = _publisher_label(row) if row.get("url") else ""
-    else:
-        text, publisher = row.get("text"), _publisher_label(row)
+    (otbor_pack): издатель — источник статьи корпуса или сайт из ссылки (имя издателя у ссылки поиска записала модель
+    поиска; у материала без ссылки издателя нет); текст материала — colleague_materials.as_publication. Ссылки
+    находки — заголовок, издатель и дата каждой, до 8."""
     return {
         "ref": contract.signal_ref(row["signal_id"]),
         "title": publication_text(row.get("title"))[:500],
-        "text": publication_text(text),
-        "publisher": publisher,
+        "text": publication_text(row.get("text")),
+        "publisher": _publisher_label(row),
         "language": row.get("language") or "",
         "published": publication_day(row.get("published")),
         "received": publication_day(row.get("received")),
@@ -288,8 +283,8 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
         {contract.article_ref(value) for value in article_ids or []}
         | {contract.signal_ref(value) for value in signal_ids or []})
     otbor_store.record_usage(job_id, [usage for decision in decisions if (usage := _usage(decision, expected))])
-    links = otbor_store.link_counts([signal_id for decision in decisions
-                                     if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
+    links = otbor_store.links_in_input([signal_id for decision in decisions
+                                        if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
     stale = result.get("dictionaries_version") != dictionaries.get("version")
     recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
               "dictionaries_version": dictionaries.get("version"), "job_id": job_id}

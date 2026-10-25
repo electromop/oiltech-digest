@@ -2466,6 +2466,14 @@ def external_worker_claim(
         # Не выдаём: воркер оплатил бы ответ модели, а запись отказала бы (ревью 27.09).
         repository.fail_background_job(int(job["id"]), f"payload: {exc}")
         return {"job": None}
+    needed = contract.required_contract(job.get("kind"), worker_payload)
+    given = contract.parse_contract(x_worker_contract) or 0
+    if given < needed:
+        # Сборка постарше исполнила бы новую форму задачи по-старому, молча (#131): отказ с причиной, видно сразу.
+        repository.fail_background_job(
+            int(job["id"]), f"сборке NL с контрактом {given} задача не по силам: нужен контракт {needed} — "
+                            "пересоберите NL (deploy-nl.sh)")
+        return {"job": None}
     return {"job": {**_job_payload(job), "payload": worker_payload, "lease_token": lease_token}}
 
 
