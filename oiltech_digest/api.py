@@ -28,7 +28,8 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, marks, rejected_sections, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import contract, lanes, network_policy, otbor, signal_card, signal_card_filters
+from oiltech_digest import contract, lanes, network_policy, otbor, signal_card, signal_card_filters, signal_summary
+from oiltech_digest import material_signals
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
@@ -2465,6 +2466,14 @@ def external_worker_claim(
         # Не выдаём: воркер оплатил бы ответ модели, а запись отказала бы (ревью 27.09).
         repository.fail_background_job(int(job["id"]), f"payload: {exc}")
         return {"job": None}
+    needed = contract.required_contract(job.get("kind"), worker_payload)
+    given = contract.parse_contract(x_worker_contract) or 0
+    if given < needed:
+        # Сборка постарше исполнила бы новую форму задачи по-старому, молча (#131): отказ с причиной, видно сразу.
+        repository.fail_background_job(
+            int(job["id"]), f"сборке NL с контрактом {given} задача не по силам: нужен контракт {needed} — "
+                            "пересоберите NL (deploy-nl.sh)")
+        return {"job": None}
     return {"job": {**_job_payload(job), "payload": worker_payload, "lease_token": lease_token}}
 
 
@@ -2590,9 +2599,15 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         result = {"signal_card": True, "applied": applied}
     if job.get("kind") == otbor.KIND and result.get("otbor"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели уже разобраны в решения сигналов и «Ход решения».
-        applied = otbor.apply_result(result, job_id=job_id,
-                                     article_ids=(job.get("payload_json") or {}).get("article_ids") or [])
+        job_payload = job.get("payload_json") or {}
+        applied = otbor.apply_result(result, job_id=job_id, article_ids=job_payload.get("article_ids") or [],
+                                     signal_ids=job_payload.get("signal_ids") or [])
         result = {"otbor": True, "applied": applied}
+    if job.get("kind") == signal_summary.KIND and result.get("signal_summary"):
+        # Конверт ЗАМЕНЯЕТСЯ итогом: суть и заголовки уже записаны в сигналы.
+        applied = signal_summary.apply_result(result, job_id=job_id,
+                                              signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
+        result = {"signal_summary": True, "applied": applied}
     return result
 
 
@@ -3089,6 +3104,8 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "signal_card": lambda payload, job_id: signal_card.build_payload(payload),
     # Агент «Отбор» (#130): публикации, справочники и приёмщик ОС — воркеру без базы.
     "otbor": lambda payload, job_id: otbor.build_payload(payload),
+    # «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», с его категорией и связью.
+    "signal_summary": lambda payload, job_id: signal_summary.build_payload(payload),
 }
 
 
@@ -3415,7 +3432,39 @@ async def external_worker_save_material(
         path = colleague_materials.store_file(content, file.filename or "")
         file_fields = {"file_name": (file.filename or "файл")[:300], "file_path": str(path), "file_size": len(content)}
     row, created = colleague_materials.save(fields, **file_fields)
+    if created and config.OTBOR_ENABLED:
+        # Материал — сигнал третьего происхождения (#131): его решит «Отбор». Сбой здесь приём не ломает: материал
+        # записан, сигнал заведёт команда накопленных (otbor-materials).
+        try:
+            row = {**row, "signal_id": material_signals.to_signal(row)}
+        except Exception:  # noqa: BLE001 - материал уже принят, автору важен ответ бота
+            logger.exception("material_signal_failed material_id=%s", row.get("id"))
     return {"ok": True, "created": created, "material": _clean(colleague_materials.brief(row))}
+
+
+@app.get("/api/external-worker/materials/notices")
+def external_worker_material_notices(
+    limit: int = Query(default=20, ge=1, le=100),
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    """Итоги «Отбора» по материалам, которых авторы ещё не получили (#131): бот отвечает в чате материала."""
+    return {"ok": True, "notices": material_signals.pending_notices(limit=limit)}
+
+
+class MaterialNoticeSent(BaseModel):
+    material_id: int
+    outcome: str = Field(min_length=1, max_length=100)
+
+
+@app.post("/api/external-worker/materials/notices")
+def external_worker_material_notice_sent(
+    payload: MaterialNoticeSent,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    """Бот доставил итог автору: этот итог второй раз не уходит."""
+    if not material_signals.mark_notified(payload.material_id, payload.outcome):
+        raise HTTPException(status_code=404, detail="Материала нет")
+    return {"ok": True}
 
 
 @app.get("/api/external-worker/materials")

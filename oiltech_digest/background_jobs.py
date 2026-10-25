@@ -604,9 +604,21 @@ def _run_otbor(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
 
     repository.update_background_job_progress(job_id, 20)
     result = otbor.process_payload(otbor.build_payload(payload))
-    applied = otbor.apply_result(result, job_id=job_id, article_ids=payload.get("article_ids") or [])
+    applied = otbor.apply_result(result, job_id=job_id, article_ids=payload.get("article_ids") or [],
+                                 signal_ids=payload.get("signal_ids") or [])
     repository.update_background_job_progress(job_id, 95)
     return {"otbor": True, "applied": applied}
+
+
+def _run_signal_summary(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """«Суть и перевод» сигналов в местном контуре (#131) — как «Отбор»."""
+    from oiltech_digest import signal_summary
+
+    repository.update_background_job_progress(job_id, 20)
+    result = signal_summary.process_payload(signal_summary.build_payload(payload))
+    applied = signal_summary.apply_result(result, job_id=job_id, signal_ids=payload.get("signal_ids") or [])
+    repository.update_background_job_progress(job_id, 95)
+    return {"signal_summary": True, "applied": applied}
 
 
 def _run_admission_notify(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
@@ -629,5 +641,6 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "signal_discovery": _run_signal_discovery,
     "signal_card": _run_signal_card,
     "otbor": _run_otbor,
+    "signal_summary": _run_signal_summary,
     "admission_notify": _run_admission_notify,
 }

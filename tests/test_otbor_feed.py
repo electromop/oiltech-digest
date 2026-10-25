@@ -33,8 +33,9 @@ def test_feed_article_accepted_by_otbor_is_in_the_business_feed_with_its_decisio
     # Вход модели — публикация, справочники и приёмщик ОС; происхождения в нём нет: его использует только код.
     header = call["input"].split("Текст публикации:", 1)[0]
     assert [line.split(":", 1)[0] for line in header.strip().splitlines()] == [
-        "Заголовок", "Источник", "Язык", "Дата публикации", "Дата поступления",
+        "Заголовок", "Источник", "Язык", "Дата публикации", "Дата поступления", "Ссылки находки",
         "Похожие сигналы, оценённые людьми", "Оценки людей текстом"]
+    assert "Ссылки находки: нет" in header
     assert "Похожие сигналы, оценённые людьми: нет" in call["input"]
     assert "происхожд" not in (call["instructions"] + call["input"]).lower()
     for word in ("лента", "радар", "поиск", "feed", "radar"):

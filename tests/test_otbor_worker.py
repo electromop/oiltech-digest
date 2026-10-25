@@ -38,7 +38,21 @@ def test_old_worker_build_refuses_the_otbor_job_and_check_lanes_shows_the_mismat
         cli.cmd_check_lanes(type("Args", (), {})())
     out = capsys.readouterr().out
     assert f"контракт 3, у ядра контракт {contract.CONTRACT}" in out
-    assert contract.CONTRACT == 4
+    assert contract.CONTRACT == 5
+
+
+def test_build_before_131_refuses_the_signal_summary_job(user, contour, monkeypatch):
+    # Сборка NL контракта 4: «Суть и перевод» сигналов у неё нет — отказ явной ошибкой, а не тихий пропуск.
+    repository.create_background_job("signal_summary", {"signal_ids": [1]}, queue_name="external-ai",
+                                     execution_region="external", capability="openai")
+    old_build = {kind: target for kind, target in external_worker._HANDLERS.items() if kind != "signal_summary"}
+    monkeypatch.setattr(external_worker, "_HANDLERS", old_build)
+    client = worker("external-ai", contract_number=4)
+
+    job = client.claim()
+    external_worker._run_job(client, job, lambda done=None: None)
+
+    assert "Unsupported external job kind: signal_summary" in repository.get_background_job(job["id"])["error_message"]
 
 
 def test_no_model_no_fallback_to_the_feed_model(user, contour, monkeypatch):

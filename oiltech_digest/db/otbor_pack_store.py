@@ -21,7 +21,7 @@ from oiltech_digest.db.repository import _judged_sql, radar_origin_sql
 
 # Дата ссылки находки: у статьи корпуса — её, у ссылки поиска «режима ChatGPT» — никакой (это дата события по
 # версии модели поиска), у прочих ссылок — дата издателя.
-_LINK_PUBLISHED_SQL = (
+LINK_PUBLISHED_SQL = (
     "CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)"
     " WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %(search_source)s THEN e.published_at END"
 )
@@ -76,7 +76,7 @@ def radar_candidates(until: str) -> list[dict[str, Any]]:
             SELECT DISTINCT ON (s.id)
                    s.id AS signal_id, e.id AS evidence_id, a.id AS article_id, a.language,
                    COALESCE(a.title, e.title) AS title, COALESCE(a.url, e.source_url) AS url,
-                   COALESCE(a.raw_text, e.extracted_fact) AS text, {_LINK_PUBLISHED_SQL} AS published,
+                   COALESCE(a.raw_text, e.extracted_fact) AS text, {LINK_PUBLISHED_SQL} AS published,
                    s.first_seen_at AS received, src.name AS publisher_source,
                    COALESCE(src.source_type, '') AS publisher_type,
                    CASE WHEN s.filter_stage IN ('judge', 'review') THEN s.filter_stage
@@ -112,7 +112,7 @@ def evidence_links(signal_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         cur.execute(
             f"""
             SELECT e.signal_id, {_LINK_TITLE_SQL} AS title, COALESCE(a.url, e.source_url) AS url,
-                   src.name AS publisher_source, {_LINK_PUBLISHED_SQL} AS published
+                   src.name AS publisher_source, {LINK_PUBLISHED_SQL} AS published
             FROM signal_evidence e
             LEFT JOIN articles a ON a.id = e.article_id
             LEFT JOIN sources src ON src.id = a.source_id

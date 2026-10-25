@@ -11,61 +11,33 @@
 Сбой — по причине (решение владельца 23.10): технический (модель не ответила) шаг планировщика повторяет до
 OTBOR_ATTEMPTS задач; модель ответила, но не по схеме или не из справочника, — без повтора: такое надо понять, а
 не оплачивать ещё раз. Оба видны админу в разделах отклонённого.
+
+С #131 «Отбор» решает и находки поиска радара, и материалы коллег — сигналы с меткой пути (signals.selector): вход у
+них тот же, что строка радара и материала в пакете эксперту; у находки с несколькими ссылками — «Ссылки находки»,
+и только у неё «разные события в одной находке» не конфликт шагов.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import partial
 from typing import Any, Callable
 
-from oiltech_digest import config, contract, feed_window
+from oiltech_digest import config, contract
 from oiltech_digest.db import otbor_store, repository
+from oiltech_digest.otbor_answer import NO_REASON, answer_problem, answer_schema, conflicts, outcome, technical_failure
 from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
-from oiltech_digest.signal_card_pack import publication_day, publication_text
+from oiltech_digest.signal_card_pack import _publisher_label, publication_day, publication_text
 
 KIND = otbor_store.KIND
-# Версия инструкции (и таблицы конфликтов) — в рецепте решения: другая инструкция — другие решения.
-PROMPT_VERSION = "2026-10-23.2"
+# Версия инструкции (и таблицы конфликтов, otbor_answer) — в рецепте решения: другая инструкция — другие решения.
+PROMPT_VERSION = "2026-10-23.3"
 _OUTPUT_TOKENS = 600
-# Шаг «Отбора» в «Ходе решения» сигнала.
-STAGE = "«Отбор»"
 # Справочники, из которых модель выбирает коды, — в порядке её рассуждения (поля ответа).
 CHOICES = ("industry", "oilfield_relevance", "decision", "reject_reason", "category")
-# Код «причины нет» у решения «брать»: в справочнике причин его нет, в схеме ответа — есть.
-NO_REASON = "none"
-ACCEPT, REJECT = feed_window.OTBOR_ACCEPT, feed_window.OTBOR_REJECT
-DIRECT, TRANSFERABLE, NO_LINK = "direct", "transferable", "none"
-OILFIELD_SERVICES, OIL_GAS, OTHER_INDUSTRY = "oilfield_services", "oil_gas", "other_industry"
-# Потолки длины ответа воркера (недоверенный ввод): обоснование — до 200 знаков (спека), применение — как фраза
-# судьи радара.
-_JUSTIFICATION_CHARS, _APPLICATION_CHARS = 200, 400
-
-# Таблица конфликтов шагов утверждена владельцем 23.10 (решение 29 журнала гриля; раздел 5 разбора разметки
-# эксперта). Пар «отрасль + связь», которых не бывает, две: у нефтесервиса связь прямая, другая отрасль только
-# переносится. Переносимая бывает и у нефтегаза (смежные операции: переработка, транспорт, хранение) при любой
-# категории.
-_NO_PAIRS = {(OILFIELD_SERVICES, TRANSFERABLE): "переносимая связь у нефтесервиса: его связь прямая",
-             (OTHER_INDUSTRY, DIRECT): "прямая связь у другой отрасли"}
-LINKED = frozenset({DIRECT, TRANSFERABLE})
-# При каких отрасли и связи допустимы «брать» и каждая причина отказа; None — при любой из допустимых пар. Причина
-# не из таблицы (новая версия справочника) — при любой паре. Тексты причин — в справочнике, здесь только коды.
-DECISION_STEPS = {
-    ACCEPT: (None, LINKED),
-    "oil_gas_no_link": ({OIL_GAS}, {NO_LINK}),
-    "other_industry_no_transfer": ({OTHER_INDUSTRY}, {NO_LINK}),
-    "incident_war_politics": (None, {NO_LINK}),
-    "corporate_promo": (None, None),
-    "old_event": (None, LINKED),
-    "mixed_events": (None, LINKED),
-}
-# «Разные события в одной находке» — только у находки с двумя и более ссылками: у статьи ленты публикация одна, и
-# эта причина у неё всегда конфликт (находки радара с несколькими ссылками — #131).
-MIXED_EVENTS = "mixed_events"
 
 
 class OtborSetupError(ValueError):
@@ -76,28 +48,35 @@ class OtborSetupError(ValueError):
 
 
 def scheduler_step() -> dict[str, Any]:
-    """Шаг планировщика «Отбор», за флагом OTBOR_ENABLED: статьи, у которых кончились попытки, а итога нет (задачи
-    падали целиком), — в раздел «„Отбор“ не ответил»; новые статьи, которые решает он, — в задачи по полосе
-    ежедневной обработки."""
+    """Шаг планировщика «Отбор», за флагом OTBOR_ENABLED: статьи, находки и материалы, у которых кончились попытки,
+    а итога нет (задачи падали целиком), — в раздел «„Отбор“ не ответил»; новые, которые решает он, — в задачи по
+    полосе ежедневной обработки."""
     if not config.OTBOR_ENABLED:
-        return {"articles": 0, "jobs": [], "reason": "disabled"}
+        return {"articles": 0, "signals": 0, "jobs": [], "reason": "disabled"}
     # Без модели шаг отказывает в каждом цикле, даже когда новых статей нет: настройка видна сразу.
     configured_model()
-    # Попытки кончились, а итога нет (задачи падали целиком): статья — в раздел «„Отбор“ не ответил».
-    unanswered = otbor_store.unanswered_articles(days=config.OTBOR_NEW_DAYS, attempts=config.OTBOR_ATTEMPTS,
-                                                 limit=config.OTBOR_STEP_LIMIT)
+    window = {"days": config.OTBOR_NEW_DAYS, "attempts": config.OTBOR_ATTEMPTS, "limit": config.OTBOR_STEP_LIMIT}
+    # Попытки кончились, а итога нет (задачи падали целиком): публикация — в раздел «„Отбор“ не ответил».
+    unanswered = otbor_store.unanswered_articles(**window)
     for article_id, reason in unanswered:
-        failed = _technical_failure(reason)
+        failed = technical_failure(reason)
         otbor_store.write_failure(article_id, failed.failure, failed.failure_reason, log=failed.log)
-    ids = otbor_store.new_article_ids(days=config.OTBOR_NEW_DAYS, limit=config.OTBOR_STEP_LIMIT,
-                                      attempts=config.OTBOR_ATTEMPTS)
-    return {"articles": len(ids), "jobs": enqueue(ids, trigger="daily"), "unanswered": len(unanswered)}
+    unanswered_signals = otbor_store.unanswered_signals(**window)
+    for signal_id, reason in unanswered_signals:
+        failed = technical_failure(reason)
+        otbor_store.write_signal_failure(signal_id, failed.failure, failed.failure_reason, log=failed.log)
+    ids = otbor_store.new_article_ids(**window)
+    signal_ids = otbor_store.new_signal_ids(**window)
+    return {"articles": len(ids), "signals": len(signal_ids),
+            "jobs": enqueue(ids, signal_ids=signal_ids, trigger="daily"),
+            "unanswered": len(unanswered) + len(unanswered_signals)}
 
 
-def enqueue(article_ids: list[int], *, trigger: str, bulk: bool = False) -> list[dict[str, Any]]:
-    """Задачи агента пачками по OTBOR_BATCH. bulk — названные статьи (повтор после разбора сбоя): по полосе
-    пересчётов, чтобы не стоять перед потоком дня. Только при включённом флаге: до экзамена (#133) агент на проде
-    не работает."""
+def enqueue(article_ids: list[int], *, signal_ids: list[int] | tuple[int, ...] = (), trigger: str,
+            bulk: bool = False) -> list[dict[str, Any]]:
+    """Задачи агента пачками по OTBOR_BATCH: статьи и сигналы (находки и материалы, #131) — своими задачами. bulk —
+    названные публикации (повтор после разбора сбоя): по полосе пересчётов, чтобы не стоять перед потоком дня.
+    Только при включённом флаге: до экзамена (#133) агент на проде не работает."""
     from oiltech_digest import network_policy
 
     if not config.OTBOR_ENABLED:
@@ -108,11 +87,11 @@ def enqueue(article_ids: list[int], *, trigger: str, bulk: bool = False) -> list
     return [
         repository.create_background_job(
             KIND,
-            {"article_ids": article_ids[start:start + batch], "model": model,
-             "reasoning": config.OTBOR_REASONING, "trigger": trigger},
+            {key: ids[start:start + batch], "model": model, "reasoning": config.OTBOR_REASONING, "trigger": trigger},
             queue_name=route.queue_name, execution_region=route.execution_region, capability=route.capability,
         )
-        for start in range(0, len(article_ids), batch)
+        for key, ids in (("article_ids", list(article_ids)), ("signal_ids", list(signal_ids)))
+        for start in range(0, len(ids), batch)
     ]
 
 
@@ -126,11 +105,13 @@ def configured_model() -> str:
 
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
-    """Самодостаточный пакет для воркера без базы: публикации, справочники, приёмщик ОС."""
+    """Самодостаточный пакет для воркера без базы: публикации (статьи, находки, материалы), справочники, приёмщик
+    ОС."""
     return {
         "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
         "dictionaries": load_dictionaries(),
-        "items": [_item(row) for row in otbor_store.article_inputs(job_payload.get("article_ids") or [])],
+        "items": [*(_item(row) for row in otbor_store.article_inputs(job_payload.get("article_ids") or [])),
+                  *(_signal_item(row) for row in otbor_store.signal_inputs(job_payload.get("signal_ids") or []))],
     }
 
 
@@ -147,6 +128,26 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
         "language": row.get("language") or "",
         "published": publication_day(row.get("published")),
         "received": publication_day(row.get("received")),
+        "links": [],
+        "feedback": {"similar_signals": [], "text": ""},
+    }
+
+
+def _signal_item(row: dict[str, Any]) -> dict[str, Any]:
+    """Находка или материал (#131) так, как их видит модель, — как строка радара и материала в пакете эксперту
+    (otbor_pack): издатель — источник статьи корпуса или сайт из ссылки (имя издателя у ссылки поиска записала модель
+    поиска; у материала без ссылки издателя нет); текст материала — colleague_materials.as_publication. Ссылки
+    находки — заголовок, издатель и дата каждой, до 8."""
+    return {
+        "ref": contract.signal_ref(row["signal_id"]),
+        "title": publication_text(row.get("title"))[:500],
+        "text": publication_text(row.get("text")),
+        "publisher": _publisher_label(row),
+        "language": row.get("language") or "",
+        "published": publication_day(row.get("published")),
+        "received": publication_day(row.get("received")),
+        "links": [{"title": publication_text(link.get("title"))[:300] or None, "publisher": _publisher_label(link),
+                   "published": publication_day(link.get("published"))} for link in row.get("links") or []],
         "feedback": {"similar_signals": [], "text": ""},
     }
 
@@ -163,7 +164,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         raise ValueError("otbor: в задаче нет модели (OTBOR_MODEL на ядре) — модель ленты агент не берёт")
     dictionaries = payload.get("dictionaries") or {}
     instructions = _instructions(dictionaries)
-    schema = _answer_schema(dictionaries)
+    schema = answer_schema(dictionaries)
     client = make_client()
     decisions: list[dict[str, Any]] = []
     result = {"otbor": True, "kind": KIND, "prompt_version": PROMPT_VERSION,
@@ -185,6 +186,7 @@ def _decide(client: Any, item: dict[str, Any], instructions: str, schema: dict[s
     """Ответы модели о публикации: каждый вызов — ответ или ошибка; токены — за все вызовы."""
     decision: dict[str, Any] = {"ref": item.get("ref"), "calls": [], "model": None,
                                 "input_tokens": 0, "output_tokens": 0}
+    links = len(item.get("links") or [])
     found: list[str] = []
     for _ in range(2):
         try:
@@ -200,7 +202,8 @@ def _decide(client: Any, item: dict[str, Any], instructions: str, schema: dict[s
         decision["input_tokens"] += int(response.input_tokens or 0)
         decision["output_tokens"] += int(response.output_tokens or 0)
         # Ответ не по правилам не повторяется (решение владельца 23.10); повтор — только при конфликте шагов.
-        found = [] if answer_problem(response.data, dictionaries) else conflicts(response.data, dictionaries)
+        found = [] if answer_problem(response.data, dictionaries) else conflicts(response.data, dictionaries,
+                                                                                    links=links)
         if not found:
             break
     return decision
@@ -220,7 +223,8 @@ _TASK = """Ты решаешь, брать ли публикацию на пла
 
 Коды — строго из справочников ниже, буквально. Дата публикации и дата поступления — когда о событии написали и
 когда публикация пришла на платформу; дата самого события — только та, что названа в тексте или из него
-следует. Похожие сигналы, оценённые людьми, и оценки людей — справка о том, как люди оценивали похожее, а не
+следует. «Ссылки находки» — публикации, собранные в эту находку (заголовок, издатель, дата); «нет» — публикация
+одна. Похожие сигналы, оценённые людьми, и оценки людей — справка о том, как люди оценивали похожее, а не
 правило."""
 
 
@@ -238,41 +242,23 @@ def _instructions(dictionaries: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _codes(dictionaries: dict[str, Any], name: str) -> list[str]:
-    return [value["code"] for value in (dictionaries.get(name) or {}).get("values") or []]
-
-
-def _answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
-    """Схема ответа модели (строгий JSON): порядок полей — порядок рассуждения «Отбора». По ней же ядро проверяет
-    ответ (answer_problem)."""
-    def enum(name: str, *extra: str) -> dict[str, Any]:
-        return {"type": "string", "enum": [*_codes(dictionaries, name), *extra]}
-
-    properties: dict[str, Any] = {
-        "industry": enum("industry"),
-        "oilfield_relevance": enum("oilfield_relevance"),
-        "oilfield_application": {"type": "string"},
-        "decision": enum("decision"),
-        "reject_reason": enum("reject_reason", NO_REASON),
-        "justification": {"type": "string"},
-        "category": enum("category"),
-    }
-    return {"name": "otbor", "schema": {
-        "type": "object", "additionalProperties": False, "required": list(properties), "properties": properties,
-    }}
-
-
 def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> str:
     """Вход модели о публикации: она сама, приёмщик ОС и, при повторе, конфликт прошлого ответа. Происхождения
     нет (решение владельца 22.10): «радар — значит технология» тянуло бы к старой мерке."""
     feedback = item.get("feedback") or {}
     similar = feedback.get("similar_signals") or []
+    links = item.get("links") or []
     lines = [
         f"Заголовок: {item.get('title') or ''}",
         f"Источник: {item.get('publisher') or 'не указан'}",
         f"Язык: {item.get('language') or 'не указан'}",
         f"Дата публикации: {item.get('published') or 'не указана'}",
         f"Дата поступления: {item.get('received') or 'не указана'}",
+        # Как колонка таблицы эксперта (otbor_pack_format.GIVEN_COLUMNS): по ней справочник объясняет причину
+        # «разные события в одной находке».
+        "Ссылки находки:" + (" нет" if not links else ""),
+        *[f"- {link.get('title') or 'без заголовка'}; {link.get('publisher') or 'издатель не указан'};"
+          f" {link.get('published') or 'дата не указана'}" for link in links],
         "Похожие сигналы, оценённые людьми: " + ("нет" if not similar else ""),
         *[f"- {one.get('title') or ''}; решение: {one.get('decision') or ''}; причина: {one.get('reason') or ''};"
           f" категория: {one.get('category') or ''}; тема: {one.get('theme') or ''}" for one in similar],
@@ -283,207 +269,82 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
     return "\n".join([*lines, "Текст публикации:", item.get("text") or ""])
 
 
-# --- Проверка ответа (воркер и ядро) -------------------------------------------------------------
-
-
-def answer_problem(answer: Any, dictionaries: dict[str, Any]) -> str | None:
-    """Чем ответ не по правилам: не по схеме или значение не из справочника; None — по правилам."""
-    if not isinstance(answer, dict):
-        return "не объект"
-    for name, spec in _answer_schema(dictionaries)["schema"]["properties"].items():
-        if name == "category" and answer.get("decision") == REJECT:
-            # Категория выбирает витрину, у отклонённого её нет: проверка её не требует (решение владельца 23.10).
-            continue
-        value = answer.get(name)
-        if not isinstance(value, str):
-            return f"нет строки {name}"
-        if "enum" in spec and value not in spec["enum"]:
-            return f"значение не из справочника: {name} = «{value[:60]}»"
-    return None
-
-
-def _label(dictionaries: dict[str, Any], name: str, code: str | None) -> str:
-    """Подпись кода по справочнику; кода в справочнике нет — сам код."""
-    values = (dictionaries.get(name) or {}).get("values") or []
-    return next((value["label"] for value in values if value["code"] == code), code or "")
-
-
-def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any]) -> list[str]:
-    """Где шаги ответа не сошлись друг с другом (таблица конфликтов, DECISION_STEPS)."""
-    label = partial(_label, dictionaries)
-    industry, relevance = answer["industry"], answer["oilfield_relevance"]
-    decision, reason = answer["decision"], answer["reject_reason"]
-    found = []
-    if (industry, relevance) in _NO_PAIRS:
-        found.append(_NO_PAIRS[(industry, relevance)])
-    if decision == ACCEPT and reason != NO_REASON:
-        found.append(f"у «брать» есть причина отказа «{label('reject_reason', reason)}»")
-    if decision == REJECT and reason == NO_REASON:
-        found.append("у «не брать» нет причины отказа")
-    step = ACCEPT if decision == ACCEPT else reason
-    industries, relevances = DECISION_STEPS.get(step, (None, None))
-    if step == ACCEPT and relevance not in relevances:
-        found.append(f"«брать» при связи «{label('oilfield_relevance', relevance)}»")
-    elif (industries is not None and industry not in industries) or (relevances is not None
-                                                                      and relevance not in relevances):
-        found.append(f"причина «{label('reject_reason', reason)}» при отрасли «{label('industry', industry)}» "
-                     f"и связи «{label('oilfield_relevance', relevance)}»")
-    if relevance == TRANSFERABLE and not answer["oilfield_application"].strip():
-        found.append("переносимая связь без применения в нефтесервисе")
-    if reason == MIXED_EVENTS:
-        found.append(f"причина «{label('reject_reason', reason)}» у публикации без нескольких ссылок")
-    return found
-
-
-@dataclass
-class Outcome:
-    """Что из ответов воркера дойдёт до сигнала: решение (values) или сбой (failure и почему)."""
-
-    values: dict[str, Any] | None = None
-    disputed: str | None = None
-    failure: str | None = None
-    failure_reason: str | None = None
-    log: list[dict[str, str]] = field(default_factory=list)
-
-
-def _technical_failure(reason: str) -> Outcome:
-    """Технический сбой: «Отбор» не ответил, шаг повторит до OTBOR_ATTEMPTS задач."""
-    return Outcome(failure=otbor_store.FAILURE_TECHNICAL, failure_reason=reason,
-                   log=[_step(f"Сбой, «Отбор» не ответил: {reason}")])
-
-
-def outcome(decision: dict[str, Any], dictionaries: dict[str, Any]) -> Outcome:
-    """Строка итога воркера → решение или сбой. Через неё пишет ядро (apply_result) и будет мерить экзамен
-    (#133): мерится то, что дойдёт до сигнала. Конфликт шагов: в силе ответ повтора, если он по правилам; снова
-    конфликт или повтора нет — решение остаётся с пометкой «спорное»."""
-    calls = [call for call in decision.get("calls") or [] if isinstance(call, dict)]
-    if not calls or calls[0].get("error"):
-        return _technical_failure(f"модель: {str(calls[0].get('error'))[:300]}" if calls else "модель не ответила")
-    answer = calls[0].get("answer")
-    problem = answer_problem(answer, dictionaries)
-    if problem:
-        reason = f"ответ не по правилам: {problem}"
-        return Outcome(failure=otbor_store.FAILURE_INVALID, failure_reason=reason, log=[_step(reason)])
-    log: list[dict[str, str]] = []
-    found = conflicts(answer, dictionaries)
-    disputed = None
-    if found:
-        log.append(_step(f"Шаги ответа не сошлись ({'; '.join(found)}): повторный вызов с указанием конфликта"))
-        retry = calls[1] if len(calls) > 1 else {}
-        if "answer" in retry and answer_problem(retry["answer"], dictionaries) is None:
-            answer = retry["answer"]
-            found = conflicts(answer, dictionaries)
-        if found:
-            disputed = "шаги ответа не сошлись и после повтора: " + "; ".join(found)
-    values = _values(answer, dictionaries)
-    log.append(_step(_decision_text(values, dictionaries)))
-    if disputed:
-        log.append(_step(f"Спорное: {disputed}"))
-    return Outcome(values=values, disputed=disputed, log=log)
-
-
-def _values(answer: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, Any]:
-    """Проверенный ответ → значения сигнала. Применение — только у переносимой связи; причина — только у отказа;
-    категория у отказа — если модель её написала из справочника (её никто не читает)."""
-    relevance = answer["oilfield_relevance"]
-    reason = answer["reject_reason"]
-    category = answer.get("category")
-    return {
-        "industry": answer["industry"],
-        "oilfield_relevance": relevance,
-        "oilfield_application": _phrase(answer["oilfield_application"], _APPLICATION_CHARS)
-        if relevance == TRANSFERABLE else None,
-        "otbor_decision": answer["decision"],
-        "reject_reason": reason if answer["decision"] == REJECT and reason != NO_REASON else None,
-        "signal_category": category if category in _codes(dictionaries, "category") else None,
-        "verdict_reason": _phrase(answer["justification"], _JUSTIFICATION_CHARS),
-    }
-
-
-def _decision_text(values: dict[str, Any], dictionaries: dict[str, Any]) -> str:
-    label = partial(_label, dictionaries)
-
-    relevance = label("oilfield_relevance", values["oilfield_relevance"])
-    if values["oilfield_application"]:
-        relevance += f", применение: {values['oilfield_application']}"
-    decision = label("decision", values["otbor_decision"])
-    if values["reject_reason"]:
-        decision += f", причина «{label('reject_reason', values['reject_reason'])}»"
-    return (f"Отрасль: {label('industry', values['industry'])}. Связь с нефтесервисом: {relevance}. "
-            f"Решение: {decision}. Категория: {label('category', values['signal_category'])}."
-            + (f" Почему: {values['verdict_reason']}" if values["verdict_reason"] else ""))
-
-
-def _step(text: str) -> dict[str, str]:
-    return {"stage": STAGE, "text": text}
-
-
-def _phrase(value: str, limit: int) -> str | None:
-    return " ".join(value.split())[:limit] or None
-
-
 # --- Применение (ядро) ---------------------------------------------------------------------------
 
 
-def apply_result(result: dict[str, Any], *, job_id: int | None = None,
-                 article_ids: list[Any] | None = None) -> dict[str, Any]:
-    """Сторона ядра: проверить ответы кодом и записать решения или сбои. Строка не о статье задачи не пишется.
+def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_ids: list[Any] | None = None,
+                 signal_ids: list[Any] | None = None) -> dict[str, Any]:
+    """Сторона ядра: проверить ответы кодом и записать решения или сбои — у статьи в её сигнал ленты, у находки и
+    материала (#131) в сам сигнал. Строка не о публикации задачи не пишется; ссылок у находки ядро считает само.
     Справочники сменились после выдачи — модель выбирала из других: технический сбой, шаг повторит."""
     dictionaries = load_dictionaries()
     decisions = [decision for decision in result.get("decisions") or [] if isinstance(decision, dict)]
-    expected = None if article_ids is None else {str(value) for value in article_ids}
+    expected = None if article_ids is None and signal_ids is None else (
+        {contract.article_ref(value) for value in article_ids or []}
+        | {contract.signal_ref(value) for value in signal_ids or []})
     otbor_store.record_usage(job_id, [usage for decision in decisions if (usage := _usage(decision, expected))])
+    links = otbor_store.links_in_input([signal_id for decision in decisions
+                                        if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
     stale = result.get("dictionaries_version") != dictionaries.get("version")
     recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
               "dictionaries_version": dictionaries.get("version"), "job_id": job_id}
     applied = {"decided": 0, "failed": 0, "kept_in_digest": 0, "errors": []}
     for decision in decisions:
-        article_id = _article_id(decision)
-        if not _in_job(article_id, expected):
+        article_id, signal_id = _publication(decision, expected)
+        if article_id is None and signal_id is None:
             applied["errors"].append({"ref": str(decision.get("ref"))[:60], "error": "публикации нет в этой задаче"})
             continue
         if stale:
             reason = (f"справочники сменились после выдачи задачи ({result.get('dictionaries_version')} → "
                       f"{dictionaries.get('version')})")
-            checked = _technical_failure(reason)
+            checked = technical_failure(reason)
         else:
-            checked = outcome(decision, dictionaries)
+            checked = outcome(decision, dictionaries, links=links.get(signal_id, 0))
         if checked.values is None:
-            if otbor_store.write_failure(article_id, checked.failure, checked.failure_reason, log=checked.log):
+            failed = (otbor_store.write_failure(article_id, checked.failure, checked.failure_reason, log=checked.log)
+                      if article_id is not None else
+                      otbor_store.write_signal_failure(signal_id, checked.failure, checked.failure_reason,
+                                                       log=checked.log))
+            if failed:
                 applied["failed"] += 1
-            applied["errors"].append({"article_id": article_id, "error": checked.failure_reason})
+            applied["errors"].append({"article_id": article_id, "signal_id": signal_id,
+                                      "error": checked.failure_reason})
             continue
         decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        written = otbor_store.write_decision(article_id, checked.values, disputed=checked.disputed, log=checked.log,
-                                             recipe={**recipe, "model": _model_name(decision), "decided_at": decided_at})
+        write = (partial(otbor_store.write_decision, article_id) if article_id is not None
+                 else partial(otbor_store.write_signal_decision, signal_id))
+        written = write(checked.values, disputed=checked.disputed, log=checked.log,
+                        recipe={**recipe, "model": _model_name(decision), "decided_at": decided_at})
         if written:
             applied[written] += 1
     return applied
 
 
-def _article_id(decision: dict[str, Any]) -> int | None:
-    return contract.ref_article_id(decision.get("ref"))
-
-
-def _in_job(article_id: int | None, expected: set[str] | None) -> bool:
-    return article_id is not None and (expected is None or str(article_id) in expected)
+def _publication(decision: dict[str, Any], expected: set[str] | None) -> tuple[int | None, int | None]:
+    """(статья, сигнал) строки итога воркера: ровно одно не None, если публикация — из этой задачи."""
+    article_id, signal_id = contract.ref_article_id(decision.get("ref")), contract.ref_signal_id(decision.get("ref"))
+    ref = (contract.article_ref(article_id) if article_id is not None
+           else contract.signal_ref(signal_id) if signal_id is not None else None)
+    if ref is None or (expected is not None and ref not in expected):
+        return None, None
+    return article_id, signal_id
 
 
 def _usage(decision: dict[str, Any], expected: set[str] | None) -> dict[str, Any] | None:
     """Оплаченные вызовы модели — и с ответом не по правилам: модель за них уже взяла деньги. Цена — по ставкам
-    ядра. Строка не о статье задачи — не расход этой задачи."""
-    article_id = _article_id(decision)
+    ядра. Строка не о публикации задачи — не расход этой задачи."""
+    article_id, signal_id = _publication(decision, expected)
     try:
         tokens_in = max(0, int(decision.get("input_tokens") or 0))
         tokens_out = max(0, int(decision.get("output_tokens") or 0))
     except (TypeError, ValueError):
         return None
-    if not _in_job(article_id, expected) or not tokens_in + tokens_out:
+    if (article_id is None and signal_id is None) or not tokens_in + tokens_out:
         return None
     model = _model_name(decision)
     price_in, price_out = config.price_for_model(model)
-    return {"article_id": article_id, "model": model, "input_tokens": tokens_in, "output_tokens": tokens_out,
-            "cost_usd": round((tokens_in * price_in + tokens_out * price_out) / 1_000_000, 6)}
+    return {"article_id": article_id, "signal_id": signal_id, "model": model, "input_tokens": tokens_in,
+            "output_tokens": tokens_out, "cost_usd": round((tokens_in * price_in + tokens_out * price_out) / 1_000_000, 6)}
 
 
 def _model_name(decision: dict[str, Any]) -> str | None:

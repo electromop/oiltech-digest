@@ -123,10 +123,10 @@ const VERDICT_LABELS: Array<{ value: FeedbackDraft["verdict"]; label: string }> 
 ];
 
 // Отзыв учит судью радара только о его находке вне бизнес-ленты (#130, repository.judge_learns_from): у неё
-// полная форма. У остальных (сигнал ленты, находка в бизнес-ленте) отзыв — блок ОС: оценка, причина и
-// комментарий, правок карточки и «дубля» (он прячет карточку) нет; блок только хранится.
+// полная форма. У остальных (сигнал ленты, материал коллеги — #131, находка в бизнес-ленте) отзыв — блок ОС:
+// оценка, причина и комментарий, правок карточки и «дубля» (он прячет карточку) нет; блок только хранится.
 function judgeFeedback(signal: Signal): boolean {
-  return signal.origin !== "feed" && signal.signal_category !== "business";
+  return (signal.origin ?? "radar") === "radar" && signal.signal_category !== "business";
 }
 
 // «Не тот блок» у бизнес-карточки — наоборот: технология, а не бизнес.
@@ -945,8 +945,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
             // Отклонённое «Отбором» и не решённое им в выпуск не выбирают: вернуть отклонённое можно только
             // полями «Отбора» (#132). Скрытое прежними правилами — как раньше, выбранное выходит на радар.
             const digestOffered = signal.otbor_decision !== "reject" && !(signal.otbor_failure && !signal.otbor_decision);
-            // Поля судьи радара («Почему сейчас», «Переносимость») у статьи сбора пусты — как в ленте, их нет.
-            const judgeFieldsOptional = business || signal.origin === "feed";
+            // Поля судьи радара («Почему сейчас», «Переносимость») у статьи сбора и материала коллеги пусты — их нет.
+            const judgeFieldsOptional = business || (signal.origin ?? "radar") !== "radar";
             return (
               <article className="articleCardReact" key={signal.id}>
                 {/* Свёрнутая строка, как у «Бизнес-сигналов» (документ заказчика 19.09):
