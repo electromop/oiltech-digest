@@ -104,9 +104,7 @@ sources
 ### `docs/`
 
 - `architecture.md` — техническая архитектура;
-- `testing.md` — как проверять систему;
-- `reference/` — фирменный референс дайджеста (email_template + образец);
-- `archive/` — исторические отчёты и планы (work_report, handoff, status).
+- `testing.md` — как проверять систему.
 
 ## 5. Режимы запуска
 
