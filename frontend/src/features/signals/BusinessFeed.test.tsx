@@ -38,7 +38,7 @@ describe("бизнес-лента", () => {
     // дата события; «Решение платформы» и число публикаций — в раскрытой карточке (пересмотр 23.10).
     const line = card.querySelector(".signalCardLine") as HTMLElement;
     expect(line).toHaveTextContent("Бурение");
-    expect(line).toHaveTextContent("событие 24.09.2026");
+    expect(line).toHaveTextContent("Дата события: 24.09.2026");
     expect(line).not.toHaveTextContent("Решение платформы");
     expect(within(card).getByTitle("Балл по профилю «Бизнес-сигналы»")).toHaveTextContent("74");
     expect(within(card).getByText("Выше средней")).toBeInTheDocument();

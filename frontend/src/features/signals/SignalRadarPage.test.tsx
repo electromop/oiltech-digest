@@ -994,9 +994,9 @@ describe("качество радара на экране (Виктор 29.09)",
   it("строка карточки показывает дату самого события, если судья её поставил", async () => {
     renderRadar(false);
     const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
-    expect(within(card).getByText("событие 10.09.2026")).toBeInTheDocument();
+    expect(within(card).getByText("Дата события:").parentElement).toHaveTextContent("Дата события: 10.09.2026");
     const old = screen.getByText("Карточка до правки").closest("article") as HTMLElement;
-    expect(within(old).queryByText(/событие/)).not.toBeInTheDocument();
+    expect(within(old).queryByText(/Дата события/)).not.toBeInTheDocument();
   });
 
   it("раскрытая карточка показывает разбивку балла по критериям с весами из снимка", async () => {

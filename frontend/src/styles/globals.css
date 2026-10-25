@@ -4176,20 +4176,24 @@
    компании, регион, дата события через точку. Атрибуты (#97) — в раскрытой карточке таблицей «подпись: значение»;
    «не определено» — пробел карточки, пунктир слева вместо пропуска. Компания — кнопка «всё про компанию». */
 .signalCardLine {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  row-gap: 2px;
+  display: grid;
+  gap: 2px;
   margin-top: 4px;
   color: var(--ot-text-secondary);
   font-size: var(--ot-size-body);
   line-height: 1.5;
 }
 
-.signalCardLine > * + *::before {
-  content: "·";
-  content: "·" / "";
-  margin-inline: 8px;
+/* Кто, где, когда — строкой ниже темы: подпись серым, значение основным цветом, между полями отступ, без точек. */
+.signalCardFacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 20px;
+  color: var(--ot-text-primary);
+}
+
+.signalCardLabel {
   color: var(--ot-text-secondary);
 }
 
