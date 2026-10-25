@@ -26,7 +26,7 @@ type Props = {
   onError?: (error: unknown) => void;
 };
 
-// Формулировки заказчика (13.09): официальный тон для корпоративного портала ГПН.
+// Формулировки заказчика (13.09): официальный тон для корпоративного портала.
 const SCALES: Array<{ key: "usefulness" | "translation" | "source_quality"; label: string; hint: string }> = [
   { key: "usefulness", label: "Практическая ценность сигнала", hint: "1 — не применимо, 5 — берём в дайджест" },
   { key: "translation", label: "Качество заголовка и перевода", hint: "1 — смысл искажён, 5 — править нечего" },
