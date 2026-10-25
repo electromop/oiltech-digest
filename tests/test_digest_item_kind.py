@@ -4,8 +4,11 @@
 экране сборки, и в самом выпуске: письмо и PDF (одна вёрстка), DOCX.
 """
 
+from collections import OrderedDict
 from datetime import datetime, timezone
 from io import BytesIO
+import threading
+import time
 
 from docx import Document
 from fastapi.testclient import TestClient
@@ -84,7 +87,8 @@ def test_kind_comes_from_the_feed_signal_of_the_article(isolated_db):
 
 def test_preview_pdf_opens_inline_without_files_or_jobs(monkeypatch, tmp_path):
     _stub(monkeypatch, [_row(1)])
-    monkeypatch.setattr(api, "render_digest_pdf", lambda content: b"%PDF-1.4 preview")
+    monkeypatch.setattr(digest, "render_digest_pdf", lambda content: b"%PDF-1.4 preview")
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_CACHE", OrderedDict())
     monkeypatch.setattr(digest, "EXPORTS_DIR", tmp_path)
     api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "role": "user"}
     try:
@@ -97,3 +101,40 @@ def test_preview_pdf_opens_inline_without_files_or_jobs(monkeypatch, tmp_path):
     assert response.headers["content-disposition"].startswith("inline")
     assert response.content == b"%PDF-1.4 preview"
     assert list(tmp_path.iterdir()) == []
+
+
+def test_preview_pdf_builds_one_issue_once_and_one_at_a_time(monkeypatch):
+    """Ревью 24.10: предпросмотр собирает Chromium в процессе API. Тот же выпуск (возврат на вкладку, повторное
+    открытие архива) отдаётся без новой сборки, разные — по одной за раз, а память — на четыре последних."""
+    calls = []
+    running = []
+
+    def fake_render(content):
+        running.append(1)
+        assert len(running) == 1, "две сборки Chromium одновременно"
+        time.sleep(0.05)
+        calls.append(content["month"])
+        running.pop()
+        return f"%PDF {content['month']}".encode()
+
+    monkeypatch.setattr(digest, "render_digest_pdf", fake_render)
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_CACHE", OrderedDict())
+    issue = {"month": "2026-10", "news": [{"title": "Пилот"}]}
+
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(digest.render_digest_preview_pdf(dict(issue)))) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert results == [b"%PDF 2026-10"] * 3
+    assert calls == ["2026-10"]
+
+    # Сменилось содержание (черновик, отметка, фильтр) — новая сборка.
+    digest.render_digest_preview_pdf({"month": "2026-10", "news": [{"title": "Другой"}]})
+    assert calls == ["2026-10", "2026-10"]
+
+    for month in ("2026-06", "2026-07", "2026-08", "2026-09"):
+        digest.render_digest_preview_pdf({"month": month, "news": []})
+    assert len(digest._PREVIEW_PDF_CACHE) == 4
+

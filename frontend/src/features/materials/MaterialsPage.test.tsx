@@ -68,7 +68,7 @@ describe("MaterialsPage", () => {
     expect(within(fromBot).getByText("Telegram · бот")).toBeTruthy();
     expect(within(fromBot).getByText(/Иван Иванов \(@ivanov\)/)).toBeTruthy();
     const document = screen.getByText("Отчёт о ГРП.pdf").closest("article") as HTMLElement;
-    expect(within(document).getByText("Внесено на платформе")).toBeTruthy();
+    expect(within(document).getByText("Внесено вами")).toBeTruthy();
     expect(screen.getByText(/обзор\.pdf/).closest("a")?.getAttribute("href")).toBe("/api/materials/2/file");
 
     fireEvent.change(screen.getByLabelText("Оценка автора"), { target: { value: "reject" } });
@@ -77,7 +77,7 @@ describe("MaterialsPage", () => {
     expect(screen.getByText("Обзор рынка")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Оценка автора"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Внесено" }));
+    fireEvent.click(screen.getByRole("button", { name: "Внесено вами" }));
     expect(screen.getByText("Отчёт о ГРП.pdf")).toBeTruthy();
     expect(screen.queryByText("Обзор рынка")).toBeNull();
   });

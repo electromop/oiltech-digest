@@ -8,7 +8,9 @@ import json
 import logging
 import re
 import secrets
+import threading
 import time
+from collections import OrderedDict
 from html import escape
 from pathlib import Path
 from datetime import UTC, datetime
@@ -1080,6 +1082,32 @@ def render_digest_pdf(content: dict) -> bytes:
         finally:
             browser.close()
     return pdf_bytes
+
+
+# Предпросмотр PDF на экране дайджеста собирает Chromium в процессе API (выгрузка файлом идёт полосой playwright).
+# Чтобы экран не держал несколько Chromium сразу и не собирал один и тот же выпуск заново (возврат на вкладку,
+# повторное открытие архивного выпуска), сборки идут по одной, а готовый PDF помнится по содержанию выпуска.
+_PREVIEW_PDF_LOCK = threading.Lock()
+_PREVIEW_PDF_CACHE: OrderedDict[str, bytes] = OrderedDict()
+_PREVIEW_PDF_CACHE_SIZE = 4
+
+
+def render_digest_preview_pdf(content: dict) -> bytes:
+    """PDF предпросмотра: тот же render_digest_pdf, но по одной сборке за раз и с памятью на последние выпуски.
+
+    Ключ — содержание выпуска целиком (состав, тексты, оформление): сменился черновик, отметка или фильтр — другой
+    ключ и новая сборка; тот же выпуск — готовые байты без Chromium."""
+    key = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+    with _PREVIEW_PDF_LOCK:
+        cached = _PREVIEW_PDF_CACHE.get(key)
+        if cached is not None:
+            _PREVIEW_PDF_CACHE.move_to_end(key)
+            return cached
+        pdf_bytes = render_digest_pdf(content)
+        _PREVIEW_PDF_CACHE[key] = pdf_bytes
+        while len(_PREVIEW_PDF_CACHE) > _PREVIEW_PDF_CACHE_SIZE:
+            _PREVIEW_PDF_CACHE.popitem(last=False)
+        return pdf_bytes
 
 
 def _fetch_docx_image(url: str | None, timeout: float = 8) -> bytes | None:

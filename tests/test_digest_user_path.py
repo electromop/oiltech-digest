@@ -187,8 +187,10 @@ def test_issue_of_only_signals_then_mixed_with_and_without_a_draft(issue):
     assert analyst.save(SEPT, []).status_code == 200
     assert analyst.issue() == [("signal", s["sep"])]
 
+    # Сигналы радара идут после статей и без черновика (решение владельца 24.10): на экране один список в порядке
+    # PDF, а сигналы в черновике не хранятся, так что после сохранения порядок тот же.
     analyst.mark(a["low"])
-    assert analyst.issue() == [("signal", s["sep"]), ("article", a["low"])]
+    assert analyst.issue() == [("article", a["low"]), ("signal", s["sep"])]
 
     # Черновик хранит статьи; выбранные сигналы идут за ними.
     assert analyst.save(SEPT, [a["low"]]).status_code == 200

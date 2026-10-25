@@ -20,12 +20,13 @@ type Props = {
 };
 
 // Один раздел «Материалы» (решение владельца 23.10): то, что коллеги прислали боту в Telegram, и документы,
-// внесённые на платформе. У каждой записи видно, откуда она пришла и кто её прислал.
+// внесённые на платформе. У каждой записи видно, откуда она пришла и кто её прислал. Документы сервер отдаёт только
+// внёсшему (изоляция пользователей, 24.07), поэтому они подписаны «Внесено вами» (ревью 24.10).
 type Entry =
   | { origin: "telegram"; key: string; time: number; material: ColleagueMaterial }
   | { origin: "upload"; key: string; time: number; document: UploadedDocument };
 
-const ORIGIN_LABELS = { telegram: "Telegram · бот", upload: "Внесено на платформе" } as const;
+const ORIGIN_LABELS = { telegram: "Telegram · бот", upload: "Внесено вами" } as const;
 const VERDICT_TONE: Record<string, string> = {
   strong_signal: "ok",
   approved: "ok",
@@ -174,8 +175,8 @@ export function MaterialsPage({ onUnauthorized, showToast, isAdmin = false }: Pr
         <div>
           <h1>Материалы</h1>
           <p>
-            Что коллеги прислали боту в Telegram, и документы, внесённые на платформе. У каждой записи видно, откуда она
-            пришла.
+            Что коллеги прислали боту в Telegram, и документы, которые вы внесли на платформе (их видите только вы). У
+            каждой записи видно, откуда она пришла.
           </p>
         </div>
         <div className="panelActions">
@@ -205,7 +206,7 @@ export function MaterialsPage({ onUnauthorized, showToast, isAdmin = false }: Pr
           <div className="field">
             <span id="materials-origin-label">Откуда</span>
             <div className="viewTabs" role="group" aria-labelledby="materials-origin-label">
-              {([["", "Все"], ["telegram", "Telegram"], ["upload", "Внесено"]] as const).map(([value, label]) => (
+              {([["", "Все"], ["telegram", "Telegram"], ["upload", "Внесено вами"]] as const).map(([value, label]) => (
                 <button
                   key={value || "all"}
                   type="button"

@@ -108,6 +108,11 @@
   gap: 12px;
 }
 
+/* Выгрузка прошлого выпуска из таблицы архива: процесс виден рядом с заголовком списка. */
+.panelHeader .digestArchiveExport {
+  margin-top: 0;
+}
+
 .digestWorkspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

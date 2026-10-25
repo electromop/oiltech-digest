@@ -46,9 +46,6 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   const [archiveOpen, setArchiveOpen] = useState<string | null>(null);
   // PDF собирается заново, когда растёт число: открытие, смена выпуска, сохранённый черновик, «Обновить PDF».
   const [pdfToken, setPdfToken] = useState(0);
-  // Фильтры, с которыми собран показанный PDF: сменились — PDF устарел до «Обновить PDF».
-  const filterSignature = JSON.stringify([scoreMin, scoreMax, search, tag]);
-  const [pdfFilterSignature, setPdfFilterSignature] = useState(filterSignature);
   // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML») — без понятий
   // «задача/очередь/№N»: пользователь видит процесс и результат, а не job-runner.
   const [exporting, setExporting] = useState<string | null>(null);
@@ -70,6 +67,15 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   // Лента (/api/articles) без месяца отдаёт только открытые месяцы — для прошлого выпуска
   // выбранные статьи приходят отдельным запросом с `month`.
   const sourceArticles = isArchiveMonth ? archiveArticles ?? NO_ARTICLES : articles;
+  // Прошлый выпуск — целиком (ревью 24.10): фильтры состава к нему не применяются и на экране их нет, иначе выгрузка
+  // из панели и из таблицы архива давала бы разные файлы.
+  const appliedSearch = isArchiveMonth ? "" : search;
+  const appliedTag = isArchiveMonth ? "" : tag;
+  const appliedMin = isArchiveMonth ? 0 : scoreMin;
+  const appliedMax = isArchiveMonth ? 100 : scoreMax;
+  // Фильтры, с которыми собран показанный PDF: сменились — PDF устарел до «Обновить PDF».
+  const filterSignature = JSON.stringify([appliedMin, appliedMax, appliedSearch, appliedTag]);
+  const [pdfFilterSignature, setPdfFilterSignature] = useState(filterSignature);
 
   // Окно сменилось, пока вкладка была открыта (наступил день смены окна): выбранное за закрывшийся
   // месяц ушло в архив. Перечитываем список, иначе в очереди остались бы статьи, которые
@@ -110,7 +116,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   useEffect(() => {
     if (loading) return;
     void loadDigestPreview();
-  }, [loading, month, scoreMin, scoreMax, search, tag]);
+  }, [loading, month, appliedMin, appliedMax, appliedSearch, appliedTag]);
 
   // PDF — заново на открытии экрана и при смене выпуска; фильтры его только помечают устаревшим. Ждём окно
   // месяца и выпуск по умолчанию: иначе первый PDF собрался бы за все месяцы и сразу ещё раз — за выпуск.
@@ -130,7 +136,9 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     void loadSavedDraft(activeMonth);
   }, [loading, activeMonth]);
 
-  const previewFilters = { month, limit: DIGEST_PREVIEW_LIMIT, minScore: scoreMin, maxScore: scoreMax, search, topTag: tag };
+  const previewFilters = {
+    month, limit: DIGEST_PREVIEW_LIMIT, minScore: appliedMin, maxScore: appliedMax, search: appliedSearch, topTag: appliedTag,
+  };
 
   async function reload() {
     try {
@@ -215,19 +223,19 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   }
 
   const digestCandidates = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = appliedSearch.trim().toLowerCase();
     return sourceArticles.filter((article) => {
       const hay = [article.title, article.tag, article.summary].join(" ").toLowerCase();
       return (
         article.digest &&
         (!q || hay.includes(q)) &&
-        (!tag || article.tag === tag || article.tag.startsWith(`${tag} /`)) &&
-        Number(article.score || 0) >= scoreMin &&
-        Number(article.score || 0) <= scoreMax &&
+        (!appliedTag || article.tag === appliedTag || article.tag.startsWith(`${appliedTag} /`)) &&
+        Number(article.score || 0) >= appliedMin &&
+        Number(article.score || 0) <= appliedMax &&
         (!month || String(article.date || "").startsWith(month))
       );
     });
-  }, [sourceArticles, month, scoreMax, scoreMin, search, tag]);
+  }, [sourceArticles, month, appliedMax, appliedMin, appliedSearch, appliedTag]);
 
   const topTags = useMemo(() => {
     const names = [...new Set(sourceArticles.map((article) => article.tag).filter(Boolean))].sort();
@@ -288,7 +296,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
         format,
         monthOverride
           ? { month: monthOverride, limit: DIGEST_PREVIEW_LIMIT, minScore: 0, maxScore: 100 }
-          : { month, limit: DIGEST_PREVIEW_LIMIT, minScore: scoreMin, maxScore: scoreMax, search, topTag: tag },
+          : { month, limit: DIGEST_PREVIEW_LIMIT, minScore: appliedMin, maxScore: appliedMax, search: appliedSearch, topTag: appliedTag },
       );
       showToast(`Документ готов: ${filename}`);
     } catch (error) {
@@ -390,17 +398,19 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
             <span>Выпуск за {monthLabel(month)} в архиве: его можно смотреть и выгружать, но не менять.</span>
           </div>
         ) : null}
-        <DigestFilters
-          search={search}
-          tag={tag}
-          topTags={topTags}
-          scoreMin={scoreMin}
-          scoreMax={scoreMax}
-          onSearch={setSearch}
-          onTag={setTag}
-          onScoreMin={setScoreMin}
-          onScoreMax={setScoreMax}
-        />
+        {isArchiveMonth ? null : (
+          <DigestFilters
+            search={search}
+            tag={tag}
+            topTags={topTags}
+            scoreMin={scoreMin}
+            scoreMax={scoreMax}
+            onSearch={setSearch}
+            onTag={setTag}
+            onScoreMin={setScoreMin}
+            onScoreMax={setScoreMax}
+          />
+        )}
         {loading ? (
           <SkeletonList rows={4} label="Загружаем материалы выпуска" />
         ) : orderedDigestCandidates.length || availableDigestCandidates.length || radarItems.length ? (
@@ -454,24 +464,31 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
 
       <DigestViewSwitch view={view} archiveCount={archiveIssueMonths.length} onChange={switchView} />
 
-      {view === "issue" ? workspace : archiveOpen ? (
-        <>
-          <div className="digestArchiveBar">
-            <button type="button" className="ghostButton compactButton" onClick={() => setArchiveOpen(null)}>
-              ← Все выпуски
-            </button>
-          </div>
-          {workspace}
-        </>
-      ) : (
+      {view === "archive" && archiveOpen ? (
+        <div className="digestArchiveBar">
+          <button type="button" className="ghostButton compactButton" onClick={() => setArchiveOpen(null)}>
+            ← Все выпуски
+          </button>
+        </div>
+      ) : null}
+      {view === "archive" && !archiveOpen ? (
         <section className="panel">
           <div className="panelHeader">
             <h2>Архив выпусков</h2>
+            {exporting ? (
+              <span className="inlineLoader digestArchiveExport" role="status">
+                <span className="loaderDot" aria-hidden="true" />
+                Готовим документ {exporting}…
+              </span>
+            ) : null}
           </div>
           <DigestArchive months={feedWindow?.archive ?? []} rolloverDay={feedWindow?.rollover_day} busy={busy}
             onOpen={setArchiveOpen} onDownload={(target) => void handleDigestExport("pdf", target)} />
         </section>
-      )}
+      ) : null}
+      {/* Состав и PDF не размонтируются, пока открыт список архива (ревью 24.10): возврат на вкладку не собирает
+          PDF заново, а «Открыть» в архиве шлёт один запрос PDF, а не два. */}
+      <div hidden={view === "archive" && !archiveOpen}>{workspace}</div>
     </section>
   );
 }

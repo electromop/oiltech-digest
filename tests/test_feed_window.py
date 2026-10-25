@@ -440,6 +440,39 @@ def test_feed_window_endpoint_lists_archive_months_with_counts(feed, monkeypatch
     assert admin_view["archive"] == [{"month": "2026-08", "articles": 3, "digest": 1}]
 
 
+def test_archive_counts_radar_cards_chosen_for_the_issue(feed, monkeypatch):
+    """Ревью 24.10: в выпуске идут и карточки радара. Август — статья и карточка, июль — одна карточка: июль тоже
+    в архиве, иначе его выпуск не открыть (выбора месяца на экране нет). Дубль и сигнал ленты не считаются."""
+    def radar_card(key, first_seen, **fields):
+        signal_id = repository.upsert_signal({"signal_key": key, "title": key, "title_ru": key, "theme": "Бурение",
+                                              "summary": "Суть.", "maturity": "shortlist", "score": 70})
+        with connection.get_connection() as conn:
+            conn.execute("UPDATE signals SET first_seen_at = %s WHERE id = %s", (first_seen, signal_id))
+            for column, value in fields.items():
+                conn.execute(f"UPDATE signals SET {column} = %s WHERE id = %s", (value, signal_id))
+            conn.execute("INSERT INTO signal_marks (signal_id, status) VALUES (%s, 'digest')", (signal_id,))
+            conn.commit()
+        return signal_id
+
+    main_card = radar_card("aug-radar", _utc(2026, 8, 10, 12))
+    radar_card("aug-duplicate", _utc(2026, 8, 11, 12), merged_into_signal_id=main_card)
+    radar_card("aug-feed", _utc(2026, 8, 12, 12), origin="feed")
+    radar_card("jul-radar", _utc(2026, 7, 15, 12))
+    with connection.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO article_marks (set_by_user_id, article_id, status) VALUES (%s, %s, 'digest')",
+            (feed["user"], feed["ids"]["aug"]),
+        )
+        conn.commit()
+    _freeze(monkeypatch, _msk(2026, 9, 23, 12, 0))
+
+    payload = _as(feed["user"], "user").get("/api/feed-window").json()
+    assert payload["archive"] == [
+        {"month": "2026-08", "articles": 3, "digest": 2},
+        {"month": "2026-07", "articles": 0, "digest": 1},
+    ]
+
+
 def test_archived_issue_can_be_viewed_but_its_draft_cannot_change(feed, monkeypatch):
     """Решение владельца 23.09: прошлый выпуск — просмотр и выгрузка, без правки черновика."""
     with connection.get_connection() as conn:

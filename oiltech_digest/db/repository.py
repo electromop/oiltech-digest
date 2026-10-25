@@ -5057,6 +5057,10 @@ def feed_archive_months(window: FeedWindow) -> list[dict]:
     та же, что у ленты и её счётчиков (feed_window.visible_sql): число у месяца равно
     «сигналам» над лентой этого месяца. Скрытия отметками и порог балла не учитываются —
     число показывает объём месяца, а не текущий фильтр.
+
+    В выпуске идут и карточки радара, выбранные «в дайджест» (ревью 24.10): «digest» считает их
+    теми же условиями, что сборщик (_issue_signal_sql, signal_month_sql), а месяц только из
+    карточек радара тоже есть в списке — иначе такой прошлый выпуск было бы не открыть.
     """
     month_expr = period_month_sql("a")
     with get_connection() as conn:
@@ -5073,14 +5077,25 @@ def feed_archive_months(window: FeedWindow) -> list[dict]:
              WHERE {visible_sql()}
                AND {month_expr} < %s
              GROUP BY 1
-             ORDER BY 1 DESC
             """,
             (window.open_months[0],),
         )
-        return [
-            {"month": row["month"], "articles": int(row["articles"]), "digest": int(row["digest"])}
-            for row in cur.fetchall()
-        ]
+        months = {row["month"]: {"month": row["month"], "articles": int(row["articles"]), "digest": int(row["digest"])}
+                  for row in cur.fetchall()}
+        cur.execute(
+            f"""
+            SELECT {signal_month_sql("sig")} AS month, COUNT(*) AS digest
+              FROM signals sig
+             WHERE {_issue_signal_sql(marks.signal_marked_sql("sig.id", "digest"))}
+               AND {signal_month_sql("sig")} < %s
+             GROUP BY 1
+            """,
+            (window.open_months[0],),
+        )
+        for row in cur.fetchall():
+            entry = months.setdefault(row["month"], {"month": row["month"], "articles": 0, "digest": 0})
+            entry["digest"] += int(row["digest"])
+        return sorted(months.values(), key=lambda item: item["month"], reverse=True)
 
 
 def monthly_platform_stats(months: int = 6) -> list[dict]:

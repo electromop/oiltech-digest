@@ -47,7 +47,7 @@ from oiltech_digest.processing.digest import (
     build_digest_content,
     get_digest_branding,
     render_digest_email,
-    render_digest_pdf,
+    render_digest_preview_pdf,
     save_digest_branding,
     save_digest_draft,
     write_digest_export,
@@ -2235,7 +2235,8 @@ def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
                        top_tag: str = "",
                        user: dict[str, Any] = Depends(require_user)) -> Response:
     """Предпросмотр выпуска сразу в PDF (решение владельца 23.10): тот же выпуск и та же вёрстка, что у выгрузки
-    PDF, но для окна экрана — inline, без файла в exports и без строки export_jobs."""
+    PDF, но для окна экрана — inline, без файла в exports и без строки export_jobs. Сборки по одной, тот же выпуск
+    отдаётся без повторной сборки (render_digest_preview_pdf)."""
     content = build_digest_content(
         month=month,
         limit=limit,
@@ -2245,7 +2246,7 @@ def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
         top_tag=top_tag.strip() or None,
     )
     try:
-        pdf = render_digest_pdf(content)
+        pdf = render_digest_preview_pdf(content)
     except RuntimeError as exc:  # нет Chromium и т.п. — понятное сообщение, не 500
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(

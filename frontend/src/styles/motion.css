@@ -1,7 +1,8 @@
 /* Дизайн-система v2: движение. Точечно, там, где оно объясняет, что произошло (решение владельца 23.10):
    раскрытие карточек и панелей, отметка «В дайджест», подокно и меню, скелеты загрузки, нажатие кнопки.
-   Перемещение и масштаб — только при prefers-reduced-motion: no-preference; при «уменьшить движение» —
-   короткое проявление прозрачностью или ничего. Длительности и кривые — токены Carbon (tokens.css).
+   Всё движение — только при prefers-reduced-motion: no-preference. При «уменьшить движение» анимаций и переходов нет
+   совсем: base.css сводит их к 0,01 мс для всего интерфейса, отдельные запасные варианты здесь не нужны.
+   Длительности и кривые — токены Carbon (tokens.css).
    Ни одно состояние не передаётся одним движением: подпись, цвет или значок остаются и без анимации. */
 
 /* --- Раскрытие: карточка, ход решения, панель фильтров, группа, строка выпуска --- */
@@ -12,20 +13,7 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .revealIn,
-  .digestAvailablePanel[open] > .digestAvailableList {
-    animation: otFadeIn var(--ot-duration-moderate-01) linear both;
-  }
-
-  /* Поворот шеврона — тоже движение. */
-  .groupChevron,
-  .expandButtonReact svg {
-    transition: none;
-  }
-}
-
-/* Таблица под плиткой-фильтром проявляется заново (только прозрачность — без сдвига, и при «уменьшить движение»). */
+/* Таблица под плиткой-фильтром проявляется заново: только прозрачность, без сдвига. */
 .revealFade {
   animation: otFadeIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
 }
@@ -42,16 +30,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dialog[open] {
-    animation: otFadeIn var(--ot-duration-moderate-01) linear both;
-  }
-
-  .dialog[open]::backdrop {
-    animation: otFadeIn 150ms linear both;
-  }
-}
-
 /* --- Мобильное меню: выезжает слева, подложка проявляется (на широком экране меню скрыто) --- */
 @media (prefers-reduced-motion: no-preference) {
   .shell.mobileNavOpen .mobileNav {
@@ -60,13 +38,6 @@
 
   .shell.mobileNavOpen .mobileNavScrim {
     animation: otFadeIn var(--ot-duration-moderate-02) var(--ot-ease-entrance) both;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .shell.mobileNavOpen .mobileNav,
-  .shell.mobileNavOpen .mobileNavScrim {
-    animation: otFadeIn var(--ot-duration-moderate-01) linear both;
   }
 }
 
@@ -89,12 +60,6 @@
 
   .statValueFlash {
     animation: otValueBump 700ms var(--ot-ease-standard) both;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .statValueFlash {
-    animation: otValueTint 700ms linear both;
   }
 }
 
@@ -171,13 +136,6 @@
   45% {
     opacity: 1;
     transform: none;
-    color: var(--ot-support-success);
-  }
-}
-
-@keyframes otValueTint {
-  0%,
-  45% {
     color: var(--ot-support-success);
   }
 }

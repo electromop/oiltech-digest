@@ -14,6 +14,9 @@ type Props = {
 export function Dialog({ open, title, onClose, children, wide = false }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
+  // Где нажали кнопку мыши: выделение текста в поле, отпущенное за краем подокна, даёт click по затемнению — закрывать
+  // по нему нельзя, иначе пропадает несохранённая правка (ревью 24.10).
+  const pressedOnBackdrop = useRef(false);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -37,9 +40,14 @@ export function Dialog({ open, title, onClose, children, wide = false }: Props) 
         event.preventDefault();
         onClose();
       }}
+      onPointerDown={(event) => {
+        pressedOnBackdrop.current = event.target === event.currentTarget;
+      }}
       onClick={(event) => {
-        // Нажатие по затемнению вокруг подокна закрывает его.
-        if (event.target === event.currentTarget) onClose();
+        // Затемнение вокруг подокна закрывает его, если на нём и нажали, и отпустили.
+        const onBackdrop = event.target === event.currentTarget && pressedOnBackdrop.current;
+        pressedOnBackdrop.current = false;
+        if (onBackdrop) onClose();
       }}
     >
       {open ? (

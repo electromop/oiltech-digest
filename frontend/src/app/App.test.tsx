@@ -802,6 +802,8 @@ describe("App smoke", () => {
     expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     expect(window.location.search).not.toContain("source-candidates");
     expect(screen.queryAllByRole("button", { name: "Агент источников" })).toHaveLength(0);
+    // Экран не монтируется даже на миг до перехода в ленту (ревью 24.10): ни одного запроса агента и кандидатов.
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/source-"))).toBe(false);
     expect(screen.getAllByRole("button", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
     unmount();
 

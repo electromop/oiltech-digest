@@ -228,6 +228,32 @@ describe("экран выпуска: какой месяц открыт по у�
       Object.defineProperty(window.URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     });
 
+    it("переход к списку архива и обратно PDF не пересобирает; прошлый выпуск — целиком, без фильтров (ревью 24.10)", async () => {
+      openMonths = ["2026-10"];
+      archive = [{ month: "2026-09", articles: 120, digest: 1 }];
+      marked = [september];
+      const user = userEvent.setup();
+      render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+      await waitFor(() => expect(pdfRequests()).toHaveLength(1));
+      await user.clear(screen.getByRole("spinbutton", { name: "Балл от" }));
+      await user.type(screen.getByRole("spinbutton", { name: "Балл от" }), "60");
+
+      await user.click(screen.getByRole("button", { name: /Архив выпусков/ }));
+      await user.click(screen.getByRole("button", { name: "Сборка выпуска" }));
+      expect(pdfRequests()).toHaveLength(1);
+
+      await user.click(screen.getByRole("button", { name: /Архив выпусков/ }));
+      const row = screen.getByRole("rowheader", { name: "сентябрь 2026" }).closest("tr") as HTMLElement;
+      await user.click(within(row).getByRole("button", { name: "Открыть" }));
+
+      // Один запрос PDF на открытие, выпуск целиком: фильтр «Балл от 60» к прошлому выпуску не применяется и не виден.
+      await waitFor(() => expect(pdfRequests()).toHaveLength(2));
+      expect(pdfRequests()[1]).toContain("month=2026-09");
+      expect(pdfRequests()[1]).toContain("min_score=0");
+      expect(screen.queryByRole("spinbutton", { name: "Балл от" })).not.toBeInTheDocument();
+    });
+
     it("собирается при открытии выпуска; порядок поменяли — PDF прежний, пока черновик не сохранён; сохранили — собран заново", async () => {
       openMonths = ["2026-09"];
       archive = [];

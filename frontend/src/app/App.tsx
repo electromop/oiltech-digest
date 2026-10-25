@@ -115,7 +115,7 @@ const screens: ScreenDef[] = [
     label: "Материалы",
     eyebrow: "Материалы",
     title: "Материалы",
-    description: "Что коллеги прислали боту в Telegram, и документы, внесённые на платформе.",
+    description: "Что коллеги прислали боту в Telegram, и документы, которые вы внесли на платформе.",
     status: "Экран активен",
   },
   {
@@ -357,11 +357,13 @@ export function App() {
     currentScreen = <SourcesPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
-  if (activeScreen === "source-candidates") {
+  // Архивный экран без флага не монтируется даже на миг до перехода в ленту: иначе он успевал бы слать свои запросы
+  // (ревью 24.10; ADR 0001, п. 7 — модуль скрыт и в интерфейсе, и в коде).
+  if (activeScreen === "source-candidates" && screenEnabled("source-candidates")) {
     currentScreen = <SourceCandidatesPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
-  if (activeScreen === "source-agent") {
+  if (activeScreen === "source-agent" && screenEnabled("source-agent")) {
     currentScreen = <SourceAgentPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
@@ -369,7 +371,7 @@ export function App() {
     currentScreen = <MaterialsPage onUnauthorized={resetSession} showToast={showToast} isAdmin={isAdmin} />;
   }
 
-  if (activeScreen === "articles") {
+  if (activeScreen === "articles" && screenEnabled("articles")) {
     currentScreen = (
       <ArticlesPage
         onUnauthorized={resetSession}

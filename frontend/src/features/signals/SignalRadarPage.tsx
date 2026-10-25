@@ -234,26 +234,14 @@ function pluralWord(count: number, one: string, few: string, many: string): stri
   return many;
 }
 
-const LINK_WORDS = ["ссылка", "ссылки", "ссылок"] as const;
 const PUBLICATION_WORDS = ["публикация", "публикации", "публикаций"] as const;
 
-// Мета под заголовком карточки: «тема · N ссылок · решение платформы · » — номер карточки следом, в обеих
-// витринах одинаково (решение владельца 23.10). Решение платформы (наблюдать / кандидат / подтверждено /
-// отклонено; до 22.10 — «Решение радара») — оценка машины, а не зрелость технологии (та — чипом карточки);
-// оценка человека в ОС — «Оценка сигнала». У события ленты ссылки — публикации.
-function cardMeta(signal: Signal, business: boolean): string {
-  const links = Number(signal.evidence_count || 0);
-  const [one, few, many] = business ? PUBLICATION_WORDS : LINK_WORDS;
-  const maturity = MATURITY_LABELS[signal.maturity] || signal.maturity;
-  return `${signal.theme} · ${links} ${pluralWord(links, one, few, many)} · Решение платформы: ${maturity} · `;
-}
-
-// Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
 // «Спорный сигнал: …» — коротко, без служебного зачина «шаги ответа не сошлись и после повтора» (otbor.py).
 function disputedWhy(text: string): string {
   return text.replace(/^шаги ответа не сошлись(?: и после повтора)?:\s*/i, "") || text;
 }
 
+// Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
 function scoreTone(signal: Signal): string {
   return signal.score_label ? ratingClass(signal.score_label) : scoreClass(Number(signal.score || 0));
 }
