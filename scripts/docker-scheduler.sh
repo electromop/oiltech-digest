@@ -227,6 +227,11 @@ while true; do
     run_step "enqueue-signal-cards" python -m oiltech_digest.cli enqueue-signal-cards
   fi
 
+  if [ "$OTBOR_ENABLED" = "1" ]; then
+    # Второй вызов «Карточки» (#132): баллы по профилю категории — после её основного вызова.
+    run_step "enqueue-signal-scores" python -m oiltech_digest.cli enqueue-signal-scores
+  fi
+
   if [ "$SOURCE_DISCOVERY_ENABLED" = "1" ]; then
     if [ "$SOURCE_DISCOVERY_EVERY_CYCLES" -gt 0 ] && [ $((cycle % SOURCE_DISCOVERY_EVERY_CYCLES)) -eq 0 ]; then
       _source_discovery_offline_flag=""

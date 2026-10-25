@@ -28,7 +28,8 @@ from oiltech_digest.db.connection import get_connection
 from oiltech_digest.db import analytics, documents_repo, marks, rejected_sections, repository
 from oiltech_digest.logging_utils import setup_logging
 from oiltech_digest.maintenance import maintenance_cleanup, maintenance_status
-from oiltech_digest import contract, lanes, network_policy, otbor, signal_card, signal_card_filters, signal_summary
+from oiltech_digest import (contract, lanes, network_policy, otbor, signal_card, signal_card_filters, signal_scores,
+                            signal_scoring, signal_summary)
 from oiltech_digest import material_signals
 from oiltech_digest.processing.pipeline import (
     make_client,
@@ -179,6 +180,14 @@ class SignalPatch(BaseModel):
     status: str | None = None
     selected_for_digest: bool | None = None
     analyst_comment: str | None = None
+
+
+class SignalReturnIn(BaseModel):
+    """Поля «Отбора», которые человек вписывает, возвращая отклонённое (#132): коды справочника «Отбора»."""
+    industry: str
+    oilfield_relevance: str
+    oilfield_application: str = ""
+    signal_category: str
 
 
 class SourceDiscoveryPlanRequest(BaseModel):
@@ -1930,11 +1939,16 @@ def list_signals(
     rows = []
     for row in cards:
         # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
-        # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте.
-        label = score_label(float(row.get("score") or 0))
+        # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте. У сигнала с баллами второго
+        # вызова «Карточки» (#132) — его ступень: сильный, полезный, наблюдать, слабый.
+        band = row.get("score_band")
+        label = (signal_scoring.BAND_LABELS[band].capitalize() if band in signal_scoring.BAND_LABELS
+                 else score_label(float(row.get("score") or 0)))
         rows.append(_clean({
             **row,
             "score_label": label,
+            # «Не тот блок» (#132): до ответа второго вызова баллы «пересчитываются».
+            "scores_pending": row.get("scores_stale_since") is not None,
             "digest_locked": not window.is_open(row["digest_month"]),
             "evidence": evidence.get(int(row["id"]), []),
         }))
@@ -2075,6 +2089,30 @@ def update_signal(signal_id: int, patch: SignalPatch, user: dict[str, Any] = Dep
     return {"ok": True}
 
 
+@app.post("/api/signals/{signal_id}/return")
+def return_rejected_signal(signal_id: int, payload: SignalReturnIn,
+                           user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Вернуть отклонённое «Отбором» (#132, спека #128): человек вписывает то, что ставит «Отбор», — отрасль, связь и
+    применение, категорию — и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не взял бы». Решение
+    человека повтор «Отбора» не перезаписывает. Только админ: разделы отклонённого видит только он (решение 05.10)."""
+    from oiltech_digest.db import otbor_store
+    from oiltech_digest.otbor_answer import return_problems
+    from oiltech_digest.otbor_pack_format import load_dictionaries
+
+    values = {"industry": payload.industry.strip(), "oilfield_relevance": payload.oilfield_relevance.strip(),
+              "oilfield_application": " ".join(payload.oilfield_application.split())[:400],
+              "category": payload.signal_category.strip()}
+    problems = return_problems(values, load_dictionaries())
+    if problems:
+        raise HTTPException(status_code=422, detail="Вернуть нельзя: " + "; ".join(problems))
+    done = otbor_store.human_return(signal_id, values, author=user.get("email"))
+    if done is None:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    if done == otbor_store.NOT_REJECTED:
+        raise HTTPException(status_code=409, detail="Вернуть можно только отклонённое «Отбором»")
+    return {"ok": True}
+
+
 # Отзыв о сигнале оставляет любой пользователь: на отзывах коллег заказчика учится агент
 # (решение владельца 28.09). До этого форма была только у админа, и ОС коллег не доходила.
 @app.post("/api/signals/feedback")
@@ -2111,7 +2149,7 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
             verdict=verdict, reason=(payload.reason or "").strip() or None,
         )
         return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0,
-                "block": _feedback_block(event_id, payload, user)}
+                "block": _feedback_block(event_id, payload, user), **_wrong_block(payload, user)}
     result = store_signal_feedback(
         {
             "article_id": payload.article_id,
@@ -2129,7 +2167,20 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
         },
         user_id=int(user["id"]),
     )
-    return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user)}
+    return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user),
+            **_wrong_block(payload, user)}
+
+
+def _wrong_block(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
+    """«Не тот блок» у сигнала после «Отбора» (#132, спека #128) — не только блок ОС: категория меняется сразу, баллы
+    «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора» — как раньше: блок ОС
+    и память судьи. recategorized — новая категория сигнала."""
+    from oiltech_digest.signal_feedback import _normalize_verdict
+
+    if payload.signal_id is None or _normalize_verdict(payload.verdict) != "wrong_block":
+        return {}
+    category = signal_scores.wrong_block(int(payload.signal_id), user.get("email"))
+    return {"recategorized": category} if category else {}
 
 
 def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
@@ -2608,6 +2659,11 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         applied = signal_summary.apply_result(result, job_id=job_id,
                                               signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
         result = {"signal_summary": True, "applied": applied}
+    if job.get("kind") == signal_scores.KIND and result.get("signal_scores"):
+        # Конверт ЗАМЕНЯЕТСЯ итогом: баллы уже записаны в сигналы.
+        applied = signal_scores.apply_result(result, job_id=job_id,
+                                             signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
+        result = {"signal_scores": True, "applied": applied}
     return result
 
 
@@ -3106,6 +3162,8 @@ _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "otbor": lambda payload, job_id: otbor.build_payload(payload),
     # «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», с его категорией и связью.
     "signal_summary": lambda payload, job_id: signal_summary.build_payload(payload),
+    # Второй вызов «Карточки» (#132): публикации с полями по договорённости, критерии профилей с линейками.
+    "signal_scores": lambda payload, job_id: signal_scores.build_payload(payload),
 }
 
 

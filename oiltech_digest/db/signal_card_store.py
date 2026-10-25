@@ -1,7 +1,8 @@
 """Хранилище карточек сигналов (#96, ADR 0003): что агенту «Карточка сигнала» читать и как писать.
 
 Карточка живёт в самом сигнале: атрибуты — колонки signals, у каждого значения — кто его поставил
-(card_set_by), у карточки — рецепт (card_recipe)."""
+(card_set_by), у карточки — рецепт (card_recipe). С #132 — и тема сигнала после «Отбора», и возврат в «Отбор»
+публикации, у которой «Карточка» нашла в тексте старое событие."""
 
 from __future__ import annotations
 
@@ -14,21 +15,21 @@ from psycopg.types.json import Json
 
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import (_FEED_ARTICLE_SHOWN_SQL, CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN,
-                                          SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_MATERIAL, radar_origin_sql)
-from oiltech_digest.feed_window import OTBOR_REJECT, FeedWindow
+                                          SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_MATERIAL, radar_origin_sql,
+                                          signal_digest_sql)
+from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT, FeedWindow
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "signal_card"
-# Поле карточки → колонки signals; первая колонка решает, пусто ли поле.
+# Поле карточки → колонки signals; первая колонка решает, пусто ли поле. Связь с нефтесервисом и применение с #132
+# ставит «Отбор»: «Карточка» их больше не пишет, прежние значения остаются.
 CARD_COLUMNS: dict[str, tuple[str, ...]] = {
-    "event_date": ("event_date", "event_date_source"),
+    "event_date": ("event_date", "event_date_source", "event_date_precision"),
     "participants": ("participants_json",),
     "event_type": ("event_type",),
     "region": ("region",),
     "technology_class": ("technology_class",),
     "technology_maturity": ("technology_maturity",),
-    "oilfield_relevance": ("oilfield_relevance",),
-    "oilfield_application": ("oilfield_application",),
     "why_interesting": ("why_interesting",),
 }
 _JSON_COLUMNS = frozenset({"participants_json"})
@@ -41,7 +42,8 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
     экзамен (#98) сверяет агента с разметкой того же текста. Дата публикации — как в пакете: у находки
     «режима ChatGPT» дата ссылки — это дата события по версии модели, публикационной даты у неё нет.
     publisher_type — тип источника из справочника источников (Media, Company…); у находки без статьи
-    корпуса его нет."""
+    корпуса его нет. Суть — сигнала (#132: вход «Карточки»), дата поступления — для возраста события без даты
+    публикации."""
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
     ids = sorted({int(value) for value in signal_ids})
@@ -51,9 +53,9 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
+            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category, s.summary,
                    'article:' || a.id AS publication, a.title, a.raw_text AS text,
-                   COALESCE(a.published_at, a.collected_at) AS published,
+                   COALESCE(a.published_at, a.collected_at) AS published, a.collected_at AS received,
                    src.name AS publisher, src.source_type AS publisher_type
             FROM signals s
             JOIN articles a ON a.id = s.origin_article_id
@@ -66,8 +68,8 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
         cur.execute(
             f"""
             SELECT DISTINCT ON (s.id)
-                   s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
-                   'evidence:' || e.id AS publication,
+                   s.id AS signal_id, s.origin, s.theme, s.signal_category AS category, s.summary,
+                   s.first_seen_at AS received, 'evidence:' || e.id AS publication,
                    COALESCE(a.title, e.title) AS title, COALESCE(a.raw_text, e.extracted_fact) AS text,
                    CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)
                         WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %(model_dated)s
@@ -89,9 +91,9 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
         # Материал коллеги (#131): публикация — сам материал, как во входе «Отбора».
         cur.execute(
             f"""
-            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
+            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category, s.summary,
                    'material:' || m.id AS publication, m.title, m.description, m.url, m.file_path,
-                   m.created_at AS published
+                   m.created_at AS published, m.created_at AS received
             FROM signals s
             JOIN colleague_materials m ON m.signal_id = s.id
             WHERE s.id = ANY(%(ids)s) AND s.origin = '{SIGNAL_ORIGIN_MATERIAL}'
@@ -119,6 +121,9 @@ _PAST_OTBOR_SQL = (
     f"(s.otbor_decision IS DISTINCT FROM '{OTBOR_REJECT}'"
     " AND NOT (s.otbor_decision IS NULL AND (s.otbor_failure IS NOT NULL OR s.selector IS NOT NULL)))"
 )
+# Сигнал после «Отбора» карточку ждёт до сути (#132: на входе «Карточки» суть и категория): её дают обработка ленты
+# (мост «лента → сигнал») и «Суть и перевод». Решённое до «Отбора» — как раньше.
+_READY_SQL = f"({_PAST_OTBOR_SQL} AND (s.otbor_decision IS NULL OR COALESCE(btrim(s.summary), '') <> ''))"
 _RADAR_OR_MATERIAL_SQL = f"({radar_origin_sql('s')} OR s.origin = '{SIGNAL_ORIGIN_MATERIAL}')"
 
 
@@ -143,7 +148,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             FROM signals s
             WHERE s.card_recipe IS NULL AND s.merged_into_signal_id IS NULL
               AND s.created_at >= now() - make_interval(days => %(days)s)
-              AND {_PAST_OTBOR_SQL}
+              AND {_READY_SQL}
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id
             LIMIT %(limit)s
@@ -174,7 +179,7 @@ def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
                    EXISTS (SELECT 1 FROM pending p WHERE p.id = s.id) AS pending
             FROM signals s
             LEFT JOIN articles a ON a.id = s.origin_article_id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
-            WHERE s.merged_into_signal_id IS NULL AND {_PAST_OTBOR_SQL}
+            WHERE s.merged_into_signal_id IS NULL AND {_READY_SQL}
               AND ({_RADAR_OR_MATERIAL_SQL}
                    OR (a.collected_at >= %(since)s AND s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}))
             ORDER BY first DESC, s.id
@@ -190,11 +195,13 @@ def write_card(signal_id: int, values: dict[str, Any], *, recipe: dict[str, Any]
     Агент пишет поле, если оно его (прошлый прогон агента) или пустое. Значение человека не
     перезаписывается никогда — даже пустое: человек мог убрать лишнее намеренно. Чужое непустое
     значение — судьи радара (дата события, связь с нефтесервисом, применение, «почему интересно») —
-    тоже остаётся: у находки радара агент заполняет только пустые поля."""
+    тоже остаётся: у находки радара агент заполняет только пустые поля. Тему (#132) агент ставит только
+    сигналу после «Отбора»: у решённого до него тема — тега статьи или судьи, и так остаётся."""
     primary = ", ".join(columns[0] for columns in CARD_COLUMNS.values())
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute(f"SELECT card_set_by, {primary} FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),))
+        cur.execute(f"SELECT card_set_by, otbor_decision, {primary} FROM signals WHERE id = %s FOR UPDATE",
+                    (int(signal_id),))
         row = cur.fetchone()
         if row is None:
             return False
@@ -207,6 +214,9 @@ def write_card(signal_id: int, values: dict[str, Any], *, recipe: dict[str, Any]
                 value = values.get(column)
                 updates[column] = Json(value) if column in _JSON_COLUMNS else value
             set_by[key] = CARD_SET_BY_AGENT
+        if values.get("theme") and row["otbor_decision"] is not None and set_by.get("theme") != CARD_SET_BY_HUMAN:
+            updates["theme"] = values["theme"]
+            set_by["theme"] = CARD_SET_BY_AGENT
         updates["card_set_by"] = Json(set_by)
         updates["card_recipe"] = Json(recipe)
         assignments = ", ".join(f"{column} = %s" for column in updates)
@@ -216,6 +226,32 @@ def write_card(signal_id: int, values: dict[str, Any], *, recipe: dict[str, Any]
         )
         conn.commit()
     return True
+
+
+def return_to_otbor(signal_id: int, fact: str, *, log: list[dict[str, str]]) -> tuple[str, int] | None:
+    """Вернуть публикацию в «Отбор» (#132): «Карточка» нашла в тексте дату события старше срока. Решение снимается,
+    факт — во вход «Отбора» (otbor_return_fact), шаг — в «Ход решения». Только у принятой «Отбором» (не человеком),
+    один раз (otbor_returns), если дату поставил агент и публикацию не выбрали «в дайджест» (её не прячет ничто).
+    Что ставить «Отбору»: ("article", статья) у сигнала ленты, ("signal", сигнал) у находки и материала; None —
+    возврата нет."""
+    with connection.get_connection() as conn:
+        row = conn.execute(
+            f"""
+            UPDATE signals s
+            SET otbor_decision = NULL, otbor_returns = s.otbor_returns + 1, otbor_return_fact = %s,
+                decision_log = COALESCE(s.decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()
+            WHERE s.id = %s AND s.otbor_decision = '{OTBOR_ACCEPT}' AND s.otbor_returns = 0
+              AND s.card_set_by->>'otbor_decision' IS DISTINCT FROM '{CARD_SET_BY_HUMAN}'
+              AND s.card_set_by->>'event_date' = '{CARD_SET_BY_AGENT}'
+              AND s.merged_into_signal_id IS NULL AND NOT {signal_digest_sql('s')}
+            RETURNING s.origin, s.origin_article_id
+            """,
+            (fact, Json(log), int(signal_id)),
+        ).fetchone()
+        conn.commit()
+    if row is None:
+        return None
+    return ("article", int(row[1])) if row[0] == SIGNAL_ORIGIN_FEED else ("signal", int(signal_id))
 
 
 def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:

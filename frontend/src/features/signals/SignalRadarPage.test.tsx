@@ -6,6 +6,7 @@ import {
   getSignalSummary,
   getSignalWeekly,
   listSignals,
+  returnSignal,
   updateSignal,
   type SignalQuery,
   type SignalSearchHealth,
@@ -43,6 +44,7 @@ vi.mock("../../api/signals", () => ({
   getSignalSummary: vi.fn(),
   updateSignal: vi.fn(),
   createSignalFeedback: vi.fn(),
+  returnSignal: vi.fn(),
   getSignalSearchHealth: vi.fn(),
   // Итоги недели по умолчанию не пришли — блока нет, остальные тесты экрана его не видят.
   getSignalWeekly: vi.fn(() => Promise.reject(new Error("нет итогов"))),
@@ -1095,6 +1097,105 @@ describe("качество радара на экране (Виктор 29.09)",
     fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
 
     await waitFor(() => expect(toasts).toContain("Отзыв сохранён"));
+  });
+
+  it("админ возвращает отклонённое полями «Отбора»; переносимую — только с применением (#132)", async () => {
+    serveWithHidden([scored], [], [rejectedCard]);
+    vi.mocked(returnSignal).mockResolvedValue({ ok: true });
+    const toasts: string[] = [];
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} isAdmin />);
+    const visible = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    // Вернуть можно только отклонённое: у карточки на радаре кнопки нет.
+    expect(within(visible).queryByRole("button", { name: "Вернуть" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Отклонённые: 1" }));
+    const card = (await screen.findByText("Котировки нефти")).closest("article") as HTMLElement;
+
+    fireEvent.click(within(card).getByRole("button", { name: "Вернуть" }));
+    const form = within(card).getByRole("form", { name: "Вернуть публикацию" });
+    fireEvent.change(within(form).getByLabelText("Отрасль"), { target: { value: "other_industry" } });
+    fireEvent.change(within(form).getByLabelText("Связь с нефтесервисом"), { target: { value: "transferable" } });
+    expect(within(form).getByRole("button", { name: "Вернуть" })).toBeDisabled();
+    fireEvent.change(within(form).getByLabelText("Применение в нефтесервисе"),
+      { target: { value: "Экзоскелеты для работ на буровой" } });
+    fireEvent.change(within(form).getByLabelText("Категория"), { target: { value: "technology" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Вернуть" }));
+
+    await waitFor(() => expect(returnSignal).toHaveBeenCalledWith(602, {
+      industry: "other_industry", oilfield_relevance: "transferable",
+      oilfield_application: "Экзоскелеты для работ на буровой", signal_category: "technology",
+    }));
+    await waitFor(() => expect(toasts).toContain(
+      "Публикация возвращена: она пройдёт суть, карточку и баллы с пометкой «спорное»"));
+  });
+
+  it("после «не тот блок» баллы «пересчитываются»; ступень — подписью балла (#132)", async () => {
+    serveWithHidden([
+      { ...scored, title_ru: "Перешла из бизнес-ленты", score: 70, score_band: "useful", score_label: "Полезный",
+        scores_pending: true },
+      { ...scored, id: 503, signal_key: "k503", title_ru: "Сильный сигнал", score: 86, score_band: "strong",
+        score_label: "Сильный" },
+    ], []);
+    renderRadar(false);
+
+    const moved = (await screen.findByText("Перешла из бизнес-ленты")).closest("article") as HTMLElement;
+    expect(within(moved).getByText("пересчитываются")).toBeInTheDocument();
+    expect(within(moved).queryByText("70")).not.toBeInTheDocument();
+    expect(within(moved).queryByText("Полезный")).not.toBeInTheDocument();
+    const strong = screen.getByText("Сильный сигнал").closest("article") as HTMLElement;
+    expect(within(strong).getByText("Сильный")).toHaveClass("ok");
+  });
+
+  it("дата события до месяца — без первого числа; «Свежесть» без даты в итог не входит (#132)", async () => {
+    serveWithHidden([{
+      ...scored, event_date: "2026-09-01", event_date_precision: "month", event_date_source: "из текста",
+      card_set_by: { event_date: "agent" },
+      score_items_json: [
+        { criterion_id: 101, final_score: 80 },
+        { criterion_id: 105, final_score: null, excluded: "нет даты события в тексте" },
+      ],
+    }], []);
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+
+    expect(within(card).getByText("Событие: 09.2026 · из текста")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    const breakdown = within(card).getByText("Балл по критериям").closest(".signalScoreBreakdown") as HTMLElement;
+    expect(within(breakdown).getByTitle("нет даты события в тексте")).toHaveTextContent("не входит");
+  });
+
+  it("возвращённая человеком публикация — с пометкой «спорное: „Отбор“ не взял бы» и причиной (#132)", async () => {
+    serveWithHidden([{
+      ...scored, otbor_decision: "accept", otbor_disputed: "«Отбор» не взял бы: Нефтегаз без связи с нефтесервисом",
+      card_set_by: { otbor_decision: "human", signal_category: "human" },
+    }], []);
+    renderRadar(false);
+
+    expect(await screen.findByText("Спорное: «Отбор» не взял бы: Нефтегаз без связи с нефтесервисом"))
+      .toBeInTheDocument();
+  });
+
+  it("у «другого» нет «Решения платформы» (#132)", async () => {
+    serveWithHidden([{ ...scored, maturity: null, signal_category: "other", otbor_decision: "accept" }], []);
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+
+    expect(within(card).queryByText(/Решение платформы/)).not.toBeInTheDocument();
+  });
+
+  it("«не тот блок» у сигнала после «Отбора» переносит карточку в другую витрину (#132)", async () => {
+    serveWithHidden([{ ...scored, origin: "feed", otbor_decision: "accept" }], []);
+    vi.mocked(createSignalFeedback).mockResolvedValue({
+      ok: true, event_id: 4, memory_ids: [], memories: 0, recategorized: "business" });
+    const toasts: string[] = [];
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} />);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Обратная связь" }));
+
+    fireEvent.change(within(card).getByLabelText("Оценка сигнала"), { target: { value: "wrong_block" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => expect(toasts).toContain("Отзыв сохранён: карточка перешла в бизнес-ленту, баллы пересчитываются"));
   });
 });
 

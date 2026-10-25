@@ -50,16 +50,20 @@ function cardChips(signal: Signal): Chip[] {
   return chips;
 }
 
-function formatEventDate(value: string | null | undefined): string {
-  // Дата без часового пояса (ГГГГ-ММ-ДД): строкой, без Date — в Date она сдвинулась бы на сутки.
+function formatEventDate(value: string | null | undefined, precision?: string | null): string {
+  // Дата без часового пояса (ГГГГ-ММ-ДД): строкой, без Date — в Date она сдвинулась бы на сутки. У месяца и года
+  // (#132) первый день периода не показывается: «09.2026», «2026».
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || "");
-  return match ? `${match[3]}.${match[2]}.${match[1]}` : "";
+  if (!match) return "";
+  if (precision === "year") return match[1];
+  if (precision === "month") return `${match[2]}.${match[1]}`;
+  return `${match[3]}.${match[2]}.${match[1]}`;
 }
 
 // Дата события и откуда она взята: у агента (#96) — «из текста» или «по дате публикации», у судьи радара
 // и человека — кто её поставил. Дата без пометки — карточка до #96 («нашёл очень старый сигнал», 29.09).
 export function eventDateLabel(signal: Signal): { text: string; gap: boolean } | null {
-  const day = formatEventDate(signal.event_date);
+  const day = formatEventDate(signal.event_date, signal.event_date_precision);
   const setBy = signal.card_set_by?.event_date ?? "";
   const source = signal.event_date_source;
   if (day) {

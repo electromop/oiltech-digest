@@ -130,6 +130,7 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
         "received": publication_day(row.get("received")),
         "links": [],
         "feedback": {"similar_signals": [], "text": ""},
+        **_card_fact(row),
     }
 
 
@@ -149,7 +150,14 @@ def _signal_item(row: dict[str, Any]) -> dict[str, Any]:
         "links": [{"title": publication_text(link.get("title"))[:300] or None, "publisher": _publisher_label(link),
                    "published": publication_day(link.get("published"))} for link in row.get("links") or []],
         "feedback": {"similar_signals": [], "text": ""},
+        **_card_fact(row),
     }
+
+
+def _card_fact(row: dict[str, Any]) -> dict[str, str]:
+    """Факт «Карточки» у публикации, которую она вернула (#132): дата события из текста старше срока. Только у
+    возвращённой — у остальных входа не меняет (экзамен #133 подаёт манифест без него)."""
+    return {"card_fact": row["card_fact"]} if row.get("card_fact") else {}
 
 
 # --- Вызов модели (воркер, без базы) -------------------------------------------------------------
@@ -254,6 +262,8 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
         f"Язык: {item.get('language') or 'не указан'}",
         f"Дата публикации: {item.get('published') or 'не указана'}",
         f"Дата поступления: {item.get('received') or 'не указана'}",
+        # Вернула «Карточка» (#132): что она нашла в тексте, — решение остаётся за «Отбором».
+        *([f"Факт «Карточки»: {item['card_fact']}"] if item.get("card_fact") else []),
         # Как колонка таблицы эксперта (otbor_pack_format.GIVEN_COLUMNS): по ней справочник объясняет причину
         # «разные события в одной находке».
         "Ссылки находки:" + (" нет" if not links else ""),
@@ -288,7 +298,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
     stale = result.get("dictionaries_version") != dictionaries.get("version")
     recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
               "dictionaries_version": dictionaries.get("version"), "job_id": job_id}
-    applied = {"decided": 0, "failed": 0, "kept_in_digest": 0, "errors": []}
+    applied = {"decided": 0, "failed": 0, "kept_in_digest": 0, "kept_by_human": 0, "errors": []}
     for decision in decisions:
         article_id, signal_id = _publication(decision, expected)
         if article_id is None and signal_id is None:

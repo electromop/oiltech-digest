@@ -122,6 +122,20 @@ def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: in
     return found
 
 
+def return_problems(values: dict[str, Any], dictionaries: dict[str, Any]) -> list[str]:
+    """Чем поля «Отбора», которые вписал человек, возвращая отклонённое (#132, спека #128), не по правилам: значение не
+    из справочника или шаги не сходятся по той же таблице конфликтов, что у «Отбора» (вернуть — значит взять: связь
+    прямая или переносимая, у переносимой — применение). Пусто — по правилам."""
+    problems = [f"{name}: «{str(values.get(name))[:60]}» нет в справочнике" for name in ("industry", "oilfield_relevance",
+                                                                                      "category")
+                if values.get(name) not in codes(dictionaries, name)]
+    if problems:
+        return problems
+    return conflicts({"industry": values["industry"], "oilfield_relevance": values["oilfield_relevance"],
+                      "oilfield_application": values.get("oilfield_application") or "", "decision": ACCEPT,
+                      "reject_reason": NO_REASON, "category": values["category"]}, dictionaries)
+
+
 @dataclass
 class Outcome:
     """Что из ответов воркера дойдёт до сигнала: решение (values) или сбой (failure и почему)."""

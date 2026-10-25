@@ -14,10 +14,15 @@ export function ratingClass(rating: string | null | undefined) {
   switch ((rating || "").trim()) {
     case "Высокая":
     case "Выше средней":
+    // Ступени балла второго вызова «Карточки» (#132): те же пороги 80/65/40 по умолчанию.
+    case "Сильный":
+    case "Полезный":
       return "ok";
     case "Средняя":
+    case "Наблюдать":
       return "warn";
     case "Низкая":
+    case "Слабый":
       return "bad";
     default:
       return "muted";

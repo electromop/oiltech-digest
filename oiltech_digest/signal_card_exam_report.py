@@ -22,7 +22,6 @@ _ROWS = (
     ("event_type", "Тип события"),
     ("technology_class", "Класс технологии"),
     ("maturity", "Зрелость"),
-    ("oilfield_relevance", "Связь с нефтесервисом (среднее по значениям)"),
     ("event_date", "Дата события — доля ошибок"),
     ("event_date_source", "Источник даты (где дата события ≠ дате публикации)"),
     ("invented_companies", "Выдуманные компании"),
@@ -187,8 +186,7 @@ def _judge(judge: dict[str, Any] | None) -> list[str]:
     lines = ["## Судья радара против эксперта", "",
              f"Радарных строк набора: {lenient['rows']}; без вызовов модели — значения, которые показывает радар.", "",
              "| | С допусками | Строго | Константа |", "|---|---|---|---|"]
-    for key, title in (("event_date", "Дата события — доля ошибок"),
-                       ("oilfield_relevance", "Связь с нефтесервисом (среднее по значениям)")):
+    for key, title in (("event_date", "Дата события — доля ошибок"),):
         lines.append(f"| {title} | {_share(lenient[key]['agent'])} | {_share(strict[key]['agent'])} | "
                      f"{_share(lenient[key]['constant'])} |")
     return lines + [""]

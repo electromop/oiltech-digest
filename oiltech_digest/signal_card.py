@@ -1,19 +1,25 @@
 """Агент «Карточка сигнала» (#96, спека #93, ADR 0003): атрибуты карточки по тексту главной публикации.
 
 Один вызов модели на сигнал, без инструментов и без выхода в сеть, — не автономный агент: путь
-известен, обязательное проверяет код. Ядро собирает пакет при выдаче задачи (тексты, тема,
-категория, справочники), воркер без базы зовёт модель со справочниками в каждом вызове и
+известен, обязательное проверяет код. Ядро собирает пакет при выдаче задачи (тексты, суть,
+категория, справочники, тематики), воркер без базы зовёт модель со справочниками в каждом вызове и
 возвращает ответы как есть, ядро проверяет их кодом и записывает: ответ воркера — недоверенный
 ввод. Модель — явная настройка агента (SIGNAL_CARD_MODEL), без отката на модель ленты: едет в
 задаче и попадает в рецепт карточки вместе с версией инструкции и справочников.
+
+С #132 (спека #128) — основной вызов «Карточки» в конвейере «Отбора»: тема (одна из 13 тематик заказчика, три
+кандидата по ключам — signal_themes), дата события с точностью (день, месяц или год). Связь с нефтесервисом и
+применение ставит «Отбор», смешанность — тоже не «Карточка». На входе суть и категория, решения, причины и
+обоснования «Отбора» нет. Дата события из текста старше OTBOR_OLD_EVENT_DAYS у принятой «Отбором» публикации
+возвращает её в «Отбор» с этим фактом, один раз. Баллы — второй вызов (signal_scores).
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 
-from oiltech_digest import config, word_forms
+from oiltech_digest import config, event_dates, signal_themes, word_forms
 from oiltech_digest.db import repository, signal_card_store
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
@@ -23,20 +29,26 @@ from oiltech_digest.signal_card_pack import (CATEGORY_RU, CHOICE_DICTIONARIES, U
 
 KIND = signal_card_store.KIND
 # Версия инструкции — в рецепте карточки: другая инструкция — другие карточки.
-PROMPT_VERSION = "2026-10-16.1"
+PROMPT_VERSION = "2026-10-25.1"
 _OUTPUT_TOKENS = 1200
-# Источник даты события — значения справочника date_source, по ним код решает, откуда дата.
-FROM_TEXT = "из текста"
-BY_PUBLICATION = "по дате публикации"
-# Связь с нефтесервисом: значение справочника → прежний код радара (direct / transferable / none).
-RELEVANCE_CODES = {"прямая": "direct", "переносимая": "transferable", "нет связи": "none"}
-# Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты и связи.
-_MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source", "oilfield_relevance")
+# Источник даты события — значения справочника date_source, по ним код решает, откуда дата (event_dates).
+FROM_TEXT, BY_PUBLICATION = event_dates.FROM_TEXT, event_dates.BY_PUBLICATION
+# Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты.
+_MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source")
+# Правила из комментариев эксперта к разметке (решение 29 журнала гриля, 23.10) — в инструкции обоих вызовов
+# «Карточки» (signal_scores).
+EXPERT_RULES = """Правила эксперта:
+- дата события — дата главного события публикации, а не упомянутых в ней прошлых этапов;
+- «сегодня», «вчера», «на этой неделе» отсчитываются от даты публикации;
+- дата из адреса ссылки и из метаданных страницы — не дата события;
+- план, цель, прогноз, опцион и рамочное соглашение — не факт;
+- проектный (расчётный) ресурс и заявление поставщика — не доказательство;
+- рекорд компании — не новизна для отрасли;
+- сумма договора — масштаб события, а не эффект для заказчика."""
 # Поле карточки с выбором из справочника: колонка signals (она же параметр фильтра экрана, #97) → справочник,
 # по нему же назван ключ в ответе модели. Зрелость — technology_maturity: maturity — решение радара.
 CHOICE_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                   "technology_maturity": "maturity"}
-_EARLIEST_EVENT = date(2000, 1, 1)
 # Оценка цены до вызова — для сухих прогонов экзамена и истории (#98): ответ карточки с рассуждением low
 # — около 600 токенов, русский текст — около трёх знаков на токен (с запасом).
 ESTIMATED_OUTPUT_TOKENS = 600
@@ -111,31 +123,37 @@ def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
 
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
-    """Самодостаточный пакет для воркера без базы: публикации, тема, категория, справочники."""
+    """Самодостаточный пакет для воркера без базы: публикации с сутью и категорией, справочники, имена 13 тематик и
+    у каждой публикации — темы-кандидаты по ключам (#132)."""
+    tags = repository.list_enabled_tags()
     signals = []
     for row in signal_card_store.card_inputs(job_payload.get("signal_ids") or []):
         publication = _publication(row)
-        published = publication["published"]
-        signals.append({**publication, "published": published.isoformat() if published else None})
+        text = " ".join([publication["title"], publication["summary"], publication["text"]])
+        signals.append({**{key: value for key, value in publication.items() if key != "received"},
+                        "published": publication["published"].isoformat() if publication["published"] else None,
+                        "theme_candidates": signal_themes.candidates(text, tags)})
     return {
         "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
-        "dictionaries": load_dictionaries(), "signals": signals,
+        "dictionaries": load_dictionaries(), "themes": signal_themes.names(tags), "signals": signals,
     }
 
 
 def _publication(row: dict[str, Any]) -> dict[str, Any]:
     """Главная публикация сигнала так, как её видит модель, — по ней же ядро сверяет ответ: тот же
-    текст (publication_text), издатель, дата публикации днём по UTC."""
-    published = publication_day(row.get("published"))
+    текст (publication_text), издатель, дата публикации днём по UTC, суть сигнала. Дата поступления — для
+    возраста события, когда даты публикации нет (#132); модель её не видит."""
+    published, received = publication_day(row.get("published")), publication_day(row.get("received"))
     return {
         "signal_id": int(row["signal_id"]),
         "publication": row["publication"],
         "title": publication_text(row.get("title"))[:500],
         "text": publication_text(row.get("text")),
         "published": date.fromisoformat(published) if published else None,
+        "received": date.fromisoformat(received) if received else None,
         "publisher": row.get("publisher") or "",
         "publisher_type": row.get("publisher_type") or "",
-        "theme": row.get("theme") or "",
+        "summary": publication_text(row.get("summary")),
         # Без категории — находка радара до 29.09: радар показывает её как технологию.
         "category": CATEGORY_RU.get(row.get("category") or "technology", UNDEFINED),
     }
@@ -151,8 +169,9 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
         # Клиент без модели взял бы OPENAI_MODEL ленты — тихий откат, которого быть не должно.
         raise ValueError("signal_card: в задаче нет модели (SIGNAL_CARD_MODEL на ядре) — модель ленты агент не берёт")
     dictionaries = payload.get("dictionaries") or {}
-    instructions = _instructions(dictionaries)
-    schema = _answer_schema(dictionaries)
+    themes = list(payload.get("themes") or [])
+    instructions = _instructions(dictionaries, themes)
+    schema = _answer_schema(dictionaries, themes)
     client = make_client()
     cards: list[dict[str, Any]] = []
     result = {"signal_card": True, "kind": KIND, "prompt_version": PROMPT_VERSION,
@@ -185,10 +204,12 @@ _TASK = """Ты заполняешь карточку сигнала — соб�
 компаний, дат и фактов.
 
 Поля ответа:
-- event_date и event_date_source — дата самого события (подписание, запуск, испытание, объявление).
-  Названа в тексте или однозначно из него следует — event_date = ГГГГ-ММ-ДД, event_date_source =
-  «из текста». В тексте даты нет — event_date пусто, event_date_source = «по дате публикации».
-  Понять нельзя — event_date пусто, event_date_source = «не определено».
+- event_date и event_date_source — дата главного события публикации (подписание, запуск, испытание,
+  объявление). Названа в тексте или однозначно из него следует — event_date_source = «из текста», а
+  event_date — с той точностью, что в тексте: ГГГГ-ММ-ДД; известен только месяц — ГГГГ-ММ; только
+  год — ГГГГ. День и месяц, которых в тексте нет, не подставляй. В тексте даты нет — event_date пусто,
+  event_date_source = «по дате публикации». Понять нельзя — event_date пусто, event_date_source =
+  «не определено».
 - companies — компании-участники события: кто внедряет, поставляет, разрабатывает, покупает,
   продаёт, инвестирует. Издание, которое о событии сообщает, и компании, упомянутые мимоходом, — не
   участники; компания, которая сама сообщает о своём событии, — участник. Для каждой: name —
@@ -196,24 +217,23 @@ _TASK = """Ты заполняешь карточку сигнала — соб�
   участником. Участников нет — пустой список.
 - event_type, region, technology_class, maturity — строго одно значение из справочника ниже,
   буквально. Не подходит ни одно — «не определено».
-- oilfield_relevance — связь с нефтесервисом: «прямая»; «переносимая» — технология из другой
-  отрасли (горнодобыча, производство, транспорт), применимая в нефтесервисе; «нет связи». Понять
-  нельзя — «не определено».
-- oilfield_application — при прямой и переносимой связи: одной фразой по-русски, где и как это
-  применяется в нефтесервисе; иначе пусто.
-- why_important — одной фразой по-русски, почему сигнал важен нефтесервису; при «нет связи» — пусто."""
+- theme — тематика заказчика, к которой событие относится по содержанию: строго одна из списка ниже,
+  буквально. «Темы-кандидаты по ключам» во входе — совпадения слов, подсказка, а не ответ. Не подходит
+  ни одна — «не определено».
+- why_important — одной фразой по-русски, почему сигнал важен нефтесервису."""
 
 
-def _instructions(dictionaries: dict[str, Any]) -> str:
-    lines = [_TASK, "", f"Справочники (версия {dictionaries.get('version')}):"]
+def _instructions(dictionaries: dict[str, Any], themes: list[str]) -> str:
+    lines = [_TASK, "", EXPERT_RULES, "", f"Справочники (версия {dictionaries.get('version')}):"]
     for field in _MODEL_DICTIONARIES:
         block = dictionaries.get(field) or {}
         rule = f" ({block['rule']})" if block.get("rule") else ""
         lines.append(f"- {field} — {block.get('title', field)}{rule}: " + "; ".join(_values(dictionaries, field)))
+    lines.append("- theme — тематики заказчика: " + "; ".join(themes))
     return "\n".join(lines)
 
 
-def _answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
+def _answer_schema(dictionaries: dict[str, Any], themes: list[str]) -> dict[str, Any]:
     """Схема ответа модели (строгий JSON) — по ней же ядро проверяет ответ (_shape_problem)."""
     def enum(field: str) -> dict[str, Any]:
         return {"type": "string", "enum": [*_values(dictionaries, field), UNDEFINED]}
@@ -226,8 +246,7 @@ def _answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
             "properties": {"name": {"type": "string"}, "quote": {"type": "string"}},
         }},
         **{field: enum(field) for field in CHOICE_DICTIONARIES},
-        "oilfield_relevance": enum("oilfield_relevance"),
-        "oilfield_application": {"type": "string"},
+        "theme": {"type": "string", "enum": [*themes, UNDEFINED]},
         "why_important": {"type": "string"},
     }
     return {"name": "signal_card", "schema": {
@@ -235,9 +254,9 @@ def _answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
     }}
 
 
-def request_chars(item: dict[str, Any], dictionaries: dict[str, Any]) -> int:
+def request_chars(item: dict[str, Any], dictionaries: dict[str, Any], themes: list[str]) -> int:
     """Длина запроса модели в знаках — инструкция со справочниками и вход сигнала: для оценки цены до вызова."""
-    return len(_instructions(dictionaries)) + len(_model_input(item))
+    return len(_instructions(dictionaries, themes)) + len(_model_input(item))
 
 
 def _model_input(item: dict[str, Any]) -> str:
@@ -245,8 +264,9 @@ def _model_input(item: dict[str, Any]) -> str:
         f"Заголовок: {item.get('title') or ''}",
         f"Издатель: {item.get('publisher') or 'не указан'}",
         f"Дата публикации: {item.get('published') or 'не указана'}",
-        f"Тема: {item.get('theme') or 'не указана'}",
         f"Категория: {item.get('category') or UNDEFINED}",
+        f"Суть: {item.get('summary') or 'не указана'}",
+        "Темы-кандидаты по ключам: " + ("; ".join(item.get("theme_candidates") or []) or "нет"),
         "Текст публикации:",
         item.get("text") or "",
     ])
@@ -259,8 +279,10 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
                  signal_ids: list[Any] | None = None) -> dict[str, Any]:
     """Сторона ядра: проверить ответы кодом и записать карточки с рецептом. Ответ не по схеме не
     пишется: ошибка — в итоге задачи, остальные карточки пачки пишутся. signal_ids — сигналы задачи:
-    карточку другого сигнала итог воркера не пишет."""
+    карточку другого сигнала итог воркера не пишет. Дата события из текста старше OTBOR_OLD_EVENT_DAYS
+    возвращает принятую «Отбором» публикацию в «Отбор» (#132)."""
     dictionaries = load_dictionaries()
+    themes = signal_themes.names(repository.list_enabled_tags())
     cards = [card for card in result.get("cards") or [] if isinstance(card, dict)]
     ids = [signal_id for signal_id in map(_signal_id, cards) if signal_id is not None]
     publications = {int(row["signal_id"]): _publication(row) for row in signal_card_store.card_inputs(ids)}
@@ -273,12 +295,13 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         return {"applied": 0, "errors": [{"signal_id": _signal_id(card), "error": stale} for card in cards]}
     applied = 0
     errors: list[dict[str, Any]] = []
+    returned: list[tuple[str, int]] = []
     for card in cards:
         signal_id = _signal_id(card)
         problem = _publication_problem(card, signal_id, expected, publications)
         values = None
         if problem is None:
-            values, problem = card_values(card, publications[signal_id], dictionaries)
+            values, problem = card_values(card, publications[signal_id], dictionaries, themes)
         if values is None:
             errors.append({"signal_id": signal_id, "error": problem})
             continue
@@ -289,7 +312,36 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         }
         if signal_card_store.write_card(signal_id, values, recipe=recipe):
             applied += 1
-    return {"applied": applied, "errors": errors}
+            if (back := _return_old_event(signal_id, values, publications[signal_id])) is not None:
+                returned.append(back)
+    if returned:
+        _enqueue_returned(returned)
+    return {"applied": applied, "errors": errors, "returned_to_otbor": len(returned)}
+
+
+# --- Возврат в «Отбор» (#132) --------------------------------------------------------------------
+
+
+def _return_old_event(signal_id: int, values: dict[str, Any], publication: dict[str, Any]) -> tuple[str, int] | None:
+    """Вернуть принятую «Отбором» публикацию в «Отбор», если «Карточка» нашла в тексте старое событие: решение
+    снимается, факт ложится во вход «Отбора». Один раз; решение человека и выбор «в дайджест» не трогаются
+    (signal_card_store.return_to_otbor). Без «Отбора» (флаг, модель) возврат не делается: решать было бы некому."""
+    fact = event_dates.old_event_fact(values, publication["published"], publication["received"],
+                                      config.OTBOR_OLD_EVENT_DAYS)
+    if fact is None or not (config.OTBOR_ENABLED and config.OTBOR_MODEL):
+        return None
+    step = {"stage": "«Карточка»",
+            "text": f"Старое событие: {fact}, старше {config.OTBOR_OLD_EVENT_DAYS} дней: возврат в «Отбор»"}
+    return signal_card_store.return_to_otbor(signal_id, fact, log=[step])
+
+
+def _enqueue_returned(returned: list[tuple[str, int]]) -> None:
+    """Задачи «Отбора» о возвращённых публикациях — сразу, по полосе пересчётов: окно шага планировщика старую статью
+    уже не берёт."""
+    from oiltech_digest import otbor
+
+    otbor.enqueue([ref for kind, ref in returned if kind == "article"],
+                  signal_ids=[ref for kind, ref in returned if kind == "signal"], trigger="card_return", bulk=True)
 
 
 def _in_job(signal_id: int | None, expected: set[str] | None) -> bool:
@@ -311,14 +363,14 @@ def _publication_problem(card: dict[str, Any], signal_id: int | None, expected: 
     return None
 
 
-def card_values(card: dict[str, Any], publication: dict[str, Any],
-                dictionaries: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+def card_values(card: dict[str, Any], publication: dict[str, Any], dictionaries: dict[str, Any],
+                themes: list[str]) -> tuple[dict[str, Any] | None, str | None]:
     """Строка итога воркера → значения карточки или почему карточки не будет (ошибка модели, ответ не по
     схеме). Через неё пишет ядро (apply_result) и мерит экзамен (#98): мерится то, что дойдёт до карточки."""
-    problem = _answer_problem(card, _answer_schema(dictionaries))
+    problem = _answer_problem(card, _answer_schema(dictionaries, themes))
     if problem:
         return None, problem
-    return check_answer(card["answer"], publication, dictionaries), None
+    return check_answer(card["answer"], publication, dictionaries, themes), None
 
 
 def _answer_problem(card: dict[str, Any], schema: dict[str, Any]) -> str | None:
@@ -375,47 +427,24 @@ def _model_name(card: dict[str, Any]) -> str | None:
     return str(card.get("model") or "")[:100] or None
 
 
-def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, Any]:
+def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionaries: dict[str, Any],
+                 themes: list[str]) -> dict[str, Any]:
     """Ответ модели → значения карточки. Значение не из справочника — «не определено»; компания без
     цитаты из текста публикации и издание-издатель отбрасываются, написания одной компании (word_forms.Companies)
-    сводятся к одному участнику."""
+    сводятся к одному участнику. Тема не из 13 тематик — не тема: None, карточка её не пишет."""
     source = _listed(dictionaries, "date_source", answer["event_date_source"])
-    event_date, source = _event_date(answer["event_date"], source, publication["published"])
-    relevance = RELEVANCE_CODES.get(_listed(dictionaries, "oilfield_relevance", answer["oilfield_relevance"]))
+    event_date, source, precision = event_dates.from_answer(answer["event_date"], source, publication["published"],
+                                                            UNDEFINED)
     return {
         "event_date": event_date,
         "event_date_source": source,
+        "event_date_precision": precision,
         "participants_json": _participants(answer["companies"], publication, dictionaries),
         **{column: _listed(dictionaries, key, answer[key]) for column, key in CHOICE_COLUMNS.items()},
-        "oilfield_relevance": relevance,
-        # Как у судьи радара: применение — только при прямой или переносимой связи.
-        "oilfield_application": (_phrase(answer["oilfield_application"])
-                                 if relevance in ("direct", "transferable") else None),
+        "theme": next((name for name in themes if _plain(name) == _plain(answer["theme"])), None),
         # «Почему важно нефтесервису» — в прежнем поле судьи «почему интересно».
         "why_interesting": _phrase(answer["why_important"]),
     }
-
-
-def _event_date(value: str, source: str, published: date | None) -> tuple[date | None, str]:
-    """Дата события и откуда она: «по дате публикации» — дата публикации; «из текста» — дата модели,
-    если она не позже публикации и не раньше 2000 года, иначе «не определено». Дата публикации — по
-    UTC, поэтому сутки допуска: событие дня публикации по местному времени бывает на день позже её
-    даты по UTC. Даты публикации нет (находка «режима ChatGPT») — событие не позже сегодняшнего дня.
-    «Из текста» без даты — даты в тексте нет, и по инструкции это «по дате публикации»."""
-    if source == FROM_TEXT and not str(value or "").strip():
-        source = BY_PUBLICATION
-    if source == BY_PUBLICATION:
-        return (published, source) if published else (None, UNDEFINED)
-    if source != FROM_TEXT:
-        return None, UNDEFINED
-    try:
-        day = date.fromisoformat(value.strip())
-    except ValueError:
-        return None, UNDEFINED
-    latest = (published or datetime.now(timezone.utc).date()) + timedelta(days=1)
-    if not _EARLIEST_EVENT <= day <= latest:
-        return None, UNDEFINED
-    return day, source
 
 
 def _participants(companies: list[dict[str, str]], publication: dict[str, Any],

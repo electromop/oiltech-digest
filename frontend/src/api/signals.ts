@@ -146,6 +146,21 @@ export type SignalSearchHealth = {
   cause: "not_configured" | "unsupported_provider" | "http" | "network" | "connection" | "other" | null;
 };
 
+// Возврат отклонённого (#132): поля «Отбора», которые вписывает человек, — коды справочника «Отбора».
+export type SignalReturnPayload = {
+  industry: string;
+  oilfield_relevance: string;
+  oilfield_application: string;
+  signal_category: string;
+};
+
+export function returnSignal(signalId: number, payload: SignalReturnPayload) {
+  return apiFetch<{ ok: boolean }>(`/api/signals/${signalId}/return`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getSignalSearchHealth() {
   return apiFetch<{ search_health: SignalSearchHealth | null }>("/api/signals/search-health");
 }
@@ -163,6 +178,8 @@ export function createSignalFeedback(payload: SignalFeedbackPayload) {
     merge_skipped?: boolean;
     // Сохранённый блок ОС (#130) — экран добавляет его в список на карточке, не перечитывая витрину.
     block?: SignalFeedbackBlock;
+    // «Не тот блок» (#132): новая категория сигнала — он уже в другой витрине, баллы пересчитываются.
+    recategorized?: string;
   }>("/api/signals/feedback", {
     method: "POST",
     body: JSON.stringify(payload),
