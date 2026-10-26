@@ -137,6 +137,15 @@ def card_row_facts(article_ids: list[int], signal_ids: list[int]) -> tuple[dict[
     return articles, signals
 
 
+def judged_categories(signal_ids: list[int]) -> dict[int, str | None]:
+    """Категория находок, по которой витрина решала показ (судья или человек, не агент карточки), — контроль
+    категории на экзамене «Отбора» (#133)."""
+    with connection.get_connection() as conn:
+        rows = conn.execute(f"SELECT s.id, {_judged_sql('s', 'signal_category')} FROM signals s"
+                            " WHERE s.id = ANY(%s::bigint[])", (signal_ids,)).fetchall()
+    return {int(row[0]): row[1] for row in rows}
+
+
 def material_candidates(until: str) -> list[dict[str, Any]]:
     """Материалы коллег со статусом «принят» (сигналом ещё не стали), присланные до конца окна."""
     with connection.get_connection() as conn:

@@ -2608,6 +2608,64 @@ def cmd_otbor_markup_check(args: argparse.Namespace) -> None:
         raise SystemExit(f"otbor-markup-check: разметку нужно поправить, нарушений {len(violations)}")
 
 
+def cmd_otbor_exam(args: argparse.Namespace) -> None:
+    """Экзамен агента «Отбор» (#133) на разметке эксперта: модели лестницей по цене."""
+    from oiltech_digest import otbor_exam, signal_card
+    from oiltech_digest.otbor_exam_report import PART_RU
+
+    if args.rescore and (args.dry_run or args.models or args.runs is not None or args.part or args.all):
+        raise SystemExit("otbor-exam: --rescore берёт модели, прогоны и часть из отчёта, без --dry-run, --models, "
+                         "--runs, --part и --all")
+    models = tuple(model.strip() for model in (args.models or "").split(",") if model.strip()) or otbor_exam.MODELS
+    runs = otbor_exam.RUNS if args.runs is None else args.runs
+    options = {"manifest_path": args.manifest, "models": models, "runs": runs, "part": args.part or "exam"}
+    try:
+        if args.rescore:
+            result = otbor_exam.rescore(args.rescore, args.markup, manifest_path=args.manifest)
+        elif args.dry_run:
+            plan = otbor_exam.plan(args.markup, **options)
+        else:
+            result = otbor_exam.run(args.markup, **options, every=args.all)
+    except (otbor_exam.ExamError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"otbor-exam: {exc}") from exc
+    if args.rescore or not args.dry_run:
+        decision = result["decision"]
+        print("otbor-exam: решение: " + (f"{decision['model']}, " if decision["model"] else "") + decision["reason"])
+        print(f"Отчёт: {result['readable']}\nОтветы и метрики: {result['report']}")
+        return
+    print("otbor-exam: сухой прогон, ничего не записано и не оплачено")
+    print(f"Набор: строк {plan['rows']}; деление " + ("новое, запишется при первом прогоне" if plan["split_new"]
+                                                    else f"из {otbor_exam.SPLIT_NAME}"))
+    print("Утверждено: " + (plan["approved"] or f"нет, без отметки approved в {otbor_exam.ROWS_NAME} прогона не будет"))
+    for key in ("tuning", "exam"):
+        counts = plan["split"][key]
+        print(f"  {PART_RU[key]} {sum(counts.values())}: " + "; ".join(
+            f"{otbor_exam.stratum_label(stratum)} {count}" for stratum, count in counts.items()))
+    print(f"Часть «{PART_RU[plan['part']]}»: публикаций {plan['publications']}, прогонов на публикацию {plan['runs']}")
+    for number, one in enumerate(plan["models"]):
+        print(f"  {one['model']}: вызовов {one['calls']}, токенов ≈ {one['input_tokens'] // 1000} тыс. входа и "
+              f"{one['output_tokens'] // 1000} тыс. выхода, ≈ {_usd(one['cost_usd'])}"
+              + (", если не пройдёт предыдущая" if number and plan["part"] == "exam" else ""))
+    total = sum(one["cost_usd"] for one in plan["models"])
+    calls = sum(one["calls"] for one in plan["models"])
+    print(("Не больше" if plan["part"] == "exam" else "Всего") + f": вызовов {calls}, "
+          f"≈ {_usd(total)} (оценка: ответ {signal_card.ESTIMATED_OUTPUT_TOKENS} токенов, знаков на токен "
+          f"{signal_card.CHARS_PER_TOKEN}; повтор при конфликте шагов не учтён)")
+
+
+def cmd_otbor_exam_control(args: argparse.Namespace) -> None:
+    """Размеры страт ленты в окне пакета и категория судьи у радарных строк манифеста экзамена «Отбора» (#133) —
+    JSON в stdout: экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    from oiltech_digest import otbor_exam
+
+    try:
+        raw = sys.stdin.read() if args.manifest == "-" else Path(args.manifest).read_text(encoding="utf-8")
+        values = otbor_exam.control_values(json.loads(raw))
+    except (otbor_exam.ExamError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"otbor-exam-control: {exc}") from exc
+    print(json.dumps(values, ensure_ascii=False, indent=1))
+
+
 def _usd(value: float) -> str:
     return f"${value:.2f}" if value >= 1 else f"${value:.3f}"
 
@@ -3753,6 +3811,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_otbor_check.add_argument("--manifest", default=None,
                                help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
     p_otbor_check.set_defaults(func=cmd_otbor_markup_check)
+
+    p_otbor_exam = sub.add_parser(
+        "otbor-exam",
+        help="экзамен агента «Отбор» на разметке эксперта (#133): модели лестницей по цене, отчёт с таблицей "
+             "качества и цены рядом с манифестом",
+    )
+    p_otbor_exam.add_argument("--markup", required=True, help="таблица разметки, заполненная экспертом (вне репозитория)")
+    p_otbor_exam.add_argument("--manifest", default=None,
+                              help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
+    p_otbor_exam.add_argument("--models", default=None,
+                              help="лестница моделей через запятую, по цене: следующая только при провале предыдущей "
+                                   "(по умолчанию gpt-6-luna, gpt-5.6-luna, gpt-5.4-nano, gpt-5.4-mini, gpt-5.5)")
+    p_otbor_exam.add_argument("--runs", type=int, default=None,
+                              help="прогонов на публикацию: на экзамене только 3 (спека), на настройке от 1")
+    p_otbor_exam.add_argument("--dry-run", action="store_true",
+                              help="только деление, число вызовов и цена: ничего не записать и не вызвать модель")
+    p_otbor_exam.add_argument("--rescore", default=None, metavar="REPORT",
+                              help="пересчитать сохранённый отчёт без вызовов модели: модели, прогоны и часть из отчёта")
+    p_otbor_exam.add_argument("--part", choices=["exam", "tuning"], default=None,
+                              help="часть набора: экзамен или настройка (по ней и только по ней правят инструкцию)")
+    p_otbor_exam.add_argument("--all", action="store_true",
+                              help="прогнать все модели лестницы, и после прошедшей: полная таблица качества и цены")
+    p_otbor_exam.set_defaults(func=cmd_otbor_exam)
+
+    p_otbor_exam_control = sub.add_parser(
+        "otbor-exam-control",
+        help="контроль экзамена «Отбора» (#133): размеры страт ленты и категория судьи у радарных строк манифеста, "
+             "JSON в stdout, запуск на ядре",
+    )
+    p_otbor_exam_control.add_argument("--manifest", required=True, help="манифест пакета эксперту или «-» из stdin")
+    p_otbor_exam_control.set_defaults(func=cmd_otbor_exam_control)
 
     p_archive_signals = sub.add_parser(
         "archive-signals",

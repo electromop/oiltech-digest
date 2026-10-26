@@ -114,7 +114,7 @@ def select_rows(*, seed: int, since: str, until: str, card: list[dict[str, Any]]
     rows = list(card)
     articles = {item["article_id"] for item in rows if item.get("article_id")}
     signals = {item["signal_id"] for item in rows if item.get("signal_id")}
-    feed = [item for item in _feed_items(since, until) if item["article_id"] not in articles and _markable(item)]
+    feed = feed_pool(since, until, exclude=articles)
     for group in ("feed_rejected", "feed_accepted"):
         pool = [item for item in feed if item["group"] == group]
         rows += sorted(pool, key=lambda item: _rank(seed, group, item["id"]))[:QUOTAS[group]]
@@ -125,6 +125,12 @@ def select_rows(*, seed: int, since: str, until: str, card: list[dict[str, Any]]
     rows += [item for item in _material_items(until) if _markable(item)]
     _complete_from_base(rows)
     return rows
+
+
+def feed_pool(since: str, until: str, *, exclude: set[Any] | frozenset[Any] = frozenset()) -> list[dict[str, Any]]:
+    """Кандидаты выборки ленты в окне: статьи, о которых гейт решил, кроме прежних строк карточки (exclude) и тех,
+    что эксперт не разметит. Из них выбраны строки пакета, а их число по группам — веса страт экзамена (#133)."""
+    return [item for item in _feed_items(since, until) if item["article_id"] not in exclude and _markable(item)]
 
 
 def composition(rows: list[dict[str, Any]]) -> dict[str, Any]:
