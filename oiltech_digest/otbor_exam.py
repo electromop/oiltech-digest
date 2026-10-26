@@ -15,8 +15,8 @@
 с повтором при конфликте шагов) после проверки кодом ядра (otbor_answer.outcome). Модели — лестницей по цене: первая,
 прошедшая правило и пороги (otbor_exam_score), — решение; с --all идут все — полная таблица качества и цены. Модель,
 которую поставщик пометил устаревшей, экзамен меряет, но не выбирает. Прогон — только после утверждения (approved в
-файле строк экзамена): деление фиксируется первым же прогоном. Отчёт — рядом с манифестом, вне репозитория: он
-публичный.
+файле строк экзамена): деление фиксируется первым же прогоном; экзамен — только если отметка называет текущие
+инструкцию и справочники. Отчёт — рядом с манифестом, вне репозитория: он публичный.
 """
 
 from __future__ import annotations
@@ -67,16 +67,18 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     if not exam["approved"]:
         raise ExamError(f"{ROWS_NAME}: нет отметки approved. До первого прогона владелец утверждает инструкцию, пороги "
                         "и строки экзамена: первый же прогон, даже настройки, фиксирует деление")
+    dictionaries = load_dictionaries()
+    if part == "exam":
+        _check_approved(exam["approved"], dictionaries)
     ladder = _by_price(models)
     split = _split(exam, write=True)
     items = _part_items(exam, split, part)
-    dictionaries = load_dictionaries()
     tried: list[dict[str, Any]] = []
     for model in ladder:
         tried.append(_model_scores(model, _answers(model, items, runs, dictionaries, workers), items, dictionaries,
                                    exam["control"]))
         print(f"{model}: " + ("правило и пороги пройдены" if tried[-1]["passed"]
-                              else "не прошла: " + ", ".join(tried[-1]["failed"])))
+                              else "не прошла: " + ", ".join(tried[-1]["failed"])), flush=True)
         if not every and _decision(tried, part):
             break
     settings = {"part": part, "runs": runs, "split": split, "reasoning": config.OTBOR_REASONING,
@@ -134,6 +136,16 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
             "split": {key: dict(sorted(Counter(stratum[one] for one in split[key]).items()))
                       for key in ("tuning", "exam")},
             "models": [estimate(chars * runs, len(items) * runs, model) for model in _by_price(models)]}
+
+
+def _check_approved(approved: str, dictionaries: dict[str, Any]) -> None:
+    """Экзамен идёт только на правилах, которые утвердил владелец: отметка называет текущие инструкцию и справочники.
+    Настройку это не держит: по её строкам инструкцию правят до утверждения."""
+    missing = [name for name in (f"инструкция {otbor.PROMPT_VERSION}", f"справочники {dictionaries.get('version')}")
+               if name not in approved]
+    if missing:
+        raise ExamError(f"{ROWS_NAME}: утверждение не называет текущие правила ({', '.join(missing)}): после правки "
+                        "инструкции или справочников экзамен ждёт нового утверждения владельца")
 
 
 def _check_runs(runs: int, part: str) -> None:
@@ -370,7 +382,7 @@ def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: d
                             "output_tokens": int(decision["output_tokens"])})
         failures = sum(_technical(decision, dictionaries) for decision in decisions)
         print(f"{model}: прогон {number}/{runs}: публикаций {len(decisions)}, повторов после сбоя {len(failed)}, "
-              f"без ответа {failures}")
+              f"без ответа {failures}", flush=True)  # ход прогона виден в логе сразу
     return answers
 
 

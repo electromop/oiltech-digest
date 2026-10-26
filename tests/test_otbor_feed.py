@@ -45,7 +45,7 @@ def test_feed_article_accepted_by_otbor_is_in_the_business_feed_with_its_decisio
     # Справочники «Отбора» — в каждом вызове: в инструкции и в схеме ответа.
     dictionaries = load_dictionaries()
     properties = call["schema"]["schema"]["properties"]
-    assert list(properties) == ["industry", "oilfield_relevance", "oilfield_application", "decision",
+    assert list(properties) == ["industry", "occasion", "oilfield_relevance", "oilfield_application", "decision",
                                 "reject_reason", "justification", "category"]
     for field in OTBOR_FIELDS:
         codes = [value["code"] for value in dictionaries[field]["values"]]

@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from oiltech_digest import api, cli, contract, signal_scores
+from oiltech_digest import api, cli, signal_scores
 from oiltech_digest.db import repository
 from oiltech_digest.otbor_pack_format import load_rubrics
 from oiltech_digest.processing.openai_client import AIClientError
@@ -412,4 +412,4 @@ def test_old_worker_build_does_not_get_the_scores_job(user, admin, pipeline, mon
     assert worker("external-ai", contract_number=5).claim() is None
 
     [job] = api_get("/api/jobs", admin, kind="signal_scores")
-    assert f"нужен контракт {contract.CONTRACT}" in repository.get_background_job(job["id"])["error_message"]
+    assert "нужен контракт 6" in repository.get_background_job(job["id"])["error_message"]

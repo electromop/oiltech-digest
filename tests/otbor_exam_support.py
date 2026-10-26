@@ -18,6 +18,7 @@ from oiltech_digest import cli, otbor
 from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.openai_client import AIResponse
 from tests.otbor_pack_support import TAKEN, business, fill, rejected, technology
+from tests.otbor_support import occasion_for
 
 # gpt-6-luna — самая дешёвая из действующих; gpt-5.4-nano поставщик пометил устаревшей (экзамен её не выбирает).
 LUNA, NANO, MINI, FULL = "gpt-6-luna", "gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.5"
@@ -84,8 +85,12 @@ def special_rows(items):
     return {"list_pages": filtered[OLD_EVENTS:OLD_EVENTS + LIST_PAGES], "in_instruction": card[:2]}
 
 
-def write_rows(out, rows, *, approved="утверждено владельцем"):
-    """Файл строк экзамена рядом с манифестом; approved — отметка утверждения (без неё прогона нет)."""
+def write_rows(out, rows, *, approved=True):
+    """Файл строк экзамена рядом с манифестом; approved — отметка утверждения: True — текущих инструкции и
+    справочников, строка — как есть, пусто — без отметки (прогона нет)."""
+    if approved is True:
+        approved = (f"утверждено владельцем: инструкция {otbor.PROMPT_VERSION}, справочники "
+                    f"{load_dictionaries()['version']}")
     (out / ROWS_NAME).write_text(json.dumps({**rows, **({"approved": approved} if approved else {})},
                                             ensure_ascii=False), encoding="utf-8")
 
@@ -116,14 +121,17 @@ def oracle(exam_pack, by_id=None):
             "justification": "Как у эксперта", "category": codes["category"] or "business",
         }
         change = by_id.get(number, {})
-        return change(answer) if callable(change) else {**answer, **change}
+        changed = change(answer) if callable(change) else {**answer, **change}
+        # Повод — по ответу после поправки, если поправка его не задала: иначе лишний конфликт шагов.
+        return {"occasion": occasion_for(changed), **changed}
     return reply
 
 
 def always_take(title):
     """Модель-константа «всегда брать»: ответ по правилам и без конфликта шагов, но не о публикации."""
-    return {"industry": "oilfield_services", "oilfield_relevance": "direct", "oilfield_application": "",
-            "decision": "accept", "reject_reason": "none", "justification": "Берём всё", "category": "business"}
+    return {"industry": "oilfield_services", "occasion": "oilfield_work", "oilfield_relevance": "direct",
+            "oilfield_application": "", "decision": "accept", "reject_reason": "none", "justification": "Берём всё",
+            "category": "business"}
 
 
 class ExamModel:

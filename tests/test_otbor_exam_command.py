@@ -67,6 +67,10 @@ def test_the_exam_refuses_before_any_paid_call(exam_pack, monkeypatch):
     write_rows(out, lists, approved=None)
     refused("approved", "--part", "tuning", "--runs", "1", "--models", NANO)
     assert not (out / "otbor_exam_split.json").exists()
+    # Экзамен — только на утверждённых правилах: отметка о прежних инструкции и справочниках его не пускает.
+    write_rows(out, lists, approved="утверждено владельцем: инструкция 2026-10-01.1, справочники 2026-10-01.1")
+    refused("не называет текущие правила", "--models", NANO)
+    assert not (out / "otbor_exam_split.json").exists()
     write_rows(out, lists)
     # Строки экзамена — решение владельца: без файла, с битым файлом и с чужими строками экзамен не идёт.
     rows = json.loads((out / ROWS_NAME).read_text(encoding="utf-8"))

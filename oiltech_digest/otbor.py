@@ -34,10 +34,10 @@ from oiltech_digest.signal_card_pack import _publisher_label, publication_day, p
 
 KIND = otbor_store.KIND
 # Версия инструкции (и таблицы конфликтов, otbor_answer) — в рецепте решения: другая инструкция — другие решения.
-PROMPT_VERSION = "2026-10-26.1"
+PROMPT_VERSION = "2026-10-26.2"
 _OUTPUT_TOKENS = 600
 # Справочники, из которых модель выбирает коды, — в порядке её рассуждения (поля ответа).
-CHOICES = ("industry", "oilfield_relevance", "decision", "reject_reason", "category")
+CHOICES = ("industry", "occasion", "oilfield_relevance", "decision", "reject_reason", "category")
 
 
 class OtborSetupError(ValueError):
@@ -222,13 +222,14 @@ _TASK = """Ты решаешь, брать ли публикацию на пла
 
 Иди по шагам в порядке полей ответа, каждый следующий шаг опирается на предыдущие:
 1. industry — отрасль, где произошло событие (где работает его главный участник).
-2. oilfield_relevance — связь с нефтесервисом. oilfield_application — при переносимой связи по-русски: какую
-   задачу нефтесервиса решит технология, какие нужны доработки и ограничения; при прямой связи и без связи —
-   пусто.
-3. decision — брать (accept) или не брать (reject).
-4. reject_reason — у reject один код причины отказа; у accept — none.
-5. justification — одной-двумя фразами по-русски, до 200 знаков, почему такое решение.
-6. category — категория публикации.
+2. occasion — главный повод публикации по её тексту, а не по заголовку.
+3. oilfield_relevance — связь с нефтесервисом, только из связей повода. oilfield_application — при переносимой
+   связи по-русски: какую задачу нефтесервиса решит технология, какие нужны доработки и ограничения; при прямой
+   связи и без связи — пусто.
+4. decision — брать (accept) или не брать (reject).
+5. reject_reason — у reject один код причины отказа; у accept — none.
+6. justification — одной-двумя фразами по-русски, до 200 знаков, почему такое решение.
+7. category — категория публикации.
 
 Коды — строго из справочников ниже, буквально. Дата публикации и дата поступления — когда о событии написали и
 когда публикация пришла на платформу; дата самого события — только та, что названа в тексте или из него
@@ -244,7 +245,9 @@ def _instructions(dictionaries: dict[str, Any]) -> str:
         lines.append(f"{name} — {block.get('title', name)}. {block.get('rule', '')}".rstrip())
         for value in block.get("values") or []:
             examples = "; ".join(value.get("examples") or [])
+            relevances = " или ".join(value.get("relevances") or [])  # связи повода публикации
             lines.append(f"- {value['code']} — {value['label']}: {value.get('rule', '')}"
+                         + (f" Связь: {relevances}." if relevances else "")
                          + (f" Примеры: {examples}." if examples else ""))
         if name == "reject_reason":
             lines.append(f"- {NO_REASON} — причины нет (решение accept).")

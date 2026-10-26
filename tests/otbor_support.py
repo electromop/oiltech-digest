@@ -42,12 +42,29 @@ class OtborModel:
 
 
 def answer(**overrides):
-    """Ответ «Отбора» по схеме: нефтегаз, прямая связь, брать, бизнес."""
-    return {
+    """Ответ «Отбора» по схеме: нефтегаз, прямая связь, брать, бизнес; повод — по связи и причине (occasion_for),
+    если его не задали."""
+    reply = {
         "industry": "oil_gas", "oilfield_relevance": "direct", "oilfield_application": "",
         "decision": "accept", "reject_reason": "none", "justification": JUSTIFICATION, "category": "business",
         **overrides,
     }
+    return {"occasion": occasion_for(reply), **reply}
+
+
+# Повод отказа без связи — по причине; остальные отказы без связи — «Рынок и финансы».
+_OCCASION_BY_REASON = {"other_industry_no_transfer": "other_event", "incident_war_politics": "incident_politics",
+                       "corporate_promo": "corporate"}
+
+
+def occasion_for(reply):
+    """Повод публикации, связи которого допускают связь ответа: заготовка не даёт лишнего конфликта шагов."""
+    relevance = reply.get("oilfield_relevance")
+    if relevance == "direct":
+        return "oilfield_work" if reply.get("industry") == "oilfield_services" else "investment"
+    if relevance == "transferable":
+        return "other_tech"
+    return _OCCASION_BY_REASON.get(reply.get("reject_reason"), "market_finance")
 
 
 def reject(reason, **overrides):
