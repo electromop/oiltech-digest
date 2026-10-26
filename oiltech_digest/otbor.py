@@ -24,7 +24,7 @@ from functools import partial
 from typing import Any, Callable
 
 from oiltech_digest import config, contract
-from oiltech_digest.db import otbor_store, repository
+from oiltech_digest.db import otbor_inputs, otbor_store, repository
 from oiltech_digest.otbor_answer import NO_REASON, answer_problem, answer_schema, conflicts, outcome, technical_failure
 from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.external_ai import StopRequested
@@ -110,8 +110,8 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
         "dictionaries": load_dictionaries(),
-        "items": [*(_item(row) for row in otbor_store.article_inputs(job_payload.get("article_ids") or [])),
-                  *(_signal_item(row) for row in otbor_store.signal_inputs(job_payload.get("signal_ids") or []))],
+        "items": [*(_item(row) for row in otbor_inputs.article_inputs(job_payload.get("article_ids") or [])),
+                  *(_signal_item(row) for row in otbor_inputs.signal_inputs(job_payload.get("signal_ids") or []))],
     }
 
 
@@ -130,6 +130,7 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
         "received": publication_day(row.get("received")),
         "links": [],
         "feedback": {"similar_signals": [], "text": ""},
+        **_card_fact(row),
     }
 
 
@@ -149,7 +150,14 @@ def _signal_item(row: dict[str, Any]) -> dict[str, Any]:
         "links": [{"title": publication_text(link.get("title"))[:300] or None, "publisher": _publisher_label(link),
                    "published": publication_day(link.get("published"))} for link in row.get("links") or []],
         "feedback": {"similar_signals": [], "text": ""},
+        **_card_fact(row),
     }
+
+
+def _card_fact(row: dict[str, Any]) -> dict[str, str]:
+    """Факт «Карточки» у публикации, которую она вернула (#132): дата события из текста старше срока. Только у
+    возвращённой — у остальных входа не меняет (экзамен #133 подаёт манифест без него)."""
+    return {"card_fact": row["card_fact"]} if row.get("card_fact") else {}
 
 
 # --- Вызов модели (воркер, без базы) -------------------------------------------------------------
@@ -254,6 +262,8 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
         f"Язык: {item.get('language') or 'не указан'}",
         f"Дата публикации: {item.get('published') or 'не указана'}",
         f"Дата поступления: {item.get('received') or 'не указана'}",
+        # Вернула «Карточка» (#132): что она нашла в тексте, — решение остаётся за «Отбором».
+        *([f"Факт «Карточки»: {item['card_fact']}"] if item.get("card_fact") else []),
         # Как колонка таблицы эксперта (otbor_pack_format.GIVEN_COLUMNS): по ней справочник объясняет причину
         # «разные события в одной находке».
         "Ссылки находки:" + (" нет" if not links else ""),
@@ -283,12 +293,12 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
         {contract.article_ref(value) for value in article_ids or []}
         | {contract.signal_ref(value) for value in signal_ids or []})
     otbor_store.record_usage(job_id, [usage for decision in decisions if (usage := _usage(decision, expected))])
-    links = otbor_store.links_in_input([signal_id for decision in decisions
+    links = otbor_inputs.links_in_input([signal_id for decision in decisions
                                         if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
     stale = result.get("dictionaries_version") != dictionaries.get("version")
     recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,
               "dictionaries_version": dictionaries.get("version"), "job_id": job_id}
-    applied = {"decided": 0, "failed": 0, "kept_in_digest": 0, "errors": []}
+    applied = {"decided": 0, "failed": 0, "kept_in_digest": 0, "kept_by_human": 0, "errors": []}
     for decision in decisions:
         article_id, signal_id = _publication(decision, expected)
         if article_id is None and signal_id is None:

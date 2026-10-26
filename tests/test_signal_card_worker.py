@@ -13,23 +13,26 @@ from tests.signal_card_support import MODEL, FakeModel, answer, api_get, busines
 from tests.signal_card_support import admin, contour, user  # noqa: F401 — фикстуры
 
 
-def test_old_worker_build_refuses_the_card_job_and_check_lanes_shows_the_mismatch(user, contour, monkeypatch, capsys):
+def test_old_worker_build_does_not_get_the_new_card_job_and_check_lanes_shows_the_mismatch(user, admin, contour,
+                                                                                          monkeypatch, capsys):
     feed_signal("Контракт SLB", "SLB подписала контракт с Saudi Aramco.")
+    model = FakeModel({"Контракт SLB": answer()})
+    monkeypatch.setattr(signal_card, "make_client", lambda: model)
     cli.main(["enqueue-signal-cards"])
-    # Сборка NL до #96 (на проде — контракт 1): обработчика карточки у неё нет.
-    old_build = {kind: target for kind, target in external_worker._HANDLERS.items() if kind != "signal_card"}
-    monkeypatch.setattr(external_worker, "_HANDLERS", old_build)
-    client = worker("external-ai", contract_number=1)
+    # Сборка NL до #132 (контракт 5) исполнила бы карточку по-старому, без темы, а ядро отбросило бы оплаченный ответ:
+    # ядро такую задачу ей не выдаёт, а валит с причиной.
+    client = worker("external-ai", contract_number=5)
 
-    job = client.claim()
-    external_worker._run_job(client, job, lambda done=None: None)
+    assert client.claim() is None
 
-    assert "Unsupported external job kind: signal_card" in repository.get_background_job(job["id"])["error_message"]
+    assert model.calls == []
+    [job] = api_get("/api/jobs", admin, kind="signal_card")
+    assert "нужен контракт 6" in repository.get_background_job(job["id"])["error_message"]
     capsys.readouterr()
     with pytest.raises(SystemExit):
         cli.cmd_check_lanes(type("Args", (), {})())
     out = capsys.readouterr().out
-    assert f"контракт 1, у ядра контракт {contract.CONTRACT}" in out
+    assert f"контракт 5, у ядра контракт {contract.CONTRACT}" in out
     assert "NL надо пересобрать" in out
 
 

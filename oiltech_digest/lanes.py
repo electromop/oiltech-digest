@@ -27,7 +27,7 @@ AGENTS = "external-agents"
 NOTIFY = "external-notify"
 
 _AI_KINDS = frozenset({"process_articles", "recheck_relevance", "translate_titles", "process_document", "reprint_review",
-                       "signal_card", "otbor", "signal_summary"})
+                       "signal_card", "otbor", "signal_summary", "signal_scores"})
 _FETCH_KINDS = frozenset({"scrape_source", "refetch_text"})
 _AGENT_KINDS = frozenset({"signal_discovery", "source_candidate_evaluate"})
 
@@ -38,8 +38,10 @@ EXTERNAL_LANES: dict[str, frozenset[str]] = {
     # релевантности (удаляют статьи) здесь нет: резерв защищает только пару пакет×пакет, и
     # удаление параллельно пакету дня уронило бы его apply на внешнем ключе. Карточки сигналов по
     # истории (#96, #98) — тоже пересчёт: новые сигналы идут потоком дня. «Отбор» (#130) названных статей —
-    # повтор после разбора сбоя: новые статьи идут потоком дня. Так же «Суть и перевод» названных сигналов (#131).
-    AI_BULK: frozenset({"process_articles", "translate_titles", "signal_card", "otbor", "signal_summary"}),
+    # повтор после разбора сбоя: новые статьи идут потоком дня. Так же «Суть и перевод» названных сигналов (#131), баллы
+    # «Карточки» названных сигналов и возврат в «Отбор» из «Карточки» (#132).
+    AI_BULK: frozenset({"process_articles", "translate_titles", "signal_card", "otbor", "signal_summary",
+                        "signal_scores"}),
     FETCH: _FETCH_KINDS,
     BROWSER: _FETCH_KINDS,
     # Радар и оценка кандидатов агента источников (ADR 0001): прогон радара — минуты,

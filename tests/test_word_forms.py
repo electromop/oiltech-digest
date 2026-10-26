@@ -71,7 +71,7 @@ def test_spellings_of_a_name_are_the_name_and_its_abbreviation_never_an_explanat
 def _kept(text, companies, *, publisher="Пресс-служба", publisher_type="Company"):
     """Участники, которых ядро запишет в карточку по ответу модели."""
     publication = {"text": text, "publisher": publisher, "publisher_type": publisher_type, "published": PUBLISHED}
-    values = signal_card.check_answer(answer(companies=companies), publication, load_dictionaries())
+    values = signal_card.check_answer(answer(companies=companies), publication, load_dictionaries(), [])
     return values["participants_json"]
 
 

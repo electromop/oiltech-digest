@@ -88,8 +88,8 @@ def answer_problem(answer: Any, dictionaries: dict[str, Any]) -> str | None:
     return None
 
 
-def _label(dictionaries: dict[str, Any], name: str, code: str | None) -> str:
-    """Подпись кода по справочнику; кода в справочнике нет — сам код."""
+def code_label(dictionaries: dict[str, Any], name: str, code: str | None) -> str:
+    """Подпись кода по справочнику; кода в справочнике нет — сам код, нет и кода — пусто."""
     values = (dictionaries.get(name) or {}).get("values") or []
     return next((value["label"] for value in values if value["code"] == code), code or "")
 
@@ -97,7 +97,7 @@ def _label(dictionaries: dict[str, Any], name: str, code: str | None) -> str:
 def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: int = 0) -> list[str]:
     """Где шаги ответа не сошлись друг с другом (таблица конфликтов, DECISION_STEPS). links — сколько ссылок у
     находки во входе (0 — публикация одна)."""
-    label = partial(_label, dictionaries)
+    label = partial(code_label, dictionaries)
     industry, relevance = answer["industry"], answer["oilfield_relevance"]
     decision, reason = answer["decision"], answer["reject_reason"]
     found = []
@@ -120,6 +120,31 @@ def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: in
     if reason == MIXED_EVENTS and links < 2:
         found.append(f"причина «{label('reject_reason', reason)}» у публикации без нескольких ссылок")
     return found
+
+
+def return_choices(dictionaries: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    """Что человек может вписать, возвращая отклонённое (#132): коды и подписи справочника «Отбора» — отрасль, связь
+    (вернуть значит взять: только прямая и переносимая) и категория. Экран берёт их отсюда, а не держит у себя."""
+    def options(name: str, allowed: frozenset[str] | None = None) -> list[dict[str, str]]:
+        return [{"code": value["code"], "label": value["label"]} for value in (dictionaries.get(name) or {}).get("values")
+                or [] if allowed is None or value["code"] in allowed]
+
+    return {"industry": options("industry"), "oilfield_relevance": options("oilfield_relevance", LINKED),
+            "category": options("category")}
+
+
+def return_problems(values: dict[str, Any], dictionaries: dict[str, Any]) -> list[str]:
+    """Чем поля «Отбора», которые вписал человек, возвращая отклонённое (#132, спека #128), не по правилам: значение не
+    из справочника или шаги не сходятся по той же таблице конфликтов, что у «Отбора» (вернуть — значит взять: связь
+    прямая или переносимая, у переносимой — применение). Пусто — по правилам."""
+    problems = [f"{name}: «{str(values.get(name))[:60]}» нет в справочнике" for name in ("industry", "oilfield_relevance",
+                                                                                      "category")
+                if values.get(name) not in codes(dictionaries, name)]
+    if problems:
+        return problems
+    return conflicts({"industry": values["industry"], "oilfield_relevance": values["oilfield_relevance"],
+                      "oilfield_application": values.get("oilfield_application") or "", "decision": ACCEPT,
+                      "reject_reason": NO_REASON, "category": values["category"]}, dictionaries)
 
 
 @dataclass
@@ -192,7 +217,7 @@ def _values(answer: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, A
 
 
 def _decision_text(values: dict[str, Any], dictionaries: dict[str, Any]) -> str:
-    label = partial(_label, dictionaries)
+    label = partial(code_label, dictionaries)
 
     relevance = label("oilfield_relevance", values["oilfield_relevance"])
     if values["oilfield_application"]:

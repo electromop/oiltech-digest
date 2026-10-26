@@ -7,11 +7,13 @@ import {
   getSignalSummary,
   getSignalWeekly,
   listSignals,
+  returnSignal,
   updateSignal,
 } from "../../api/signals";
 import type {
   SignalDictionaries,
   SignalFilters,
+  SignalReturnPayload,
   SignalSearchHealth,
   SignalShowcase,
   SignalSort,
@@ -26,6 +28,7 @@ import { PROFILES } from "../scoring/ScoringPage";
 import { CHOICE_FIELDS, SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
 import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
+import { SignalReturnForm } from "./SignalReturnForm";
 
 // Страница выдачи: остальное — «Показать ещё». Выборку и страницу считает сервер по всему
 // радару, а не экран по загруженным карточкам (замечание заказчика 19.09).
@@ -176,7 +179,9 @@ function profileLabel(signal: Signal): string | undefined {
 
 // Разбивка балла по критериям профиля: имя и вес — из снимка набора на момент оценки, а не из
 // нынешнего экрана «Скоринг» (там их могли поменять).
-function scoreBreakdown(signal: Signal): Array<{ id: number; name: string; weight: number; score: number }> {
+function scoreBreakdown(
+  signal: Signal,
+): Array<{ id: number; name: string; weight: number; score: number; excluded: string | null }> {
   if (!profileLabel(signal)) return [];
   const byId = new Map((signal.criteria_snapshot || []).map((item) => [Number(item.id), item]));
   return (signal.score_items_json || []).map((item) => {
@@ -186,6 +191,8 @@ function scoreBreakdown(signal: Signal): Array<{ id: number; name: string; weigh
       name: criterion?.name || `Критерий ${item.criterion_id}`,
       weight: Number(criterion?.weight || 0),
       score: Math.round(Number(item.final_score || 0)),
+      // «Свежесть» без даты события в тексте в итог не входит (#132): балла у неё нет, и «0» здесь солгал бы.
+      excluded: item.excluded ?? null,
     };
   });
 }
@@ -230,8 +237,17 @@ const PUBLICATION_WORDS = ["публикация", "публикации", "пу
 function cardMeta(signal: Signal, business: boolean): string {
   const links = Number(signal.evidence_count || 0);
   const [one, few, many] = business ? PUBLICATION_WORDS : LINK_WORDS;
-  const maturity = MATURITY_LABELS[signal.maturity] || signal.maturity;
-  return `${signal.theme} · ${links} ${pluralWord(links, one, few, many)} · Решение платформы: ${maturity} · `;
+  // У «другого» после «Отбора» «Решения платформы» нет (#132).
+  const decision = signal.maturity ? ` · Решение платформы: ${MATURITY_LABELS[signal.maturity] || signal.maturity}` : "";
+  return `${signal.theme} · ${links} ${pluralWord(links, one, few, many)}${decision} · `;
+}
+
+// Раскрыть или свернуть карточку, её форму ОС или форму возврата: новый набор номеров без этого или с ним.
+function toggled(current: Set<number>, signalId: number): Set<number> {
+  const next = new Set(current);
+  if (next.has(signalId)) next.delete(signalId);
+  else next.add(signalId);
+  return next;
 }
 
 // Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
@@ -293,6 +309,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const filtersPanelId = useId();
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [feedbackOpen, setFeedbackOpen] = useState<Set<number>>(new Set());
+  // Форма возврата отклонённого (#132) — у админа в «Отклонённых».
+  const [returnOpen, setReturnOpen] = useState<Set<number>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Свёрнутые вручную — сильнее авто-раскрытия при поиске и выбранной теме.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -546,6 +564,27 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     }
   }
 
+  function toggleReturn(signalId: number) {
+    setReturnOpen((current) => toggled(current, signalId));
+  }
+
+  // Возврат отклонённого (#132): поля «Отбора» вписывает человек; публикация уходит из «Отклонённых» и пройдёт
+  // остаток конвейера (суть, карточку, баллы) с пометкой «спорное».
+  async function returnRejected(signal: Signal, payload: SignalReturnPayload) {
+    try {
+      setSaving((current) => ({ ...current, [signal.id]: true }));
+      await returnSignal(signal.id, payload);
+      toggleReturn(signal.id);
+      setSignals((current) => current.filter((item) => item.id !== signal.id));
+      showToast("Публикация возвращена: она пройдёт суть, карточку и баллы с пометкой «спорное»");
+      reload({ keepLoaded: true });
+    } catch (error) {
+      handleError(error, "Не удалось вернуть публикацию");
+    } finally {
+      setSaving((current) => ({ ...current, [signal.id]: false }));
+    }
+  }
+
   async function submitFeedback(signal: Signal) {
     const draft = feedbackDrafts[signal.id] || EMPTY_FEEDBACK_DRAFT;
     const comment = draft.comment.trim();
@@ -588,6 +627,15 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
             : item,
         ),
       );
+      if (result.recategorized) {
+        // «Не тот блок» у сигнала после «Отбора» (#132): категория сменилась сразу — карточка уже в другой
+        // витрине, баллы там пересчитываются по профилю новой категории.
+        const target = result.recategorized === "technology" ? "технологический радар" : "бизнес-ленту";
+        showToast(`Отзыв сохранён: карточка перешла в ${target}, баллы пересчитываются`);
+        setSignals((current) => current.filter((item) => item.id !== signal.id));
+        reload({ keepLoaded: true });
+        return;
+      }
       showToast(
         result.merged
           ? "Отзыв сохранён: карточка скрыта как дубль, её ссылки — в главной карточке"
@@ -619,21 +667,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   }
 
   function toggleExpanded(signalId: number) {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(signalId)) next.delete(signalId);
-      else next.add(signalId);
-      return next;
-    });
+    setExpanded((current) => toggled(current, signalId));
   }
 
   function toggleFeedback(signalId: number) {
-    setFeedbackOpen((current) => {
-      const next = new Set(current);
-      if (next.has(signalId)) next.delete(signalId);
-      else next.add(signalId);
-      return next;
-    });
+    setFeedbackOpen((current) => toggled(current, signalId));
   }
 
   function draftOf(signalId: number): FeedbackDraft {
@@ -995,10 +1033,25 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                       <div className={eventDate.gap ? "articleMetric gap" : "articleMetric"}>{eventDate.text}</div>
                     ) : null}
                     {arrival ? <div className="articleMetric">Поступил: {arrival}</div> : null}
-                    <div className={`miniPill ${tone}`} title={scoreTitle(signal, breakdown.length > 0)}>
-                      {Math.round(Number(signal.score || 0))}
-                    </div>
-                    <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
+                    {/* «Не тот блок» (#132): до ответа второго вызова баллы прежнего профиля не показываются. */}
+                    {signal.scores_pending ? (
+                      <div className="miniPill muted" title="Категория сменилась: баллы пересчитываются по её профилю">
+                        пересчитываются
+                      </div>
+                    ) : signal.unscored ? (
+                      // Без баллов (#132): «другое», отклонённое, сбой «Отбора» и отсеянное поиском не оценивают, у
+                      // принятого бизнеса и технологии второй вызов «Карточки» ещё не прошёл. «0» и «Низкая» солгали бы.
+                      <div className="miniPill muted" title="Баллов нет: их ставят только принятым «Отбором» бизнесу и технологии, после карточки">
+                        без баллов
+                      </div>
+                    ) : (
+                      <>
+                        <div className={`miniPill ${tone}`} title={scoreTitle(signal, breakdown.length > 0)}>
+                          {Math.round(Number(signal.score || 0))}
+                        </div>
+                        <div className={`miniPill ${tone}`}>{signal.score_label || "—"}</div>
+                      </>
+                    )}
                     {/* «В дайджест» — одна механика в обеих витринах (#130): у сигнала ленты — отметка его
                         статьи, та же, что в ленте статей. */}
                     {digestOffered ? (
@@ -1012,8 +1065,29 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                         {signal.selected_for_digest ? "Убрать" : "В дайджест"}
                       </button>
                     ) : null}
+                    {/* Отклонённое «Отбором» возвращает человек, вписав его поля (#132): разделы видит только админ. */}
+                    {isAdmin && signal.otbor_decision === "reject" && dictionaries?.otbor_return ? (
+                      <button
+                        type="button"
+                        className="ghostButton compactButton"
+                        aria-expanded={returnOpen.has(signal.id)}
+                        disabled={savingThis}
+                        onClick={() => toggleReturn(signal.id)}
+                      >
+                        Вернуть
+                      </button>
+                    ) : null}
                   </div>
                 </div>
+                {returnOpen.has(signal.id) && dictionaries?.otbor_return ? (
+                  <SignalReturnForm
+                    signal={signal}
+                    choices={dictionaries.otbor_return}
+                    saving={savingThis}
+                    onSubmit={(payload) => void returnRejected(signal, payload)}
+                    onCancel={() => toggleReturn(signal.id)}
+                  />
+                ) : null}
 
                 {isExpanded ? (
                   <div className="articleDetailReact signalRadarDetail">
@@ -1057,7 +1131,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                               {breakdown.map((item) => (
                                 <li key={item.id}>
                                   <span>{item.name}{item.weight ? ` · вес ${item.weight}` : ""}</span>
-                                  <strong>{item.score}</strong>
+                                  {item.excluded ? (
+                                    <strong title={item.excluded}>не входит</strong>
+                                  ) : (
+                                    <strong>{item.score}</strong>
+                                  )}
                                 </li>
                               ))}
                             </ul>

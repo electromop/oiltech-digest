@@ -19,7 +19,8 @@ import logging
 
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection
-from oiltech_digest.db.repository import SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED, signal_publication_count_sql
+from oiltech_digest.db.repository import (SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED, refresh_platform_decisions,
+                                          signal_publication_count_sql)
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,21 @@ def _key_sql(article_sql: str) -> str:
     return f"('{FEED_KEY_PREFIX}' || {article_sql})"
 
 
+# Что мост берёт у статьи сигналу после «Отбора» (#132): тему — пока её не поставила «Карточка», балл — никогда (его
+# ставит второй вызов «Карточки» по профилю категории, а балл статьи — всегда бизнес-профилем).
+_THEME_SQL = "CASE WHEN signals.card_set_by ? 'theme' THEN signals.theme ELSE EXCLUDED.theme END"
+
+
+def _score_sql(column: str) -> str:
+    return f"CASE WHEN signals.otbor_decision IS NOT NULL THEN signals.{column} ELSE EXCLUDED.{column} END"
+
+
 # Принятая статья, которая не перепечатка, — свой сигнал. Тема — корневая тематика тега
 # статьи (у дочернего тега — его корень), без тега — «не классифицировано»: тема у сигнала
 # обязательна, а тег приходит позже отбора. Балл с подпунктами — как у статьи. Принятая — по
 # решению агента «Отбор» (#130), без него — по гейту: отклонённую и ждущую «Отбора» статью
-# заводит хранилище «Отбора» (otbor_store), а мост ей суть, тему и балл не пишет.
+# заводит хранилище «Отбора» (otbor_store), а мост ей суть, тему и балл не пишет. Тему и балл сигнала после
+# «Отбора» ставит «Карточка» (#132): мост их не перезаписывает (_THEME_SQL, _score_sql).
 _UPSERT_SIGNALS = f"""
 INSERT INTO signals (
   signal_key, origin, origin_article_id, signal_category, title, title_ru, theme, summary,
@@ -72,18 +83,18 @@ ON CONFLICT (signal_key) DO UPDATE SET
   -- не должна возвращать сигнал в «бизнес».
   title = EXCLUDED.title,
   title_ru = EXCLUDED.title_ru,
-  theme = EXCLUDED.theme,
+  theme = {_THEME_SQL},
   summary = EXCLUDED.summary,
-  score = EXCLUDED.score,
-  score_profile = EXCLUDED.score_profile,
-  criteria_snapshot = EXCLUDED.criteria_snapshot,
-  score_items_json = EXCLUDED.score_items_json,
+  score = {_score_sql('score')},
+  score_profile = {_score_sql('score_profile')},
+  criteria_snapshot = {_score_sql('criteria_snapshot')},
+  score_items_json = {_score_sql('score_items_json')},
   updated_at = now()
 WHERE (signals.title, signals.title_ru, signals.theme, signals.summary, signals.score,
        signals.score_profile, signals.criteria_snapshot, signals.score_items_json)
   IS DISTINCT FROM
-      (EXCLUDED.title, EXCLUDED.title_ru, EXCLUDED.theme, EXCLUDED.summary, EXCLUDED.score,
-       EXCLUDED.score_profile, EXCLUDED.criteria_snapshot, EXCLUDED.score_items_json)
+      (EXCLUDED.title, EXCLUDED.title_ru, {_THEME_SQL}, EXCLUDED.summary, {_score_sql('score')},
+       {_score_sql('score_profile')}, {_score_sql('criteria_snapshot')}, {_score_sql('score_items_json')})
 RETURNING (xmax = 0) AS inserted
 """
 
@@ -192,6 +203,10 @@ FROM (
 WHERE s.id = n.id AND s.evidence_count <> n.count
 """
 
+# Сигналы статей прогона и их перепечаток. Перепечатка — новая публикация события главной статьи («Дедуп» ленты):
+# «Решение платформы» сигнала после «Отбора» пересчитывается (#132; «подтверждено» с третьей публикацией сильного).
+_SCOPE_SIGNALS = f"SELECT s.id FROM signals s JOIN feed_scope f ON s.signal_key = {_key_sql('f.id')}"
+
 
 def sync_feed_signals(
     article_ids: Sequence[int] | None = None,
@@ -246,6 +261,7 @@ def sync_feed_signals(
         merged = conn.execute(_MERGE_REPRINTS).rowcount
         publications = conn.execute(_UPSERT_PUBLICATIONS).rowcount
         conn.execute(_REFRESH_COUNTS)
+        refresh_platform_decisions([row[0] for row in conn.execute(_SCOPE_SIGNALS).fetchall()], conn=conn)
         if dry_run:
             conn.rollback()
         else:

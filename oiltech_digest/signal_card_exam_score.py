@@ -3,9 +3,9 @@
 Мерится то, что дойдёт до карточки: ответ модели после проверок кодом (signal_card.card_values).
 Рядом с каждым атрибутом — результат константы: самое частое значение эксперта на тех же строках, для
 даты события — дата публикации. Пороги спеки (#93, поправки 18.10): компании — точность ≥ 90% и
-полнота ≥ 80% по упоминаниям; регион ≥ 85%; тип события, класс технологии, зрелость ≥ 75%; связь с
-нефтесервисом — средняя доля верных по значениям ≥ 75%; дата события — ошибок не больше, чем у
-константы; выдуманных компаний и дат — 0.
+полнота ≥ 80% по упоминаниям; регион ≥ 85%; тип события, класс технологии, зрелость ≥ 75%; дата
+события — ошибок не больше, чем у константы; выдуманных компаний и дат — 0. Связь с нефтесервисом с #132
+ставит «Отбор»: метрики и порога по ней у экзамена карточки нет.
 
 Два вида отчёта: строго — по меткам эксперта; с допусками — в ячейке из списка допусков засчитывается и
 законный второй ответ, а компания из списка допусков необязательна: её не требуют и за неё не штрафуют.
@@ -13,24 +13,22 @@
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 import re
 from typing import Any
 
-from oiltech_digest.signal_card import FROM_TEXT, RELEVANCE_CODES
-from oiltech_digest.signal_card_pack import UNDEFINED
+from oiltech_digest.event_dates import DAY, FROM_TEXT
 from oiltech_digest.word_forms import Companies, named_among, words
 
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
-              "technology_class": 0.75, "maturity": 0.75, "oilfield_relevance": 0.75}
+              "technology_class": 0.75, "maturity": 0.75}
 CHOICES = ("event_type", "region", "technology_class", "maturity")
 # Атрибут разметки → колонка карточки (signal_card.CHOICE_COLUMNS: зрелость — technology_maturity).
 _CARD_COLUMNS = {"event_type": "event_type", "region": "region", "technology_class": "technology_class",
                  "maturity": "technology_maturity", "event_date": "event_date",
                  "event_date_source": "event_date_source"}
-_RELEVANCE_RU = {code: value for value, code in RELEVANCE_CODES.items()}
 # Карточки нет (сбой модели, ответ не по схеме): ни с одной меткой не совпадает.
 _MISSING = object()
 
@@ -66,7 +64,6 @@ def _metrics(items, finals, names, lenient) -> dict[str, dict[str, Any]]:
     return {
         "companies_precision": precision, "companies_recall": recall,
         **{key: _accuracy(items, finals, key, lenient) for key in CHOICES},
-        "oilfield_relevance": _per_value(items, finals, "oilfield_relevance", lenient),
         "event_date": _event_date(items, finals, lenient),
         # Источник даты — только где дата события не день публикации: иначе «из текста» и «по дате
         # публикации» дают одну и ту же дату, и расхождение ничего не значит.
@@ -83,8 +80,6 @@ def _card_value(final: Mapping[str, Any] | None, key: str) -> Any:
         return _MISSING
     if key == "companies":
         return [item["name"] for item in final["participants_json"]]
-    if key == "oilfield_relevance":
-        return _RELEVANCE_RU.get(final["oilfield_relevance"], UNDEFINED)
     return final[_CARD_COLUMNS[key]]
 
 
@@ -118,22 +113,6 @@ def _accuracy(items, finals, key, lenient) -> dict[str, Any]:
             "constant_value": constant}
 
 
-def _per_value(items, finals, key, lenient) -> dict[str, Any]:
-    """Средняя по значениям эксперта доля верных: редкое значение весит столько же, сколько частое."""
-    groups: dict[Any, list[dict[str, Any]]] = defaultdict(list)
-    for item in items:
-        groups[item["labels"][key]].append(item)
-    constant = _most_common([item["labels"][key] for item in items])
-    agent, fixed = [], []
-    for group in groups.values():
-        hits = sum(_card_value(final, key) in _allowed(item, key, lenient) for item in group for final in finals[item["id"]])
-        agent.append(_share(hits, sum(len(finals[item["id"]]) for item in group)))
-        fixed.append(_share(sum(constant in _allowed(item, key, lenient) for item in group), len(group)))
-    return {"agent": _mean(agent), "n": sum(len(finals[item["id"]]) for item in items),
-            "stability": _stability(items, finals, key), "constant": _mean(fixed), "constant_value": constant,
-            "by_value": {str(label): share for label, share in zip(groups, agent)}}
-
-
 def _mean(values: list[float | None]) -> float | None:
     known = [one for one in values if one is not None]
     return sum(known) / len(known) if known else None
@@ -152,13 +131,15 @@ def _event_date(items, finals, lenient) -> dict[str, Any]:
 
 def _invented_dates(items, finals, lenient) -> dict[str, Any]:
     """Выдуманная дата — «из текста», но её нет ни в разметке, ни в тексте, и это не день публикации
-    (с сутками допуска, как у проверки кодом)."""
+    (с сутками допуска, как у проверки кодом). Месяц или год без дня (#132) — не день: выдуманным днём не считается."""
     invented = 0
     for item in items:
         allowed = _allowed(item, "event_date", lenient)
         for final in finals[item["id"]]:
             day = _card_value(final, "event_date")
             if day is _MISSING or day is None or final["event_date_source"] != FROM_TEXT or day in allowed:
+                continue
+            if (final.get("event_date_precision") or DAY) != DAY:
                 continue
             published = item["published"]
             if published and abs(day - published) <= timedelta(days=1):
@@ -186,10 +167,9 @@ def judged(items: list[dict[str, Any]], values: Mapping[str, Any] | None) -> dic
 
 
 def judge_metrics(items: list[dict[str, Any]], finals: Finals, *, lenient: bool) -> dict[str, Any]:
-    """Судья радара против эксперта: дата события и связь с нефтесервисом, которые на проде у находок радара
-    показывает судья (агент их не перезаписывает)."""
-    return {"rows": len(items), "event_date": _event_date(items, finals, lenient),
-            "oilfield_relevance": _per_value(items, finals, "oilfield_relevance", lenient)}
+    """Судья радара против эксперта: дата события, которую на проде у находок радара показывает судья (агент её не
+    перезаписывает). Связь с нефтесервисом с #132 ставит «Отбор», экзамен карточки её не сравнивает."""
+    return {"rows": len(items), "event_date": _event_date(items, finals, lenient)}
 
 
 def _companies(items, finals, names, lenient):

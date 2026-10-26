@@ -1,4 +1,5 @@
-"""Хранилище решений агента «Отбор» (#130, #131, ADR 0005): что агенту читать и как писать решение у сигнала.
+"""Хранилище решений агента «Отбор» (#130, #131, ADR 0005): кого решает агент и как писать решение у сигнала. Что
+модель видит о публикации — otbor_inputs (с #132; прежние имена отсюда остаются).
 
 Решение живёт в сигнале публикации. У статьи ленты сигнал заводится здесь, при первом решении или сбое: отклонённая
 и не получившая решения статья тоже хранится сигналом (решение владельца 22.10), как отсеянные находки радара; суть,
@@ -12,17 +13,19 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timezone
+from functools import partial
 from typing import Any
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from oiltech_digest import config
 from oiltech_digest.db import connection, feed_signals, marks
-from oiltech_digest.db.otbor_pack_store import LINK_PUBLISHED_SQL, evidence_links
 from oiltech_digest.db.repository import (ARTICLE_SELECTOR_OTBOR, CARD_SET_BY_HUMAN, CARD_SET_BY_OTBOR,
-                                          SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_MATERIAL, SIGNAL_SELECTOR_OTBOR,
-                                          SYSTEM_TAG_UNCLASSIFIED, radar_origin_sql)
-from oiltech_digest.feed_window import OTBOR_REJECT
+                                          SIGNAL_ORIGIN_FEED, SIGNAL_SELECTOR_OTBOR, SYSTEM_TAG_UNCLASSIFIED,
+                                          refresh_platform_decisions)
+from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "otbor"
@@ -31,12 +34,12 @@ KIND = "otbor"
 FAILURE_TECHNICAL = "technical"
 FAILURE_INVALID = "invalid_answer"
 # Итог записи решения: записано; не изменено — публикацию выбрали «в дайджест», а повтор «Отбора» решения людей не
-# перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»).
-DECIDED, KEPT_IN_DIGEST = "decided", "kept_in_digest"
+# перезаписывает (спека #128: «выбранное «в дайджест» не прячет ничто»); не изменено — решение человека (#132).
+DECIDED, KEPT_IN_DIGEST, KEPT_BY_HUMAN = "decided", "kept_in_digest", "kept_by_human"
+# Итог возврата отклонённого человеком (#132): возвращено; не отклонено «Отбором» — возвращать нечего.
+RETURNED, NOT_REJECTED = "returned", "not_rejected"
 # Поля решения «Отбора» в прежних колонках сигнала: кто поставил значение — в card_set_by.
 _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "signal_category")
-# Ссылок находки во входе «Отбора» — не больше стольких (спека #128, как в пакете эксперту).
-LINKS_LIMIT = 8
 
 
 def _tried_sql(key: str) -> str:
@@ -82,94 +85,17 @@ def _signal_has(condition: str) -> str:
             f" AND ({condition}))")
 
 
+# Решение человека (#132): он вернул отклонённое, вписав поля «Отбора»; повтор «Отбора» его не пересматривает.
+def _human_decided_sql(alias: str) -> str:
+    return f"{alias}.card_set_by->>'otbor_decision' = '{CARD_SET_BY_HUMAN}'"
+
+
 # Статья, уже решённая «Отбором» и выбранная «в дайджест»: её решение повтор не пересматривает.
 _DECIDED_IN_DIGEST_SQL = (
     f"({marks.article_marked_sql('a.id', 'digest')} AND {_signal_has('os.otbor_decision IS NOT NULL')})"
 )
 # То же у сигнала (#131): отметка «в дайджест» у находки и материала — у самого сигнала.
 _SIGNAL_DECIDED_IN_DIGEST_SQL = f"(s.otbor_decision IS NOT NULL AND {marks.signal_marked_sql('s.id', 'digest')})"
-
-
-def article_inputs(article_ids: Sequence[int]) -> list[dict[str, Any]]:
-    """Статьи так, как их видит модель, — те же поля, что у статьи ленты в пакете эксперту (otbor_pack_store
-    .feed_candidates): экзамен (#133) подаст агенту манифест пакета без переделки."""
-    ids = sorted({int(value) for value in article_ids})
-    if not ids:
-        return []
-    with connection.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            """
-            SELECT a.id AS article_id, a.title, a.raw_text AS text, a.language,
-                   COALESCE(a.published_at, a.collected_at) AS published, a.collected_at AS received,
-                   src.name AS publisher
-            FROM articles a
-            JOIN sources src ON src.id = a.source_id
-            WHERE a.id = ANY(%(ids)s)
-            ORDER BY a.id
-            """,
-            {"ids": ids},
-        )
-        return cur.fetchall()
-
-
-def signal_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
-    """Находки и материалы так, как их видит модель (#131), — поля строки радара и материала в пакете эксперту
-    (otbor_pack): у находки главная публикация с текстом издателя (статья корпуса или докачанная страница — раньше
-    сводки модели поиска, затем по силе, как у «Карточки»), дата публикации — только издателя (у ссылки поиска
-    «режима ChatGPT» её дала модель поиска, во вход она не идёт), поступление — день находки, ссылки находки — если их
-    больше одной; у материала — строка материала как публикация (colleague_materials.as_publication)."""
-    from oiltech_digest.colleague_materials import as_publication
-    from oiltech_digest.signal_research import EVIDENCE_SOURCE
-
-    ids = sorted({int(value) for value in signal_ids})
-    if not ids:
-        return []
-    with connection.get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT DISTINCT ON (s.id)
-                   s.id AS signal_id, s.origin, s.first_seen_at AS received, a.language,
-                   COALESCE(a.title, e.title) AS title, COALESCE(a.url, e.source_url) AS url,
-                   COALESCE(a.raw_text, e.extracted_fact) AS text, {LINK_PUBLISHED_SQL} AS published,
-                   src.name AS publisher_source
-            FROM signals s
-            JOIN signal_evidence e ON e.signal_id = s.id
-            LEFT JOIN articles a ON a.id = e.article_id
-            LEFT JOIN sources src ON src.id = a.source_id
-            WHERE s.id = ANY(%(ids)s) AND {radar_origin_sql('s')}
-            ORDER BY s.id,
-                     (length(btrim(COALESCE(a.raw_text, ''))) > 0
-                      OR e.raw_payload_json->>'full_text_fetched' = 'true') DESC,
-                     e.strength DESC, e.id
-            """,
-            {"ids": ids, "search_source": EVIDENCE_SOURCE},
-        )
-        rows = cur.fetchall()
-        cur.execute(
-            f"""
-            SELECT s.id AS signal_id, s.origin, m.id AS material_id, m.title, m.description, m.url, m.file_path,
-                   m.created_at AS published, m.created_at AS received
-            FROM signals s
-            JOIN colleague_materials m ON m.signal_id = s.id
-            WHERE s.id = ANY(%(ids)s) AND s.origin = '{SIGNAL_ORIGIN_MATERIAL}'
-            """,
-            {"ids": ids},
-        )
-        rows += [as_publication(row) for row in cur.fetchall()]
-    links = evidence_links([int(row["signal_id"]) for row in rows if row["origin"] != SIGNAL_ORIGIN_MATERIAL])
-    for row in rows:
-        found = links.get(int(row["signal_id"])) or []
-        row["links"] = found[:LINKS_LIMIT] if len(found) > 1 else []
-    return sorted(rows, key=lambda row: row["signal_id"])
-
-
-def links_in_input(signal_ids: Sequence[int]) -> dict[int, int]:
-    """Сколько ссылок у каждой находки во входе «Отбора» (0 — ссылка одна): «разные события в одной находке» —
-    причина только у находки с несколькими ссылками. Ядро считает сама, ответ воркера — недоверенный ввод."""
-    found = evidence_links(sorted({int(value) for value in signal_ids}))
-    return {int(signal_id): (min(len(rows), LINKS_LIMIT) if len(rows) > 1 else 0) for signal_id, rows in found.items()}
 
 
 def new_article_ids(*, days: int, limit: int, attempts: int) -> list[int]:
@@ -278,7 +204,8 @@ def unanswered_signals(*, days: int, attempts: int, limit: int) -> list[tuple[in
 
 def own_article_ids(article_ids: Sequence[int]) -> list[int]:
     """Из названных статей — те, что решает «Отбор»: решённое гейтом он не пересматривает (проверка на реальных
-    данных, #134, пишет свои решения отдельно), решённое им и выбранное «в дайджест» тоже (chosen_for_digest)."""
+    данных, #134, пишет свои решения отдельно), решённое им и выбранное «в дайджест» тоже (chosen_for_digest), и
+    решённое человеком (#132)."""
     ids = sorted({int(value) for value in article_ids})
     if not ids:
         return []
@@ -287,6 +214,7 @@ def own_article_ids(article_ids: Sequence[int]) -> list[int]:
             f"""
             SELECT a.id FROM articles a
             WHERE a.id = ANY(%s) AND {_OTBOR_ARTICLE_SQL} AND NOT {_DECIDED_IN_DIGEST_SQL}
+              AND NOT {_signal_has(_human_decided_sql("os"))}
             ORDER BY a.id
             """,
             (ids,),
@@ -296,14 +224,14 @@ def own_article_ids(article_ids: Sequence[int]) -> list[int]:
 
 def own_signal_ids(signal_ids: Sequence[int]) -> list[int]:
     """Из названных сигналов — находки и материалы, которые решает «Отбор» (#131), кроме решённых им и выбранных
-    «в дайджест»: прежние находки радара он не пересматривает."""
+    «в дайджест» и решённых человеком (#132): прежние находки радара он не пересматривает."""
     ids = sorted({int(value) for value in signal_ids})
     if not ids:
         return []
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"SELECT s.id FROM signals s WHERE s.id = ANY(%s) AND {_OTBOR_SIGNAL_SQL}"
-            f" AND NOT {_SIGNAL_DECIDED_IN_DIGEST_SQL} ORDER BY s.id",
+            f" AND NOT {_SIGNAL_DECIDED_IN_DIGEST_SQL} AND NOT {_human_decided_sql('s')} ORDER BY s.id",
             (ids,),
         ).fetchall()
     return [int(row[0]) for row in rows]
@@ -321,12 +249,18 @@ def chosen_for_digest(article_ids: Sequence[int]) -> list[int]:
     return [int(row[0]) for row in rows]
 
 
+# Сигнал под замком для записи решения: прежнее решение, кто ставил поля, возвраты «Карточки» (#132).
+_DECISION_ROW = "id, maturity, card_set_by, otbor_decision, otbor_returns"
+# Пометка «спорное» у публикации, которую вернула «Карточка» и «Отбор» снова принял (спека #128).
+RETURN_DISPUTED = "«Карточка» нашла в тексте дату события старше {days} дней, «Отбор» снова принял"
+
+
 def _signal_for_update(cur, article_id: int) -> dict[str, Any] | None:
     """Сигнал статьи под замком; нет — его заводит мост «лента → сигнал» (feed_signals.BASE_SIGNAL_INSERT): суть,
     тему и балл принятой он допишет позже. None — статьи нет."""
     cur.execute(feed_signals.BASE_SIGNAL_INSERT, {"id": int(article_id), "unclassified": SYSTEM_TAG_UNCLASSIFIED})
     cur.execute(
-        "SELECT id, maturity, card_set_by, otbor_decision FROM signals WHERE signal_key = %s FOR UPDATE",
+        f"SELECT {_DECISION_ROW} FROM signals WHERE signal_key = %s FOR UPDATE",
         (f"{feed_signals.FEED_KEY_PREFIX}{int(article_id)}",),
     )
     return cur.fetchone()
@@ -334,8 +268,7 @@ def _signal_for_update(cur, article_id: int) -> dict[str, Any] | None:
 
 def _own_signal_for_update(cur, signal_id: int) -> dict[str, Any] | None:
     """Находка или материал (#131) под замком: сигнал уже есть. None — его нет."""
-    cur.execute("SELECT id, maturity, card_set_by, otbor_decision FROM signals WHERE id = %s FOR UPDATE",
-                (int(signal_id),))
+    cur.execute(f"SELECT {_DECISION_ROW} FROM signals WHERE id = %s FOR UPDATE", (int(signal_id),))
     return cur.fetchone()
 
 
@@ -345,8 +278,19 @@ def _write_decision(cur, row: dict[str, Any], values: dict[str, Any], *, dispute
     тогда другое решение повтора не пишется, шаги ложатся в «Ход решения» (KEPT_IN_DIGEST).
 
     Отрасль, связь и применение, категория — в прежние колонки, источник «otbor» (card_set_by); значение
-    человека не перезаписывается никогда. У отклонённой «Решение платформы» (maturity) — «отклонено», у принятой
-    после повторного решения — снова «наблюдать». Сбой прежней попытки снимается, шаги — в «Ход решения»."""
+    человека не перезаписывается никогда. «Решение платформы» (maturity) пересчитывает код
+    (repository.platform_decision_sql): у отклонённой — «отклонено», у «другого» его нет, у принятой — по ступени
+    баллов, пока их нет — «наблюдать». Сбой прежней попытки снимается, шаги — в «Ход решения». Принял снова
+    публикацию, которую вернула «Карточка» (#132), — пометка «спорное»."""
+    if (row["card_set_by"] or {}).get("otbor_decision") == CARD_SET_BY_HUMAN:
+        # Решение человека главнее (#132): повтор «Отбора» и запоздалый итог его не меняют, шаги — в «Ход решения».
+        kept = {"stage": "«Отбор»", "text": "Решение человека: не изменено"}
+        cur.execute(
+            "UPDATE signals SET decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb,"
+            " updated_at = now() WHERE id = %s",
+            (Json([*log, kept]), row["id"]),
+        )
+        return KEPT_BY_HUMAN
     if row["otbor_decision"] not in (None, values["otbor_decision"]):
         cur.execute(f"SELECT {chosen_sql} AS chosen", (row["chosen_id"],))
         if cur.fetchone()["chosen"]:
@@ -368,10 +312,16 @@ def _write_decision(cur, row: dict[str, Any], values: dict[str, Any], *, dispute
         elif set_by.get(column) == CARD_SET_BY_OTBOR:
             set_by.pop(column)
     rejected = values["otbor_decision"] == OTBOR_REJECT
-    maturity = "reject" if rejected else ("watch" if row["maturity"] == "reject" else row["maturity"])
+    if not rejected and row["otbor_returns"]:
+        again = RETURN_DISPUTED.format(days=config.OTBOR_OLD_EVENT_DAYS)
+        disputed = f"{disputed}; {again}" if disputed else again
+        log = [*log, {"stage": "«Отбор»", "text": f"Спорное: {again}"}]
+    if not rejected and row["otbor_decision"] != OTBOR_ACCEPT:
+        # Пошла дальше «Отбора» сейчас: окна шагов конвейера считают от этого (signal_card_store.PIPELINE_SINCE_SQL).
+        updates["accepted_at"] = datetime.now(timezone.utc)
     updates.update({
         "otbor_decision": values["otbor_decision"], "reject_reason": values.get("reject_reason"),
-        "verdict_reason": values.get("verdict_reason"), "otbor_disputed": disputed, "maturity": maturity,
+        "verdict_reason": values.get("verdict_reason"), "otbor_disputed": disputed,
         "otbor_failure": None, "otbor_failure_reason": None,
         "otbor_recipe": Json(recipe), "card_set_by": Json(set_by),
     })
@@ -381,6 +331,7 @@ def _write_decision(cur, row: dict[str, Any], values: dict[str, Any], *, dispute
         " updated_at = now() WHERE id = %s",
         [*updates.values(), Json(log), row["id"]],
     )
+    refresh_platform_decisions([row["id"]], conn=cur.connection)
     return DECIDED
 
 
@@ -415,6 +366,55 @@ def write_signal_decision(signal_id: int, values: dict[str, Any], *, disputed: s
                                   recipe=recipe, chosen_sql=marks.signal_marked_sql("%s", "digest"))
         conn.commit()
     return written
+
+
+def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) -> str | None:
+    """Вернуть отклонённое «Отбором» решением человека (#132, спека #128): человек вписал то, что ставит «Отбор» —
+    отрасль, связь и применение, категорию (проверены: otbor_answer.return_problems). Решение — «брать», источник всех
+    полей — человек, пометка «спорное: „Отбор“ не взял бы» с причиной отказа; «Решение платформы» — по ступени, когда
+    будут баллы. Дальше публикация идёт по остатку конвейера: суть и перевод, оба вызова «Карточки», «Дедуп». RETURNED;
+    NOT_REJECTED — «Отбор» её не отклонял (вернуть можно только отклонённое); None — сигнала нет."""
+    from oiltech_digest.otbor_answer import code_label
+    from oiltech_digest.otbor_pack_format import load_dictionaries
+
+    label = partial(code_label, load_dictionaries())
+
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT id, origin, origin_article_id, otbor_decision, reject_reason, card_set_by FROM signals"
+                    " WHERE id = %s FOR UPDATE", (int(signal_id),))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if row["otbor_decision"] != OTBOR_REJECT:
+            return NOT_REJECTED
+        disputed = f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
+        application = values.get("oilfield_application") if values["oilfield_relevance"] == "transferable" else None
+        relevance = label("oilfield_relevance", values["oilfield_relevance"])
+        step = {"stage": "Человек", "text": (
+            f"Вернул{f' {author}' if author else ''}: отрасль «{label('industry', values['industry'])}», связь "
+            f"«{relevance}»{f' ({application})' if application else ''}, категория "
+            f"«{label('category', values['category'])}». {disputed}")}
+        set_by = {**(row["card_set_by"] or {}),
+                  **{column: CARD_SET_BY_HUMAN for column in (*_SET_BY_COLUMNS, "otbor_decision")}}
+        cur.execute(
+            f"""
+            UPDATE signals
+            SET industry = %s, oilfield_relevance = %s, oilfield_application = %s, signal_category = %s,
+                otbor_decision = '{OTBOR_ACCEPT}', accepted_at = now(), reject_reason = NULL, otbor_disputed = %s,
+                otbor_failure = NULL, otbor_failure_reason = NULL, card_set_by = %s,
+                decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()
+            WHERE id = %s
+            """,
+            (values["industry"], values["oilfield_relevance"], application, values["category"], disputed,
+             Json(set_by), Json([step]), row["id"]),
+        )
+        refresh_platform_decisions([row["id"]], conn=conn)
+        conn.commit()
+    if row["origin"] == SIGNAL_ORIGIN_FEED and row["origin_article_id"]:
+        # Принятая статья — снова в ленте и в обработке; мост допишет сигналу суть, когда её запишет обработка.
+        feed_signals.sync_quietly([int(row["origin_article_id"])])
+    return RETURNED
 
 
 def _write_failure(cur, row: dict[str, Any], kind: str, reason: str, log: list[dict[str, str]]) -> None:

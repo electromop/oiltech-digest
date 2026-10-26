@@ -2282,6 +2282,30 @@ def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
         print(f"  пропущены (не приняты «Отбором», дубль или нет такого): {', '.join(map(str, result['skipped']))}")
 
 
+def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
+    """Шаг планировщика «баллы» — второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
+    баллами, которые «пересчитываются» после «не тот блок», — в задачи по полосе ежедневной обработки. За флагом
+    OTBOR_ENABLED, модель — SIGNAL_SCORES_MODEL. С --ids — названные сигналы по полосе пересчётов."""
+    from oiltech_digest import signal_scores
+
+    try:
+        if args.ids:
+            result = signal_scores.enqueue_named([int(value) for value in args.ids.split(",") if value.strip()])
+        else:
+            result = signal_scores.scheduler_step()
+    except signal_scores.ScoresSetupError as exc:
+        raise SystemExit(f"enqueue-signal-scores: {exc}") from exc
+    if result.get("reason"):
+        print(f"enqueue-signal-scores: skipped reason={result['reason']}")
+        return
+    queues = sorted({job["queue_name"] for job in result["jobs"]})
+    print(f"enqueue-signal-scores: сигналов {result['signals']}, задач {len(result['jobs'])}"
+          + (f", очередь {', '.join(queues)}" if queues else ""))
+    if result.get("skipped"):
+        print(f"  пропущены (не оцениваются: до «Отбора», отклонённые, «другое», без карточки или нет такого): "
+              f"{', '.join(map(str, result['skipped']))}")
+
+
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
     """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы коллег (дальше
     «Отбора» — только принятое им) — по полосе пересчётов, сначала текущее окно ленты, радар и материалы. По умолчанию
@@ -3572,6 +3596,16 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="повторить для названных сигналов (номера через запятую) — по полосе "
                                         "пересчётов")
     p_enqueue_summary.set_defaults(func=cmd_enqueue_signal_summary)
+
+    p_enqueue_scores = sub.add_parser(
+        "enqueue-signal-scores",
+        help="шаг планировщика «баллы» (второй вызов «Карточки»): сигналы после основного вызова без баллов и с "
+             "баллами после «не тот блок» (за флагом OTBOR_ENABLED, модель SIGNAL_SCORES_MODEL)",
+    )
+    p_enqueue_scores.add_argument("--ids", default="",
+                                  help="повторить для названных сигналов (номера через запятую) по полосе "
+                                       "пересчётов")
+    p_enqueue_scores.set_defaults(func=cmd_enqueue_signal_scores)
 
     p_otbor_materials = sub.add_parser(
         "otbor-materials",
