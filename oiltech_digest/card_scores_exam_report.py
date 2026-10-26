@@ -1,8 +1,9 @@
 """Отчёт экзамена «Карточки» (#133): JSON с ответами и метриками и читаемый Markdown рядом, вне репозитория.
 
 Сверху таблица качества и цены по моделям второго вызова (по ней владелец решает, с чем включать), рядом то, с чем
-модель сравнивается без её ответов: константа, эксперт сам с собой, контроль с ядра. Ниже тема основного вызова и по
-модели: оба варианта ключевых слов, ошибка по критериям, итог модели по оценке эксперта (по этим цифрам пересматривают
+модель сравнивается без её ответов: константа, эксперт сам с собой, контроль с ядра. Ниже тема и атрибуты основного
+вызова и по модели: оба варианта ключевых слов, ступень эксперта против ступени модели (точность «сильного» — это
+«кандидаты» «Решения платформы»), ошибка по критериям, итог модели по оценке эксперта (по этим цифрам пересматривают
 границы ступеней, если совпадение низкое: решение 30 журнала гриля). Текст отчёта читает владелец: без длинного и
 среднего тире.
 """
@@ -11,26 +12,26 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from oiltech_digest.card_scores_exam_score import THRESHOLDS, VARIANTS
+from oiltech_digest import card_scores_exam_calls, card_scores_exam_control, otbor_exam
+from oiltech_digest.card_scores_exam_score import EXTRA, THRESHOLDS, VARIANTS
 from oiltech_digest.otbor_exam_score import FEED_GROUPS
-from oiltech_digest.otbor_pack_format import CATEGORY_PROFILE, EXPERT_SCALE
+from oiltech_digest.otbor_pack_format import CATEGORY_PROFILE, EXPERT_SCALE, PROFILE_RU
+from oiltech_digest.signal_scoring import BAND_LABELS, BAND_ORDER
 
 REPORT_PREFIX = "card_scores_exam_report_"
 PART_RU = {"exam": "экзамен", "tuning": "настройка"}
 VARIANT_RU = {"keywords": "с ключевыми словами", "plain": "без ключевых слов"}
 _FAILED_RU = {"band": "ступень", "order": "порядок"}
-_RATING_RU = {**{value: short for value, short, _ in EXPERT_SCALE}, "strong_extra": "Сильный сверх пакета"}
-_PROFILE_RU = {"business": "бизнес", "tech_radar": "технология"}
-_SOURCES_RU = {"digest": "в дайджест", "top": "эталонный ТОП"}
-_SKIPPED_RU = {"in_pack": "в пакете", "other": "«другое»", "no_text": "без текста издателя",
-               "unreadable": "не прочесть"}
-_FILES = (("rows", "otbor_exam_rows.json"), ("split", "otbor_exam_split.json"),
-          ("control", "card_scores_exam_control.json"), ("summaries", "card_scores_exam_summaries.json"),
-          ("cards", "card_scores_exam_cards.json"))
+_RULES_RU = {"thresholds": "пороги", "bands": "границы ступеней", "rows": "строки экзамена"}
+_RATING_RU = {**{value: short for value, short, _ in EXPERT_SCALE}, EXTRA: "Сильный сверх пакета"}
+_FILES = (("rows", otbor_exam.ROWS_NAME), ("split", otbor_exam.SPLIT_NAME), ("control", card_scores_exam_control.NAME),
+          ("summaries", card_scores_exam_calls.SUMMARIES_NAME), ("cards", card_scores_exam_calls.CARDS_NAME))
+_SPEND_RU = {"summary": "суть", "card": "основной вызов"}
 
 
 def reason(decision: str | None, tried: list[dict[str, Any]]) -> str:
@@ -49,8 +50,6 @@ def failed_ru(names: list[str]) -> str:
 
 def files(folder: Path) -> dict[str, dict[str, str] | None]:
     """Отметки файлов рядом с манифестом: строки экзамена, деление, выгрузка с ядра, суть, основной вызов."""
-    import hashlib
-
     return {name: {"file": str(folder / file), "sha256": hashlib.sha256((folder / file).read_bytes()).hexdigest()}
             if (folder / file).exists() else None for name, file in _FILES}
 
@@ -104,7 +103,8 @@ def _problems(saved: Any) -> list[str]:
     if not (isinstance(runs, int) and runs >= 1):
         problems.append("прогонов на строку: число от 1")
     problems += [f"нет {key}" for key in ("rubrics_version", "dictionaries_version", "card_model", "summary_model",
-                                          "card_prompt_version", "scores_prompt_version")
+                                          "card_prompt_version", "scores_prompt_version", "card_reasoning",
+                                          "scores_reasoning")
                  if not isinstance(saved.get(key), str)]
     problems += [f"{key} без sha256" for key in ("manifest", "markup")
                  if not (isinstance(saved.get(key), dict) and isinstance(saved[key].get("sha256"), str))]
@@ -140,9 +140,8 @@ def _model_entry(one: Any, ids: set[str], runs: Any) -> bool:
 
 def render(report: dict[str, Any]) -> str:
     rows = report["rows"]
-    pack = [row for row in rows if row["rating"] != "strong_extra"]
-    extra = len(rows) - len(pack)
-    profiles = Counter(_PROFILE_RU[row["profile"]] for row in pack)
+    pack = [row for row in rows if row["rating"] != EXTRA]
+    profiles = Counter(PROFILE_RU[row["profile"]].lower() for row in pack)
     skipped = report.get("strong_skipped") or {}
     lines = [
         f"# Экзамен «Карточки»: тема и баллы, {report['created_at']}", "",
@@ -150,17 +149,19 @@ def render(report: dict[str, Any]) -> str:
         *_rescore_notes(report),
         f"Часть: {PART_RU[report['part']]}, строк пакета {len(pack)} ("
         + ", ".join(f"{name} {count}" for name, count in sorted(profiles.items())) + f"), «сильных сверх пакета» "
-        f"{extra}" + (" (не вошли: " + ", ".join(f"{_SKIPPED_RU.get(key, key)} {value}"
-                                                  for key, value in skipped.items()) + ")" if skipped else "")
-        + f"; прогонов на строку {report['runs']}.",
-        f"Основной вызов: {report['card_model']}, инструкция {report['card_prompt_version']}. Второй вызов: инструкция "
-        f"{report['scores_prompt_version']}, линейки {report['rubrics_version']}, рассуждение "
-        f"{report['scores_reasoning']}. Суть: {report['summary_model']}.",
+        f"{len(rows) - len(pack)}" + (" (не вошли: " + ", ".join(
+            f"{card_scores_exam_control.SKIPPED.get(key, key)} {value}" for key, value in skipped.items()) + ")"
+            if skipped else "") + f"; прогонов на строку {report['runs']}.",
+        f"Основной вызов: {report['card_model']}, инструкция {report['card_prompt_version']}, рассуждение "
+        f"{report['card_reasoning']}. Второй вызов: инструкция {report['scores_prompt_version']}, линейки "
+        f"{report['rubrics_version']}, рассуждение {report['scores_reasoning']}. Суть: {report['summary_model']}.",
+        "Вход второго вызова: категория, отрасль и связь эксперта (у «сильных сверх пакета» машинные), применения у "
+        "строк пакета нет: эксперт его не размечал.",
         f"Ступени {'/'.join(map(str, report['rules']['bands']))}; в настройке сейчас "
         f"{VARIANT_RU['keywords' if report['keywords_setting'] else 'plain']}. Утверждено: "
         f"{report.get('approved_scores') or 'нет'}.",
         f"Манифест: `{Path(report['manifest']['file']).name}`, разметка: `{Path(report['markup']['file']).name}`.",
-        _spent(report.get("spend") or {}), "",
+        _spent(report), "",
     ]
     lines += _quality_and_price(report)
     lines += _theme(report)
@@ -184,15 +185,22 @@ def _rescore_notes(report: dict[str, Any]) -> list[str]:
     if report.get("markup_changed"):
         lines += ["Разметка изменилась после исходного прогона: счёт по новой разметке.", ""]
     if report.get("rules_changed"):
-        lines += ["**Правила изменились после исходного прогона** (" + ", ".join(report["rules_changed"])
+        lines += ["**Правила изменились после исходного прогона** ("
+                  + ", ".join(_RULES_RU.get(name, name) for name in report["rules_changed"])
                   + "): решение по ним не годится без нового утверждения владельцем.", ""]
+    if report.get("original_decision") and not report["decision"]["model"]:
+        lines += [f"Исходный прогон остановился на {report['original_decision']}: модели дороже не пробовались, для "
+                  "решения нужен прогон.", ""]
     return lines
 
 
-def _spent(spend: dict[str, Any]) -> str:
-    names = {"summary": "суть", "card": "основной вызов"}
-    done = [f"{names[stage]}: вызовов {one['calls']}, {_usd(one['cost_usd'])}" for stage, one in spend.items()
-            if stage in names]
+def _spent(report: dict[str, Any]) -> str:
+    """Оплата сути и основного вызова: в этом запуске или (у пересчёта) в исходном прогоне."""
+    done = [f"{_SPEND_RU[stage]}: вызовов {one['calls']}, {_usd(one['cost_usd'])}"
+            for stage, one in (report.get("spend") or {}).items() if stage in _SPEND_RU]
+    if report.get("rescored_from"):
+        return ("Пересчёт ничего не оплачивал; в исходном прогоне: " + "; ".join(done) + "." if done
+                else "Пересчёт ничего не оплачивал.")
     return ("Оплачено в этом запуске: " + "; ".join(done) + "; остальное взято из файлов рядом с манифестом."
             if done else "Суть и основной вызов взяты из файлов рядом с манифестом: в этом запуске не оплачивались.")
 
@@ -201,10 +209,11 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
     month = report.get("month")
     base = report["baseline"]
     lines = ["## Качество и цена", "",
-             f"Пороги: ступень не ниже {THRESHOLDS['band']:.0%}, порядок не ниже {THRESHOLDS['order']:.0%} (хотя бы в "
-             "одном варианте ключевых слов); вариант модели: ближе к эксперту.", "",
-             "| Модель | Правило | Вариант | Ступень | Порядок | Сильные сверх пакета: «сильный» | Без баллов "
-             "| Экзамен | На сигнал | Лента за 30 дней |", "|---|---|---|---|---|---|---|---|---|---|"]
+             f"Пороги на строках пакета: ступень не ниже {THRESHOLDS['band']:.0%}, порядок не ниже "
+             f"{THRESHOLDS['order']:.0%} (хотя бы в одном варианте ключевых слов); вариант модели: ближе к эксперту. "
+             "«Сильные сверх пакета» в решение не входят: доля ответов «сильный» у них и порядок вместе с ними рядом.",
+             "", "| Модель | Правило | Вариант | Ступень | Порядок | Сверх пакета: «сильный» | Порядок с ними "
+             "| Без баллов | Экзамен | На сигнал | Лента за 30 дней |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     for model in report["models"]:
         scores = model["scores"][model["variant"]]
         answers = model["scores"]["answers"]
@@ -213,13 +222,13 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
         lines.append(
             f"| {model['model']}{deprecated} | {'прошла' if model['passed'] else 'нет: ' + failed_ru(model['failed'])} "
             f"| {VARIANT_RU[model['variant']]} | {_share(scores['band']['agent'])} "
-            f"| {_share(scores['order']['agent'])} "
-            f"| {_share(scores['band']['extra_strong'])} | {answers['failures']} | {_usd(model['cost_usd'])} "
+            f"| {_share(scores['order']['agent'])} | {_share(scores['band']['extra_strong'])} "
+            f"| {_share(scores['order']['with_extra'])} | {answers['failures']} | {_usd(model['cost_usd'])} "
             f"| {_usd(per_signal)} | {_usd(per_signal * month['signals']) if per_signal and month else 'нет'} |")
     control = base["control"]
-    lines += ["", f"Без модели: константа (всегда «{_band_ru(base['constant']['band_value'])}») ступень "
-                  f"{_share(base['constant']['band'])}, порядок {_share(base['constant']['order'])}; эксперт сам с "
-                  f"собой (итог по весам из его баллов) ступень {_share(base['expert']['band'])}, порядок "
+    lines += ["", f"Без модели, на строках пакета: константа (всегда «{_band_ru(base['constant']['band_value'])}») "
+                  f"ступень {_share(base['constant']['band'])}, порядок {_share(base['constant']['order'])}; эксперт "
+                  f"сам с собой (итог по весам из его баллов) ступень {_share(base['expert']['band'])}, порядок "
                   f"{_share(base['expert']['order'])}; контроль с ядра (балл ленты и судьи, строк {control['rows']}) "
                   f"ступень {_share(control['band'])}, порядок {_share(control['order'])}.",
               (f"Лента за 30 дней: сигналов с баллами около {month['signals']} из {month['feed']} публикаций "
@@ -235,9 +244,8 @@ def _theme(report: dict[str, Any]) -> list[str]:
     return ["## Тема основного вызова", "",
             f"{report['card_model']}: {_share(found['agent'])} ответов с темой эксперта (порог "
             f"{found['threshold']:.0%}) {_mark(found['passed'])}; константа (всегда "
-            f"«{base['constant']['theme_value']}») "
-            f"{_share(base['constant']['theme'])}; контроль (тег ленты и тема судьи, строк "
-            f"{base['control']['theme_rows']}) {_share(base['control']['theme'])}.", ""]
+            f"«{base['constant']['theme_value']}») {_share(base['constant']['theme'])}; контроль (тег ленты и тема "
+            f"судьи, строк {base['control']['theme_rows']}) {_share(base['control']['theme'])}.", ""]
 
 
 _ATTRIBUTES_RU = (("companies_precision", "Компании, точность"), ("companies_recall", "Компании, полнота"),
@@ -250,7 +258,7 @@ def _attributes(report: dict[str, Any]) -> list[str]:
     """Атрибуты основного вызова того же прогона против разметки экзамена #98 (с допусками, пороги #98)."""
     found = report.get("attributes")
     if not found:
-        return ["Атрибуты основного вызова с разметкой экзамена #98 не сверялись (нет `--card-markup`).", ""]
+        return ["Атрибуты основного вызова с разметкой экзамена #98 не сверялись (настройка без `--card-markup`).", ""]
     lines = ["## Атрибуты основного вызова", "",
              f"Против разметки экзамена #98 на строках его экзамена ({len(found['rows'])}), с допусками и по порогам "
              "#98 (новых порогов нет):", "", "| Атрибут | Модель | Константа | |", "|---|---|---|---|"]
@@ -271,17 +279,18 @@ def _model(model: dict[str, Any], report: dict[str, Any]) -> list[str]:
              f"Вызовов {model['calls']}, токенов {model['input_tokens'] // 1000} тыс. входа и "
              f"{model['output_tokens'] // 1000} тыс. выхода, {_usd(model['cost_usd'])}; ответов {answers['answers']}, "
              f"без баллов {answers['failures']}; одна ступень во всех прогонах у {_share(chosen['band']['stability'])} "
-             "строк.", "",
+             "строк пакета.", "",
              "| Вариант | Ступень | Порядок | Порядок: бизнес | Порядок: технология | |", "|---|---|---|---|---|---|"]
     for variant in VARIANTS:
         one = scores[variant]
         lines.append(f"| {VARIANT_RU[variant]} | {_share(one['band']['agent'])} | {_share(one['order']['agent'])} "
                      f"| {_share(one['order']['by_profile'].get('business'))} "
                      f"| {_share(one['order']['by_profile'].get('tech_radar'))} | {_mark(one['passed'])} |")
+    lines += _bands(scores["bands"], model["variant"])
     constant = report["baseline"]["constant"]["criteria"]
     lines += ["", f"По критериям, {VARIANT_RU[model['variant']]} (ошибка: средняя разница с баллом эксперта; сдвиг: "
-                  "модель минус эксперт):", "",
-              "| Критерий | Ошибка | Сдвиг | Константа (среднее эксперта) | Ответов |", "|---|---|---|---|---|"]
+                  "модель минус эксперт; константа: ошибка ответа «всегда среднее эксперта»):", "",
+              "| Критерий | Ошибка | Сдвиг | Константа | Ответов |", "|---|---|---|---|---|"]
     for name, one in sorted(chosen["criteria"].items()):
         lines.append(f"| {name} | {one['mae']:.1f} | {one['bias']:+.1f} | {_number(constant.get(name))} | {one['n']} |")
     freshness = chosen["freshness"]
@@ -289,7 +298,7 @@ def _model(model: dict[str, Any], report: dict[str, Any]) -> list[str]:
                   f"({freshness['n']}).", "",
               "Итог модели по оценке эксперта (среднее по прогонам на строку):", "",
               "| Оценка эксперта | Строк | Меньший | Средний | Больший |", "|---|---|---|---|---|"]
-    order = [value for value, _, _ in EXPERT_SCALE] + ["strong_extra"]
+    order = [value for value, _, _ in EXPERT_SCALE] + [EXTRA]
     for rating in sorted(scores["totals"], key=lambda one: order.index(one) if one in order else len(order)):
         one = scores["totals"][rating]
         lines.append(f"| {_RATING_RU.get(rating, rating)} | {one['rows']} | {one['min']:.1f} | {one['mean']:.1f} "
@@ -297,8 +306,23 @@ def _model(model: dict[str, Any], report: dict[str, Any]) -> list[str]:
     return lines + [""]
 
 
+def _bands(bands: dict[str, Any], variant: str) -> list[str]:
+    """Ступень эксперта (строки) против ступени модели (колонки) и точность «сильного» («кандидаты»)."""
+    columns = [*BAND_ORDER, "none"]
+    lines = ["", f"Ступень эксперта против ступени модели, {VARIANT_RU[variant]} (ответов, строки пакета; «нет»: без "
+                 f"баллов). «Сильный» даёт «кандидата» «Решения платформы»: эксперт счёл сильными "
+                 f"{_share(bands['strong_precision'])} кандидатов модели, модель нашла "
+                 f"{_share(bands['strong_recall'])} сильных эксперта.", "",
+             "| Эксперт \\ модель | " + " | ".join(_band_ru(band) for band in columns) + " |",
+             "|---|" + "---|" * len(columns)]
+    for band in BAND_ORDER:
+        counts = bands["matrix"].get(band) or {}
+        lines.append(f"| {_band_ru(band)} | " + " | ".join(str(counts.get(one, 0)) for one in columns) + " |")
+    return lines
+
+
 def _band_ru(band: str | None) -> str:
-    return {"strong": "сильный", "useful": "полезный", "watch": "наблюдать", "weak": "слабый"}.get(band or "", "нет")
+    return BAND_LABELS.get(band or "", "нет")
 
 
 def _mark(passed: bool | None) -> str:

@@ -9,7 +9,7 @@ import pytest
 
 from oiltech_digest import card_scores_exam, card_scores_exam_calls, cli, config, signal_card, signal_scores
 from oiltech_digest.db import marks, repository
-from oiltech_digest.otbor_pack_format import MANIFEST_NAME
+from oiltech_digest.otbor_pack_format import MANIFEST_NAME, load_rubrics
 from tests.card_scores_exam_support import (CARD, CONTROL_NAME, LUNA, MINI, SUMMARY, ScoresModel, add_strong,
                                             approve_scores, oracle_card, oracle_scores, part_rows, run_exam)
 from tests.card_scores_exam_support import scores_pack  # noqa: F401 — фикстура
@@ -85,6 +85,7 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     def refused(match, *args, card_model=CARD):
         with pytest.raises(SystemExit, match=match):
             cli.main(["card-scores-exam", "--markup", str(scores_pack["markup"]), "--models", LUNA,
+                      "--card-markup", str(scores_pack["card_markup"]),
                       *(["--card-model", card_model] if card_model else []), *args])
 
     # Экзамен — три прогона на строку; меньше — только на настройке.
@@ -96,13 +97,18 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     refused("approved_scores")
     approve_scores(out, approved="утверждено: карточка 2026-10-01.1, баллы 2026-10-01.1, линейки 2026-10-01.1")
     refused("не называет текущие правила")
+    # Пороги — часть утверждения: отметка с нынешними версиями, но без порогов экзамен не пускает.
+    approve_scores(out, approved=(f"утверждено: карточка {signal_card.PROMPT_VERSION}, баллы "
+                                  f"{signal_scores.PROMPT_VERSION}, линейки {load_rubrics()['version']}"))
+    refused("пороги: ступень")
     approve_scores(out)
     # Деление и строки экзамена утверждает владелец: без отметки «Отбора» прогона нет, даже настройки.
     rows = json.loads((out / ROWS_NAME).read_text(encoding="utf-8"))
     write_rows(out, {key: rows[key] for key in ("list_pages", "in_instruction")}, approved=None)
     refused("approved", "--part", "tuning", "--runs", "1")
     (out / ROWS_NAME).write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
-    # Без модели основного вызова тема и дата не те, что на ядре.
+    # Модель основного вызова и сути — со ставкой в таблице цен; без модели основного вызова тема и дата не те.
+    refused("цены gpt-9-card нет", card_model="gpt-9-card")
     monkeypatch.setattr(card_scores_exam.config, "SIGNAL_CARD_MODEL", "")
     refused("--card-model", card_model=None)
     # Выгрузка с ядра: без неё весов и тегов нет; с испорченной — итог исказился бы.
@@ -115,6 +121,11 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     (out / CONTROL_NAME).write_text(json.dumps({**control, "rows": {"signal:999999": {}}}, ensure_ascii=False),
                                     encoding="utf-8")
     refused("signal:999999")
+    # Балл контроля не числом упал бы уже после оплаченных вызовов: проверка — при загрузке набора.
+    number = next(iter(control["rows"]))
+    (out / CONTROL_NAME).write_text(json.dumps({**control, "rows": {**control["rows"], number: {"score": "n/a"}}},
+                                               ensure_ascii=False), encoding="utf-8")
+    refused("число или null")
     assert model.calls == []
     assert not list(out.glob("card_scores_exam_*"))[1:]  # только выгрузка с ядра, ни сути, ни отчёта
 
@@ -124,7 +135,7 @@ def test_the_second_call_gets_the_core_input_with_the_expert_fields_and_the_main
     _, first = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
     number = next(one for one in part_rows(first, scores_pack) if scores_pack["expert"][one]["profile"] == "business")
     title = scores_pack["expert"][number]["title"]
-    # Дата и стадия основного вызова — свои у каждого прогона: второй вызов прогона получает свои.
+    # Дата и зрелость основного вызова — свои у каждого прогона: второй вызов прогона получает свои.
     dates = {}
 
     def card(found):
@@ -227,20 +238,28 @@ def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monk
     # Границы ступеней сменились после прогона: ответы те же, ступень по новым границам, правило — с пометкой.
     monkeypatch.setattr(config, "SIGNAL_SCORE_BANDS", (95, 65, 40))
 
+    # Рассуждение сменили после прогона: отчёт пересчёта пишет то, на котором получены ответы.
+    monkeypatch.setattr(config, "SIGNAL_SCORES_REASONING", "high")
+
     model, rescored = run_exam(monkeypatch, scores_pack, {}, "--rescore", str(source))
 
     assert model.calls == []
     assert rescored["rescored_from"] == source.name and rescored["rules_changed"] == ["bands"]
+    assert rescored["scores_reasoning"] == report["scores_reasoning"] == "low"
     [luna] = rescored["models"]
-    strong = sum(one["band"] == "strong" for one in rescored["rows"])
-    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(1 - strong / len(rescored["rows"]))
+    pack = [one for one in rescored["rows"] if one["rating"] != "strong_extra"]
+    strong = sum(one["band"] == "strong" for one in pack)
+    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(1 - strong / len(pack))
+    readable = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1]
+    assert "Пересчёт ничего не оплачивал" in readable.read_text(encoding="utf-8")
     assert luna["cost_usd"] == report["models"][0]["cost_usd"]  # цена исходного прогона
     assert rescored["summaries"] == report["summaries"] and rescored["cards"] == report["cards"]
     # Ответы на других линейках пересчёт не берёт: баллы ставились по другим.
     saved = json.loads(source.read_text(encoding="utf-8"))
     source.write_text(json.dumps({**saved, "rubrics_version": "2026-10-01.1"}, ensure_ascii=False), encoding="utf-8")
     with pytest.raises(SystemExit, match="линейк"):
-        cli.main(["card-scores-exam", "--markup", str(scores_pack["markup"]), "--rescore", str(source)])
+        cli.main(["card-scores-exam", "--markup", str(scores_pack["markup"]), "--rescore", str(source),
+                  "--card-markup", str(scores_pack["card_markup"])])
 
 
 def test_tuning_takes_only_pack_rows_needs_no_scores_approval_and_chooses_no_model(scores_pack, monkeypatch):
@@ -302,3 +321,15 @@ def test_readable_report_has_the_quality_and_price_table_with_the_monthly_feed_e
     assert f"${per_signal * 2200:.2f}" in text
     assert "## Тема основного вызова" in text and "эксперт сам с собой" in text
     assert not DASHES.search(text)
+
+
+def test_a_changed_summary_instruction_asks_for_a_new_summary(scores_pack, monkeypatch):
+    run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
+    monkeypatch.setattr(card_scores_exam_calls, "SUMMARY_INSTRUCTIONS", "Новая инструкция сути")
+
+    model, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
+
+    # Суть по старой инструкции не годится. Основной вызов переспрашивается, только если суть стала другой: его
+    # отпечаток — по его же запросу (подставная модель пишет ту же суть).
+    assert len(model.of("article_summary")) == len(report["rows"])
+    assert model.of("signal_card") == []

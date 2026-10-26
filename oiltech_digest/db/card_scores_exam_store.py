@@ -16,7 +16,7 @@ from psycopg.rows import dict_row
 
 from oiltech_digest import config
 from oiltech_digest.db import connection, marks
-from oiltech_digest.db.otbor_pack_store import LINK_PUBLISHED_SQL
+from oiltech_digest.db.otbor_pack_store import LINK_PUBLISHED_SQL, PUBLISHER_TEXT_SQL
 from oiltech_digest.db.repository import radar_origin_sql
 
 # Карточка радара, заведённая по списку заказчика (ТОП, 06-07.10): так помечена её ссылка.
@@ -90,10 +90,7 @@ def strong_radar(reference_keys: list[str]) -> list[dict[str, Any]]:
                 FROM signal_evidence e
                 LEFT JOIN articles a ON a.id = e.article_id
                 LEFT JOIN sources src ON src.id = a.source_id
-                WHERE e.signal_id = s.id
-                  AND (length(btrim(COALESCE(a.raw_text, ''))) >= %(min_chars)s
-                       OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'
-                           AND length(btrim(COALESCE(e.extracted_fact, ''))) >= %(min_chars)s))
+                WHERE e.signal_id = s.id AND {PUBLISHER_TEXT_SQL}
                 ORDER BY e.strength DESC, e.id
                 LIMIT 1
             ) m ON TRUE

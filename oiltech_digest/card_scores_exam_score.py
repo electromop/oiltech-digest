@@ -10,10 +10,11 @@ signal_scores.score_values, итог в двух вариантах подмеш
   совпадение «есть дата / нет даты» (её считает код по дате основного вызова).
 - Тема основного вызова — доля совпавших с темой эксперта.
 
-Рядом: константа (самая частая ступень и тема эксперта, его среднее по критерию), эксперт сам с собой (итог по весам
-из его же баллов) и контроль с ядра (балл и тег ленты, балл и тема судьи). «Сильные сверх пакета» идут в ступень и
-порядок как «сильный сигнал»; темы и баллов эксперта у них нет. Пороги — черновик разбора разметки 23.10 (раздел
-3.4), утверждает владелец до платного прогона.
+Решение и правило прохождения — по строкам пакета: с ними сравниваются константа, эксперт сам с собой (итог по весам из
+его же баллов) и контроль с ядра (балл и тег ленты, балл и тема судьи). «Сильные сверх пакета» (выбранное «в дайджест»,
+эталонный ТОП) — отдельной строкой: доля ответов «сильный» и порядок вместе с ними; иначе их число решало бы, кто
+прошёл (константа «всегда сильный» на смеси). Пороги — черновик разбора разметки 23.10 (раздел 3.4), утверждает
+владелец до платного прогона (rules_text — в его отметке).
 """
 
 from __future__ import annotations
@@ -23,18 +24,26 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from oiltech_digest import config, signal_scoring
-from oiltech_digest.signal_scoring import STRONG, USEFUL, WATCH, WEAK
+from oiltech_digest.signal_scoring import BAND_ORDER, STRONG, USEFUL, WATCH, WEAK
 
 THRESHOLDS = {"band": 0.65, "order": 0.85, "theme": 0.65}
 VARIANTS = ("keywords", "plain")
 # Общая оценка эксперта → ступень: «наблюдать» и «фоновый» у эксперта одна ступень (разбор разметки, раздел 1.5).
 EXPERT_BANDS = {"strong_signal": STRONG, "approved": USEFUL, "watch_later": WATCH, "background_material": WATCH,
                 "reject": WEAK, "wrong_domain": WEAK}
+# Оценка «сильного сверх пакета» вместо общей оценки эксперта.
+EXTRA = "strong_extra"
 _RANK = {STRONG: 3, USEFUL: 2, WATCH: 1, WEAK: 0}
 NO_DATE = "нет даты"
 
 # Значения по прогонам: номер строки → по значению на прогон (None — сбой).
 Finals = Mapping[str, Sequence[Mapping[str, Any] | None]]
+
+
+def rules_text() -> str:
+    """Пороги словами — их называет отметка утверждения владельцем: другие пороги — другое утверждение."""
+    return (f"пороги: ступень {THRESHOLDS['band']:.0%}, порядок {THRESHOLDS['order']:.0%}, "
+            f"тема {THRESHOLDS['theme']:.0%}")
 
 
 def evaluate(rows: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
@@ -45,7 +54,7 @@ def evaluate(rows: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
     every = [final for row in rows for final in finals[row["id"]]]
     return {**variants, "variant": chosen, "passed": bool(passing), "failed": variants[chosen]["failed"],
             "answers": {"answers": len(every), "failures": sum(final is None for final in every)},
-            "totals": _totals_by_rating(rows, finals, chosen)}
+            "totals": _totals_by_rating(rows, finals, chosen), "bands": _bands(rows, finals, chosen)}
 
 
 def _closer(variants: dict[str, Any], candidates: list[str]) -> str:
@@ -57,12 +66,14 @@ def _closer(variants: dict[str, Any], candidates: list[str]) -> str:
 
 def _variant(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[str, Any]:
     totals = {row["id"]: [_total(final, variant) for final in finals[row["id"]]] for row in rows}
-    band = _band(rows, totals)
-    order = order_share(rows, totals)
+    pack = [row for row in rows if not row["extra"]]
+    extra = [signal_scoring.band(total) for row in rows if row["extra"] for total in totals[row["id"]]]
+    band = {**_band(pack, totals), "extra_strong": _share(extra.count(STRONG), len(extra))}
+    order = {**order_share(pack, totals), "with_extra": order_share(rows, totals)["agent"]}
     checks = {"band": band["agent"], "order": order["agent"]}
     failed = [name for name, share in checks.items() if share is None or share < THRESHOLDS[name]]
-    return {"band": band, "order": order, "criteria": _criteria(rows, finals, variant),
-            "freshness": _freshness(rows, finals), "passed": not failed, "failed": failed}
+    return {"band": band, "order": order, "criteria": _criteria(pack, finals, variant),
+            "freshness": _freshness(pack, finals), "passed": not failed, "failed": failed}
 
 
 def _total(final: Mapping[str, Any] | None, variant: str) -> float | None:
@@ -73,14 +84,12 @@ def _total(final: Mapping[str, Any] | None, variant: str) -> float | None:
 
 
 def _band(rows: list[dict[str, Any]], totals: Mapping[str, Sequence[float | None]]) -> dict[str, Any]:
-    """Доля ответов со ступенью эксперта; отдельно — у «сильных сверх пакета»; устойчивость — одна ступень во всех
-    прогонах без сбоев."""
+    """Доля ответов со ступенью эксперта; устойчивость — одна ступень во всех прогонах без сбоев."""
     pairs = [(row["band"], signal_scoring.band(total)) for row in rows for total in totals[row["id"]]]
-    extra = [signal_scoring.band(total) for row in rows if row["extra"] for total in totals[row["id"]]]
     stable = sum(all(total is not None for total in totals[row["id"]])
                  and len({signal_scoring.band(total) for total in totals[row["id"]]}) == 1 for row in rows)
     return {"agent": _share(sum(expert == given for expert, given in pairs), len(pairs)), "n": len(pairs),
-            "extra_strong": _share(extra.count(STRONG), len(extra)), "stability": _share(stable, len(rows))}
+            "stability": _share(stable, len(rows))}
 
 
 def order_share(rows: list[dict[str, Any]], totals: Mapping[str, Sequence[float | None]]) -> dict[str, Any]:
@@ -109,6 +118,21 @@ def _concordant(high: float | None, low: float | None) -> float:
     return 1.0 if high > low else 0.5 if high == low else 0.0
 
 
+def _bands(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[str, Any]:
+    """Ступень эксперта против ступени модели (ответов, строки пакета) и точность «сильного»: «сильный» даёт
+    «кандидата» «Решения платформы», так что его точность — доля кандидатов, которых эксперт счёл сильными."""
+    matrix: dict[str, Counter[str]] = {band: Counter() for band in BAND_ORDER}
+    for row in rows:
+        if row["extra"]:
+            continue
+        for final in finals[row["id"]]:
+            matrix[row["band"]][signal_scoring.band(_total(final, variant)) or "none"] += 1
+    called_strong = sum(counts[STRONG] for counts in matrix.values())
+    return {"matrix": {band: dict(counts) for band, counts in matrix.items()},
+            "strong_precision": _share(matrix[STRONG][STRONG], called_strong),
+            "strong_recall": _share(matrix[STRONG][STRONG], sum(matrix[STRONG].values()))}
+
+
 def _totals_by_rating(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[str, Any]:
     """Итог модели по общей оценке эксперта (среднее по прогонам на строку): цифры модели, по которым пересматривают
     границы ступеней, если совпадение низкое (решение 30 журнала гриля)."""
@@ -125,11 +149,9 @@ def _totals_by_rating(rows: list[dict[str, Any]], finals: Finals, variant: str) 
 
 
 def _criteria(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[str, Any]:
-    """Средняя ошибка и сдвиг балла критерия против эксперта — где число есть у обоих; строки пакета."""
+    """Средняя ошибка и сдвиг балла критерия против эксперта (строки пакета) — где число есть у обоих."""
     diffs: dict[str, list[float]] = defaultdict(list)
     for row in rows:
-        if row["extra"]:
-            continue
         for final in finals[row["id"]]:
             for item in (final or {}).get("items") or []:
                 expert = row["scores"].get(item["name"])
@@ -141,11 +163,10 @@ def _criteria(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[
 
 
 def _freshness(rows: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
-    """«Свежесть» (её считает код по дате основного вызова): есть ли дата — как у эксперта; строки пакета."""
+    """«Свежесть» (её считает код по дате основного вызова): есть ли дата — как у эксперта (строки пакета)."""
     pairs = []
     for row in rows:
-        expert = next((value for name, value in row["scores"].items() if name in row["computed"]), None) \
-            if not row["extra"] else None
+        expert = next((value for name, value in row["scores"].items() if name in row["computed"]), None)
         if expert is None:
             continue
         for final in finals[row["id"]]:
@@ -173,17 +194,17 @@ def baseline(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[str, floa
              control: Mapping[str, Any]) -> dict[str, Any]:
     """То, с чем сравнивается модель, — без её ответов: константа (самая частая ступень и тема эксперта, его среднее по
     критерию), эксперт сам с собой (итог по весам из его баллов) и контроль с ядра (балл и тег ленты, балл и тема
-    судьи) — на тех строках, где он есть."""
+    судьи) — на строках пакета, контроль — где он есть."""
     pack = [row for row in rows if not row["extra"]]
-    common_band = _most_common([row["band"] for row in rows])
+    common_band = _most_common([row["band"] for row in pack])
     common_theme = _most_common([row["theme"] for row in pack])
     expert_totals = {row["id"]: [expert_total(row, weights[row["profile"]])] for row in pack}
-    controlled = [row for row in rows if (control.get(row["id"]) or {}).get("score") is not None]
+    controlled = [row for row in pack if (control.get(row["id"]) or {}).get("score") is not None]
     control_totals = {row["id"]: [float(control[row["id"]]["score"])] for row in controlled}
     themed = [row for row in pack if (control.get(row["id"]) or {}).get("theme")]
     means = _expert_means(pack)
     return {
-        "constant": {"band": _share(sum(row["band"] == common_band for row in rows), len(rows)),
+        "constant": {"band": _share(sum(row["band"] == common_band for row in pack), len(pack)),
                      "band_value": common_band, "order": 0.5,
                      "theme": _share(sum(row["theme"] == common_theme for row in pack), len(pack)),
                      "theme_value": common_theme,

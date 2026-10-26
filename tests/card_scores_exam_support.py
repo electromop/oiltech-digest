@@ -3,7 +3,8 @@
 Пакет «Отбора» выгружает otbor-expert-pack на изолированной базе (otbor_pack_support), разметка — как у эксперта:
 решения и метки «Отбора» как в otbor_exam_support, у взятых бизнес- и технологических строк — баллы по критериям,
 общая оценка и тема по кругу (CLASSES, THEMES). Выгрузка с ядра (card-scores-exam-control) — с той же базы, в ней два
-«сильных сверх пакета»: статья, выбранная «в дайджест», и карточка из списка заказчика. Подставная модель отвечает
+«сильных сверх пакета»: статья, выбранная «в дайджест», и карточка из списка заказчика. Рядом — пакет экзамена
+карточки #98 по строкам прежней разметки (сверка атрибутов основного вызова). Подставная модель отвечает
 за три вызова — суть (article_summary), основной вызов «Карточки» (signal_card) и второй (signal_scores) — и
 запоминает их. Сами тесты — test_card_scores_exam*.py.
 """
@@ -14,12 +15,15 @@ import json
 
 import pytest
 
-from oiltech_digest import card_scores_exam_calls, cli, signal_card, signal_card_pack, signal_scores
+from oiltech_digest import (card_scores_exam_calls, card_scores_exam_score, cli, signal_card, signal_card_exam,
+                            signal_card_pack, signal_scores)
 from oiltech_digest.db import marks, repository
 from oiltech_digest.otbor_pack_format import MANIFEST_NAME, load_rubrics
 from oiltech_digest.processing.openai_client import AIResponse
 from tests.otbor_exam_support import ROWS_NAME, expert_codes, markup_columns, special_rows, write_rows
 from tests.otbor_pack_support import BUSINESS, TECH, THEMES, fill, radar
+from tests.signal_card_support import row as card_row
+from tests.signal_card_support import write_pack as write_card_pack
 
 CARD = "gpt-6-sol"  # основной вызов — модель ядра
 SUMMARY = "gpt-5-mini"  # «Суть и перевод» — модель ленты
@@ -40,7 +44,8 @@ def approve_scores(out, approved=True):
     rows.pop("approved_scores", None)
     if approved is True:
         approved = (f"утверждено владельцем: карточка {signal_card.PROMPT_VERSION}, баллы "
-                    f"{signal_scores.PROMPT_VERSION}, линейки {load_rubrics()['version']}")
+                    f"{signal_scores.PROMPT_VERSION}, линейки {load_rubrics()['version']}, "
+                    f"{card_scores_exam_score.rules_text()}")
     if approved:
         rows["approved_scores"] = approved
     (out / ROWS_NAME).write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
@@ -66,6 +71,26 @@ def add_strong(corpus):
                      ('{"origin": "customer_list"}', top))
         conn.commit()
     return {"digest_article": late, "top_signal": top}
+
+
+def card_exam_pack(items, folder, *, tuning=1, text_of=None):
+    """Пакет экзамена #98 по строкам прежней разметки пакета «Отбора»: те же номера и тексты; эксперт #98 поставил
+    всем «контракт» и «Ближний Восток». Деление #98 — первые tuning строк в настройке. Таблица и номера экзамена."""
+    text_of = text_of or {}
+    rows = []
+    for item in items:
+        if item["group"] != "card_markup":
+            continue
+        built = card_row(int(item["id"].split(":")[1]), "technology" if item["origin"] == "radar" else "useful",
+                         title=item["title"], text=text_of.get(item["id"], item["text"]),
+                         published=item["published"] or "2026-09-30")
+        rows.append({**built, "id": item["id"]})
+    folder.mkdir()
+    markup = write_card_pack(folder, rows)
+    ids = [one["id"] for one in rows]
+    (folder / signal_card_exam.SPLIT_NAME).write_text(json.dumps({"tuning": ids[:tuning], "exam": ids[tuning:]}),
+                                                      encoding="utf-8")
+    return markup, ids[tuning:]
 
 
 def _article_title(article_id):
@@ -99,10 +124,11 @@ def scores_pack(pack, capsys):
     approve_scores(out)
     strong = add_strong(pack["corpus"])
     control = export_control(out, capsys)
+    card_markup, card_exam = card_exam_pack(pack["items"], out.parent / "card98")
     titles = {**{one["title"]: number for number, one in expert.items()},
               **{one["title"]: one["id"] for one in control["strong"]}}
     return {**pack, "markup": markup, "codes": codes, "rows": rows, "expert": expert, "strong": strong,
-            "control": control, "titles": titles}
+            "control": control, "titles": titles, "card_markup": card_markup, "card_exam": card_exam}
 
 
 # --- Подставная модель ---------------------------------------------------------------------------
@@ -114,7 +140,7 @@ def _title(user_input):
 
 
 def oracle_card(scores_pack, by_id=None):
-    """Основной вызов, который ставит тему, как эксперт; даты события в тексте нет, стадия «не определено». by_id —
+    """Основной вызов, который ставит тему, как эксперт; даты события в тексте нет, зрелость «не определено». by_id —
     {номер строки: поправки ответа}."""
     by_id = by_id or {}
 
@@ -189,12 +215,14 @@ class ScoresModel:
 
 def run_exam(monkeypatch, scores_pack, scores, *args, card=None):
     """Команда экзамена с подставной моделью; последний отчёт рядом с манифестом. Без --models лестница — модели, у
-    которых есть ответы."""
+    которых есть ответы; разметка #98 — пакета фикстуры, если тест не назвал свою."""
     model = ScoresModel(card or oracle_card(scores_pack), scores)
     for module in (card_scores_exam_calls, signal_card, signal_scores):
         monkeypatch.setattr(module, "make_client", lambda: model)
     ladder = [] if "--models" in args or "--rescore" in args else ["--models", ",".join(scores)]
     options = [] if "--rescore" in args else ["--card-model", CARD, "--summary-model", SUMMARY]
+    if "--card-markup" not in args:
+        options += ["--card-markup", str(scores_pack["card_markup"])]
     cli.main(["card-scores-exam", "--markup", str(scores_pack["markup"]), *ladder, *options, *args])
     [report] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.json"))[-1:]
     return model, json.loads(report.read_text(encoding="utf-8"))

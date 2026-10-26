@@ -166,8 +166,11 @@ def _problems(data: Any, ids: set[str]) -> list[str]:
     if not (isinstance(tags, list) and any(isinstance(tag, dict) and tag.get("name") and tag.get("parent_id") is None
                                            for tag in tags)):
         problems.append("теги тем (корневые тематики)")
-    if not (isinstance(rows, dict) and all(isinstance(one, dict) for one in rows.values())):
-        problems.append("контроль rows {строка: {theme, score}}")
+    if not (isinstance(rows, dict) and all(
+            isinstance(one, dict) and isinstance(one.get("theme"), (str, type(None)))
+            and isinstance(one.get("score"), (int, float, type(None))) and not isinstance(one.get("score"), bool)
+            for one in rows.values())):
+        problems.append("контроль rows {строка: {theme: строка или null, score: число или null}}")
     elif set(rows) - ids:
         problems.append(f"строк {', '.join(sorted(set(rows) - ids)[:5])} нет в манифесте: выгрузка другого пакета")
     if not (isinstance(strong, list) and all(isinstance(one, dict) and all(key in one for key in _STRONG_KEYS)

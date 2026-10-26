@@ -2693,31 +2693,29 @@ def cmd_otbor_exam_control(args: argparse.Namespace) -> None:
 
 
 def cmd_card_scores_exam(args: argparse.Namespace) -> None:
-    """Экзамен «Карточки» (#133) на разметке эксперта: тема основного вызова, модели второго вызова лестницей по цене."""
+    """Экзамен «Карточки» (#133) на разметке эксперта: тема основного вызова, модели второго вызова по цене."""
     from oiltech_digest import card_scores_exam
 
     if args.rescore and (args.dry_run or args.models or args.runs is not None or args.part or args.all
                          or args.card_model or args.summary_model):
-        raise SystemExit("card-scores-exam: --rescore берёт модели, прогоны и часть из отчёта, без --dry-run, --models, "
-                         "--card-model, --summary-model, --runs, --part и --all")
+        raise SystemExit("card-scores-exam: --rescore берёт модели, прогоны и часть из отчёта, без --dry-run, "
+                         "--models, --card-model, --summary-model, --runs, --part и --all")
     if args.workers < 1:
         raise SystemExit(f"card-scores-exam: --workers {args.workers}: параллельных вызовов модели от одного")
     models = (tuple(model.strip() for model in (args.models or "").split(",") if model.strip())
               or card_scores_exam.MODELS)
-    runs = card_scores_exam.RUNS if args.runs is None else args.runs
+    options = {"manifest_path": args.manifest, "models": models, "part": args.part or "exam",
+               "runs": card_scores_exam.RUNS if args.runs is None else args.runs, "card_model": args.card_model,
+               "summary_model": args.summary_model}
     try:
         if args.rescore:
             result = card_scores_exam.rescore(args.rescore, args.markup, manifest_path=args.manifest,
                                               card_markup=args.card_markup)
         elif args.dry_run:
-            _print_scores_plan(card_scores_exam.plan(args.markup, manifest_path=args.manifest, models=models, runs=runs,
-                                                     part=args.part or "exam", card_model=args.card_model,
-                                                     summary_model=args.summary_model))
+            _print_scores_plan(card_scores_exam.plan(args.markup, **options))
             return
         else:
-            result = card_scores_exam.run(args.markup, manifest_path=args.manifest, models=models, runs=runs,
-                                          part=args.part or "exam", every=args.all, workers=args.workers,
-                                          card_model=args.card_model, summary_model=args.summary_model,
+            result = card_scores_exam.run(args.markup, **options, every=args.all, workers=args.workers,
                                           card_markup=args.card_markup)
     except (card_scores_exam.ExamError, OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"card-scores-exam: {exc}") from exc
@@ -3977,7 +3975,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_scores_exam.add_argument("--dry-run", action="store_true",
                                help="только строки, число вызовов и цена: ничего не записать и не вызвать модель")
     p_scores_exam.add_argument("--rescore", default=None, metavar="REPORT",
-                               help="пересчитать сохранённый отчёт без вызовов модели: модели, прогоны и часть из отчёта")
+                               help="пересчитать сохранённый отчёт без вызовов модели: модели, прогоны и часть из "
+                                    "отчёта")
     p_scores_exam.add_argument("--part", choices=["exam", "tuning"], default=None,
                                help="часть набора: экзамен или настройка (деление общее с «Отбором»)")
     p_scores_exam.add_argument("--all", action="store_true",

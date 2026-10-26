@@ -2,17 +2,19 @@
 
 Набор — пакет «Отбора» (#129) с его делением и файлом строк (otbor_exam): строки, которые эксперт взял с категорией
 «бизнес» или «технология» (у них баллы по критериям профиля и общая оценка), без страниц-списков. На экзамене к ним
-добавляются «сильные сверх пакета» из выгрузки с ядра: выбранное «в дайджест» и эталонный ТОП заказчика (спека).
+добавляются «сильные сверх пакета» из выгрузки с ядра: выбранное «в дайджест» и эталонный ТОП заказчика (спека); они
+показаны отдельно, решение — по строкам пакета (card_scores_exam_score).
 
 Каждая строка проходит путь сигнала после «Отбора»: «Суть и перевод» (один раз на строку, с полями «Отбора»
-эксперта), основной вызов «Карточки» (модель ядра, три прогона: тема, дата события и стадия) и второй вызов — модели
-лестницы, по прогону на каждый прогон основного: вход — категория, отрасль и связь эксперта, дата и стадия основного
-вызова того же прогона. Ответы проходят проверку кодом ядра (signal_card.card_values, signal_scores.score_values):
-мерится то, что дошло бы до сигнала (card_scores_exam_score). Суть и ответы основного вызова лежат рядом с манифестом
-по отпечатку входа: все модели второго вызова получают одни и те же, повторный запуск их не оплачивает. Критерии
-«Скоринга» (веса, ключевые слова), теги тем и контроль — из выгрузки с ядра (card_scores_exam_control): экзамен идёт
-без базы. Модель второго вызова — самая дешёвая из прошедших; экзамен (не настройка) — только после утверждения
-владельцем (approved_scores называет текущие инструкции и линейки). Отчёт — рядом с манифестом, вне репозитория.
+эксперта), основной вызов «Карточки» (модель ядра, три прогона: тема, дата события и зрелость) и второй вызов —
+модели лестницы, по прогону на каждый прогон основного: вход — категория, отрасль и связь эксперта, дата и зрелость
+основного вызова того же прогона. Ответы проходят проверку кодом ядра (signal_card.card_values,
+signal_scores.score_values): мерится то, что дошло бы до сигнала. Атрибуты основного вызова сверяются с разметкой
+экзамена карточки (#98) на строках его экзамена, по его порогам. Суть и ответы основного вызова лежат рядом с
+манифестом по отпечатку запроса (card_scores_exam_calls). Критерии «Скоринга» (веса, ключевые слова), теги тем и
+контроль — из выгрузки с ядра (card_scores_exam_control): экзамен идёт без базы. Модель второго вызова — самая дешёвая
+из прошедших; экзамен (не настройка) — только после утверждения владельцем (approved_scores называет инструкции,
+линейки и пороги). Отчёт — рядом с манифестом, вне репозитория: он публичный.
 """
 
 from __future__ import annotations
@@ -24,8 +26,9 @@ from typing import Any
 
 from oiltech_digest import (card_scores_exam_control, card_scores_exam_report, config, otbor_exam, otbor_markup,
                             signal_card, signal_card_exam, signal_card_exam_score, signal_scores, signal_scoring)
-from oiltech_digest.card_scores_exam_calls import SUMMARIES_NAME, Calls, ExamError, Inputs, read_stored
-from oiltech_digest.card_scores_exam_score import EXPERT_BANDS, THRESHOLDS, baseline, evaluate, theme
+from oiltech_digest.card_scores_exam_calls import Calls, ExamError, Inputs
+from oiltech_digest.card_scores_exam_score import (EXPERT_BANDS, EXTRA, THRESHOLDS, baseline, evaluate, rules_text,
+                                                   theme)
 from oiltech_digest.otbor_pack_format import CATEGORY_PROFILE, load_rubrics
 from oiltech_digest.signal_card_pack import load_dictionaries as card_dictionaries
 from oiltech_digest.signal_card_pack import publication_text
@@ -35,7 +38,6 @@ from oiltech_digest.signal_card_pack import publication_text
 MODELS = ("gpt-6-luna", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-mini", "gpt-6-sol", "gpt-5.5")
 RUNS = otbor_exam.RUNS
 APPROVAL_KEY = "approved_scores"
-EXTRA = "strong_extra"  # оценка «сильных сверх пакета»
 
 
 def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
@@ -47,10 +49,9 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     exam = load(markup_path, manifest_path)
     if part == "exam":
         _check_approved(exam["approved_scores"])
-    card_exam = _card_exam(card_markup, exam) if card_markup else None
+    card_exam = _card_exam(card_markup, exam, part)
     ladder = _by_price(models)
-    calls = Calls(Inputs(exam), card_model or config.SIGNAL_CARD_MODEL, summary_model or config.OPENAI_MODEL,
-                  workers)
+    calls = _calls(exam, card_model, summary_model, workers)
     split = otbor_exam._split(exam, write=True)
     rows = _rows(exam, split, part)
     summaries = calls.summaries(rows)
@@ -65,7 +66,8 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
             break
     settings = {"part": part, "runs": runs, "split": split, "card_model": calls.card_model,
                 "summary_model": calls.summary_model, "card_prompt_version": signal_card.PROMPT_VERSION,
-                "scores_prompt_version": signal_scores.PROMPT_VERSION}
+                "scores_prompt_version": signal_scores.PROMPT_VERSION, "card_reasoning": config.SIGNAL_CARD_REASONING,
+                "scores_reasoning": config.SIGNAL_SCORES_REASONING}
     return _report(exam, rows, summaries, cards, tried, settings, spend=calls.spend, card_exam=card_exam)
 
 
@@ -80,7 +82,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
     except ValueError as exc:
         raise ExamError(str(exc)) from exc
     exam = load(markup_path, manifest_path)
-    card_exam = _card_exam(card_markup, exam) if card_markup else None
+    card_exam = _card_exam(card_markup, exam, saved["part"])
     inputs = Inputs(exam)
     if saved["manifest"]["sha256"] != exam["manifest"]["sha256"]:
         raise ExamError(f"{source.name}: ответы получены на другом манифесте, тексты другие: пересчёт неверен")
@@ -101,7 +103,8 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
               **{key: one[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}}
              for one in saved["models"]]
     settings = {key: saved[key] for key in ("part", "runs", "split", "card_model", "summary_model",
-                                            "card_prompt_version", "scores_prompt_version")}
+                                            "card_prompt_version", "scores_prompt_version", "card_reasoning",
+                                            "scores_reasoning")}
     changed = [name for name, value in rules(exam).items() if (saved.get("rules") or {}).get(name) != value]
     decided = saved.get("decision")
     return _report(exam, rows, summaries, cards, tried, settings, spend=saved.get("spend") or {},
@@ -115,14 +118,13 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
          summary_model: str | None = None) -> dict[str, Any]:
     """Сухой прогон: строки, число вызовов и цена по этапам; ничего не пишет и не вызывает модель. Суть и основной
     вызов, которые уже лежат рядом с манифестом, не считаются. Цена — по длине запросов (signal_card.estimate); вход
-    второго вызова — без даты и стадии (их даст основной вызов); повтор после сбоя не учтён."""
+    второго вызова — без даты и зрелости (их даст основной вызов); повтор после сбоя не учтён."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
-    calls = Calls(Inputs(exam), card_model or config.SIGNAL_CARD_MODEL, summary_model or config.OPENAI_MODEL, 1)
+    calls = _calls(exam, card_model, summary_model, 1)
     split = otbor_exam._split(exam, write=False)
     rows = _rows(exam, split, part)
-    stored = read_stored(exam["folder"], SUMMARIES_NAME)
-    summaries = {number: one.get("summary") or "" for number, one in stored.items()}
+    summaries = calls.cached_summaries()
     summary_todo = calls.summary_todo(rows)
     card_todo, card_chars = calls.card_todo(rows, summaries, runs)
     scores_chars = calls.scores_chars(rows, summaries) * runs
@@ -141,14 +143,23 @@ def _check_runs(runs: int, part: str) -> None:
 
 
 def _check_approved(approved: str | None) -> None:
-    """Экзамен идёт только на правилах, которые утвердил владелец: отметка называет текущие инструкции обоих вызовов
-    и линейки. Настройку это не держит."""
+    """Экзамен идёт только на правилах, которые утвердил владелец: отметка называет текущие инструкции обоих вызовов,
+    линейки и пороги (rules_text). Настройку это не держит."""
     names = (f"карточка {signal_card.PROMPT_VERSION}", f"баллы {signal_scores.PROMPT_VERSION}",
-             f"линейки {load_rubrics()['version']}")
+             f"линейки {load_rubrics()['version']}", rules_text())
     missing = [name for name in names if name not in (approved or "")]
     if missing:
         raise ExamError(f"{otbor_exam.ROWS_NAME}: {APPROVAL_KEY} не называет текущие правила ({', '.join(missing)}): "
                         "до платного прогона владелец утверждает инструкции, линейки и пороги")
+
+
+def _calls(exam: dict[str, Any], card_model: str | None, summary_model: str | None, workers: int) -> Calls:
+    """Вызовы экзамена; модели основного вызова и сути — с их ставками в таблице цен, иначе расход в отчёте солгал
+    бы."""
+    card_model, summary_model = card_model or config.SIGNAL_CARD_MODEL, summary_model or config.OPENAI_MODEL
+    if card_model:
+        _by_price((card_model, summary_model))
+    return Calls(Inputs(exam), card_model, summary_model, workers)
 
 
 def _by_price(models: tuple[str, ...]) -> list[str]:
@@ -193,9 +204,15 @@ def load(markup_path: str | Path, manifest_path: str | Path | None = None) -> di
             "approved_scores": approved.strip() if isinstance(approved, str) and approved.strip() else None}
 
 
-def _card_exam(markup: str | Path, exam: dict[str, Any]) -> dict[str, Any]:
-    """Разметка экзамена карточки (#98) для сверки атрибутов основного вызова: только строки его экзаменационной
-    части (по строкам настройки #98 правили инструкцию) и только те же тексты, что видел эксперт «Отбора»."""
+def _card_exam(markup: str | Path | None, exam: dict[str, Any], part: str) -> dict[str, Any] | None:
+    """Разметка экзамена карточки (#98) для сверки атрибутов основного вызова того же прогона (тикет #133): на
+    экзамене обязательна. Только строки его экзаменационной части (по строкам настройки #98 правили инструкцию) и только
+    те же тексты, что видел эксперт «Отбора»."""
+    if not markup:
+        if part == "exam":
+            raise ExamError("экзамен сверяет атрибуты основного вызова с разметкой экзамена карточки #98: нужен "
+                            "--card-markup (таблица #98, манифест рядом)")
+        return None
     try:
         card = signal_card_exam.load(markup)
         split = signal_card_exam._split(card, write=False)
@@ -298,7 +315,6 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **{key: value for key, value in settings.items() if key != "split"},
-        "card_reasoning": config.SIGNAL_CARD_REASONING, "scores_reasoning": config.SIGNAL_SCORES_REASONING,
         "rubrics_version": load_rubrics()["version"], "dictionaries_version": inputs.dictionaries.get("version"),
         "keywords_setting": bool(config.SIGNAL_SCORES_KEYWORDS), "rules": rules(exam),
         "manifest": exam["manifest"], "markup": exam["markup"], "files": card_scores_exam_report.files(exam["folder"]),

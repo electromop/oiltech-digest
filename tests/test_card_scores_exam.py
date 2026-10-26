@@ -4,6 +4,8 @@
 технологических строк — баллы, общая оценка и тема по кругу; выгрузка с ядра — с той же изолированной базы.
 """
 
+import json
+
 import pytest
 
 from oiltech_digest import signal_card, signal_scores
@@ -34,10 +36,27 @@ def test_a_model_that_scores_like_the_expert_passes_and_the_main_call_measures_t
     for variant in ("keywords", "plain"):
         scores = luna["scores"][variant]
         assert scores["band"]["agent"] == 1.0 and scores["order"]["agent"] == 1.0
+        assert scores["band"]["extra_strong"] == 1.0 and scores["order"]["with_extra"] == 1.0
     # Тема — у строк пакета (у «сильных сверх пакета» темы эксперта нет), версии инструкций — в отчёте.
     assert report["theme"]["agent"] == 1.0 and report["theme"]["n"] == len(exam) * 3
     assert report["card_prompt_version"] == signal_card.PROMPT_VERSION
     assert report["scores_prompt_version"] == signal_scores.PROMPT_VERSION
+    # Деление — то же, что у экзамена «Отбора» (файл рядом с манифестом).
+    split = json.loads((scores_pack["out"] / "otbor_exam_split.json").read_text(encoding="utf-8"))
+    assert report["split"] == {key: split[key] for key in ("tuning", "exam")}
+
+    # Рядом без модели, на строках пакета: константа — самая частая ступень эксперта, эксперт сам с собой — итог по
+    # весам из его баллов (в синтетике баллы и оценка согласованы), контроль — баллы ленты (77) и судьи (70): оба
+    # «полезный».
+    bands = [scores_pack["expert"][number]["band"] for number in exam]
+    base = report["baseline"]
+    assert base["constant"]["band"] == pytest.approx(max(map(bands.count, set(bands))) / len(exam))
+    assert base["constant"]["order"] == 0.5
+    assert base["expert"] == {"band": 1.0, "order": 1.0}
+    controlled = [number for number in exam if scores_pack["control"]["rows"].get(number, {}).get("score")]
+    assert base["control"]["rows"] == len(controlled)
+    assert base["control"]["band"] == pytest.approx(
+        sum(scores_pack["expert"][number]["band"] == "useful" for number in controlled) / len(controlled))
 
 
 def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_are_paid_once(scores_pack,
@@ -47,14 +66,15 @@ def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_
     luna, mini = report["models"]
     assert (luna["model"], mini["model"]) == (LUNA, MINI)
     # Один балл всем: итог у всех строк одинаковый — порядок только ничьи (половина), ступень совпала лишь у
-    # «наблюдать».
-    rows = [one for one in report["rows"]]
-    watch = sum(one["band"] == "watch" for one in rows)
+    # «наблюдать» (решение — по строкам пакета).
+    rows = report["rows"]
+    pack = [one for one in rows if one["rating"] != "strong_extra"]
+    watch = sum(one["band"] == "watch" for one in pack)
     assert luna["scores"]["plain"]["order"]["agent"] == 0.5
-    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(watch / len(rows))
+    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(watch / len(pack))
     assert set(luna["failed"]) == {"band", "order"} and luna["passed"] is False
     assert mini["passed"] is True and report["decision"]["model"] == MINI
-    # Основной вызов — один на прогон строки для всех моделей второго вызова: дата и стадия у них одни и те же.
+    # Основной вызов — один на прогон строки для всех моделей второго вызова: дата и зрелость у них одни и те же.
     assert len(model.of("signal_card")) == len(rows) * 3
     assert len(model.of("article_summary")) == len(rows)
 
@@ -121,7 +141,7 @@ def test_criteria_error_counts_what_reaches_the_signal_and_freshness_follows_the
     exam = part_rows(first, scores_pack)
     business = [number for number in exam if scores_pack["expert"][number]["profile"] == "business"]
     technology = [number for number in exam if scores_pack["expert"][number]["profile"] == "tech_radar"]
-    # Модель ставит бизнесу на 5 больше эксперта. У технологии с баллом эксперта выше 39 основной вызов назвал стадию
+    # Модель ставит бизнесу на 5 больше эксперта. У технологии с баллом эксперта выше 39 основной вызов назвал зрелость
     # «исследование»: балл «Зрелости» держится ниже 40, сколько бы модель ни поставила. У другой нашёл дату события.
     scores = oracle_scores(scores_pack, {number: scores_pack["expert"][number]["score"] + 5 for number in business})
     research = next(number for number in technology if scores_pack["expert"][number]["score"] > 39)
@@ -142,3 +162,21 @@ def test_criteria_error_counts_what_reaches_the_signal_and_freshness_follows_the
     # «Свежесть» считает код по дате основного вызова: у строки с датой она есть, а у эксперта «нет даты».
     assert chosen["freshness"]["n"] == len(technology) * 3
     assert chosen["freshness"]["agreement"] == pytest.approx((len(technology) - 1) / len(technology))
+
+
+def test_strong_signals_beyond_the_pack_are_shown_apart_and_do_not_decide(scores_pack, monkeypatch):
+    # Модель, которая всем ставит «сильный»: у «сильных сверх пакета» она права всегда, у пакета — только у сильных.
+    _, report = run_exam(monkeypatch, scores_pack, {LUNA: flat(90)})
+
+    [luna] = report["models"]
+    plain = luna["scores"]["plain"]
+    pack = [one for one in report["rows"] if one["rating"] != "strong_extra"]
+    strong = sum(one["band"] == "strong" for one in pack)
+    assert plain["band"]["extra_strong"] == 1.0
+    assert plain["band"]["agent"] == pytest.approx(strong / len(pack))  # смесь с «сильными» дала бы больше
+    assert luna["passed"] is False and report["decision"]["model"] is None
+    # Ступень эксперта против ступени модели: все ответы — «сильный», точность «кандидатов» — доля сильных эксперта.
+    bands = luna["scores"]["bands"]
+    assert {band: counts.get("strong", 0) for band, counts in bands["matrix"].items()} == {
+        band: sum(one["band"] == band for one in pack) * 3 for band in ("strong", "useful", "watch", "weak")}
+    assert bands["strong_precision"] == pytest.approx(strong / len(pack)) and bands["strong_recall"] == 1.0
