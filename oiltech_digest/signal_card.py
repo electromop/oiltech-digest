@@ -124,17 +124,22 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации с сутью и категорией, справочники, имена 13 тематик и
     у каждой публикации — темы-кандидаты по ключам (#132)."""
     tags = repository.list_enabled_tags()
-    signals = []
-    for row in signal_card_store.card_inputs(job_payload.get("signal_ids") or []):
-        publication = _publication(row)
-        text = " ".join([publication["title"], publication["summary"], publication["text"]])
-        signals.append({**{key: value for key, value in publication.items() if key != "received"},
-                        "published": publication["published"].isoformat() if publication["published"] else None,
-                        "theme_candidates": signal_themes.candidates(text, tags)})
+    rows = signal_card_store.card_inputs(job_payload.get("signal_ids") or [])
     return {
         "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
-        "dictionaries": load_dictionaries(), "themes": signal_themes.names(tags), "signals": signals,
+        "dictionaries": load_dictionaries(), "themes": signal_themes.names(tags),
+        "signals": [payload_signal(row, tags) for row in rows],
     }
+
+
+def payload_signal(row: dict[str, Any], tags: list[dict[str, Any]]) -> dict[str, Any]:
+    """Сигнал во входе модели (строка card_inputs → пакет воркера): главная публикация, как её видит модель, и
+    темы-кандидаты по ключам. Той же функцией вход строит экзамен (#133): мерится тот же вход."""
+    publication = _publication(row)
+    text = " ".join([publication["title"], publication["summary"], publication["text"]])
+    return {**{key: value for key, value in publication.items() if key != "received"},
+            "published": publication["published"].isoformat() if publication["published"] else None,
+            "theme_candidates": signal_themes.candidates(text, tags)}
 
 
 def _publication(row: dict[str, Any]) -> dict[str, Any]:
@@ -252,9 +257,15 @@ def _answer_schema(dictionaries: dict[str, Any], themes: list[str]) -> dict[str,
     }}
 
 
+def request(item: dict[str, Any], dictionaries: dict[str, Any], themes: list[str]) -> tuple[str, str]:
+    """Запрос модели — инструкция со справочниками и вход сигнала: по нему оценка цены до вызова и отпечаток входа
+    экзамена (#133)."""
+    return _instructions(dictionaries, themes), _model_input(item)
+
+
 def request_chars(item: dict[str, Any], dictionaries: dict[str, Any], themes: list[str]) -> int:
     """Длина запроса модели в знаках — инструкция со справочниками и вход сигнала: для оценки цены до вызова."""
-    return len(_instructions(dictionaries, themes)) + len(_model_input(item))
+    return sum(map(len, request(item, dictionaries, themes)))
 
 
 def _model_input(item: dict[str, Any]) -> str:
