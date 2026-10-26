@@ -4,7 +4,8 @@
 Рядом с каждым атрибутом — результат константы: самое частое значение эксперта на тех же строках, для
 даты события — дата публикации. Пороги спеки (#93, поправки 18.10): компании — точность ≥ 90% и
 полнота ≥ 80% по упоминаниям; регион ≥ 85%; тип события, класс технологии, зрелость ≥ 75%; дата
-события — ошибок не больше, чем у константы; выдуманных компаний и дат — 0. Связь с нефтесервисом с #132
+события — ошибок не больше, чем у константы (дата с точностью до месяца или года верна, если дата эксперта в этом
+периоде); выдуманных компаний и дат — 0. Связь с нефтесервисом с #132
 ставит «Отбор»: метрики и порога по ней у экзамена карточки нет.
 
 Два вида отчёта: строго — по меткам эксперта; с допусками — в ячейке из списка допусков засчитывается и
@@ -19,7 +20,7 @@ from datetime import date, timedelta
 import re
 from typing import Any
 
-from oiltech_digest.event_dates import DAY, FROM_TEXT
+from oiltech_digest.event_dates import DAY, FROM_TEXT, period_end
 from oiltech_digest.word_forms import Companies, named_among, words
 
 THRESHOLDS = {"companies_precision": 0.90, "companies_recall": 0.80, "region": 0.85, "event_type": 0.75,
@@ -118,9 +119,22 @@ def _mean(values: list[float | None]) -> float | None:
     return sum(known) / len(known) if known else None
 
 
+def _date_right(final: Mapping[str, Any] | None, allowed: list[Any]) -> bool:
+    """Дата карточки верна: день из разметки или допусков; дата с точностью до месяца или года (#132) — если дата
+    эксперта в этом периоде (решение владельца 26.10): так период понимает и ядро (event_dates.period_end)."""
+    day = _card_value(final, "event_date")
+    if day in allowed:
+        return True
+    precision = (final or {}).get("event_date_precision") or DAY
+    if precision == DAY or not isinstance(day, date):
+        return False
+    end = period_end(day, precision)
+    return any(isinstance(one, date) and day <= one <= end for one in allowed)
+
+
 def _event_date(items, finals, lenient) -> dict[str, Any]:
     """Дата события: доля ошибок агента против доли ошибок ответа «всегда дата публикации»."""
-    errors = sum(_card_value(final, "event_date") not in _allowed(item, "event_date", lenient)
+    errors = sum(not _date_right(final, _allowed(item, "event_date", lenient))
                  for item in items for final in finals[item["id"]])
     total = sum(len(finals[item["id"]]) for item in items)
     constant = sum(item["published"] not in _allowed(item, "event_date", lenient) for item in items)
