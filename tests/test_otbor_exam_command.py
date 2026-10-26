@@ -241,3 +241,17 @@ def test_all_models_give_the_full_table_and_a_deprecated_model_is_measured_but_n
     assert "устаревшие" in report["decision"]["reason"]
     text = sorted(markup.parent.glob("otbor_exam_report_*.md"))[-1].read_text(encoding="utf-8")
     assert "gpt-5.4-nano (устаревшая)" in text
+
+
+def test_parallel_calls_give_the_same_answers_and_scores(exam_pack, monkeypatch):
+    markup = exam_pack["markup"]
+    _, alone = run_exam(monkeypatch, markup, {LUNA: oracle(exam_pack)})
+    model, parallel = run_exam(monkeypatch, markup, {LUNA: oracle(exam_pack)}, "--workers", "4")
+
+    # Вызовы делятся между потоками, а ответы ложатся по строкам, как при одном потоке: счёт тот же.
+    assert len(model.calls) == len(parallel["split"]["exam"]) * 3
+    assert [(one["run"], one["id"]) for one in parallel["models"][0]["answers"]] == [
+        (one["run"], one["id"]) for one in alone["models"][0]["answers"]]
+    assert parallel["models"][0]["scores"] == alone["models"][0]["scores"]
+    with pytest.raises(SystemExit, match="--workers"):
+        cli.main(["otbor-exam", "--markup", str(markup), "--workers", "0", "--dry-run"])

@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -58,8 +59,9 @@ class ExamError(ValueError):
 
 
 def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
-        runs: int = RUNS, part: str = "exam", every: bool = False) -> dict[str, Any]:
-    """Экзамен по лестнице моделей (every — все модели, полная таблица): отчёт и решение — рядом с манифестом."""
+        runs: int = RUNS, part: str = "exam", every: bool = False, workers: int = 1) -> dict[str, Any]:
+    """Экзамен по лестнице моделей (every — все модели, полная таблица; workers — параллельных вызовов модели):
+    отчёт и решение — рядом с манифестом."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     if not exam["approved"]:
@@ -71,7 +73,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     dictionaries = load_dictionaries()
     tried: list[dict[str, Any]] = []
     for model in ladder:
-        tried.append(_model_scores(model, _answers(model, items, runs, dictionaries), items, dictionaries,
+        tried.append(_model_scores(model, _answers(model, items, runs, dictionaries, workers), items, dictionaries,
                                    exam["control"]))
         print(f"{model}: " + ("правило и пороги пройдены" if tried[-1]["passed"]
                               else "не прошла: " + ", ".join(tried[-1]["failed"])))
@@ -342,19 +344,20 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
 # --- Прогоны -------------------------------------------------------------------------------------
 
 
-def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
+def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: dict[str, Any],
+             workers: int = 1) -> list[dict[str, Any]]:
     """Ответы воркера «Отбора»: строка на (прогон, публикацию). Технический сбой (модель не ответила) — одна повторная
     попытка, как у шага планировщика; обе попытки оплачены. Ответ не по правилам не повторяется, как на ядре."""
     payload = {"model": model, "reasoning": config.OTBOR_REASONING, "dictionaries": dictionaries,
                "items": [model_item(item) for item in items]}
     answers: list[dict[str, Any]] = []
     for number in range(1, runs + 1):
-        decisions = otbor.process_payload(payload)["decisions"]
+        decisions = _decide_all(payload, workers)
         decisions = [{**decision, "attempts": 1, "model_calls": len(decision["calls"])} for decision in decisions]
         failed = [index for index, decision in enumerate(decisions) if _technical(decision, dictionaries)]
         if failed:
-            retry = otbor.process_payload({**payload, "items": [payload["items"][index] for index in failed]})
-            for index, decision in zip(failed, retry["decisions"]):
+            retry = _decide_all({**payload, "items": [payload["items"][index] for index in failed]}, workers)
+            for index, decision in zip(failed, retry):
                 paid = decisions[index]
                 decisions[index] = {**decision, "attempts": 2,
                                     "model_calls": len(paid["calls"]) + len(decision["calls"]),
@@ -369,6 +372,19 @@ def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: d
         print(f"{model}: прогон {number}/{runs}: публикаций {len(decisions)}, повторов после сбоя {len(failed)}, "
               f"без ответа {failures}")
     return answers
+
+
+def _decide_all(payload: dict[str, Any], workers: int) -> list[dict[str, Any]]:
+    """Ответы воркера на публикации пакета, в порядке публикаций: с workers > 1 публикации делятся на куски, и куски
+    идут параллельно — у каждого свой вызов воркера и свой клиент модели."""
+    items = payload["items"]
+    if workers <= 1 or len(items) <= 1:
+        return otbor.process_payload(payload)["decisions"]
+    size = -(-len(items) // workers)
+    chunks = [items[start:start + size] for start in range(0, len(items), size)]
+    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+        parts = pool.map(lambda chunk: otbor.process_payload({**payload, "items": chunk})["decisions"], chunks)
+        return [decision for part in parts for decision in part]
 
 
 def _technical(decision: dict[str, Any], dictionaries: dict[str, Any]) -> bool:

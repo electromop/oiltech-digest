@@ -2616,6 +2616,8 @@ def cmd_otbor_exam(args: argparse.Namespace) -> None:
     if args.rescore and (args.dry_run or args.models or args.runs is not None or args.part or args.all):
         raise SystemExit("otbor-exam: --rescore берёт модели, прогоны и часть из отчёта, без --dry-run, --models, "
                          "--runs, --part и --all")
+    if args.workers < 1:
+        raise SystemExit(f"otbor-exam: --workers {args.workers}: параллельных вызовов модели от одного")
     models = tuple(model.strip() for model in (args.models or "").split(",") if model.strip()) or otbor_exam.MODELS
     runs = otbor_exam.RUNS if args.runs is None else args.runs
     options = {"manifest_path": args.manifest, "models": models, "runs": runs, "part": args.part or "exam"}
@@ -2625,7 +2627,7 @@ def cmd_otbor_exam(args: argparse.Namespace) -> None:
         elif args.dry_run:
             plan = otbor_exam.plan(args.markup, **options)
         else:
-            result = otbor_exam.run(args.markup, **options, every=args.all)
+            result = otbor_exam.run(args.markup, **options, every=args.all, workers=args.workers)
     except (otbor_exam.ExamError, OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"otbor-exam: {exc}") from exc
     if args.rescore or not args.dry_run:
@@ -3833,6 +3835,8 @@ def build_parser() -> argparse.ArgumentParser:
                               help="часть набора: экзамен или настройка (по ней и только по ней правят инструкцию)")
     p_otbor_exam.add_argument("--all", action="store_true",
                               help="прогнать все модели лестницы, и после прошедшей: полная таблица качества и цены")
+    p_otbor_exam.add_argument("--workers", type=int, default=1,
+                              help="параллельных вызовов модели (по умолчанию 1); ответы и счёт те же")
     p_otbor_exam.set_defaults(func=cmd_otbor_exam)
 
     p_otbor_exam_control = sub.add_parser(
