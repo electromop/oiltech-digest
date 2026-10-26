@@ -424,6 +424,20 @@ def test_date_source_is_not_scored_where_the_event_date_is_the_publication_date(
     assert metrics["event_date"]["constant_errors"] == 31
 
 
+def test_a_date_known_to_the_year_or_month_is_right_when_the_expert_date_falls_in_it(tmp_path, monkeypatch, strata):
+    # Дня в тексте нет — «Карточка» пишет только год или месяц (#132), ядро понимает такую дату как период. Экзамен
+    # считает её верной, если дата эксперта (24.09.2026) в этом периоде (решение владельца 26.10).
+    markup = write_pack(tmp_path, pack_rows())
+    agent = by_stratum(strata, business=answer(event_date="2026"), technology=answer(event_date="2026-09"),
+                       noise=answer(event_date="2025"))
+
+    _, report = run_exam(monkeypatch, markup, {NANO: agent})
+
+    metrics = report["models"][0]["strict"]["overall"]
+    assert metrics["event_date"]["errors"] == 4 * 3  # только шумные: 2025 год, дата эксперта не в нём
+    assert metrics["invented_dates"]["agent"] == 0
+
+
 def test_readable_report_lies_next_to_the_manifest_in_two_views(tmp_path, monkeypatch, strata, capsys):
     markup = write_pack(tmp_path, pack_rows(noise={"Связь с нефтесервисом": "нет связи"}))
 
