@@ -24,7 +24,7 @@ from functools import partial
 from typing import Any, Callable
 
 from oiltech_digest import config, contract
-from oiltech_digest.db import otbor_store, repository
+from oiltech_digest.db import otbor_inputs, otbor_store, repository
 from oiltech_digest.otbor_answer import NO_REASON, answer_problem, answer_schema, conflicts, outcome, technical_failure
 from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.external_ai import StopRequested
@@ -110,8 +110,8 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
         "dictionaries": load_dictionaries(),
-        "items": [*(_item(row) for row in otbor_store.article_inputs(job_payload.get("article_ids") or [])),
-                  *(_signal_item(row) for row in otbor_store.signal_inputs(job_payload.get("signal_ids") or []))],
+        "items": [*(_item(row) for row in otbor_inputs.article_inputs(job_payload.get("article_ids") or [])),
+                  *(_signal_item(row) for row in otbor_inputs.signal_inputs(job_payload.get("signal_ids") or []))],
     }
 
 
@@ -293,7 +293,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
         {contract.article_ref(value) for value in article_ids or []}
         | {contract.signal_ref(value) for value in signal_ids or []})
     otbor_store.record_usage(job_id, [usage for decision in decisions if (usage := _usage(decision, expected))])
-    links = otbor_store.links_in_input([signal_id for decision in decisions
+    links = otbor_inputs.links_in_input([signal_id for decision in decisions
                                         if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
     stale = result.get("dictionaries_version") != dictionaries.get("version")
     recipe = {"agent": KIND, "prompt_version": str(result.get("prompt_version") or "")[:50] or None,

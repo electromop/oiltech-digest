@@ -84,11 +84,15 @@ def maturity_range(rubric: dict[str, Any], scale: list[dict[str, Any]], stage: s
 
 def final_score(item: dict[str, Any], *, keywords: bool) -> float | None:
     """Балл критерия в итоге: с подмешиванием ключевых слов — как у статей ленты (pipeline.normalize_score_payload:
-    ключи добавляют вес, только когда совпадений много), без — балл модели или кода как есть."""
+    ключи добавляют вес, только когда совпадений много), без — балл модели или кода как есть. bounds — ступень, из
+    которой балл не выходит и с ключевыми словами («Зрелость» в ступени стадии карточки)."""
     score, keyword = item["ai_score"], item.get("keyword_score")
     if score is None or not keywords or keyword is None:
         return score
-    return round(max(score, keyword * SCORE_KEYWORD_WEIGHT + score * SCORE_AI_WEIGHT), 2)
+    blended = max(score, keyword * SCORE_KEYWORD_WEIGHT + score * SCORE_AI_WEIGHT)
+    if item.get("bounds"):
+        blended = min(max(blended, item["bounds"][0]), item["bounds"][1])
+    return round(blended, 2)
 
 
 def totals(items: list[dict[str, Any]]) -> dict[str, float | None]:
@@ -108,9 +112,19 @@ def chosen(found: dict[str, float | None]) -> float | None:
     return found["keywords" if config.SIGNAL_SCORES_KEYWORDS else "plain"]
 
 
+def bands_problem(bands: tuple[int, ...]) -> str | None:
+    """Чем границы ступеней итога не годятся; None, если годятся: три границы (сильный, полезный, наблюдать) от 0 до
+    100 по убыванию."""
+    if len(bands) != 3 or not 100 >= bands[0] > bands[1] > bands[2] >= 0:
+        return (f"{','.join(map(str, bands))}: нужны три границы от 0 до 100 по убыванию (сильный, полезный, "
+                "наблюдать)")
+    return None
+
+
 def band(score: float | None) -> str | None:
-    """Ступень итога по границам настройки SIGNAL_SCORE_BANDS (сильный, полезный, наблюдать; ниже — слабый)."""
+    """Ступень итога по границам настройки SIGNAL_SCORE_BANDS (сильный, полезный, наблюдать; ниже — слабый). Границы
+    проверяет постановка этапа (bands_problem)."""
     if score is None:
         return None
-    strong, useful, watch = config.SIGNAL_SCORE_BANDS[:3]
+    strong, useful, watch = config.SIGNAL_SCORE_BANDS
     return STRONG if score >= strong else USEFUL if score >= useful else WATCH if score >= watch else WEAK

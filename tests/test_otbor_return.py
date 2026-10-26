@@ -4,6 +4,8 @@
 """
 
 from oiltech_digest import cli, otbor
+from oiltech_digest.db import repository
+from oiltech_digest.otbor_pack_format import load_dictionaries
 from tests.card_pipeline_support import (accepted, answer, card_answer, even, fill_cards, pipeline, process_feed,  # noqa: F401
                                          run_scores, scores)
 from tests.otbor_support import OtborModel, api_request, api_send, reject, showcase
@@ -67,6 +69,25 @@ def test_returned_publication_goes_through_the_rest_of_the_pipeline_marked_dispu
     assert card["decision_log"][-1]["text"].startswith("Решение человека: не изменено")
 
 
+def test_publication_returned_days_after_the_refusal_still_goes_through_the_pipeline(user, admin, pipeline,
+                                                                                      monkeypatch):
+    # Шаги конвейера берут сигнал по окну дней: отсчёт — от того, как публикация пошла дальше «Отбора» (его решение
+    # или человека), а не от заведения сигнала: отказ мог быть неделю назад.
+    _, signal_id, _ = _rejected(monkeypatch, admin)
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET created_at = now() - interval '10 days' WHERE id = %s", (signal_id,))
+        conn.commit()
+
+    assert _return(admin, signal_id).status_code == 200
+    process_feed()
+    fill_cards(monkeypatch, {SALES: card_answer()})
+    run_scores(monkeypatch, {SALES: scores(even("business", 70))})
+
+    card = showcase(user)[SALES]
+    assert card["card_recipe"] is not None and card["scores_recipe"] is not None
+    assert card["score_band"] == "useful"
+
+
 def test_return_form_takes_only_the_otbor_fields_by_its_rules_and_only_for_rejected(user, admin, pipeline,
                                                                                    monkeypatch):
     _, signal_id, _ = _rejected(monkeypatch, admin)
@@ -87,6 +108,12 @@ def test_return_form_takes_only_the_otbor_fields_by_its_rules_and_only_for_rejec
     assert _return(admin, accepted_id).status_code == 409
     assert _return(user, signal_id).status_code == 403
     assert showcase(user).keys() == {"Программа бурения"}
+    # Что вписывать, экран берёт у сервера — по справочнику «Отбора»; связь — только прямая и переносимая.
+    choices = api_get("/api/signals/dictionaries", user)["otbor_return"]
+    dictionaries = load_dictionaries()
+    assert [one["code"] for one in choices["industry"]] == [value["code"] for value in dictionaries["industry"]["values"]]
+    assert [one["code"] for one in choices["oilfield_relevance"]] == ["direct", "transferable"]
+    assert [one["code"] for one in choices["category"]] == [value["code"] for value in dictionaries["category"]["values"]]
 
 
 def test_returned_publication_goes_to_the_showcase_of_the_human_category(user, admin, pipeline, monkeypatch):

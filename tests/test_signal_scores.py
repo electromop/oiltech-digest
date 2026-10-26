@@ -93,6 +93,20 @@ def test_scores_follow_the_profile_of_the_category_with_only_the_agreed_input(us
     assert len(steps) == 1 and "полезный" in steps[0]["text"]
 
 
+def test_model_gets_the_ruler_of_a_criterion_not_its_screen_description(user, pipeline, monkeypatch):
+    # Описание критерия на экране «Скоринг» — черновик заказчика: у «Достоверности» там «свежесть события», а линейка
+    # (утверждённая правка эксперта) возраст оценивать запрещает. Модель получает линейку.
+    accepted(monkeypatch, {CONTRACT: answer()}, {CONTRACT: CONTRACT_TEXT})
+    fill_cards(monkeypatch, {CONTRACT: card_answer()})
+
+    model = run_scores(monkeypatch, {CONTRACT: scores(even("business", 70))})
+
+    instructions = model.calls[0]["instructions"]
+    assert "свежесть события" not in instructions
+    assert "Возраст события здесь не оценивается" in instructions
+    assert "В «почему такой балл» масштаб и эффект пишутся раздельно" in instructions
+
+
 def test_freshness_is_left_out_without_an_event_date_in_the_text_or_with_a_month_across_bands(
         user, pipeline, monkeypatch):
     _tech(monkeypatch, {
@@ -138,6 +152,35 @@ def test_maturity_score_stays_in_the_band_of_the_card_stage(user, pipeline, monk
     cards = showcase(user, "technology")
     assert {title: _items(cards[title])[MATURITY]["ai_score"] for title in cards} == {
         "Прототип": 64, "Запуск без заказчика": 64, "Внедрение у заказчика": 80, "Без стадии": 30}
+
+
+def test_keywords_do_not_lift_maturity_above_the_band_of_the_card_stage(user, pipeline, monkeypatch):
+    # Ключевые слова подмешиваются в балл критерия (вариант экзамена), но «Зрелость» остаётся в ступени стадии.
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE scoring_criteria SET keywords_json = '[\"цифровой\", \"двойник\", \"бурения\"]'::jsonb "
+                     "WHERE profile = 'tech_radar' AND name = %s", (MATURITY,))
+        conn.commit()
+    _tech(monkeypatch, {"Прототип": card_answer(maturity="прототип")})
+
+    run_scores(monkeypatch, {"Прототип": scores(even("tech_radar", 64), named_customer=False)})
+
+    maturity = _items(showcase(user, "technology")["Прототип"])[MATURITY]
+    assert maturity["keyword_score"] > 64 and maturity["final_score"] == 64
+
+
+def test_signal_without_scores_shows_no_score_rather_than_zero(user, admin, pipeline, monkeypatch):
+    accepted(monkeypatch, {CONTRACT: answer(), "Интервью": answer(category="other")},
+             {CONTRACT: CONTRACT_TEXT, "Интервью": "Интервью о подготовке буровых кадров."})
+
+    # Второй вызов ещё не прошёл, «другое» не оценивается вовсе: балла нет, а не «0» и «Низкая».
+    card = showcase(user)[CONTRACT]
+    [other] = api_get("/api/signals", admin, section="other")
+    assert (card["unscored"], card["score_label"]) == (True, None)
+    assert (other["unscored"], other["score_label"]) == (True, None)
+    fill_cards(monkeypatch, {CONTRACT: card_answer()})
+    run_scores(monkeypatch, {CONTRACT: scores(even("business", 70))})
+    card = showcase(user)[CONTRACT]
+    assert (card["unscored"], card["score_label"]) == (False, "Полезный")
 
 
 def test_band_and_platform_decision_are_counted_by_code_and_other_gets_neither(user, admin, pipeline, monkeypatch):
@@ -265,10 +308,22 @@ def test_scores_model_is_an_explicit_setting_and_its_spend_has_its_own_name(user
     assert monthly["signal_scores"] == f"{SCORES_MODEL}-2026-03-17"
 
 
+def test_wrong_score_bands_stop_the_step_before_a_paid_call(user, admin, pipeline, monkeypatch):
+    # Порядок перепутан или границ не три: ступени исказились бы или запись упала бы после оплаченного вызова.
+    accepted(monkeypatch, {CONTRACT: answer()}, {CONTRACT: CONTRACT_TEXT})
+    fill_cards(monkeypatch, {CONTRACT: card_answer()})
+    for bands in [(65, 80, 40), (80, 65)]:
+        monkeypatch.setattr(api.config, "SIGNAL_SCORE_BANDS", bands)
+        with pytest.raises(SystemExit, match="SIGNAL_SCORE_BANDS"):
+            cli.main(["enqueue-signal-scores"])
+
+    assert api_get("/api/jobs", admin, kind="signal_scores") == []
+
+
 def test_answer_off_the_rules_is_not_written_and_the_batch_goes_on(user, admin, pipeline, monkeypatch):
     titles = {"Без критерия": CONTRACT_TEXT, "Дважды": CONTRACT_TEXT + " Вторая фаза.",
               "Не число": CONTRACT_TEXT + " Третья фаза.", "Модель молчит": CONTRACT_TEXT + " Четвёртая фаза.",
-              "Как надо": CONTRACT_TEXT + " Пятая фаза."}
+              "Дробный": CONTRACT_TEXT + " Шестая фаза.", "Как надо": CONTRACT_TEXT + " Пятая фаза."}
     accepted(monkeypatch, {title: answer() for title in titles}, titles)
     fill_cards(monkeypatch, {title: card_answer() for title in titles})
     names = profile_names("business")
@@ -278,17 +333,56 @@ def test_answer_off_the_rules_is_not_written_and_the_batch_goes_on(user, admin, 
         "Дважды": {"scores": [{"criterion": names[0], "score": 70, "why": "x"}] * 2
                    + [{"criterion": name, "score": 70, "why": "x"} for name in names[1:]]},
         "Не число": scores({**even("business", 70), names[0]: "много"}),
+        # Схема просит целое: дробное — не по правилам.
+        "Дробный": scores({**even("business", 70), names[0]: 70.5}),
         "Модель молчит": AIClientError("timeout"),
         "Как надо": scores(even("business", 70)),
     })
 
     cards = showcase(user)
     assert {title: cards[title]["scores_recipe"] is not None for title in titles} == {
-        "Без критерия": False, "Дважды": False, "Не число": False, "Модель молчит": False, "Как надо": True}
+        "Без критерия": False, "Дважды": False, "Не число": False, "Модель молчит": False, "Дробный": False,
+        "Как надо": True}
     [job] = api_get("/api/jobs", admin, kind="signal_scores")
     errors = {error["signal_id"]: error["error"] for error in api_get(f"/api/jobs/{job['id']}", admin)["result"][
         "applied"]["errors"]}
-    assert len(errors) == 4
+    assert len(errors) == 5
+
+
+def test_criteria_edited_after_the_job_was_issued_are_not_written_over_but_weights_are(user, admin, pipeline,
+                                                                                         monkeypatch):
+    """Критерий поправили на экране «Скоринг», пока воркер ждал модель: она оценивала прежний, баллы не пишутся и
+    приходят со следующей задачей. Правка одних весов запись не держит: итог по нынешним весам, они и в снимке."""
+    accepted(monkeypatch, {CONTRACT: answer()}, {CONTRACT: CONTRACT_TEXT})
+    fill_cards(monkeypatch, {CONTRACT: card_answer()})
+
+    def edited(change):
+        def reply(schema):
+            criteria = api_get("/api/scoring-criteria", admin, profile="business")
+            change(criteria)
+            api_send("PUT", "/api/scoring-criteria?profile=business", admin, criteria)
+            return scores(even("business", 70))
+        return reply
+
+    def describe(criteria):
+        criteria[0]["description"] = f"{criteria[0]['description'] or ''} Уточнено."
+
+    def reweigh(criteria):
+        criteria[0]["weight"], criteria[1]["weight"] = criteria[0]["weight"] + 5, criteria[1]["weight"] - 5
+
+    run_scores(monkeypatch, {CONTRACT: edited(describe)})
+
+    assert showcase(user)[CONTRACT]["scores_recipe"] is None
+    [job] = api_get("/api/jobs", admin, kind="signal_scores")
+    [error] = api_get(f"/api/jobs/{job['id']}", admin)["result"]["applied"]["errors"]
+    assert error["error"].startswith("критерии профиля сменились после выдачи задачи")
+
+    run_scores(monkeypatch, {CONTRACT: edited(reweigh)})
+
+    card = showcase(user)[CONTRACT]
+    weights = {row["name"]: row["weight"] for row in api_get("/api/scoring-criteria", admin, profile="business")}
+    assert card["scores_recipe"] is not None
+    assert {name: item["weight"] for name, item in _items(card).items()} == weights
 
 
 def test_old_worker_build_does_not_get_the_scores_job(user, admin, pipeline, monkeypatch):

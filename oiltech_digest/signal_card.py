@@ -11,7 +11,7 @@
 кандидата по ключам — signal_themes), дата события с точностью (день, месяц или год). Связь с нефтесервисом и
 применение ставит «Отбор», смешанность — тоже не «Карточка». На входе суть и категория, решения, причины и
 обоснования «Отбора» нет. Дата события из текста старше OTBOR_OLD_EVENT_DAYS у принятой «Отбором» публикации
-возвращает её в «Отбор» с этим фактом, один раз. Баллы — второй вызов (signal_scores).
+возвращает её в «Отбор» с этим фактом, один раз (card_return). Баллы — второй вызов (signal_scores).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any, Callable
 
-from oiltech_digest import config, event_dates, signal_themes, word_forms
+from oiltech_digest import card_return, config, event_dates, signal_themes, word_forms
 from oiltech_digest.db import repository, signal_card_store
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
@@ -31,8 +31,6 @@ KIND = signal_card_store.KIND
 # Версия инструкции — в рецепте карточки: другая инструкция — другие карточки.
 PROMPT_VERSION = "2026-10-25.1"
 _OUTPUT_TOKENS = 1200
-# Источник даты события — значения справочника date_source, по ним код решает, откуда дата (event_dates).
-FROM_TEXT, BY_PUBLICATION = event_dates.FROM_TEXT, event_dates.BY_PUBLICATION
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source")
 # Правила из комментариев эксперта к разметке (решение 29 журнала гриля, 23.10) — в инструкции обоих вызовов
@@ -295,7 +293,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         return {"applied": 0, "errors": [{"signal_id": _signal_id(card), "error": stale} for card in cards]}
     applied = 0
     errors: list[dict[str, Any]] = []
-    returned: list[tuple[str, int]] = []
+    returned: list[str] = []
     for card in cards:
         signal_id = _signal_id(card)
         problem = _publication_problem(card, signal_id, expected, publications)
@@ -312,36 +310,11 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         }
         if signal_card_store.write_card(signal_id, values, recipe=recipe):
             applied += 1
-            if (back := _return_old_event(signal_id, values, publications[signal_id])) is not None:
+            if (back := card_return.old_event(signal_id, values, publications[signal_id])) is not None:
                 returned.append(back)
     if returned:
-        _enqueue_returned(returned)
+        card_return.enqueue(returned)
     return {"applied": applied, "errors": errors, "returned_to_otbor": len(returned)}
-
-
-# --- Возврат в «Отбор» (#132) --------------------------------------------------------------------
-
-
-def _return_old_event(signal_id: int, values: dict[str, Any], publication: dict[str, Any]) -> tuple[str, int] | None:
-    """Вернуть принятую «Отбором» публикацию в «Отбор», если «Карточка» нашла в тексте старое событие: решение
-    снимается, факт ложится во вход «Отбора». Один раз; решение человека и выбор «в дайджест» не трогаются
-    (signal_card_store.return_to_otbor). Без «Отбора» (флаг, модель) возврат не делается: решать было бы некому."""
-    fact = event_dates.old_event_fact(values, publication["published"], publication["received"],
-                                      config.OTBOR_OLD_EVENT_DAYS)
-    if fact is None or not (config.OTBOR_ENABLED and config.OTBOR_MODEL):
-        return None
-    step = {"stage": "«Карточка»",
-            "text": f"Старое событие: {fact}, старше {config.OTBOR_OLD_EVENT_DAYS} дней: возврат в «Отбор»"}
-    return signal_card_store.return_to_otbor(signal_id, fact, log=[step])
-
-
-def _enqueue_returned(returned: list[tuple[str, int]]) -> None:
-    """Задачи «Отбора» о возвращённых публикациях — сразу, по полосе пересчётов: окно шага планировщика старую статью
-    уже не берёт."""
-    from oiltech_digest import otbor
-
-    otbor.enqueue([ref for kind, ref in returned if kind == "article"],
-                  signal_ids=[ref for kind, ref in returned if kind == "signal"], trigger="card_return", bulk=True)
 
 
 def _in_job(signal_id: int | None, expected: set[str] | None) -> bool:

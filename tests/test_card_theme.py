@@ -19,13 +19,6 @@ CONTRACT_TEXT = ("Weatherford получила контракт на бурен�
                  "2026 года, бурение начнётся в 2027 году.")
 
 
-def _signal(title):
-    with repository.get_connection() as conn:
-        row = conn.execute("SELECT * FROM signals WHERE title = %s", (title,)).fetchone()
-        names = [column.name for column in conn.execute("SELECT * FROM signals LIMIT 0").description]
-    return dict(zip(names, row))
-
-
 def test_card_gets_the_summary_and_category_but_nothing_of_otbor_and_sets_the_theme(user, pipeline, monkeypatch):
     accepted(monkeypatch, {CONTRACT: answer(industry="oilfield_services")}, {CONTRACT: CONTRACT_TEXT})
     summary = showcase(user)[CONTRACT]["summary"]
@@ -59,7 +52,7 @@ def test_theme_is_set_only_after_otbor_and_only_from_the_list(user, pipeline, mo
              {"Цифровой двойник бурения": "Цифровой двойник ведёт бурение скважин на шельфе."})
     # Сигнал прежней цепочки (гейт ленты): его тему ставил тег статьи, «Карточка» её не меняет.
     feed_signal("Контракт до «Отбора»", "SLB подписала контракт на бурение.")
-    before = _signal("Контракт до «Отбора»")["theme"]
+    before = showcase(user)["Контракт до «Отбора»"]["theme"]
 
     fill_cards(monkeypatch, {"Цифровой двойник бурения": card_answer(theme="Космос"),
                              "Контракт до «Отбора»": card_answer(theme=MARKET)})
@@ -67,7 +60,7 @@ def test_theme_is_set_only_after_otbor_and_only_from_the_list(user, pipeline, mo
     twin = showcase(user, "technology")["Цифровой двойник бурения"]
     # Тема не из списка — не тема: остаётся прежняя, поле не помечено как заполненное агентом.
     assert twin["theme"] != "Космос" and "theme" not in twin["card_set_by"]
-    legacy = _signal("Контракт до «Отбора»")
+    legacy = showcase(user)["Контракт до «Отбора»"]
     assert legacy["theme"] == before and "theme" not in (legacy["card_set_by"] or {})
 
 

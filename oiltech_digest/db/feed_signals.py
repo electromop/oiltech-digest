@@ -19,7 +19,7 @@ import logging
 
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection
-from oiltech_digest.db.repository import (SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED, platform_decision_sql,
+from oiltech_digest.db.repository import (SIGNAL_ORIGIN_FEED, SYSTEM_TAG_UNCLASSIFIED, refresh_platform_decisions,
                                           signal_publication_count_sql)
 
 logger = logging.getLogger(__name__)
@@ -203,17 +203,9 @@ FROM (
 WHERE s.id = n.id AND s.evidence_count <> n.count
 """
 
-def _refresh_decisions_sql() -> str:
-    """Перепечатка — новая публикация события главной статьи («Дедуп» ленты): «Решение платформы» сигнала после
-    «Отбора» пересчитывается (#132; «подтверждено» — с третьей публикацией сильного сигнала). Выражение — при вызове:
-    в нём число из настройки."""
-    return f"""
-UPDATE signals s
-SET maturity = {platform_decision_sql('s')}, updated_at = now()
-FROM feed_scope f
-WHERE s.signal_key = {_key_sql('f.id')} AND s.otbor_decision IS NOT NULL
-  AND s.maturity IS DISTINCT FROM {platform_decision_sql('s')}
-"""
+# Сигналы статей прогона и их перепечаток. Перепечатка — новая публикация события главной статьи («Дедуп» ленты):
+# «Решение платформы» сигнала после «Отбора» пересчитывается (#132; «подтверждено» с третьей публикацией сильного).
+_SCOPE_SIGNALS = f"SELECT s.id FROM signals s JOIN feed_scope f ON s.signal_key = {_key_sql('f.id')}"
 
 
 def sync_feed_signals(
@@ -269,7 +261,7 @@ def sync_feed_signals(
         merged = conn.execute(_MERGE_REPRINTS).rowcount
         publications = conn.execute(_UPSERT_PUBLICATIONS).rowcount
         conn.execute(_REFRESH_COUNTS)
-        conn.execute(_refresh_decisions_sql())
+        refresh_platform_decisions([row[0] for row in conn.execute(_SCOPE_SIGNALS).fetchall()], conn=conn)
         if dry_run:
             conn.rollback()
         else:

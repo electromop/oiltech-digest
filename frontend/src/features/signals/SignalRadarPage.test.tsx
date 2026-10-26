@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSignalFeedback,
+  getSignalDictionaries,
   getSignalSearchHealth,
   getSignalSummary,
   getSignalWeekly,
@@ -1099,8 +1100,19 @@ describe("качество радара на экране (Виктор 29.09)",
     await waitFor(() => expect(toasts).toContain("Отзыв сохранён"));
   });
 
+  // Варианты формы возврата берутся из справочника «Отбора» с сервера: экран своих кодов и подписей не держит.
+  const RETURN_CHOICES = {
+    industry: [{ code: "oil_gas", label: "Нефтегаз" }, { code: "other_industry", label: "Другая отрасль" }],
+    oilfield_relevance: [{ code: "direct", label: "Прямая" }, { code: "transferable", label: "Переносимая" }],
+    category: [{ code: "business", label: "Бизнес" }, { code: "technology", label: "Технология" }],
+  };
+
   it("админ возвращает отклонённое полями «Отбора»; переносимую — только с применением (#132)", async () => {
     serveWithHidden([scored], [], [rejectedCard]);
+    vi.mocked(getSignalDictionaries).mockResolvedValueOnce({
+      event_type: [], region: [], technology_class: [], technology_maturity: [], companies: [],
+      otbor_return: RETURN_CHOICES,
+    });
     vi.mocked(returnSignal).mockResolvedValue({ ok: true });
     const toasts: string[] = [];
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={(text) => toasts.push(text)} isAdmin />);
@@ -1112,6 +1124,7 @@ describe("качество радара на экране (Виктор 29.09)",
 
     fireEvent.click(within(card).getByRole("button", { name: "Вернуть" }));
     const form = within(card).getByRole("form", { name: "Вернуть публикацию" });
+    expect(within(form).getByRole("option", { name: "Другая отрасль" })).toBeInTheDocument();
     fireEvent.change(within(form).getByLabelText("Отрасль"), { target: { value: "other_industry" } });
     fireEvent.change(within(form).getByLabelText("Связь с нефтесервисом"), { target: { value: "transferable" } });
     expect(within(form).getByRole("button", { name: "Вернуть" })).toBeDisabled();
@@ -1126,6 +1139,27 @@ describe("качество радара на экране (Виктор 29.09)",
     }));
     await waitFor(() => expect(toasts).toContain(
       "Публикация возвращена: она пройдёт суть, карточку и баллы с пометкой «спорное»"));
+  });
+
+  it("без справочника «Отбора» кнопки «Вернуть» нет: вариантов формы взять неоткуда (#132)", async () => {
+    serveWithHidden([scored], [], [rejectedCard]);
+    renderRadar(true);
+    await screen.findByText(scored.title_ru as string);
+    fireEvent.click(screen.getByRole("button", { name: "Отклонённые: 1" }));
+    const card = (await screen.findByText("Котировки нефти")).closest("article") as HTMLElement;
+
+    expect(within(card).queryByRole("button", { name: "Вернуть" })).not.toBeInTheDocument();
+  });
+
+  it("после «Отбора» без баллов — «без баллов», а не «0» и «Низкая» (#132)", async () => {
+    serveWithHidden([{ ...scored, title_ru: "Другое без баллов", score: 0, score_band: null, score_label: null,
+      unscored: true }], []);
+    renderRadar(false);
+
+    const card = (await screen.findByText("Другое без баллов")).closest("article") as HTMLElement;
+    expect(within(card).getByText("без баллов")).toBeInTheDocument();
+    expect(within(card).queryByText("0")).not.toBeInTheDocument();
+    expect(within(card).queryByText("Низкая")).not.toBeInTheDocument();
   });
 
   it("после «не тот блок» баллы «пересчитываются»; ступень — подписью балла (#132)", async () => {

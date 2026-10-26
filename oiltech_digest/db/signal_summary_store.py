@@ -1,7 +1,7 @@
 """Хранилище «Суть и перевод» сигналов (#131): что этапу читать у находок и материалов, принятых «Отбором», и как
 писать суть и русский заголовок.
 
-Публикация — та же, что видел «Отбор» (otbor_store.signal_inputs); поля «Отбора» — категория, связь и применение
+Публикация — та же, что видел «Отбор» (otbor_inputs.signal_inputs); поля «Отбора» — категория, связь и применение
 сигнала. Пишется только пустое: суть материала — описание автора, правку человека этап не трогает.
 
 ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в signal_card_store):
@@ -16,7 +16,8 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest.db import connection, otbor_store
+from oiltech_digest.db import connection, otbor_inputs
+from oiltech_digest.db.signal_card_store import PIPELINE_SINCE_SQL
 from oiltech_digest.db.repository import CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN, SIGNAL_SELECTOR_OTBOR
 from oiltech_digest.feed_window import OTBOR_ACCEPT
 
@@ -35,7 +36,7 @@ _ACCEPTED_SQL = (f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_sign
 def summary_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
     """Публикация сигнала (как у «Отбора») и его поля: суть, русский заголовок, кто их поставил, категория, связь и
     применение «Отбора». Только принятые им (_ACCEPTED_SQL)."""
-    rows = otbor_store.signal_inputs(signal_ids)
+    rows = otbor_inputs.signal_inputs(signal_ids)
     if not rows:
         return []
     with connection.get_connection() as conn:
@@ -58,8 +59,8 @@ def missing(row: dict[str, Any]) -> list[str]:
 
 
 def new_signal_ids(*, days: int, limit: int) -> list[int]:
-    """Сигналы для шага планировщика: находки и материалы, принятые «Отбором», без сути или русского заголовка,
-    заведены за `days` дней, не дубли, не в идущей задаче этапа и не исчерпали попыток (DAILY_ATTEMPTS)."""
+    """Сигналы для шага планировщика: находки и материалы, принятые «Отбором» или человеком за `days` дней, без сути
+    или русского заголовка, не дубли, не в идущей задаче этапа и не исчерпали попыток (DAILY_ATTEMPTS)."""
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
@@ -80,7 +81,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
                     AND s.card_set_by->>'summary' IS DISTINCT FROM '{CARD_SET_BY_HUMAN}')
                    OR (COALESCE(btrim(s.title_ru), '') = ''
                        AND s.card_set_by->>'title_ru' IS DISTINCT FROM '{CARD_SET_BY_HUMAN}'))
-              AND s.created_at >= now() - make_interval(days => %(days)s)
+              AND {PIPELINE_SINCE_SQL} >= now() - make_interval(days => %(days)s)
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id
             LIMIT %(limit)s

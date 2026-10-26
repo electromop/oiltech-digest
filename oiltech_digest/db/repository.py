@@ -1240,21 +1240,14 @@ def platform_decision_sql(alias: str = "s") -> str:
     )
 
 
-def refresh_platform_decisions(signal_ids: Sequence[int], *, conn=None) -> None:
+def refresh_platform_decisions(signal_ids: Sequence[int], *, conn) -> None:
     """Пересчитать «Решение платформы» сигналов после «Отбора» (#132): после баллов, решения «Отбора» и когда у события
-    стало больше публикаций. conn — внутри чужой транзакции; без него — своё соединение."""
+    стало больше публикаций. Внутри транзакции того, кто их поменял (conn): решение видно вместе с причиной."""
     ids = sorted({int(value) for value in signal_ids if value is not None})
-    if not ids:
-        return
-    sql = (f"UPDATE signals s SET maturity = {platform_decision_sql('s')}, updated_at = now()"
-           f" WHERE s.id = ANY(%s) AND s.otbor_decision IS NOT NULL AND s.maturity IS DISTINCT FROM"
-           f" {platform_decision_sql('s')}")
-    if conn is not None:
-        conn.execute(sql, (ids,))
-        return
-    with get_connection() as own:
-        own.execute(sql, (ids,))
-        own.commit()
+    if ids:
+        conn.execute(f"UPDATE signals s SET maturity = {platform_decision_sql('s')}, updated_at = now()"
+                     f" WHERE s.id = ANY(%s) AND s.otbor_decision IS NOT NULL AND s.maturity IS DISTINCT FROM"
+                     f" {platform_decision_sql('s')}", (ids,))
 
 
 def refresh_signal_evidence_count(signal_id: int) -> int:

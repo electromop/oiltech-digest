@@ -232,8 +232,9 @@ export type Signal = {
   maturity: "reject" | "watch" | "shortlist" | "proven" | string | null;
   confidence: number;
   score: number;
-  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label) — как у бизнес-сигналов.
-  score_label?: string;
+  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label) — как у бизнес-сигналов. У оценённого вторым
+  // вызовом «Карточки» это подпись ступени, без баллов подписи нет (#132).
+  score_label?: string | null;
   why_now: string | null;
   why_not_noise: string | null;
   companies_json: string[] | null;
@@ -315,6 +316,8 @@ export type Signal = {
   // «не тот блок», сколько раз «Карточка» возвращала публикацию в «Отбор» (старое событие).
   score_band?: "strong" | "useful" | "watch" | "weak" | string | null;
   scores_pending?: boolean;
+  // После «Отбора» без баллов: «другое» или второй вызов ещё не прошёл; балл «0» тогда не балл.
+  unscored?: boolean;
   scores_recipe?: Record<string, unknown> | null;
   otbor_returns?: number;
   // Блоки ОС: каждый человек добавляет свой (оценка, причина, комментарий), чужие не перезаписываются;

@@ -242,6 +242,14 @@ function cardMeta(signal: Signal, business: boolean): string {
   return `${signal.theme} · ${links} ${pluralWord(links, one, few, many)}${decision} · `;
 }
 
+// Раскрыть или свернуть карточку, её форму ОС или форму возврата: новый набор номеров без этого или с ним.
+function toggled(current: Set<number>, signalId: number): Set<number> {
+  const next = new Set(current);
+  if (next.has(signalId)) next.delete(signalId);
+  else next.add(signalId);
+  return next;
+}
+
 // Цвет балла — по словесной оценке, как в ленте: число и слово одного цвета.
 function scoreTone(signal: Signal): string {
   return signal.score_label ? ratingClass(signal.score_label) : scoreClass(Number(signal.score || 0));
@@ -557,12 +565,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   }
 
   function toggleReturn(signalId: number) {
-    setReturnOpen((current) => {
-      const next = new Set(current);
-      if (next.has(signalId)) next.delete(signalId);
-      else next.add(signalId);
-      return next;
-    });
+    setReturnOpen((current) => toggled(current, signalId));
   }
 
   // Возврат отклонённого (#132): поля «Отбора» вписывает человек; публикация уходит из «Отклонённых» и пройдёт
@@ -664,21 +667,11 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   }
 
   function toggleExpanded(signalId: number) {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(signalId)) next.delete(signalId);
-      else next.add(signalId);
-      return next;
-    });
+    setExpanded((current) => toggled(current, signalId));
   }
 
   function toggleFeedback(signalId: number) {
-    setFeedbackOpen((current) => {
-      const next = new Set(current);
-      if (next.has(signalId)) next.delete(signalId);
-      else next.add(signalId);
-      return next;
-    });
+    setFeedbackOpen((current) => toggled(current, signalId));
   }
 
   function draftOf(signalId: number): FeedbackDraft {
@@ -1045,6 +1038,12 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                       <div className="miniPill muted" title="Категория сменилась: баллы пересчитываются по её профилю">
                         пересчитываются
                       </div>
+                    ) : signal.unscored ? (
+                      // После «Отбора» без баллов (#132): «другое» не оценивается, у остальных второй вызов «Карточки»
+                      // ещё не прошёл. «0» и «Низкая» здесь солгали бы.
+                      <div className="miniPill muted" title="Баллов нет: «другое» не оценивается, у остальных их ещё считают">
+                        без баллов
+                      </div>
                     ) : (
                       <>
                         <div className={`miniPill ${tone}`} title={scoreTitle(signal, breakdown.length > 0)}>
@@ -1067,7 +1066,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                       </button>
                     ) : null}
                     {/* Отклонённое «Отбором» возвращает человек, вписав его поля (#132): разделы видит только админ. */}
-                    {isAdmin && signal.otbor_decision === "reject" ? (
+                    {isAdmin && signal.otbor_decision === "reject" && dictionaries?.otbor_return ? (
                       <button
                         type="button"
                         className="ghostButton compactButton"
@@ -1080,9 +1079,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                     ) : null}
                   </div>
                 </div>
-                {returnOpen.has(signal.id) ? (
+                {returnOpen.has(signal.id) && dictionaries?.otbor_return ? (
                   <SignalReturnForm
                     signal={signal}
+                    choices={dictionaries.otbor_return}
                     saving={savingThis}
                     onSubmit={(payload) => void returnRejected(signal, payload)}
                     onCancel={() => toggleReturn(signal.id)}

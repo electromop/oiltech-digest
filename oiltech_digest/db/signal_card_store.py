@@ -13,6 +13,7 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from oiltech_digest import contract
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import (_FEED_ARTICLE_SHOWN_SQL, CARD_SET_BY_AGENT, CARD_SET_BY_HUMAN,
                                           SIGNAL_ORIGIN_FEED, SIGNAL_ORIGIN_MATERIAL, radar_origin_sql,
@@ -121,6 +122,9 @@ _PAST_OTBOR_SQL = (
     f"(s.otbor_decision IS DISTINCT FROM '{OTBOR_REJECT}'"
     " AND NOT (s.otbor_decision IS NULL AND (s.otbor_failure IS NOT NULL OR s.selector IS NOT NULL)))"
 )
+# С какого времени сигнал «новый» для шагов конвейера (#132): с принятия «Отбором» или человеком — отказ и возврат
+# могли быть давно; у решённого до «Отбора» — с заведения.
+PIPELINE_SINCE_SQL = "COALESCE(s.accepted_at, s.created_at)"
 # Сигнал после «Отбора» карточку ждёт до сути (#132: на входе «Карточки» суть и категория): её дают обработка ленты
 # (мост «лента → сигнал») и «Суть и перевод». Решённое до «Отбора» — как раньше.
 _READY_SQL = f"({_PAST_OTBOR_SQL} AND (s.otbor_decision IS NULL OR COALESCE(btrim(s.summary), '') <> ''))"
@@ -128,8 +132,8 @@ _RADAR_OR_MATERIAL_SQL = f"({radar_origin_sql('s')} OR s.origin = '{SIGNAL_ORIGI
 
 
 def new_signal_ids(*, days: int, limit: int) -> list[int]:
-    """Сигналы для шага планировщика: заведены за `days` дней, без карточки, не дубли, не в задаче
-    агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS). Дальше «Отбора» — только
+    """Сигналы для шага планировщика: заведены (после «Отбора» — приняты) за `days` дней, без карточки, не дубли,
+    не в задаче агента, которая ещё идёт, и не исчерпали попыток (DAILY_ATTEMPTS). Дальше «Отбора» — только
     принятое (_PAST_OTBOR_SQL)."""
     with connection.get_connection() as conn:
         rows = conn.execute(
@@ -147,7 +151,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             SELECT s.id
             FROM signals s
             WHERE s.card_recipe IS NULL AND s.merged_into_signal_id IS NULL
-              AND s.created_at >= now() - make_interval(days => %(days)s)
+              AND {PIPELINE_SINCE_SQL} >= now() - make_interval(days => %(days)s)
               AND {_READY_SQL}
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id
@@ -228,12 +232,12 @@ def write_card(signal_id: int, values: dict[str, Any], *, recipe: dict[str, Any]
     return True
 
 
-def return_to_otbor(signal_id: int, fact: str, *, log: list[dict[str, str]]) -> tuple[str, int] | None:
+def return_to_otbor(signal_id: int, fact: str, *, log: list[dict[str, str]]) -> str | None:
     """Вернуть публикацию в «Отбор» (#132): «Карточка» нашла в тексте дату события старше срока. Решение снимается,
     факт — во вход «Отбора» (otbor_return_fact), шаг — в «Ход решения». Только у принятой «Отбором» (не человеком),
     один раз (otbor_returns), если дату поставил агент и публикацию не выбрали «в дайджест» (её не прячет ничто).
-    Что ставить «Отбору»: ("article", статья) у сигнала ленты, ("signal", сигнал) у находки и материала; None —
-    возврата нет."""
+    Номер публикации для «Отбора»: статья у сигнала ленты (contract.article_ref), сам сигнал у находки и материала
+    (contract.signal_ref); None — возврата нет."""
     with connection.get_connection() as conn:
         row = conn.execute(
             f"""
@@ -251,7 +255,7 @@ def return_to_otbor(signal_id: int, fact: str, *, log: list[dict[str, str]]) -> 
         conn.commit()
     if row is None:
         return None
-    return ("article", int(row[1])) if row[0] == SIGNAL_ORIGIN_FEED else ("signal", int(signal_id))
+    return contract.article_ref(row[1]) if row[0] == SIGNAL_ORIGIN_FEED else contract.signal_ref(signal_id)
 
 
 def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:

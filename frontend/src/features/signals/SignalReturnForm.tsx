@@ -1,41 +1,36 @@
 import { useState } from "react";
-import type { SignalReturnPayload } from "../../api/signals";
+import type { SignalChoice, SignalReturnChoices, SignalReturnPayload } from "../../api/signals";
 import type { Signal } from "../../api/types";
 
 // Возврат отклонённого (#132, спека #128): человек вписывает то, что ставит «Отбор», — отрасль, связь с
 // нефтесервисом и применение, категорию — и публикация идёт по остатку конвейера с пометкой «спорное: „Отбор“ не
-// взял бы». Вернуть — значит взять: связь прямая или переносимая, у переносимой — применение. Коды — справочника
-// «Отбора»; невозможные пары (переносимая у нефтесервиса, прямая у другой отрасли) отклонит сервер.
-
-const INDUSTRIES = [
-  { value: "oilfield_services", label: "Нефтесервис" },
-  { value: "oil_gas", label: "Нефтегаз" },
-  { value: "other_industry", label: "Другая отрасль" },
-];
-const RELEVANCE = [
-  { value: "direct", label: "Прямая" },
-  { value: "transferable", label: "Переносимая" },
-];
-const CATEGORIES = [
-  { value: "business", label: "Бизнес" },
-  { value: "technology", label: "Технология" },
-  { value: "other", label: "Другое" },
-];
+// взял бы». Коды и подписи — справочника «Отбора» с сервера (/api/signals/dictionaries): экран их не держит. Связь
+// сервер даёт только прямую и переносимую (вернуть — значит взять); невозможные пары отрасли и связи он отклонит.
 
 type Props = {
   signal: Signal;
+  choices: SignalReturnChoices;
   saving: boolean;
   onSubmit: (payload: SignalReturnPayload) => void;
   onCancel: () => void;
 };
 
-export function SignalReturnForm({ signal, saving, onSubmit, onCancel }: Props) {
-  // Начальные значения — что поставил «Отбор»; связи у отклонённого чаще нет, а вернуть без связи нельзя.
-  const [industry, setIndustry] = useState(signal.industry || "oil_gas");
-  const [relevance, setRelevance] = useState(signal.oilfield_relevance === "transferable" ? "transferable" : "direct");
+// Начальное значение — что поставил «Отбор», если оно есть в списке; иначе первое.
+function initial(options: SignalChoice[], value: string | null | undefined): string {
+  return options.some((item) => item.code === value) ? (value as string) : options[0]?.code ?? "";
+}
+
+export function SignalReturnForm({ signal, choices, saving, onSubmit, onCancel }: Props) {
+  const [industry, setIndustry] = useState(initial(choices.industry, signal.industry));
+  const [relevance, setRelevance] = useState(initial(choices.oilfield_relevance, signal.oilfield_relevance));
   const [application, setApplication] = useState(signal.oilfield_application || "");
-  const [category, setCategory] = useState(signal.signal_category || "business");
+  const [category, setCategory] = useState(initial(choices.category, signal.signal_category));
+  // Применение нужно переносимой связи: так проверяет и сервер (таблица конфликтов «Отбора»).
   const needsApplication = relevance === "transferable" && !application.trim();
+
+  function options(list: SignalChoice[]) {
+    return list.map((item) => <option key={item.code} value={item.code}>{item.label}</option>);
+  }
 
   return (
     // Та же разметка, что у формы ОС на карточке: две колонки на десктопе, «Отмена» и «Вернуть» справа.
@@ -60,14 +55,12 @@ export function SignalReturnForm({ signal, saving, onSubmit, onCancel }: Props) 
       <div className="signalFeedbackGrid">
         <label className="field">
           <span>Отрасль</span>
-          <select value={industry} onChange={(event) => setIndustry(event.target.value)}>
-            {INDUSTRIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>
+          <select value={industry} onChange={(event) => setIndustry(event.target.value)}>{options(choices.industry)}</select>
         </label>
         <label className="field">
           <span>Связь с нефтесервисом</span>
           <select value={relevance} onChange={(event) => setRelevance(event.target.value)}>
-            {RELEVANCE.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            {options(choices.oilfield_relevance)}
           </select>
         </label>
         {relevance === "transferable" ? (
@@ -82,9 +75,7 @@ export function SignalReturnForm({ signal, saving, onSubmit, onCancel }: Props) 
         ) : null}
         <label className="field">
           <span>Категория</span>
-          <select value={category} onChange={(event) => setCategory(event.target.value)}>
-            {CATEGORIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>
+          <select value={category} onChange={(event) => setCategory(event.target.value)}>{options(choices.category)}</select>
         </label>
       </div>
       <div className="signalFeedbackActions">

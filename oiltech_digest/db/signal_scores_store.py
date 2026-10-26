@@ -19,7 +19,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from oiltech_digest.db import connection, signal_card_store
-from oiltech_digest.db.repository import CARD_SET_BY_HUMAN, platform_decision_sql
+from oiltech_digest.db.repository import CARD_SET_BY_HUMAN, refresh_platform_decisions
+from oiltech_digest.db.signal_card_store import PIPELINE_SINCE_SQL
 from oiltech_digest.feed_window import OTBOR_ACCEPT
 from oiltech_digest.scoring_profiles import BUSINESS, TECH_RADAR
 
@@ -59,7 +60,7 @@ def score_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
 
 
 def new_signal_ids(*, days: int, limit: int) -> list[int]:
-    """Сигналы для шага планировщика: оцениваемые (_SCORABLE_SQL), без баллов второго вызова и заведённые за `days`
+    """Сигналы для шага планировщика: оцениваемые (_SCORABLE_SQL), без баллов второго вызова и принятые за `days`
     дней, или с баллами, которые «пересчитываются» после «не тот блок», — не в идущей задаче этапа и не исчерпали
     попыток (DAILY_ATTEMPTS)."""
     with connection.get_connection() as conn:
@@ -78,7 +79,7 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
             SELECT s.id
             FROM signals s
             WHERE {_SCORABLE_SQL}
-              AND ((s.scores_recipe IS NULL AND s.created_at >= now() - make_interval(days => %(days)s))
+              AND ((s.scores_recipe IS NULL AND {PIPELINE_SINCE_SQL} >= now() - make_interval(days => %(days)s))
                    OR s.scores_stale_since IS NOT NULL)
               AND NOT EXISTS (SELECT 1 FROM taken t WHERE t.id = s.id)
             ORDER BY s.id
@@ -118,8 +119,7 @@ def write_scores(signal_id: int, values: dict[str, Any], *, category: str, recip
              Json(values["criteria_snapshot"]), values["band"], Json(recipe), Json(log), int(signal_id), category),
         ).fetchone()
         if row is not None:
-            conn.execute(f"UPDATE signals s SET maturity = {platform_decision_sql('s')} WHERE s.id = %s",
-                         (int(signal_id),))
+            refresh_platform_decisions([int(signal_id)], conn=conn)
         conn.commit()
     return row is not None
 

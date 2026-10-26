@@ -1942,13 +1942,17 @@ def list_signals(
         # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте. У сигнала с баллами второго
         # вызова «Карточки» (#132) — его ступень: сильный, полезный, наблюдать, слабый.
         band = row.get("score_band")
+        # Сигнал после «Отбора» без ступени ещё не оценён вторым вызовом или он «другое»: балла у него нет, и «0» с
+        # подписью «Низкая» солгали бы.
+        unscored = row.get("otbor_decision") is not None and band is None
         label = (signal_scoring.BAND_LABELS[band].capitalize() if band in signal_scoring.BAND_LABELS
-                 else score_label(float(row.get("score") or 0)))
+                 else None if unscored else score_label(float(row.get("score") or 0)))
         rows.append(_clean({
             **row,
             "score_label": label,
             # «Не тот блок» (#132): до ответа второго вызова баллы «пересчитываются».
             "scores_pending": row.get("scores_stale_since") is not None,
+            "unscored": unscored,
             "digest_locked": not window.is_open(row["digest_month"]),
             "evidence": evidence.get(int(row["id"]), []),
         }))
@@ -1990,8 +1994,12 @@ def signal_radar_summary(
 
 @app.get("/api/signals/dictionaries")
 def signal_card_dictionaries(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Значения фильтров атрибутов карточки на экранах (#97) — справочники агента «Карточка сигнала»."""
-    return signal_card_filters.screen_dictionaries()
+    """Значения фильтров атрибутов карточки на экранах (#97) — справочники агента «Карточка сигнала»; и что можно
+    вписать, возвращая отклонённое (#132) — по справочнику «Отбора»."""
+    from oiltech_digest.otbor_answer import return_choices
+    from oiltech_digest.otbor_pack_format import load_dictionaries
+
+    return {**signal_card_filters.screen_dictionaries(), "otbor_return": return_choices(load_dictionaries())}
 
 
 def _guard_hidden_radar(filters: dict[str, Any], user: dict[str, Any]) -> None:
@@ -2148,8 +2156,9 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
             signal_title=payload.signal_title, comment=payload.comment.strip(),
             verdict=verdict, reason=(payload.reason or "").strip() or None,
         )
+        moved = _recategorize(payload, user)
         return {"ok": True, "event_id": event_id, "memory_ids": [], "memories": 0,
-                "block": _feedback_block(event_id, payload, user), **_wrong_block(payload, user)}
+                "block": _feedback_block(event_id, payload, user), **moved}
     result = store_signal_feedback(
         {
             "article_id": payload.article_id,
@@ -2167,14 +2176,14 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
         },
         user_id=int(user["id"]),
     )
-    return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user),
-            **_wrong_block(payload, user)}
+    moved = _recategorize(payload, user)
+    return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user), **moved}
 
 
-def _wrong_block(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
+def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
     """«Не тот блок» у сигнала после «Отбора» (#132, спека #128) — не только блок ОС: категория меняется сразу, баллы
     «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора» — как раньше: блок ОС
-    и память судьи. recategorized — новая категория сигнала."""
+    и память судьи. {"recategorized": новая категория} или пусто, если категория не менялась."""
     from oiltech_digest.signal_feedback import _normalize_verdict
 
     if payload.signal_id is None or _normalize_verdict(payload.verdict) != "wrong_block":

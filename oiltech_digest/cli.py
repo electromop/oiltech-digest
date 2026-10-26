@@ -3603,7 +3603,7 @@ def build_parser() -> argparse.ArgumentParser:
              "баллами после «не тот блок» (за флагом OTBOR_ENABLED, модель SIGNAL_SCORES_MODEL)",
     )
     p_enqueue_scores.add_argument("--ids", default="",
-                                  help="повторить для названных сигналов (номера через запятую) — по полосе "
+                                  help="повторить для названных сигналов (номера через запятую) по полосе "
                                        "пересчётов")
     p_enqueue_scores.set_defaults(func=cmd_enqueue_signal_scores)
 

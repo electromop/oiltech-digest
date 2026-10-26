@@ -18,12 +18,13 @@ from typing import Any, Callable
 
 from oiltech_digest import config, event_dates, signal_scoring
 from oiltech_digest.db import repository, signal_scores_store
+from oiltech_digest.otbor_answer import code_label
 from oiltech_digest.otbor_pack_format import load_dictionaries as otbor_dictionaries
 from oiltech_digest.otbor_pack_format import load_rubrics
 from oiltech_digest.processing.external_ai import InvalidJobPayload, StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import keyword_score_for_criterion, make_client
-from oiltech_digest.scoring_profiles import criteria_snapshot
+from oiltech_digest.scoring_profiles import criteria_snapshot, snapshot_texts
 from oiltech_digest.signal_card import EXPERT_RULES
 from oiltech_digest.signal_card_pack import CATEGORY_RU, UNDEFINED, publication_day, publication_text
 
@@ -39,7 +40,7 @@ _SCALE_LABELS = (("strong", "80 и выше"), ("useful", "65-79"), ("watch", "4
 
 
 class ScoresSetupError(ValueError):
-    """Этап нельзя поставить в работу: выключен флаг «Отбора» или не задана модель."""
+    """Этап нельзя поставить в работу: выключен флаг «Отбора», не задана модель или границы ступеней неверны."""
 
 
 # --- Постановка (ядро) ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[
     from oiltech_digest import network_policy
 
     if not config.OTBOR_ENABLED:
-        raise ScoresSetupError("OTBOR_ENABLED выключен: баллы «Карточки» — этап конвейера «Отбора»")
+        raise ScoresSetupError("OTBOR_ENABLED выключен, а баллы «Карточки» идут этапом конвейера «Отбора»")
     model = configured_model()
     route = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
     batch = config.OTBOR_BATCH
@@ -84,8 +85,13 @@ def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[
 
 
 def configured_model() -> str:
+    """Модель этапа. Заодно проверяет границы ступеней: неверные исказили бы ступени или уронили бы запись после
+    оплаченного вызова, поэтому этап с ними в работу не ставится."""
     if not config.SIGNAL_SCORES_MODEL:
         raise ScoresSetupError("SIGNAL_SCORES_MODEL не задан: модель ленты и основного вызова баллы не берут")
+    problem = signal_scoring.bands_problem(config.SIGNAL_SCORE_BANDS)
+    if problem:
+        raise ScoresSetupError(f"SIGNAL_SCORE_BANDS {problem}")
     return config.SIGNAL_SCORES_MODEL
 
 
@@ -113,23 +119,22 @@ def wrong_block(signal_id: int, author: str | None) -> str | None:
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации с полями по договорённости и критерии профилей с
-    линейками (без весов). Сумма весов профиля не 100 — задачу не выдаём: итог исказился бы (ADR 0002, п. 3)."""
+    линейками (без весов). Сумма весов профиля не 100 — задачу не выдаём: итог исказился бы (ADR 0002, п. 3). Снимок
+    критериев (criteria_snapshot) воркер вернёт как есть: по нему ядро при записи узнает, что модель оценивала те же
+    критерии, что стоят сейчас."""
     rubrics = load_rubrics()
     contexts = [context(row) for row in signal_scores_store.score_inputs(job_payload.get("signal_ids") or [])]
-    profiles = {}
+    profiles, snapshots = {}, {}
     for profile in sorted({one["profile"] for one in contexts}):
-        criteria = _criteria(profile)
+        criteria = repository.list_enabled_scoring_criteria(profile)
         total = sum(float(criterion["weight"]) for criterion in criteria)
         if round(total, 6) != 100:
-            raise InvalidJobPayload(f"сумма весов профиля {profile} — {total:g}, а не 100: баллы не считаются")
+            raise InvalidJobPayload(f"сумма весов профиля {profile} равна {total:g}, а не 100: баллы не считаются")
         profiles[profile] = model_criteria(criteria, rubrics, profile)
+        snapshots[profile] = criteria_snapshot(criteria)
     return {"kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
-            "rubrics_version": rubrics["version"], "profiles": profiles,
+            "rubrics_version": rubrics["version"], "profiles": profiles, "criteria_snapshots": snapshots,
             "items": [payload_item(one) for one in contexts]}
-
-
-def _criteria(profile: str) -> list[dict[str, Any]]:
-    return repository.list_enabled_scoring_criteria(profile)
 
 
 def context(row: dict[str, Any]) -> dict[str, Any]:
@@ -154,19 +159,14 @@ def payload_item(item: dict[str, Any]) -> dict[str, Any]:
     """Сигнал во входе модели (context → пакет воркера): подписи вместо кодов, дата события — только из текста (дата
     публикации вместо неё не подставляется). Той же функцией вход строит экзамен (#133): мерится тот же вход."""
     labels = otbor_dictionaries()
-
-    def label(name: str, code: str | None) -> str:
-        values = (labels.get(name) or {}).get("values") or []
-        return next((value["label"] for value in values if value["code"] == code), code or UNDEFINED)
-
     from_text = item["event_date_source"] == event_dates.FROM_TEXT and item["event_date"] is not None
     return {
         "signal_id": item["signal_id"], "publication": item["publication"], "profile": item["profile"],
         "title": item["title"], "text": item["text"], "publisher": item["publisher"], "summary": item["summary"],
         "published": item["published"].isoformat() if item["published"] else None,
         "category": CATEGORY_RU.get(item["category"], UNDEFINED),
-        "industry": label("industry", item["industry"]),
-        "oilfield_relevance": label("oilfield_relevance", item["oilfield_relevance"]),
+        "industry": code_label(labels, "industry", item["industry"]) or UNDEFINED,
+        "oilfield_relevance": code_label(labels, "oilfield_relevance", item["oilfield_relevance"]) or UNDEFINED,
         "oilfield_application": item["oilfield_application"] or "",
         "event_date": event_dates.label(item["event_date"], item["event_date_precision"]) if from_text else None,
         "stage": item["stage"] or UNDEFINED,
@@ -174,15 +174,17 @@ def payload_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def model_criteria(criteria: list[dict[str, Any]], rubrics: dict[str, Any], profile: str) -> list[dict[str, Any]]:
-    """Критерии, которые оценивает модель: имя, описание и линейка (без веса). «Свежести» здесь нет — её считает код;
-    у «Зрелости» — как её ступень задаёт стадия карточки."""
+    """Критерии, которые оценивает модель: имя и линейка (без веса). Описание с экрана «Скоринг» — только у критерия
+    без линейки: у набора заказчика оно черновое и может ей противоречить («Достоверность и актуальность» там с
+    «свежестью события», а линейка возраст оценивать запрещает). «Свежести» здесь нет — её считает код; у «Зрелости» —
+    как её ступень задаёт стадия карточки."""
     by_name = {one["name"]: one for one in rubrics["profiles"][profile]}
     found = []
     for criterion in criteria:
         rubric = by_name.get(criterion["name"]) or {}
         if signal_scoring.computed(rubric):
             continue
-        found.append({"name": criterion["name"], "description": criterion.get("description") or "",
+        found.append({"name": criterion["name"], "description": "" if rubric else criterion.get("description") or "",
                       "note": rubric.get("note") or "", "bands": rubric.get("bands") or {},
                       "stage_bands": rubric.get("stage_bands") if signal_scoring.bounded(rubric) else None})
     return found
@@ -196,12 +198,14 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     model = str(payload.get("model") or "").strip()
     if not model:
         # Клиент без модели взял бы OPENAI_MODEL ленты — тихий откат, которого быть не должно.
-        raise ValueError("signal_scores: в задаче нет модели (SIGNAL_SCORES_MODEL на ядре) — модель ленты этап не берёт")
+        raise ValueError("signal_scores: в задаче нет модели (SIGNAL_SCORES_MODEL на ядре), а модель ленты этап "
+                         "не берёт")
     profiles = payload.get("profiles") or {}
     client = make_client()
     rows: list[dict[str, Any]] = []
     result = {"signal_scores": True, "kind": KIND, "prompt_version": PROMPT_VERSION,
-              "rubrics_version": payload.get("rubrics_version"), "scores": rows}
+              "rubrics_version": payload.get("rubrics_version"),
+              "criteria_snapshots": payload.get("criteria_snapshots"), "scores": rows}
     for item in payload.get("items") or []:
         if heartbeat:
             try:
@@ -230,8 +234,8 @@ _TASK = """Ты оцениваешь сигнал рынка нефтесерв�
 карточки. Опирайся только на вход, не выдумывай фактов.
 
 Каждому критерию — балл от 0 до 100 по его линейке: ступень (80 и выше, 65-79, 40-64, ниже 40) — по правилу ступени,
-внутри ступени выше то, что подтверждено цифрами, названными участниками и независимыми источниками. why — одной
-фразой по-русски, почему такой балл."""
+внутри ступени выше то, что подтверждено цифрами, названными участниками и независимыми источниками. why — коротко
+по-русски, почему такой балл; что линейка велит писать в «почему» раздельно (масштаб и эффект), пиши раздельно."""
 
 
 def instructions(criteria: list[dict[str, Any]]) -> str:
@@ -292,7 +296,9 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     """Сторона ядра: проверить ответы кодом (score_values) и записать баллы с рецептом. Ответ не по правилам не
     пишется: ошибка — в итоге задачи, остальные сигналы пачки пишутся. Строка чужого сигнала не пишется; сигнал,
     который этап больше не оценивает или у которого сменились категория или главная публикация, — тоже: баллы
-    пересчитает следующая задача."""
+    пересчитает следующая задача. Так же с критериями профиля, которые сменились после выдачи (имя, описание, ключевые
+    слова, набор): модель оценивала прежние. Правка одних весов запись не держит: итог считает ядро по нынешним весам
+    и пишет их в снимок (ADR 0002, п. 7)."""
     rubrics = load_rubrics()
     rows = [row for row in result.get("scores") or [] if isinstance(row, dict)]
     expected = None if signal_ids is None else {str(value) for value in signal_ids}
@@ -301,15 +307,22 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     signal_scores_store.record_usage(job_id, [usage for row in rows if (usage := _usage(row, expected))])
     if result.get("rubrics_version") != rubrics["version"]:
         # Модель ставила баллы по другим линейкам: рецепт солгал бы.
-        stale = (f"линейки сменились после выдачи задачи ({result.get('rubrics_version')} → {rubrics['version']}): "
-                 "баллы не записаны")
+        stale = (f"линейки сменились после выдачи задачи ({str(result.get('rubrics_version'))[:50]} → "
+                 f"{rubrics['version']}): баллы не записаны")
         return {"written": 0, "errors": [{"signal_id": row.get("signal_id"), "error": stale} for row in rows]}
-    criteria = {profile: _criteria(profile) for profile in signal_scores_store.PROFILES.values()}
+    criteria = {profile: repository.list_enabled_scoring_criteria(profile)
+                for profile in signal_scores_store.PROFILES.values()}
+    sent = result.get("criteria_snapshots") if isinstance(result.get("criteria_snapshots"), dict) else {}
+    changed = {profile for profile, current in criteria.items()
+               if snapshot_texts(sent.get(profile)) != snapshot_texts(criteria_snapshot(current))}
     applied: dict[str, Any] = {"written": 0, "errors": []}
     for row in rows:
         signal_id = _signal_id(row, expected)
         item = contexts.get(signal_id) if signal_id is not None else None
         problem = _context_problem(row, signal_id, item)
+        if problem is None and item["profile"] in changed:
+            problem = ("критерии профиля сменились после выдачи задачи (экран «Скоринг»): баллы поставит следующая "
+                       "задача")
         values = None
         if problem is None:
             values, problem = score_values(row, item, criteria[item["profile"]])
@@ -366,13 +379,15 @@ def score_values(row: dict[str, Any], item: dict[str, Any],
         else:
             entry = given[criterion["name"]]
             score = float(entry["score"])
-            if signal_scoring.bounded(rubric):
-                low, high = signal_scoring.maturity_range(rubric, scale, item["stage"], answer.get("named_customer"))
-                score = float(min(max(score, low), high))
             keyword, why = keyword_score_for_criterion(article, criterion), " ".join(entry["why"].split())[:_WHY_CHARS]
+        # «Зрелость» — в ступени стадии карточки, и балл модели, и итог с ключевыми словами (signal_scoring.final_score).
+        bounds = (signal_scoring.maturity_range(rubric, scale, item["stage"], answer.get("named_customer"))
+                  if signal_scoring.bounded(rubric) else None)
+        if bounds is not None:
+            score = float(min(max(score, bounds[0]), bounds[1]))
         items.append({"criterion_id": int(criterion["id"]), "name": criterion["name"],
                       "weight": float(criterion["weight"]), "ai_score": score, "keyword_score": keyword,
-                      "rationale": why, "excluded": excluded})
+                      "rationale": why, "excluded": excluded, "bounds": list(bounds) if bounds else None})
     for one in items:
         one["final_score"] = signal_scoring.final_score(one, keywords=bool(config.SIGNAL_SCORES_KEYWORDS))
     totals = signal_scoring.totals(items)
@@ -383,7 +398,7 @@ def score_values(row: dict[str, Any], item: dict[str, Any],
 
 
 def _answer_problem(answer: Any, asked: list[dict[str, Any]]) -> str | None:
-    """Чем ответ не по правилам; None — по правилам: у каждого критерия ровно один балл — целое от 0 до 100 — и
+    """Чем ответ не по правилам; None — по правилам: у каждого критерия ровно один балл (целое от 0 до 100) и
     «почему»; при «Зрелости» — назван ли заказчик (да или нет)."""
     if not isinstance(answer, dict) or not isinstance(answer.get("scores"), list):
         return "нет списка scores"
@@ -397,8 +412,8 @@ def _answer_problem(answer: Any, asked: list[dict[str, Any]]) -> str | None:
             return f"критерия «{name[:80]}» нет в профиле"
         if name in seen:
             return f"критерий «{name}» дважды"
-        if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 100:
-            return f"балл критерия «{name}» — не число от 0 до 100"
+        if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100:
+            return f"балл критерия «{name}» не целое число от 0 до 100"
         if not isinstance(entry.get("why"), str):
             return f"у критерия «{name}» нет «почему»"
         seen.append(name)
@@ -415,7 +430,8 @@ def _step(values: dict[str, Any]) -> dict[str, str]:
     profile = {"business": "бизнес-сигналы", "tech_radar": "технологический радар"}[values["profile"]]
     left_out = [f"«{item['name']}» не входит: {item['excluded']}" for item in values["items"] if item["excluded"]]
     score = "нет" if values["score"] is None else f"{values['score']:g}"
-    return {"stage": STAGE, "text": f"Профиль «{profile}». Итог {score} ({signal_scoring.BAND_LABELS.get(values['band'], '—')})."
+    band = signal_scoring.BAND_LABELS.get(values["band"]) or "без ступени"
+    return {"stage": STAGE, "text": f"Профиль «{profile}». Итог {score} ({band})."
                                     + (" " + "; ".join(left_out) + "." if left_out else "")}
 
 

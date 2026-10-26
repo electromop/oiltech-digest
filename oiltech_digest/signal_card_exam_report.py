@@ -186,9 +186,9 @@ def _judge(judge: dict[str, Any] | None) -> list[str]:
     lines = ["## Судья радара против эксперта", "",
              f"Радарных строк набора: {lenient['rows']}; без вызовов модели — значения, которые показывает радар.", "",
              "| | С допусками | Строго | Константа |", "|---|---|---|---|"]
-    for key, title in (("event_date", "Дата события — доля ошибок"),):
-        lines.append(f"| {title} | {_share(lenient[key]['agent'])} | {_share(strict[key]['agent'])} | "
-                     f"{_share(lenient[key]['constant'])} |")
+    date_lenient, date_strict = lenient["event_date"], strict["event_date"]
+    lines.append(f"| Дата события — доля ошибок | {_share(date_lenient['agent'])} | {_share(date_strict['agent'])} | "
+                 f"{_share(date_lenient['constant'])} |")
     return lines + [""]
 
 

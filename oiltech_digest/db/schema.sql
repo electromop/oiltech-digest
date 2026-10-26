@@ -947,6 +947,9 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_return_fact TEXT;    -- чт�
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS score_band TEXT;           -- strong / useful / watch / weak
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS scores_recipe JSONB;       -- второй вызов: инструкция, модель, итоги
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS scores_stale_since TIMESTAMPTZ;  -- «не тот блок»: пересчитываются
+-- Когда публикация пошла дальше «Отбора» (его решение «брать» или возврат человеком): от этого считают окна шаги
+-- конвейера (суть, оба вызова «Карточки»); NULL — решённое до «Отбора», окна от заведения сигнала.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
 ALTER TABLE signals ALTER COLUMN maturity DROP NOT NULL;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;

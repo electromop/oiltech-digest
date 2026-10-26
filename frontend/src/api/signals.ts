@@ -67,6 +67,16 @@ export type SignalDictionaries = {
   technology_maturity: string[];
   // Подсказки к полю «Компания» — канонические имена справочника алиасов.
   companies: string[];
+  // Что можно вписать, возвращая отклонённое (#132): коды и подписи справочника «Отбора».
+  otbor_return?: SignalReturnChoices;
+};
+
+export type SignalChoice = { code: string; label: string };
+
+export type SignalReturnChoices = {
+  industry: SignalChoice[];
+  oilfield_relevance: SignalChoice[];
+  category: SignalChoice[];
 };
 
 export function getSignalDictionaries() {

@@ -8,6 +8,7 @@ test_otbor_return.py (возврат отклонённого человеком
 from datetime import datetime, timezone
 
 import pytest
+from psycopg.types.json import Json
 
 from oiltech_digest import api, cli, signal_card
 from oiltech_digest.db import repository
@@ -15,7 +16,7 @@ from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from oiltech_digest.scoring_profiles import SCORING_PRESETS
 from tests.otbor_support import answer, article, decide
-from tests.signal_card_support import FakeModel, run_worker
+from tests.signal_card_support import FakeModel, run_worker, tag
 from tests.signal_card_support import answer as card_answer
 
 CARD_MODEL, SCORES_MODEL = "gpt-5.4-nano", "gpt-5.4-mini"
@@ -41,14 +42,11 @@ def pipeline(monkeypatch, contour):
 
 def theme(name, keywords):
     """Корневая тематика заказчика с ключами; номер тега."""
+    tag_id = tag(name)
     with repository.get_connection() as conn:
-        row = conn.execute("SELECT id FROM tags WHERE name = %s AND parent_id IS NULL", (name,)).fetchone()
-        if row is None:
-            row = conn.execute("INSERT INTO tags (name, enabled) VALUES (%s, TRUE) RETURNING id", (name,)).fetchone()
-        conn.execute("UPDATE tags SET keywords_json = %s::jsonb WHERE id = %s",
-                     (str(keywords).replace("'", '"'), row[0]))
+        conn.execute("UPDATE tags SET keywords_json = %s WHERE id = %s", (Json(keywords), tag_id))
         conn.commit()
-    return int(row[0])
+    return tag_id
 
 
 def process_feed():
