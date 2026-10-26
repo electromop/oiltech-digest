@@ -20,11 +20,10 @@ from tests.signal_card_support import (EXAM_COUNTS, MINI, NANO, STRATA, ExamMode
 
 
 def test_exam_scores_the_agent_against_the_markup_with_the_constant_alongside(tmp_path, monkeypatch, strata):
-    # Шумные статьи эксперт пометил «нет связи», технологии радара — «пилот»; агент ответил так же.
+    # Шумные статьи эксперт пометил «нет связи», технологии радара — «пилот»; агент технологии назвал так же.
     markup = write_pack(tmp_path, pack_rows(noise={"Связь с нефтесервисом": "нет связи"},
                                              technology={"Тип события": "пилот"}))
-    agent = by_stratum(strata, noise=answer(oilfield_relevance="нет связи", oilfield_application=""),
-                       technology=answer(event_type="пилот"))
+    agent = by_stratum(strata, technology=answer(event_type="пилот"))
 
     model, report = run_exam(monkeypatch, markup, {NANO: agent})
 
@@ -33,8 +32,9 @@ def test_exam_scores_the_agent_against_the_markup_with_the_constant_alongside(tm
     assert report["decision"]["model"] == NANO
     [nano] = report["models"]
     metrics = nano["lenient"]["overall"]
-    # Связь — средняя доля верных по значениям: «прямая» у 31 строки экзамена, «нет связи» у 4.
-    assert (metrics["oilfield_relevance"]["agent"], metrics["oilfield_relevance"]["constant"]) == (1.0, 0.5)
+    # Связь с нефтесервисом с #132 ставит «Отбор»: её нет ни в вопросе к модели, ни в метриках и порогах экзамена.
+    assert "oilfield_relevance" not in metrics
+    assert all("oilfield_relevance" not in call["input"] + call["instructions"] for call in model.calls)
     # Самое частое значение типа — «контракт»: 25 из 35 строк экзамена.
     assert metrics["event_type"]["agent"] == 1.0
     assert metrics["event_type"]["constant"] == pytest.approx(25 / 35)
@@ -365,22 +365,20 @@ def test_radar_judge_is_compared_with_the_expert_on_all_radar_rows_without_model
     rows = pack_rows(business={"Связь с нефтесервисом": "нет связи"})
     markup = write_pack(tmp_path, rows)
     radar = [item["id"] for item in rows if item["origin"] == "radar"]  # 15 технологий, затем 5 бизнес
-    # Судья: у десяти технологий дата верна, у пяти не названа; у бизнеса — чужая дата; связь — мимо у двух.
+    # Судья: у десяти технологий дата верна, у пяти не названа; у бизнеса — чужая дата. Связь в выгрузке судьи
+    # осталась, но экзамен карточки её не сравнивает (#132: связь ставит «Отбор»).
     judge = {number: {"event_date": "2026-09-24" if index < 10 else None if index < 15 else "2026-09-01",
                       "oilfield_relevance": "direct" if index < 15 or index >= 18 else "none"}
              for index, number in enumerate(radar)}
     (tmp_path / "signal_card_exam_judge.json").write_text(json.dumps(judge), encoding="utf-8")
 
-    agent = by_stratum(strata, business=answer(oilfield_relevance="нет связи", oilfield_application=""))
-    model, report = run_exam(monkeypatch, markup, {NANO: agent})
+    model, report = run_exam(monkeypatch, markup, {NANO: by_stratum(strata)})
 
     assert len(model.calls) == 35 * 3  # судья — без вызовов модели
     strict = report["judge"]["strict"]
     assert strict["rows"] == 20
     assert (strict["event_date"]["agent"], strict["event_date"]["constant"]) == (0.5, 1.0)
-    # «Прямая» — 15 из 15, «нет связи» — 3 из 5: в среднем по значениям 0,8.
-    assert strict["oilfield_relevance"]["agent"] == pytest.approx(0.8)
-    assert strict["oilfield_relevance"]["by_value"] == {"прямая": 1.0, "нет связи": 0.6}
+    assert "oilfield_relevance" not in strict
 
 
 def test_judge_values_are_exported_from_the_core_by_manifest_number(isolated_db, tmp_path, monkeypatch, capsys):
@@ -428,16 +426,15 @@ def test_date_source_is_not_scored_where_the_event_date_is_the_publication_date(
 
 def test_readable_report_lies_next_to_the_manifest_in_two_views(tmp_path, monkeypatch, strata, capsys):
     markup = write_pack(tmp_path, pack_rows(noise={"Связь с нефтесервисом": "нет связи"}))
-    agent = by_stratum(strata, noise=answer(oilfield_relevance="нет связи", oilfield_application=""))
 
-    run_exam(monkeypatch, markup, {NANO: agent})
+    run_exam(monkeypatch, markup, {NANO: by_stratum(strata)})
 
     [readable] = tmp_path.glob("signal_card_exam_report_*.md")
     assert str(readable) in capsys.readouterr().out
     text = readable.read_text(encoding="utf-8")
     assert "Решение: **gpt-5.4-nano** — самая дешёвая из прошедших пороги" in text
     assert "| Атрибут | Порог | С допусками | Строго | Константа | Устойчивость | |" in text
-    assert "| Связь с нефтесервисом (среднее по значениям) | ≥ 75% | 100% | 100% | 50% | 100% | ✓ |" in text
+    assert "Связь с нефтесервисом" not in text
     assert "| Дата события — доля ошибок | не больше константы | 0% | 0% | 100% | 100% | ✓ |" in text
     assert "Допусков нет: отчёт с допусками совпадает со строгим." in text
     # По долям — число строк доли на экзамене, а не ответов (строки × прогоны).

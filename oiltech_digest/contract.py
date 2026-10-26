@@ -23,7 +23,11 @@
    сигналов), во входе «Отбора» находки и материалы («Ссылки находки», номер signal:<id>), прогон
    радара в режиме «поиск только находит» (otbor в конфиге прогона). Сборка контракта 4 сама отказывает
    signal_summary, а новую форму прежних видов (прогон радара при «Отборе», «Отбор» находок) исполнила
-   бы молча по-старому — такой ядро задачу не выдаёт (required_contract).
+   бы молча по-старому — такой ядро задачу не выдаёт (required_contract);
+   6 — «Карточка» в конвейере «Отбора» (#132): вид задачи signal_scores (второй вызов, баллы), новая форма
+   задачи карточки (тема из 13 тематик и темы-кандидаты, суть во входе, без связи с нефтесервисом) и «Отбора»
+   (факт «Карточки» у возвращённой публикации). Сборка контракта 5 карточку исполнила бы по-старому, и ядро
+   отбросило бы оплаченный ответ без темы, а факт «Отбор» пропустил бы молча: такие задачи ядро ей не выдаёт.
    Совместимые добавки номер не меняют — старая сторона их молча пропускает: 28.09 — поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002) — profile у критериев в payload и profile + criteria_snapshot в
@@ -43,21 +47,25 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 5
+CONTRACT = 6
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
 
 
 def required_contract(kind: str | None, worker_payload: dict[str, Any]) -> int:
     """Какой контракт нужен сборке для задачи — по пакету, который она получит. Новую форму прежнего вида задачи
-    (#131: прогон радара при «Отборе», «Отбор» находок и материалов) сборка постарше исполнила бы молча по-старому:
-    судьёй мимо «Отбора», без «Ссылок находки». Такой ядро задачу не выдаёт, а валит с причиной — как незнакомый
-    вид задачи валит сама сборка (история 50 спеки #128). 0 — подойдёт любая сборка, в том числе без заголовка
-    контракта: прежние формы задач номера не требуют."""
+    (#131: прогон радара при «Отборе», «Отбор» находок и материалов; #132: карточка с темой, «Отбор» с фактом
+    «Карточки») сборка постарше исполнила бы молча по-старому: судьёй мимо «Отбора», без «Ссылок находки», без темы
+    и без факта. Такой ядро задачу не выдаёт, а валит с причиной — как незнакомый вид задачи валит сама сборка
+    (история 50 спеки #128); второй вызов «Карточки» (signal_scores) — так же, с той же понятной причиной. 0 —
+    подойдёт любая сборка, в том числе без заголовка контракта: прежние формы задач номера не требуют."""
+    items = [item for item in worker_payload.get("items") or [] if isinstance(item, dict)]
+    if kind == "signal_scores" or (kind == "signal_card" and "themes" in worker_payload) or (
+            kind == "otbor" and any(item.get("card_fact") for item in items)):
+        return 6
     if kind == "signal_discovery" and (worker_payload.get("config") or {}).get("otbor"):
         return 5
-    if kind == "otbor" and any(str(item.get("ref") or "").startswith("signal:")
-                               for item in worker_payload.get("items") or [] if isinstance(item, dict)):
+    if kind == "otbor" and any(str(item.get("ref") or "").startswith("signal:") for item in items):
         return 5
     return 0
 
@@ -81,8 +89,8 @@ _ARTICLE_BATCHES = frozenset({"process_articles", "recheck_relevance", "translat
 # Виды, чей частичный итог ядро принимает. Сбор ИИ не зовёт — повторить его дёшево;
 # итог документа — одна карточка на весь файл, половина карточки не нужна никому. Карточки
 # сигналов (#96) — по строке на сигнал, как статьи; решения «Отбора» (#130) — по строке на публикацию;
-# «Суть и перевод» сигналов (#131) — по строке на сигнал.
-PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card", "otbor", "signal_summary"}
+# «Суть и перевод» сигналов (#131) и баллы второго вызова «Карточки» (#132) — по строке на сигнал.
+PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card", "otbor", "signal_summary", "signal_scores"}
 
 
 def accepts_partial(kind: str | None, result: dict[str, Any] | None,
@@ -105,11 +113,11 @@ def without_reservation(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def done_count(result: dict[str, Any] | None) -> int:
-    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи, карточек сигналов, решений «Отбора» или
-    сутей сигналов."""
+    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи, карточек сигналов, решений «Отбора», сутей
+    или баллов сигналов."""
     result = result or {}
     return len(result.get("articles") or result.get("verdicts") or result.get("cards")
-               or result.get("decisions") or result.get("summaries") or [])
+               or result.get("decisions") or result.get("summaries") or result.get("scores") or [])
 
 
 
@@ -156,14 +164,14 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
     - сигналы карточек — без тех, на которые модель уже ответила (в том числе ответом не по схеме:
       вызов оплачен);
     - публикации «Отбора» — без тех, о которых воркер вернул строку (ответ или сбой модели);
-    - сигналы «Суть и перевод» (#131) — без тех, на которые модель уже ответила.
+    - сигналы «Суть и перевод» (#131) и баллов (#132) — без тех, на которые модель уже ответила.
     """
     rest = without_reservation(payload)
     if not accepts_partial(kind, result, payload):
         return rest
     kind = str(kind)
-    if kind in ("signal_card", "signal_summary"):
-        rows = result.get("cards" if kind == "signal_card" else "summaries") or []
+    if kind in ("signal_card", "signal_summary", "signal_scores"):
+        rows = result.get({"signal_card": "cards", "signal_summary": "summaries", "signal_scores": "scores"}[kind]) or []
         answered = {str(row.get("signal_id")) for row in rows if isinstance(row, dict)}
         left = [signal_id for signal_id in rest.get("signal_ids") or [] if str(signal_id) not in answered]
         return {**rest, "signal_ids": left} if left else None

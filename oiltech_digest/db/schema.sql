@@ -936,6 +936,21 @@ CREATE INDEX IF NOT EXISTS idx_signals_otbor_waiting ON signals(created_at)
 ALTER TABLE colleague_materials ADD COLUMN IF NOT EXISTS notified_outcome TEXT;
 ALTER TABLE colleague_materials ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
 ALTER TABLE signal_feedback_events ADD COLUMN IF NOT EXISTS author TEXT; -- кто оставил блок, если не учётка
+-- «Карточка» в конвейере «Отбора» (#132): дата события с точностью (у месяца и года — первый день периода, как
+-- период её читает только код с точностью); возврат в «Отбор», если «Карточка» нашла в тексте дату события старше
+-- 180 дней (один раз; что нашла — во входе «Отбора»); баллы второго вызова по профилю категории: ступень, рецепт с
+-- итогами в двух вариантах подмешивания ключевых слов; «не тот блок» — баллы пересчитываются. У «другого»
+-- «Решения платформы» нет: maturity может быть пусто.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date_precision TEXT;  -- day / month / year; NULL — день (до #132)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_returns INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_return_fact TEXT;    -- что нашла «Карточка»: во вход «Отбора»
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS score_band TEXT;           -- strong / useful / watch / weak
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS scores_recipe JSONB;       -- второй вызов: инструкция, модель, итоги
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS scores_stale_since TIMESTAMPTZ;  -- «не тот блок»: пересчитываются
+-- Когда публикация пошла дальше «Отбора» (его решение «брать» или возврат человеком): от этого считают окна шаги
+-- конвейера (суть, оба вызова «Карточки»); NULL — решённое до «Отбора», окна от заведения сигнала.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
+ALTER TABLE signals ALTER COLUMN maturity DROP NOT NULL;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;

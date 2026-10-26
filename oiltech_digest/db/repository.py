@@ -1029,6 +1029,9 @@ def upsert_signal(signal: dict) -> int:
               -- сигнала» (#96) к ней не относится.
               event_date_source = CASE WHEN EXCLUDED.event_date IS NOT NULL AND NOT {by_human("event_date")}
                                        THEN NULL ELSE signals.event_date_source END,
+              -- Дата судьи — день (#132): точность месяца или года от агента к ней не относится.
+              event_date_precision = CASE WHEN EXCLUDED.event_date IS NOT NULL AND NOT {by_human("event_date")}
+                                          THEN NULL ELSE signals.event_date_precision END,
               mixed_events = COALESCE(EXCLUDED.mixed_events, signals.mixed_events),
               mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
               oilfield_relevance = CASE WHEN {by_human("oilfield_relevance")} THEN signals.oilfield_relevance
@@ -1212,7 +1215,44 @@ def signal_publication_count_sql(alias: str = "s") -> str:
     )
 
 
+def platform_publications_sql(alias: str = "s") -> str:
+    """Публикаций у события для «Решения платформы» (#132): публикации сигнала (signal_publication_count_sql) и ссылки
+    склеенных в него дублей — «Дедуп» добавляет публикацию и тем, и другим путём."""
+    return (f"({signal_publication_count_sql(alias)}"
+            " + (SELECT COUNT(*) FROM signal_evidence de JOIN signals d ON d.id = de.signal_id"
+            f" WHERE d.merged_into_signal_id = {alias}.id))")
+
+
+def platform_decision_sql(alias: str = "s") -> str:
+    """«Решение платформы» сигнала после «Отбора» (#132, спека #128) — считает код: у отклонённой — «отклонено»; у
+    «другого» его нет; сильный по баллам — «кандидат», с SIGNAL_CONFIRMED_PUBLICATIONS публикациями и больше —
+    «подтверждено»; полезный и ниже — «наблюдать»; без баллов (ещё не оценён) — «наблюдать». Решённое до «Отбора»
+    живёт по прежним правилам: его «Решение радара» ставил судья, выражение его не трогает."""
+    a = alias
+    return (
+        f"(CASE WHEN {a}.otbor_decision IS NULL THEN {a}.maturity"
+        f" WHEN {a}.otbor_decision = '{feed_window.OTBOR_REJECT}' THEN 'reject'"
+        f" WHEN {a}.signal_category = 'other' THEN NULL"
+        f" WHEN {a}.score_band = 'strong' THEN CASE WHEN {platform_publications_sql(a)}"
+        f" >= {int(config.SIGNAL_CONFIRMED_PUBLICATIONS)} THEN 'proven' ELSE 'shortlist' END"
+        f" WHEN {a}.score_band IS NOT NULL OR {a}.maturity IS NULL OR {a}.maturity = 'reject' THEN 'watch'"
+        f" ELSE {a}.maturity END)"
+    )
+
+
+def refresh_platform_decisions(signal_ids: Sequence[int], *, conn) -> None:
+    """Пересчитать «Решение платформы» сигналов после «Отбора» (#132): после баллов, решения «Отбора» и когда у события
+    стало больше публикаций. Внутри транзакции того, кто их поменял (conn): решение видно вместе с причиной."""
+    ids = sorted({int(value) for value in signal_ids if value is not None})
+    if ids:
+        conn.execute(f"UPDATE signals s SET maturity = {platform_decision_sql('s')}, updated_at = now()"
+                     f" WHERE s.id = ANY(%s) AND s.otbor_decision IS NOT NULL AND s.maturity IS DISTINCT FROM"
+                     f" {platform_decision_sql('s')}", (ids,))
+
+
 def refresh_signal_evidence_count(signal_id: int) -> int:
+    """Число публикаций сигнала; у события, к которому «Дедуп» добавил публикацию, — и «Решение платформы» (#132): у
+    самого сигнала и у главной карточки, если он дубль."""
     with get_connection() as conn:
         cur = conn.execute(
             f"""
@@ -1220,11 +1260,13 @@ def refresh_signal_evidence_count(signal_id: int) -> int:
             SET evidence_count = {signal_publication_count_sql("s")},
                 updated_at = now()
             WHERE s.id = %s
-            RETURNING evidence_count
+            RETURNING evidence_count, merged_into_signal_id
             """,
             (signal_id,),
         )
         row = cur.fetchone()
+        if row:
+            refresh_platform_decisions([signal_id, row[1]], conn=conn)
         conn.commit()
         return int(row[0]) if row else 0
 
@@ -1381,6 +1423,8 @@ def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *,
                 "UPDATE signals SET merged_into_signal_id = %s, updated_at = now() WHERE merged_into_signal_id = %s",
                 (root, int(signal_id)),
             )
+            # У главной стало больше публикаций (#132).
+            refresh_platform_decisions([root], conn=conn)
         conn.commit()
         return row is not None
 
@@ -5152,9 +5196,9 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
                    -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агенты
-                   -- «Карточка сигнала» (#96) и «Отбор» (#130) — своими.
+                   -- «Карточка сигнала» (#96), «Отбор» (#130) и баллы «Карточки» (#132) — своими.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
-                        WHEN stage IN ('signal_card', 'otbor') THEN stage ELSE 'feed' END AS area,
+                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores') THEN stage ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs

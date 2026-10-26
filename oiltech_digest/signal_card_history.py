@@ -76,5 +76,5 @@ def _request_chars(signal_ids: list[int]) -> dict[int, int]:
     for start in range(0, len(signal_ids), _CHUNK):
         payload = signal_card.build_payload({"signal_ids": signal_ids[start:start + _CHUNK]})
         for item in payload["signals"]:
-            chars[int(item["signal_id"])] = signal_card.request_chars(item, payload["dictionaries"])
+            chars[int(item["signal_id"])] = signal_card.request_chars(item, payload["dictionaries"], payload["themes"])
     return chars

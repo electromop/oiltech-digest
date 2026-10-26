@@ -621,6 +621,17 @@ def _run_signal_summary(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     return {"signal_summary": True, "applied": applied}
 
 
+def _run_signal_scores(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
+    """Баллы «Карточки» (второй вызов, #132) в местном контуре — как «Суть и перевод»."""
+    from oiltech_digest import signal_scores
+
+    repository.update_background_job_progress(job_id, 20)
+    result = signal_scores.process_payload(signal_scores.build_payload(payload))
+    applied = signal_scores.apply_result(result, job_id=job_id, signal_ids=payload.get("signal_ids") or [])
+    repository.update_background_job_progress(job_id, 95)
+    return {"signal_scores": True, "applied": applied}
+
+
 def _run_admission_notify(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     """Код допуска отправляет только воркер NL (#113): с РФ-ядра Telegram недоступен. Вид
     зарегистрирован, чтобы ядро могло поставить задачу; очередь external-notify здесь не исполняется."""
@@ -642,5 +653,6 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "signal_card": _run_signal_card,
     "otbor": _run_otbor,
     "signal_summary": _run_signal_summary,
+    "signal_scores": _run_signal_scores,
     "admission_notify": _run_admission_notify,
 }
