@@ -33,7 +33,8 @@ _NO_PAIRS = {(OILFIELD_SERVICES, TRANSFERABLE): "переносимая связ
              (OTHER_INDUSTRY, DIRECT): "прямая связь у другой отрасли"}
 LINKED = frozenset({DIRECT, TRANSFERABLE})
 # При каких отрасли и связи допустимы «брать» и каждая причина отказа; None — при любой из допустимых пар. Причина
-# не из таблицы (новая версия справочника) — при любой паре. Тексты причин — в справочнике, здесь только коды.
+# справочника без строки таблицы — конфликт шагов: таблицу правят в том же изменении, что и коды справочника (#133).
+# Тексты причин — в справочнике, здесь только коды.
 DECISION_STEPS = {
     ACCEPT: (None, LINKED),
     "oil_gas_no_link": ({OIL_GAS}, {NO_LINK}),
@@ -109,7 +110,10 @@ def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: in
         found.append("у «не брать» нет причины отказа")
     step = ACCEPT if decision == ACCEPT else reason
     industries, relevances = DECISION_STEPS.get(step, (None, None))
-    if step == ACCEPT and relevance not in relevances:
+    if step not in DECISION_STEPS:
+        if step != NO_REASON:
+            found.append(f"причины «{label('reject_reason', reason)}» нет в таблице конфликтов шагов")
+    elif step == ACCEPT and relevance not in relevances:
         found.append(f"«брать» при связи «{label('oilfield_relevance', relevance)}»")
     elif (industries is not None and industry not in industries) or (relevances is not None
                                                                       and relevance not in relevances):

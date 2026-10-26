@@ -8,40 +8,11 @@ from __future__ import annotations
 import json
 import shutil
 
-import openpyxl
 import pytest
 
 from oiltech_digest import otbor_markup, otbor_pack_format as pack_format
-from tests.otbor_pack_support import build_corpus, manifest, pack_args, run_check, run_pack
-
-RUBRICS = pack_format.load_rubrics()["profiles"]
-BUSINESS = [f"Бизнес: {one['name']}" for one in RUBRICS["business"]]
-TECH = [f"Технология: {one['name']}" for one in RUBRICS["tech_radar"]]
-TAKEN = {"Отрасль": "нефтесервис", "Связь с нефтесервисом": "прямая", "Брать или нет": "брать", "Тема": "Бурение",
-         "Общая оценка": "Полезный сигнал", "Почему такой балл": "Крупный контракт на буровые услуги"}
-
-
-@pytest.fixture()
-def pack(isolated_db, tmp_path):
-    corpus = build_corpus(tmp_path)
-    out = tmp_path / "pack"
-    run_pack(*pack_args(corpus, out, "--apply"))
-    return {"corpus": corpus, "out": out, "items": manifest(out)["items"]}
-
-
-def business(**overrides):
-    return {**TAKEN, "Категория": "бизнес", **{column: 70 for column in BUSINESS}, **overrides}
-
-
-def technology(**overrides):
-    return {**TAKEN, "Категория": "технология", **{column: 85 for column in TECH[:-1]}, TECH[-1]: "нет даты",
-            **overrides}
-
-
-def rejected(**overrides):
-    return {"Отрасль": "нефтегаз", "Связь с нефтесервисом": "нет связи", "Брать или нет": "не брать",
-            "Причина отказа": "Нефтегаз без связи с нефтесервисом", "Категория": "бизнес",
-            "Общая оценка": "Не релевантно", **overrides}
+from tests.otbor_pack_support import BUSINESS, RUBRICS, TAKEN, TECH, business, fill, rejected, run_check, technology
+from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
 
 
 def by_the_rules(items):
@@ -56,20 +27,6 @@ def by_the_rules(items):
     first_tech = next(item_id for item_id, answer in answers.items() if answer.get("Категория") == "технология")
     answers[first_tech] = technology(**{TECH[-1]: 90})
     return answers
-
-
-def fill(out, answers, *, name="otbor_markup_done.xlsx", edit=None):
-    book = openpyxl.load_workbook(out / pack_format.WORKBOOK_NAME)
-    sheet = book[pack_format.MARKUP_SHEET]
-    header = [cell.value for cell in sheet[1]]
-    for row in sheet.iter_rows(min_row=2):
-        for column, value in answers.get(row[0].value, {}).items():
-            row[header.index(column)].value = value
-    if edit:
-        edit(book, sheet, header)
-    path = out / name
-    book.save(path)
-    return path
 
 
 def test_a_markup_by_the_rules_passes(pack, capsys):
@@ -90,7 +47,7 @@ def test_a_markup_by_the_rules_passes(pack, capsys):
     assert {key: labels[refused][key] for key in ("decision", "reject_reason", "industry", "oilfield_relevance",
                                                   "category", "overall")} == {
         "decision": "reject", "reject_reason": "oil_gas_no_link", "industry": "oil_gas", "oilfield_relevance": "none",
-        "category": "business", "overall": "wrong_domain"}
+        "category": None, "overall": "wrong_domain"}
     assert labels[taken]["scores"] == {**{one["name"]: 70 for one in RUBRICS["business"]},
                                        **{one["name"]: None for one in RUBRICS["tech_radar"]}}
     assert labels[taken]["theme"] == "Бурение" and labels[taken]["why"] == TAKEN["Почему такой балл"]
@@ -101,7 +58,8 @@ def test_every_violation_is_reported_at_once_and_the_check_fails(pack, capsys):
     answers = by_the_rules(items)
     feed = [item["id"] for item in items if item["group"] in ("feed_rejected", "feed_accepted")]
     (outside, no_reason, reason_taken, mixed_single, score_missing, score_bad, both_profiles, no_why, no_theme,
-     scored_rejected, fresh_empty, blank, other_scored, changed_text, dropped, doubled) = feed[:16]
+     scored_rejected, fresh_empty, blank, other_scored, taken_uncategorized, changed_text, dropped,
+     doubled) = feed[:17]
     answers.update({
         outside: rejected(**{"Отрасль": "энергетика"}),
         no_reason: rejected(**{"Причина отказа": None}),
@@ -116,6 +74,8 @@ def test_every_violation_is_reported_at_once_and_the_check_fails(pack, capsys):
         fresh_empty: technology(**{TECH[-1]: None}),
         blank: {"Брать или нет": None, "Отрасль": None, "Связь с нефтесервисом": None, "Категория": None},
         other_scored: {**TAKEN, "Категория": "другое", TECH[0]: 60},
+        # Категория выбирает витрину: у взятой строки она обязательна, у отклонённой — нет.
+        taken_uncategorized: {**TAKEN, "Категория": None},
     })
 
     def edit(book, sheet, header):
@@ -148,8 +108,8 @@ def test_every_violation_is_reported_at_once_and_the_check_fails(pack, capsys):
         f"{blank}: «Брать или нет» не заполнена",
         f"{blank}: «Отрасль» не заполнена",
         f"{blank}: «Связь с нефтесервисом» не заполнена",
-        f"{blank}: «Категория» не заполнена",
         f"{other_scored}: баллы у категории «другое»",
+        f"{taken_uncategorized}: «Категория» не заполнена",
         f"{changed_text}: текст публикации не тот, что в манифесте",
         f"{dropped}: строки нет в таблице",
         "article:999999: строки нет в манифесте",
