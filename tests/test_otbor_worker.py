@@ -21,24 +21,21 @@ def _jobs(admin):
     return api_get("/api/jobs", admin, kind="otbor")
 
 
-def test_old_worker_build_refuses_the_otbor_job_and_check_lanes_shows_the_mismatch(user, contour, monkeypatch, capsys):
+def test_old_worker_build_does_not_get_the_otbor_job_and_check_lanes_shows_the_mismatch(user, admin, contour, capsys):
     article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
     cli.main(["enqueue-otbor"])
-    # Сборка NL до #130 (контракт 3): обработчика «Отбора» у неё нет.
-    old_build = {kind: target for kind, target in external_worker._HANDLERS.items() if kind != "otbor"}
-    monkeypatch.setattr(external_worker, "_HANDLERS", old_build)
-    client = worker("external-ai", contract_number=3)
+    # Сборка NL контракта 6 строит схему ответа без повода публикации (#133): каждый её ответ ядро отбросило бы как
+    # не по правилам. Такой сборке ядро задачу не выдаёт, а валит с причиной.
+    assert worker("external-ai", contract_number=6).claim() is None
 
-    job = client.claim()
-    external_worker._run_job(client, job, lambda done=None: None)
-
-    assert "Unsupported external job kind: otbor" in repository.get_background_job(job["id"])["error_message"]
+    [job] = _jobs(admin)
+    assert "нужен контракт 7" in repository.get_background_job(job["id"])["error_message"]
     capsys.readouterr()
     with pytest.raises(SystemExit):
         cli.cmd_check_lanes(type("Args", (), {})())
     out = capsys.readouterr().out
-    assert f"контракт 3, у ядра контракт {contract.CONTRACT}" in out
-    assert contract.CONTRACT == 6
+    assert f"контракт 6, у ядра контракт {contract.CONTRACT}" in out
+    assert contract.CONTRACT == 7
 
 
 def test_build_before_131_refuses_the_signal_summary_job(user, contour, monkeypatch):

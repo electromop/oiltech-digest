@@ -33,7 +33,8 @@ _NO_PAIRS = {(OILFIELD_SERVICES, TRANSFERABLE): "переносимая связ
              (OTHER_INDUSTRY, DIRECT): "прямая связь у другой отрасли"}
 LINKED = frozenset({DIRECT, TRANSFERABLE})
 # При каких отрасли и связи допустимы «брать» и каждая причина отказа; None — при любой из допустимых пар. Причина
-# не из таблицы (новая версия справочника) — при любой паре. Тексты причин — в справочнике, здесь только коды.
+# справочника без строки таблицы — конфликт шагов: таблицу правят в том же изменении, что и коды справочника (#133).
+# Тексты причин — в справочнике, здесь только коды.
 DECISION_STEPS = {
     ACCEPT: (None, LINKED),
     "oil_gas_no_link": ({OIL_GAS}, {NO_LINK}),
@@ -60,6 +61,7 @@ def answer_schema(dictionaries: dict[str, Any]) -> dict[str, Any]:
 
     properties: dict[str, Any] = {
         "industry": enum("industry"),
+        "occasion": enum("occasion"),
         "oilfield_relevance": enum("oilfield_relevance"),
         "oilfield_application": {"type": "string"},
         "decision": enum("decision"),
@@ -94,6 +96,12 @@ def code_label(dictionaries: dict[str, Any], name: str, code: str | None) -> str
     return next((value["label"] for value in values if value["code"] == code), code or "")
 
 
+def occasion_relevances(dictionaries: dict[str, Any]) -> dict[str, list[str]]:
+    """Какие связи с нефтесервисом даёт каждый повод публикации справочника."""
+    return {value["code"]: list(value.get("relevances") or [])
+            for value in (dictionaries.get("occasion") or {}).get("values") or []}
+
+
 def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: int = 0) -> list[str]:
     """Где шаги ответа не сошлись друг с другом (таблица конфликтов, DECISION_STEPS). links — сколько ссылок у
     находки во входе (0 — публикация одна)."""
@@ -103,13 +111,23 @@ def conflicts(answer: dict[str, Any], dictionaries: dict[str, Any], *, links: in
     found = []
     if (industry, relevance) in _NO_PAIRS:
         found.append(_NO_PAIRS[(industry, relevance)])
+    # Повод публикации задаёт допустимую связь (справочник, решение владельца 26.10): связь не из связей повода —
+    # конфликт шагов. Без повода (возврат человеком, return_problems) сверки нет.
+    allowed = occasion_relevances(dictionaries).get(answer.get("occasion")) or []
+    if allowed and relevance not in allowed:
+        names = " или ".join(f"«{label('oilfield_relevance', code)}»" for code in allowed)
+        found.append(f"повод публикации «{label('occasion', answer['occasion'])}» даёт связь {names}, "
+                     f"а не «{label('oilfield_relevance', relevance)}»")
     if decision == ACCEPT and reason != NO_REASON:
         found.append(f"у «брать» есть причина отказа «{label('reject_reason', reason)}»")
     if decision == REJECT and reason == NO_REASON:
         found.append("у «не брать» нет причины отказа")
     step = ACCEPT if decision == ACCEPT else reason
     industries, relevances = DECISION_STEPS.get(step, (None, None))
-    if step == ACCEPT and relevance not in relevances:
+    if step not in DECISION_STEPS:
+        if step != NO_REASON:
+            found.append(f"причины «{label('reject_reason', reason)}» нет в таблице конфликтов шагов")
+    elif step == ACCEPT and relevance not in relevances:
         found.append(f"«брать» при связи «{label('oilfield_relevance', relevance)}»")
     elif (industries is not None and industry not in industries) or (relevances is not None
                                                                       and relevance not in relevances):
@@ -199,13 +217,15 @@ def outcome(decision: dict[str, Any], dictionaries: dict[str, Any], *, links: in
 
 
 def _values(answer: dict[str, Any], dictionaries: dict[str, Any]) -> dict[str, Any]:
-    """Проверенный ответ → значения сигнала. Применение — только у переносимой связи; причина — только у отказа;
-    категория у отказа — если модель её написала из справочника (её никто не читает)."""
+    """Проверенный ответ → значения сигнала и повод для «Хода решения». Применение — только у переносимой связи;
+    причина — только у отказа; категория у отказа — если модель её написала из справочника (её никто не читает)."""
     relevance = answer["oilfield_relevance"]
     reason = answer["reject_reason"]
     category = answer.get("category")
     return {
         "industry": answer["industry"],
+        # Повод в сигнал не пишется (колонки нет): он виден в «Ходе решения».
+        "occasion": answer["occasion"],
         "oilfield_relevance": relevance,
         "oilfield_application": _phrase(answer["oilfield_application"], _APPLICATION_CHARS)
         if relevance == TRANSFERABLE else None,
@@ -225,7 +245,8 @@ def _decision_text(values: dict[str, Any], dictionaries: dict[str, Any]) -> str:
     decision = label("decision", values["otbor_decision"])
     if values["reject_reason"]:
         decision += f", причина «{label('reject_reason', values['reject_reason'])}»"
-    return (f"Отрасль: {label('industry', values['industry'])}. Связь с нефтесервисом: {relevance}. "
+    return (f"Отрасль: {label('industry', values['industry'])}. Повод: {label('occasion', values['occasion'])}. "
+            f"Связь с нефтесервисом: {relevance}. "
             f"Решение: {decision}. Категория: {label('category', values['signal_category'])}."
             + (f" Почему: {values['verdict_reason']}" if values["verdict_reason"] else ""))
 

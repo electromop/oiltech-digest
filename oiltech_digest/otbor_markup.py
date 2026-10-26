@@ -2,8 +2,8 @@
 
 Таблица сверяется с манифестом своего пакета (otbor_pack): номера строк и отпечатки текстов; значения — из тех
 списков, что видел эксперт (они в манифесте, справочники с тех пор могли поменяться); правила колонок — те же, что
-на листе «Правила»: у строки «не брать» причина отказа, у «брать» тема, общая оценка и баллы по пяти критериям
-профиля своей категории с обоснованием. Нарушения собираются все сразу: эксперт правит таблицу за один заход.
+на листе «Правила»: у строки «не брать» причина отказа, у «брать» категория, тема, общая оценка и баллы по пяти
+критериям профиля своей категории с обоснованием. Нарушения собираются все сразу: эксперт правит таблицу за один заход.
 Строки с метками в кодах справочников — вход экзамена (#133).
 """
 
@@ -21,8 +21,9 @@ from oiltech_digest.otbor_pack_format import (APPROVAL_SHEET, CATEGORY_COLUMN, C
                                               fingerprint, open_book, sheet_rows, text)
 from oiltech_digest.signal_card import _plain
 
-# Шаги «Отбора», без которых решения нет, — у каждой строки.
-REQUIRED = (DECISION_COLUMN, INDUSTRY_COLUMN, RELEVANCE_COLUMN, CATEGORY_COLUMN)
+# Шаги «Отбора», без которых решения нет, — у каждой строки. Категория — только у «брать»: она выбирает витрину, а у
+# отклонённого витрины нет (решение владельца 23.10; эксперт её у отказов не ставил).
+REQUIRED = (DECISION_COLUMN, INDUSTRY_COLUMN, RELEVANCE_COLUMN)
 # Колонка списка → метка строки для экзамена: справочник колонки, у общей оценки — overall.
 LABEL_KEYS = {**dict(CHOICE_COLUMNS), SCALE_COLUMN: "overall"}
 
@@ -82,7 +83,7 @@ def _labels(cells: dict[str, Any], item: dict[str, Any], manifest: dict[str, Any
     elif decision == "accept":
         if text(cells.get(REASON_COLUMN)):
             problems.append("у строки «брать» не должно быть причины отказа")
-        problems += [f"«{column}» не заполнена" for column in (THEME_COLUMN, SCALE_COLUMN)
+        problems += [f"«{column}» не заполнена" for column in (CATEGORY_COLUMN, THEME_COLUMN, SCALE_COLUMN)
                      if not text(cells.get(column)) and column not in invalid]
         profile = CATEGORY_PROFILE.get(category) if category else None
         if category == "other" and scored:
