@@ -12,11 +12,12 @@ from oiltech_digest import api, cli, contract, signal_scores
 from oiltech_digest.db import repository
 from oiltech_digest.otbor_pack_format import load_rubrics
 from oiltech_digest.processing.openai_client import AIClientError
+from oiltech_digest.signal_research import UNCONFIRMED_LINK
 from tests.card_pipeline_support import (SCORES_MODEL, ScoresModel, accepted, answer, card_answer, even, fill_cards,
                                          pipeline, profile_names, run_scores, scores)  # noqa: F401 — фикстура
-from tests.otbor_support import JUSTIFICATION, api_send, showcase
+from tests.otbor_support import JUSTIFICATION, api_send, reject, showcase
 from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import admin, api_get, run_worker, user, worker  # noqa: F401 — фикстуры
+from tests.signal_card_support import admin, api_get, radar_finding, run_worker, user, worker  # noqa: F401 — фикстуры
 
 CONTRACT = "Контракт Weatherford в Омане"
 CONTRACT_TEXT = "Weatherford получила контракт на бурение 274 скважин в Омане. Контракт подписан 24 сентября 2026 года."
@@ -169,14 +170,25 @@ def test_keywords_do_not_lift_maturity_above_the_band_of_the_card_stage(user, pi
 
 
 def test_signal_without_scores_shows_no_score_rather_than_zero(user, admin, pipeline, monkeypatch):
-    accepted(monkeypatch, {CONTRACT: answer(), "Интервью": answer(category="other")},
-             {CONTRACT: CONTRACT_TEXT, "Интервью": "Интервью о подготовке буровых кадров."})
+    accepted(monkeypatch, {CONTRACT: answer(), "Интервью": answer(category="other"),
+                           "Котировки": reject("oil_gas_no_link"), "Не по схеме": {"decision": "accept"}},
+             {CONTRACT: CONTRACT_TEXT, "Интервью": "Интервью о подготовке буровых кадров.",
+              "Котировки": "Нефть дешевеет после роста запасов в США.",
+              "Не по схеме": "SLB подписала контракт с Saudi Aramco на бурение 40 скважин."})
+    radar_finding("unconfirmed", "Выдуманная ссылка", "Текст сводки модели поиска.", filter_stage="search",
+                  filter_reason=UNCONFIRMED_LINK)
+    radar_finding("judged", "Брак судьи", "SLB представила новую систему.", filter_stage="judge",
+                  filter_reason="не технология")
 
-    # Второй вызов ещё не прошёл, «другое» не оценивается вовсе: балла нет, а не «0» и «Низкая».
+    # Второй вызов ещё не прошёл; «другое», отклонённое, сбой «Отбора» и отсеянное поиском не оценивают вовсе: балла
+    # нет, а не «0» и «Низкая». У брака судьи балл судьи есть.
     card = showcase(user)[CONTRACT]
-    [other] = api_get("/api/signals", admin, section="other")
     assert (card["unscored"], card["score_label"]) == (True, None)
-    assert (other["unscored"], other["score_label"]) == (True, None)
+    removed = {one["title"]: (one["unscored"], one["score_label"]) for one in api_get("/api/signals", admin,
+                                                                                    section="all")}
+    assert {title: removed[title] for title in ("Интервью", "Котировки", "Не по схеме", "Выдуманная ссылка")} == {
+        title: (True, None) for title in ("Интервью", "Котировки", "Не по схеме", "Выдуманная ссылка")}
+    assert removed["Брак судьи"][0] is False and removed["Брак судьи"][1]
     fill_cards(monkeypatch, {CONTRACT: card_answer()})
     run_scores(monkeypatch, {CONTRACT: scores(even("business", 70))})
     card = showcase(user)[CONTRACT]
@@ -349,35 +361,42 @@ def test_answer_off_the_rules_is_not_written_and_the_batch_goes_on(user, admin, 
     assert len(errors) == 5
 
 
-def test_criteria_edited_after_the_job_was_issued_are_not_written_over_but_weights_are(user, admin, pipeline,
-                                                                                         monkeypatch):
-    """Критерий поправили на экране «Скоринг», пока воркер ждал модель: она оценивала прежний, баллы не пишутся и
-    приходят со следующей задачей. Правка одних весов запись не держит: итог по нынешним весам, они и в снимке."""
+def test_criteria_the_model_sees_edited_after_the_job_was_issued_are_not_written_over(user, admin, pipeline,
+                                                                                       monkeypatch):
+    """Критерий переименовали на экране «Скоринг», пока воркер ждал модель: она оценивала прежний, баллы не пишутся и
+    приходят со следующей задачей. Чего модель не видит (веса, описание критерия с линейкой), то запись не держит:
+    итог по нынешним весам, они и в снимке."""
     accepted(monkeypatch, {CONTRACT: answer()}, {CONTRACT: CONTRACT_TEXT})
     fill_cards(monkeypatch, {CONTRACT: card_answer()})
+    first = profile_names("business")[0]
+
+    def edit(change):
+        criteria = api_get("/api/scoring-criteria", admin, profile="business")
+        change(criteria)
+        api_send("PUT", "/api/scoring-criteria?profile=business", admin, criteria)
 
     def edited(change):
         def reply(schema):
-            criteria = api_get("/api/scoring-criteria", admin, profile="business")
-            change(criteria)
-            api_send("PUT", "/api/scoring-criteria?profile=business", admin, criteria)
+            edit(change)
             return scores(even("business", 70))
         return reply
 
-    def describe(criteria):
+    def rename(criteria):
+        criteria[0]["name"] = f"{first} (уточнено)"
+
+    def unseen(criteria):
+        criteria[0]["weight"], criteria[1]["weight"] = criteria[0]["weight"] + 5, criteria[1]["weight"] - 5
         criteria[0]["description"] = f"{criteria[0]['description'] or ''} Уточнено."
 
-    def reweigh(criteria):
-        criteria[0]["weight"], criteria[1]["weight"] = criteria[0]["weight"] + 5, criteria[1]["weight"] - 5
-
-    run_scores(monkeypatch, {CONTRACT: edited(describe)})
+    run_scores(monkeypatch, {CONTRACT: edited(rename)})
 
     assert showcase(user)[CONTRACT]["scores_recipe"] is None
     [job] = api_get("/api/jobs", admin, kind="signal_scores")
     [error] = api_get(f"/api/jobs/{job['id']}", admin)["result"]["applied"]["errors"]
     assert error["error"].startswith("критерии профиля сменились после выдачи задачи")
 
-    run_scores(monkeypatch, {CONTRACT: edited(reweigh)})
+    edit(lambda criteria: criteria[0].update(name=first))
+    run_scores(monkeypatch, {CONTRACT: edited(unseen)})
 
     card = showcase(user)[CONTRACT]
     weights = {row["name"]: row["weight"] for row in api_get("/api/scoring-criteria", admin, profile="business")}

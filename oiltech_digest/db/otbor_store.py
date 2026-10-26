@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -21,7 +22,6 @@ from psycopg.types.json import Json
 
 from oiltech_digest import config
 from oiltech_digest.db import connection, feed_signals, marks
-from oiltech_digest.db.otbor_inputs import LINKS_LIMIT, article_inputs, links_in_input, signal_inputs  # noqa: F401
 from oiltech_digest.db.repository import (ARTICLE_SELECTOR_OTBOR, CARD_SET_BY_HUMAN, CARD_SET_BY_OTBOR,
                                           SIGNAL_ORIGIN_FEED, SIGNAL_SELECTOR_OTBOR, SYSTEM_TAG_UNCLASSIFIED,
                                           refresh_platform_decisions)
@@ -374,13 +374,10 @@ def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) 
     полей — человек, пометка «спорное: „Отбор“ не взял бы» с причиной отказа; «Решение платформы» — по ступени, когда
     будут баллы. Дальше публикация идёт по остатку конвейера: суть и перевод, оба вызова «Карточки», «Дедуп». RETURNED;
     NOT_REJECTED — «Отбор» её не отклонял (вернуть можно только отклонённое); None — сигнала нет."""
+    from oiltech_digest.otbor_answer import code_label
     from oiltech_digest.otbor_pack_format import load_dictionaries
 
-    dictionaries = load_dictionaries()
-
-    def label(name: str, code: str | None) -> str:
-        found = (dictionaries.get(name) or {}).get("values") or []
-        return next((value["label"] for value in found if value["code"] == code), code or "без причины")
+    label = partial(code_label, load_dictionaries())
 
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -391,7 +388,7 @@ def human_return(signal_id: int, values: dict[str, Any], *, author: str | None) 
             return None
         if row["otbor_decision"] != OTBOR_REJECT:
             return NOT_REJECTED
-        disputed = f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason'])}"
+        disputed = f"«Отбор» не взял бы: {label('reject_reason', row['reject_reason']) or 'без причины'}"
         application = values.get("oilfield_application") if values["oilfield_relevance"] == "transferable" else None
         relevance = label("oilfield_relevance", values["oilfield_relevance"])
         step = {"stage": "Человек", "text": (

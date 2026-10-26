@@ -13,6 +13,8 @@ business, технология — tech_radar; «другое» не оцени�
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, datetime, timezone
 from typing import Any, Callable
 
@@ -24,7 +26,7 @@ from oiltech_digest.otbor_pack_format import load_rubrics
 from oiltech_digest.processing.external_ai import InvalidJobPayload, StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import keyword_score_for_criterion, make_client
-from oiltech_digest.scoring_profiles import criteria_snapshot, snapshot_texts
+from oiltech_digest.scoring_profiles import criteria_snapshot
 from oiltech_digest.signal_card import EXPERT_RULES
 from oiltech_digest.signal_card_pack import CATEGORY_RU, UNDEFINED, publication_day, publication_text
 
@@ -119,21 +121,21 @@ def wrong_block(signal_id: int, author: str | None) -> str | None:
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
     """Самодостаточный пакет для воркера без базы: публикации с полями по договорённости и критерии профилей с
-    линейками (без весов). Сумма весов профиля не 100 — задачу не выдаём: итог исказился бы (ADR 0002, п. 3). Снимок
-    критериев (criteria_snapshot) воркер вернёт как есть: по нему ядро при записи узнает, что модель оценивала те же
-    критерии, что стоят сейчас."""
+    линейками (без весов). Сумма весов профиля не 100 — задачу не выдаём: итог исказился бы (ADR 0002, п. 3).
+    Отпечаток критериев так, как их видит модель (criteria_fingerprints), воркер вернёт как есть: по нему ядро при
+    записи узнает, что модель оценивала то же, что увидела бы сейчас."""
     rubrics = load_rubrics()
     contexts = [context(row) for row in signal_scores_store.score_inputs(job_payload.get("signal_ids") or [])]
-    profiles, snapshots = {}, {}
+    profiles = {}
     for profile in sorted({one["profile"] for one in contexts}):
         criteria = repository.list_enabled_scoring_criteria(profile)
         total = sum(float(criterion["weight"]) for criterion in criteria)
         if round(total, 6) != 100:
             raise InvalidJobPayload(f"сумма весов профиля {profile} равна {total:g}, а не 100: баллы не считаются")
         profiles[profile] = model_criteria(criteria, rubrics, profile)
-        snapshots[profile] = criteria_snapshot(criteria)
     return {"kind": KIND, "model": job_payload.get("model"), "reasoning": job_payload.get("reasoning"),
-            "rubrics_version": rubrics["version"], "profiles": profiles, "criteria_snapshots": snapshots,
+            "rubrics_version": rubrics["version"], "profiles": profiles,
+            "criteria_fingerprints": {profile: _fingerprint(seen) for profile, seen in profiles.items()},
             "items": [payload_item(one) for one in contexts]}
 
 
@@ -190,6 +192,13 @@ def model_criteria(criteria: list[dict[str, Any]], rubrics: dict[str, Any], prof
     return found
 
 
+def _fingerprint(seen: list[dict[str, Any]]) -> str:
+    """Отпечаток критериев так, как их видит модель (model_criteria): имена, описания критериев без линейки, линейки.
+    Веса, ключевые слова и описания критериев с линейкой в него не входят: модель их не видит."""
+    blob = json.dumps(seen, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 # --- Вызов модели (воркер, без базы) -------------------------------------------------------------
 
 
@@ -205,7 +214,7 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
     rows: list[dict[str, Any]] = []
     result = {"signal_scores": True, "kind": KIND, "prompt_version": PROMPT_VERSION,
               "rubrics_version": payload.get("rubrics_version"),
-              "criteria_snapshots": payload.get("criteria_snapshots"), "scores": rows}
+              "criteria_fingerprints": payload.get("criteria_fingerprints"), "scores": rows}
     for item in payload.get("items") or []:
         if heartbeat:
             try:
@@ -296,9 +305,10 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
     """Сторона ядра: проверить ответы кодом (score_values) и записать баллы с рецептом. Ответ не по правилам не
     пишется: ошибка — в итоге задачи, остальные сигналы пачки пишутся. Строка чужого сигнала не пишется; сигнал,
     который этап больше не оценивает или у которого сменились категория или главная публикация, — тоже: баллы
-    пересчитает следующая задача. Так же с критериями профиля, которые сменились после выдачи (имя, описание, ключевые
-    слова, набор): модель оценивала прежние. Правка одних весов запись не держит: итог считает ядро по нынешним весам
-    и пишет их в снимок (ADR 0002, п. 7)."""
+    пересчитает следующая задача. Так же с критериями профиля, у которых после выдачи сменилось то, что видит модель
+    (имя, состав набора, описание критерия без линейки): модель оценивала прежние. Правка весов, ключевых слов и
+    описания критерия с линейкой запись не держит: модель их не видит, итог и ключевой балл ядро считает по нынешним
+    и пишет их в снимок (ADR 0002, п. 6)."""
     rubrics = load_rubrics()
     rows = [row for row in result.get("scores") or [] if isinstance(row, dict)]
     expected = None if signal_ids is None else {str(value) for value in signal_ids}
@@ -312,9 +322,9 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
         return {"written": 0, "errors": [{"signal_id": row.get("signal_id"), "error": stale} for row in rows]}
     criteria = {profile: repository.list_enabled_scoring_criteria(profile)
                 for profile in signal_scores_store.PROFILES.values()}
-    sent = result.get("criteria_snapshots") if isinstance(result.get("criteria_snapshots"), dict) else {}
+    sent = result.get("criteria_fingerprints") if isinstance(result.get("criteria_fingerprints"), dict) else {}
     changed = {profile for profile, current in criteria.items()
-               if snapshot_texts(sent.get(profile)) != snapshot_texts(criteria_snapshot(current))}
+               if sent.get(profile) != _fingerprint(model_criteria(current, rubrics, profile))}
     applied: dict[str, Any] = {"written": 0, "errors": []}
     for row in rows:
         signal_id = _signal_id(row, expected)

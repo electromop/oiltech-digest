@@ -316,7 +316,7 @@ export type Signal = {
   // «не тот блок», сколько раз «Карточка» возвращала публикацию в «Отбор» (старое событие).
   score_band?: "strong" | "useful" | "watch" | "weak" | string | null;
   scores_pending?: boolean;
-  // После «Отбора» без баллов: «другое» или второй вызов ещё не прошёл; балл «0» тогда не балл.
+  // Балла нет: после «Отбора» без ступени, сбой «Отбора» или отсеяно поиском; «0» тогда не балл.
   unscored?: boolean;
   scores_recipe?: Record<string, unknown> | null;
   otbor_returns?: number;

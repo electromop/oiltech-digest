@@ -1942,9 +1942,10 @@ def list_signals(
         # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте. У сигнала с баллами второго
         # вызова «Карточки» (#132) — его ступень: сильный, полезный, наблюдать, слабый.
         band = row.get("score_band")
-        # Сигнал после «Отбора» без ступени ещё не оценён вторым вызовом или он «другое»: балла у него нет, и «0» с
-        # подписью «Низкая» солгали бы.
-        unscored = row.get("otbor_decision") is not None and band is None
+        # Балла нет у сигнала после «Отбора» без ступени (второй вызов не прошёл или он «другое»), у сбоя «Отбора» и у
+        # отсеянного поиском: их не оценивали ни «Карточка», ни судья, и «0» с подписью «Низкая» солгали бы.
+        unscored = band is None and (row.get("otbor_decision") is not None or row.get("otbor_failure") is not None
+                                     or row.get("filter_stage") == "search")
         label = (signal_scoring.BAND_LABELS[band].capitalize() if band in signal_scoring.BAND_LABELS
                  else None if unscored else score_label(float(row.get("score") or 0)))
         rows.append(_clean({
