@@ -11,7 +11,7 @@ import pytest
 from oiltech_digest import signal_card, signal_scores
 from oiltech_digest.db import repository
 from tests.card_scores_exam_support import (CARD, LUNA, MATURITY, MINI, SUMMARY, export_control, flat, oracle_card,
-                                            oracle_scores, part_rows, relabel, run_exam)
+                                            oracle_scores, part_rows, run_exam)
 from tests.card_scores_exam_support import scores_pack  # noqa: F401 — фикстура
 from tests.otbor_pack_support import THEMES
 from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
@@ -61,17 +61,17 @@ def test_a_model_that_scores_like_the_expert_passes_and_the_main_call_measures_t
 
 def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_are_paid_once(scores_pack,
                                                                                                monkeypatch):
-    model, report = run_exam(monkeypatch, scores_pack, {LUNA: flat(60), MINI: oracle_scores(scores_pack)})
+    model, report = run_exam(monkeypatch, scores_pack, {LUNA: flat(72), MINI: oracle_scores(scores_pack)})
 
     luna, mini = report["models"]
     assert (luna["model"], mini["model"]) == (LUNA, MINI)
-    # Один балл всем: итог у всех строк одинаковый — порядок только ничьи (половина), ступень совпала лишь у
-    # «наблюдать» (решение — по строкам пакета).
+    # Один балл всем: итог у всех строк одинаковый — порядок только ничьи (половина), ступень «полезный» у всех, как у
+    # нынешних баллов ядра, — не лучше их (решение — по строкам пакета).
     rows = report["rows"]
     pack = [one for one in rows if one["rating"] != "strong_extra"]
-    watch = sum(one["band"] == "watch" for one in pack)
+    useful = sum(one["band"] == "useful" for one in pack)
     assert luna["scores"]["plain"]["order"]["agent"] == 0.5
-    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(watch / len(pack))
+    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(useful / len(pack))
     assert set(luna["failed"]) == {"band", "order"} and luna["passed"] is False
     assert mini["passed"] is True and report["decision"]["model"] == MINI
     # Основной вызов — один на прогон строки для всех моделей второго вызова: дата и зрелость у них одни и те же.
@@ -89,31 +89,31 @@ def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_
     assert "ступень" in report["decision"]["reason"] and "порядок" in report["decision"]["reason"]
 
 
-def test_the_band_passes_at_the_expert_own_agreement_on_the_same_rows(scores_pack, monkeypatch):
+def test_the_band_passes_only_when_better_than_the_core_scores_on_the_same_rows(scores_pack, monkeypatch):
     _, first = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
     exam = part_rows(first, scores_pack)
-    before = {number: scores_pack["expert"][number]["overall"] for number in exam}
-    # Эксперт поднял общую оценку у трёх классов строк из пяти, баллы критериев оставил: итог из его баллов совпадает
-    # с его же оценкой только у сильных и фоновых, ниже 65% черновика. Порядок цел: поднятые остались выше прежних.
-    relabel(scores_pack, {"Полезный сигнал": "Сильный сигнал", "Наблюдать": "Полезный сигнал",
-                          "Низкая ценность / шум": "Фоновый материал"})
-    kept = sum(before[number] in ("Сильный сигнал", "Фоновый материал") for number in exam) / len(exam)
-    strong = next(number for number in exam if before[number] == "Сильный сигнал")
+    expert = scores_pack["expert"]
+    # Нынешние баллы ядра (77 у ленты, 70 у судьи) дают «полезный» всем строкам, где они есть. gpt-6-luna ставит в
+    # порядке эксперта, но все итоги внутри «полезного»: порядок верный, ступень не лучше ядра. gpt-5.4-mini ставит как
+    # эксперт, кроме одной сильной строки (72, «полезный»): хуже эксперта самого с собой, но лучше ядра.
+    squeezed = {90: 79, 72: 75, 50: 70, 45: 68, 25: 66}
+    strong = next(number for number in exam if expert[number]["band"] == "strong")
+    _, report = run_exam(monkeypatch, scores_pack, {
+        LUNA: oracle_scores(scores_pack, {number: squeezed[one["score"]] for number, one in expert.items()}),
+        MINI: oracle_scores(scores_pack, {strong: 72})})
 
-    # gpt-6-luna ставит баллы эксперта, кроме одной сильной строки (72, «полезный»); gpt-5.4-mini — как эксперт.
-    _, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack, {strong: 72}),
-                                                    MINI: oracle_scores(scores_pack)})
-
-    assert report["baseline"]["expert"]["band"] == pytest.approx(kept) and kept < 0.65
+    controlled = [number for number in exam if scores_pack["control"]["rows"].get(number, {}).get("score")]
+    useful = sum(expert[number]["band"] == "useful" for number in controlled) / len(controlled)
+    assert report["baseline"]["control"]["band"] == pytest.approx(useful)
     luna, mini = report["models"]
-    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(kept - 1 / len(exam))
+    assert luna["scores"]["plain"]["band"]["floor"] == pytest.approx(useful)
     assert luna["failed"] == ["band"] and luna["scores"]["plain"]["order"]["agent"] == 1.0
-    assert mini["scores"]["plain"]["band"]["agent"] == pytest.approx(kept)
+    assert mini["scores"]["plain"]["band"]["agent"] < report["baseline"]["expert"]["band"]
     assert mini["passed"] is True and report["decision"]["model"] == MINI
-    # Порог в отчёте — доля эксперта с десятыми: рядом с ним целые проценты спрятали бы «не прошла».
+    # Порог в отчёте — доля ядра на тех же строках, с десятыми: рядом с ним целые проценты спрятали бы «не прошла».
     text = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1].read_text(encoding="utf-8")
     line = next(one for one in text.splitlines() if one.startswith("Пороги на строках пакета"))
-    assert "эксперта самого с собой" in line and f"({kept:.1%})" in line
+    assert "лучше нынешних баллов ядра" in line and f"({useful:.1%}" in line
 
 
 def test_both_keyword_variants_are_scored_and_the_one_closer_to_the_expert_is_chosen(scores_pack, monkeypatch, capsys):

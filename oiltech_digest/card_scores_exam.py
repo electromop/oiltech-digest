@@ -34,8 +34,10 @@ from oiltech_digest.signal_card_pack import load_dictionaries as card_dictionari
 from oiltech_digest.signal_card_pack import publication_text
 
 # Кандидаты второго вызова (решение 20 журнала гриля, спека): лестница «Отбора» и gpt-6-sol — модель «Отбора» и
-# основного вызова на проде с 26.10. Лестница — по цене.
-MODELS = ("gpt-6-luna", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-mini", "gpt-6-sol", "gpt-5.5")
+# основного вызова на проде с 26.10; с 27.10 линейка 6.1 (terra и sol, решение владельца; 5.6-terra и 5.6-sol не
+# берём). Лестница — по цене.
+MODELS = ("gpt-6-luna", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-mini", "gpt-6.1-terra", "gpt-6-sol", "gpt-6.1-sol",
+          "gpt-5.5")
 RUNS = otbor_exam.RUNS
 APPROVAL_KEY = "approved_scores"
 
@@ -59,7 +61,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     tried: list[dict[str, Any]] = []
     for model in ladder:
         tried.append(_model_scores(model, calls.scores(model, rows, summaries, cards, runs), rows, summaries, cards,
-                                   calls.inputs))
+                                   calls.inputs, exam["scores_control"]["rows"]))
         print(f"{model}: " + ("ступень и порядок пройдены" if tried[-1]["passed"]
                               else "не прошла: " + ", ".join(tried[-1]["failed"])), flush=True)
         if not every and _decision(tried, part):
@@ -99,7 +101,8 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
     rows = [found[one["id"]] for one in saved["rows"]]
     summaries, cards = saved["summaries"], saved["cards"]["answers"]
     # Цена и токены — исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
-    tried = [{**_model_scores(one["model"], one["answers"], rows, summaries, cards, inputs),
+    tried = [{**_model_scores(one["model"], one["answers"], rows, summaries, cards, inputs,
+                              exam["scores_control"]["rows"]),
               **{key: one[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}}
              for one in saved["models"]]
     settings = {key: saved[key] for key in ("part", "runs", "split", "card_model", "summary_model",
@@ -286,8 +289,8 @@ def finals(answers: list[dict[str, Any]], rows: list[dict[str, Any]], summaries:
 
 
 def _model_scores(model: str, answers: list[dict[str, Any]], rows: list[dict[str, Any]], summaries: dict[str, str],
-                  cards: dict[str, list[dict[str, Any]]], inputs: Inputs) -> dict[str, Any]:
-    scores = evaluate(rows, finals(answers, rows, summaries, cards, inputs), _weights(inputs.criteria))
+                  cards: dict[str, list[dict[str, Any]]], inputs: Inputs, control: dict[str, Any]) -> dict[str, Any]:
+    scores = evaluate(rows, finals(answers, rows, summaries, cards, inputs), control)
     return {"model": model, **_spend(answers), "answers": answers, "scores": scores, "passed": scores["passed"],
             "failed": scores["failed"], "variant": scores["variant"]}
 

@@ -210,12 +210,13 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
     month = report.get("month")
     base = report["baseline"]
     lines = ["## Качество и цена", "",
-             f"Пороги на строках пакета: ступень {BAND_RULE_RU} ({_share(base['expert']['band'], 1)}), порядок "
-             f"не ниже {THRESHOLDS['order']:.0%} (хотя бы в одном варианте ключевых слов); вариант модели: ближе к "
-             "эксперту. "
+             f"Пороги на строках пакета: ступень {BAND_RULE_RU} ({_share(base['control']['band'], 1)} на "
+             f"{base['control']['rows']} строках с баллом ядра), порядок не ниже {THRESHOLDS['order']:.0%} (хотя бы в "
+             "одном варианте ключевых слов); вариант модели: ближе к эксперту. "
              "«Сильные сверх пакета» в решение не входят: доля ответов «сильный» у них и порядок вместе с ними рядом.",
-             "", "| Модель | Правило | Вариант | Ступень | Порядок | Сверх пакета: «сильный» | Порядок с ними "
-             "| Без баллов | Экзамен | На сигнал | Лента за 30 дней |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "", "| Модель | Правило | Вариант | Ступень | Там же, где ядро | Порядок | Сверх пакета: «сильный» "
+             "| Порядок с ними | Без баллов | Экзамен | На сигнал | Лента за 30 дней |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for model in report["models"]:
         scores = model["scores"][model["variant"]]
         answers = model["scores"]["answers"]
@@ -224,6 +225,7 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
         lines.append(
             f"| {model['model']}{deprecated} | {'прошла' if model['passed'] else 'нет: ' + failed_ru(model['failed'])} "
             f"| {VARIANT_RU[model['variant']]} | {_share(scores['band']['agent'], 1)} "
+            f"| {_share(scores['band']['same_rows'], 1)} "
             f"| {_share(scores['order']['agent'], 1)} | {_share(scores['band']['extra_strong'])} "
             f"| {_share(scores['order']['with_extra'])} | {answers['failures']} | {_usd(model['cost_usd'])} "
             f"| {_usd(per_signal)} | {_usd(per_signal * month['signals']) if per_signal and month else 'нет'} |")
@@ -232,7 +234,7 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
                   f"ступень {_share(base['constant']['band'])}, порядок {_share(base['constant']['order'])}; эксперт "
                   f"сам с собой (итог по весам из его баллов) ступень {_share(base['expert']['band'])}, порядок "
                   f"{_share(base['expert']['order'])}; контроль с ядра (балл ленты и судьи, строк {control['rows']}) "
-                  f"ступень {_share(control['band'])}, порядок {_share(control['order'])}.",
+                  f"ступень {_share(control['band'], 1)}, порядок {_share(control['order'], 1)}.",
               (f"Лента за 30 дней: сигналов с баллами около {month['signals']} из {month['feed']} публикаций "
                "ленты (доля взятого экспертом бизнеса и технологии по размерам страт окна пакета); находки радара и "
                "материалы не учтены." if month else

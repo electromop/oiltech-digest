@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import json
 
-import openpyxl
 import pytest
 
 from oiltech_digest import (card_scores_exam_calls, card_scores_exam_score, cli, signal_card, signal_card_exam,
                             signal_card_pack, signal_scores)
 from oiltech_digest.db import marks, repository
-from oiltech_digest.otbor_pack_format import MANIFEST_NAME, MARKUP_SHEET, SCALE_COLUMN, load_rubrics
+from oiltech_digest.otbor_pack_format import MANIFEST_NAME, load_rubrics
 from oiltech_digest.processing.openai_client import AIResponse
 from tests.otbor_exam_support import ROWS_NAME, expert_codes, markup_columns, special_rows, write_rows
 from tests.otbor_pack_support import BUSINESS, TECH, THEMES, fill, radar
@@ -92,20 +91,6 @@ def card_exam_pack(items, folder, *, tuning=1, text_of=None):
     (folder / signal_card_exam.SPLIT_NAME).write_text(json.dumps({"tuning": ids[:tuning], "exam": ids[tuning:]}),
                                                       encoding="utf-8")
     return markup, ids[tuning:]
-
-
-def relabel(scores_pack, overall_of):
-    """Эксперт сменил общую оценку {прежняя: новая} у строк с баллами, баллы критериев прежние: итог из его баллов
-    расходится с его же оценкой. Разметка и scores_pack["expert"] — с новой оценкой."""
-    book = openpyxl.load_workbook(scores_pack["markup"])
-    sheet = book[MARKUP_SHEET]
-    column = [cell.value for cell in sheet[1]].index(SCALE_COLUMN)
-    for row in sheet.iter_rows(min_row=2):
-        expert = scores_pack["expert"].get(row[0].value)
-        if expert and row[column].value in overall_of:
-            row[column].value = expert["overall"] = overall_of[row[column].value]
-            expert["band"] = BAND_OF[expert["overall"]]
-    book.save(scores_pack["markup"])
 
 
 def _article_title(article_id):

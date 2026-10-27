@@ -100,8 +100,12 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     # Пороги — часть утверждения: отметка с нынешними версиями, но без порогов экзамен не пускает.
     approve_scores(out, approved=(f"утверждено: карточка {signal_card.PROMPT_VERSION}, баллы "
                                   f"{signal_scores.PROMPT_VERSION}, линейки {load_rubrics()['version']}"))
-    refused("пороги: ступень")
+    refused("пороги: границы итога")
     approve_scores(out)
+    # Границы итога — тоже часть утверждения: отметка при других границах экзамен не пускает.
+    monkeypatch.setattr(card_scores_exam.config, "SIGNAL_SCORE_BANDS", (74, 61, 40))
+    refused("границы итога 74/61/40")
+    monkeypatch.setattr(card_scores_exam.config, "SIGNAL_SCORE_BANDS", (80, 65, 40))
     # Деление и строки экзамена утверждает владелец: без отметки «Отбора» прогона нет, даже настройки.
     rows = json.loads((out / ROWS_NAME).read_text(encoding="utf-8"))
     write_rows(out, {key: rows[key] for key in ("list_pages", "in_instruction")}, approved=None)
@@ -250,8 +254,8 @@ def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monk
     pack = [one for one in rescored["rows"] if one["rating"] != "strong_extra"]
     strong = sum(one["band"] == "strong" for one in pack)
     assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(1 - strong / len(pack))
-    # Порог ступени — эксперт сам с собой по тем же новым границам: модель с его баллами проходит и при пересчёте.
-    assert rescored["baseline"]["expert"]["band"] == pytest.approx(1 - strong / len(pack))
+    # Порог ступени при пересчёте — нынешние баллы ядра по тем же новым границам: модель с баллами эксперта лучше них.
+    assert luna["scores"]["plain"]["band"]["floor"] == pytest.approx(rescored["baseline"]["control"]["band"])
     assert luna["passed"] is True and rescored["decision"]["model"] == LUNA
     readable = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1]
     assert "Пересчёт ничего не оплачивал" in readable.read_text(encoding="utf-8")
