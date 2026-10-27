@@ -250,6 +250,9 @@ def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monk
     pack = [one for one in rescored["rows"] if one["rating"] != "strong_extra"]
     strong = sum(one["band"] == "strong" for one in pack)
     assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(1 - strong / len(pack))
+    # Порог ступени — эксперт сам с собой по тем же новым границам: модель с его баллами проходит и при пересчёте.
+    assert rescored["baseline"]["expert"]["band"] == pytest.approx(1 - strong / len(pack))
+    assert luna["passed"] is True and rescored["decision"]["model"] == LUNA
     readable = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1]
     assert "Пересчёт ничего не оплачивал" in readable.read_text(encoding="utf-8")
     assert luna["cost_usd"] == report["models"][0]["cost_usd"]  # цена исходного прогона

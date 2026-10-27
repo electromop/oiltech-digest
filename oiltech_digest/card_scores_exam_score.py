@@ -13,8 +13,9 @@ signal_scores.score_values, итог в двух вариантах подмеш
 Решение и правило прохождения — по строкам пакета: с ними сравниваются константа, эксперт сам с собой (итог по весам из
 его же баллов) и контроль с ядра (балл и тег ленты, балл и тема судьи). «Сильные сверх пакета» (выбранное «в дайджест»,
 эталонный ТОП) — отдельной строкой: доля ответов «сильный» и порядок вместе с ними; иначе их число решало бы, кто
-прошёл (константа «всегда сильный» на смеси). Пороги — черновик разбора разметки 23.10 (раздел 3.4), утверждает
-владелец до платного прогона (rules_text — в его отметке).
+прошёл (константа «всегда сильный» на смеси). Правило утвердил владелец 27.10: ступень не ниже, чем у эксперта самого с
+собой на тех же строках (при ступенях 80/65/40 постоянный порог не прошла бы и модель с его баллами), порядок 85%;
+порог темы в решение второго вызова не входит. rules_text — в отметке утверждения.
 """
 
 from __future__ import annotations
@@ -26,7 +27,10 @@ from typing import Any
 from oiltech_digest import config, signal_scoring
 from oiltech_digest.signal_scoring import BAND_ORDER, STRONG, USEFUL, WATCH, WEAK
 
-THRESHOLDS = {"band": 0.65, "order": 0.85, "theme": 0.65}
+THRESHOLDS = {"order": 0.85, "theme": 0.65}
+# Порог ступени — не число, а эксперт сам с собой на тех же строках (expert_agreement).
+BAND_RULE = "expert_self"
+BAND_RULE_RU = "не ниже эксперта самого с собой на тех же строках"
 VARIANTS = ("keywords", "plain")
 # Общая оценка эксперта → ступень: «наблюдать» и «фоновый» у эксперта одна ступень (разбор разметки, раздел 1.5).
 EXPERT_BANDS = {"strong_signal": STRONG, "approved": USEFUL, "watch_later": WATCH, "background_material": WATCH,
@@ -42,13 +46,14 @@ Finals = Mapping[str, Sequence[Mapping[str, Any] | None]]
 
 def rules_text() -> str:
     """Пороги словами — их называет отметка утверждения владельцем: другие пороги — другое утверждение."""
-    return (f"пороги: ступень {THRESHOLDS['band']:.0%}, порядок {THRESHOLDS['order']:.0%}, "
-            f"тема {THRESHOLDS['theme']:.0%}")
+    return f"пороги: ступень {BAND_RULE_RU}, порядок {THRESHOLDS['order']:.0%}, тема {THRESHOLDS['theme']:.0%}"
 
 
-def evaluate(rows: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
-    """Метрики модели второго вызова в обоих вариантах, правило прохождения и вариант ближе к эксперту."""
-    variants = {variant: _variant(rows, finals, variant) for variant in VARIANTS}
+def evaluate(rows: list[dict[str, Any]], finals: Finals, weights: Mapping[str, Mapping[str, float]]) -> dict[str, Any]:
+    """Метрики модели второго вызова в обоих вариантах, правило прохождения и вариант ближе к эксперту; weights — веса
+    критериев по профилю: по ним итог эксперта самого с собой на тех же строках, ниже его доли ступень не проходит."""
+    floor = expert_agreement(rows, weights)["band"]
+    variants = {variant: _variant(rows, finals, variant, floor) for variant in VARIANTS}
     passing = [variant for variant in VARIANTS if variants[variant]["passed"]]
     chosen = _closer(variants, passing or list(VARIANTS))
     every = [final for row in rows for final in finals[row["id"]]]
@@ -64,14 +69,14 @@ def _closer(variants: dict[str, Any], candidates: list[str]) -> str:
                                                 variants[variant]["order"]["agent"] or 0, variant == current))
 
 
-def _variant(rows: list[dict[str, Any]], finals: Finals, variant: str) -> dict[str, Any]:
+def _variant(rows: list[dict[str, Any]], finals: Finals, variant: str, floor: float | None) -> dict[str, Any]:
     totals = {row["id"]: [_total(final, variant) for final in finals[row["id"]]] for row in rows}
     pack = [row for row in rows if not row["extra"]]
     extra = [signal_scoring.band(total) for row in rows if row["extra"] for total in totals[row["id"]]]
-    band = {**_band(pack, totals), "extra_strong": _share(extra.count(STRONG), len(extra))}
+    band = {**_band(pack, totals), "floor": floor, "extra_strong": _share(extra.count(STRONG), len(extra))}
     order = {**order_share(pack, totals), "with_extra": order_share(rows, totals)["agent"]}
-    checks = {"band": band["agent"], "order": order["agent"]}
-    failed = [name for name, share in checks.items() if share is None or share < THRESHOLDS[name]]
+    checks = {"band": (band["agent"], floor), "order": (order["agent"], THRESHOLDS["order"])}
+    failed = [name for name, (share, bound) in checks.items() if share is None or bound is None or share < bound]
     return {"band": band, "order": order, "criteria": _criteria(pack, finals, variant),
             "freshness": _freshness(pack, finals), "passed": not failed, "failed": failed}
 
@@ -198,7 +203,6 @@ def baseline(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[str, floa
     pack = [row for row in rows if not row["extra"]]
     common_band = _most_common([row["band"] for row in pack])
     common_theme = _most_common([row["theme"] for row in pack])
-    expert_totals = {row["id"]: [expert_total(row, weights[row["profile"]])] for row in pack}
     controlled = [row for row in pack if (control.get(row["id"]) or {}).get("score") is not None]
     control_totals = {row["id"]: [float(control[row["id"]]["score"])] for row in controlled}
     themed = [row for row in pack if (control.get(row["id"]) or {}).get("theme")]
@@ -209,12 +213,20 @@ def baseline(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[str, floa
                      "theme": _share(sum(row["theme"] == common_theme for row in pack), len(pack)),
                      "theme_value": common_theme,
                      "criteria": {name: _constant_error(pack, name, mean) for name, mean in means.items()}},
-        "expert": {"band": _band(pack, expert_totals)["agent"], "order": order_share(pack, expert_totals)["agent"]},
+        "expert": expert_agreement(rows, weights),
         "control": {"rows": len(controlled), "band": _band(controlled, control_totals)["agent"],
                     "order": order_share(controlled, control_totals)["agent"],
                     "theme_rows": len(themed),
                     "theme": _share(sum(row["theme"] == control[row["id"]]["theme"] for row in themed), len(themed))},
     }
+
+
+def expert_agreement(rows: list[dict[str, Any]], weights: Mapping[str, Mapping[str, float]]) -> dict[str, Any]:
+    """Эксперт сам с собой на строках пакета: итог по весам из его баллов против его общей оценки — ступень и порядок.
+    Ступень модели проходит, если не ниже его ступени (правило владельца 27.10)."""
+    pack = [row for row in rows if not row["extra"]]
+    totals = {row["id"]: [expert_total(row, weights[row["profile"]])] for row in pack}
+    return {"band": _band(pack, totals)["agent"], "order": order_share(pack, totals)["agent"]}
 
 
 def expert_total(row: Mapping[str, Any], weights: Mapping[str, float]) -> float | None:

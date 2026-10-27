@@ -11,7 +11,7 @@ import pytest
 from oiltech_digest import signal_card, signal_scores
 from oiltech_digest.db import repository
 from tests.card_scores_exam_support import (CARD, LUNA, MATURITY, MINI, SUMMARY, export_control, flat, oracle_card,
-                                            oracle_scores, part_rows, run_exam)
+                                            oracle_scores, part_rows, relabel, run_exam)
 from tests.card_scores_exam_support import scores_pack  # noqa: F401 — фикстура
 from tests.otbor_pack_support import THEMES
 from tests.otbor_pack_support import pack  # noqa: F401 — фикстура
@@ -87,6 +87,33 @@ def test_the_cheapest_model_that_passes_is_chosen_and_the_main_call_and_summary_
     _, report = run_exam(monkeypatch, scores_pack, {LUNA: flat(60), MINI: flat(70)})
     assert report["decision"]["model"] is None
     assert "ступень" in report["decision"]["reason"] and "порядок" in report["decision"]["reason"]
+
+
+def test_the_band_passes_at_the_expert_own_agreement_on_the_same_rows(scores_pack, monkeypatch):
+    _, first = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
+    exam = part_rows(first, scores_pack)
+    before = {number: scores_pack["expert"][number]["overall"] for number in exam}
+    # Эксперт поднял общую оценку у трёх классов строк из пяти, баллы критериев оставил: итог из его баллов совпадает
+    # с его же оценкой только у сильных и фоновых, ниже 65% черновика. Порядок цел: поднятые остались выше прежних.
+    relabel(scores_pack, {"Полезный сигнал": "Сильный сигнал", "Наблюдать": "Полезный сигнал",
+                          "Низкая ценность / шум": "Фоновый материал"})
+    kept = sum(before[number] in ("Сильный сигнал", "Фоновый материал") for number in exam) / len(exam)
+    strong = next(number for number in exam if before[number] == "Сильный сигнал")
+
+    # gpt-6-luna ставит баллы эксперта, кроме одной сильной строки (72, «полезный»); gpt-5.4-mini — как эксперт.
+    _, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack, {strong: 72}),
+                                                    MINI: oracle_scores(scores_pack)})
+
+    assert report["baseline"]["expert"]["band"] == pytest.approx(kept) and kept < 0.65
+    luna, mini = report["models"]
+    assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(kept - 1 / len(exam))
+    assert luna["failed"] == ["band"] and luna["scores"]["plain"]["order"]["agent"] == 1.0
+    assert mini["scores"]["plain"]["band"]["agent"] == pytest.approx(kept)
+    assert mini["passed"] is True and report["decision"]["model"] == MINI
+    # Порог в отчёте — доля эксперта с десятыми: рядом с ним целые проценты спрятали бы «не прошла».
+    text = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1].read_text(encoding="utf-8")
+    line = next(one for one in text.splitlines() if one.startswith("Пороги на строках пакета"))
+    assert "эксперта самого с собой" in line and f"({kept:.1%})" in line
 
 
 def test_both_keyword_variants_are_scored_and_the_one_closer_to_the_expert_is_chosen(scores_pack, monkeypatch, capsys):

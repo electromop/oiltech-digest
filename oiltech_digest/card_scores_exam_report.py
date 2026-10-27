@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from oiltech_digest import card_scores_exam_calls, card_scores_exam_control, otbor_exam
-from oiltech_digest.card_scores_exam_score import EXTRA, THRESHOLDS, VARIANTS
+from oiltech_digest.card_scores_exam_score import BAND_RULE_RU, EXTRA, THRESHOLDS, VARIANTS
 from oiltech_digest.otbor_exam_score import FEED_GROUPS
 from oiltech_digest.otbor_pack_format import CATEGORY_PROFILE, EXPERT_SCALE, PROFILE_RU
 from oiltech_digest.signal_scoring import BAND_LABELS, BAND_ORDER
@@ -27,7 +27,8 @@ REPORT_PREFIX = "card_scores_exam_report_"
 PART_RU = {"exam": "экзамен", "tuning": "настройка"}
 VARIANT_RU = {"keywords": "с ключевыми словами", "plain": "без ключевых слов"}
 _FAILED_RU = {"band": "ступень", "order": "порядок"}
-_RULES_RU = {"thresholds": "пороги", "bands": "границы ступеней", "rows": "строки экзамена"}
+_RULES_RU = {"thresholds": "пороги", "band_rule": "правило ступени", "bands": "границы ступеней",
+             "rows": "строки экзамена"}
 _RATING_RU = {**{value: short for value, short, _ in EXPERT_SCALE}, EXTRA: "Сильный сверх пакета"}
 _FILES = (("rows", otbor_exam.ROWS_NAME), ("split", otbor_exam.SPLIT_NAME), ("control", card_scores_exam_control.NAME),
           ("summaries", card_scores_exam_calls.SUMMARIES_NAME), ("cards", card_scores_exam_calls.CARDS_NAME))
@@ -209,8 +210,9 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
     month = report.get("month")
     base = report["baseline"]
     lines = ["## Качество и цена", "",
-             f"Пороги на строках пакета: ступень не ниже {THRESHOLDS['band']:.0%}, порядок не ниже "
-             f"{THRESHOLDS['order']:.0%} (хотя бы в одном варианте ключевых слов); вариант модели: ближе к эксперту. "
+             f"Пороги на строках пакета: ступень {BAND_RULE_RU} ({_share(base['expert']['band'], 1)}), порядок "
+             f"не ниже {THRESHOLDS['order']:.0%} (хотя бы в одном варианте ключевых слов); вариант модели: ближе к "
+             "эксперту. "
              "«Сильные сверх пакета» в решение не входят: доля ответов «сильный» у них и порядок вместе с ними рядом.",
              "", "| Модель | Правило | Вариант | Ступень | Порядок | Сверх пакета: «сильный» | Порядок с ними "
              "| Без баллов | Экзамен | На сигнал | Лента за 30 дней |", "|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -221,8 +223,8 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
         deprecated = " (устаревшая)" if model["model"] in (report.get("deprecated") or {}) else ""
         lines.append(
             f"| {model['model']}{deprecated} | {'прошла' if model['passed'] else 'нет: ' + failed_ru(model['failed'])} "
-            f"| {VARIANT_RU[model['variant']]} | {_share(scores['band']['agent'])} "
-            f"| {_share(scores['order']['agent'])} | {_share(scores['band']['extra_strong'])} "
+            f"| {VARIANT_RU[model['variant']]} | {_share(scores['band']['agent'], 1)} "
+            f"| {_share(scores['order']['agent'], 1)} | {_share(scores['band']['extra_strong'])} "
             f"| {_share(scores['order']['with_extra'])} | {answers['failures']} | {_usd(model['cost_usd'])} "
             f"| {_usd(per_signal)} | {_usd(per_signal * month['signals']) if per_signal and month else 'нет'} |")
     control = base["control"]
@@ -283,7 +285,8 @@ def _model(model: dict[str, Any], report: dict[str, Any]) -> list[str]:
              "| Вариант | Ступень | Порядок | Порядок: бизнес | Порядок: технология | |", "|---|---|---|---|---|---|"]
     for variant in VARIANTS:
         one = scores[variant]
-        lines.append(f"| {VARIANT_RU[variant]} | {_share(one['band']['agent'])} | {_share(one['order']['agent'])} "
+        lines.append(f"| {VARIANT_RU[variant]} | {_share(one['band']['agent'], 1)} "
+                     f"| {_share(one['order']['agent'], 1)} "
                      f"| {_share(one['order']['by_profile'].get('business'))} "
                      f"| {_share(one['order']['by_profile'].get('tech_radar'))} | {_mark(one['passed'])} |")
     lines += _bands(scores["bands"], model["variant"])
@@ -333,8 +336,9 @@ def _number(value: float | None) -> str:
     return "нет" if value is None else f"{value:.1f}"
 
 
-def _share(value: float | None) -> str:
-    return "нет" if value is None else f"{value:.0%}"
+def _share(value: float | None, digits: int = 0) -> str:
+    """Доля в процентах; ступень и порядок — с десятыми: рядом с порогом целые проценты прячут «не прошла»."""
+    return "нет" if value is None else f"{value:.{digits}%}"
 
 
 def _usd(value: float | None) -> str:

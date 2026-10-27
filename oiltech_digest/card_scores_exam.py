@@ -27,8 +27,8 @@ from typing import Any
 from oiltech_digest import (card_scores_exam_control, card_scores_exam_report, config, otbor_exam, otbor_markup,
                             signal_card, signal_card_exam, signal_card_exam_score, signal_scores, signal_scoring)
 from oiltech_digest.card_scores_exam_calls import Calls, ExamError, Inputs
-from oiltech_digest.card_scores_exam_score import (EXPERT_BANDS, EXTRA, THRESHOLDS, baseline, evaluate, rules_text,
-                                                   theme)
+from oiltech_digest.card_scores_exam_score import (BAND_RULE, EXPERT_BANDS, EXTRA, THRESHOLDS, baseline, evaluate,
+                                                   rules_text, theme)
 from oiltech_digest.otbor_pack_format import CATEGORY_PROFILE, load_rubrics
 from oiltech_digest.signal_card_pack import load_dictionaries as card_dictionaries
 from oiltech_digest.signal_card_pack import publication_text
@@ -287,7 +287,7 @@ def finals(answers: list[dict[str, Any]], rows: list[dict[str, Any]], summaries:
 
 def _model_scores(model: str, answers: list[dict[str, Any]], rows: list[dict[str, Any]], summaries: dict[str, str],
                   cards: dict[str, list[dict[str, Any]]], inputs: Inputs) -> dict[str, Any]:
-    scores = evaluate(rows, finals(answers, rows, summaries, cards, inputs))
+    scores = evaluate(rows, finals(answers, rows, summaries, cards, inputs), _weights(inputs.criteria))
     return {"model": model, **_spend(answers), "answers": answers, "scores": scores, "passed": scores["passed"],
             "failed": scores["failed"], "variant": scores["variant"]}
 
@@ -308,8 +308,6 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
     part, decision = settings["part"], _decision(tried, settings["part"])
     inputs = Inputs(exam)
     control = exam["scores_control"]
-    weights = {profile: {one["name"]: float(one["weight"]) for one in criteria}
-               for profile, criteria in control["criteria"].items()}
     themes = {row["id"]: [inputs.card_values(row, card) for card in cards[row["id"]]] for row in rows}
     chosen = next((one for one in tried if one["model"] == decision), None)
     report = {
@@ -324,7 +322,7 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
         "strong_skipped": control.get("skipped"), "summaries": summaries,
         "cards": {"model": settings["card_model"], "answers": cards}, "spend": spend,
         "theme": theme(rows, themes), "attributes": _attributes(card_exam, rows, themes),
-        "baseline": baseline(rows, weights, control["rows"]),
+        "baseline": baseline(rows, _weights(inputs.criteria), control["rows"]),
         "deprecated": {one["model"]: otbor_exam.DEPRECATED[one["model"]] for one in tried
                        if one["model"] in otbor_exam.DEPRECATED},
         "models": tried, "month": card_scores_exam_report.month(exam),
@@ -351,7 +349,13 @@ def _attributes(card_exam: dict[str, Any] | None, rows: list[dict[str, Any]],
                for view in ("strict", "lenient")}}
 
 
+def _weights(criteria: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, float]]:
+    """Веса критериев «Скоринга» по профилю (выгрузка с ядра): итог эксперта самого с собой."""
+    return {profile: {one["name"]: float(one["weight"]) for one in found} for profile, found in criteria.items()}
+
+
 def rules(exam: dict[str, Any]) -> dict[str, Any]:
-    """Правила, по которым считается решение: пороги, границы ступеней, строки экзамена. Пересчёт сверяет их с
-    исходным прогоном."""
-    return {"thresholds": dict(THRESHOLDS), "bands": list(config.SIGNAL_SCORE_BANDS), "rows": exam["rows"]}
+    """Правила, по которым считается решение: пороги, правило ступени, границы ступеней, строки экзамена. Пересчёт
+    сверяет их с исходным прогоном."""
+    return {"thresholds": dict(THRESHOLDS), "band_rule": BAND_RULE, "bands": list(config.SIGNAL_SCORE_BANDS),
+            "rows": exam["rows"]}
