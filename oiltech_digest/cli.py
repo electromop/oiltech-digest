@@ -3317,7 +3317,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate_terms.set_defaults(func=cmd_validate_terminology)
 
     p_eval_terms = sub.add_parser("eval-terminology", help="прогнать оценку нефтегазовой терминологии и собрать отчет")
-    p_eval_terms.add_argument("--limit", type=int, default=100)
+    p_eval_terms.add_argument("--limit", type=int, default=None, help="не больше N случаев (по умолчанию все)")
     p_eval_terms.add_argument("--show", type=int, default=30)
     p_eval_terms.add_argument("--csv-path", default="exports/translation_terminology_100_eval.csv")
     p_eval_terms.add_argument("--markdown-path", default="exports/translation_terminology_work_report.md")

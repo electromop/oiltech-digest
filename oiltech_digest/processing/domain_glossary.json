@@ -41,9 +41,25 @@
       "note": "EOR/IOR в дайджесте нормализуем как МУН."
     },
     {
-      "source_terms": ["artificial lift", "esp", "electric submersible pump", "rod lift", "gas lift"],
+      "source_terms": ["artificial lift", "rod lift"],
       "preferred_ru": "механизированная добыча",
-      "forbidden_ru": ["искусственный лифт"]
+      "forbidden_ru": ["искусственный лифт"],
+      "note": "Общий термин. Газлифт и ЭЦН — свои строки словаря, до механизированной добычи их не обобщать."
+    },
+    {
+      "source_terms": ["gas lift", "gas-lift", "gaslift"],
+      "preferred_ru": "газлифт",
+      "forbidden_ru": ["газовый лифт"],
+      "phrase_repairs": [["\\bгазов(?:ый|ого|ому|ым|ом|ые|ых|ыми)\\s+лифт(а|у|ом|е|ы|ов|ам|ами|ах)?\\b", "газлифт\\1"]],
+      "note": "gas lift — газлифт (газлифтные скважины, газлифтный фонд), не «механизированная добыча» (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["electric submersible pump", "electrical submersible pump", "esp", "esps"],
+      "preferred_ru": "ЭЦН",
+      "full_ru": "электроцентробежный насос",
+      "forbidden_ru": ["электрический погружной насос"],
+      "phrase_repairs": [["\\b(?:электрическ(?:ий|ого|ому|им|ом|ие|их|ими)\\s+погружн(?:ой|ого|ому|ым|ом|ые|ых|ыми)|погружн(?:ой|ого|ому|ым|ом|ые|ых|ыми)\\s+электрическ(?:ий|ого|ому|им|ом|ие|их|ими))\\s+насос(?:а|у|ом|е|ы|ов|ам|ами|ах)?\\b", "ЭЦН"]],
+      "note": "ESP — электроцентробежный насос, ЭЦН (установка — УЭЦН), не «механизированная добыча» (замечание эксперта 28.10). Сокращение не склоняется. ESP на НПЗ и в энергетике бывает электрофильтром (electrostatic precipitator): это не насос."
     },
     {
       "source_terms": ["drilling fluid", "drilling mud", "mud system", "mud motor"],
@@ -66,9 +82,11 @@
     },
     {
       "source_terms": ["coiled tubing", "ct intervention"],
-      "preferred_ru": "колтюбинг",
-      "forbidden_ru": ["гибкая труба", "свернутая труба"],
-      "note": "В отраслевом тексте предпочтительно колтюбинг."
+      "preferred_ru": "ГНКТ",
+      "full_ru": "гибкая насосно-компрессорная труба",
+      "forbidden_ru": ["гибкая труба", "свернутая труба", "колтюбинг"],
+      "phrase_repairs": [["(?<!время\\s)\\bколтюбинг(?:а|у|ом|е|и|ов|ам|ами|ах)?\\b", "ГНКТ"]],
+      "note": "Coiled tubing — ГНКТ (установка ГНКТ, работы с ГНКТ), не «колтюбинг» (замечание эксперта 28.10). Сокращение не склоняется."
     },
     {
       "source_terms": ["proppant", "proppants"],
@@ -202,6 +220,48 @@
       "full_ru": "детальный, детализированный; granular activated carbon — гранулированный активированный уголь",
       "warn_patterns": ["\\bgranular\\w*"],
       "note": "granular data/controls/analytics — детальные данные/настройки/аналитика; не оставлять латиницей и не склонять латинский корень (замечание заказчика 22.09)."
+    },
+    {
+      "source_terms": ["eddy current array", "eddy-current array"],
+      "preferred_ru": "вихретоковый контроль матричными датчиками",
+      "source_warn_patterns": ["\\bECA\\b"],
+      "note": "ECA (eddy current array) — вихретоковый контроль матричными датчиками; сокращение ECA в заголовок и суть не переносить (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["hydrogen sulfide", "hydrogen sulphide", "h2s", "h₂s"],
+      "preferred_ru": "сероводород",
+      "warn_patterns": ["\\bH2S\\b", "H₂S"],
+      "note": "H2S — сероводород; формулу в заголовок и суть не переносить (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["push-to-talk", "push to talk"],
+      "preferred_ru": "голосовая связь",
+      "source_warn_patterns": ["\\bPTT\\b"],
+      "note": "push-to-talk (PTT) — голосовая связь по нажатию, как у рации; PTT в заголовок и суть не переносить (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["lithium-free", "lithium free"],
+      "preferred_ru": "безлитиевый",
+      "forbidden_ru": ["литий-свободный"],
+      "phrase_repairs": [["\\bлитий\\s?[-\\u2010\\u2011\\u2013]\\s?свободн(ый|ая|ое|ые|ого|ой|ому|ым|ыми|ых|ую|ом)\\b", "безлитиев\\1"]],
+      "note": "lithium-free — безлитиевый, по роду и числу (безлитиевые накопители), не «литий-свободный» (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["permian basin", "permian"],
+      "preferred_ru": "Пермский бассейн",
+      "note": "Permian, Permian Basin — Пермский бассейн (в Пермском бассейне), не латиницей; название компании (Permian Resources) не переводить (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["artificial intelligence", "ai"],
+      "preferred_ru": "ИИ",
+      "full_ru": "искусственный интеллект",
+      "note": "AI — ИИ; в названиях продуктов и компаний латиница остаётся (C3 AI) (замечание эксперта 28.10)."
+    },
+    {
+      "source_terms": ["metal-organic framework", "metal organic framework"],
+      "preferred_ru": "металлорганические каркасы",
+      "source_warn_patterns": ["\\bMOFs?\\b"],
+      "note": "MOF (metal-organic frameworks) — металлорганические каркасы; сокращение MOF в заголовок и суть не переносить (замечание эксперта 28.10)."
     }
   ],
   "mixed_script_allow": ["PROНЕФТЬ", "PROНефть", "Farш", "Dostaевский", "Dостаевский"],
@@ -293,6 +353,27 @@
       "must_not": ["искусственный лифт"]
     },
     {
+      "name": "газлифт / gas lift — падеж (#150)",
+      "article": {"title": "Gas lift", "raw_text": "The field switched three wells to gas lift.", "language": "en"},
+      "bad": "Газовый лифт повысил добычу, перевод на режим газового лифта занял неделю.",
+      "must_have": ["Газлифт повысил добычу", "режим газлифта"],
+      "must_not": ["газов"]
+    },
+    {
+      "name": "ЭЦН / ESP — падеж (#150)",
+      "article": {"title": "ESP run life", "raw_text": "The electric submersible pump (ESP) run life doubled.", "language": "en"},
+      "bad": "Наработка электрического погружного насоса выросла вдвое, электрический погружной насос меняют реже.",
+      "must_have": ["Наработка ЭЦН выросла", "ЭЦН меняют реже"],
+      "must_not": ["погружн"]
+    },
+    {
+      "name": "ГНКТ / coiled tubing — падеж (#150)",
+      "article": {"title": "Coiled tubing intervention", "raw_text": "The coiled tubing unit cleaned out the well.", "language": "en"},
+      "bad": "Работы с колтюбингом заняли два дня, для колтюбинга нужна одна бригада.",
+      "must_have": ["Работы с ГНКТ заняли", "для ГНКТ нужна"],
+      "must_not": ["колтюбинг"]
+    },
+    {
       "name": "СПГ / LNG",
       "article": {"title": "LNG capacity grows", "raw_text": "Liquefied natural gas capacity grows.", "language": "en"},
       "bad": "Мощности LNG выросли.",
@@ -364,10 +445,10 @@
     },
     {
       "name": "склейка слов разных алфавитов",
-      "article": {"title": "Honeywell expands presence", "raw_text": "Honeywell expands its presence in the Permian.", "language": "en"},
-      "bad": "Компания расширяет присутствиеHoneywell вPermian.",
-      "must_have": ["присутствие Honeywell", "в Permian"],
-      "must_not": ["присутствиеHoneywell", "вPermian"]
+      "article": {"title": "Honeywell expands presence", "raw_text": "Honeywell expands its presence at Aramco.", "language": "en"},
+      "bad": "Компания расширяет присутствиеHoneywell вAramco.",
+      "must_have": ["присутствие Honeywell", "в Aramco"],
+      "must_not": ["присутствиеHoneywell", "вAramco"]
     },
     {
       "name": "интенсификация / stimulation — род глагола сохраняется",

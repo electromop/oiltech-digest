@@ -341,7 +341,8 @@ def validate_glossary() -> list[str]:
     return errors
 
 
-def terminology_eval_cases(limit: int = 100) -> list[dict[str, object]]:
+def terminology_eval_cases(limit: int | None = 100) -> list[dict[str, object]]:
+    """Золотые примеры, затем случаи по каждому запретному слову; limit=None — все."""
     cases: list[dict[str, object]] = []
     for case in glossary_golden_cases():
         cases.append({**case, "source": "golden"})
@@ -372,12 +373,12 @@ def terminology_eval_cases(limit: int = 100) -> list[dict[str, object]]:
                         "source": "generated",
                     }
                 )
-                if len(cases) >= limit:
+                if limit is not None and len(cases) >= limit:
                     return cases
     return cases[:limit]
 
 
-def run_terminology_eval(limit: int = 100) -> dict[str, object]:
+def run_terminology_eval(limit: int | None = 100) -> dict[str, object]:
     rows = []
     for index, case in enumerate(terminology_eval_cases(limit=limit), start=1):
         article = case["article"]

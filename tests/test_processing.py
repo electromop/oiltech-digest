@@ -7,6 +7,7 @@ from oiltech_digest.processing.domain_glossary import (
     glossary_prompt_block,
     mixed_script_words,
     normalize_scripts,
+    relevant_glossary_terms,
     run_terminology_eval,
     terminology_warnings,
     validate_glossary,
@@ -776,6 +777,95 @@ def test_glossary_golden_cases_pass():
         assert not forbidden, f"{case['name']}: {fixed}; forbidden={forbidden}"
 
 
+@pytest.mark.parametrize("text, preferred", [
+    ("The field switched three wells to gas lift.", "газлифт"),
+    ("The operator replaced the ESP after a short run life.", "ЭЦН"),
+    ("An electric submersible pump was installed.", "ЭЦН"),
+    ("The artificial lift program covers 300 wells.", "механизированная добыча"),
+])
+def test_gas_lift_and_esp_are_not_generalised_to_artificial_lift(text, preferred):
+    """#150: эксперт пишет «газлифт» и «ЭЦН»; до правки gas lift и ESP стояли в строке artificial lift, и подсказка
+    модели обобщала их до «механизированной добычи»."""
+    terms = relevant_glossary_terms({"title": "Field update", "raw_text": text})
+
+    assert [term.preferred_ru for term in terms] == [preferred]
+
+
+def test_coiled_tubing_is_gnkt_not_koltyubing():
+    """#150: эксперт пишет «ГНКТ», колтюбинга в его выпуске нет ни разу; до правки словарь подсказывал колтюбинг."""
+    block = glossary_prompt_block({"title": "Coiled tubing intervention",
+                                   "raw_text": "The coiled tubing unit cleaned out the well."})
+
+    assert "preferred_ru: ГНКТ | full_ru: гибкая насосно-компрессорная труба" in block
+    assert "колтюбинг" in block.split("forbidden_ru:", 1)[1]
+
+
+@pytest.mark.parametrize("text, preferred", [
+    ("Inspectors scanned the welds with an eddy current array probe.", "вихретоковый контроль матричными датчиками"),
+    ("H2S levels at the wellhead fell.", "сероводород"),
+    ("Crews talk over push-to-talk radios.", "голосовая связь"),
+    ("A lithium-free battery powers the site.", "безлитиевый"),
+    ("Permian Basin output rose.", "Пермский бассейн"),
+    ("AI agents tune the setpoints.", "ИИ"),
+    ("The sorbent is a metal-organic framework.", "металлорганические каркасы"),
+])
+def test_glossary_puts_the_russian_term_first(text, preferred):
+    """#150: в выпуске эксперта русский термин, а сокращение или латиница в заголовке и сути не нужны."""
+    block = glossary_prompt_block({"title": "Update", "raw_text": text})
+
+    assert f"preferred_ru: {preferred}" in block
+
+
+@pytest.mark.parametrize("text", [
+    "The Ministry of Finance (MoF) cut the export duty.",
+    "Tankers in the Emission Control Area (ECA) burn low-sulphur fuel.",
+    "PTT Exploration and Production signed the contract.",
+])
+def test_ambiguous_abbreviations_do_not_pull_the_new_terms(text):
+    """#150: MOF, ECA и PTT ключами словаря не взяты — это ещё Министерство финансов, зона контроля выбросов и тайская
+    PTT. Полное название (metal-organic framework, eddy current array, push-to-talk) в публикации о них и так есть."""
+    assert relevant_glossary_terms({"title": "Update", "raw_text": text}) == []
+
+
+@pytest.mark.parametrize("source, bad, good", [
+    ("A lithium-free battery powers the site.",
+     "Литий‑свободные накопители, литий–свободная химия, литий-свободных модулей.",
+     "Безлитиевые накопители, безлитиевая химия, безлитиевых модулей."),
+    ("A lithium-free battery powers the site.", "Электролит оставляет литий свободным для реакции.",
+     "Электролит оставляет литий свободным для реакции."),
+    ("The coiled tubing unit cleaned out the well.", "Колтюбинги простаивали, об этом писал журнал «Время колтюбинга».",
+     "ГНКТ простаивали, об этом писал журнал «Время колтюбинга»."),
+    ("The field switched three wells to gas lift.", "Газовые лифты заменили, газовых лифтов стало меньше.",
+     "Газлифты заменили, газлифтов стало меньше."),
+    ("The electric submersible pump (ESP) run life doubled.", "Погружной электрический насос дешевле.", "ЭЦН дешевле."),
+])
+def test_glossary_repairs_plural_word_order_and_leave_lookalikes(source, bad, good):
+    """#150, ревью: множественное число и обратный порядок слов чинятся; «литий свободным» без дефиса — не калька, а
+    название журнала «Время колтюбинга» не термин."""
+    assert enforce_glossary_text(bad, {"title": "Update", "raw_text": source}) == good
+
+
+@pytest.mark.parametrize("source, text", [
+    ("H2S levels at the wellhead fell.", "Уровень H2S снизился."),
+    ("Inspectors scanned the welds with an eddy current array probe.", "ECA-контроль ускорился."),
+    ("Crews talk over push-to-talk radios.", "Связь PTT работает."),
+    ("The sorbent is a metal-organic framework.", "Сорбент из MOF."),
+])
+def test_glossary_audit_flags_abbreviations_left_in_russian_text(source, text):
+    """#150, ревью: «сокращение в заголовок и суть не переносить» видит аудит, как латиницу ROP и granular; замены
+    нет."""
+    article = {"title": "Update", "raw_text": source}
+
+    assert terminology_warnings(text, article)
+    assert enforce_glossary_text(text, article) == text
+
+
+def test_glossary_audit_leaves_an_eca_of_another_meaning_alone():
+    article = {"title": "Shipping", "raw_text": "Tankers in the Emission Control Area (ECA) burn low-sulphur fuel."}
+
+    assert terminology_warnings("Танкеры в зоне ECA перешли на малосернистое топливо.", article) == []
+
+
 def test_glossary_repairs_customer_spud_and_granular_remarks():
     """Замечания заказчика 22.09 по карточке радара: «спудрил вертикальную скважину», «granular».
 
@@ -865,6 +955,15 @@ def test_terminology_eval_passes_100_examples():
     assert report["passed"] == 100
 
 
+def test_terminology_eval_without_a_limit_passes_on_every_case():
+    """Золотые примеры идут первыми, и с #150 часть случаев по запретным словам в первые 100 не попадает: без
+    предела (так по умолчанию и у eval-terminology) оценка берёт все."""
+    report = run_terminology_eval(limit=None)
+
+    assert report["total"] > 100
+    assert report["failed"] == 0
+
+
 def test_title_translation_enforces_completion_and_workover_terms():
     class BadTitleClient:
         def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
@@ -887,6 +986,57 @@ def test_title_translation_enforces_completion_and_workover_terms():
     assert "заканчивание скважины" in title_ru.lower()
     assert "КРС" in title_ru
     assert "ворковер" not in title_ru.lower()
+
+
+def _one_line(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_summary_prompt_follows_the_expert_issue():
+    """#150: суть по образцу итогового выпуска эксперта за октябрь 2026 — событие с главным числом, что оно меняет
+    для нефтесервиса, стадия и чьи данные, не длиннее 330 знаков. Первый абзац заменён, прежние пункты остались."""
+    from oiltech_digest.processing.prompts import SUMMARY_INSTRUCTIONS
+
+    text = _one_line(SUMMARY_INSTRUCTIONS)
+
+    assert text.startswith("Ты отраслевой аналитик нефтесервиса. Составь суть публикации для эксперта нефтесервисной "
+                           "компании: 2-3 предложения по-русски, не длиннее 330 знаков, без маркетинга. ")
+    for rule in (
+        "- Первое предложение: событие. Кто что сделал или делает, где и в каком масштабе (главное число из текста). "
+        "Начинай с участника события или с технологии, а не с издания и не с даты публикации.",
+        "- Второе: как это устроено или что меняет для нефтесервиса: какие работы, операции или заказчики затронуты.",
+        "- Третье, если нужно: стадия. План, цель и прогноз пиши как план («планирует», «намечено»); результат, "
+        "который назвала сама компания, со ссылкой на неё («по данным компании», «результаты представлены авторами "
+        "компании»); чего ещё нет, назови одной фразой.",
+        "- Не перечисляй, чего в публикации нет («заказчик не назван»), и не опровергай того, что в ней не "
+        "утверждается («не является рекордом отрасли»).",
+        "- Не обращайся к читателю и не советуй ему, что делать.",
+        "- Внутренние номера установок, докладов и партий не пиши, если это не название продукта.",
+        "- НЕ притягивай связь с нефтегазом, если её в статье нет; НЕ добавляй фактов, которых там нет.",
+        "- Если во входе есть блок domain_glossary, он имеет приоритет над твоим обычным переводом.",
+        "- Числа — только те, что есть в статье, и только значимые (суммы, объёмы, даты).",
+        "- Если во входе есть category, oilfield_relevance и oilfield_application",
+    ):
+        assert rule in text, rule
+    assert "Отрази, что произошло" not in text
+
+
+def test_title_prompt_names_the_event_without_dashes_or_brackets():
+    """#150: заголовок как в выпуске эксперта — кто что сделал, до 90 знаков, без тире, скобок, внутренних номеров и
+    названия издания. Длина в инструкции одна: прежние «до 200 символов» спорили бы с 90."""
+    from oiltech_digest.processing.prompts import TRANSLATE_INSTRUCTIONS
+
+    text = _one_line(TRANSLATE_INSTRUCTIONS)
+
+    for rule in (
+        "- Заголовок называет событие, а не публикацию: кто что сделал. Не длиннее 90 знаков.",
+        "- Без тире между частями заголовка и без скобок: вместо тире двоеточие («Предмет: событие») или другой "
+        "порядок слов.",
+        "- Без внутренних номеров установок и докладов и без названия издания, если оно не автор события.",
+        "- Если во входе есть блок domain_glossary, он имеет приоритет над обычным переводом.",
+    ):
+        assert rule in text, rule
+    assert "200 символов" not in text
 
 
 def test_offline_summary_is_deterministic():
