@@ -173,6 +173,13 @@ OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").st
 OPENAI_TRANSLATE_MODEL = os.environ.get("OPENAI_TRANSLATE_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 
+# Суть — своя модель (переезд с gpt-5 до 11.12.2026, как в ветке моста feat/explicit-stage-models): раньше она сидела
+# на OPENAI_MODEL вместе с тегами, судьёй перепечаток и ИИ-оценкой агента источников. По проверке на эталоне выпуска
+# эксперта (#150, владелец 28.10) «Суть и перевод» — gpt-6.1-terra, low: строки в .env воркера NL. Пусто — откат на
+# OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки.
+OPENAI_SUMMARY_MODEL = os.environ.get("OPENAI_SUMMARY_MODEL", "").strip() or OPENAI_MODEL
+OPENAI_SUMMARY_REASONING = os.environ.get("OPENAI_SUMMARY_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+
 # Скоринг (бизнес-эффект и пр. критерии) — балл напрямую определяет отбор в дайджест.
 # Раньше скоринг ТИХО ехал на основной OPENAI_MODEL с минимальным reasoning: при смене
 # основной модели на слабую/быструю (или откате на nano) балл систематически проседал

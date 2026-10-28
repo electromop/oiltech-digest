@@ -1,5 +1,11 @@
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 
+from oiltech_digest import config
 from oiltech_digest.processing import pipeline
 from oiltech_digest.processing.domain_glossary import (
     enforce_glossary_text,
@@ -14,7 +20,7 @@ from oiltech_digest.processing.domain_glossary import (
 )
 from oiltech_digest.processing import digest
 from oiltech_digest.processing import external_ai
-from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient, _extract_output_text
+from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient, _extract_output_text, output_budget
 from oiltech_digest.processing.seed import DEFAULT_SCORING_PROFILES, _split_keywords, _tag_signal_enrichment
 
 
@@ -994,22 +1000,27 @@ def _one_line(text: str) -> str:
 
 def test_summary_prompt_follows_the_expert_issue():
     """#150: суть по образцу итогового выпуска эксперта за октябрь 2026 — событие с главным числом, что оно меняет
-    для нефтесервиса, стадия и чьи данные, не длиннее 330 знаков. Первый абзац заменён, прежние пункты остались."""
+    для нефтесервиса, стадия и чьи данные, не длиннее 330 знаков. Первый абзац заменён, прежние пункты остались.
+    Правка по проверке на эталоне (владелец 28.10): длина ещё и словами, «что впереди» вместо «чего ещё нет» — модель
+    читала его как «чего нет в публикации» и писала «масштаб не указан»."""
     from oiltech_digest.processing.prompts import SUMMARY_INSTRUCTIONS
 
     text = _one_line(SUMMARY_INSTRUCTIONS)
 
     assert text.startswith("Ты отраслевой аналитик нефтесервиса. Составь суть публикации для эксперта нефтесервисной "
-                           "компании: 2-3 предложения по-русски, не длиннее 330 знаков, без маркетинга. ")
+                           "компании: 2-3 коротких предложения по-русски, всего не длиннее 330 знаков (около 45 слов), "
+                           "без маркетинга. Длиннее нельзя: выбери главное, остальное опусти. ")
     for rule in (
-        "- Первое предложение: событие. Кто что сделал или делает, где и в каком масштабе (главное число из текста). "
+        "- Первое предложение: событие. Кто что сделал или делает, где и в каком масштабе (одно главное число из "
+        "текста). "
         "Начинай с участника события или с технологии, а не с издания и не с даты публикации.",
         "- Второе: как это устроено или что меняет для нефтесервиса: какие работы, операции или заказчики затронуты.",
         "- Третье, если нужно: стадия. План, цель и прогноз пиши как план («планирует», «намечено»); результат, "
         "который назвала сама компания, со ссылкой на неё («по данным компании», «результаты представлены авторами "
-        "компании»); чего ещё нет, назови одной фразой.",
-        "- Не перечисляй, чего в публикации нет («заказчик не назван»), и не опровергай того, что в ней не "
-        "утверждается («не является рекордом отрасли»).",
+        "компании»); что у самого проекта ещё впереди (испытания, поставки, результаты), назови одной фразой.",
+        "- Пиши о событии, а не о публикации: не перечисляй, чего в ней нет («заказчик не назван», «масштаб не "
+        "указан», «в статье не указано»), и не опровергай того, что в ней не утверждается («не является рекордом "
+        "отрасли»).",
         "- Не обращайся к читателю и не советуй ему, что делать.",
         "- Внутренние номера установок, докладов и партий не пиши, если это не название продукта.",
         "- НЕ притягивай связь с нефтегазом, если её в статье нет; НЕ добавляй фактов, которых там нет.",
@@ -1018,7 +1029,7 @@ def test_summary_prompt_follows_the_expert_issue():
         "- Если во входе есть category, oilfield_relevance и oilfield_application",
     ):
         assert rule in text, rule
-    assert "Отрази, что произошло" not in text
+    assert "Отрази, что произошло" not in text and "чего ещё нет" not in text
 
 
 def test_title_prompt_names_the_event_without_dashes_or_brackets():
@@ -1029,7 +1040,8 @@ def test_title_prompt_names_the_event_without_dashes_or_brackets():
     text = _one_line(TRANSLATE_INSTRUCTIONS)
 
     for rule in (
-        "- Заголовок называет событие, а не публикацию: кто что сделал. Не длиннее 90 знаков.",
+        "- Заголовок называет событие, а не публикацию: кто что сделал. Не длиннее 90 знаков (около 12 слов): длинные "
+        "названия компаний и продуктов сокращай до узнаваемой части, подробности оставь для сути.",
         "- Без тире между частями заголовка и без скобок: вместо тире двоеточие («Предмет: событие») или другой "
         "порядок слов.",
         "- Без внутренних номеров установок и докладов и без названия издания, если оно не автор события.",
@@ -1037,6 +1049,75 @@ def test_title_prompt_names_the_event_without_dashes_or_brackets():
     ):
         assert rule in text, rule
     assert "200 символов" not in text
+
+
+class _StageClient:
+    """Фейк-клиент: модель, уровень рассуждения и лимит ответа каждого вызова."""
+
+    model = "fake"
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def complete_json(self, instructions, user_input, schema, max_output_tokens=900, model=None, reasoning_effort=None):
+        self.calls.append({"name": schema["name"], "model": model, "reasoning": reasoning_effort,
+                           "max_output_tokens": max_output_tokens})
+        data = {"article_summary": {"summary": "Суть статьи."},
+                "article_title_translation": {"title_ru": "Новости бурения"}}[schema["name"]]
+        return AIResponse(data=data, model=model or self.model)
+
+
+def test_summary_uses_its_own_model_reasoning_and_budget(monkeypatch):
+    """#150: «Суть и перевод» — на своей модели (владелец 28.10: gpt-6.1-terra, low по проверке на эталоне), а не на
+    общей OPENAI_MODEL тегов и судьи перепечаток; лимит ответа с запасом под рассуждение. Перенесено из ветки моста с
+    gpt-5 (feat/explicit-stage-models) дословно: та же переменная и тот же запас."""
+    monkeypatch.setattr(config, "OPENAI_SUMMARY_MODEL", "summary-model")
+    monkeypatch.setattr(config, "OPENAI_SUMMARY_REASONING", "low")
+    client = _StageClient()
+
+    pipeline.summarize_article({"title": "Drilling", "raw_text": "Новый буровой станок."}, client)
+
+    (call,) = client.calls
+    assert (call["model"], call["reasoning"]) == ("summary-model", "low")
+    assert call["max_output_tokens"] == output_budget(1200, "low")
+
+
+def test_translation_budget_follows_its_reasoning(monkeypatch):
+    """На low перевод не уместил бы рассуждение в прежние 300 токенов ответа."""
+    monkeypatch.setattr(config, "OPENAI_TRANSLATE_MODEL", "translate-model")
+    monkeypatch.setattr(config, "OPENAI_TRANSLATE_REASONING", "low")
+    client = _StageClient()
+
+    pipeline.translate_article({"title": "New drilling rig tested"}, client)
+
+    assert client.calls[-1]["max_output_tokens"] == output_budget(300, "low")
+
+
+def test_minimal_keeps_todays_summary_and_translation_limits(monkeypatch):
+    """На нынешнем уровне (minimal) лимиты прежние: до новых строк в .env воркера поведение не меняется."""
+    for name in ("OPENAI_SUMMARY_REASONING", "OPENAI_TRANSLATE_REASONING"):
+        monkeypatch.setattr(config, name, "minimal")
+    client = _StageClient()
+    article = {"title": "New rig", "raw_text": "x"}
+
+    pipeline.summarize_article(article, client)
+    pipeline.translate_article(article, client)
+
+    assert [call["max_output_tokens"] for call in client.calls] == [1200, 300]
+
+
+def test_summary_model_falls_back_to_the_main_model():
+    """Пусто — откат на OPENAI_MODEL / OPENAI_REASONING_EFFORT: без новых строк в .env воркер работает как раньше."""
+    # Пустые, а не удалённые: config при импорте читает .env, и строка оттуда подменила бы отсутствующую переменную.
+    env = {**os.environ, "OPENAI_MODEL": "main-model", "OPENAI_REASONING_EFFORT": "low", "OPENAI_SUMMARY_MODEL": "",
+           "OPENAI_SUMMARY_REASONING": ""}
+    probe = "from oiltech_digest import config as c; print(c.OPENAI_SUMMARY_MODEL, c.OPENAI_SUMMARY_REASONING)"
+
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
+                            cwd=Path(__file__).resolve().parents[1], env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["main-model", "low"]
 
 
 def test_offline_summary_is_deterministic():

@@ -3967,7 +3967,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_scores_exam.add_argument("--card-model", default=None,
                                help="модель основного вызова (по умолчанию SIGNAL_CARD_MODEL; на проде gpt-6-sol)")
     p_scores_exam.add_argument("--summary-model", default=None,
-                               help="модель «Сути и перевода» (по умолчанию OPENAI_MODEL, модель ленты)")
+                               help="модель «Сути и перевода» (по умолчанию OPENAI_SUMMARY_MODEL, как у агента)")
     p_scores_exam.add_argument("--card-markup", default=None,
                                help="разметка экзамена карточки #98 (манифест рядом): атрибуты основного вызова того "
                                     "же прогона сверяются с ней на строках его экзамена, по его порогам")

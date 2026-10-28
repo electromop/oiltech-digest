@@ -174,7 +174,7 @@ def _check_approved(approved: str | None) -> None:
 def _calls(exam: dict[str, Any], card_model: str | None, summary_model: str | None, workers: int) -> Calls:
     """Вызовы экзамена; модели основного вызова и сути — с их ставками в таблице цен, иначе расход в отчёте солгал
     бы."""
-    card_model, summary_model = card_model or config.SIGNAL_CARD_MODEL, summary_model or config.OPENAI_MODEL
+    card_model, summary_model = card_model or config.SIGNAL_CARD_MODEL, summary_model or config.OPENAI_SUMMARY_MODEL
     if card_model:
         _by_price((card_model, summary_model))
     return Calls(Inputs(exam), card_model, summary_model, workers)
