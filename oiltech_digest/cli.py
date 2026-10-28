@@ -2692,6 +2692,76 @@ def cmd_otbor_exam_control(args: argparse.Namespace) -> None:
     print(json.dumps(values, ensure_ascii=False, indent=1))
 
 
+def cmd_card_scores_exam(args: argparse.Namespace) -> None:
+    """Экзамен «Карточки» (#133) на разметке эксперта: тема основного вызова, модели второго вызова по цене."""
+    from oiltech_digest import card_scores_exam
+
+    if args.rescore and (args.dry_run or args.models or args.runs is not None or args.part or args.all
+                         or args.card_model or args.summary_model):
+        raise SystemExit("card-scores-exam: --rescore берёт модели, прогоны и часть из отчёта, без --dry-run, "
+                         "--models, --card-model, --summary-model, --runs, --part и --all")
+    if args.workers < 1:
+        raise SystemExit(f"card-scores-exam: --workers {args.workers}: параллельных вызовов модели от одного")
+    models = (tuple(model.strip() for model in (args.models or "").split(",") if model.strip())
+              or card_scores_exam.MODELS)
+    options = {"manifest_path": args.manifest, "models": models, "part": args.part or "exam",
+               "runs": card_scores_exam.RUNS if args.runs is None else args.runs, "card_model": args.card_model,
+               "summary_model": args.summary_model}
+    try:
+        if args.rescore:
+            result = card_scores_exam.rescore(args.rescore, args.markup, manifest_path=args.manifest,
+                                              card_markup=args.card_markup)
+        elif args.dry_run:
+            _print_scores_plan(card_scores_exam.plan(args.markup, **options))
+            return
+        else:
+            result = card_scores_exam.run(args.markup, **options, every=args.all, workers=args.workers,
+                                          card_markup=args.card_markup)
+    except (card_scores_exam.ExamError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"card-scores-exam: {exc}") from exc
+    decision = result["decision"]
+    print("card-scores-exam: решение: " + (f"{decision['model']}, " if decision["model"] else "") + decision["reason"])
+    print(f"Отчёт: {result['readable']}\nОтветы и метрики: {result['report']}")
+
+
+def _print_scores_plan(plan: dict) -> None:
+    from oiltech_digest import card_scores_exam, otbor_exam, signal_card
+    from oiltech_digest.card_scores_exam_report import PART_RU
+
+    print("card-scores-exam: сухой прогон, ничего не записано и не оплачено")
+    print("Набор: деление " + ("новое, запишется при первом прогоне" if plan["split_new"]
+                               else f"из {otbor_exam.SPLIT_NAME}"))
+    print("Утверждено: " + (plan["approved"] or f"нет, без отметки {card_scores_exam.APPROVAL_KEY} в "
+                                               f"{otbor_exam.ROWS_NAME} экзамена не будет"))
+    print(f"Часть «{PART_RU[plan['part']]}»: строк пакета {plan['pack']} (бизнес {plan['profiles']['business']}, "
+          f"технология {plan['profiles']['tech_radar']}), «сильных сверх пакета» {plan['extra']}, прогонов на строку "
+          f"{plan['runs']}")
+    for title, one in (("Суть", plan["summary"]), ("Основной вызов", plan["card"])):
+        print(f"{title} ({one['model']}): вызовов {one['calls']}, ≈ {_usd(one['cost_usd'])}"
+              + ("" if one["calls"] else ", всё уже лежит рядом с манифестом"))
+    print("Второй вызов, лестница по цене:")
+    for number, one in enumerate(plan["models"]):
+        print(f"  {one['model']}: вызовов {one['calls']}, ≈ {_usd(one['cost_usd'])}"
+              + (", если не пройдёт предыдущая" if number and plan["part"] == "exam" else ""))
+    stages = [plan["summary"], plan["card"], *plan["models"]]
+    print(("Не больше" if plan["part"] == "exam" else "Всего") + f": вызовов {sum(one['calls'] for one in stages)}, "
+          f"≈ {_usd(sum(one['cost_usd'] for one in stages))} (оценка: ответ {signal_card.ESTIMATED_OUTPUT_TOKENS} "
+          f"токенов, знаков на токен {signal_card.CHARS_PER_TOKEN}; повтор после сбоя не учтён)")
+
+
+def cmd_card_scores_exam_control(args: argparse.Namespace) -> None:
+    """Выгрузка с ядра для экзамена «Карточки» (#133): критерии, теги, контроль, «сильные сверх пакета» — JSON в stdout:
+    экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    from oiltech_digest import card_scores_exam_control
+
+    try:
+        raw = sys.stdin.read() if args.manifest == "-" else Path(args.manifest).read_text(encoding="utf-8")
+        values = card_scores_exam_control.control_values(json.loads(raw))
+    except (card_scores_exam_control.ControlError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"card-scores-exam-control: {exc}") from exc
+    print(json.dumps(values, ensure_ascii=False, indent=1))
+
+
 def _usd(value: float) -> str:
     return f"${value:.2f}" if value >= 1 else f"${value:.3f}"
 
@@ -3880,6 +3950,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_otbor_exam_control.add_argument("--manifest", required=True, help="манифест пакета эксперту или «-» из stdin")
     p_otbor_exam_control.set_defaults(func=cmd_otbor_exam_control)
+
+    p_scores_exam = sub.add_parser(
+        "card-scores-exam",
+        help="экзамен «Карточки» на разметке эксперта (#133): тема основного вызова и баллы второго, модели второго "
+             "вызова лестницей по цене, отчёт рядом с манифестом",
+    )
+    p_scores_exam.add_argument("--markup", required=True,
+                               help="таблица разметки, заполненная экспертом (вне репозитория)")
+    p_scores_exam.add_argument("--manifest", default=None,
+                               help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
+    p_scores_exam.add_argument("--models", default=None,
+                               help="лестница моделей второго вызова через запятую, по цене (по умолчанию gpt-6-luna, "
+                                    "gpt-5.6-luna, gpt-5.4-nano, gpt-5.4-mini, gpt-6.1-terra, gpt-6-sol, gpt-6.1-sol, "
+                                    "gpt-5.5)")
+    p_scores_exam.add_argument("--card-model", default=None,
+                               help="модель основного вызова (по умолчанию SIGNAL_CARD_MODEL; на проде gpt-6-sol)")
+    p_scores_exam.add_argument("--summary-model", default=None,
+                               help="модель «Сути и перевода» (по умолчанию OPENAI_MODEL, модель ленты)")
+    p_scores_exam.add_argument("--card-markup", default=None,
+                               help="разметка экзамена карточки #98 (манифест рядом): атрибуты основного вызова того "
+                                    "же прогона сверяются с ней на строках его экзамена, по его порогам")
+    p_scores_exam.add_argument("--runs", type=int, default=None,
+                               help="прогонов на строку: на экзамене только 3 (спека), на настройке от 1")
+    p_scores_exam.add_argument("--dry-run", action="store_true",
+                               help="только строки, число вызовов и цена: ничего не записать и не вызвать модель")
+    p_scores_exam.add_argument("--rescore", default=None, metavar="REPORT",
+                               help="пересчитать сохранённый отчёт без вызовов модели: модели, прогоны и часть из "
+                                    "отчёта")
+    p_scores_exam.add_argument("--part", choices=["exam", "tuning"], default=None,
+                               help="часть набора: экзамен или настройка (деление общее с «Отбором»)")
+    p_scores_exam.add_argument("--all", action="store_true",
+                               help="прогнать все модели лестницы, и после прошедшей: полная таблица качества и цены")
+    p_scores_exam.add_argument("--workers", type=int, default=1,
+                               help="параллельных вызовов модели (по умолчанию 1); ответы и счёт те же")
+    p_scores_exam.set_defaults(func=cmd_card_scores_exam)
+
+    p_scores_exam_control = sub.add_parser(
+        "card-scores-exam-control",
+        help="выгрузка с ядра для экзамена «Карточки» (#133): критерии «Скоринга», теги тем, контроль у строк пакета и "
+             "«сильные сверх пакета», JSON в stdout, запуск на ядре",
+    )
+    p_scores_exam_control.add_argument("--manifest", required=True, help="манифест пакета эксперту или «-» из stdin")
+    p_scores_exam_control.set_defaults(func=cmd_card_scores_exam_control)
 
     p_archive_signals = sub.add_parser(
         "archive-signals",

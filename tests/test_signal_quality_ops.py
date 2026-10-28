@@ -187,7 +187,7 @@ def test_excluded_topics_setting_parses_several_prefixes(monkeypatch):
 
 def test_run_collects_ai_usage_by_stage(monkeypatch):
     from oiltech_digest import signal_research
-    from tests.test_signal_research import _Research, _event
+    from tests.test_signal_research import _Research, _recent_event
 
     judge_answer = {"title": "t", "title_ru": "t", "theme": "Бурение", "summary": "s", "thesis": "", "transferability": "",
                     "maturity": "watch", "confidence": 0.5, "score": 60, "why_now": "", "why_not_noise": "",
@@ -198,7 +198,7 @@ def test_run_collects_ai_usage_by_stage(monkeypatch):
         def complete_json(self, *args, **kwargs):
             return AIResponse(data=dict(judge_answer), model="gpt-5-judge", input_tokens=2500, output_tokens=900)
 
-    research = _Research([_event()])
+    research = _Research([_recent_event()])
     monkeypatch.setattr(signal_research, "make_client", lambda offline: research)
     monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Judge())
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",

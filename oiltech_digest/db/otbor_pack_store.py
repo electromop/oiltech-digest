@@ -25,6 +25,13 @@ LINK_PUBLISHED_SQL = (
     "CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)"
     " WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %(search_source)s THEN e.published_at END"
 )
+# Текст ссылки написал издатель: статья корпуса или докачанная страница (без докачки текст находки — сводка модели
+# поиска). Так выбирается главная публикация находки — для пакета и для «сильных сверх пакета» экзамена «Карточки».
+PUBLISHER_TEXT_SQL = (
+    "(length(btrim(COALESCE(a.raw_text, ''))) >= %(min_chars)s"
+    " OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'"
+    " AND length(btrim(COALESCE(e.extracted_fact, ''))) >= %(min_chars)s))"
+)
 # Заголовок ссылки: у статьи корпуса — её, у страницы, которую докачали, и у выдачи обычного поиска — издателя. У
 # ссылки «режима ChatGPT» без докачки заголовок написала модель поиска (бывает переводом: «SLB выиграла у Aramco…» у
 # английской страницы, проверка пакета 22.10) — его нет: черновые данные поиска в решения агентов не идут (спека #128).
@@ -90,10 +97,7 @@ def radar_candidates(until: str) -> list[dict[str, Any]]:
             LEFT JOIN articles a ON a.id = e.article_id
             LEFT JOIN sources src ON src.id = a.source_id
             WHERE {radar_origin_sql('s')} AND s.merged_into_signal_id IS NULL AND s.archived_at IS NULL
-              AND s.first_seen_at < %(until)s::date
-              AND (length(btrim(COALESCE(a.raw_text, ''))) >= %(min_chars)s
-                   OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'
-                       AND length(btrim(COALESCE(e.extracted_fact, ''))) >= %(min_chars)s))
+              AND s.first_seen_at < %(until)s::date AND {PUBLISHER_TEXT_SQL}
             ORDER BY s.id, e.strength DESC, e.id
             """,
             {"search_source": EVIDENCE_SOURCE, "until": until, "min_chars": config.MIN_ARTICLE_TEXT_CHARS},
