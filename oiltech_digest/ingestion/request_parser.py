@@ -233,15 +233,15 @@ def fetch_article(candidate: CandidateLink, source: dict) -> ArticleFetch:
     if _moved_to_home_page(candidate.url, final_url):
         # Сайт увёл со статьи на главную (переехал, статья снята) — это не статья.
         return ArticleFetch(None, verdicts.REDIRECTED_HOME, detail=f"→ {final_url}")
-    title, published_at, raw_text = parse_article_page(content, candidate.title)
-    final_published = published_at or candidate.published_at
+    title, published_at, raw_text = parse_article_page(content, candidate.title, url=candidate.url,
+                                                       fallback_date=candidate.published_at)
     if not title or len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
         return ArticleFetch(None, verdicts.TOO_SHORT, title, len(raw_text))
     return ArticleFetch({
         "source_id": source["id"],
         "title": title[:500],
         "url": candidate.url,
-        "published_at": final_published,
+        "published_at": published_at,
         "raw_text": raw_text,
         "text_truncated": normalize.is_truncated(raw_text),
         "language": _guess_language(source),

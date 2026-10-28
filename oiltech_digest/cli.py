@@ -1055,6 +1055,74 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
               f"(id: {', '.join(str(article_id) for article_id in archive)})")
 
 
+def cmd_repair_article_dates(args: argparse.Namespace) -> None:
+    """Дата публикации, противоречащая дате в адресе статьи (#139), по новому разбору страницы.
+
+    Сухой прогон (--ids или --source-id) заново скачивает и разбирает страницы, ничего не пишет и
+    печатает по строке на статью: план «id: было → стало», переезды по месяцам ленты (у закрытого
+    месяца меняется архив) и остальные статьи с тем, что даёт их страница. --save-plan сохраняет
+    план. --apply ПЛАН пишет ровно его, без новой перекачки: дату публикации и её копию у публикации
+    сигнала ленты; перерасчёт ИИ не ставится: он платный, решение отдельное."""
+    from oiltech_digest import feed_window
+    from oiltech_digest.ingestion import date_repair
+
+    def day(value) -> str:
+        return value.date().isoformat() if value else "пусто"
+
+    ids = [int(item) for item in args.ids.split(",") if item.strip()] if args.ids else None
+    if args.apply:
+        if ids or args.source_id is not None or args.save_plan:
+            raise SystemExit("repair-article-dates: --apply пишет план сухого прогона; --ids, --source-id и "
+                             "--save-plan с ним не задаются")
+        try:
+            changes = date_repair.load_plan(args.apply)
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"repair-article-dates: {exc}") from exc
+        written = date_repair.apply_plan(changes)
+        if args.json:
+            print(json.dumps(written, ensure_ascii=False, indent=2, default=str))
+            return
+        print(f"repair-article-dates: в плане={written['planned']} записано={len(written['written_ids'])} "
+              f"копий даты у публикаций сигналов ленты={written['publication_copies']}")
+        if written["not_written_ids"]:
+            print("  не записано, дату после сухого прогона поменяли (новое согласование): "
+                  + ", ".join(str(item) for item in written["not_written_ids"]))
+        return
+
+    if not ids and args.source_id is None:
+        raise SystemExit("repair-article-dates: нужен --ids, --source-id или --apply ПЛАН")
+    if args.limit < 0 or args.pause < 0 or args.days < 1:
+        raise SystemExit("repair-article-dates: --limit и --pause не меньше 0, --days не меньше 1")
+    articles = date_repair.candidate_articles(source_id=args.source_id, days=args.days, ids=ids)
+    if args.limit:
+        articles = articles[: args.limit]
+    result = date_repair.repair_dates(articles, pause_seconds=args.pause)
+    if args.save_plan:
+        Path(args.save_plan).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str),
+                                        encoding="utf-8")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    scope = (f"статьи {args.ids}" if ids else
+             f"источник {args.source_id}, собранные с {(datetime.now(timezone.utc) - timedelta(days=args.days)).date()}")
+    print(f"repair-article-dates: {scope}; проверено={result['checked']} в плане={result['changed']} "
+          "[сухой прогон, без записи]")
+    for key, count in result["stats"].items():
+        print(f"  {key}: {count}")
+    window = feed_window.current()
+    for move in result["months"]:
+        state = "открыт" if window.is_open(move["new_month"]) else "закрыт"
+        print(f"  месяц ленты {move['old_month']} → {move['new_month']} ({state}): {move['count']}")
+    for item in result["changes"]:
+        print(f"  {item['article_id']}: {day(item['old'])} → {day(item['new'])}  {item['url']}")
+    for item in result["skipped"]:
+        page = day(item["page"]) if item["page_status"] == "read" else item["page_status"]
+        print(f"  {item['article_id']}: было {day(item['old'])}, страница {page}; не в плане ({item['reason']})"
+              f"  {item['url']}")
+    if args.save_plan:
+        print(f"  план: {args.save_plan}")
+
+
 def cmd_repair_url_keys(args: argparse.Namespace) -> None:
     """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер — в query
     (Минэнерго, EIA, Новатэк, Лукойл, РГУ Губкина); схема тогда же спрятала «копии».
@@ -3536,6 +3604,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_bodies.add_argument("--batch", type=int, default=25, help="статей в задаче перерасчёта")
     p_repair_bodies.add_argument("--json", action="store_true")
     p_repair_bodies.set_defaults(func=cmd_repair_article_bodies)
+
+    p_repair_dates = sub.add_parser(
+        "repair-article-dates",
+        help="исправить дату публикации, противоречащую дате в адресе статьи, новым разбором страницы")
+    p_repair_dates.add_argument("--ids", default="", help="id статей через запятую")
+    p_repair_dates.add_argument("--source-id", type=int, default=None, help="все статьи источника за --days")
+    p_repair_dates.add_argument("--days", type=int, default=180, help="окно по дате поступления, дней")
+    p_repair_dates.add_argument("--limit", type=int, default=0, help="не больше N статей, 0 значит все")
+    p_repair_dates.add_argument("--pause", type=float, default=0.5, help="пауза между страницами, с")
+    p_repair_dates.add_argument("--save-plan", default="", help="сохранить план сухого прогона в файл")
+    p_repair_dates.add_argument("--apply", default="", metavar="ПЛАН",
+                                help="записать план сухого прогона из файла; без него ничего не пишется")
+    p_repair_dates.add_argument("--json", action="store_true")
+    p_repair_dates.set_defaults(func=cmd_repair_article_dates)
 
     p_repair_keys = sub.add_parser(
         "repair-url-keys",
