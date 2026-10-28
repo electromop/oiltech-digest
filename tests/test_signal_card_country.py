@@ -136,3 +136,9 @@ def test_country_dictionary_names_and_spellings_are_unique_and_regions_come_from
                                                  "кот-д’ивуар", "Шотландия", "Atlantis", 7)] == [
         "Россия", "Россия", "США", "США", "Кот-д'Ивуар", "Великобритания", None, None]
     assert countries.regions("Турция") == ["Европа", "Ближний Восток"] and countries.regions("Марс") == []
+    # Состав «как в ООН» (решение владельца 28.10): 193 члена и наблюдатели Ватикан и Палестина; Косово — к Сербии,
+    # Тайвань, Гонконг и Макао — к Китаю; Абхазии и Южной Осетии в справочнике нет, такое значение отбрасывается.
+    assert len(countries.names) == 195 and {"Ватикан", "Палестина"} <= set(countries.names)
+    assert [countries.canonical(one) for one in ("Косово", "Kosovo", "Тайвань", "Taiwan", "Гонконг", "Абхазия",
+                                                 "Южная Осетия")] == [
+        "Сербия", "Сербия", "Китай", "Китай", "Китай", None, None]
