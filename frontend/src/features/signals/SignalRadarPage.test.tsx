@@ -332,6 +332,20 @@ describe("SignalRadarPage", () => {
       expect(screen.getByText("Спутник MethaneSAT")).toBeInTheDocument();
     });
 
+    it("число в заголовке блока склоняется: 1 сигнал, 2 сигнала, 5 сигналов", async () => {
+      const block = (theme: string, count: number, firstId: number) =>
+        Array.from({ length: count }, (_, index) => ({
+          ...ecology, id: firstId + index, signal_key: `k${firstId + index}`, theme, title_ru: `${theme} ${index + 1}`,
+        }));
+      serve([drilling, ...block("Экология", 2, 40), ...block("Добыча", 5, 50)]);
+      renderRadar(false);
+
+      await screen.findByRole("button", { name: "Раскрыть группу Бурение" });
+      expect(screen.getByText("1 сигнал · средняя")).toBeInTheDocument();
+      expect(screen.getByText("2 сигнала · средняя")).toBeInTheDocument();
+      expect(screen.getByText("5 сигналов · средняя")).toBeInTheDocument();
+    });
+
     it("обычный пользователь оставляет ОС, в оценках есть «Не тот блок»", async () => {
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));

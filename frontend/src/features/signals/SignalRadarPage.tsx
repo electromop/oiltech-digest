@@ -901,7 +901,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                   <span className="miniPill muted">{group}</span>
                 </span>
                 <span className="articleGroupHeadMeta">
-                  <span className="metaText">{groupSignals.length} сигналов · средняя</span>
+                  <span className="metaText">
+                    {groupSignals.length} {pluralWord(groupSignals.length, "сигнал", "сигнала", "сигналов")} · средняя
+                  </span>
                   <span className={`miniPill ${scoreClass(groupAvg)}`}>{groupAvg}</span>
                 </span>
               </button>

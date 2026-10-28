@@ -39,6 +39,16 @@ const STATUS_LABELS: Record<Article["status"], string> = {
   duplicate: "Дубликат",
 };
 
+// Слово при числе: «1 бизнес-сигнал», «2 бизнес-сигнала», «5 бизнес-сигналов»; после «из» —
+// «из 1 бизнес-сигнала», «из 21 бизнес-сигнала», но «из 2 бизнес-сигналов».
+function pluralWord(count: number, one: string, few: string, many: string): string {
+  const tens = count % 100;
+  const units = count % 10;
+  if (units === 1 && tens !== 11) return one;
+  if (units >= 2 && units <= 4 && (tens < 12 || tens > 14)) return few;
+  return many;
+}
+
 // Интервал фонового обновления ленты. Консервативно: /api/articles и /api/stats —
 // тяжёлые запросы, а прод-сервер слабый. 40с дают «живость» без лишней нагрузки.
 const AUTO_REFRESH_MS = 40000;
@@ -367,6 +377,7 @@ export function ArticlesPage(props: Props) {
   // total_articles теперь и есть число СИГНАЛОВ (бэкенд считает после релевантности,
   // отрезанное в базу счёта не входит), поэтому вычитать «почищено» больше не нужно.
   const workingTotal = Math.max(stats?.total_articles ?? 0, filteredArticles.length);
+  const afterFrom = pluralWord(workingTotal, "бизнес-сигнала", "бизнес-сигналов", "бизнес-сигналов");
 
   // Явно называем активные фильтры, которые сужают выдачу «молча».
   const filterHint = (() => {
@@ -485,8 +496,8 @@ export function ArticlesPage(props: Props) {
                 : serverResults !== null
                   ? `Выборка по фильтрам: ${filteredArticles.length}`
                   : remaining > 0
-                    ? `${filteredArticles.length} из ${workingTotal} бизнес-сигналов · показаны ${visibleArticles.length}`
-                    : `${filteredArticles.length} из ${workingTotal} бизнес-сигналов`}
+                    ? `${filteredArticles.length} из ${workingTotal} ${afterFrom} · показаны ${visibleArticles.length}`
+                    : `${filteredArticles.length} из ${workingTotal} ${afterFrom}`}
             </span>
             {filterHint ? <span className="badge filterHintBadge">{filterHint}</span> : null}
             {grouped.length ? (
@@ -677,6 +688,7 @@ export function ArticlesPage(props: Props) {
               // Свёрнуто по умолчанию; авто-раскрытие при активном поиске или выбранном этом теге.
               const groupOpen = expandedGroups.has(group) || Boolean(search.trim()) || tag === group;
               const groupAvg = Math.round(groupArticles.reduce((sum, article) => sum + Number(article.score || 0), 0) / groupArticles.length);
+              const groupWord = pluralWord(groupArticles.length, "бизнес-сигнал", "бизнес-сигнала", "бизнес-сигналов");
               return (
               <section className="articleGroupCard" key={group}>
                 <button
@@ -693,7 +705,7 @@ export function ArticlesPage(props: Props) {
                     <span className="miniPill muted">{group}</span>
                   </span>
                   <span className="articleGroupHeadMeta">
-                    <span className="metaText">{groupArticles.length} бизнес-сигналов · средняя</span>
+                    <span className="metaText">{groupArticles.length} {groupWord} · средняя</span>
                     <span className={`miniPill ${scoreClass(groupAvg)}`}>{groupAvg}</span>
                   </span>
                 </button>
