@@ -270,6 +270,22 @@ def test_dry_run_prints_rows_calls_and_price_and_writes_nothing(scores_pack, mon
     assert not DASHES.search(printed)
 
 
+def test_exam_writes_summaries_with_the_summary_agent_model(scores_pack, monkeypatch, capsys):
+    """#150: суть экзамена по умолчанию пишет модель «Сути и перевода» (OPENAI_SUMMARY_MODEL), а не общая OPENAI_MODEL:
+    второй вызов «Карточки» экзамен проверяет на той сути, что пойдёт на проде."""
+    model = ScoresModel(oracle_card(scores_pack), {})
+    for module in (card_scores_exam_calls, signal_card, signal_scores):
+        monkeypatch.setattr(module, "make_client", lambda: model)
+    monkeypatch.setattr(config, "OPENAI_MODEL", SUMMARY)
+    monkeypatch.setattr(config, "OPENAI_SUMMARY_MODEL", "gpt-6.1-terra")
+    capsys.readouterr()
+
+    cli.main(["card-scores-exam", "--markup", str(scores_pack["markup"]), "--dry-run", "--models", f"{MINI},{LUNA}",
+              "--card-model", CARD])
+
+    assert "Суть (gpt-6.1-terra): вызовов" in capsys.readouterr().out
+
+
 def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monkeypatch):
     _, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
     [source] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.json"))
