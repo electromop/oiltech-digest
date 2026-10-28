@@ -76,6 +76,34 @@ def test_core_export_gives_criteria_tags_control_and_strong_signals_beyond_the_p
     assert data["skipped"] == {"in_pack": 1, "other": 1, "no_text": 1}
 
 
+def test_the_help_names_every_model_of_the_default_ladder(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["card-scores-exam", "--help"])
+    printed = "".join(capsys.readouterr().out.split())  # перенос строк справки рвёт имена на дефисе
+    assert [model for model in card_scores_exam.MODELS if model not in printed] == []
+
+
+def test_rescore_marks_a_new_core_export_and_refuses_one_without_core_scores(scores_pack, monkeypatch):
+    run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
+    [source] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.json"))
+    path = scores_pack["out"] / CONTROL_NAME
+    control = json.loads(path.read_text(encoding="utf-8"))
+    # Выгрузку сняли заново: у строки другой балл ядра, порог ступени при пересчёте другой — отчёт это говорит.
+    number = next(key for key, one in control["rows"].items() if one["score"] is not None)
+    rows = {**control["rows"], number: {**control["rows"][number], "score": 10}}
+    path.write_text(json.dumps({**control, "rows": rows}, ensure_ascii=False), encoding="utf-8")
+    _, rescored = run_exam(monkeypatch, scores_pack, {}, "--rescore", str(source))
+    assert rescored["control_changed"] is True
+    readable = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1].read_text(encoding="utf-8")
+    assert "Выгрузка с ядра изменилась после исходного прогона" in readable
+    # Выгрузка без единого балла ядра: порог не посчитать, пересчёт отказывает.
+    empty = {key: {**one, "score": None} for key, one in control["rows"].items()}
+    path.write_text(json.dumps({**control, "rows": empty}, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(SystemExit, match="нет нынешнего балла ядра"):
+        cli.main(["card-scores-exam", "--markup", str(scores_pack["markup"]), "--rescore", str(source),
+                  "--card-markup", str(scores_pack["card_markup"])])
+
+
 def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     out = scores_pack["out"]
     model = ScoresModel(oracle_card(scores_pack), {LUNA: oracle_scores(scores_pack)})
@@ -130,6 +158,12 @@ def test_the_exam_refuses_before_any_paid_call(scores_pack, monkeypatch):
     (out / CONTROL_NAME).write_text(json.dumps({**control, "rows": {**control["rows"], number: {"score": "n/a"}}},
                                                ensure_ascii=False), encoding="utf-8")
     refused("число или null")
+    # Порог ступени — нынешние баллы ядра. Выгрузка, где их нет ни у одной строки, прошла бы проверку, лестница
+    # оплатилась бы вся, и каждая модель «не прошла» бы ступень: отказ до вызовов, и на сухом прогоне тоже.
+    empty = {key: {**one, "score": None} for key, one in control["rows"].items()}
+    (out / CONTROL_NAME).write_text(json.dumps({**control, "rows": empty}, ensure_ascii=False), encoding="utf-8")
+    refused("нет нынешнего балла ядра")
+    refused("нет нынешнего балла ядра", "--dry-run")
     assert model.calls == []
     assert not list(out.glob("card_scores_exam_*"))[1:]  # только выгрузка с ядра, ни сути, ни отчёта
 
@@ -239,8 +273,9 @@ def test_dry_run_prints_rows_calls_and_price_and_writes_nothing(scores_pack, mon
 def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monkeypatch):
     _, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
     [source] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.json"))
-    # Границы ступеней сменились после прогона: ответы те же, ступень по новым границам, правило — с пометкой.
-    monkeypatch.setattr(config, "SIGNAL_SCORE_BANDS", (95, 65, 40))
+    # Границы ступеней сменились после прогона: ответы те же, ступень по новым границам, правило — с пометкой. При
+    # нижней границе «полезного» 71 балл судьи 70 уходит в «наблюдать», балл ленты 77 остаётся «полезным».
+    monkeypatch.setattr(config, "SIGNAL_SCORE_BANDS", (95, 71, 40))
 
     # Рассуждение сменили после прогона: отчёт пересчёта пишет то, на котором получены ответы.
     monkeypatch.setattr(config, "SIGNAL_SCORES_REASONING", "high")
@@ -255,7 +290,14 @@ def test_rescore_recomputes_a_saved_report_without_model_calls(scores_pack, monk
     strong = sum(one["band"] == "strong" for one in pack)
     assert luna["scores"]["plain"]["band"]["agent"] == pytest.approx(1 - strong / len(pack))
     # Порог ступени при пересчёте — нынешние баллы ядра по тем же новым границам: модель с баллами эксперта лучше них.
-    assert luna["scores"]["plain"]["band"]["floor"] == pytest.approx(rescored["baseline"]["control"]["band"])
+    control = scores_pack["control"]["rows"]
+    controlled = [one for one in pack if (control.get(one["id"]) or {}).get("score") is not None]
+    assert {control[one["id"]]["score"] for one in controlled} == {77, 70}
+    floor = sum({77: "useful", 70: "watch"}[control[one["id"]]["score"]] == one["band"]
+                for one in controlled) / len(controlled)
+    # По прежним границам оба балла ядра были «полезными»: порог был бы другим.
+    assert floor != pytest.approx(sum(one["band"] == "useful" for one in controlled) / len(controlled))
+    assert luna["scores"]["plain"]["band"]["floor"] == pytest.approx(floor)
     assert luna["passed"] is True and rescored["decision"]["model"] == LUNA
     readable = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1]
     assert "Пересчёт ничего не оплачивал" in readable.read_text(encoding="utf-8")

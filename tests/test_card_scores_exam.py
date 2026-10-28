@@ -116,6 +116,30 @@ def test_the_band_passes_only_when_better_than_the_core_scores_on_the_same_rows(
     assert "лучше нынешних баллов ядра" in line and f"({useful:.1%}" in line
 
 
+def test_the_band_is_judged_only_on_the_rows_with_a_core_score(scores_pack, monkeypatch):
+    _, first = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)})
+    exam = part_rows(first, scores_pack)
+    expert, control = scores_pack["expert"], scores_pack["control"]["rows"]
+    controlled = [number for number in exam if (control.get(number) or {}).get("score") is not None]
+    uncontrolled = [number for number in exam if number not in controlled]
+    assert controlled and uncontrolled  # иначе сценарий ничего не проверяет
+    # gpt-6-luna права там, где балла ядра нет, а там, где он есть, ставит «полезный», как ядро (77 и 70): по всем
+    # строкам пакета она лучше порога, на строках ядра вровень с ним — ступень не пройдена.
+    _, report = run_exam(monkeypatch, scores_pack,
+                         {LUNA: oracle_scores(scores_pack, {number: 72 for number in controlled})})
+    [luna] = report["models"]
+    band = luna["scores"]["plain"]["band"]
+    useful = sum(expert[number]["band"] == "useful" for number in controlled)
+    assert band["same_rows"] == pytest.approx(useful / len(controlled)) == pytest.approx(band["floor"])
+    assert band["agent"] == pytest.approx((useful + len(uncontrolled)) / len(exam))
+    assert band["agent"] > band["floor"] and "band" in luna["failed"]
+    # Таблица вариантов в разделе модели показывает и долю на строках ядра: по ней ставится отметка правила.
+    text = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1].read_text(encoding="utf-8")
+    section = text[text.index(f"## {LUNA}:"):]
+    line = next(one for one in section.splitlines() if one.startswith("| без ключевых слов |"))
+    assert f"| {band['agent']:.1%} | {band['same_rows']:.1%} |" in line
+
+
 def test_both_keyword_variants_are_scored_and_the_one_closer_to_the_expert_is_chosen(scores_pack, monkeypatch, capsys):
     # Ключевые слова, которые есть в каждой статье ленты: подмешивание поднимает слабые строки ленты до «наблюдать».
     with repository.get_connection() as conn:

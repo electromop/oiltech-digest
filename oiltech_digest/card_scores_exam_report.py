@@ -185,6 +185,8 @@ def _rescore_notes(report: dict[str, Any]) -> list[str]:
                   "проверке кодом, выгрузке с ядра и порогам; цена исходного прогона.", ""]
     if report.get("markup_changed"):
         lines += ["Разметка изменилась после исходного прогона: счёт по новой разметке.", ""]
+    if report.get("control_changed"):
+        lines += ["Выгрузка с ядра изменилась после исходного прогона: порог ступени по новой выгрузке.", ""]
     if report.get("rules_changed"):
         lines += ["**Правила изменились после исходного прогона** ("
                   + ", ".join(_RULES_RU.get(name, name) for name in report["rules_changed"])
@@ -284,11 +286,12 @@ def _model(model: dict[str, Any], report: dict[str, Any]) -> list[str]:
              f"{model['output_tokens'] // 1000} тыс. выхода, {_usd(model['cost_usd'])}; ответов {answers['answers']}, "
              f"без баллов {answers['failures']}; одна ступень во всех прогонах у {_share(chosen['band']['stability'])} "
              "строк пакета.", "",
-             "| Вариант | Ступень | Порядок | Порядок: бизнес | Порядок: технология | |", "|---|---|---|---|---|---|"]
+             "| Вариант | Ступень | Там же, где ядро | Порядок | Порядок: бизнес | Порядок: технология | |",
+             "|---|---|---|---|---|---|---|"]
     for variant in VARIANTS:
         one = scores[variant]
         lines.append(f"| {VARIANT_RU[variant]} | {_share(one['band']['agent'], 1)} "
-                     f"| {_share(one['order']['agent'], 1)} "
+                     f"| {_share(one['band']['same_rows'], 1)} | {_share(one['order']['agent'], 1)} "
                      f"| {_share(one['order']['by_profile'].get('business'))} "
                      f"| {_share(one['order']['by_profile'].get('tech_radar'))} | {_mark(one['passed'])} |")
     lines += _bands(scores["bands"], model["variant"])

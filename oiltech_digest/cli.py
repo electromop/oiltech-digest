@@ -3962,7 +3962,8 @@ def build_parser() -> argparse.ArgumentParser:
                                help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
     p_scores_exam.add_argument("--models", default=None,
                                help="лестница моделей второго вызова через запятую, по цене (по умолчанию gpt-6-luna, "
-                                    "gpt-5.6-luna, gpt-5.4-nano, gpt-5.4-mini, gpt-6-sol, gpt-5.5)")
+                                    "gpt-5.6-luna, gpt-5.4-nano, gpt-5.4-mini, gpt-6.1-terra, gpt-6-sol, gpt-6.1-sol, "
+                                    "gpt-5.5)")
     p_scores_exam.add_argument("--card-model", default=None,
                                help="модель основного вызова (по умолчанию SIGNAL_CARD_MODEL; на проде gpt-6-sol)")
     p_scores_exam.add_argument("--summary-model", default=None,

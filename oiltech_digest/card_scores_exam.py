@@ -27,8 +27,8 @@ from typing import Any
 from oiltech_digest import (card_scores_exam_control, card_scores_exam_report, config, otbor_exam, otbor_markup,
                             signal_card, signal_card_exam, signal_card_exam_score, signal_scores, signal_scoring)
 from oiltech_digest.card_scores_exam_calls import Calls, ExamError, Inputs
-from oiltech_digest.card_scores_exam_score import (BAND_RULE, EXPERT_BANDS, EXTRA, THRESHOLDS, baseline, evaluate,
-                                                   rules_text, theme)
+from oiltech_digest.card_scores_exam_score import (BAND_RULE, EXPERT_BANDS, EXTRA, THRESHOLDS, baseline,
+                                                   control_agreement, evaluate, rules_text, theme)
 from oiltech_digest.otbor_pack_format import CATEGORY_PROFILE, load_rubrics
 from oiltech_digest.signal_card_pack import load_dictionaries as card_dictionaries
 from oiltech_digest.signal_card_pack import publication_text
@@ -56,6 +56,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     calls = _calls(exam, card_model, summary_model, workers)
     split = otbor_exam._split(exam, write=True)
     rows = _rows(exam, split, part)
+    _check_control(rows, exam)
     summaries = calls.summaries(rows)
     cards = calls.cards(rows, summaries, runs)
     tried: list[dict[str, Any]] = []
@@ -99,6 +100,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
         raise ExamError(f"{source.name}: строк {', '.join(missing[:5])} нет в наборе (сменились выгрузка с ядра, "
                         "разметка или деление): пересчёт неверен")
     rows = [found[one["id"]] for one in saved["rows"]]
+    _check_control(rows, exam)
     summaries, cards = saved["summaries"], saved["cards"]["answers"]
     # Цена и токены — исходного прогона: новых вызовов нет, а ставки с тех пор могли поменяться.
     tried = [{**_model_scores(one["model"], one["answers"], rows, summaries, cards, inputs,
@@ -110,9 +112,13 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
                                             "scores_reasoning")}
     changed = [name for name, value in rules(exam).items() if (saved.get("rules") or {}).get(name) != value]
     decided = saved.get("decision")
+    # Выгрузка с ядра задаёт порог ступени: снятая заново после прогона меняет его так же, как разметка — счёт.
+    control_before = ((saved.get("files") or {}).get("control") or {}).get("sha256")
+    control_now = (card_scores_exam_report.files(exam["folder"])["control"] or {}).get("sha256")
     return _report(exam, rows, summaries, cards, tried, settings, spend=saved.get("spend") or {},
                    card_exam=card_exam, rescored_from=source.name,
-                   markup_changed=saved["markup"]["sha256"] != exam["markup"]["sha256"], rules_changed=changed,
+                   markup_changed=saved["markup"]["sha256"] != exam["markup"]["sha256"],
+                   control_changed=control_before != control_now, rules_changed=changed,
                    original_decision=decided.get("model") if isinstance(decided, dict) else None)
 
 
@@ -127,6 +133,7 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
     calls = _calls(exam, card_model, summary_model, 1)
     split = otbor_exam._split(exam, write=False)
     rows = _rows(exam, split, part)
+    _check_control(rows, exam)
     summaries = calls.cached_summaries()
     summary_todo = calls.summary_todo(rows)
     card_todo, card_chars = calls.card_todo(rows, summaries, runs)
@@ -143,6 +150,14 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
 def _check_runs(runs: int, part: str) -> None:
     if runs < 1 or (part == "exam" and runs != RUNS):
         raise ExamError(f"--runs {runs}: на экзамене {RUNS} прогона на строку, на настройке от одного")
+
+
+def _check_control(rows: list[dict[str, Any]], exam: dict[str, Any]) -> None:
+    """Порог ступени — нынешние баллы ядра на строках пакета: без них он не считается, лестница оплатилась бы вся, и
+    каждая модель «не прошла» бы ступень."""
+    if not control_agreement(rows, exam["scores_control"]["rows"])["rows"]:
+        raise ExamError(f"{card_scores_exam_control.NAME}: нет нынешнего балла ядра ни у одной строки пакета, порог "
+                        "ступени не посчитать: выгрузку снять заново (card-scores-exam-control)")
 
 
 def _check_approved(approved: str | None) -> None:
