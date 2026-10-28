@@ -140,8 +140,10 @@ def test_quote_names_the_company_under_any_of_its_spellings():
     ])
 
     assert participants == [
-        {"name": "Petroleum Development Oman (PDO)", "quote": "PDO signed a contract", "verified": True},
-        {"name": "FleetRabbit (поставщик)", "quote": "FleetRabbit offers fleet software", "verified": True},
+        {"name": "Petroleum Development Oman (PDO)", "quote": "PDO signed a contract", "verified": True,
+         "country": None},
+        {"name": "FleetRabbit (поставщик)", "quote": "FleetRabbit offers fleet software", "verified": True,
+         "country": None},
     ]
 
 

@@ -2710,13 +2710,13 @@ def cmd_card_scores_exam(args: argparse.Namespace) -> None:
     try:
         if args.rescore:
             result = card_scores_exam.rescore(args.rescore, args.markup, manifest_path=args.manifest,
-                                              card_markup=args.card_markup)
+                                              card_markup=args.card_markup, theme_before=args.theme_before)
         elif args.dry_run:
             _print_scores_plan(card_scores_exam.plan(args.markup, **options))
             return
         else:
             result = card_scores_exam.run(args.markup, **options, every=args.all, workers=args.workers,
-                                          card_markup=args.card_markup)
+                                          card_markup=args.card_markup, theme_before=args.theme_before)
     except (card_scores_exam.ExamError, OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"card-scores-exam: {exc}") from exc
     decision = result["decision"]
@@ -3971,6 +3971,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_scores_exam.add_argument("--card-markup", default=None,
                                help="разметка экзамена карточки #98 (манифест рядом): атрибуты основного вызова того "
                                     "же прогона сверяются с ней на строках его экзамена, по его порогам")
+    p_scores_exam.add_argument("--theme-before", default=None, metavar="REPORT",
+                               help="прежний отчёт экзамена на том же манифесте: тема основного вызова и ошибки "
+                                    "«Рынок против темы отрасли» до и после (#149)")
     p_scores_exam.add_argument("--runs", type=int, default=None,
                                help="прогонов на строку: на экзамене только 3 (спека), на настройке от 1")
     p_scores_exam.add_argument("--dry-run", action="store_true",

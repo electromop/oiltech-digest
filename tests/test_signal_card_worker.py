@@ -19,20 +19,20 @@ def test_old_worker_build_does_not_get_the_new_card_job_and_check_lanes_shows_th
     model = FakeModel({"Контракт SLB": answer()})
     monkeypatch.setattr(signal_card, "make_client", lambda: model)
     cli.main(["enqueue-signal-cards"])
-    # Сборка NL до #132 (контракт 5) исполнила бы карточку по-старому, без темы, а ядро отбросило бы оплаченный ответ:
-    # ядро такую задачу ей не выдаёт, а валит с причиной.
-    client = worker("external-ai", contract_number=5)
+    # Сборка NL до #137 (контракт 7) построила бы схему ответа без стран, и ядро отбросило бы оплаченный ответ: ядро
+    # такую задачу ей не выдаёт, а валит с причиной.
+    client = worker("external-ai", contract_number=7)
 
     assert client.claim() is None
 
     assert model.calls == []
     [job] = api_get("/api/jobs", admin, kind="signal_card")
-    assert "нужен контракт 6" in repository.get_background_job(job["id"])["error_message"]
+    assert "нужен контракт 8" in repository.get_background_job(job["id"])["error_message"]
     capsys.readouterr()
     with pytest.raises(SystemExit):
         cli.cmd_check_lanes(type("Args", (), {})())
     out = capsys.readouterr().out
-    assert f"контракт 5, у ядра контракт {contract.CONTRACT}" in out
+    assert f"контракт 7, у ядра контракт {contract.CONTRACT}" in out
     assert "NL надо пересобрать" in out
 
 

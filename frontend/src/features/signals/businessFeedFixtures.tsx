@@ -21,6 +21,7 @@ export const DICTIONARIES: SignalDictionaries = {
   technology_class: ["робототехника", "датчики и IoT", "неприменимо"],
   technology_maturity: ["прототип", "пилот/ОПИ", "неприменимо"],
   companies: ["SLB", "Saudi Aramco", "Роснефть"],
+  country: ["Норвегия", "ОАЭ", "Россия", "США"],
 };
 
 export const AGENT_FIELDS = ["event_date", "participants", "event_type", "region", "technology_class", "technology_maturity",
@@ -131,6 +132,8 @@ export function chips(card: HTMLElement) {
 
 export function matches(card: Signal, query: SignalQuery) {
   const names = (card.participants_json || []).map((item) => item.name);
+  // Страна (#137) — в любой роли: страна события или страна участника.
+  const countries = [...(card.event_countries || []), ...(card.participants_json || []).map((item) => item.country)];
   return (
     (!query.theme || card.theme === query.theme)
     && (!query.eventType || card.event_type === query.eventType)
@@ -138,6 +141,7 @@ export function matches(card: Signal, query: SignalQuery) {
     && (!query.technologyClass || card.technology_class === query.technologyClass)
     && (!query.technologyMaturity || card.technology_maturity === query.technologyMaturity)
     && (!query.company || names.includes(query.company))
+    && (!query.country || countries.includes(query.country))
   );
 }
 

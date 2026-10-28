@@ -4,13 +4,15 @@ import { CHOICE_FIELDS, UNDEFINED } from "./SignalCardChips";
 
 // Фильтры атрибутов карточки (#97) — сверху на обоих экранах: значения — из справочников агента
 // «Карточка сигнала» (/api/signals/dictionaries), «не определено» — тоже значение (так видны пробелы).
-// Компания — под любым из её имён: алиасы сводит сервер.
+// Компания — под любым из её имён: алиасы сводит сервер. Страна (#137) — имя справочника стран: сервер ищет её
+// и в странах события, и у участников; «не определено» у неё нет — пробел виден чипом на карточке.
 
 export type CardFilterValues = {
   eventType: string;
   region: string;
   technologyClass: string;
   technologyMaturity: string;
+  country: string;
   company: string;
 };
 
@@ -19,6 +21,7 @@ export const EMPTY_CARD_FILTERS: CardFilterValues = {
   region: "",
   technologyClass: "",
   technologyMaturity: "",
+  country: "",
   company: "",
 };
 
@@ -47,6 +50,15 @@ export function SignalCardFilters({ dictionaries, values, onChange }: Props) {
           </label>
         );
       })}
+      {Array.isArray(dictionaries?.country) ? (
+        <label className="field">
+          <span>Страна</span>
+          <select value={values.country} onChange={(event) => onChange({ country: event.target.value })}>
+            <option value="">Любая страна</option>
+            {dictionaries.country.map((value) => <option value={value} key={value}>{value}</option>)}
+          </select>
+        </label>
+      ) : null}
       <label className="field">
         <span>Компания</span>
         <input

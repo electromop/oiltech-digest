@@ -140,14 +140,14 @@ def _title(user_input):
 
 
 def oracle_card(scores_pack, by_id=None):
-    """Основной вызов, который ставит тему, как эксперт; даты события в тексте нет, зрелость «не определено». by_id —
-    {номер строки: поправки ответа}."""
+    """Основной вызов, который ставит тему, как эксперт; даты события в тексте нет, зрелость «не определено», стран
+    нет. by_id — {номер строки: поправки ответа}."""
     by_id = by_id or {}
 
     def reply(title):
         number = scores_pack["titles"][title]
         expert = scores_pack["expert"].get(number)
-        answer = {"event_date": "", "event_date_source": "по дате публикации", "companies": [],
+        answer = {"event_date": "", "event_date_source": "по дате публикации", "companies": [], "event_countries": [],
                   "event_type": signal_card_pack.UNDEFINED, "region": signal_card_pack.UNDEFINED,
                   "technology_class": signal_card_pack.UNDEFINED, "maturity": signal_card_pack.UNDEFINED,
                   "theme": expert["theme"] if expert else signal_card_pack.UNDEFINED,

@@ -39,3 +39,25 @@ def test_the_exam_needs_the_card_markup_of_the_same_texts_and_tuning_does_not(sc
                                text_of={first: "Другой текст публикации. " * 20})
     with pytest.raises(SystemExit, match="текст"):
         run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)}, "--card-markup", str(markup))
+
+
+def test_the_main_call_country_is_checked_against_the_expert_region_by_the_country_table(scores_pack, monkeypatch):
+    # Эксперт #98 страну не размечал, регион у всех его строк «Ближний Восток» (card_exam_pack): страна события
+    # основного вызова сверяется с ним по таблице «страна → регион»; страна на стыке регионов называет оба.
+    numbers = sorted(scores_pack["card_exam"])
+    given = {numbers[0]: ["Норвегия"], numbers[1]: [], numbers[2]: ["Норвегия", "Саудовская Аравия"]}
+    countries = {number: given.get(number, ["Турция"]) for number in numbers}
+    card = oracle_card(scores_pack, {number: {"event_countries": value} for number, value in countries.items()})
+
+    _, report = run_exam(monkeypatch, scores_pack, {LUNA: oracle_scores(scores_pack)}, card=card)
+
+    country = report["attributes"]["country"]
+    compared = report["attributes"]["rows"]
+    matched = [number for number in compared if countries[number] not in (["Норвегия"], [])]
+    assert country["rows"] == len(compared) and country["n"] == 3 * len(compared)
+    assert country["agent"] == pytest.approx(len(matched) / len(compared))
+    assert country["no_country"] == 3 * sum(countries[number] == [] for number in compared)
+    assert sorted(one["id"] for one in country["mismatches"]) == sorted(set(compared) - set(matched))
+    assert all(one["region"] == "Ближний Восток" for one in country["mismatches"])
+    [readable] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1:]
+    assert "Страна события против региона эксперта" in readable.read_text(encoding="utf-8")

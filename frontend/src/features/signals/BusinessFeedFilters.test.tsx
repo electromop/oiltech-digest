@@ -1,9 +1,10 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSignalSummary, type SignalQuery } from "../../api/signals";
 import type { Signal } from "../../api/types";
+import { SignalRadarPage } from "./SignalRadarPage";
 import {
-  DICTIONARIES, cardOf, contract, lastListQuery, publication, renderFeed, resetBusinessFeedApi, serve,
+  DICTIONARIES, cardOf, chips, contract, lastListQuery, publication, renderFeed, resetBusinessFeedApi, serve,
 } from "./businessFeedFixtures";
 
 // Бизнес-лента (#97, #130): фильтры атрибутов в панели «Фильтры · N» и «всё про компанию». Шов 3.
@@ -131,5 +132,57 @@ describe("бизнес-лента: фильтры и «всё про компа�
 
     expect(await screen.findByText(/Компания ищется по имени целиком/)).toBeInTheDocument();
     expect(lastListQuery()).toMatchObject({ company: "Газпром" });
+  });
+
+  it("страна (#137): чип в двух ролях, фильтр «Страна» находит и по месту события, и по участнику", async () => {
+    const uae: Signal = {
+      ...contract, id: 9006, signal_key: "feed:6", title_ru: "SLB бурит для ADNOC в ОАЭ", event_countries: ["ОАЭ"],
+      participants_json: [
+        { name: "SLB", quote: "SLB бурит", country: "США" }, { name: "ADNOC", quote: "для ADNOC", country: null },
+      ],
+      card_set_by: { ...contract.card_set_by, event_countries: "agent" }, evidence: [publication(7, {})],
+    };
+    // Агент страны события не нашёл: пробел карточки, его видно.
+    const review: Signal = {
+      ...contract, id: 9007, signal_key: "feed:7", title_ru: "Обзор рынка бурения", event_countries: [],
+      participants_json: [], card_set_by: { ...contract.card_set_by, event_countries: "agent" },
+      evidence: [publication(8, {})],
+    };
+    serve([contract, deal, uae, review]);
+    renderFeed();
+    fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
+
+    expect(chips(await cardOf("SLB бурит для ADNOC в ОАЭ"))).toEqual(expect.arrayContaining([
+      ["Страна события: ОАЭ", false], ["Компании: SLB (США) ADNOC", false],
+    ]));
+    expect(chips(await cardOf("Обзор рынка бурения"))).toContainEqual(["Страна события: не определено", true]);
+    // Карточка до #137: страну агент ещё не ставил — чипа нет.
+    expect(chips(await cardOf("SLB получила контракт Saudi Aramco на бурение")).map(([text]) => text))
+      .not.toContainEqual(expect.stringMatching(/^Страна/));
+
+    fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+    const country = await screen.findByRole("combobox", { name: "Страна" });
+    expect(within(country).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Любая страна", ...DICTIONARIES.country]);
+    fireEvent.change(country, { target: { value: "США" } });
+
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ showcase: "business", country: "США" }));
+    await waitFor(() => expect(screen.queryByText("Роснефть купила сервисную компанию")).not.toBeInTheDocument());
+    expect(screen.getByText("SLB бурит для ADNOC в ОАЭ")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Снять: Страна: США" })).toBeInTheDocument();
+    // «Всё про компанию» снимает и страну.
+    fireEvent.click(within(await cardOf("SLB бурит для ADNOC в ОАЭ")).getByRole("button", { name: "SLB" }));
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB" }));
+    expect(lastListQuery().country).toBeUndefined();
+  });
+
+  it("радар (#137): тот же фильтр «Страна», выбор уходит на сервер", async () => {
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Фильтры" }));
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Страна" }), { target: { value: "Норвегия" } });
+
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ country: "Норвегия" }));
+    expect(lastListQuery().showcase).toBeUndefined();
   });
 });

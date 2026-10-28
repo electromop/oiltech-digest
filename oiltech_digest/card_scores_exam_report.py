@@ -247,11 +247,33 @@ def _quality_and_price(report: dict[str, Any]) -> list[str]:
 
 def _theme(report: dict[str, Any]) -> list[str]:
     found, base = report["theme"], report["baseline"]
-    return ["## Тема основного вызова", "",
-            f"{report['card_model']}: {_share(found['agent'])} ответов с темой эксперта (порог "
-            f"{found['threshold']:.0%}) {_mark(found['passed'])}; константа (всегда "
-            f"«{base['constant']['theme_value']}») {_share(base['constant']['theme'])}; контроль (тег ленты и тема "
-            f"судьи, строк {base['control']['theme_rows']}) {_share(base['control']['theme'])}.", ""]
+    lines = ["## Тема основного вызова", "",
+             f"{report['card_model']}: {_share(found['agent'])} ответов с темой эксперта (порог "
+             f"{found['threshold']:.0%}) {_mark(found['passed'])}; константа (всегда "
+             f"«{base['constant']['theme_value']}») {_share(base['constant']['theme'])}; контроль (тег ленты и "
+             f"тема судьи, строк {base['control']['theme_rows']}) {_share(base['control']['theme'])}.", ""]
+    before = found.get("before")
+    if before:
+        lines += [f"Прежний прогон `{before['report']}`: {_share(before['agent'])} ответов с темой эксперта; сейчас "
+                  + ("не ниже прежнего." if found.get("not_below_before") else "**ниже прежнего**."), ""]
+    return lines + _market(found.get("market"), (before or {}).get("market"))
+
+
+_MARKET_RU = (("missed", "«Рынок» у эксперта, тема отрасли у модели"),
+              ("extra", "тема отрасли у эксперта, «Рынок» у модели"))
+
+
+def _market(found: dict[str, Any] | None, before: dict[str, Any] | None) -> list[str]:
+    """Ошибки «Рынок против темы отрасли» (#149), сейчас и в прежнем прогоне; отчёт до #149 их не знает."""
+    if not found:
+        return []
+    lines = [f"Ошибки «Рынок против темы отрасли» (тема рынка «{found['theme']}»), ответов по всем прогонам:", ""]
+    for key, title in _MARKET_RU:
+        one = found[key]
+        rows = f" (строки {', '.join(one['rows'])})" if one["rows"] else ""
+        was = f"; было {before[key]['answers']}" if before else ""
+        lines.append(f"- {title}: {one['answers']}{rows}{was}")
+    return lines + [""]
 
 
 _ATTRIBUTES_RU = (("companies_precision", "Компании, точность"), ("companies_recall", "Компании, полнота"),
@@ -273,7 +295,24 @@ def _attributes(report: dict[str, Any]) -> list[str]:
         shown = str(one.get("agent")) if key.startswith("invented") else _share(one.get("agent"))
         constant = _share(one["constant"]) if "constant" in one else ""
         lines.append(f"| {title} | {shown} | {constant} | {_mark(one.get('passed'))} |")
-    return lines + [""]
+    return lines + [""] + _country(found.get("country"))
+
+
+def _country(found: dict[str, Any] | None) -> list[str]:
+    """Страна события против региона эксперта #98 (#137): доля и расхождения для глаз; отчёт до #137 её не знает."""
+    if not found:
+        return []
+    lines = [f"Страна события против региона эксперта #98 (таблица «страна → регион», порога нет): "
+             f"{_share(found['agent'])} ответов ({found['n']}, строк {found['rows']}), без страны "
+             f"{found['no_country']}; строк с регионом «глобально» и «не определено» (не сверялись): "
+             f"{found['skipped']}.", ""]
+    if found["mismatches"]:
+        lines += ["Расхождения: регион эксперта и страны события по прогонам.", ""]
+        lines += [f"- {one['id']}: {one['region']}; " + " | ".join(", ".join(names) or "нет страны"
+                                                                      for names in one["countries"])
+                  for one in found["mismatches"]]
+        lines.append("")
+    return lines
 
 
 def _model(model: dict[str, Any], report: dict[str, Any]) -> list[str]:

@@ -1110,7 +1110,7 @@ describe("качество радара на экране (Виктор 29.09)",
   it("админ возвращает отклонённое полями «Отбора»; переносимую — только с применением (#132)", async () => {
     serveWithHidden([scored], [], [rejectedCard]);
     vi.mocked(getSignalDictionaries).mockResolvedValueOnce({
-      event_type: [], region: [], technology_class: [], technology_maturity: [], companies: [],
+      event_type: [], region: [], technology_class: [], technology_maturity: [], companies: [], country: [],
       otbor_return: RETURN_CHOICES,
     });
     vi.mocked(returnSignal).mockResolvedValue({ ok: true });

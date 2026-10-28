@@ -899,7 +899,10 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_type TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS region TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS technology_class TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS technology_maturity TEXT;
-ALTER TABLE signals ADD COLUMN IF NOT EXISTS participants_json JSONB;  -- [{name, quote, verified}]
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS participants_json JSONB;  -- [{name, quote, verified, country}]
+-- Страны события (#137): до трёх имён справочника стран у кода (signal_card_countries); страна участника — в его
+-- записи participants_json.
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_countries TEXT[];
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_date_source TEXT;   -- из текста / по дате публикации / не определено
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS card_set_by JSONB;        -- {поле: agent / radar_judge / human}
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS card_recipe JSONB;        -- инструкция, модель, справочники, время

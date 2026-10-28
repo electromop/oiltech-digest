@@ -337,6 +337,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       region: cardFilters.region || undefined,
       technologyClass: cardFilters.technologyClass || undefined,
       technologyMaturity: cardFilters.technologyMaturity || undefined,
+      country: cardFilters.country || undefined,
       company: cardFilters.company.trim() || undefined,
     }),
     [business, search, theme, maturity, isAdmin, showHidden, cardFilters],
@@ -716,6 +717,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     ...CHOICE_FIELDS.filter(({ filter }) => cardFilters[filter]).map(({ filter, label }) => ({
       key: filter, label: `${label}: ${cardFilters[filter]}`, clear: () => updateCardFilters({ [filter]: "" }),
     })),
+    ...(cardFilters.country
+      ? [{ key: "country", label: `Страна: ${cardFilters.country}`, clear: () => updateCardFilters({ country: "" }) }]
+      : []),
     ...(cardFilters.company.trim()
       ? [{ key: "company", label: `Компания: ${cardFilters.company.trim()}`, clear: () => updateCardFilters({ company: "" }) }]
       : []),
