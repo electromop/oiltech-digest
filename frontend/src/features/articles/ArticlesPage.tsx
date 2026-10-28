@@ -734,7 +734,7 @@ export function ArticlesPage(props: Props) {
                               </div>
                             ) : null}
                           </div>
-                          <div className="articleCardMetrics">
+                          <div className="articleCardMetrics articleListMetrics">
                             <div className="articleMetric">{formatDate(article.collected || article.date)}</div>
                             <div className={`miniPill ${ratingClass(article.rating)}`} title="Итоговая оценка релевантности">
                               {Math.round(article.score || 0)}

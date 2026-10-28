@@ -958,7 +958,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                       <div className="signalCardStatus signalDisputed">Спорный сигнал: {disputedWhy(signal.otbor_disputed)}</div>
                     ) : null}
                   </div>
-                  <div className="articleCardMetrics">
+                  <div className="articleCardMetrics signalCardMetrics">
                     {/* Номер виден всегда: без него не сослаться на дубль в поле «ID дубля». */}
                     <span className="signalIdText metaText">№{signal.id}</span>
                     <span className={`scoreBadge ${tone}`} title={scoreTitle(signal, breakdown.length > 0)}>

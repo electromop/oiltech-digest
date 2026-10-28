@@ -1288,6 +1288,38 @@
   margin-left: auto;
 }
 
+/* Номер, балл и кнопка сигнала, дата, балл, оценка и статус статьи — колонки одной ширины во всех строках
+   (замечание владельца 28.10): длина номера, оценки («Низкая» / «Выше средней») и подписи («Убрать» /
+   «В дайджест») не сдвигает соседей. Ширина колонки — по самому длинному варианту с запасом; строка без
+   кнопки держит её колонку пустой. */
+.signalCardMetrics,
+.articleListMetrics {
+  display: grid;
+  justify-items: start;
+}
+
+.signalCardMetrics {
+  grid-template-columns: minmax(3.5rem, max-content) minmax(8rem, max-content) minmax(6.5rem, max-content);
+}
+
+.signalCardMetrics .signalDigestButton {
+  justify-self: stretch;
+}
+
+.articleListMetrics {
+  grid-template-columns:
+    minmax(3.75rem, max-content) minmax(2.5rem, max-content) minmax(6.5rem, max-content)
+    minmax(8.25rem, max-content);
+}
+
+/* На телефоне строки по вертикали не сравнить: группа снова переносится, как раньше. */
+@media (max-width: 720px) {
+  .signalCardMetrics,
+  .articleListMetrics {
+    display: flex;
+  }
+}
+
 .articleCardMain {
   flex: 1 1 260px;
   min-width: 0;
