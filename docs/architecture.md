@@ -312,7 +312,7 @@ stats
 | `EXTERNAL_WORKER_TOKEN_HASH` | SHA-256 токена воркера (на стороне ядра) |
 | `CORE_API_URL`, `EXTERNAL_WORKER_TOKEN` | на стороне воркера |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | базовые параметры LLM |
-| `OPENAI_RELEVANCE_MODEL` / `_SCORE_MODEL` / `_TRANSLATE_MODEL` | пер-стадийные модели |
+| `OPENAI_RELEVANCE_MODEL` / `_SCORE_MODEL` / `_TRANSLATE_MODEL` / `_SUMMARY_MODEL` | пер-стадийные модели |
 | `CYCLE_INTERVAL_SECONDS` | период цикла scheduler (прод — 1800) |
 | `REQUEST_ARTICLE_LIMIT` | сколько кандидатов брать с листинга (6) — см. §11.3 |
 | `REPRINTS_INTERVAL_HOURS` / `_DAYS` / `_LIMIT` | шаг перепечаток: период в часах (0 — выключен), окно, потолок пар |

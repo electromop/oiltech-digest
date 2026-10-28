@@ -150,6 +150,14 @@ WHERE d.signal_key = {_key_sql('f.id')}
   AND d.merged_into_signal_id IS DISTINCT FROM p.id
 """
 
+
+def _feed_owned_sql(evidence: str) -> str:
+    """Ссылку ведёт мост: она ничья или у сигнала ленты. Ссылку карточки радара мост не трогает."""
+    return (f"({evidence}.signal_id IS NULL"
+            f" OR EXISTS (SELECT 1 FROM signals owner"
+            f" WHERE owner.id = {evidence}.signal_id AND owner.origin = '{SIGNAL_ORIGIN_FEED}'))")
+
+
 # Публикация: статья — к своему сигналу, перепечатка — к сигналу главной. Ссылку, которую
 # держит карточка радара, не забираем и не переписываем (см. описание модуля).
 _UPSERT_PUBLICATIONS = f"""
@@ -181,9 +189,7 @@ ON CONFLICT (source_url) DO UPDATE SET
   summary_ru = EXCLUDED.summary_ru,
   strength = EXCLUDED.strength,
   updated_at = now()
-WHERE (signal_evidence.signal_id IS NULL
-       OR EXISTS (SELECT 1 FROM signals owner
-                  WHERE owner.id = signal_evidence.signal_id AND owner.origin = '{SIGNAL_ORIGIN_FEED}'))
+WHERE {_feed_owned_sql('signal_evidence')}
   AND (signal_evidence.signal_id, signal_evidence.article_id, signal_evidence.title,
        signal_evidence.title_ru, signal_evidence.publisher, signal_evidence.published_at,
        signal_evidence.summary_ru, signal_evidence.strength)
@@ -274,6 +280,26 @@ def sync_feed_signals(
         "publications": int(publications or 0),
         "dry_run": dry_run,
     }
+
+
+# Дата публикации у сигнала ленты — копия даты статьи. Починка даты (#139) обновляет только её, без
+# остального моста; ссылку, которую держит радар, не трогает, как и _UPSERT_PUBLICATIONS.
+_REFRESH_PUBLICATION_DATES = f"""
+UPDATE signal_evidence e
+SET published_at = a.published_at, updated_at = now()
+FROM articles a
+WHERE a.id = ANY(%(ids)s) AND e.article_id = a.id
+  AND e.published_at IS DISTINCT FROM a.published_at
+  AND {_feed_owned_sql('e')}
+"""
+
+
+def refresh_publication_dates(conn, article_ids: Sequence[int]) -> int:
+    """Копия даты статей у их публикаций в сигналах ленты — в транзакции вызывающего. Число строк."""
+    ids = sorted({int(value) for value in article_ids})
+    if not ids:
+        return 0
+    return int(conn.execute(_REFRESH_PUBLICATION_DATES, {"ids": ids}).rowcount or 0)
 
 
 def sync_quietly(article_ids: Sequence[int]) -> None:
