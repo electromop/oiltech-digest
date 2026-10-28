@@ -382,7 +382,7 @@ def _shape_problem(answer: Any, schema: dict[str, Any]) -> str | None:
             return f"нет строки {field}"
         if spec["type"] == "array" and spec["items"]["type"] == "string":
             if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-                return f"{field} — не список строк"
+                return f"{field}: не список строк"
         elif spec["type"] == "array":
             required = spec["items"]["required"]
             if not isinstance(value, list) or not all(

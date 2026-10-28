@@ -18,6 +18,12 @@ export const CHOICE_FIELDS = [
   { field: "technology_maturity", filter: "technologyMaturity", label: "Зрелость", any: "Любая зрелость" },
 ] as const;
 
+// Фильтр «Страна» (#137): ищет и в странах события, и у участников, поэтому не одна колонка, как у CHOICE_FIELDS.
+// Чип на карточке показывает страны события, страна участника стоит у его имени.
+export const COUNTRY_FILTER = {
+  filter: "country", label: "Страна", any: "Любая страна", chip: "Страна события",
+} as const;
+
 const CATEGORY_LABELS: Record<string, string> = { business: "бизнес", technology: "технология", other: "другое" };
 const RELEVANCE_LABELS: Record<string, string> = { direct: "прямая", transferable: "переносимая", none: "нет связи" };
 // Кто поставил дату события, если у неё нет источника агента («из текста», «по дате публикации»).
@@ -45,8 +51,9 @@ function cardChips(signal: Signal): Chip[] {
     if (field === "region") {
       const countries = signal.event_countries;
       const key = "event_countries";
-      if (isGap(signal, key, countries)) chips.push({ key, label: "Страна события", value: UNDEFINED, gap: true });
-      else if (countries?.length) chips.push({ key, label: "Страна события", value: countries.join(", "), gap: false });
+      const label = COUNTRY_FILTER.chip;
+      if (isGap(signal, key, countries)) chips.push({ key, label, value: UNDEFINED, gap: true });
+      else if (countries?.length) chips.push({ key, label, value: countries.join(", "), gap: false });
     }
   }
   // «Не определено» у связи с нефтесервисом — пусто при пометке агента (код радара: direct / transferable / none).

@@ -25,7 +25,7 @@ import { radarDigestLockedText } from "../articles/feedWindow";
 import { StatCard } from "../shared/StatCard";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { PROFILES } from "../scoring/ScoringPage";
-import { CHOICE_FIELDS, SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
+import { CHOICE_FIELDS, COUNTRY_FILTER, SignalCardChips, eventDateLabel, whyBlock } from "./SignalCardChips";
 import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
 import { SignalReturnForm } from "./SignalReturnForm";
@@ -718,7 +718,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       key: filter, label: `${label}: ${cardFilters[filter]}`, clear: () => updateCardFilters({ [filter]: "" }),
     })),
     ...(cardFilters.country
-      ? [{ key: "country", label: `Страна: ${cardFilters.country}`, clear: () => updateCardFilters({ country: "" }) }]
+      ? [{
+          key: "country", label: `${COUNTRY_FILTER.label}: ${cardFilters.country}`,
+          clear: () => updateCardFilters({ country: "" }),
+        }]
       : []),
     ...(cardFilters.company.trim()
       ? [{ key: "company", label: `Компания: ${cardFilters.company.trim()}`, clear: () => updateCardFilters({ company: "" }) }]

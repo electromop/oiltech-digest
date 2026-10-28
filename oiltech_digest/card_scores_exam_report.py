@@ -254,7 +254,9 @@ def _theme(report: dict[str, Any]) -> list[str]:
              f"тема судьи, строк {base['control']['theme_rows']}) {_share(base['control']['theme'])}.", ""]
     before = found.get("before")
     if before:
-        lines += [f"Прежний прогон `{before['report']}`: {_share(before['agent'])} ответов с темой эксперта; сейчас "
+        lines += [f"Прежний прогон `{before['report']}` на тех же строках: {_share(before['agent'])} ответов с темой "
+                  "эксперта" + (" (разметка с тех пор менялась, счёт по нынешней)" if before.get("markup_changed")
+                                else "") + "; сейчас "
                   + ("не ниже прежнего." if found.get("not_below_before") else "**ниже прежнего**."), ""]
     return lines + _market(found.get("market"), (before or {}).get("market"))
 
@@ -306,12 +308,14 @@ def _country(found: dict[str, Any] | None) -> list[str]:
              f"{_share(found['agent'])} ответов ({found['n']}, строк {found['rows']}), без страны "
              f"{found['no_country']}; строк с регионом «глобально» и «не определено» (не сверялись): "
              f"{found['skipped']}.", ""]
-    if found["mismatches"]:
-        lines += ["Расхождения: регион эксперта и страны события по прогонам.", ""]
-        lines += [f"- {one['id']}: {one['region']}; " + " | ".join(", ".join(names) or "нет страны"
-                                                                      for names in one["countries"])
-                  for one in found["mismatches"]]
-        lines.append("")
+    for key, title in (("mismatches", "Расхождения"),
+                       ("matched", "Совпали (проверить глазами: страна могла быть не та, но в том же регионе)")):
+        if found.get(key):
+            lines += [f"{title}: регион эксперта и страны события по прогонам.", ""]
+            lines += [f"- {one['id']}: {one['region']}; " + " | ".join(", ".join(names) or "нет страны"
+                                                                          for names in one["countries"])
+                      for one in found[key]]
+            lines.append("")
     return lines
 
 

@@ -59,5 +59,8 @@ def test_the_main_call_country_is_checked_against_the_expert_region_by_the_count
     assert country["no_country"] == 3 * sum(countries[number] == [] for number in compared)
     assert sorted(one["id"] for one in country["mismatches"]) == sorted(set(compared) - set(matched))
     assert all(one["region"] == "Ближний Восток" for one in country["mismatches"])
+    # Совпавшие тоже видны для проверки глазами: страна могла быть не та, но в том же регионе.
+    assert sorted(one["id"] for one in country["matched"]) == sorted(matched)
+    assert all(one["countries"] == [countries[one["id"]]] * 3 for one in country["matched"])
     [readable] = sorted(scores_pack["out"].glob("card_scores_exam_report_*.md"))[-1:]
     assert "Страна события против региона эксперта" in readable.read_text(encoding="utf-8")

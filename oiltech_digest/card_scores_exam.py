@@ -53,7 +53,6 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     тема и ошибки «Рынок против темы отрасли» до и после (#149). Отчёт рядом с манифестом."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
-    before = _theme_before(theme_before, exam) if theme_before else None
     if part == "exam":
         _check_approved(exam["approved_scores"])
     card_exam = _card_exam(card_markup, exam, part)
@@ -62,6 +61,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     split = otbor_exam._split(exam, write=True)
     rows = _rows(exam, split, part)
     _check_control(rows, exam)
+    before = _theme_before(theme_before, exam, part, split) if theme_before else None
     summaries = calls.summaries(rows)
     cards = calls.cards(rows, summaries, runs)
     tried: list[dict[str, Any]] = []
@@ -91,7 +91,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
     except ValueError as exc:
         raise ExamError(str(exc)) from exc
     exam = load(markup_path, manifest_path)
-    before = _theme_before(theme_before, exam) if theme_before else None
+    before = _theme_before(theme_before, exam, saved["part"], saved["split"]) if theme_before else None
     card_exam = _card_exam(card_markup, exam, saved["part"])
     inputs = Inputs(exam)
     if saved["manifest"]["sha256"] != exam["manifest"]["sha256"]:
@@ -229,10 +229,12 @@ def load(markup_path: str | Path, manifest_path: str | Path | None = None) -> di
             "approved_scores": approved.strip() if isinstance(approved, str) and approved.strip() else None}
 
 
-def _theme_before(path: str | Path, exam: dict[str, Any]) -> dict[str, Any]:
-    """Тема основного вызова прежнего прогона (#149) — «до» в отчёте, на тех же текстах: по его сохранённым ответам и
-    строкам. Схема ответа держит тему в списке тематик, поэтому сверка точная; ответ прежней схемы (до #137, без
-    стран) годится: берётся только тема."""
+def _theme_before(path: str | Path, exam: dict[str, Any], part: str, split: dict[str, Any]) -> dict[str, Any]:
+    """Темы ответов основного вызова прежнего прогона (#149) по строкам — «до» в отчёте. Сравнимо только на тех же
+    текстах, той же части и тех же строках (иначе отказ до платных вызовов); счёт — на нынешней разметке
+    (_report): у «до» и «после» одни метки эксперта. Из отчёта берутся только ответы (их проверяет
+    card_scores_exam_report.read); схема ответа держит тему в списке тематик, поэтому сверка точная, и ответ
+    прежней схемы (до #137, без стран) годится."""
     source = Path(path).expanduser().resolve()
     try:
         saved = card_scores_exam_report.read(source)
@@ -240,17 +242,17 @@ def _theme_before(path: str | Path, exam: dict[str, Any]) -> dict[str, Any]:
         raise ExamError(str(exc)) from exc
     if saved["manifest"]["sha256"] != exam["manifest"]["sha256"]:
         raise ExamError(f"{source.name}: прежний прогон на другом манифесте, тексты другие: «до» не сравнить")
+    if saved["part"] != part or sorted(saved["split"][part]) != sorted(split[part]):
+        raise ExamError(f"{source.name}: прежний прогон другой части или на других строках: «до» не сравнить")
     themes = Inputs(exam).themes
-    answers = (saved.get("cards") or {}).get("answers") or {}
-    rows = [{"id": row["id"], "theme": row["theme"], "extra": row["group"] == EXTRA} for row in saved["rows"]]
-    cards = {row["id"]: [{"theme": _saved_theme(card, themes)} for card in answers.get(row["id"]) or []]
-             for row in rows}
-    found = theme(rows, cards, signal_themes.market(themes))
-    return {"report": source.name, "agent": found["agent"], "n": found["n"], "market": found["market"]}
+    return {"report": source.name, "markup_changed": saved["markup"]["sha256"] != exam["markup"]["sha256"],
+            "themes": {number: [_saved_theme(card, themes) for card in found]
+                       for number, found in saved["cards"]["answers"].items()}}
 
 
 def _saved_theme(card: dict[str, Any], themes: list[str]) -> str | None:
-    value = None if card.get("error") else (card.get("answer") or {}).get("theme")
+    answer = card.get("answer")
+    value = answer.get("theme") if isinstance(answer, dict) and not card.get("error") else None
     return value if value in themes else None
 
 
@@ -361,10 +363,14 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
     inputs = Inputs(exam)
     control = exam["scores_control"]
     themes = {row["id"]: [inputs.card_values(row, card) for card in cards[row["id"]]] for row in rows}
-    found_theme = theme(rows, themes, signal_themes.market(inputs.themes))
+    market = signal_themes.market(inputs.themes)
+    found_theme = theme(rows, themes, market)
     if theme_before is not None:
-        found_theme.update(before=theme_before,
-                           not_below_before=(found_theme["agent"] or 0) >= (theme_before["agent"] or 0))
+        saved = theme(rows, {row["id"]: [{"theme": one} for one in theme_before["themes"].get(row["id"]) or []]
+                             for row in rows}, market)
+        found_theme.update(before={"report": theme_before["report"], "agent": saved["agent"], "n": saved["n"],
+                                   "markup_changed": theme_before["markup_changed"], "market": saved["market"]},
+                           not_below_before=(found_theme["agent"] or 0) >= (saved["agent"] or 0))
     chosen = next((one for one in tried if one["model"] == decision), None)
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

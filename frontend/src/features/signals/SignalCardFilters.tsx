@@ -1,6 +1,6 @@
 import { useId } from "react";
 import type { SignalDictionaries } from "../../api/signals";
-import { CHOICE_FIELDS, UNDEFINED } from "./SignalCardChips";
+import { CHOICE_FIELDS, COUNTRY_FILTER, UNDEFINED } from "./SignalCardChips";
 
 // Фильтры атрибутов карточки (#97) — сверху на обоих экранах: значения — из справочников агента
 // «Карточка сигнала» (/api/signals/dictionaries), «не определено» — тоже значение (так видны пробелы).
@@ -52,9 +52,9 @@ export function SignalCardFilters({ dictionaries, values, onChange }: Props) {
       })}
       {Array.isArray(dictionaries?.country) ? (
         <label className="field">
-          <span>Страна</span>
+          <span>{COUNTRY_FILTER.label}</span>
           <select value={values.country} onChange={(event) => onChange({ country: event.target.value })}>
-            <option value="">Любая страна</option>
+            <option value="">{COUNTRY_FILTER.any}</option>
             {dictionaries.country.map((value) => <option value={value} key={value}>{value}</option>)}
           </select>
         </label>

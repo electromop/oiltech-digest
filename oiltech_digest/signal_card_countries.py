@@ -29,12 +29,12 @@ class Countries:
         entries = dictionaries.get("countries") or []
         self.names = [entry["name"] for entry in entries]
         self._regions = {entry["name"]: list(entry["regions"]) for entry in entries}
-        self._names = {spelling_key(spelling): entry["name"]
-                       for entry in entries for spelling in (entry["name"], *entry["aliases"])}
+        self._by_spelling = {spelling_key(spelling): entry["name"]
+                             for entry in entries for spelling in (entry["name"], *entry["aliases"])}
 
     def canonical(self, value: Any) -> str | None:
         """Имя справочника по написанию модели; страны нет в справочнике — None."""
-        return self._names.get(spelling_key(value)) if isinstance(value, str) else None
+        return self._by_spelling.get(spelling_key(value)) if isinstance(value, str) else None
 
     def event(self, values: Iterable[Any]) -> list[str]:
         """Страны события из ответа модели: имена справочника по порядку ответа, без повторов и чужих, не больше
