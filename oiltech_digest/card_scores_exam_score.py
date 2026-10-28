@@ -8,7 +8,8 @@ signal_scores.score_values, итог в двух вариантах подмеш
   половина, сбой — промах; среднее по прогонам. Константа — 50%.
 - По каждому критерию: средняя ошибка и сдвиг (модель минус эксперт) там, где число есть у обоих; у «Свежести» ещё
   совпадение «есть дата / нет даты» (её считает код по дате основного вызова).
-- Тема основного вызова — доля совпавших с темой эксперта.
+- Тема основного вызова — доля совпавших с темой эксперта; ошибки «Рынок против темы отрасли» (#149) отдельно.
+- Страна события основного вызова (#137) — против региона эксперта #98 по таблице «страна → регион», без порога.
 
 Решение и правило прохождения — по строкам пакета: с ними сравниваются константа, эксперт сам с собой (итог по весам из
 его же баллов) и контроль с ядра (балл и тег ленты, балл и тема судьи). «Сильные сверх пакета» (выбранное «в дайджест»,
@@ -189,13 +190,54 @@ def _freshness(rows: list[dict[str, Any]], finals: Finals) -> dict[str, Any]:
 # --- Тема ----------------------------------------------------------------------------------------
 
 
-def theme(rows: list[dict[str, Any]], cards: Finals) -> dict[str, Any]:
-    """Тема основного вызова против темы эксперта — у строк пакета; сбой — промах."""
+def theme(rows: list[dict[str, Any]], cards: Finals, market: str | None = None) -> dict[str, Any]:
+    """Тема основного вызова против темы эксперта — у строк пакета; сбой — промах. market — имя темы рынка в списке
+    (signal_themes.market): по нему ошибки «Рынок против темы отрасли» (#149)."""
     pack = [row for row in rows if not row["extra"]]
-    pairs = [(row["theme"], (card or {}).get("theme")) for row in pack for card in cards[row["id"]]]
-    agent = _share(sum(expert == given for expert, given in pairs), len(pairs))
+    pairs = [(row["id"], row["theme"], (card or {}).get("theme")) for row in pack for card in cards[row["id"]]]
+    agent = _share(sum(expert == given for _, expert, given in pairs), len(pairs))
     return {"agent": agent, "n": len(pairs), "threshold": THRESHOLDS["theme"],
-            "passed": agent is not None and agent >= THRESHOLDS["theme"]}
+            "passed": agent is not None and agent >= THRESHOLDS["theme"], "market": _market_errors(pairs, market)}
+
+
+def _market_errors(pairs: list[tuple[str, Any, Any]], market: str | None) -> dict[str, Any] | None:
+    """Ошибки «Рынок против темы отрасли» (#149): у эксперта тема рынка, у модели другая из списка (missed), и
+    наоборот (extra) — ответы и строки; «не определено» и сбой — не тема отрасли. Темы рынка в списке нет — None."""
+    if market is None:
+        return None
+
+    def errors(found: list[str]) -> dict[str, Any]:
+        return {"answers": len(found), "rows": sorted(set(found))}
+    return {"theme": market,
+            "missed": errors([number for number, expert, given in pairs
+                              if expert == market and given not in (None, market)]),
+            "extra": errors([number for number, expert, given in pairs
+                             if given == market and expert not in (None, market)])}
+
+
+# Регионы эксперта, с которыми страну не сверить: у «глобально» страны нет, «не определено» — регион не понят.
+_REGIONS_WITHOUT_COUNTRY = frozenset({"глобально", "не определено"})
+
+
+def country_region(items: list[dict[str, Any]], cards: Finals, countries: Any) -> dict[str, Any]:
+    """Страна события основного вызова против региона эксперта #98 по таблице «страна → регион» (#137; эксперт страну
+    не размечает): ответ совпал, если регион эксперта среди регионов хоть одной страны события; без стран и без
+    карточки — промах. Строки с регионом «глобально» и «не определено» не сверяются. Порога нет: расхождения и
+    совпавшие (страна могла быть не та, но в том же регионе) — списками для глаз. countries — справочник стран
+    (signal_card_countries.Countries)."""
+    compared = [item for item in items if item["labels"]["region"] not in _REGIONS_WITHOUT_COUNTRY]
+    hits = empty = 0
+    mismatches, matches = [], []
+    for item in compared:
+        region = item["labels"]["region"]
+        given = [list((card or {}).get("event_countries") or []) for card in cards[item["id"]]]
+        matched = [any(region in countries.regions(name) for name in names) for names in given]
+        hits += sum(matched)
+        empty += sum(not names for names in given)
+        (matches if all(matched) else mismatches).append({"id": item["id"], "region": region, "countries": given})
+    answers = sum(len(cards[item["id"]]) for item in compared)
+    return {"agent": _share(hits, answers), "n": answers, "rows": len(compared), "no_country": empty,
+            "skipped": len(items) - len(compared), "mismatches": mismatches, "matched": matches}
 
 
 # --- Константа, эксперт сам с собой, контроль ------------------------------------------------------

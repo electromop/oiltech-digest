@@ -18,6 +18,12 @@ export const CHOICE_FIELDS = [
   { field: "technology_maturity", filter: "technologyMaturity", label: "Зрелость", any: "Любая зрелость" },
 ] as const;
 
+// Фильтр «Страна» (#137): ищет и в странах события, и у участников, поэтому не одна колонка, как у CHOICE_FIELDS.
+// Чип на карточке показывает страны события, страна участника стоит у его имени.
+export const COUNTRY_FILTER = {
+  filter: "country", label: "Страна", any: "Любая страна", chip: "Страна события",
+} as const;
+
 const CATEGORY_LABELS: Record<string, string> = { business: "бизнес", technology: "технология", other: "другое" };
 const RELEVANCE_LABELS: Record<string, string> = { direct: "прямая", transferable: "переносимая", none: "нет связи" };
 // Кто поставил дату события, если у неё нет источника агента («из текста», «по дате публикации»).
@@ -41,6 +47,14 @@ function cardChips(signal: Signal): Chip[] {
     const value = signal[field];
     if (isGap(signal, field, value)) chips.push({ key: field, label, value: UNDEFINED, gap: true });
     else if (value) chips.push({ key: field, label, value, gap: false });
+    // Страны события (#137) — после региона: где событие произошло. Страна участника — у его имени (Компании).
+    if (field === "region") {
+      const countries = signal.event_countries;
+      const key = "event_countries";
+      const label = COUNTRY_FILTER.chip;
+      if (isGap(signal, key, countries)) chips.push({ key, label, value: UNDEFINED, gap: true });
+      else if (countries?.length) chips.push({ key, label, value: countries.join(", "), gap: false });
+    }
   }
   // «Не определено» у связи с нефтесервисом — пусто при пометке агента (код радара: direct / transferable / none).
   const relevance = signal.oilfield_relevance;
@@ -95,7 +109,7 @@ type Props = {
 };
 
 export function SignalCardChips({ signal, onCompany }: Props) {
-  const companies = (signal.participants_json || []).map((item) => item.name).filter(Boolean);
+  const companies = (signal.participants_json || []).filter((item) => item.name);
   return (
     <div className="signalCardChips" role="group" aria-label="Атрибуты сигнала">
       {cardChips(signal).map((chip) => (
@@ -106,7 +120,7 @@ export function SignalCardChips({ signal, onCompany }: Props) {
       {companies.length ? (
         <span className="signalChip signalChipCompanies">
           <span className="signalChipLabel">Компании:</span>
-          {companies.map((name) => (
+          {companies.map(({ name, country }) => (
             <Fragment key={name}>
               {" "}
               <button
@@ -117,6 +131,8 @@ export function SignalCardChips({ signal, onCompany }: Props) {
               >
                 {name}
               </button>
+              {/* Страна участника (#137): по ней тоже находит фильтр «Страна». */}
+              {country ? ` (${country})` : null}
             </Fragment>
           ))}
         </span>

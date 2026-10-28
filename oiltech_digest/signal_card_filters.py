@@ -1,6 +1,7 @@
 """Фильтры экрана по атрибутам карточки сигнала (#97): значения справочников для экрана, проверка значения
 фильтра и имена участников для «всё про компанию» — с дочерними обществами по списку «дочка → мать» (решение
-владельца 20.10, company_parents.py). Агент «Карточка сигнала» — в signal_card.py."""
+владельца 20.10, company_parents.py); страна (#137) — по справочнику стран у кода. Агент «Карточка сигнала» — в
+signal_card.py."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ from collections.abc import Iterable, Sequence
 
 from oiltech_digest import company_parents, word_forms
 from oiltech_digest.signal_card import CHOICE_COLUMNS
+from oiltech_digest.signal_card_countries import Countries
 from oiltech_digest.signal_card_pack import UNDEFINED, load_dictionaries
 
 
@@ -55,12 +57,23 @@ def checked_choice(column: str, value: str | None) -> str | None:
     return value
 
 
+def checked_country(value: str | None) -> str | None:
+    """Значение фильтра «Страна» (#137): имя справочника стран как есть; пустое — фильтра нет. Чужое и написание
+    вместо имени («USA») — ValueError, как у справочных полей: значения экран берёт из справочника."""
+    if not value:
+        return None
+    if value not in Countries(load_dictionaries()).names:
+        raise ValueError(f"Фильтр «Страна»: страны «{value}» нет в справочнике")
+    return value
+
+
 def screen_dictionaries() -> dict[str, list[str]]:
-    """Значения фильтров экрана (#97): справочные поля карточки по колонкам signals и подсказки к полю
-    «Компания» — канонические имена справочника алиасов. «Не определено» в справочник не входит: его
-    экран добавляет сам, как и подписи полей."""
+    """Значения фильтров экрана (#97): справочные поля карточки по колонкам signals, подсказки к полю
+    «Компания» — канонические имена справочника алиасов, и страны (#137) — имена справочника стран. «Не
+    определено» в справочник не входит: его экран добавляет сам, как и подписи полей."""
     dictionaries = load_dictionaries()
     return {
         **{column: list(dictionaries[key]["values"]) for column, key in CHOICE_COLUMNS.items()},
         "companies": [entry["name"] for entry in dictionaries.get("companies") or []],
+        "country": Countries(dictionaries).names,
     }

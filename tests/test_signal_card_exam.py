@@ -123,7 +123,8 @@ def test_thresholds_are_checked_on_the_report_with_tolerances_strict_is_alongsid
                   for item in rows}
     (tmp_path / "signal_card_exam_tolerances.json").write_text(json.dumps(tolerances, ensure_ascii=False),
                                                                encoding="utf-8")
-    both = [{"name": "SLB", "quote": "SLB подписала контракт"}, {"name": "Saudi Aramco", "quote": "контракт с Saudi Aramco"}]
+    both = [{"name": "SLB", "quote": "SLB подписала контракт", "country": ""},
+            {"name": "Saudi Aramco", "quote": "контракт с Saudi Aramco", "country": ""}]
     agent = by_stratum(strata, technology=answer(companies=both, technology_class="датчики и IoT"))
 
     _, report = run_exam(monkeypatch, markup, {NANO: lambda title: {**agent(title), "companies": both}})

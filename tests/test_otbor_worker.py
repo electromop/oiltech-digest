@@ -35,7 +35,7 @@ def test_old_worker_build_does_not_get_the_otbor_job_and_check_lanes_shows_the_m
         cli.cmd_check_lanes(type("Args", (), {})())
     out = capsys.readouterr().out
     assert f"контракт 6, у ядра контракт {contract.CONTRACT}" in out
-    assert contract.CONTRACT == 7
+    assert contract.CONTRACT >= 7
 
 
 def test_build_before_131_refuses_the_signal_summary_job(user, contour, monkeypatch):

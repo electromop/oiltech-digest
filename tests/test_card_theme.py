@@ -6,7 +6,7 @@
 
 from datetime import datetime, timezone
 
-from oiltech_digest import cli
+from oiltech_digest import cli, signal_card
 from oiltech_digest.db import marks, repository
 from tests.card_pipeline_support import (DRILLING, MARKET, THEMES, accepted, answer, card_answer, fill_cards,
                                          pipeline)  # noqa: F401 — фикстура pipeline
@@ -45,6 +45,23 @@ def test_card_gets_the_summary_and_category_but_nothing_of_otbor_and_sets_the_th
     assert (card["theme"], card["card_set_by"]["theme"]) == (MARKET, "agent")
     # Связь и применение — по-прежнему от «Отбора».
     assert (card["oilfield_relevance"], card["card_set_by"]["oilfield_relevance"]) == ("direct", "otbor")
+
+
+REVIEW = "Рынок цифровых двойников вырастет вдвое"
+REVIEW_TEXT = "Исследование: мировой рынок цифровых двойников в нефтегазе вырастет вдвое к 2030 году."
+
+
+def test_the_theme_rule_sends_a_market_review_to_the_market_theme_named_as_in_the_list(user, pipeline, monkeypatch):
+    accepted(monkeypatch, {REVIEW: answer(category="business")}, {REVIEW: REVIEW_TEXT})
+
+    model = fill_cards(monkeypatch, {REVIEW: card_answer(theme=MARKET)})
+
+    # Правило из выпуска эксперта (#149): обзор рынка одной технологии — тема рынка, по её имени в списке 13.
+    [call] = model.calls
+    assert (f"Обзор, прогноз или исследование рынка (объёмы, рост, спрос, инвестиции) относится к теме «{MARKET}», "
+            "даже если это рынок одной технологии.") in " ".join(call["instructions"].split())
+    card = showcase(user)[REVIEW]
+    assert (card["theme"], card["card_recipe"]["prompt_version"]) == (MARKET, signal_card.PROMPT_VERSION)
 
 
 def test_theme_is_set_only_after_otbor_and_only_from_the_list(user, pipeline, monkeypatch):

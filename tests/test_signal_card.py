@@ -28,7 +28,8 @@ def test_accepted_article_gets_a_card_through_the_worker(user, contour, monkeypa
     card = business(user)["Контракт SLB"]
     assert (card["event_date"], card["event_date_source"], card["event_date_precision"]) == (
         "2026-09-24", "из текста", "day")
-    assert card["participants_json"] == [{"name": "SLB", "quote": "SLB подписала контракт", "verified": True}]
+    assert card["participants_json"] == [{"name": "SLB", "quote": "SLB подписала контракт", "verified": True,
+                                          "country": None}]
     assert (card["event_type"], card["region"], card["technology_class"], card["technology_maturity"]) == (
         "контракт", "Ближний Восток", "неприменимо", "неприменимо")
     # Связь с нефтесервисом и применение с #132 ставит «Отбор», а не «Карточка».
@@ -78,9 +79,10 @@ def test_participant_needs_a_quote_from_the_text_publisher_is_dropped_aliases_co
 
     participants = business(user)["Контракт SLB"]["participants_json"]
     assert participants == [
-        {"name": "SLB", "quote": "Schlumberger и Saudi Aramco подписали контракт", "verified": True},
-        {"name": "Saudi Aramco", "quote": "Saudi Aramco подписали контракт на бурение", "verified": True},
-        {"name": "Роснефть", "quote": "Соглашение с Роснефтью подписано", "verified": True},
+        {"name": "SLB", "quote": "Schlumberger и Saudi Aramco подписали контракт", "verified": True, "country": None},
+        {"name": "Saudi Aramco", "quote": "Saudi Aramco подписали контракт на бурение", "verified": True,
+         "country": None},
+        {"name": "Роснефть", "quote": "Соглашение с Роснефтью подписано", "verified": True, "country": None},
     ]
 
 
@@ -318,8 +320,8 @@ def test_radar_finding_gets_only_empty_fields_and_keeps_the_judge_values(user, c
 
 # Атрибуты карточки и время правки — то, что агент меняет у находки радара по замыслу.
 _CARD_FIELDS = {"event_date", "event_date_source", "event_date_precision", "participants_json", "event_type", "region",
-                "technology_class", "technology_maturity", "why_interesting", "card_set_by", "card_recipe",
-                "updated_at", "user_status_updated_at"}
+                "event_countries", "technology_class", "technology_maturity", "why_interesting", "card_set_by",
+                "card_recipe", "updated_at", "user_status_updated_at"}
 
 
 def _radar_views(user, admin):
