@@ -264,6 +264,32 @@ def test_summary_tiles_count_the_whole_radar_not_the_search(user):
     assert searched["matching"] == 1
 
 
+
+def test_tile_filter_lists_the_cards_behind_each_tile(user):
+    # Плашки над списком — фильтры (решение владельца 23.10): по нажатию список показывает ровно те
+    # карточки, что плашка посчитала. Условие у фильтра и у числа плашки одно.
+    other = repository.create_user("colleague@example.test", "long-enough-password", "user")
+    now = datetime.now(timezone.utc)
+    fresh = _card("fresh", "Свежая карточка", seen=now - timedelta(days=2))
+    old = _card("old", "Карточка двухнедельной давности", seen=now - timedelta(days=14))
+    reviewed = _card("reviewed", "Карточка с отзывом", seen=now - timedelta(days=10))
+    marks.set_signal_mark(fresh, status="digest", user_id=int(user["id"]))
+    marks.set_signal_mark(old, status="digest", user_id=int(other["id"]))
+    repository.record_signal_feedback_event(
+        None, "comment_added", signal_id=reviewed, user_id=int(other["id"]), comment="сильный источник",
+    )
+    tiles = _get("/api/signals/summary", user).json()
+
+    for tile, expected in (("new_7d", {fresh}), ("in_digest", {fresh, old}), ("with_feedback", {reviewed})):
+        assert set(_ids(_get("/api/signals", user, tile=tile))) == expected, tile
+        summary = _get("/api/signals/summary", user, tile=tile).json()
+        # «N из M»: в выборке плашки столько же, сколько на самой плашке; плашки от фильтра не меняются.
+        assert summary["matching"] == tiles[tile] == len(expected), tile
+        assert summary["total"] == tiles["total"]
+    # Плашка с поиском — пересечение: свежая карточка не про «отзыв».
+    assert _ids(_get("/api/signals", user, tile="new_7d", q="отзыв")) == []
+    assert _get("/api/signals", user, tile="merged").status_code == 422
+
 def test_card_carries_the_word_rating_by_the_feed_thresholds(user):
     # Оценка «как у бизнес-сигналов» (документ заказчика 19.09): те же пороги 80/65/40,
     # что у ленты (pipeline.score_label), — один источник слов и цвета.

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
+import { SkeletonList } from "../shared/Skeleton";
 import { addBacklogTaskComment, createBacklogTask, getBacklog, updateBacklogTask, updateBacklogTaskStatus } from "../../api/backlog";
 import type { BacklogPayload, BacklogTask, BacklogTaskStatus } from "../../api/types";
 
@@ -351,7 +352,7 @@ export function BacklogPage({ onUnauthorized, showToast }: Props) {
           </div>
         </div>
 
-        {loading ? <div className="emptyState">Загружаем задачи из репозитория...</div> : null}
+        {loading ? <SkeletonList rows={4} label="Загружаем задачи из репозитория…" /> : null}
 
         <div className="backlogBoard">
           {statusColumns.map((column) => {

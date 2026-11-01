@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { SkeletonList } from "../shared/Skeleton";
 import { ApiError } from "../../api/client";
 import {
   addCompanyParent,
@@ -247,7 +248,7 @@ export function CompanyParentsPage({ onUnauthorized, showToast }: Props) {
           </label>
         </div>
         {loading ? (
-          <div className="emptyState">Загружаем список…</div>
+          <SkeletonList rows={4} label="Загружаем список…" />
         ) : !pairs.length ? (
           <div className="emptyState">
             <strong>Список пуст</strong>

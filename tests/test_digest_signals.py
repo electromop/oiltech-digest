@@ -5,8 +5,16 @@ monthly_digest_items.article_id → articles или молча цепляло ч
 номером, а после сохранения сигнал из выпуска пропадал.
 """
 
+import pytest
+
 from oiltech_digest.processing import digest
 from oiltech_digest.processing.digest import build_digest_content, save_digest_draft
+
+
+@pytest.fixture(autouse=True)
+def _no_item_kinds_lookup(monkeypatch):
+    """Категорию элементов (плашка «Технология / Бизнес») берёт база; эти проверки — без базы."""
+    monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: ({}, {}))
 
 
 def _row(row_id, *, item_type="article", title=None):
@@ -96,4 +104,19 @@ def test_hidden_draft_articles_fall_back_to_current_selection(monkeypatch):
     assert [(item["item_type"], item["article_id"] or item["signal_id"]) for item in content["news"]] == [
         ("article", 12),
         ("signal", 7),
+    ]
+
+
+def test_without_draft_radar_signals_follow_articles(monkeypatch):
+    """Без черновика сигналы радара идут после статей, как и с черновиком (решение владельца 24.10): экран
+    показывает выпуск одним списком в порядке PDF, а сигналы в черновике не хранятся."""
+    _patch(monkeypatch, candidates=[_row(7, item_type="signal"), _row(10), _row(8, item_type="signal"), _row(11)])
+
+    content = build_digest_content("2026-09")
+
+    assert [(item["item_type"], item["article_id"] or item["signal_id"]) for item in content["news"]] == [
+        ("article", 10),
+        ("article", 11),
+        ("signal", 7),
+        ("signal", 8),
     ]

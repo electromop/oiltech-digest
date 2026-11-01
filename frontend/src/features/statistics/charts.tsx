@@ -205,7 +205,7 @@ export function LineChart({ title, categories, series, format, axisFormat, refer
             return (
               <g key={s.key}>
                 <polyline points={points} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-                {lastValue != null && <circle cx={x(last)} cy={y(lastValue)} r={4} fill={s.color} stroke="#ffffff" strokeWidth={2} />}
+                {lastValue != null && <circle cx={x(last)} cy={y(lastValue)} r={4} fill={s.color} stroke="var(--viz-surface)" strokeWidth={2} />}
               </g>
             );
           })}
@@ -278,7 +278,7 @@ export function Sparkline({ values }: { values: number[] }) {
     <svg className={styles.spark} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
       <polyline points={values.map((v, i) => `${px(i)},${py(v)}`).join(" ")} fill="none"
         stroke="var(--viz-context-ink)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={px(last)} cy={py(values[last])} r={3} fill="var(--viz-s1)" stroke="#ffffff" strokeWidth={1.5} />
+      <circle cx={px(last)} cy={py(values[last])} r={3} fill="var(--viz-s1)" stroke="var(--viz-surface)" strokeWidth={1.5} />
     </svg>
   );
 }

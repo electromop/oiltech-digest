@@ -1,7 +1,8 @@
 import { Fragment } from "react";
 import type { Signal } from "../../api/types";
 
-// Атрибуты карточки сигнала (#97, спека #93) — чипами на обоих экранах: бизнес-ленте и радаре.
+// Атрибуты карточки сигнала (#97, спека #93) на обоих экранах: бизнес-ленте и радаре. С пересмотра 23.10 — строкой
+// под заголовком (тема, компании, регион, дата события) и таблицей в раскрытой карточке, а не рядом чипов.
 // Значения ставит агент «Карточка сигнала» (#96) из справочников; «не определено» — его ответ «по тексту
 // понять нельзя». Это пробел карточки, и его видно, а не прячется.
 
@@ -102,45 +103,105 @@ export function whyBlock(signal: Signal, business: boolean): { label: string; te
   return { label: "Почему важно", text: isGap(signal, "why_interesting", null) ? UNDEFINED : NOT_FILLED };
 }
 
+type CompanyEntry = { name: string; country?: string | null };
+
 type Props = {
   signal: Signal;
   // Клик по компании — «всё про компанию»: фильтр по ней в этой витрине.
   onCompany: (name: string) => void;
 };
 
-export function SignalCardChips({ signal, onCompany }: Props) {
-  const companies = (signal.participants_json || []).filter((item) => item.name);
+function companiesOf(signal: Signal): CompanyEntry[] {
+  return (signal.participants_json || []).filter((item) => item.name);
+}
+
+function CompanyButtons({ companies, onCompany }: { companies: CompanyEntry[]; onCompany: (name: string) => void }) {
   return (
-    <div className="signalCardChips" role="group" aria-label="Атрибуты сигнала">
-      {cardChips(signal).map((chip) => (
-        <span key={chip.key} className={chip.gap ? "signalChip gap" : "signalChip"} title={chip.gap ? GAP_HINT : undefined}>
-          <span className="signalChipLabel">{chip.label}:</span> {chip.value}
-        </span>
+    <>
+      {companies.map(({ name, country }, index) => (
+        <Fragment key={name}>
+          {index ? ", " : ""}
+          <button type="button" className="signalCompanyButton" title={`Все сигналы с участием ${name}`} onClick={() => onCompany(name)}>
+            {name}
+          </button>
+          {/* Страна участника (#137): по ней тоже находит фильтр «Страна». */}
+          {country ? ` (${country})` : null}
+        </Fragment>
       ))}
-      {companies.length ? (
-        <span className="signalChip signalChipCompanies">
-          <span className="signalChipLabel">Компании:</span>
-          {companies.map(({ name, country }) => (
-            <Fragment key={name}>
-              {" "}
-              <button
-                type="button"
-                className="signalCompanyButton"
-                title={`Все сигналы с участием ${name}`}
-                onClick={() => onCompany(name)}
-              >
-                {name}
-              </button>
-              {/* Страна участника (#137): по ней тоже находит фильтр «Страна». */}
-              {country ? ` (${country})` : null}
-            </Fragment>
-          ))}
-        </span>
-      ) : isGap(signal, "participants", signal.participants_json) ? (
-        <span className="signalChip gap" title={GAP_HINT}>
-          <span className="signalChipLabel">Компании:</span> {UNDEFINED}
-        </span>
+    </>
+  );
+}
+
+// Под заголовком свёрнутой карточки (пересмотр 23-25.10: «много флагов и плашек — непонятно, о чём речь»): тема
+// строкой, ниже — кто, где и когда с подписями и без точек-разделителей: «SLB  Регион: …  Дата события: …».
+// Пробелы и служебное — в раскрытой карточке. Подпись «Регион», как у поля карточки (решение владельца 25.10): страны
+// у карточки пока нет (#128).
+export function SignalCardLine({ signal, onCompany }: Props) {
+  const companies = companiesOf(signal);
+  const region = signal.region && signal.region !== UNDEFINED ? signal.region : "";
+  const day = formatEventDate(signal.event_date, signal.event_date_precision);
+  return (
+    <div className="signalCardLine">
+      {signal.theme ? <div className="signalCardTheme">{signal.theme}</div> : null}
+      {companies.length || region || day ? (
+        <div className="signalCardFacts">
+          {companies.length ? (
+            <span className="signalCardLineCompanies">
+              <CompanyButtons companies={companies.slice(0, 3)} onCompany={onCompany} />
+              {companies.length > 3 ? ` и ещё ${companies.length - 3}` : ""}
+            </span>
+          ) : null}
+          {region ? (
+            <span>
+              <span className="signalCardLabel">Регион:</span> {region}
+            </span>
+          ) : null}
+          {day ? (
+            <span>
+              <span className="signalCardLabel">Дата события:</span> {day}
+            </span>
+          ) : null}
+        </div>
       ) : null}
     </div>
+  );
+}
+
+// wide — значение во всю строку таблицы (длинная причина отклонения).
+type Extra = { key: string; label: string; value: string; wide?: boolean };
+
+// Атрибуты раскрытой карточки — таблица «подпись: значение» вместо ряда чипов. «Не определено» — видимый
+// пробел карточки (пунктир), а не пропуск.
+export function SignalAttributes({ signal, onCompany, extra = [] }: Props & { extra?: Extra[] }) {
+  const companies = companiesOf(signal);
+  const companiesGap = !companies.length && isGap(signal, "participants", signal.participants_json);
+  const date = eventDateLabel(signal);
+  return (
+    <dl className="signalAttributes">
+      {cardChips(signal).map((chip) => (
+        <div key={chip.key} className={chip.gap ? "signalAttribute gap" : "signalAttribute"} title={chip.gap ? GAP_HINT : undefined}>
+          <dt>{chip.label}</dt>
+          <dd>{chip.value}</dd>
+        </div>
+      ))}
+      {companies.length || companiesGap ? (
+        <div className={companiesGap ? "signalAttribute gap" : "signalAttribute"} title={companiesGap ? GAP_HINT : undefined}>
+          <dt>Компании</dt>
+          <dd>{companiesGap ? UNDEFINED : <CompanyButtons companies={companies} onCompany={onCompany} />}</dd>
+        </div>
+      ) : null}
+      {date ? (
+        <div className={date.gap ? "signalAttribute gap" : "signalAttribute"}>
+          <dt>Событие</dt>
+          <dd>{date.text.replace(/^Событие: /, "")}</dd>
+        </div>
+      ) : null}
+      {extra.map((item) => (
+        <div key={item.key} className={item.wide ? "signalAttribute wide" : "signalAttribute"}>
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

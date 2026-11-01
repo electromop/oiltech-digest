@@ -283,8 +283,6 @@ const digestContent = {
   footer: digestBranding.footer,
 };
 
-const digestEmailHtml = "";
-
 const uploadedDocument = {
   id: 501,
   filename: "Отчёт ТЭК 2026.pdf",
@@ -313,6 +311,10 @@ const processingDocument = {
   empty_anchors: null,
   fact_count: null,
 };
+
+// Архивные модули, включённые флагом ARCHIVED_MODULES, — их отдаёт вход. Прежний список статей «Бизнес-сигналы»
+// с 23.10 за флагом (ключ articles): тесты его экрана включают флаг, остальные входят без него.
+let archivedModulesFixture: string[] = [];
 
 // Список, который отдаёт мок GET /api/documents. Тест меняет его ДО входа в приложение,
 // чтобы проверить оба состояния опроса: есть документ в работе — и нет ни одного.
@@ -367,6 +369,7 @@ describe("App smoke", () => {
     window.history.replaceState(null, "", "/");
     documentsFixture = [uploadedDocument];
     detailDocumentOverride = null;
+    archivedModulesFixture = [];
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -375,8 +378,17 @@ describe("App smoke", () => {
         return Promise.resolve(jsonResponse({ detail: "Not authenticated" }, { status: 401 }));
       }
       if (url === "/api/auth/login" && method === "POST") {
-        return Promise.resolve(jsonResponse({ ok: true, user: { id: 1, email: "user@example.com", role: "admin" } }));
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          user: { id: 1, email: "user@example.com", role: "admin" },
+          archived_modules: archivedModulesFixture,
+        }));
       }
+      if (url.startsWith("/api/signals/summary")) {
+        return Promise.resolve(jsonResponse({ total: 0, new_7d: 0, in_digest: 0, with_feedback: 0, merged: 0, matching: 0, themes: [] }));
+      }
+      if (url === "/api/signals/search-health") return Promise.resolve(jsonResponse({ search_health: null }));
+      if (url.startsWith("/api/signals?")) return Promise.resolve(jsonResponse([]));
       if (url.startsWith("/api/articles")) {
         return Promise.resolve(jsonResponse(digestArticles));
       }
@@ -399,9 +411,6 @@ describe("App smoke", () => {
             status_counts: { new: 5, digest: 1, archive: 3, noise: 999, duplicate: 7 },
           }),
         );
-      }
-      if (url === "/api/digest-branding") {
-        return Promise.resolve(jsonResponse(method === "PUT" ? { ok: true, branding: digestBranding } : digestBranding));
       }
       if (url === "/api/sources?limit=500") {
         return Promise.resolve(
@@ -489,8 +498,11 @@ describe("App smoke", () => {
       if (url.startsWith("/api/digest-content")) {
         return Promise.resolve(jsonResponse(digestContent));
       }
-      if (url.startsWith("/api/digest-email")) {
-        return Promise.resolve(new Response(digestEmailHtml, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }));
+      if (url.startsWith("/api/digest-preview.pdf")) {
+        return Promise.resolve(new Response(new Blob(["%PDF-1.7"], { type: "application/pdf" }), {
+          status: 200,
+          headers: { "Content-Type": "application/pdf", "Content-Disposition": 'inline; filename="digest-preview.pdf"' },
+        }));
       }
       if (url.startsWith("/api/monthly-digests/") && method === "PUT") {
         const monthValue = decodeURIComponent(url.split("/api/monthly-digests/")[1] || "2026-06");
@@ -552,7 +564,25 @@ describe("App smoke", () => {
     revokeObjectURLMock.mockClear();
   });
 
+  it("без флага вход открывает «Бизнес-ленту»; прежнего списка статей нет ни в меню, ни по ссылке", async () => {
+    window.history.replaceState(null, "", "/?screen=articles");
+    const user = userEvent.setup();
+    render(<App />);
+    await logIn(user);
+
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
+    expect(window.location.search).not.toContain("screen=articles");
+    const sidebar = document.querySelector(".sidebar") as HTMLElement;
+    const menu = within(sidebar).getAllByRole("button").map((button) => button.textContent);
+    expect(menu.slice(0, 4)).toEqual(["Бизнес-лента", "Технологический радар", "Месячный дайджест", "Материалы"]);
+    expect(menu).not.toContain("Бизнес-сигналы");
+    const requested = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(requested.some((url) => url.startsWith("/api/articles?limit=2000"))).toBe(false);
+  });
+
   it("logs in, navigates and expands a signal", async () => {
+    // Прежний список статей «Бизнес-сигналы» — за флагом (решение владельца 23.10); с флагом вход ведёт в него.
+    archivedModulesFixture = ["articles"];
     const user = userEvent.setup();
     const { container } = render(<App />);
 
@@ -631,7 +661,7 @@ describe("App smoke", () => {
     await user.type(screen.getByLabelText("Код допуска"), "12345678");
     await user.click(screen.getByRole("button", { name: "Подтвердить" }));
 
-    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     expect(admitBodies[admitBodies.length - 1]).toEqual({ email: "user@example.com", password: "12345678", code: "12345678" });
   });
 
@@ -717,7 +747,7 @@ describe("App smoke", () => {
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
-    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     expect(window.location.search).not.toContain("analytics-preview");
     expect(screen.queryByText("Прототип · демонстрационные данные")).not.toBeInTheDocument();
     expect(screen.queryByText("Прототипы")).not.toBeInTheDocument();
@@ -761,27 +791,42 @@ describe("App smoke", () => {
     expect(screen.getAllByRole("button", { name: heading }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("админ видит экран агента источников в навигации", async () => {
+  // «Агент источников» с кандидатами — архивный модуль с 24.10 (решение владельца): без флага его нет ни в меню,
+  // ни по прямой ссылке; с флагом ARCHIVED_MODULES=source-agent админ видит его, как прежде.
+  it("без флага агента источников нет ни в меню, ни по ссылке; с флагом админ его видит", async () => {
+    window.history.replaceState(null, "", "/?screen=source-candidates");
     const user = userEvent.setup();
-    render(<App />);
+    const { unmount } = render(<App />);
+    await logIn(user);
 
-    await user.type(await screen.findByPlaceholderText("you@example.com"), "user@example.com");
-    await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
-    await user.click(screen.getByRole("button", { name: "Войти" }));
-
-    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
-    // В едином контуре радар и агент источников — родные экраны, не ссылки на поддомен.
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
+    expect(window.location.search).not.toContain("source-candidates");
+    expect(screen.queryAllByRole("button", { name: "Агент источников" })).toHaveLength(0);
+    // Экран не монтируется даже на миг до перехода в ленту (ревью 24.10): ни одного запроса агента и кандидатов.
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/source-"))).toBe(false);
     expect(screen.getAllByRole("button", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
+    unmount();
+
+    archivedModulesFixture = ["source-agent"];
+    window.history.replaceState(null, "", "/");
+    render(<App />);
+    await logIn(userEvent.setup());
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Агент источников" }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("обычный пользователь не видит экран агента и не открывает его по прямой ссылке", async () => {
     window.history.replaceState(null, "", "/?screen=source-agent");
 
+    // Модуль включён флагом — проверяем именно гард роли.
     const adminImpl = fetchMock.getMockImplementation();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === "/api/auth/login" && (init?.method ?? "GET") === "POST") {
-        return Promise.resolve(jsonResponse({ ok: true, user: { id: 2, email: "user@example.com", role: "user" } }));
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          user: { id: 2, email: "user@example.com", role: "user" },
+          archived_modules: ["source-agent"],
+        }));
       }
       return adminImpl!(input, init);
     });
@@ -799,20 +844,10 @@ describe("App smoke", () => {
     expect(screen.getAllByRole("button", { name: "Технологический радар" }).length).toBeGreaterThanOrEqual(1);
   });
 
-  // #97: бизнес-лента — экран радара в витрине «бизнес»; старый список статей остаётся рядом, пока
-  // новая лента не принята (спека #93).
-  it("«Бизнес-лента» — пункт меню рядом со старым списком статей, у каждого экрана свои фильтры", async () => {
-    const baseImpl = fetchMock.getMockImplementation();
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/signals/summary")) {
-        return Promise.resolve(jsonResponse({ total: 0, new_7d: 0, in_digest: 0, with_feedback: 0, merged: 0, matching: 0, themes: [] }));
-      }
-      if (url === "/api/signals/search-health") return Promise.resolve(jsonResponse({ search_health: null }));
-      if (url.startsWith("/api/signals/weekly")) return Promise.resolve(jsonResponse({ detail: "нет" }, { status: 404 }));
-      if (url.startsWith("/api/signals?")) return Promise.resolve(jsonResponse([]));
-      return baseImpl!(input, init);
-    });
+  // #97: бизнес-лента — экран радара в витрине «бизнес». С 23.10 прежний список статей за флагом: с флагом он
+  // открывается первым и стоит последним в «Работе».
+  it("«Бизнес-лента» — первой в меню, прежний список статей — за флагом; у каждого экрана свои фильтры", async () => {
+    archivedModulesFixture = ["articles"];
     const user = userEvent.setup();
     render(<App />);
 
@@ -820,11 +855,10 @@ describe("App smoke", () => {
     await user.type(screen.getByPlaceholderText("Не короче 8 символов"), "12345678");
     await user.click(screen.getByRole("button", { name: "Войти" }));
 
-    // Первым экраном — по-прежнему старый список статей.
     expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
     const sidebar = document.querySelector(".sidebar") as HTMLElement;
     const menu = within(sidebar).getAllByRole("button").map((button) => button.textContent);
-    expect(menu.slice(0, 3)).toEqual(["Бизнес-сигналы", "Бизнес-лента", "Технологический радар"]);
+    expect(menu.slice(0, 5)).toEqual(["Бизнес-лента", "Технологический радар", "Месячный дайджест", "Материалы", "Бизнес-сигналы"]);
 
     await user.click(within(sidebar).getByRole("button", { name: "Бизнес-лента" }));
 
@@ -881,6 +915,7 @@ describe("App smoke", () => {
   // duplicate=7, тогда как среди 3 загруженных статей нет ни одной 'noise'/'duplicate' —
   // клиентский фолбэк дал бы 0. Значит ненулевые числа доказывают привязку к серверу.
   it("плитки статусов берут счётчики с сервера, а не считают по загруженной странице", async () => {
+    archivedModulesFixture = ["articles"];
     const user = userEvent.setup();
     const { container } = render(<App />);
 
@@ -916,6 +951,7 @@ describe("App smoke", () => {
   // новая идентичность объекта → эффект снова → fetch каждые ~400мс, бесконечно.
   // Взводился при ЛЮБОМ активном фильтре (поиск/тег/статус/источник/язык/score/сорт/«Со статусом»).
   it("не перезапрашивает ленту в цикле, пока активен фильтр", async () => {
+    archivedModulesFixture = ["articles"];
     const user = userEvent.setup();
     render(<App />);
 
@@ -946,6 +982,7 @@ describe("App smoke", () => {
   // активном фильтре не доживало до срабатывания. Ждать 40с в тесте не нужно — достаточно
   // убедиться, что таймер заводится один раз и не пересоздаётся бесконечно.
   it("не пересоздаёт 40с-таймер автообновления на каждом рендере", async () => {
+    archivedModulesFixture = ["articles"];
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     const user = userEvent.setup();
     render(<App />);
@@ -1008,6 +1045,7 @@ describe("App smoke", () => {
   }
 
   it("архив прошлого месяца открывается из ленты только на просмотр", async () => {
+    archivedModulesFixture = ["articles"];
     withArchiveMocks();
     const user = userEvent.setup();
     const { container } = render(<App />);
@@ -1033,42 +1071,52 @@ describe("App smoke", () => {
     expect(screen.queryByText(/Архив за август 2026/)).not.toBeInTheDocument();
   });
 
-  it("прошлый выпуск в конструкторе дайджеста — только просмотр и выгрузка", async () => {
+  it("прошлый выпуск в дайджесте — только просмотр и выгрузка", async () => {
     withArchiveMocks();
     const user = userEvent.setup();
     render(<App />);
     await logIn(user);
-    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
-    // Открыт выпуск, который собирается сейчас, — первый открытый месяц окна (29.09).
-    const monthSelect = await screen.findByDisplayValue("2026-09");
-    // Прошлый выпуск есть в списке месяцев, с пометкой архива.
-    expect(within(monthSelect).getByRole("option", { name: "2026-08 · архив" })).toBeInTheDocument();
+    // Собирается выпуск первого открытого месяца окна (29.09); выбора выпуска на экране нет (24.10).
+    expect(await screen.findByText(/Выпуск за сентябрь 2026/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Выпуск" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeInTheDocument();
 
-    await user.selectOptions(monthSelect, "2026-08");
+    // Прошлый выпуск — во вкладке архива, только на просмотр.
+    await user.click(screen.getByRole("button", { name: /Архив выпусков/ }));
+    const august = screen.getByRole("rowheader", { name: "август 2026" }).closest("tr") as HTMLElement;
+    await user.click(within(august).getByRole("button", { name: "Открыть" }));
 
     expect(await screen.findByText(/Выпуск за август 2026 в архиве/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Сохранить черновик" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Из дайджеста" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Скачать PDF" })).toBeInTheDocument();
     const requested = fetchMock.mock.calls.map(([input]) => String(input));
     expect(requested.some((url) => url.includes("status=digest") && url.includes("month=2026-08"))).toBe(true);
+    // Предпросмотр прошлого выпуска — его же PDF.
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/digest-preview.pdf?month=2026-08&"))).toBe(true),
+    );
   });
 
-  it("оформление выпуска — «Предпросмотр оформления», а не «Live preview»", async () => {
-    // Заказчик просил убрать англицизмы с экранов.
+  it("предпросмотр выпуска — сразу в PDF; оформления выпуска на экране нет", async () => {
+    // Решение владельца 23.10: «предпросмотр сразу в PDF, оформление выпуска убираем полностью».
     const user = userEvent.setup();
     render(<App />);
     await logIn(user);
-    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
-    await user.click(await screen.findByRole("button", { name: "Оформление" }));
 
-    expect(await screen.findByRole("heading", { name: "Предпросмотр оформления" })).toBeInTheDocument();
-    expect(screen.queryByText("Live preview")).not.toBeInTheDocument();
+    const frame = await screen.findByTitle("Предпросмотр выпуска в PDF");
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame).toHaveAttribute("src", "blob:test#navpanes=0&view=FitH");
+    expect(screen.queryByRole("button", { name: "Оформление" })).not.toBeInTheDocument();
+    const requested = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(requested.filter((url) => url.startsWith("/api/digest-preview.pdf?"))).toHaveLength(1);
+    expect(requested).not.toContain("/api/digest-branding");
   });
 
   it("конструктор перечитывает выбранное, когда окно сменилось в открытой вкладке", async () => {
@@ -1083,10 +1131,10 @@ describe("App smoke", () => {
     const user = userEvent.setup();
     render(<App />);
     await logIn(user);
-    expect(await screen.findByRole("heading", { name: "Бизнес-сигналы" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Бизнес-лента" })).toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: "Месячный дайджест" })[0]);
-    await screen.findByDisplayValue("2026-09");
+    await screen.findByText(/Выпуск за сентябрь 2026/);
     const digestListCalls = () =>
       fetchMock.mock.calls.filter(([input]) => String(input) === "/api/articles?limit=5000&status=digest").length;
     await waitFor(() => expect(digestListCalls()).toBe(1));
@@ -1121,6 +1169,8 @@ describe("App smoke", () => {
     });
   });
 
+  // Документы с 23.10 — в общем разделе «Материалы»: вносятся подокном «Внести материал», разбор открывается
+  // подокном «Разбор документа». Прежняя ссылка на раздел документов ведёт туда же.
   async function openDocumentsScreen() {
     window.history.replaceState(null, "", "/?screen=documents");
     const user = userEvent.setup();
@@ -1140,20 +1190,24 @@ describe("App smoke", () => {
     );
   }
 
-  it("отправляет файл на POST /api/documents многочастным телом, а не JSON", async () => {
+  it("«Внести материал» отправляет файл на POST /api/documents многочастным телом, а не JSON", async () => {
     const user = await openDocumentsScreen();
 
-    // Кнопка неактивна, пока нет файла И нет аттестации.
-    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Внести материал" }));
+    const dialog = await screen.findByRole("dialog", { name: "Внести материал" });
+
+    // Условия проверяются при отправке и называются в форме, а не прячутся за неактивной кнопкой.
+    await user.click(within(dialog).getByRole("button", { name: "Загрузить" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Выберите файл материала");
 
     const file = new File(["%PDF-1.4 тестовый документ"], "otchet.pdf", { type: "application/pdf" });
-    await user.upload(screen.getByLabelText("Файл материала"), file);
-    expect(screen.getByRole("button", { name: "Загрузить" })).toBeDisabled();
+    await user.upload(within(dialog).getByLabelText("Файл материала"), file);
+    await user.click(within(dialog).getByRole("button", { name: "Загрузить" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Подтвердите право на загрузку");
+    expect(uploadCall()).toBeUndefined();
 
-    await user.click(screen.getByRole("checkbox", { name: /Подтверждаю, что вправе загрузить/ }));
-    expect(screen.getByRole("button", { name: "Загрузить" })).toBeEnabled();
-
-    await user.click(screen.getByRole("button", { name: "Загрузить" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: /Подтверждаю, что вправе загрузить/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Загрузить" }));
 
     await waitFor(() => {
       expect(uploadCall()).toBeTruthy();
@@ -1176,9 +1230,10 @@ describe("App smoke", () => {
     detailDocumentOverride = { anchor_count: 107, empty_anchors: 67 };
     const user = await openDocumentsScreen();
 
-    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+    await user.click(await screen.findByRole("button", { name: "Открыть разбор" }));
 
-    expect(await screen.findByText("Без текста")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Разбор документа" });
+    expect(await within(dialog).findByText("Без текста")).toBeInTheDocument();
     expect(screen.getByText("67 (страница)")).toBeInTheDocument();
   });
 
@@ -1187,7 +1242,7 @@ describe("App smoke", () => {
     detailDocumentOverride = { anchor_count: 18, empty_anchors: 0 };
     const user = await openDocumentsScreen();
 
-    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+    await user.click(await screen.findByRole("button", { name: "Открыть разбор" }));
 
     expect(await screen.findByText("Знаков текста")).toBeInTheDocument();
     expect(screen.queryByText("Без текста")).toBeNull();
@@ -1197,7 +1252,7 @@ describe("App smoke", () => {
     // Умолчание принципиально: молчаливо спрятанная ошибка опаснее показанной.
     // Фильтр нужен для больших документов, где строк за сотню.
     const user = await openDocumentsScreen();
-    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+    await user.click(await screen.findByRole("button", { name: "Открыть разбор" }));
 
     expect(await screen.findByText("1200")).toBeInTheDocument();
     expect(screen.getByText("80")).toBeInTheDocument();
@@ -1211,7 +1266,7 @@ describe("App smoke", () => {
   it("в карточке материала неподтверждённый факт помечен иначе, чем подтверждённый", async () => {
     const user = await openDocumentsScreen();
 
-    await user.click(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" }));
+    await user.click(await screen.findByRole("button", { name: "Открыть разбор" }));
 
     expect(await screen.findByRole("heading", { name: "Факты" })).toBeInTheDocument();
     expect(screen.getByText(/1 из 2 чисел не найдены в тексте документа/)).toBeInTheDocument();
@@ -1246,7 +1301,7 @@ describe("App smoke", () => {
     documentsFixture = [uploadedDocument]; // status: ready
     await openDocumentsScreen();
 
-    expect(await screen.findByRole("button", { name: "Отчёт ТЭК 2026.pdf" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Отчёт ТЭК 2026.pdf" })).toBeInTheDocument();
     // Ни одного 5-секундного таймера: опрос прекращается, когда работать не над чем.
     expect(setIntervalSpy.mock.calls.filter(([, ms]) => ms === 5000).length).toBe(0);
   });

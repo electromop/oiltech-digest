@@ -1,5 +1,5 @@
-import { apiFetch, apiFetchText } from "./client";
-import type { BackgroundJob, DigestBranding, DigestContent, DigestDraftSaveResult, MonthlyDigestDraft } from "./types";
+import { apiDownload, apiFetch } from "./client";
+import type { BackgroundJob, DigestContent, DigestDraftSaveResult, MonthlyDigestDraft } from "./types";
 
 type SaveDigestPayload = {
   month: string;
@@ -36,20 +36,10 @@ export function getDigestContent(filters: DigestFilters) {
   return apiFetch<DigestContent>(`/api/digest-content?${params.toString()}`);
 }
 
-export function getDigestEmailHtml(filters: DigestFilters) {
-  const params = buildDigestParams(filters);
-  return apiFetchText(`/api/digest-email?${params.toString()}`);
-}
-
-export function getDigestBranding() {
-  return apiFetch<DigestBranding>("/api/digest-branding");
-}
-
-export function saveDigestBranding(payload: DigestBranding) {
-  return apiFetch<{ ok: boolean; branding: DigestBranding }>("/api/digest-branding", {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
+// Предпросмотр выпуска сразу в PDF (решение владельца 23.10): тот же PDF и та же вёрстка, что у выгрузки, для окна
+// экрана; сервер отдаёт его inline и не пишет файл.
+export function getDigestPreviewPdf(filters: DigestFilters) {
+  return apiDownload(`/api/digest-preview.pdf?${buildDigestParams(filters).toString()}`);
 }
 
 export function saveDigestDraft(payload: SaveDigestPayload) {

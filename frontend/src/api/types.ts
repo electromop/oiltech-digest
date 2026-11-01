@@ -951,6 +951,9 @@ export type DigestContentItem = {
   tag?: string;
   score?: number | null;
   score_label?: string | null;
+  // Плашка «Технология / Бизнес» (23.10): на экране сборки и в самом выпуске.
+  kind?: "technology" | "business" | null;
+  kind_label?: string | null;
 };
 
 export type DigestContent = {

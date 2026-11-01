@@ -16,7 +16,6 @@ vi.mock("../../api/signals", () => ({
   updateSignal: vi.fn(),
   createSignalFeedback: vi.fn(),
   getSignalSearchHealth: vi.fn(),
-  getSignalWeekly: vi.fn(),
 }));
 
 beforeEach(resetBusinessFeedApi);
@@ -153,7 +152,7 @@ describe("бизнес-лента: фильтры и «всё про компа�
     fireEvent.click(await screen.findByRole("button", { name: "Развернуть всё" }));
 
     expect(chips(await cardOf("SLB бурит для ADNOC в ОАЭ"))).toEqual(expect.arrayContaining([
-      ["Страна события: ОАЭ", false], ["Компании: SLB (США) ADNOC", false],
+      ["Страна события: ОАЭ", false], ["Компании: SLB (США), ADNOC", false],
     ]));
     expect(chips(await cardOf("Обзор рынка бурения"))).toContainEqual(["Страна события: не определено", true]);
     // Карточка до #137: страну агент ещё не ставил — чипа нет.
@@ -171,7 +170,7 @@ describe("бизнес-лента: фильтры и «всё про компа�
     expect(screen.getByText("SLB бурит для ADNOC в ОАЭ")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Снять: Страна: США" })).toBeInTheDocument();
     // «Всё про компанию» снимает и страну.
-    fireEvent.click(within(await cardOf("SLB бурит для ADNOC в ОАЭ")).getByRole("button", { name: "SLB" }));
+    fireEvent.click(within(await cardOf("SLB бурит для ADNOC в ОАЭ")).getAllByRole("button", { name: "SLB" })[0]);
     await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB" }));
     expect(lastListQuery().country).toBeUndefined();
   });

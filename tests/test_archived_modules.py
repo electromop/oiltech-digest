@@ -58,3 +58,7 @@ def test_session_reports_archived_modules_switched_on_by_the_flag(monkeypatch):
 def test_flag_parsing_keeps_only_known_modules():
     assert config.parse_archived_modules(" backlog, радар ,tech-preview,, ") == frozenset({"backlog", "tech-preview"})
     assert config.parse_archived_modules("") == frozenset()
+    # Прежний экран «Бизнес-сигналы» (23.10) возвращается тем же флагом.
+    assert config.parse_archived_modules("articles") == frozenset({"articles"})
+    # Экраны агента источников (24.10) — тоже.
+    assert config.parse_archived_modules("source-agent") == frozenset({"source-agent"})

@@ -126,15 +126,16 @@ export function StatisticsPage({ onUnauthorized, showToast }: Props) {
     <section className="screenStack">
       <header className="screenHeader">
         <div>
-          <h2>Статистика платформы</h2>
+          <h1>Статистика платформы</h1>
           <p className="muted">Месячные результаты работы платформы и активность пользователей.</p>
         </div>
-        <div className="settingsActions">
+        <div className="settingsActions periodSwitch" role="group" aria-label="Период">
           {PERIODS.map((p) => (
             <button
               key={p}
               type="button"
               className={p === months ? "primaryButton" : "ghostButton"}
+              aria-pressed={p === months}
               onClick={() => setMonths(p)}
             >
               {p} мес

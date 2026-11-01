@@ -1,0 +1,283 @@
+/* Дизайн-система OilTech Digest v2: токены.
+   Основа — IBM Carbon (плотность productive, прямоугольные формы), шрифт — корпоративный GPN Din, цвета — палитра
+   «Как в выпуске» (выбор владельца 01.11): синий и оранжевый месячного выпуска, тёмно-синий шапки, холодные нейтральные.
+   Два слоя: примитивы называют значение (--slate-80) и в компонентах не используются;
+   семантические токены называют роль (--ot-text-secondary) — только их берут компоненты.
+   Старые имена (--brand, --line, --sem-*) оставлены алиасами ролей: 565 мест в CSS берут
+   новый вид без правки, а новые правила пишутся сразу на --ot-*. */
+
+:root {
+  /* --- Примитивы. Тон держится по всей линейке (расчёт в OKLCH), значения выпуска и шапки стоят точно --- */
+  --white: #ffffff;
+
+  --slate-05: #f3f6fa;
+  --slate-10: #eef3f8;
+  --slate-15: #e9edf3;
+  --slate-20: #e2e8f1;
+  --slate-25: #dee5ef;
+  --slate-30: #d9e3f3;
+  --slate-40: #c9d6e5;
+  --slate-45: #c2c8cf;
+  --slate-50: #b5bfcb;
+  --slate-60: #9ea5ae;
+  --slate-65: #748192;
+  --slate-70: #5c6776;
+  --slate-80: #46515f;
+  --slate-100: #1a2532;
+
+  --navy-80: #234566;
+  --navy-90: #153758;
+  --navy-95: #1c3249;
+  --navy-100: #042746;
+
+  --blue-10: #e6eefa;
+  --blue-30: #9bb8eb;
+  --blue-40: #7ea5ea;
+  --blue-70: #003da6;
+  --blue-80: #002c7f;
+  --blue-90: #002166;
+
+  --orange-10: #fdeee7;
+  --orange-60: #e83d08;
+  --orange-80: #9a2e00;
+
+  --green-10: #e2f7e5;
+  --green-20: #bce3c3;
+  --green-50: #298646;
+  --green-60: #21763c;
+  --green-80: #195c2e;
+
+  --amber-10: #fdf1d7;
+  --amber-20: #f3d392;
+  --amber-30: #f4c947;
+  --amber-50: #98741a;
+  --amber-80: #654b07;
+
+  --red-10: #fdebeb;
+  --red-20: #f9c5c5;
+  --red-50: #e14759;
+  --red-70: #a51c34;
+  --red-80: #89142a;
+  --red-90: #6f0c1f;
+
+  --purple-10: #f2edfd;
+  --purple-20: #d9cdf1;
+  --purple-50: #7f5bb6;
+  --purple-80: #552f86;
+
+  --teal-10: #e2f5f4;
+  --teal-50: #138282;
+  --teal-80: #024d4d;
+
+  /* --- Поверхности: фон страницы светлый холодный, панели и карточки белые (слои Carbon) --- */
+  --ot-background: var(--slate-10);
+  --ot-layer-01: var(--white);
+  --ot-layer-02: var(--slate-05);
+  --ot-layer-hover: var(--slate-15);
+  --ot-layer-hover-02: var(--slate-30);
+  --ot-layer-selected: var(--slate-25);
+  --ot-layer-accent: var(--slate-20);
+  --ot-field-01: var(--white);
+  --ot-field-02: var(--slate-05);
+  --ot-field-hover: var(--slate-15);
+  --ot-selected-subtle: var(--blue-10);
+  --ot-highlight: var(--slate-40);
+  --ot-overlay: rgba(4, 39, 70, 0.5);
+  --ot-overlay-light: rgba(255, 255, 255, 0.8);
+
+  /* --- Текст и иконки --- */
+  --ot-text-primary: var(--slate-100);
+  --ot-text-secondary: var(--slate-80);
+  --ot-text-helper: var(--slate-70);
+  --ot-text-placeholder: var(--slate-70);
+  --ot-text-on-color: var(--white);
+  --ot-text-disabled: var(--slate-60);
+  --ot-text-error: var(--red-70);
+  --ot-link: var(--blue-70);
+  --ot-link-hover: var(--blue-80);
+  --ot-icon-primary: var(--slate-100);
+  --ot-icon-secondary: var(--slate-80);
+
+  /* --- Рамки и фокус --- */
+  --ot-border-subtle: var(--slate-30);
+  --ot-border-strong: var(--slate-65);
+  --ot-border-inverse: var(--navy-100);
+  --ot-border-interactive: var(--blue-70);
+  --ot-border-disabled: var(--slate-45);
+  --ot-focus: var(--blue-70);
+  --ot-focus-inset: var(--white);
+  --ot-interactive: var(--blue-70);
+  /* Оранжевый выпуска — только метка «где я сейчас»: текущий раздел меню и нажатая плитка. */
+  --ot-marker-current: var(--orange-60);
+
+  /* --- Кнопки --- */
+  --ot-button-primary: var(--blue-70);
+  --ot-button-primary-hover: var(--blue-80);
+  --ot-button-primary-active: var(--blue-90);
+  --ot-button-secondary: var(--navy-100);
+  --ot-button-secondary-hover: var(--navy-90);
+  --ot-button-secondary-active: var(--navy-80);
+  --ot-button-tertiary: var(--blue-70);
+  --ot-button-tertiary-hover: var(--blue-80);
+  --ot-button-tertiary-active: var(--blue-90);
+  --ot-button-danger: var(--red-70);
+  --ot-button-danger-hover: var(--red-80);
+  --ot-button-danger-active: var(--red-90);
+  --ot-button-disabled: var(--slate-45);
+  --ot-button-disabled-text: var(--slate-65);
+  /* Выбранная вкладка переключателя при наведении. */
+  --ot-tab-selected-hover: var(--navy-90);
+
+  /* --- Каркас: тёмно-синяя шапка --- */
+  --ot-shell-bg: var(--navy-100);
+  --ot-shell-hover: var(--navy-90);
+  --ot-shell-active: var(--navy-80);
+  --ot-shell-text: var(--slate-10);
+  --ot-shell-text-secondary: var(--slate-40);
+  --ot-shell-border: var(--navy-100);
+  /* Уведомления и плашка над предпросмотром: тёмный слой поверх страницы. */
+  --ot-inverse-bg: var(--navy-95);
+  --ot-inverse-hover: var(--navy-80);
+  --ot-inverse-text: var(--slate-10);
+  --ot-toast-stripe: var(--blue-40);
+  --ot-toast-stripe-error: var(--red-50);
+
+  /* --- Статусы: бледные заливки, тёмный текст (проходят 4.5:1), сплошные — для меток --- */
+  --ot-support-success: var(--green-50);
+  /* Жёлтая метка (полоса, точка) — тон 50: 3:1 к белому; тон 30 — только заливкой под тёмным текстом. */
+  --ot-support-warning: var(--amber-50);
+  --ot-support-warning-fill: var(--amber-30);
+  --ot-support-error: var(--red-70);
+  --ot-support-info: var(--blue-70);
+  --ot-support-caution: var(--orange-60);
+
+  --sem-ok-fg: var(--green-80);
+  --sem-ok-bg: var(--green-10);
+  --sem-ok-border: var(--green-20);
+  --sem-warn-fg: var(--amber-80);
+  --sem-warn-bg: var(--amber-10);
+  --sem-warn-border: var(--amber-20);
+  --sem-bad-fg: var(--red-80);
+  --sem-bad-bg: var(--red-10);
+  --sem-bad-border: var(--red-20);
+  --sem-muted-fg: var(--slate-80);
+  --sem-muted-bg: var(--slate-25);
+  --sem-muted-border: var(--slate-45);
+  --sem-info-fg: var(--blue-70);
+  --sem-info-bg: var(--blue-10);
+  --sem-info-border: var(--blue-10);
+  --sem-special-fg: var(--purple-80);
+  --sem-special-bg: var(--purple-10);
+  --sem-special-border: var(--purple-20);
+
+  /* --- Категории (не статусы): откуда материал и вид элемента выпуска.
+     Полоса к белому 3:1 и выше, текст к своей заливке 4.5:1 и выше; смысл всегда ещё и подписью. --- */
+  --ot-origin-telegram: var(--teal-50);
+  --ot-origin-telegram-bg: var(--teal-10);
+  --ot-origin-telegram-fg: var(--teal-80);
+  --ot-origin-upload: var(--purple-50);
+  --ot-origin-upload-bg: var(--purple-10);
+  --ot-origin-upload-fg: var(--purple-80);
+  /* Плашка «Технология / Бизнес» — те же значения, что в самом выпуске (`_KIND_BADGE_COLORS`). */
+  --ot-kind-technology-bg: var(--blue-10);
+  --ot-kind-technology-fg: var(--blue-70);
+  --ot-kind-business-bg: var(--orange-10);
+  --ot-kind-business-fg: var(--orange-80);
+
+  /* --- Графики: три категории и уровни синего --- */
+  --viz-surface: var(--white);
+  --viz-ink: var(--slate-100);
+  --viz-ink-2: var(--slate-80);
+  --viz-muted: var(--slate-70);
+  --viz-grid: var(--slate-30);
+  --viz-axis: var(--slate-50);
+  --viz-context: var(--slate-50);
+  --viz-context-ink: var(--slate-70);
+  --viz-s1: var(--blue-70);
+  --viz-s2: var(--teal-50);
+  --viz-s3: var(--orange-60);
+  --viz-tier-light: var(--blue-30);
+  --viz-tier-dark: var(--blue-90);
+  --viz-good: var(--green-60);
+  --viz-bad: var(--red-70);
+
+  /* --- Шрифт: GPN Din (400 и 700 — других начертаний у семейства нет) --- */
+  --ot-font-sans: "GPN Din", "Helvetica Neue", Arial, sans-serif;
+  --ot-font-display: "GPN Din Condensed", "GPN Din", "Arial Narrow", Arial, sans-serif;
+  --ot-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --ot-weight-regular: 400;
+  --ot-weight-bold: 700;
+
+  /* Шкала Carbon productive: роль = размер + интерлиньяж + трекинг. */
+  --ot-size-caption: 0.75rem;     /* 12px — подписи, метки полей, метаданные */
+  --ot-size-body: 0.875rem;       /* 14px — текст интерфейса */
+  --ot-size-body-lg: 1rem;        /* 16px — чтение: суть, цитаты */
+  --ot-size-heading-03: 1.25rem;  /* 20px — заголовок панели */
+  --ot-size-heading-04: 1.75rem;  /* 28px — крупные числа */
+  --ot-size-heading-05: 2rem;     /* 32px — заголовок экрана */
+  --ot-leading-caption: 1.3333;
+  --ot-leading-compact: 1.2857;
+  --ot-leading-body: 1.4286;
+  --ot-leading-long: 1.5;
+  --ot-leading-heading: 1.25;
+  --ot-tracking-caption: 0.02667em;
+  --ot-tracking-body: 0.01143em;
+
+  /* --- Отступы: шаг 8px с мелкими 2 и 4 --- */
+  --ot-space-01: 0.125rem;
+  --ot-space-02: 0.25rem;
+  --ot-space-03: 0.5rem;
+  --ot-space-04: 0.75rem;
+  --ot-space-05: 1rem;
+  --ot-space-06: 1.5rem;
+  --ot-space-07: 2rem;
+  --ot-space-08: 2.5rem;
+  --ot-space-09: 3rem;
+
+  /* --- Размеры контролов --- */
+  --ot-control-xs: 1.5rem;   /* 24px — метка */
+  --ot-control-sm: 2rem;     /* 32px — плотные строки, кнопки в карточках */
+  --ot-control-md: 2.5rem;   /* 40px — поля и кнопки по умолчанию */
+  --ot-control-lg: 3rem;     /* 48px — шапка, вход */
+
+  /* --- Форма и глубина: прямоугольник Carbon, глубина — слоями фона, тень только у плавающего --- */
+  --ot-radius: 0;
+  --ot-radius-pill: 999px;
+  --ot-shadow-raised: 0 2px 6px rgba(0, 0, 0, 0.3);
+
+  /* --- Движение Carbon: короткое и productive --- */
+  --ot-duration-fast-01: 70ms;
+  --ot-duration-fast-02: 110ms;
+  --ot-duration-moderate-01: 150ms;
+  --ot-duration-moderate-02: 240ms;
+  --ot-ease-standard: cubic-bezier(0.2, 0, 0.38, 0.9);
+  --ot-ease-entrance: cubic-bezier(0, 0, 0.38, 0.9);
+  --ot-ease-exit: cubic-bezier(0.2, 0, 1, 0.9);
+
+  /* --- Каркас --- */
+  --ot-header-height: 3rem;
+  --ot-sidenav-width: 16rem;
+  --ot-sidenav-rail: 3rem;
+
+  /* --- Алиасы прежних имён (роль та же, вид новый) --- */
+  --surface: var(--ot-layer-01);
+  --surface-strong: var(--ot-layer-01);
+  --surface-accent: var(--ot-interactive);
+  --line: var(--ot-border-subtle);
+  --shadow: none;
+  --shadow-sm: none;
+  --text-soft: var(--ot-text-secondary);
+  /* --text-muted лежит и на hover, и на шапках таблиц: там подсказочный тон даёт меньше 4.5:1,
+     поэтому приглушённый текст — вторичный. */
+  --text-muted: var(--ot-text-secondary);
+  --brand: var(--ot-interactive);
+  --brand-soft: var(--ot-selected-subtle);
+  --radius: var(--ot-radius);
+  /* Имена, которые CSS использовал, но нигде не объявлял: номер кандидата источника рисовался
+     белым по прозрачному фону (var(--primary) пуст) и был не виден. */
+  --text: var(--ot-text-primary);
+  --primary: var(--ot-interactive);
+  --muted: var(--ot-text-secondary);
+  --blue: var(--ot-link);
+  --border: var(--ot-border-subtle);
+}

@@ -8,7 +8,9 @@ import json
 import logging
 import re
 import secrets
+import threading
 import time
+from collections import OrderedDict
 from html import escape
 from pathlib import Path
 from datetime import UTC, datetime
@@ -327,6 +329,12 @@ def build_digest_content(
             search=search,
             top_tag=top_tag,
         )
+        # Сигналы радара в черновике не хранятся и с черновиком идут после его статей. Без черновика — так же
+        # (решение владельца 24.10: один список на экране в порядке PDF): статьи по баллу, за ними сигналы по баллу.
+        rows = [
+            *(row for row in rows if row.get("item_type") != "signal"),
+            *(row for row in rows if row.get("item_type") == "signal"),
+        ]
     news = []
     for row in rows:
         tag = row.get("tag_name") or "Без тега"
@@ -363,6 +371,7 @@ def build_digest_content(
                 "image_url": row.get("image_url") or "",
             }
         )
+    _attach_item_kinds(news)
     title_template = issue_cfg["title_template_with_month"] if month else issue_cfg["title_template"]
     intro_template = issue_cfg["intro_template_with_month"] if month else issue_cfg["intro_template"]
     month_text = _issue_month_text(month)
@@ -400,6 +409,35 @@ def build_digest_content(
         "branding": branding,
     }
 
+
+
+# Плашка «Технология / Бизнес» у элемента выпуска (решение владельца 23.10): на экране сборки и в самом выпуске.
+ITEM_KIND_LABELS = {"technology": "Технология", "business": "Бизнес"}
+# Цвета плашки в выпуске — из палитры выпуска (синий заголовков, оранжевый «Читать далее»); текст к фону 8,1:1 и 6,7:1.
+_KIND_BADGE_COLORS = {"technology": ("#003da6", "#e6eefa"), "business": ("#9a2e00", "#fdeee7")}
+
+
+def _attach_item_kinds(news: list[dict]) -> None:
+    by_article, by_signal = repository.digest_item_kinds(
+        [item["article_id"] for item in news if item.get("article_id")],
+        [item["signal_id"] for item in news if item.get("signal_id")],
+    )
+    for item in news:
+        kind = by_article.get(item["article_id"]) if item.get("article_id") else by_signal.get(item.get("signal_id"))
+        item["kind"] = kind if kind in ITEM_KIND_LABELS else None
+        item["kind_label"] = ITEM_KIND_LABELS.get(kind or "")
+
+
+def _render_kind_badge(item: dict) -> str:
+    kind = item.get("kind")
+    if kind not in _KIND_BADGE_COLORS or not item.get("kind_label"):
+        return ""
+    color, background = _KIND_BADGE_COLORS[kind]
+    return (
+        f'<div class="news-card-kind" style="display:inline-block;margin:0 0 6px 0;padding:2px 8px;'
+        f'border-radius:10px;background:{background};color:{color};font-size:11px;line-height:16px;'
+        f'font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">{_html(item["kind_label"])}</div>'
+    )
 
 
 def _issue_month_text(month: str | None) -> str:
@@ -490,8 +528,10 @@ def _digest_glossary_context(row: dict, tag: str) -> dict:
     }
 
 
-def _compact_digest_summary(summary: str, title: str, max_chars: int = 170) -> str:
-    """Shorten AI summary for digest cards so layout stays tight and readable."""
+def _compact_digest_summary(summary: str, title: str, max_chars: int = 250) -> str:
+    """Суть для карточки выпуска: целыми предложениями, сколько входит в площадь карточки — около трёх строк
+    колонки 600 px (решение владельца 23.10: текст ровно вмещается в отведённое место, без обрыва фразы).
+    Первое предложение длиннее места — обрезка по слову с многоточием."""
     text = re.sub(r"\s+", " ", (summary or "").strip())
     if not text:
         return ""
@@ -501,11 +541,16 @@ def _compact_digest_summary(summary: str, title: str, max_chars: int = 170) -> s
     if title and text.lower().startswith(title_prefix.lower()):
         text = text[len(title_prefix):].strip()
 
-    # Prefer the first sentence if it is already compact enough.
-    first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
-    candidate = first_sentence or text
-    if len(candidate) <= max_chars:
-        return candidate
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    taken = ""
+    for sentence in sentences:
+        joined = f"{taken} {sentence}".strip()
+        if len(joined) > max_chars:
+            break
+        taken = joined
+    if taken:
+        return taken
+    candidate = sentences[0] if sentences else text
 
     clipped = candidate[: max_chars - 1].rstrip(" ,;:-")
     if " " in clipped:
@@ -682,6 +727,7 @@ def _render_news_item(item: dict, issue: dict | None = None) -> str:
                     {media}
                   </td>
                   <td valign="top" style="padding:14px 16px 8px 0;">
+                    {_render_kind_badge(item)}
                     <div class="news-card-title">{_html(item.get("title"))}</div>
                   </td>
                 </tr>
@@ -1038,6 +1084,32 @@ def render_digest_pdf(content: dict) -> bytes:
     return pdf_bytes
 
 
+# Предпросмотр PDF на экране дайджеста собирает Chromium в процессе API (выгрузка файлом идёт полосой playwright).
+# Чтобы экран не держал несколько Chromium сразу и не собирал один и тот же выпуск заново (возврат на вкладку,
+# повторное открытие архивного выпуска), сборки идут по одной, а готовый PDF помнится по содержанию выпуска.
+_PREVIEW_PDF_LOCK = threading.Lock()
+_PREVIEW_PDF_CACHE: OrderedDict[str, bytes] = OrderedDict()
+_PREVIEW_PDF_CACHE_SIZE = 4
+
+
+def render_digest_preview_pdf(content: dict) -> bytes:
+    """PDF предпросмотра: тот же render_digest_pdf, но по одной сборке за раз и с памятью на последние выпуски.
+
+    Ключ — содержание выпуска целиком (состав, тексты, оформление): сменился черновик, отметка или фильтр — другой
+    ключ и новая сборка; тот же выпуск — готовые байты без Chromium."""
+    key = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+    with _PREVIEW_PDF_LOCK:
+        cached = _PREVIEW_PDF_CACHE.get(key)
+        if cached is not None:
+            _PREVIEW_PDF_CACHE.move_to_end(key)
+            return cached
+        pdf_bytes = render_digest_pdf(content)
+        _PREVIEW_PDF_CACHE[key] = pdf_bytes
+        while len(_PREVIEW_PDF_CACHE) > _PREVIEW_PDF_CACHE_SIZE:
+            _PREVIEW_PDF_CACHE.popitem(last=False)
+        return pdf_bytes
+
+
 def _fetch_docx_image(url: str | None, timeout: float = 8) -> bytes | None:
     """Скачать картинку статьи для вставки в Word. Любая ошибка/неподходящий тип → None (пропуск)."""
     if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
@@ -1120,6 +1192,7 @@ def render_digest_docx(content: dict) -> bytes:
     from io import BytesIO
 
     from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Inches, Pt, RGBColor
 
     issue = content.get("issue") or {}
@@ -1199,6 +1272,12 @@ def render_digest_docx(content: dict) -> bytes:
             doc.add_page_break()
         doc.add_heading(issue.get("news_title") or "Новости", level=1)
         for index, item in enumerate(chunk, start=1 + chunk_index * 3):
+            if item.get("kind_label"):
+                p = doc.add_paragraph()
+                run = p.add_run(str(item["kind_label"]).upper())
+                run.bold = True
+                run.font.size = Pt(8)
+                run.font.color.rgb = BRAND if item.get("kind") == "technology" else ACCENT
             doc.add_heading(item.get("title") or f"Материал {index}", level=2)
             remaining = images_deadline - time.monotonic()
             image = _fetch_docx_image(item.get("image_url"), timeout=min(8.0, remaining)) if remaining > 0 else None
@@ -1221,7 +1300,8 @@ def render_digest_docx(content: dict) -> bytes:
                 run.font.size = Pt(9)
                 run.font.color.rgb = GREY
             if item.get("summary"):
-                doc.add_paragraph(item["summary"])
+                # По ширине, как в PDF и письме (просьба заказчика 25.08).
+                doc.add_paragraph(item["summary"]).alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             if item.get("url"):
                 p = doc.add_paragraph()
                 _add_docx_hyperlink(p, str(item["url"]), f"{read_more} →", ACCENT_HEX)

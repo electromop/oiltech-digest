@@ -220,7 +220,8 @@ export function MaintenancePage({ onUnauthorized, showToast }: Props) {
             <input value={String(status?.retention.stale_minutes ?? "—")} readOnly />
           </label>
           <div className="maintenanceActions">
-            <button type="button" className="primaryButton" onClick={() => void handleCleanup()} disabled={running}>
+            {/* Очистка необратима — опасная кнопка, красный контур, а не синяя заливка «главного действия». */}
+            <button type="button" className="dangerButton" onClick={() => void handleCleanup()} disabled={running}>
               {running ? "Выполняем..." : "Запустить очистку"}
             </button>
           </div>

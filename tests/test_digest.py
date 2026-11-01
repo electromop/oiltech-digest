@@ -3,6 +3,9 @@ from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
+
+from oiltech_digest.processing import digest
 from oiltech_digest.processing.digest import (
     build_digest_content,
     render_digest_email,
@@ -11,6 +14,12 @@ from oiltech_digest.processing.digest import (
     save_digest_draft,
     write_digest_export,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_item_kinds_lookup(monkeypatch):
+    """Категорию элементов (плашка «Технология / Бизнес») берёт база; эти проверки — без базы."""
+    monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: ({}, {}))
 
 
 def test_render_digest_email_contains_news_and_escapes_html():
@@ -391,7 +400,9 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     long_summary = (
         "Digest candidate: Wood Mackenzie развернула три сценария рынков СПГ после закрытия "
         "Ормузского пролива, при котором мировая поставка сократилась на 80 млн т/год. "
-        "Вторая фраза не должна попадать в короткую карточку."
+        "Вторая фраза входит целиком: место в карточке есть. "
+        "Третья фраза уже не помещается в три строки карточки выпуска и поэтому в неё не попадает, "
+        "даже если остальные целиком."
     )
     monkeypatch.setattr(
         "oiltech_digest.processing.digest.repository.digest_candidates",
@@ -416,8 +427,10 @@ def test_build_digest_content_compacts_long_summary_and_removes_title_prefix(mon
     summary = content["news"][0]["summary"]
 
     assert not summary.startswith("Digest candidate:")
-    assert len(summary) <= 170
-    assert "Вторая фраза" not in summary
+    # Целые предложения, сколько входит в площадь карточки (решение владельца 23.10), без обрыва фразы.
+    assert len(summary) <= 250
+    assert summary.endswith("место в карточке есть.")
+    assert "Третья фраза" not in summary
     assert content["news"][0]["category"] == "Рынок / LNG"
 
 

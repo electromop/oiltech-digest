@@ -20,14 +20,14 @@
 }
 
 .name {
-  font-weight: 700;
-  color: #0f172a;
+  font-weight: var(--ot-weight-bold);
+  color: var(--ot-text-primary);
 }
 
 .arrow {
   margin-right: 6px;
   color: var(--text-muted);
-  font-weight: 400;
+  font-weight: var(--ot-weight-regular);
 }
 
 .moment {
@@ -70,7 +70,7 @@
 
 .problem {
   color: var(--sem-bad-fg);
-  font-weight: 700;
+  font-weight: var(--ot-weight-bold);
 }
 
 .fine {

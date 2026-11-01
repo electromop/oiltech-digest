@@ -1,0 +1,184 @@
+/* Дизайн-система v2: шрифт, базовые элементы, фокус, движение.
+   GPN Din подключён из src/assets: Vite кладёт файлы в /assets, их отдаёт API и прод.
+   Прежний путь /fonts/* не обслуживался ни API, ни Caddy (на проде 404), и вместо
+   корпоративного шрифта показывался запасной. */
+
+@font-face {
+  font-family: "GPN Din";
+  src: url("../assets/fonts/GPN_DIN-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "GPN Din";
+  src: url("../assets/fonts/GPN_DIN-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "GPN Din Condensed";
+  src: url("../assets/fonts/GPN_DIN_Condensed-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "GPN Din Condensed";
+  src: url("../assets/fonts/GPN_DIN_Condensed-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;
+  -webkit-text-size-adjust: 100%;
+  /* Якоря и фокус не уходят под липкую шапку. */
+  scroll-padding-top: calc(var(--ot-header-height) + var(--ot-space-05));
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--ot-font-sans);
+  font-size: var(--ot-size-body);
+  line-height: var(--ot-leading-body);
+  letter-spacing: var(--ot-tracking-body);
+  font-weight: var(--ot-weight-regular);
+  color: var(--ot-text-primary);
+  background: var(--ot-background);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Поля и кнопки по умолчанию не наследуют шрифт страницы. */
+button,
+input,
+select,
+textarea,
+option {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--ot-link);
+  text-underline-offset: 0.15em;
+  text-decoration-thickness: from-font;
+}
+
+@media (hover: hover) {
+  a:hover {
+    color: var(--ot-link-hover);
+  }
+}
+
+::selection {
+  background: var(--ot-highlight);
+  color: var(--ot-text-primary);
+}
+
+/* Фокус с клавиатуры виден везде: синее кольцо 2px (контраст 5:1 к белому, 4.55:1 к фону).
+   Раньше своё кольцо было только у трёх элементов, а у поля ключевых слов его убирали. */
+:focus-visible {
+  outline: 2px solid var(--ot-focus);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+/* Движение по желанию: при «уменьшить движение» переходы и анимации гасятся. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Невидимый текст для чтения с экрана. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* «Перейти к содержимому» — первая остановка Tab, видна только в фокусе. */
+.skipLink {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  padding: var(--ot-space-04) var(--ot-space-05);
+  background: var(--ot-button-primary);
+  color: var(--ot-text-on-color);
+  font-weight: var(--ot-weight-bold);
+  text-decoration: none;
+  transform: translateY(-120%);
+}
+
+.skipLink:focus-visible {
+  transform: none;
+  outline-color: var(--ot-focus-inset);
+  outline-offset: -4px;
+}
+
+/* Числа в счётчиках и колонках — моноширинными цифрами GPN Din. */
+.tabularNums {
+  font-variant-numeric: tabular-nums;
+}

@@ -26,9 +26,13 @@ export type SignalFilters = {
   technologyClass?: string;
   technologyMaturity?: string;
   company?: string;
+  tile?: SignalTile;
   // Страна (#137): имя справочника стран; сервер ищет и по стране события, и по стране участника.
   country?: string;
 };
+
+// Плашка над списком (решение владельца 23.10): по нажатию — список тех же карточек, что она посчитала.
+export type SignalTile = "new_7d" | "in_digest" | "with_feedback";
 
 // По баллу (как раньше), «сначала новые» — по дате «Поступил», по баллу по возрастанию.
 export type SignalSort = "score_desc" | "date_desc" | "score_asc";
@@ -57,6 +61,7 @@ function filterParams(filters: SignalFilters) {
   if (filters.technologyClass) params.set("technology_class", filters.technologyClass);
   if (filters.technologyMaturity) params.set("technology_maturity", filters.technologyMaturity);
   if (filters.company) params.set("company", filters.company);
+  if (filters.tile) params.set("tile", filters.tile);
   if (filters.country) params.set("country", filters.country);
   return params;
 }
@@ -118,23 +123,6 @@ export type SignalSummary = {
 export function getSignalSummary(filters: SignalFilters = {}) {
   const params = filterParams(filters).toString();
   return apiFetch<SignalSummary>(params ? `/api/signals/summary?${params}` : "/api/signals/summary");
-}
-
-// «Итоги недели» радара (03.10): что вышло, что отсеяно и почему, что ждёт разбора, отзывы.
-export type SignalWeekly = {
-  days: number;
-  on_radar: number;
-  // Отсеянное и скрытое — служебное: сервер отдаёт только админу (решение владельца 05.10).
-  filtered?: number;
-  filtered_reasons?: Array<{ reason: string; count: number }>;
-  top: Array<{ id: number; title: string; theme: string; score: number; event_date: string | null }>;
-  awaiting_review: number;
-  feedback: number;
-  feedback_verdicts: Array<{ verdict: string; count: number }>;
-};
-
-export function getSignalWeekly(days = 7) {
-  return apiFetch<SignalWeekly>(`/api/signals/weekly?days=${days}`);
 }
 
 export function updateSignal(signalId: number, payload: SignalPatch) {

@@ -1263,9 +1263,13 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
         ],
     )
 
+    # Плашка «Технология / Бизнес» (23.10) ищет вид элемента в базе — тест без базы отвечает «вид неизвестен».
+    monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda article_ids, signal_ids: ({}, {}))
+
     content = digest.build_digest_content("2026-06", min_score=65)
 
     assert content["news"][0]["article_id"] == 501
+    assert content["news"][0]["kind"] is None
     assert content["news"][0]["category"] == "Технологии / ГРП"
     assert content["news"][0]["score"] == state["total_score"]
     assert content["news"][0]["summary"]

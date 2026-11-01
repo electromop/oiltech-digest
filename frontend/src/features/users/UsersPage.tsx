@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SkeletonList } from "../shared/Skeleton";
 import { createUser, deleteUser, listUsers, updateUser } from "../../api/users";
 import type { User } from "../../api/types";
 
@@ -152,7 +153,7 @@ export function UsersPage({ onUnauthorized, showToast, currentUserId }: Props) {
           </div>
         </div>
         {loading ? (
-          <div className="emptyState">Загружаем пользователей…</div>
+          <SkeletonList rows={4} label="Загружаем пользователей…" />
         ) : (
           <div className="settingsStack">
             {users.map((target) => {

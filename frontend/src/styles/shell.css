@@ -1,0 +1,479 @@
+/* Дизайн-система v2: каркас (Carbon UI Shell).
+   Шапка 48px на всю ширину, слева навигация 256px (свёрнутая — 48px), справа экран.
+   До 1056px навигация прячется, в шапке появляется кнопка меню, меню выезжает панелью. */
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: var(--ot-sidenav-width) minmax(0, 1fr);
+  grid-template-rows: var(--ot-header-height) minmax(0, 1fr);
+  grid-template-areas:
+    "header header"
+    "nav main";
+}
+
+.shell.sidebarCollapsed {
+  grid-template-columns: var(--ot-sidenav-rail) minmax(0, 1fr);
+}
+
+/* --- Шапка --- */
+.shellHeader {
+  grid-area: header;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: stretch;
+  height: var(--ot-header-height);
+  background: var(--ot-shell-bg);
+  color: var(--ot-shell-text);
+  border-bottom: 1px solid var(--ot-shell-border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--ot-space-03);
+  min-width: 0;
+  padding-inline: var(--ot-space-05);
+  white-space: nowrap;
+}
+
+.brandTitle {
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-heading-03);
+  font-weight: var(--ot-weight-bold);
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.brandSubtitle {
+  color: var(--ot-shell-text-secondary);
+  font-size: var(--ot-size-body);
+}
+
+.shellHeaderActions {
+  margin-left: auto;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.shellUser {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-inline: var(--ot-space-05);
+  color: var(--ot-shell-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shellHeaderButton,
+.shellMenuButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ot-space-03);
+  min-width: var(--ot-header-height);
+  height: 100%;
+  padding: 0 var(--ot-space-05);
+  border: 0;
+  background: transparent;
+  color: var(--ot-shell-text);
+  transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard);
+}
+
+.shellHeaderButton:focus-visible,
+.shellMenuButton:focus-visible {
+  outline-color: var(--ot-focus-inset);
+  outline-offset: -2px;
+}
+
+.shellHeaderButton:active,
+.shellMenuButton:active {
+  background: var(--ot-shell-active);
+}
+
+@media (hover: hover) {
+  .shellHeaderButton:hover,
+  .shellMenuButton:hover {
+    background: var(--ot-shell-hover);
+  }
+}
+
+.shellMenuButton {
+  display: none;
+  padding: 0;
+}
+
+.shellMenuButton svg,
+.shellHeaderButton svg {
+  flex: none;
+}
+
+/* --- Боковая навигация --- */
+.sidebar {
+  grid-area: nav;
+  position: sticky;
+  top: var(--ot-header-height);
+  height: calc(100vh - var(--ot-header-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  padding-block: var(--ot-space-03) 0;
+  background: var(--ot-layer-01);
+  border-right: 1px solid var(--ot-border-subtle);
+}
+
+.sidebarGroups {
+  display: grid;
+  gap: var(--ot-space-03);
+}
+
+.sidebarGroup {
+  display: grid;
+}
+
+.sidebarSection {
+  padding: var(--ot-space-04) var(--ot-space-05) var(--ot-space-03);
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  line-height: var(--ot-leading-caption);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+.nav {
+  display: grid;
+}
+
+.navButton {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--ot-space-04);
+  min-height: var(--ot-control-sm);
+  width: 100%;
+  padding: var(--ot-space-02) var(--ot-space-05);
+  border: 0;
+  background: transparent;
+  color: var(--ot-text-secondary);
+  text-align: left;
+  font-weight: var(--ot-weight-regular);
+  line-height: var(--ot-leading-compact);
+  transition: background-color var(--ot-duration-fast-02) var(--ot-ease-standard),
+    color var(--ot-duration-fast-02) var(--ot-ease-standard);
+}
+
+.navButton:focus-visible {
+  outline-offset: -2px;
+}
+
+.navButtonIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  color: var(--ot-icon-secondary);
+}
+
+.navButtonLabel {
+  min-width: 0;
+}
+
+@media (hover: hover) {
+  .navButton:hover {
+    background: var(--ot-layer-hover);
+    color: var(--ot-text-primary);
+  }
+}
+
+/* Текущий раздел: фон, жирный текст и оранжевая полоса слева — не только цвет. */
+.navButton.active {
+  background: var(--ot-layer-selected);
+  color: var(--ot-text-primary);
+  font-weight: var(--ot-weight-bold);
+}
+
+.navButton.active::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: var(--ot-marker-current);
+}
+
+.navButton.active .navButtonIcon {
+  color: var(--ot-icon-primary);
+}
+
+.sidebarBottom {
+  margin-top: auto;
+  padding-block: var(--ot-space-03);
+  border-top: 1px solid var(--ot-border-subtle);
+}
+
+.sidebarUtilityActions {
+  display: grid;
+}
+
+/* Свёрнутое меню — рельс 48px: только значки, подписи — во всплывающей подсказке title. */
+.shell.sidebarCollapsed .sidebar .sidebarSection,
+.shell.sidebarCollapsed .sidebar .navButtonLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.shell.sidebarCollapsed .sidebarGroup + .sidebarGroup {
+  border-top: 1px solid var(--ot-border-subtle);
+  padding-top: var(--ot-space-03);
+}
+
+.shell.sidebarCollapsed .navButton {
+  justify-content: center;
+  min-height: var(--ot-control-lg);
+  padding: 0;
+}
+
+/* --- Экран --- */
+.content {
+  grid-area: main;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--ot-space-05);
+  padding: var(--ot-space-06) var(--ot-space-07) var(--ot-space-08);
+}
+
+.content:focus {
+  outline: none;
+}
+
+/* Мобильное меню — панель под шапкой, на широком экране не показывается. */
+.mobileNav,
+.mobileNavScrim {
+  display: none;
+}
+
+/* --- Трекер задач (/tasks): та же шапка, без боковой навигации --- */
+.tasksAppShell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--ot-header-height) minmax(0, 1fr);
+  grid-template-areas:
+    "header"
+    "main";
+}
+
+.tasksAppContent {
+  grid-area: main;
+  min-width: 0;
+  width: min(1680px, 100%);
+  margin: 0 auto;
+  padding: var(--ot-space-06) var(--ot-space-07) var(--ot-space-08);
+}
+
+/* --- Загрузка сессии --- */
+.splashScreen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--ot-space-04);
+  color: var(--ot-text-secondary);
+  background: var(--ot-background);
+}
+
+/* --- Вход --- */
+.authShellReact {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--ot-space-06) var(--ot-space-05);
+  background: var(--ot-background);
+}
+
+.authCardReact {
+  width: min(100%, 28rem);
+  display: grid;
+  gap: var(--ot-space-05);
+  padding: var(--ot-space-07);
+  background: var(--ot-layer-01);
+  border-top: 4px solid var(--ot-interactive);
+}
+
+.authCardReact .eyebrow {
+  color: var(--ot-text-secondary);
+}
+
+.authCardReact h1 {
+  margin: 0;
+  font-family: var(--ot-font-display);
+  font-size: var(--ot-size-heading-05);
+  font-weight: var(--ot-weight-bold);
+  line-height: var(--ot-leading-heading);
+}
+
+.authCardReact p {
+  margin: 0;
+  color: var(--ot-text-secondary);
+}
+
+.authCardReact form {
+  display: grid;
+  gap: var(--ot-space-05);
+}
+
+.authActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ot-space-03);
+  margin-top: var(--ot-space-03);
+}
+
+.authActions .primaryButton {
+  flex: 1 1 12rem;
+  min-height: var(--ot-control-lg);
+}
+
+.authActions .ghostButton {
+  min-height: var(--ot-control-lg);
+}
+
+.authSwitchText {
+  padding-top: var(--ot-space-05);
+  border-top: 1px solid var(--ot-border-subtle);
+  color: var(--ot-text-secondary);
+  font-size: var(--ot-size-caption);
+  line-height: var(--ot-leading-caption);
+  letter-spacing: var(--ot-tracking-caption);
+}
+
+.authSwitchLink {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ot-link);
+  font-weight: var(--ot-weight-bold);
+}
+
+/* --- До 1056px: навигация уходит в меню шапки --- */
+@media (max-width: 1055px) {
+  .shell,
+  .shell.sidebarCollapsed {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "header"
+      "main";
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .shellMenuButton {
+    display: inline-flex;
+  }
+
+  .brand {
+    padding-inline-start: 0;
+  }
+
+  .shell.mobileNavOpen .mobileNavScrim {
+    display: block;
+    position: fixed;
+    inset: var(--ot-header-height) 0 0;
+    z-index: 38;
+    background: var(--ot-overlay);
+  }
+
+  .shell.mobileNavOpen .mobileNav {
+    position: fixed;
+    top: var(--ot-header-height);
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    width: min(20rem, 85vw);
+    display: flex;
+    flex-direction: column;
+    padding-block: var(--ot-space-03);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--ot-layer-01);
+    box-shadow: var(--ot-shadow-raised);
+  }
+
+  .mobileNavGroup {
+    display: grid;
+  }
+
+  .mobileNavGroup + .mobileNavGroup {
+    margin-top: var(--ot-space-03);
+  }
+
+  .mobileNavButton {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--ot-space-04);
+    min-height: var(--ot-control-lg);
+    padding: 0 var(--ot-space-05);
+    border: 0;
+    background: transparent;
+    color: var(--ot-text-secondary);
+    text-align: left;
+  }
+
+  .mobileNavButton:focus-visible {
+    outline-offset: -2px;
+  }
+
+  .mobileNavButton.active {
+    background: var(--ot-layer-selected);
+    color: var(--ot-text-primary);
+    font-weight: var(--ot-weight-bold);
+  }
+
+  .mobileNavButton.active::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 3px;
+    background: var(--ot-border-interactive);
+  }
+
+  .mobileNavIcon {
+    flex: none;
+    display: inline-flex;
+    width: 1rem;
+    height: 1rem;
+    color: var(--ot-icon-secondary);
+  }
+
+  .content,
+  .tasksAppContent {
+    padding: var(--ot-space-05) var(--ot-space-05) var(--ot-space-07);
+  }
+}
+
+@media (max-width: 720px) {
+  .brandSubtitle,
+  .shellUser {
+    display: none;
+  }
+
+  .authCardReact {
+    padding: var(--ot-space-06) var(--ot-space-05);
+  }
+}

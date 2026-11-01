@@ -1,12 +1,11 @@
 // Бизнес-лента (#97, спека #93): заготовки тестов экрана в витрине «бизнес» — справочники, сигналы ленты,
 // сервер в миниатюре и помощники. Тесты — BusinessFeed.test.tsx и BusinessFeedFilters.test.tsx (шов 3).
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 import {
   getSignalDictionaries,
   getSignalSearchHealth,
   getSignalSummary,
-  getSignalWeekly,
   listSignals,
   type SignalDictionaries,
   type SignalQuery,
@@ -125,9 +124,19 @@ export const fresh: Signal = {
   evidence: [publication(4, {})],
 };
 
+// Служебное раскрытой карточки — не атрибуты события: решение платформы, поступление, число ссылок, дубли.
+const CARD_EXTRAS = new Set(["Решение платформы", "Поступил", "Публикаций", "Ссылок", "Объединено дублей"]);
+
+// Атрибуты события — таблицей «подпись: значение» в раскрытой карточке (пересмотр 23.10); свёрнутую помощник
+// раскрывает. Ответ — пары «Подпись: значение» и признак пробела карточки («не определено»).
 export function chips(card: HTMLElement) {
-  const group = within(card).getByRole("group", { name: "Атрибуты сигнала" });
-  return [...group.querySelectorAll(".signalChip")].map((chip) => [chip.textContent, chip.classList.contains("gap")]);
+  const expand = within(card).queryByRole("button", { name: "Раскрыть сигнал" });
+  if (expand) fireEvent.click(expand);
+  const table = card.querySelector(".signalAttributes") as HTMLElement;
+  return [...table.querySelectorAll(".signalAttribute")]
+    .map((cell) => [cell.querySelector("dt")?.textContent ?? "", cell.querySelector("dd")?.textContent ?? "", cell.classList.contains("gap")] as const)
+    .filter(([label]) => !CARD_EXTRAS.has(label))
+    .map(([label, value, gap]) => [`${label}: ${value}`, gap]);
 }
 
 export function matches(card: Signal, query: SignalQuery) {
@@ -174,15 +183,13 @@ export function renderFeed(isAdmin = false) {
   render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} isAdmin={isAdmin} showcase="business" />);
 }
 
-// Перед каждым тестом: подставной API чистый, справочники пришли, итогов недели и здоровья поиска нет.
+// Перед каждым тестом: подставной API чистый, справочники пришли, здоровья поиска нет.
 export function resetBusinessFeedApi() {
   vi.mocked(listSignals).mockReset();
   vi.mocked(getSignalSummary).mockReset();
-  vi.mocked(getSignalWeekly).mockReset();
   vi.mocked(getSignalSearchHealth).mockReset();
   vi.mocked(getSignalDictionaries).mockReset();
   vi.mocked(getSignalDictionaries).mockResolvedValue(DICTIONARIES);
-  vi.mocked(getSignalWeekly).mockRejectedValue(new Error("нет итогов"));
   vi.mocked(getSignalSearchHealth).mockResolvedValue({ search_health: null });
   serve([contract]);
 }

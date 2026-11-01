@@ -49,6 +49,7 @@ from oiltech_digest.processing.digest import (
     build_digest_content,
     get_digest_branding,
     render_digest_email,
+    render_digest_preview_pdf,
     save_digest_branding,
     save_digest_draft,
     write_digest_export,
@@ -1892,6 +1893,9 @@ def _radar_screen_filters(
     # Раздел отклонённого «кто убрал → причина» (#130) — только админу: вместо витрины его публикации любой
     # категории, у каждой короткая причина (section_reason).
     section: str | None = Query(None, max_length=60),
+    # Плашка над списком (решение владельца 23.10): «новые за 7 дней», «в дайджесте», «с обратной связью» —
+    # список тех же карточек, что посчитала плашка.
+    tile: str | None = Query(None, pattern="^(new_7d|in_digest|with_feedback)$"),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
@@ -1920,6 +1924,7 @@ def _radar_screen_filters(
         # Пустой список имён — фильтр, который ничего не нашёл, а не «без фильтра».
         "company_names": None if company_filter is None else company_filter["names"],
         "section": found_section,
+        "tile": tile,
     }
 
 
@@ -2284,6 +2289,35 @@ def digest_content(month: str = "", limit: int = Query(100, ge=1, le=500),
             search=search.strip() or None,
             top_tag=top_tag.strip() or None,
         )
+    )
+
+
+@app.get("/api/digest-preview.pdf")
+def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
+                       min_score: float = 0,
+                       max_score: float | None = None,
+                       search: str = "",
+                       top_tag: str = "",
+                       user: dict[str, Any] = Depends(require_user)) -> Response:
+    """Предпросмотр выпуска сразу в PDF (решение владельца 23.10): тот же выпуск и та же вёрстка, что у выгрузки
+    PDF, но для окна экрана — inline, без файла в exports и без строки export_jobs. Сборки по одной, тот же выпуск
+    отдаётся без повторной сборки (render_digest_preview_pdf)."""
+    content = build_digest_content(
+        month=month,
+        limit=limit,
+        min_score=min_score,
+        max_score=max_score,
+        search=search.strip() or None,
+        top_tag=top_tag.strip() or None,
+    )
+    try:
+        pdf = render_digest_preview_pdf(content)
+    except RuntimeError as exc:  # нет Chromium и т.п. — понятное сообщение, не 500
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'inline; filename="digest-preview.pdf"', "Cache-Control": "no-store"},
     )
 
 
@@ -3562,6 +3596,41 @@ def list_colleague_materials(
         "materials": [_clean(colleague_materials.brief(row)) for row in rows],
         "verdicts": [{"value": value, "label": label} for value, _short, label in colleague_materials.VERDICTS],
     }
+
+
+class ColleagueMaterialPatch(BaseModel):
+    """Правка материала коллеги на платформе: только поля карточки, без типа и файла."""
+
+    title: str | None = None
+    description: str | None = None
+    url: str | None = None
+    companies: list[str] | None = None
+    verdict: str | None = None
+    verdict_comment: str | None = None
+
+
+@app.patch("/api/materials/{material_id}")
+def update_colleague_material(
+    material_id: int,
+    payload: ColleagueMaterialPatch,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Правка материала из бота на платформе (решение владельца 23.10) — только админ, проверки как у бота."""
+    try:
+        row = colleague_materials.update_material(material_id, payload.model_dump(exclude_unset=True))
+    except colleague_materials.InvalidMaterial as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="Материал не найден")
+    return {"ok": True, "material": _clean(colleague_materials.brief(row))}
+
+
+@app.delete("/api/materials/{material_id}")
+def delete_colleague_material(material_id: int, _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Удаление материала из бота на платформе (решение владельца 23.10) — только админ."""
+    if not colleague_materials.delete_material(material_id):
+        raise HTTPException(status_code=404, detail="Материал не найден")
+    return {"ok": True}
 
 
 @app.get("/api/materials/{material_id}/file")
