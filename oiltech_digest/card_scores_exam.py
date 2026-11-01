@@ -25,11 +25,13 @@ from pathlib import Path
 from typing import Any
 
 from oiltech_digest import (card_scores_exam_control, card_scores_exam_report, config, otbor_exam, otbor_markup,
-                            signal_card, signal_card_exam, signal_card_exam_score, signal_scores, signal_scoring)
+                            signal_card, signal_card_exam, signal_card_exam_score, signal_scores, signal_scoring,
+                            signal_themes)
 from oiltech_digest.card_scores_exam_calls import Calls, ExamError, Inputs
 from oiltech_digest.card_scores_exam_score import (BAND_RULE, EXPERT_BANDS, EXTRA, THRESHOLDS, baseline,
-                                                   control_agreement, evaluate, rules_text, theme)
+                                                   control_agreement, country_region, evaluate, rules_text, theme)
 from oiltech_digest.otbor_pack_format import CATEGORY_PROFILE, load_rubrics
+from oiltech_digest.signal_card_countries import Countries
 from oiltech_digest.signal_card_pack import load_dictionaries as card_dictionaries
 from oiltech_digest.signal_card_pack import publication_text
 
@@ -44,9 +46,11 @@ APPROVAL_KEY = "approved_scores"
 
 def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, models: tuple[str, ...] = MODELS,
         runs: int = RUNS, part: str = "exam", every: bool = False, workers: int = 1, card_model: str | None = None,
-        summary_model: str | None = None, card_markup: str | Path | None = None) -> dict[str, Any]:
+        summary_model: str | None = None, card_markup: str | Path | None = None,
+        theme_before: str | Path | None = None) -> dict[str, Any]:
     """Экзамен второго вызова по лестнице моделей (every — все модели) и тема основного вызова; card_markup — разметка
-    экзамена карточки (#98): атрибуты основного вызова того же прогона сверяются с ней. Отчёт рядом с манифестом."""
+    экзамена карточки (#98): атрибуты основного вызова того же прогона сверяются с ней; theme_before — прежний отчёт:
+    тема и ошибки «Рынок против темы отрасли» до и после (#149). Отчёт рядом с манифестом."""
     _check_runs(runs, part)
     exam = load(markup_path, manifest_path)
     if part == "exam":
@@ -57,6 +61,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     split = otbor_exam._split(exam, write=True)
     rows = _rows(exam, split, part)
     _check_control(rows, exam)
+    before = _theme_before(theme_before, exam, part, split) if theme_before else None
     summaries = calls.summaries(rows)
     cards = calls.cards(rows, summaries, runs)
     tried: list[dict[str, Any]] = []
@@ -71,11 +76,12 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
                 "summary_model": calls.summary_model, "card_prompt_version": signal_card.PROMPT_VERSION,
                 "scores_prompt_version": signal_scores.PROMPT_VERSION, "card_reasoning": config.SIGNAL_CARD_REASONING,
                 "scores_reasoning": config.SIGNAL_SCORES_REASONING}
-    return _report(exam, rows, summaries, cards, tried, settings, spend=calls.spend, card_exam=card_exam)
+    return _report(exam, rows, summaries, cards, tried, settings, spend=calls.spend, card_exam=card_exam,
+                   theme_before=before)
 
 
 def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: str | Path | None = None,
-            card_markup: str | Path | None = None) -> dict[str, Any]:
+            card_markup: str | Path | None = None, theme_before: str | Path | None = None) -> dict[str, Any]:
     """Пересчёт сохранённого отчёта без вызовов модели: те же суть и ответы — по нынешним проверке кодом, выгрузке с
     ядра, границам ступеней и порогам; новый отчёт — рядом. Ответы относятся к текстам своего манифеста, к своим
     линейкам и справочникам карточки: с другими пересчёт отказывает."""
@@ -85,6 +91,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
     except ValueError as exc:
         raise ExamError(str(exc)) from exc
     exam = load(markup_path, manifest_path)
+    before = _theme_before(theme_before, exam, saved["part"], saved["split"]) if theme_before else None
     card_exam = _card_exam(card_markup, exam, saved["part"])
     inputs = Inputs(exam)
     if saved["manifest"]["sha256"] != exam["manifest"]["sha256"]:
@@ -116,7 +123,7 @@ def rescore(report_path: str | Path, markup_path: str | Path, *, manifest_path: 
     control_before = ((saved.get("files") or {}).get("control") or {}).get("sha256")
     control_now = (card_scores_exam_report.files(exam["folder"])["control"] or {}).get("sha256")
     return _report(exam, rows, summaries, cards, tried, settings, spend=saved.get("spend") or {},
-                   card_exam=card_exam, rescored_from=source.name,
+                   card_exam=card_exam, theme_before=before, rescored_from=source.name,
                    markup_changed=saved["markup"]["sha256"] != exam["markup"]["sha256"],
                    control_changed=control_before != control_now, rules_changed=changed,
                    original_decision=decided.get("model") if isinstance(decided, dict) else None)
@@ -222,6 +229,33 @@ def load(markup_path: str | Path, manifest_path: str | Path | None = None) -> di
             "approved_scores": approved.strip() if isinstance(approved, str) and approved.strip() else None}
 
 
+def _theme_before(path: str | Path, exam: dict[str, Any], part: str, split: dict[str, Any]) -> dict[str, Any]:
+    """Темы ответов основного вызова прежнего прогона (#149) по строкам — «до» в отчёте. Сравнимо только на тех же
+    текстах, той же части и тех же строках (иначе отказ до платных вызовов); счёт — на нынешней разметке
+    (_report): у «до» и «после» одни метки эксперта. Из отчёта берутся только ответы (их проверяет
+    card_scores_exam_report.read); схема ответа держит тему в списке тематик, поэтому сверка точная, и ответ
+    прежней схемы (до #137, без стран) годится."""
+    source = Path(path).expanduser().resolve()
+    try:
+        saved = card_scores_exam_report.read(source)
+    except ValueError as exc:
+        raise ExamError(str(exc)) from exc
+    if saved["manifest"]["sha256"] != exam["manifest"]["sha256"]:
+        raise ExamError(f"{source.name}: прежний прогон на другом манифесте, тексты другие: «до» не сравнить")
+    if saved["part"] != part or sorted(saved["split"][part]) != sorted(split[part]):
+        raise ExamError(f"{source.name}: прежний прогон другой части или на других строках: «до» не сравнить")
+    themes = Inputs(exam).themes
+    return {"report": source.name, "markup_changed": saved["markup"]["sha256"] != exam["markup"]["sha256"],
+            "themes": {number: [_saved_theme(card, themes) for card in found]
+                       for number, found in saved["cards"]["answers"].items()}}
+
+
+def _saved_theme(card: dict[str, Any], themes: list[str]) -> str | None:
+    answer = card.get("answer")
+    value = answer.get("theme") if isinstance(answer, dict) and not card.get("error") else None
+    return value if value in themes else None
+
+
 def _card_exam(markup: str | Path | None, exam: dict[str, Any], part: str) -> dict[str, Any] | None:
     """Разметка экзамена карточки (#98) для сверки атрибутов основного вызова того же прогона (тикет #133): на
     экзамене обязательна. Только строки его экзаменационной части (по строкам настройки #98 правили инструкцию) и только
@@ -321,12 +355,22 @@ def _spend(answers: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[str, str],
             cards: dict[str, list[dict[str, Any]]], tried: list[dict[str, Any]], settings: dict[str, Any],
-            *, spend: dict[str, Any], card_exam: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
-    """Отчёт прогона или пересчёта — рядом с манифестом, JSON и читаемый .md (card_scores_exam_report.write)."""
+            *, spend: dict[str, Any], card_exam: dict[str, Any] | None = None,
+            theme_before: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
+    """Отчёт прогона или пересчёта — рядом с манифестом, JSON и читаемый .md (card_scores_exam_report.write).
+    theme_before — тема прежнего прогона (_theme_before): «до» рядом с темой этого."""
     part, decision = settings["part"], _decision(tried, settings["part"])
     inputs = Inputs(exam)
     control = exam["scores_control"]
     themes = {row["id"]: [inputs.card_values(row, card) for card in cards[row["id"]]] for row in rows}
+    market = signal_themes.market(inputs.themes)
+    found_theme = theme(rows, themes, market)
+    if theme_before is not None:
+        saved = theme(rows, {row["id"]: [{"theme": one} for one in theme_before["themes"].get(row["id"]) or []]
+                             for row in rows}, market)
+        found_theme.update(before={"report": theme_before["report"], "agent": saved["agent"], "n": saved["n"],
+                                   "markup_changed": theme_before["markup_changed"], "market": saved["market"]},
+                           not_below_before=(found_theme["agent"] or 0) >= (saved["agent"] or 0))
     chosen = next((one for one in tried if one["model"] == decision), None)
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -339,7 +383,7 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
         "rows": [{key: row[key] for key in ("id", "group", "profile", "rating", "band", "theme")} for row in rows],
         "strong_skipped": control.get("skipped"), "summaries": summaries,
         "cards": {"model": settings["card_model"], "answers": cards}, "spend": spend,
-        "theme": theme(rows, themes), "attributes": _attributes(card_exam, rows, themes),
+        "theme": found_theme, "attributes": _attributes(card_exam, rows, themes),
         "baseline": baseline(rows, _weights(inputs.criteria), control["rows"]),
         "deprecated": {one["model"]: otbor_exam.DEPRECATED[one["model"]] for one in tried
                        if one["model"] in otbor_exam.DEPRECATED},
@@ -355,7 +399,8 @@ def _report(exam: dict[str, Any], rows: list[dict[str, Any]], summaries: dict[st
 
 def _attributes(card_exam: dict[str, Any] | None, rows: list[dict[str, Any]],
                 values: dict[str, list[dict[str, Any] | None]]) -> dict[str, Any] | None:
-    """Атрибуты основного вызова того же прогона против разметки #98 — по его метрикам и порогам (новых нет)."""
+    """Атрибуты основного вызова того же прогона против разметки #98 — по его метрикам и порогам (новых нет); страна
+    события (#137) — против его региона по таблице «страна → регион», без порога."""
     if card_exam is None:
         return None
     ids = {row["id"] for row in rows if not row["extra"]}
@@ -364,7 +409,8 @@ def _attributes(card_exam: dict[str, Any] | None, rows: list[dict[str, Any]],
     return {"rows": sorted(item["id"] for item in items), "markup": card_exam["markup"],
             **{view: signal_card_exam_score.evaluate(items, finals, card_exam["names"],
                                                      lenient=view == "lenient")["overall"]
-               for view in ("strict", "lenient")}}
+               for view in ("strict", "lenient")},
+            "country": country_region(items, finals, Countries(card_dictionaries()))}
 
 
 def _weights(criteria: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, float]]:

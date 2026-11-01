@@ -1885,6 +1885,8 @@ def _radar_screen_filters(
     region: str | None = Query(None, max_length=100),
     technology_class: str | None = Query(None, max_length=100),
     technology_maturity: str | None = Query(None, max_length=100),
+    # Страна (#137): имя справочника стран; сигнал находится и по стране события, и по стране участника.
+    country: str | None = Query(None, max_length=100),
     # «Всё про компанию» (#97) — с дочками по списку «дочка → мать» (_company_filter).
     company_filter: dict[str, list[str]] | None = Depends(_company_filter),
     # Раздел отклонённого «кто убрал → причина» (#130) — только админу: вместо витрины его публикации любой
@@ -1901,6 +1903,7 @@ def _radar_screen_filters(
             ("event_type", event_type), ("region", region), ("technology_class", technology_class),
             ("technology_maturity", technology_maturity),
         )}
+        card["country"] = signal_card_filters.checked_country(country)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {

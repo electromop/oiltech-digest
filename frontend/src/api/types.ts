@@ -293,8 +293,11 @@ export type Signal = {
   region?: string | null;
   technology_class?: string | null;
   technology_maturity?: string | null;
-  // Компании-участники — только с цитатой из текста публикации (проверено кодом).
-  participants_json?: Array<{ name: string; quote: string; verified?: boolean }> | null;
+  // Компании-участники — только с цитатой из текста публикации (проверено кодом); страна участника (#137) — имя
+  // справочника стран, null — агент её не знает (у карточек до #137 поля нет).
+  participants_json?: Array<{ name: string; quote: string; verified?: boolean; country?: string | null }> | null;
+  // Страны события (#137): до трёх имён справочника стран; null — агент поле ещё не заполнял.
+  event_countries?: string[] | null;
   // Откуда дата события: «из текста», «по дате публикации» или «не определено»; null — дата судьи радара.
   event_date_source?: string | null;
   // Точность даты события (#132): day, month или year; у месяца и года event_date — первый день периода, и как

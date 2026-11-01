@@ -2312,6 +2312,8 @@ _PARTICIPANTS_SQL = (
 # Участник карточки — одно из имён компании (#97): имена участников из базы, которые по правилу «одна компания»
 # та же компания, сверены при запросе (signal_card_filters.group_names), здесь точное сравнение.
 _PARTICIPANT_NAMED_SQL = f"EXISTS (SELECT 1 FROM {_PARTICIPANTS_SQL} WHERE p->>'name' = ANY(%s))"
+# Страна сигнала (#137) — в любой из двух ролей: страна события или страна участника (signal_card_countries).
+_COUNTRY_SQL = f"(%s = ANY(s.event_countries) OR EXISTS (SELECT 1 FROM {_PARTICIPANTS_SQL} WHERE p->>'country' = %s))"
 
 
 def participant_names() -> list[str]:
@@ -2352,14 +2354,15 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
                    min_score: float | None = None, max_score: float | None = None,
                    hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                    region: str | None = None, technology_class: str | None = None,
-                   technology_maturity: str | None = None,
+                   technology_maturity: str | None = None, country: str | None = None,
                    company_names: Sequence[str] | None = None, section=None) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
     (#97) — значение справочника как есть, «не определено» тоже: так находятся пробелы карточек;
     компания: участник карточки под любым из имён company_names (signal_card_filters.group_names); пустой
-    список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра»."""
+    список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра». Страна (#137) — имя
+    справочника стран в любой роли: страна события или страна участника."""
     clauses = [_showcase_visible_sql(showcase, hidden=hidden, section=section)]
     params: list = []
     if maturity:
@@ -2370,6 +2373,9 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
         if value:
             clauses.append(f"s.{column} = %s")
             params.append(value)
+    if country:
+        clauses.append(_COUNTRY_SQL)
+        params.extend([country, country])
     if company_names is not None:
         clauses.append(_PARTICIPANT_NAMED_SQL)
         params.append(list(company_names))
@@ -2414,8 +2420,8 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                  max_score: float | None = None, sort: str = "score_desc", offset: int = 0,
                  hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                  region: str | None = None, technology_class: str | None = None,
-                 technology_maturity: str | None = None, company_names: Sequence[str] | None = None,
-                 section=None) -> list[dict]:
+                 technology_maturity: str | None = None, country: str | None = None,
+                 company_names: Sequence[str] | None = None, section=None) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
     hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason; section —
@@ -2423,7 +2429,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
     clauses, filter_params = _radar_filters(
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
-        technology_maturity=technology_maturity, company_names=company_names, section=section,
+        technology_maturity=technology_maturity, country=country, company_names=company_names, section=section,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
