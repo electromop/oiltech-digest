@@ -71,7 +71,7 @@ export function MaterialEditForm({ material, verdicts, onUnauthorized, showToast
       ) : null}
       <label className="field">
         <span>Компании, через запятую</span>
-        <input name="companies" value={companies} onChange={(event) => setCompanies(event.target.value)} placeholder="Газпром нефть, Halliburton" />
+        <input name="companies" value={companies} onChange={(event) => setCompanies(event.target.value)} placeholder="SLB, Halliburton" />
       </label>
       <div className="materialEditGrid">
         <label className="field">

@@ -3965,7 +3965,7 @@
 
 .statCardButton[aria-pressed="true"] {
   background: var(--ot-selected-subtle);
-  box-shadow: inset 0 -3px 0 var(--ot-border-interactive);
+  box-shadow: inset 0 -3px 0 var(--ot-marker-current);
 }
 
 @media (hover: hover) {
