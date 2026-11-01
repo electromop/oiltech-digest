@@ -63,7 +63,7 @@ def run(markup_path: str | Path, *, manifest_path: str | Path | None = None, mod
     _check_control(rows, exam)
     before = _theme_before(theme_before, exam, part, split) if theme_before else None
     summaries = calls.summaries(rows)
-    cards = calls.cards(rows, summaries, runs)
+    cards = calls.cards(rows, runs)
     tried: list[dict[str, Any]] = []
     for model in ladder:
         tried.append(_model_scores(model, calls.scores(model, rows, summaries, cards, runs), rows, summaries, cards,
@@ -143,7 +143,7 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
     _check_control(rows, exam)
     summaries = calls.cached_summaries()
     summary_todo = calls.summary_todo(rows)
-    card_todo, card_chars = calls.card_todo(rows, summaries, runs)
+    card_todo, card_chars = calls.card_todo(rows, runs)
     scores_chars = calls.scores_chars(rows, summaries) * runs
     return {"part": part, "runs": runs, "split_new": split["new"], "approved": exam["approved_scores"],
             "pack": sum(not row["extra"] for row in rows), "extra": sum(row["extra"] for row in rows),

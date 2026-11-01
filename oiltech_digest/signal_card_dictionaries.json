@@ -115,7 +115,7 @@
     {"name": "Великобритания", "regions": ["Европа"], "aliases": ["Соединённое Королевство", "Англия", "Шотландия", "Уэльс", "Северная Ирландия", "United Kingdom", "UK", "Great Britain", "Britain", "England", "Scotland", "Wales", "Northern Ireland"]},
     {"name": "Венгрия", "regions": ["Европа"], "aliases": ["Hungary"]},
     {"name": "Венесуэла", "regions": ["Латинская Америка"], "aliases": ["Venezuela"]},
-    {"name": "Восточный Тимор", "regions": ["Юго-Восточная Азия"], "aliases": ["Тимор-Лесте", "Timor-Leste", "East Timor"]},
+    {"name": "Восточный Тимор", "regions": ["Юго-Восточная Азия"], "aliases": ["Тимор-Лесте", "Тимор-Лешти", "Timor-Leste", "East Timor"]},
     {"name": "Вьетнам", "regions": ["Юго-Восточная Азия"], "aliases": ["Vietnam", "Viet Nam"]},
     {"name": "Габон", "regions": ["другое"], "aliases": ["Gabon"]},
     {"name": "Гаити", "regions": ["Латинская Америка"], "aliases": ["Haiti"]},

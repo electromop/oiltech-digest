@@ -198,8 +198,9 @@ def test_the_second_call_gets_the_core_input_with_the_expert_fields_and_the_main
         assert f"Суть: Суть публикации: {title}" in call["input"]
     assert model.of("article_summary") == []  # суть уже лежала рядом с манифестом
     card_call = next(call for call in model.of("signal_card") if call["title"] == title)
-    # Основной вызов: суть и категория, 13 тем и кандидаты по ключам — как у ядра (signal_card.payload_signal).
+    # Основной вызов: категория, 13 тем и кандидаты по ключам, без сути — как у ядра (signal_card.payload_signal).
     assert "Категория: бизнес" in card_call["input"] and "Темы-кандидаты по ключам:" in card_call["input"]
+    assert "Суть публикации" not in card_call["input"]
     assert "Бурение" in card_call["instructions"]
 
 
