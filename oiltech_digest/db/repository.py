@@ -956,6 +956,9 @@ CARD_SET_BY_OTBOR = "otbor"
 CARD_SET_BY_HUMAN = "human"
 # Статья, которую решает агент «Отбор», а не гейт ленты (articles.selector, #130): вставлена при включённом флаге.
 ARTICLE_SELECTOR_OTBOR = "otbor"
+# То же у сигнала (signals.selector, #131): находка поиска или материал коллеги, заведённые при включённом флаге. Пока
+# решения нет, сигнал не виден нигде (правила показа и «Карточка» его не берут).
+SIGNAL_SELECTOR_OTBOR = "otbor"
 # Поля карточки сигнала, которые ставит судья радара: их значения агент у находки радара не
 # перезаписывает, а пустые — заполняет.
 RADAR_JUDGE_CARD_FIELDS = ("event_date", "oilfield_relevance", "oilfield_application", "why_interesting")
@@ -1026,6 +1029,9 @@ def upsert_signal(signal: dict) -> int:
               -- сигнала» (#96) к ней не относится.
               event_date_source = CASE WHEN EXCLUDED.event_date IS NOT NULL AND NOT {by_human("event_date")}
                                        THEN NULL ELSE signals.event_date_source END,
+              -- Дата судьи — день (#132): точность месяца или года от агента к ней не относится.
+              event_date_precision = CASE WHEN EXCLUDED.event_date IS NOT NULL AND NOT {by_human("event_date")}
+                                          THEN NULL ELSE signals.event_date_precision END,
               mixed_events = COALESCE(EXCLUDED.mixed_events, signals.mixed_events),
               mixed_events_reason = COALESCE(EXCLUDED.mixed_events_reason, signals.mixed_events_reason),
               oilfield_relevance = CASE WHEN {by_human("oilfield_relevance")} THEN signals.oilfield_relevance
@@ -1209,7 +1215,44 @@ def signal_publication_count_sql(alias: str = "s") -> str:
     )
 
 
+def platform_publications_sql(alias: str = "s") -> str:
+    """Публикаций у события для «Решения платформы» (#132): публикации сигнала (signal_publication_count_sql) и ссылки
+    склеенных в него дублей — «Дедуп» добавляет публикацию и тем, и другим путём."""
+    return (f"({signal_publication_count_sql(alias)}"
+            " + (SELECT COUNT(*) FROM signal_evidence de JOIN signals d ON d.id = de.signal_id"
+            f" WHERE d.merged_into_signal_id = {alias}.id))")
+
+
+def platform_decision_sql(alias: str = "s") -> str:
+    """«Решение платформы» сигнала после «Отбора» (#132, спека #128) — считает код: у отклонённой — «отклонено»; у
+    «другого» его нет; сильный по баллам — «кандидат», с SIGNAL_CONFIRMED_PUBLICATIONS публикациями и больше —
+    «подтверждено»; полезный и ниже — «наблюдать»; без баллов (ещё не оценён) — «наблюдать». Решённое до «Отбора»
+    живёт по прежним правилам: его «Решение радара» ставил судья, выражение его не трогает."""
+    a = alias
+    return (
+        f"(CASE WHEN {a}.otbor_decision IS NULL THEN {a}.maturity"
+        f" WHEN {a}.otbor_decision = '{feed_window.OTBOR_REJECT}' THEN 'reject'"
+        f" WHEN {a}.signal_category = 'other' THEN NULL"
+        f" WHEN {a}.score_band = 'strong' THEN CASE WHEN {platform_publications_sql(a)}"
+        f" >= {int(config.SIGNAL_CONFIRMED_PUBLICATIONS)} THEN 'proven' ELSE 'shortlist' END"
+        f" WHEN {a}.score_band IS NOT NULL OR {a}.maturity IS NULL OR {a}.maturity = 'reject' THEN 'watch'"
+        f" ELSE {a}.maturity END)"
+    )
+
+
+def refresh_platform_decisions(signal_ids: Sequence[int], *, conn) -> None:
+    """Пересчитать «Решение платформы» сигналов после «Отбора» (#132): после баллов, решения «Отбора» и когда у события
+    стало больше публикаций. Внутри транзакции того, кто их поменял (conn): решение видно вместе с причиной."""
+    ids = sorted({int(value) for value in signal_ids if value is not None})
+    if ids:
+        conn.execute(f"UPDATE signals s SET maturity = {platform_decision_sql('s')}, updated_at = now()"
+                     f" WHERE s.id = ANY(%s) AND s.otbor_decision IS NOT NULL AND s.maturity IS DISTINCT FROM"
+                     f" {platform_decision_sql('s')}", (ids,))
+
+
 def refresh_signal_evidence_count(signal_id: int) -> int:
+    """Число публикаций сигнала; у события, к которому «Дедуп» добавил публикацию, — и «Решение платформы» (#132): у
+    самого сигнала и у главной карточки, если он дубль."""
     with get_connection() as conn:
         cur = conn.execute(
             f"""
@@ -1217,11 +1260,13 @@ def refresh_signal_evidence_count(signal_id: int) -> int:
             SET evidence_count = {signal_publication_count_sql("s")},
                 updated_at = now()
             WHERE s.id = %s
-            RETURNING evidence_count
+            RETURNING evidence_count, merged_into_signal_id
             """,
             (signal_id,),
         )
         row = cur.fetchone()
+        if row:
+            refresh_platform_decisions([signal_id, row[1]], conn=conn)
         conn.commit()
         return int(row[0]) if row else 0
 
@@ -1251,9 +1296,11 @@ _SIGNAL_APPROVED_SQL = (
     + ", ".join(f"'{verdict}'" for verdict in SIGNAL_POSITIVE_VERDICTS)
     + ")"
 )
-# Происхождение сигнала (#95, ADR 0003): находка поиска радара или статья ленты, принятая отбором.
+# Происхождение сигнала (#95, ADR 0003): находка поиска радара, статья ленты, принятая отбором, или материал коллеги
+# из бота (#131, третье происхождение: решает «Отбор», поля автора не переписываются).
 SIGNAL_ORIGIN_RADAR = "radar"
 SIGNAL_ORIGIN_FEED = "feed"
+SIGNAL_ORIGIN_MATERIAL = "material"
 
 
 def radar_origin_sql(alias: str = "s") -> str:
@@ -1376,8 +1423,30 @@ def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *,
                 "UPDATE signals SET merged_into_signal_id = %s, updated_at = now() WHERE merged_into_signal_id = %s",
                 (root, int(signal_id)),
             )
+            # У главной стало больше публикаций (#132).
+            refresh_platform_decisions([root], conn=conn)
         conn.commit()
         return row is not None
+
+
+def insert_otbor_finding(signal: dict) -> tuple[int, bool]:
+    """Находка поиска, которую решит «Отбор» (#131): сигнал радара с меткой пути и без решения — заголовок, тема,
+    «Ход решения» поиска. Уже есть с этим ключом — прежний сигнал как есть (найдено снова). (id, заведён ли сейчас)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            INSERT INTO signals (signal_key, origin, selector, title, theme, maturity, decision_log)
+            VALUES (%s, '{SIGNAL_ORIGIN_RADAR}', '{SIGNAL_SELECTOR_OTBOR}', %s, %s, 'watch', %s)
+            ON CONFLICT (signal_key) DO NOTHING
+            RETURNING id
+            """,
+            (signal["signal_key"], signal["title"], signal["theme"], Json(_jsonable(signal.get("decision_log") or []))),
+        ).fetchone()
+        created = row is not None
+        if row is None:
+            row = conn.execute("SELECT id FROM signals WHERE signal_key = %s", (signal["signal_key"],)).fetchone()
+        conn.commit()
+    return int(row[0]), created
 
 
 def touch_signal(signal_id: int) -> None:
@@ -2105,35 +2174,41 @@ def _otbor_shown_sql(category: str) -> str:
     """Сигнал с решением «Отбора» (#130, ADR 0005) — в витрине своей категории, для любого происхождения: по
     смыслу его прячет только «Отбор». Правила качества радара (связь, смешанные ссылки, срок события) его не
     прячут; технические остаются: архив, дубли и перепечатки, архивный источник (у сигнала ленты — по его
-    статье), карточка без ссылок. Выбранный «в дайджест» не прячет ничто, кроме технических правил статьи."""
+    статье), карточка без ссылок. Выбранный «в дайджест» не прячет ничто, кроме технических правил статьи.
+    Материал коллеги (#131) виден и без ссылки: у файла и события своими словами её нет, а адрес, который уже
+    держит другая карточка, к материалу не переходит (он свой сигнал, а не прикрепление)."""
     return (
         f"s.merged_into_signal_id IS NULL AND s.otbor_decision IS NOT NULL AND s.signal_category = '{category}'"
         f" AND ({signal_digest_sql('s')} OR (s.archived_at IS NULL AND s.otbor_decision = '{feed_window.OTBOR_ACCEPT}'))"
         f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}' THEN {_FEED_ARTICLE_SHOWN_SQL}"
+        f" WHEN s.origin = '{SIGNAL_ORIGIN_MATERIAL}' THEN TRUE"
         f" ELSE {_RADAR_CARD_SHOWN_SQL} END"
     )
 
 
+# Сигнал без решения «Отбора» живёт по прежним правилам, если «Отбор» его не решает: находку и материал, заведённые
+# при включённом флаге (#131), пока решения нет, не показывает ни витрина, ни «До „Отбора“» — только раздел сбоя.
+_BEFORE_OTBOR_SQL = "s.otbor_decision IS NULL AND s.selector IS NULL"
 # Видимая карточка радара — одна для списка и для чисел над ним (как visible_sql у ленты).
 # Дубли скрыты: их ссылки уже в главной карточке (signal_dedup). Карточка без единой ссылки
 # (своей или склеенного дубля) не показывается: оценить её нельзя (сигнал 97, 22.09). Без
 # решения «Отбора» (#130) радар — только находки поиска (#95) по прежним правилам; с решением —
 # технологии любого происхождения (_otbor_shown_sql).
 _RADAR_VISIBLE_SQL = (
-    f"((s.otbor_decision IS NULL AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
+    f"(({_BEFORE_OTBOR_SQL} AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
     f" AND {_radar_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL}) OR ({_otbor_shown_sql('technology')}))"
 )
 # «Отсеянные и скрытые» до «Отбора» (раздел «До „Отбора“», rejected_sections; только админу — решение
 # 05.10): проверить, не отсеяно ли лишнее. Та же карточка, что видна бы была, кроме правил качества;
 # дубли сюда не идут — их ссылки и так в главной карточке.
 _RADAR_HIDDEN_SQL = (
-    f"s.otbor_decision IS NULL AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
+    f"{_BEFORE_OTBOR_SQL} AND {radar_origin_sql()} AND s.merged_into_signal_id IS NULL"
     f" AND NOT ({_radar_quality_sql()}) AND {_RADAR_CARD_SHOWN_SQL}"
 )
 # Витрина «бизнес» — сигналы категории «бизнес» обоих происхождений: без решения «Отбора» — по прежним
 # правилам, с решением — по его решению (_otbor_shown_sql).
 _BUSINESS_VISIBLE_SQL = (
-    "((s.otbor_decision IS NULL AND s.merged_into_signal_id IS NULL AND s.signal_category = 'business'"
+    f"(({_BEFORE_OTBOR_SQL} AND s.merged_into_signal_id IS NULL AND s.signal_category = 'business'"
     f" AND CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}'"
     f" THEN s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}"
     f" ELSE {_business_quality_sql()} AND {_RADAR_CARD_SHOWN_SQL} END) OR ({_otbor_shown_sql('business')}))"
@@ -2203,10 +2278,11 @@ _RADAR_FEEDBACK_SQL = f"""
   WHERE {_FEEDBACK_OF_SIGNAL_SQL}"""
 # Блоки ОС сигнала (#130, решение владельца 22.10): каждый человек добавляет свой блок (оценка, причина,
 # комментарий), чужие не перезаписываются; показываются списком, на отбор и показ не влияют. Автор — почта
-# учётки (другого имени у неё нет).
+# учётки (другого имени у неё нет); у оценки автора материала коллеги (#131) учётки нет — его имя в Telegram.
 _FEEDBACK_BLOCKS_SQL = f"""(
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
-           'id', sfe.id, 'author', u.email, 'verdict', NULLIF(sfe.verdict, ''), 'reason', NULLIF(sfe.reason, ''),
+           'id', sfe.id, 'author', COALESCE(u.email, sfe.author), 'verdict', NULLIF(sfe.verdict, ''),
+           'reason', NULLIF(sfe.reason, ''),
            'comment', NULLIF(sfe.comment, ''), 'created_at', sfe.created_at) ORDER BY sfe.created_at, sfe.id),
          '[]'::jsonb)
   FROM signal_feedback_events sfe
@@ -3100,7 +3176,9 @@ def list_reviewed_signal_urls() -> list[str]:
 
     Радар не должен приносить их снова: отклонённое вернулось бы тем же сигналом,
     а одобренное перезаписалось бы новой оценкой модели поверх разобранного
-    (signal_evidence.source_url уникален — повторная находка забирает материал себе)."""
+    (signal_evidence.source_url уникален — повторная находка забирает материал себе).
+    Ссылка материала коллеги (#131) — тоже: его прислал и оценил человек, а второй сигнал той же
+    публикации «Отбор» решал бы ещё раз."""
     with get_connection() as conn:
         cur = conn.execute(
             f"""
@@ -3110,6 +3188,8 @@ def list_reviewed_signal_urls() -> list[str]:
                 SELECT f.signal_id AS id FROM signal_feedback_events f
                 JOIN signals rs ON rs.id = f.signal_id AND {radar_origin_sql("rs")}
                 WHERE (f.verdict IS NOT NULL OR f.event_type = 'comment_added')
+                UNION
+                SELECT ms.id FROM signals ms WHERE ms.origin = '{SIGNAL_ORIGIN_MATERIAL}'
             )
             SELECT DISTINCT e.source_url
             FROM signal_evidence e
@@ -5146,9 +5226,9 @@ def monthly_ai_cost(months: int = 6) -> list[dict]:
             SELECT to_char(created_at, 'YYYY-MM') AS month,
                    model,
                    -- Радар — отдельной строкой от ленты той же модели (стадии radar_*), агенты
-                   -- «Карточка сигнала» (#96) и «Отбор» (#130) — своими.
+                   -- «Карточка сигнала» (#96), «Отбор» (#130) и баллы «Карточки» (#132) — своими.
                    CASE WHEN stage LIKE 'radar\\_%%' THEN 'radar'
-                        WHEN stage IN ('signal_card', 'otbor') THEN stage ELSE 'feed' END AS area,
+                        WHEN stage IN ('signal_card', 'otbor', 'signal_scores') THEN stage ELSE 'feed' END AS area,
                    count(*) AS runs,
                    round(sum(cost_usd)::numeric, 2) AS cost_usd
             FROM ai_processing_runs
@@ -5661,13 +5741,24 @@ def get_article(article_id: int) -> dict | None:
         return cur.fetchone()
 
 
+def _otbor_fields_sql(alias: str = "a") -> str:
+    """Поля «Отбора» статьи для «Суть и перевод» (#131): категория, связь и применение у её сигнала ленты, если
+    «Отбор» её решил; без решения — NULL (гейт этих полей не даёт). Ключи — как у сигнала (pipeline.OTBOR_FIELDS)."""
+    return ", ".join(
+        f"(SELECT os.{column} FROM signals os WHERE os.origin_article_id = {alias}.id"
+        f" AND os.origin = '{SIGNAL_ORIGIN_FEED}' AND os.otbor_decision IS NOT NULL LIMIT 1) AS {column}"
+        for column in ("signal_category", "oilfield_relevance", "oilfield_application")
+    )
+
+
 def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -> list[dict]:
     if not article_ids:
         return []
-    # Решение «Отбора» (#130) — воркеру: у решённой им статьи гейта и стоп-слов нет (external_ai._stages_left).
+    # Решение «Отбора» (#130) — воркеру: у решённой им статьи гейта и стоп-слов нет (external_ai._stages_left); его
+    # категория, связь и применение — во вход сути и перевода (#131).
     summary_select = (
         ", c.summary, c.relevant, c.title_ru, at.id AS existing_tag_id, sc.id AS existing_score_id,"
-        f" {feed_window.otbor_decision_sql('a')} AS otbor_decision"
+        f" {feed_window.otbor_decision_sql('a')} AS otbor_decision, {_otbor_fields_sql('a')}"
         if include_summary else ""
     )
     summary_join = (
@@ -5946,7 +6037,7 @@ def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
             SELECT a.*, c.summary, c.relevant, c.title_ru,
                    at.id AS existing_tag_id, sc.id AS existing_score_id,
                    s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category, od.decision AS otbor_decision
+                   s.category AS source_category, od.decision AS otbor_decision, {_otbor_fields_sql('a')}
             {_needs_pipeline_from()}
             ORDER BY a.published_at DESC NULLS LAST, a.id DESC
             LIMIT %s

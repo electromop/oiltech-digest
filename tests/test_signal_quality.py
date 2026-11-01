@@ -1000,14 +1000,14 @@ def test_recall_counts_only_filtered_cards_a_human_approved(isolated_db):
 
 def test_each_failed_cluster_gets_its_own_error(monkeypatch):
     from oiltech_digest import signal_research
-    from tests.test_signal_research import _Research, _event
+    from tests.test_signal_research import _Research, _recent_event
 
     monkeypatch.setattr(config, "SIGNAL_JUDGE_CONCURRENCY", 4)
     monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
     monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
-        _event(title="А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
-        _event(title="Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
-        _event(title="В", event_kind="deployment", technology="ESP", source_url="https://example.com/c"),
+        _recent_event(title="А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
+        _recent_event(title="Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
+        _recent_event(title="В", event_kind="deployment", technology="ESP", source_url="https://example.com/c"),
     ]))
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
@@ -1043,13 +1043,15 @@ def test_overrated_counts_as_approval(isolated_db):
 
 def test_run_collects_search_drops_and_judge_failures(monkeypatch):
     from oiltech_digest import signal_research
-    from tests.test_signal_research import _Research, _event
+    from tests.test_signal_research import _Research, _recent_event
 
     monkeypatch.setattr(signal_discovery, "JUDGE_RETRY_PAUSE_SECONDS", 0)
     monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research([
-        _event(title="Бизнес", event_kind="not_technology", technology="", source_url="https://example.com/biz"),
-        _event(title="Технология А", event_kind="deployment", technology="MPD", source_url="https://example.com/a"),
-        _event(title="Технология Б", event_kind="field_test", technology="ГРП", source_url="https://example.com/b"),
+        _recent_event(title="Бизнес", event_kind="not_technology", technology="", source_url="https://example.com/biz"),
+        _recent_event(title="Технология А", event_kind="deployment", technology="MPD",
+                      source_url="https://example.com/a"),
+        _recent_event(title="Технология Б", event_kind="field_test", technology="ГРП",
+                      source_url="https://example.com/b"),
     ]))
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})

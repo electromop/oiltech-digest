@@ -226,6 +226,29 @@ def status(row: dict[str, Any]) -> tuple[str, str]:
     return "accepted", "Принят на платформу"
 
 
+def publication_text(row: dict[str, Any]) -> tuple[str, str | None]:
+    """Текст материала как публикации — вход агентов (#131, спека #128) и колонка пакета эксперту (#129): описание
+    автора; у файла и текст файла, в тех же пределах, что статья (обрезает publication_text). Файл не прочитался —
+    только описание и почему (вторым значением)."""
+    if not row.get("file_path"):
+        return row["description"], None
+    from oiltech_digest.documents.model import DocumentError
+    from oiltech_digest.documents.parsing import parse_document
+
+    try:
+        document = parse_document(Path(row["file_path"]).read_bytes())
+    except (OSError, DocumentError) as exc:
+        return row["description"], f"файл не прочитан: {exc}"
+    return row["description"] + "\n\n" + "\n".join(anchor.text for anchor in document.anchors), None
+
+
+def as_publication(row: dict[str, Any]) -> dict[str, Any]:
+    """Строка материала как публикация агентов (#131) и пакета эксперту (#129): text — publication_text, file_note —
+    почему файл не прочитан. Издатель — сайт ссылки (signal_card_pack._publisher_label): источника у материала нет."""
+    text, note = publication_text(row)
+    return {**row, "text": text, "file_note": note}
+
+
 def get_material(material_id: int) -> dict[str, Any] | None:
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

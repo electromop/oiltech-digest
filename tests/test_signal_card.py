@@ -26,13 +26,13 @@ def test_accepted_article_gets_a_card_through_the_worker(user, contour, monkeypa
 
     assert [job["kind"] for job in jobs] == ["signal_card"]
     card = business(user)["Контракт SLB"]
-    assert card["event_date"] == "2026-09-24"
-    assert card["event_date_source"] == "из текста"
+    assert (card["event_date"], card["event_date_source"], card["event_date_precision"]) == (
+        "2026-09-24", "из текста", "day")
     assert card["participants_json"] == [{"name": "SLB", "quote": "SLB подписала контракт", "verified": True}]
     assert (card["event_type"], card["region"], card["technology_class"], card["technology_maturity"]) == (
         "контракт", "Ближний Восток", "неприменимо", "неприменимо")
-    assert card["oilfield_relevance"] == "direct"
-    assert card["oilfield_application"] == "Бурение скважин на шельфе"
+    # Связь с нефтесервисом и применение с #132 ставит «Отбор», а не «Карточка».
+    assert (card["oilfield_relevance"], card["oilfield_application"]) == (None, None)
     assert card["why_interesting"] == "Крупный контракт на буровые услуги"
     assert card["card_set_by"] == {key: "agent" for key in CARD_KEYS}
     recipe = card["card_recipe"]
@@ -47,7 +47,7 @@ def test_value_outside_the_dictionaries_becomes_undefined(user, contour, monkeyp
     feed_signal("Контракт SLB", "SLB подписала контракт с Saudi Aramco.")
     fill(monkeypatch, {
         "Форум": answer(event_type="форум", region="Марс", technology_class="блокчейн", maturity="TRL 7",
-                        oilfield_relevance="косвенная", event_date_source="из головы"),
+                        event_date_source="из головы"),
         # Регистр — не чужое значение; фраза длиннее 400 знаков — обрезана, как у судьи радара.
         "Контракт SLB": answer(event_type="Контракт", region="ближний восток", why_important="Важно. " * 200),
     })
@@ -56,10 +56,8 @@ def test_value_outside_the_dictionaries_becomes_undefined(user, contour, monkeyp
     forum = cards["Форум"]
     assert (forum["event_type"], forum["region"], forum["technology_class"], forum["technology_maturity"]) == (
         "не определено", "не определено", "не определено", "не определено")
-    assert forum["oilfield_relevance"] is None
-    assert forum["oilfield_application"] is None  # применение — только при прямой или переносимой связи
     assert (forum["event_date"], forum["event_date_source"]) == (None, "не определено")
-    assert forum["card_set_by"]["oilfield_relevance"] == "agent"
+    assert forum["card_set_by"]["event_type"] == "agent" and "oilfield_relevance" not in forum["card_set_by"]
     assert (cards["Контракт SLB"]["event_type"], cards["Контракт SLB"]["region"]) == ("контракт", "Ближний Восток")
     assert len(cards["Контракт SLB"]["why_interesting"]) == 400
 
@@ -302,8 +300,7 @@ def test_radar_finding_gets_only_empty_fields_and_keeps_the_judge_values(user, c
     radar_finding("robot", "Робот-бурильщик на платформе", text, event_date="2026-09-01",
                   oilfield_relevance="transferable", oilfield_application="Роботизация буровой площадки")
     fill(monkeypatch, {"Робот-бурильщик на платформе": answer(
-        event_date="2026-09-10", oilfield_relevance="прямая", oilfield_application="Бурение",
-        why_important="Первый промышленный пилот", event_type="пилот", region="Европа",
+        event_date="2026-09-10", why_important="Первый промышленный пилот", event_type="пилот", region="Европа",
         technology_class="робототехника", maturity="пилот/ОПИ",
         companies=[{"name": "Equinor", "quote": "Equinor и SLB испытали робота-бурильщика"}])})
 
@@ -316,13 +313,13 @@ def test_radar_finding_gets_only_empty_fields_and_keeps_the_judge_values(user, c
         "пилот", "Европа", "робототехника", "пилот/ОПИ")
     assert [item["name"] for item in card["participants_json"]] == ["Equinor"]
     judge = ("event_date", "oilfield_relevance", "oilfield_application")
-    assert card["card_set_by"] == {key: ("radar_judge" if key in judge else "agent") for key in CARD_KEYS}
+    assert card["card_set_by"] == {key: ("radar_judge" if key in judge else "agent") for key in (*CARD_KEYS, *judge)}
 
 
 # Атрибуты карточки и время правки — то, что агент меняет у находки радара по замыслу.
-_CARD_FIELDS = {"event_date", "event_date_source", "participants_json", "event_type", "region", "technology_class",
-                "technology_maturity", "oilfield_relevance", "oilfield_application", "why_interesting",
-                "card_set_by", "card_recipe", "updated_at", "user_status_updated_at"}
+_CARD_FIELDS = {"event_date", "event_date_source", "event_date_precision", "participants_json", "event_type", "region",
+                "technology_class", "technology_maturity", "why_interesting", "card_set_by", "card_recipe",
+                "updated_at", "user_status_updated_at"}
 
 
 def _radar_views(user, admin):
@@ -350,13 +347,13 @@ def test_agent_values_do_not_change_what_the_radar_shows(user, admin, contour, m
     before = _radar_views(user, admin)
     assert len(before["list"]) == 2 and len(before["hidden"]) == 1
 
-    # Агент считает их «не про нефтесервис» со старым событием: решение судьи так спрятало бы карточку.
-    unrelated = answer(oilfield_relevance="нет связи", event_date="2025-01-10", oilfield_application="")
-    fill(monkeypatch, {title: unrelated for title in ("Ранняя находка", "Свежая находка", "Отсеянная находка")})
+    # Агент находит в них старое событие: решение судьи так спрятало бы карточку.
+    old = answer(event_date="2025-01-10")
+    fill(monkeypatch, {title: old for title in ("Ранняя находка", "Свежая находка", "Отсеянная находка")})
 
     assert _radar_views(user, admin) == before
     early = next(card for card in api_get("/api/signals", user) if card["title"] == "Ранняя находка")
-    assert (early["oilfield_relevance"], early["event_date"]) == ("none", "2025-01-10")
+    assert (early["oilfield_relevance"], early["event_date"]) == (None, "2025-01-10")
 
 
 def test_agent_spend_is_accounted_under_its_name(user, admin, contour, monkeypatch):
@@ -417,12 +414,14 @@ def test_card_is_not_written_when_the_main_publication_changed_after_the_job_was
 def test_judge_finding_again_takes_back_the_field_the_agent_filled(user, contour, monkeypatch):
     text = "Equinor и SLB испытали робота-бурильщика на платформе."
     radar_finding("robot", "Робот-бурильщик", text)  # дату события судья не назвал
-    fill(monkeypatch, {"Робот-бурильщик": answer(event_date="2026-09-10", companies=[])})
+    fill(monkeypatch, {"Робот-бурильщик": answer(event_date="2026-09", companies=[])})
+    assert api_get("/api/signals", user)[0]["event_date_precision"] == "month"
 
     radar_finding("robot", "Робот-бурильщик", text, event_date="2026-09-05")  # повторная находка
 
+    # Дата судьи — день: ни источник, ни точность агента (#132) к ней не относятся.
     card = api_get("/api/signals", user)[0]
-    assert (card["event_date"], card["event_date_source"]) == ("2026-09-05", None)
+    assert (card["event_date"], card["event_date_source"], card["event_date_precision"]) == ("2026-09-05", None, None)
     assert card["card_set_by"]["event_date"] == "radar_judge"
 
 

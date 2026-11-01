@@ -4,7 +4,9 @@
 нефтесервисным обществам, с упором на бизнес: ссылка с описанием, файл с описанием или событие
 своими словами. Каждый материал идёт с оценкой автора по шкале платформы (те же девять пунктов,
 что у карточки радара). Материалы видны на экране «Материалы коллег», по ним ориентируются
-аналитики. Следующий шаг: карточка сигнала, когда материал проходит порог релевантности (`signal_id`).
+аналитики. При включённом агенте «Отбор» (#131) материал становится сигналом (`signal_id`): его решает «Отбор»,
+поля автора и его оценка (блок ОС) сохраняются, а итог (взят и куда, не взят и почему, решения нет) бот
+сообщает автору ответом на карточку материала, в группе с упоминанием.
 
 ## Как это выглядит для сотрудника
 
@@ -111,16 +113,15 @@
 | | |
 |---|---|
 | Шкала, проверка полей, запись | `oiltech_digest/colleague_materials.py` |
+| Материал как сигнал, итог автору (#131) | `oiltech_digest/material_signals.py`, `oiltech_digest/tg_materials_notices.py`, `cli otbor-materials` |
 | Бот (NL) | `oiltech_digest/tg_materials_bot.py`, `cli tg-materials-bot` |
-| Эндпоинты | `api.py`: `POST /api/external-worker/materials[/hello]`, `GET /api/external-worker/materials`, `GET /api/materials`, `GET /api/materials/{id}/file` |
+| Эндпоинты | `api.py`: `POST /api/external-worker/materials[/hello]`, `GET /api/external-worker/materials`, `GET\|POST /api/external-worker/materials/notices`, `GET /api/materials`, `GET /api/materials/{id}/file` |
 | Таблица | `colleague_materials` в `schema.sql` |
 | Экран | `frontend/src/features/materials/ColleagueMaterialsPage.tsx` |
-| Тесты | `tests/test_tg_materials_bot.py`, `tests/test_colleague_materials_api.py` |
+| Тесты | `tests/test_tg_materials_bot.py`, `tests/test_colleague_materials_api.py`, `tests/test_otbor_materials.py` |
 
 ## Дальше (не сделано)
 
-- **Порог → карточка сигнала.** Судья радара на NL оценивает материал (тема, бизнес/технология,
-  балл), и при прохождении порога появляется карточка в бизнес-ленте, связанная через `signal_id`.
-- **Оценка автора → обучение.** Пишется в `signal_feedback_events` после того, как появится
-  карточка. Сейчас вердикт хранится только у материала: без сигнала учить судью не на чем.
+- **Оценка автора → обучение.** Хранится блоком ОС у сигнала материала (#131); чему из неё учить агентов, решит
+  сервис ОС.
 - **Файл → разбор документа.** Тот же разбор, что на экране «Материалы» (`process_document`).

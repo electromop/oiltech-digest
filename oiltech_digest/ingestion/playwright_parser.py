@@ -376,13 +376,14 @@ def render_article(candidate, source: dict) -> ArticleFetch:
         content = fetch_rendered(candidate.url, settle_ms=settle_ms)
         if content is None:
             return ArticleFetch(None, verdicts.FETCH_FAILED, detail=last_fetch_status() or "")
-        title, published_at, raw_text = parse_article_page(content, candidate.title)
+        title, published_at, raw_text = parse_article_page(content, candidate.title, url=candidate.url,
+                                                           fallback_date=candidate.published_at)
         if title and len(raw_text) >= MIN_ARTICLE_TEXT_CHARS:
             return ArticleFetch({
                 "source_id": source["id"],
                 "title": title[:500],
                 "url": candidate.url,
-                "published_at": published_at or candidate.published_at,
+                "published_at": published_at,
                 "raw_text": raw_text,
                 "text_truncated": normalize.is_truncated(raw_text),
                 "language": _guess_language(source),

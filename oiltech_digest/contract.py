@@ -18,7 +18,18 @@
    3 — вид задачи admission_notify, код допуска в Telegram (#113) в очереди external-notify: её
    слушает воркер сбора, отправку включает флаг ADMISSION_NOTIFY_ENABLED после пересборки NL;
    4 — вид задачи otbor, агент «Отбор» (#130): решение «брать или нет» у статей ленты; шаг
-   планировщика включается флагом OTBOR_ENABLED только после пересборки NL.
+   планировщика включается флагом OTBOR_ENABLED только после пересборки NL;
+   5 — радар и материалы коллег через «Отбор» (#131): вид задачи signal_summary («Суть и перевод»
+   сигналов), во входе «Отбора» находки и материалы («Ссылки находки», номер signal:<id>), прогон
+   радара в режиме «поиск только находит» (otbor в конфиге прогона). Сборка контракта 4 сама отказывает
+   signal_summary, а новую форму прежних видов (прогон радара при «Отборе», «Отбор» находок) исполнила
+   бы молча по-старому — такой ядро задачу не выдаёт (required_contract);
+   6 — «Карточка» в конвейере «Отбора» (#132): вид задачи signal_scores (второй вызов, баллы), новая форма
+   задачи карточки (тема из 13 тематик и темы-кандидаты, суть во входе, без связи с нефтесервисом) и «Отбора»
+   (факт «Карточки» у возвращённой публикации). Сборка контракта 5 карточку исполнила бы по-старому, и ядро
+   отбросило бы оплаченный ответ без темы, а факт «Отбор» пропустил бы молча: такие задачи ядро ей не выдаёт;
+   7 — повод публикации в ответе «Отбора» (#133): поле occasion, связь сверяется с поводом. Сборка контракта 6
+   строила бы схему ответа без повода, и ядро отбросило бы каждый её оплаченный ответ: «Отбор» ей не выдаётся.
    Совместимые добавки номер не меняют — старая сторона их молча пропускает: 28.09 — поле
    result у fail (снимок сделанного у зависшего пакета) и only в payload process_articles;
    29.09 (сессия G, ADR 0002) — profile у критериев в payload и profile + criteria_snapshot в
@@ -38,9 +49,26 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT = 4
+CONTRACT = 7
 HEADER_BUILD = "X-Worker-Build"
 HEADER_CONTRACT = "X-Worker-Contract"
+
+
+def required_contract(kind: str | None, worker_payload: dict[str, Any]) -> int:
+    """Какой контракт нужен сборке для задачи — по пакету, который она получит. Новую форму прежнего вида задачи
+    (#131: прогон радара при «Отборе»; #132: карточка с темой; #133: «Отбор» с поводом публикации) сборка постарше
+    исполнила бы молча по-старому: судьёй мимо «Отбора», без темы, без повода. Такой ядро задачу не выдаёт, а валит
+    с причиной — как незнакомый вид задачи валит сама сборка (история 50 спеки #128); второй вызов «Карточки»
+    (signal_scores) — так же, с той же понятной причиной. «Отбору» любой формы нужен контракт 7: схема ответа с
+    поводом у него всегда, а прежние добавки (находки #131, факт «Карточки» #132) сборка 7 знает. 0 — подойдёт любая
+    сборка, в том числе без заголовка контракта: прежние формы задач номера не требуют."""
+    if kind == "otbor":
+        return 7
+    if kind == "signal_scores" or (kind == "signal_card" and "themes" in worker_payload):
+        return 6
+    if kind == "signal_discovery" and (worker_payload.get("config") or {}).get("otbor"):
+        return 5
+    return 0
 
 
 def consumer_of(worker_id: str | None) -> str:
@@ -61,8 +89,9 @@ PROCESS_LIMIT_DEFAULT = 5
 _ARTICLE_BATCHES = frozenset({"process_articles", "recheck_relevance", "translate_titles"})
 # Виды, чей частичный итог ядро принимает. Сбор ИИ не зовёт — повторить его дёшево;
 # итог документа — одна карточка на весь файл, половина карточки не нужна никому. Карточки
-# сигналов (#96) — по строке на сигнал, как статьи; решения «Отбора» (#130) — по строке на публикацию.
-PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card", "otbor"}
+# сигналов (#96) — по строке на сигнал, как статьи; решения «Отбора» (#130) — по строке на публикацию;
+# «Суть и перевод» сигналов (#131) и баллы второго вызова «Карточки» (#132) — по строке на сигнал.
+PARTIAL_KINDS = _ARTICLE_BATCHES | {"reprint_review", "signal_card", "otbor", "signal_summary", "signal_scores"}
 
 
 def accepts_partial(kind: str | None, result: dict[str, Any] | None,
@@ -85,11 +114,11 @@ def without_reservation(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def done_count(result: dict[str, Any] | None) -> int:
-    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи, карточек сигналов или решений
-    «Отбора»."""
+    """Сколько строк сделано в частичном итоге: статей пакета, пар судьи, карточек сигналов, решений «Отбора», сутей
+    или баллов сигналов."""
     result = result or {}
     return len(result.get("articles") or result.get("verdicts") or result.get("cards")
-               or result.get("decisions") or [])
+               or result.get("decisions") or result.get("summaries") or result.get("scores") or [])
 
 
 
@@ -98,15 +127,29 @@ def article_ref(article_id: Any) -> str:
     return f"article:{int(article_id)}"
 
 
-def ref_article_id(ref: Any) -> int | None:
-    """Статья по номеру публикации «Отбора»; None — номер не статьи (находки радара — свой вид, #131)."""
-    kind, _, number = str(ref or "").partition(":")
-    if kind != "article":
+def signal_ref(signal_id: Any) -> str:
+    """Номер находки или материала в задаче «Отбора» (#131): «signal:<id>»."""
+    return f"signal:{int(signal_id)}"
+
+
+def _ref_number(ref: Any, kind: str) -> int | None:
+    found, _, number = str(ref or "").partition(":")
+    if found != kind:
         return None
     try:
         return int(number)
     except ValueError:
         return None
+
+
+def ref_article_id(ref: Any) -> int | None:
+    """Статья по номеру публикации «Отбора»; None — номер не статьи."""
+    return _ref_number(ref, "article")
+
+
+def ref_signal_id(ref: Any) -> int | None:
+    """Находка или материал по номеру публикации «Отбора» (#131); None — номер не сигнала."""
+    return _ref_number(ref, "signal")
 
 
 def remaining_after_partial(kind: str | None, payload: dict[str, Any],
@@ -121,20 +164,25 @@ def remaining_after_partial(kind: str | None, payload: dict[str, Any],
     - пары судьи перепечаток — без рассуженных;
     - сигналы карточек — без тех, на которые модель уже ответила (в том числе ответом не по схеме:
       вызов оплачен);
-    - статьи «Отбора» — без тех, о которых воркер вернул строку (ответ или сбой модели).
+    - публикации «Отбора» — без тех, о которых воркер вернул строку (ответ или сбой модели);
+    - сигналы «Суть и перевод» (#131) и баллов (#132) — без тех, на которые модель уже ответила.
     """
     rest = without_reservation(payload)
     if not accepts_partial(kind, result, payload):
         return rest
     kind = str(kind)
-    if kind == "signal_card":
-        answered = {str(card.get("signal_id")) for card in result.get("cards") or [] if isinstance(card, dict)}
+    if kind in ("signal_card", "signal_summary", "signal_scores"):
+        rows = result.get({"signal_card": "cards", "signal_summary": "summaries", "signal_scores": "scores"}[kind]) or []
+        answered = {str(row.get("signal_id")) for row in rows if isinstance(row, dict)}
         left = [signal_id for signal_id in rest.get("signal_ids") or [] if str(signal_id) not in answered]
         return {**rest, "signal_ids": left} if left else None
     if kind == "otbor":
         answered = {str(item.get("ref")) for item in result.get("decisions") or [] if isinstance(item, dict)}
-        left = [article_id for article_id in rest.get("article_ids") or [] if article_ref(article_id) not in answered]
-        return {**rest, "article_ids": left} if left else None
+        articles = [one for one in rest.get("article_ids") or [] if article_ref(one) not in answered]
+        signals = [one for one in rest.get("signal_ids") or [] if signal_ref(one) not in answered]
+        left = {key: ids for key, ids in (("article_ids", articles), ("signal_ids", signals)) if ids}
+        return {**{key: value for key, value in rest.items() if key not in ("article_ids", "signal_ids")},
+                **left} if left else None
     if kind in _ARTICLE_BATCHES:
         done = {int(item["article_id"]) for item in result.get("articles") or []}
         article_ids = [int(item) for item in rest.get("article_ids") or []]

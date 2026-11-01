@@ -16,8 +16,11 @@
 
 from __future__ import annotations
 
+import calendar
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
 import re
-from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from dateutil import parser as dateparser
 
@@ -32,6 +35,9 @@ _EN_MONTHS = {
     "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
+# Числовая дата `дд.мм.гггг` / `дд/мм/гггг`. Её можно прочитать двояко: «10/06/2026» — 10 июня днём
+# первым (так её читает date_from_text) и 6 октября месяцем первым (так пишет Pipeline & Gas Journal).
+_DMY_RE = re.compile(r"\b(\d{1,2})[./](\d{1,2})[./](20\d{2})\b")
 # Порядок важен: сначала формы с названием месяца, потом цифровые. Иначе в строке
 # «17 сентября 2026, 12.30» цифровое правило раньше увидело бы «12.30» — не дату,
 # а время, но уже сбило бы разбор.
@@ -41,7 +47,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b([a-z]{3,9})\.?\s+(\d{1,2}),?\s+(20\d{2})\b", re.I), "mon_d_y_en"),
     (re.compile(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b"), "ymd"),
     (re.compile(r"\b(20\d{2})[./](\d{1,2})[./](\d{1,2})\b"), "ymd"),
-    (re.compile(r"\b(\d{1,2})[./](\d{1,2})[./](20\d{2})\b"), "dmy"),
+    (_DMY_RE, "dmy"),
 ]
 # Дата в адресе статьи. Отдельно, потому что в тексте такие формы дают ложные
 # срабатывания (номера документов, артикулы), а в пути статьи — нет.
@@ -52,6 +58,18 @@ _URL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Слитно год-месяц-день: CNOOC `t20260914_122684.html`.
     (re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)"), "ymd"),
 ]
+# Год и месяц без дня — целыми сегментами пути: `/2026/10/`, `/2026/october/` (Pipeline & Gas
+# Journal, `/news/2026/october/<slug>`). Сегментом, а не началом слова: `/2026/marketing/` не март.
+_URL_MONTH_RE = re.compile(r"/(20\d{2})/(\d{1,2}|[a-z]{3,9})(?=/|$)", re.I)
+_URL_MONTH_NAMES = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, "july": 7,
+    "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "sept": 9,
+    "oct": 10, "nov": 11, "dec": 12,
+}
+# Сутки запаса в обе стороны при сверке метки времени с адресом: адрес пишут по местному дню, а
+# метатег часто в UTC — выпуск в 01:00 МСК 18.09 это 22:00 UTC 17.09.
+_URL_DATE_SLACK = timedelta(days=1)
 
 
 def _month(token: str, table: dict[str, int]) -> int | None:
@@ -105,6 +123,69 @@ def date_from_url(url: str | None) -> datetime | None:
     return _first(url, _URL_PATTERNS)
 
 
+@dataclass(frozen=True)
+class UrlDate:
+    """Дата в адресе статьи с той точностью, что в нём есть: день или только год и месяц."""
+
+    year: int
+    month: int
+    day: int | None = None
+
+    def agrees(self, value: datetime | None, *, timestamp: bool | None = None) -> bool:
+        """Сходится ли дата с адресом: тот же день или тот же месяц.
+
+        Сутки запаса — только у метки времени. У даты без времени сдвига пояса нет, а запас
+        пропустил бы и второе прочтение числовой даты: «01/02/2026» по адресу `/2026/january/` —
+        это 2 января, а не 1 февраля. Без `timestamp` датой без времени считается полночь UTC: так
+        отдаёт её разбор формы без времени (у настоящей метки ровно в полночь UTC запаса не будет)."""
+        if value is None:
+            return False
+        if timestamp is None:
+            timestamp = value.utcoffset() != timedelta() or value.time() != time()
+        if self.day is None:
+            first = date(self.year, self.month, 1)
+            last = date(self.year, self.month, calendar.monthrange(self.year, self.month)[1])
+        else:
+            first = last = date(self.year, self.month, self.day)
+        slack = _URL_DATE_SLACK if timestamp else timedelta()
+        return first - slack <= value.date() <= last + slack
+
+
+def url_date(url: str | None) -> UrlDate | None:
+    """Дата в адресе статьи (#139): полная, как у date_from_url, или год и месяц.
+
+    Дата из будущего — не дата, как и у date_from_url: скорее номер, чем день публикации."""
+    full = date_from_url(url)
+    if full is not None:
+        return UrlDate(full.year, full.month, full.day)
+    for match in _URL_MONTH_RE.finditer(urlsplit(url or "").path):
+        year, token = int(match[1]), match[2].lower()
+        month = int(token) if token.isdigit() else _URL_MONTH_NAMES.get(token)
+        if month and 1 <= month <= 12 and not normalize.is_future_date(
+                datetime(year, month, 1, tzinfo=timezone.utc)):
+            return UrlDate(year, month)
+    return None
+
+
+def possible_dates(value: str | None) -> list[datetime]:
+    """Все прочтения даты в строке: прежние (`parse_datetime`, затем явные формы) и второй
+    порядок числовой даты. Какое из них верное, решает дата в адресе статьи."""
+    if not value:
+        return []
+    found = [parse_datetime(value), date_from_text(value)]
+    for match in _DMY_RE.finditer(" ".join(str(value).split())):
+        for day, month in ((match[1], match[2]), (match[2], match[1])):
+            try:
+                found.append(datetime(int(match[3]), int(month), int(day), tzinfo=timezone.utc))
+            except ValueError:
+                continue
+    unique: list[datetime] = []
+    for item in found:
+        if item is not None and item not in unique and not normalize.is_future_date(item):
+            unique.append(item)
+    return unique
+
+
 def date_from_markup(doc) -> datetime | None:
     """Дата публикации из разметки страницы статьи: мета-теги, itemprop, JSON-LD.
 
@@ -125,10 +206,7 @@ def date_from_markup(doc) -> datetime | None:
             values.extend(str(v) for v in doc.xpath(xpath))
         except Exception:  # noqa: BLE001 — битая разметка не должна ронять разбор
             continue
-    for script in doc.xpath("//script[@type='application/ld+json']/text()"):
-        match = re.search(r'"datePublished"\s*:\s*"([^"]+)"', str(script))
-        if match:
-            values.append(match.group(1))
+    values.extend(_json_ld_published(doc))
     try:
         values.append(str(doc.xpath("string(//time[1])")))
     except Exception:  # noqa: BLE001
@@ -138,6 +216,43 @@ def date_from_markup(doc) -> datetime | None:
         if parsed is not None:
             return parsed
     return None
+
+
+# Свои места даты статьи для сверки с адресом (#139): те же, что у date_from_markup и первого
+# разбора в article_page, но в своём порядке и по первому значению каждого. Видимый текст первого
+# `<time>` идёт сразу за его атрибутом; следующие `<time itemprop="datePublished">` у Pipeline & Gas
+# Journal — даты соседних новостей того же месяца, сверку с адресом они проходят. Прежние списки не
+# сведены сюда нарочно: страница без даты в адресе разбирается ровно как раньше.
+_ARTICLE_DATE_XPATHS = (
+    "string(//meta[@property='article:published_time']/@content)",
+    "string(//meta[@name='pubdate']/@content)",
+    "string(//time[1]/@datetime)",
+    "string(//time[1])",
+    "string(//meta[@itemprop='datePublished']/@content)",
+    "string(//*[@itemprop='datePublished']/@datetime)",
+    "string(//meta[@name='date']/@content)",
+    "string(//meta[@name='DC.date' or @name='dc.date']/@content)",
+)
+
+
+def article_date_values(doc) -> list[str]:
+    """Строки дат статьи со страницы — по одной из каждого своего места, JSON-LD последним."""
+    values: list[str] = []
+    for xpath in _ARTICLE_DATE_XPATHS:
+        try:
+            values.append(str(doc.xpath(xpath)))
+        except Exception:  # noqa: BLE001 — битая разметка не должна ронять разбор
+            continue
+    return values + _json_ld_published(doc)[:1]
+
+
+def _json_ld_published(doc) -> list[str]:
+    values: list[str] = []
+    for script in doc.xpath("//script[@type='application/ld+json']/text()"):
+        match = re.search(r'"datePublished"\s*:\s*"([^"]+)"', str(script))
+        if match:
+            values.append(match.group(1))
+    return values
 
 
 # --- Прежний разбор дат парсера листингов (перенесён из request_parser 18.09) ---

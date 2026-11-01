@@ -119,9 +119,9 @@ def test_import_cli_dry_run_then_apply(isolated_db, reference_xlsx, capsys):
 
 def test_research_mode_judges_every_verified_event_beyond_max_signals(monkeypatch):
     from oiltech_digest import signal_research
-    from tests.test_signal_research import _Research, _event
+    from tests.test_signal_research import _Research, _recent_event
 
-    events = [_event(title=f"Событие {i}", source_url=f"https://example.com/{i}") for i in range(9)]
+    events = [_recent_event(title=f"Событие {i}", source_url=f"https://example.com/{i}") for i in range(9)]
     monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research(events))
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})

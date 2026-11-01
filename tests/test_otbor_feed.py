@@ -10,9 +10,11 @@ from oiltech_digest.db import repository
 from oiltech_digest.signal_research import UNCONFIRMED_LINK
 from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.openai_client import AIClientError
+from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from tests.otbor_support import JUSTIFICATION, answer, api_request, api_send, article, decide, reject, showcase
 from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import FakeModel, admin, api_get, radar_finding, run_worker, user  # noqa: F401 — фикстуры
+from tests.signal_card_support import (DRILLING, FakeModel, admin, api_get, radar_finding, run_worker, tag,  # noqa: F401
+                                       user)
 from tests.signal_card_support import answer as card_answer
 
 OTBOR_FIELDS = ("industry", "oilfield_relevance", "decision", "reject_reason", "category")
@@ -33,8 +35,9 @@ def test_feed_article_accepted_by_otbor_is_in_the_business_feed_with_its_decisio
     # Вход модели — публикация, справочники и приёмщик ОС; происхождения в нём нет: его использует только код.
     header = call["input"].split("Текст публикации:", 1)[0]
     assert [line.split(":", 1)[0] for line in header.strip().splitlines()] == [
-        "Заголовок", "Источник", "Язык", "Дата публикации", "Дата поступления",
+        "Заголовок", "Источник", "Язык", "Дата публикации", "Дата поступления", "Ссылки находки",
         "Похожие сигналы, оценённые людьми", "Оценки людей текстом"]
+    assert "Ссылки находки: нет" in header
     assert "Похожие сигналы, оценённые людьми: нет" in call["input"]
     assert "происхожд" not in (call["instructions"] + call["input"]).lower()
     for word in ("лента", "радар", "поиск", "feed", "radar"):
@@ -42,7 +45,7 @@ def test_feed_article_accepted_by_otbor_is_in_the_business_feed_with_its_decisio
     # Справочники «Отбора» — в каждом вызове: в инструкции и в схеме ответа.
     dictionaries = load_dictionaries()
     properties = call["schema"]["schema"]["properties"]
-    assert list(properties) == ["industry", "oilfield_relevance", "oilfield_application", "decision",
+    assert list(properties) == ["industry", "occasion", "oilfield_relevance", "oilfield_application", "decision",
                                 "reject_reason", "justification", "category"]
     for field in OTBOR_FIELDS:
         codes = [value["code"] for value in dictionaries[field]["values"]]
@@ -270,6 +273,14 @@ def test_only_what_otbor_accepted_goes_on_to_the_signal_card(user, contour, monk
                          "Модель молчит": AIClientError("timeout")})
     card_model = FakeModel({"Программа бурения Equinor": card_answer()})
     monkeypatch.setattr(signal_card, "make_client", lambda: card_model)
+    # Карточка ждёт сути (#132): её даёт обработка ленты.
+    cli.main(["enqueue-signal-cards"])
+    run_worker("external-ai")
+    assert card_model.calls == []
+    seed_default_scoring_criteria()
+    tag(DRILLING)
+    cli.main(["enqueue-process", "--limit", "10", "--offline"])
+    run_worker("external-ai")
 
     cli.main(["enqueue-signal-cards"])
     run_worker("external-ai")

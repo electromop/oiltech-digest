@@ -1,7 +1,8 @@
 """Общее для тестов пакета эксперту «Отбора» (#129, шов 2 спеки #128): синтетика на изолированной базе —
 статьи ленты, находки радара, материалы коллег, темы и критерии — и прежняя разметка карточки во временной
-папке. Настоящий пакет уходит эксперту вне репозитория (он публичный). Тесты — test_otbor_pack.py
-(выгрузка) и test_otbor_markup.py (проверка разметки)."""
+папке; ответы эксперта для таблицы разметки. Настоящий пакет уходит эксперту вне репозитория (он публичный).
+Тесты — test_otbor_pack.py (выгрузка), test_otbor_markup.py (проверка разметки) и test_otbor_exam.py (экзамен,
+#133)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import json
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 from oiltech_digest import cli, otbor_pack_format as pack_format
 from oiltech_digest.db import repository
@@ -238,3 +240,51 @@ def write_card_pack(folder: Path, feed_ids: list[int], radar_ids: list[int]) -> 
 def pack_args(corpus: dict, out: Path, *extra: str) -> list[str]:
     return ["--out", str(out), "--until", UNTIL, "--card-manifest", str(corpus["card"]["manifest"]),
             "--card-markup", str(corpus["card"]["markup"]), *extra]
+
+
+@pytest.fixture()
+def pack(isolated_db, tmp_path):
+    """Пакет, выгруженный командой otbor-expert-pack на синтетике: таблица и манифест во временной папке."""
+    corpus = build_corpus(tmp_path)
+    out = tmp_path / "pack"
+    run_pack(*pack_args(corpus, out, "--apply"))
+    return {"corpus": corpus, "out": out, "items": manifest(out)["items"]}
+
+
+# --- Ответы эксперта: колонки таблицы разметки ---------------------------------------------------
+
+RUBRICS = pack_format.load_rubrics()["profiles"]
+BUSINESS = [f"Бизнес: {one['name']}" for one in RUBRICS["business"]]
+TECH = [f"Технология: {one['name']}" for one in RUBRICS["tech_radar"]]
+TAKEN = {"Отрасль": "нефтесервис", "Связь с нефтесервисом": "прямая", "Брать или нет": "брать", "Тема": "Бурение",
+         "Общая оценка": "Полезный сигнал", "Почему такой балл": "Крупный контракт на буровые услуги"}
+
+
+def business(**overrides):
+    return {**TAKEN, "Категория": "бизнес", **{column: 70 for column in BUSINESS}, **overrides}
+
+
+def technology(**overrides):
+    return {**TAKEN, "Категория": "технология", **{column: 85 for column in TECH[:-1]}, TECH[-1]: "нет даты",
+            **overrides}
+
+
+def rejected(**overrides):
+    """Отказ, как у эксперта: категории нет — у отклонённого витрины нет (решение владельца 23.10)."""
+    return {"Отрасль": "нефтегаз", "Связь с нефтесервисом": "нет связи", "Брать или нет": "не брать",
+            "Причина отказа": "Нефтегаз без связи с нефтесервисом", "Общая оценка": "Не релевантно", **overrides}
+
+
+def fill(out, answers, *, name="otbor_markup_done.xlsx", edit=None):
+    """Таблица пакета, заполненная ответами эксперта {ID: {колонка: значение}}, — рядом с манифестом."""
+    book = openpyxl.load_workbook(out / pack_format.WORKBOOK_NAME)
+    sheet = book[pack_format.MARKUP_SHEET]
+    header = [cell.value for cell in sheet[1]]
+    for row in sheet.iter_rows(min_row=2):
+        for column, value in answers.get(row[0].value, {}).items():
+            row[header.index(column)].value = value
+    if edit:
+        edit(book, sheet, header)
+    path = out / name
+    book.save(path)
+    return path

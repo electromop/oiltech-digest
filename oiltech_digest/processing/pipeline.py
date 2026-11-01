@@ -340,7 +340,7 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
 
 
 def summarize_article(article: dict, client) -> AIResponse:
-    prompt = _article_prompt(article)
+    prompt = _article_prompt(article, otbor=True)
     return _complete_one_script(
         lambda extra: client.complete_json(
             SUMMARY_INSTRUCTIONS,
@@ -620,7 +620,19 @@ def score_label(score: float) -> str:
 ARTICLE_PROMPT_TEXT_CHARS = 6000
 
 
-def _article_prompt(article: dict) -> str:
+# Поля «Отбора» во входе «Суть и перевод» (#131, спека #128: передача между агентами): категория, связь с
+# нефтесервисом и применение — справочные значения, решения и обоснования «Отбора» нет. Ключ строки во входе — поле
+# публикации. У статьи, которую решил гейт, полей нет, и вход прежний.
+OTBOR_FIELDS = {"category": "signal_category", "oilfield_relevance": "oilfield_relevance",
+                "oilfield_application": "oilfield_application"}
+
+
+def _otbor_lines(article: dict) -> list[str]:
+    return [f"{name}: {article[key]}" for name, key in OTBOR_FIELDS.items() if article.get(key)]
+
+
+def _article_prompt(article: dict, *, otbor: bool = False) -> str:
+    """Вход сути, тега и балла по публикации; otbor — с полями «Отбора» (только «Суть и перевод», #131)."""
     base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
@@ -628,6 +640,7 @@ def _article_prompt(article: dict) -> str:
             f"url: {article.get('url') or ''}",
             f"language: {article.get('language') or 'unknown'}",
             f"published_at: {article.get('published_at') or ''}",
+            *(_otbor_lines(article) if otbor else []),
             f"summary: {article.get('summary') or ''}",
             f"text: {_compact(article.get('raw_text') or '', ARTICLE_PROMPT_TEXT_CHARS)}",
         ]
@@ -693,12 +706,14 @@ def _relevance_prompt(article: dict, *, tags: list[dict] | None = None, text_lim
 
 
 def _title_prompt(article: dict) -> str:
-    """Вход переводчика — только заголовок и контекст источника (дёшево, без полного текста)."""
+    """Вход переводчика — только заголовок и контекст источника (дёшево, без полного текста); поля «Отбора», если
+    они есть, — как у сути (#131)."""
     base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
             f"source: {article.get('source_name') or ''}",
             f"language: {article.get('language') or 'unknown'}",
+            *_otbor_lines(article),
             f"context: {_compact(article.get('raw_text') or article.get('summary') or '', 900)}",
         ]
     )

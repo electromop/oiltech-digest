@@ -21,9 +21,16 @@ from oiltech_digest.db.repository import _judged_sql, radar_origin_sql
 
 # Дата ссылки находки: у статьи корпуса — её, у ссылки поиска «режима ChatGPT» — никакой (это дата события по
 # версии модели поиска), у прочих ссылок — дата издателя.
-_LINK_PUBLISHED_SQL = (
+LINK_PUBLISHED_SQL = (
     "CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)"
     " WHEN e.raw_payload_json->>'evidence_source' IS DISTINCT FROM %(search_source)s THEN e.published_at END"
+)
+# Текст ссылки написал издатель: статья корпуса или докачанная страница (без докачки текст находки — сводка модели
+# поиска). Так выбирается главная публикация находки — для пакета и для «сильных сверх пакета» экзамена «Карточки».
+PUBLISHER_TEXT_SQL = (
+    "(length(btrim(COALESCE(a.raw_text, ''))) >= %(min_chars)s"
+    " OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'"
+    " AND length(btrim(COALESCE(e.extracted_fact, ''))) >= %(min_chars)s))"
 )
 # Заголовок ссылки: у статьи корпуса — её, у страницы, которую докачали, и у выдачи обычного поиска — издателя. У
 # ссылки «режима ChatGPT» без докачки заголовок написала модель поиска (бывает переводом: «SLB выиграла у Aramco…» у
@@ -76,7 +83,7 @@ def radar_candidates(until: str) -> list[dict[str, Any]]:
             SELECT DISTINCT ON (s.id)
                    s.id AS signal_id, e.id AS evidence_id, a.id AS article_id, a.language,
                    COALESCE(a.title, e.title) AS title, COALESCE(a.url, e.source_url) AS url,
-                   COALESCE(a.raw_text, e.extracted_fact) AS text, {_LINK_PUBLISHED_SQL} AS published,
+                   COALESCE(a.raw_text, e.extracted_fact) AS text, {LINK_PUBLISHED_SQL} AS published,
                    s.first_seen_at AS received, src.name AS publisher_source,
                    COALESCE(src.source_type, '') AS publisher_type,
                    CASE WHEN s.filter_stage IN ('judge', 'review') THEN s.filter_stage
@@ -90,10 +97,7 @@ def radar_candidates(until: str) -> list[dict[str, Any]]:
             LEFT JOIN articles a ON a.id = e.article_id
             LEFT JOIN sources src ON src.id = a.source_id
             WHERE {radar_origin_sql('s')} AND s.merged_into_signal_id IS NULL AND s.archived_at IS NULL
-              AND s.first_seen_at < %(until)s::date
-              AND (length(btrim(COALESCE(a.raw_text, ''))) >= %(min_chars)s
-                   OR (a.id IS NULL AND e.raw_payload_json->>'full_text_fetched' = 'true'
-                       AND length(btrim(COALESCE(e.extracted_fact, ''))) >= %(min_chars)s))
+              AND s.first_seen_at < %(until)s::date AND {PUBLISHER_TEXT_SQL}
             ORDER BY s.id, e.strength DESC, e.id
             """,
             {"search_source": EVIDENCE_SOURCE, "until": until, "min_chars": config.MIN_ARTICLE_TEXT_CHARS},
@@ -112,7 +116,7 @@ def evidence_links(signal_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         cur.execute(
             f"""
             SELECT e.signal_id, {_LINK_TITLE_SQL} AS title, COALESCE(a.url, e.source_url) AS url,
-                   src.name AS publisher_source, {_LINK_PUBLISHED_SQL} AS published
+                   src.name AS publisher_source, {LINK_PUBLISHED_SQL} AS published
             FROM signal_evidence e
             LEFT JOIN articles a ON a.id = e.article_id
             LEFT JOIN sources src ON src.id = a.source_id
@@ -135,6 +139,15 @@ def card_row_facts(article_ids: list[int], signal_ids: list[int]) -> tuple[dict[
         cur.execute("SELECT id, first_seen_at FROM signals WHERE id = ANY(%s::bigint[])", (signal_ids,))
         signals = {int(row["id"]): row["first_seen_at"] for row in cur.fetchall()}
     return articles, signals
+
+
+def judged_categories(signal_ids: list[int]) -> dict[int, str | None]:
+    """Категория находок, по которой витрина решала показ (судья или человек, не агент карточки), — контроль
+    категории на экзамене «Отбора» (#133)."""
+    with connection.get_connection() as conn:
+        rows = conn.execute(f"SELECT s.id, {_judged_sql('s', 'signal_category')} FROM signals s"
+                            " WHERE s.id = ANY(%s::bigint[])", (signal_ids,)).fetchall()
+    return {int(row[0]): row[1] for row in rows}
 
 
 def material_candidates(until: str) -> list[dict[str, Any]]:

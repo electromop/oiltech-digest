@@ -19,7 +19,13 @@ from oiltech_digest.ingestion.dates import parse_datetime as _parse_datetime
 logger = logging.getLogger(__name__)
 
 
-def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[str, datetime | None, str]:
+def parse_article_page(content: bytes | str, fallback_title: str = "", url: str | None = None,
+                       fallback_date: datetime | None = None) -> tuple[str, datetime | None, str]:
+    """Заголовок, дата публикации и текст страницы статьи.
+
+    `fallback_title` и `fallback_date` — заголовок и дата карточки ленты. `url` — адрес статьи:
+    если в нём есть дата, дата публикации обязана с ней сходиться (#139, `_published_at`). Без
+    адреса — прежний разбор: так зовут ручной импорт, диагностика источника и докачка радара."""
     try:
         doc = normalize.parse_html(content)
     except (ValueError, TypeError):
@@ -45,6 +51,25 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
     )
     title = normalize.clean_html(title)[:500]
 
+    published_at = _published_at(doc, url, fallback_date)
+
+    raw_text = _own_text(content, title, extract_main_text(content, title=title))
+    if len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
+        raw_text = _visible_text(doc)
+    return title, published_at, raw_text
+
+
+def _published_at(doc, url: str | None, fallback_date: datetime | None) -> datetime | None:
+    """Дата публикации со страницы, без неё — дата карточки ленты.
+
+    С датой в адресе статьи берётся только сходящаяся с ней (#139). У Pipeline & Gas Journal
+    первый `<time>` несёт `datetime="2025-10-01"` на всех статьях, видимый текст — настоящая дата
+    «10/06/2026» (месяц первым), адрес — `/news/2026/october/…`; атрибут выигрывал, и с 30.05
+    статьи ложились в октябрь 2025 года, мимо лент своих месяцев. Прежний выбор остаётся, если
+    сошёлся с адресом; иначе — первая сошедшаяся из своих мест даты на странице (числовая — в том
+    прочтении, что сходится), затем дата карточки ленты. Не сошлась ни одна — пусто: лента
+    возьмёт дату поступления, а не дату из противоречащей разметки.
+    """
     published_at = _parse_datetime(
         first_non_empty(
             doc.xpath("string(//meta[@property='article:published_time']/@content)"),
@@ -53,11 +78,16 @@ def parse_article_page(content: bytes | str, fallback_title: str = "") -> tuple[
             _guess_date_from_text(doc.xpath("string(//time[1])")),
         )
     ) or dates.date_from_markup(doc)
-
-    raw_text = _own_text(content, title, extract_main_text(content, title=title))
-    if len(raw_text) < MIN_ARTICLE_TEXT_CHARS:
-        raw_text = _visible_text(doc)
-    return title, published_at, raw_text
+    in_url = dates.url_date(url)
+    if in_url is None:
+        return published_at or fallback_date
+    if in_url.agrees(published_at):
+        return published_at
+    for value in dates.article_date_values(doc):
+        for reading in dates.possible_dates(value):
+            if in_url.agrees(reading):
+                return reading
+    return fallback_date if in_url.agrees(fallback_date) else None
 
 
 def _own_text(content: bytes | str, title: str, text: str) -> str:

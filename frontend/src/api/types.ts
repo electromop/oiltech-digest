@@ -228,11 +228,13 @@ export type Signal = {
   summary: string | null;
   thesis: string | null;
   transferability: string | null;
-  maturity: "reject" | "watch" | "shortlist" | "proven" | string;
+  // «Решение платформы»; у «другого» после «Отбора» его нет (#132).
+  maturity: "reject" | "watch" | "shortlist" | "proven" | string | null;
   confidence: number;
   score: number;
-  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label) — как у бизнес-сигналов.
-  score_label?: string;
+  // Словесная оценка по порогам ленты 80/65/40 (pipeline.score_label) — как у бизнес-сигналов. У оценённого вторым
+  // вызовом «Карточки» это подпись ступени, без баллов подписи нет (#132).
+  score_label?: string | null;
   why_now: string | null;
   why_not_noise: string | null;
   companies_json: string[] | null;
@@ -295,6 +297,9 @@ export type Signal = {
   participants_json?: Array<{ name: string; quote: string; verified?: boolean }> | null;
   // Откуда дата события: «из текста», «по дате публикации» или «не определено»; null — дата судьи радара.
   event_date_source?: string | null;
+  // Точность даты события (#132): day, month или year; у месяца и года event_date — первый день периода, и как
+  // день он не показывается.
+  event_date_precision?: "day" | "month" | "year" | string | null;
   // Кто поставил значение поля карточки: agent, radar_judge или human.
   card_set_by?: Record<string, string> | null;
   card_recipe?: Record<string, unknown> | null;
@@ -307,6 +312,14 @@ export type Signal = {
   otbor_failure_reason?: string | null;
   // Короткая причина публикации в разделе отклонённого «кто убрал → причина» (только админу).
   section_reason?: string | null;
+  // Второй вызов «Карточки» (#132): ступень балла (её подпись — score_label), баллы «пересчитываются» после
+  // «не тот блок», сколько раз «Карточка» возвращала публикацию в «Отбор» (старое событие).
+  score_band?: "strong" | "useful" | "watch" | "weak" | string | null;
+  scores_pending?: boolean;
+  // Балла нет: после «Отбора» без ступени, сбой «Отбора» или отсеяно поиском; «0» тогда не балл.
+  unscored?: boolean;
+  scores_recipe?: Record<string, unknown> | null;
+  otbor_returns?: number;
   // Блоки ОС: каждый человек добавляет свой (оценка, причина, комментарий), чужие не перезаписываются;
   // на отбор и показ они не влияют.
   feedback_blocks?: SignalFeedbackBlock[];
@@ -325,9 +338,11 @@ export type SignalFeedbackBlock = {
 
 export type SignalScoreItem = {
   criterion_id: number;
-  final_score: number;
-  ai_score?: number;
+  // У «Свежести» без даты события в тексте балла нет: в итог она не входит (excluded — почему).
+  final_score: number | null;
+  ai_score?: number | null;
   rationale?: string;
+  excluded?: string | null;
 };
 
 export type SignalPatch = {

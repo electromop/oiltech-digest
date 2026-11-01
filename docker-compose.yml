@@ -233,25 +233,6 @@ services:
       - documents:/data/documents
     restart: unless-stopped
 
-  # Архивный модуль «Справка /help» (утверждён владельцем 23.09): 0 открытий страниц с
-  # 13.09 по логу mkdocs, ссылок из интерфейса нет. Вернуть: этот сервис с профилем
-  # `archive` и блок /help* в Caddyfile (там он оставлен комментарием).
-  docs:
-    image: squidfunk/mkdocs-material:9
-    profiles:
-      - archive
-    container_name: oiltech_docs
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8081:8000"
-    volumes:
-      - ./docs/help:/docs
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/help/ || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   test:
     build:
       context: .

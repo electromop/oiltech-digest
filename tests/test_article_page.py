@@ -7,9 +7,11 @@
 Страж принадлежности (№24) уже стоял в дозагрузке, но не на первичном разборе.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
-from oiltech_digest.ingestion import article_page
+from oiltech_digest.ingestion import article_page, dates, playwright_parser, request_parser
 
 ENI_TITLE = "Eni awarded a new exploration licence in the prolific Kutei Basin, Indonesia"
 ENI_ARTICLE = (
@@ -84,3 +86,149 @@ def test_foreign_text_stays_when_second_extractor_is_not_about_the_title_either(
     _, _, text = article_page.parse_article_page(ENI_LIKE_HTML)
 
     assert "clear the chat" in text
+
+
+# --- Дата публикации против даты в адресе статьи (#139) ------------------------------------
+# Pipeline & Gas Journal с 30.05.2026: первый <time> страницы (он же datePublished) несёт
+# datetime="2025-10-01" у всех статей, а его видимый текст — настоящая дата «10/06/2026» (месяц
+# первым). В адресе — `/news/2026/october/<slug>`. Атрибут выигрывал: 542 статьи из 560 легли в
+# октябрь 2025 года, и в лентах июня-октября 2026 их не было. Страницы синтетические: HTML сайта
+# в репо не кладём.
+
+PGJ_URL = "https://www.pgjonline.com/news/2026/october/energy-transfer-to-acquire-vaquero-midstream"
+PGJ_TITLE = "Energy Transfer to acquire Vaquero Midstream in a $2.6 B transaction"
+# Колонка «последние новости»: даты чужих статей того же месяца, той же разметкой.
+PGJ_SIDEBAR = "".join(
+    f'<article><a href="/news/2026/october/other-story-{n}">'
+    f'<time datetime="10/27/2026" itemprop="datePublished">10/27/2026</time>Other pipeline story {n}</a></article>'
+    for n in range(3)
+)
+
+
+def _pgj_page(shown: str = "10/06/2026", *, attribute: str = "2025-10-01", sidebar: str = "") -> bytes:
+    return f"""<html><head><meta property="og:title" content="{PGJ_TITLE}"></head><body>
+<main><article><section><time datetime="{attribute}" itemprop="datePublished">{shown}</time>
+<h1>{PGJ_TITLE}</h1>
+<p>Energy Transfer will acquire Vaquero Midstream, adding a gathering network in the Delaware Basin.</p>
+<p>The transaction consideration will consist of cash and newly issued Energy Transfer common units.</p>
+<p>Energy Transfer expects the Vaquero assets to be immediately accretive to distributable cash flow.</p>
+</section></article></main><aside>{sidebar}</aside></body></html>""".encode()
+
+
+def _date(page: bytes, url: str | None, fallback_date: datetime | None = None) -> datetime | None:
+    return article_page.parse_article_page(page, PGJ_TITLE, url=url, fallback_date=fallback_date)[1]
+
+
+def _utc(*parts: int) -> datetime:
+    return datetime(*parts, tzinfo=timezone.utc)
+
+
+def test_page_date_that_contradicts_the_url_gives_way_to_the_shown_date():
+    assert _date(_pgj_page(), PGJ_URL).date().isoformat() == "2026-10-06"
+
+
+def test_without_a_date_that_agrees_with_the_url_the_date_is_empty():
+    # Ни видимой даты, ни даты карточки ленты: пусто (лента возьмёт дату поступления), а не 2025-10-01.
+    assert _date(_pgj_page(""), PGJ_URL) is None
+
+
+def test_dates_of_other_articles_on_the_page_are_not_taken():
+    # Сходятся с адресом (тот же октябрь), но это даты соседних новостей, а не этой статьи.
+    assert _date(_pgj_page("", sidebar=PGJ_SIDEBAR), PGJ_URL) is None
+    assert _date(_pgj_page(sidebar=PGJ_SIDEBAR), PGJ_URL).date().isoformat() == "2026-10-06"
+
+
+def test_listing_date_is_the_last_candidate_and_is_checked_against_the_url_too():
+    agrees, contradicts = _utc(2026, 10, 6), _utc(2026, 6, 10)  # второе — «10/06/2026» днём первым
+
+    assert _date(_pgj_page(""), PGJ_URL, fallback_date=agrees) == agrees
+    assert _date(_pgj_page(""), PGJ_URL, fallback_date=contradicts) is None
+    assert _date(_pgj_page(), PGJ_URL, fallback_date=_utc(2026, 10, 1)).date().isoformat() == "2026-10-06", \
+        "дата страницы, сошедшаяся с адресом, главнее даты ленты"
+
+
+def test_date_that_agrees_with_the_url_is_taken_as_before():
+    url = "https://www.pgjonline.com/news/2025/10/older-story"
+
+    assert _date(_pgj_page(), url) == _date(_pgj_page(), None) == _utc(2025, 10, 1)
+
+
+def test_url_without_a_date_keeps_the_old_reading():
+    url = "https://www.pgjonline.com/news/energy-transfer-to-acquire-vaquero-midstream"
+
+    assert _date(_pgj_page(), url) == _utc(2025, 10, 1)
+    assert _date(_pgj_page("", attribute=""), url, fallback_date=_utc(2026, 6, 10)) == _utc(2026, 6, 10), \
+        "даты на странице нет: дата карточки ленты, как раньше"
+
+
+@pytest.mark.parametrize(("month", "expected"), [("june", "2026-06-10"), ("october", "2026-10-06")])
+def test_ambiguous_numeric_date_is_read_the_way_it_agrees_with_the_url(month, expected):
+    page = _pgj_page(attribute="")
+
+    assert _date(page, f"https://www.pgjonline.com/news/2026/{month}/story").date().isoformat() == expected
+    assert _date(page, None).date().isoformat() == "2026-06-10", "без даты в адресе день первым, как раньше"
+
+
+def test_date_without_time_gets_no_day_of_slack_at_the_month_boundary():
+    # «01/02/2026» днём первым — 1 февраля, сутки запаса пустили бы его в январь. У даты без времени
+    # сдвига пояса нет: по адресу `/2026/january/` это 2 января.
+    page = _pgj_page("01/02/2026", attribute="")
+
+    assert _date(page, "https://www.pgjonline.com/news/2026/january/story").date().isoformat() == "2026-01-02"
+
+
+def test_utc_timestamp_a_day_off_the_local_date_in_the_url_still_agrees():
+    # Адрес пишут по местному дню, метатег — в UTC: выпуск в 01:00 МСК 18.09 — это 22:00 UTC 17.09.
+    page = f"""<html><head><meta property="og:title" content="{PGJ_TITLE}">
+<meta property="article:published_time" content="2026-09-17T22:00:00Z"></head><body><p>x</p></body></html>"""
+
+    assert _date(page.encode(), "https://example.com/2026/09/18/story/") == datetime(2026, 9, 17, 22, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(("url", "expected"), [
+    ("https://www.pgjonline.com/news/2026/october/story", (2026, 10, None)),
+    ("https://example.com/news/2026/sept/story", (2026, 9, None)),
+    ("https://example.com/2026/10/story", (2026, 10, None)),
+    ("https://example.com/archive/2026/10", (2026, 10, None)),
+    ("https://example.com/2026/09/17/story/", (2026, 9, 17)),
+    ("https://www.belorusneft.by/ru/detail-pages/event/-2026.09.17-00001/", (2026, 9, 17)),
+    ("https://tedo.ru/press-center/news-14092026", (2026, 9, 14)),
+    ("https://example.com/2026/marketing/story", None),
+    ("https://example.com/news/2026/1234-story", None),
+    ("https://example.com/news/2099/10/story", None),
+    ("https://example.com/news/energy-transfer", None),
+])
+def test_date_in_the_url_is_found_with_the_precision_it_has(url, expected):
+    found = dates.url_date(url)
+
+    assert (found and (found.year, found.month, found.day)) == expected
+
+
+ARTICLE_SOURCE = {"id": 12, "name": "Pipeline & Gas Journal", "category": "международные"}
+
+
+def test_request_collection_checks_page_and_listing_dates_against_the_article_url(monkeypatch):
+    pages = {PGJ_URL: _pgj_page(), PGJ_URL + "-2": _pgj_page("")}
+    monkeypatch.setattr(request_parser, "fetch", pages.get)
+    listing_date = _utc(2026, 6, 10)  # карточка ленты прочла «10/06/2026» днём первым
+
+    shown = request_parser.fetch_article(request_parser.CandidateLink(PGJ_URL, PGJ_TITLE, 8, None), ARTICLE_SOURCE)
+    empty = request_parser.fetch_article(
+        request_parser.CandidateLink(PGJ_URL + "-2", PGJ_TITLE, 8, listing_date), ARTICLE_SOURCE)
+
+    assert shown.article["published_at"].date().isoformat() == "2026-10-06"
+    assert empty.article is not None and empty.article["published_at"] is None
+
+
+def test_rendered_collection_checks_page_and_listing_dates_against_the_article_url(monkeypatch):
+    pages = {PGJ_URL: _pgj_page(), PGJ_URL + "-2": _pgj_page("")}
+    monkeypatch.setattr(playwright_parser, "fetch_rendered", lambda url, settle_ms=0, **_: pages.get(url))
+    agrees = _utc(2026, 10, 6)
+
+    shown = playwright_parser.render_article(request_parser.CandidateLink(PGJ_URL, PGJ_TITLE, 8, None),
+                                             ARTICLE_SOURCE)
+    from_listing = playwright_parser.render_article(
+        request_parser.CandidateLink(PGJ_URL + "-2", PGJ_TITLE, 8, agrees), ARTICLE_SOURCE)
+
+    assert shown.article["published_at"].date().isoformat() == "2026-10-06"
+    assert from_listing.article["published_at"] == agrees

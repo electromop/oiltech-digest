@@ -41,15 +41,15 @@ TOLERANCES_NAME = "signal_card_exam_tolerances.json"
 # Алиасы экзамена — для названий, которые эксперт записал не так, как в тексте: [{name, aliases}], как у
 # справочника компаний; к нему и добавляются (только для сравнения имён — агенту не передаются).
 ALIASES_NAME = "signal_card_exam_aliases.json"
-# Значения судьи радара у радарных строк набора — выгрузка с ядра (signal-card-exam-judge): {ID: {event_date,
-# oilfield_relevance}}. Экзамен идёт там, где доступна модель, а база — на ядре.
+# Значения судьи радара у радарных строк набора — выгрузка с ядра (signal-card-exam-judge): {ID: {event_date, …}}.
+# Экзамен идёт там, где доступна модель, а база — на ядре.
 JUDGE_NAME = "signal_card_exam_judge.json"
-# Колонка таблицы разметки → атрибут; справочник значения — у выбора из списка.
+# Колонка таблицы разметки → атрибут; справочник значения — у выбора из списка. Связь с нефтесервисом в таблице
+# эксперта осталась, но с #132 её ставит «Отбор»: экзамен карточки её не мерит.
 LABEL_COLUMNS = {"Дата события": "event_date", "Источник даты события": "event_date_source",
                  "Компании-участники": "companies", "Тип события": "event_type", "Регион": "region",
-                 "Класс технологии": "technology_class", "Зрелость": "maturity",
-                 "Связь с нефтесервисом": "oilfield_relevance"}
-LABEL_DICTIONARIES = {LABEL_COLUMNS[title]: key for title, key in MARKUP_COLUMNS if key}
+                 "Класс технологии": "technology_class", "Зрелость": "maturity"}
+LABEL_DICTIONARIES = {LABEL_COLUMNS[title]: key for title, key in MARKUP_COLUMNS if key and title in LABEL_COLUMNS}
 
 
 class ExamError(ValueError):
@@ -158,7 +158,9 @@ def plan(markup_path: str | Path, *, manifest_path: str | Path | None = None, mo
     split = _split(exam, write=False)
     items = _part_items(exam, split, part)
     dictionaries = load_dictionaries()
-    chars = sum(signal_card.request_chars(_model_item(index, item), dictionaries) for index, item in enumerate(items))
+    themes = _themes(exam["items"])
+    chars = sum(signal_card.request_chars(_model_item(index, item), dictionaries, themes)
+                for index, item in enumerate(items))
     priced = [signal_card.estimate(chars * runs, len(items) * runs, model) for model in _by_price(models)]
     stratum_of = {item["id"]: item["stratum"] for item in exam["items"]}
     return {"part": part, "signals": len(items), "runs": runs, "rows": len(exam["items"]), "split_new": split["new"],
@@ -239,21 +241,18 @@ def _aliases(path: Path) -> list[dict[str, Any]]:
 
 
 def _judge_file(path: Path) -> dict[str, dict[str, Any]] | None:
-    """Выгрузка судьи с ядра (signal-card-exam-judge): {ID: {event_date, oilfield_relevance}} → значения в форме
-    карточки. Проверяется при загрузке набора, до вызовов модели: битый файл не должен сорвать оплаченный прогон."""
+    """Выгрузка судьи с ядра (signal-card-exam-judge): {ID: {event_date, …}} → дата события в форме карточки.
+    Проверяется при загрузке набора, до вызовов модели: битый файл не должен сорвать оплаченный прогон."""
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not all(isinstance(judged, dict) for judged in data.values()):
-        raise ExamError(f"{path.name}: нужен объект {{ID строки: {{event_date, oilfield_relevance}}}} — выгрузка "
-                        "signal-card-exam-judge")
+        raise ExamError(f"{path.name}: нужен объект {{ID строки: {{event_date, …}}}} — выгрузка signal-card-exam-judge")
     values = {}
     for number, judged in data.items():
-        day, relevance = judged.get("event_date"), judged.get("oilfield_relevance")
-        if relevance is not None and not isinstance(relevance, str):
-            raise ExamError(f"{path.name}, {number}: связь с нефтесервисом {relevance!r} — не строка")
+        day = judged.get("event_date")
         try:
-            values[number] = {"event_date": date.fromisoformat(day) if day else None, "oilfield_relevance": relevance}
+            values[number] = {"event_date": date.fromisoformat(day) if day else None}
         except (TypeError, ValueError) as exc:
             raise ExamError(f"{path.name}, {number}: дата события {day!r} — не ГГГГ-ММ-ДД") from exc
     return values
@@ -426,15 +425,23 @@ def _split(exam: dict[str, Any], *, write: bool) -> dict[str, Any]:
 
 
 def _model_item(index: int, item: dict[str, Any]) -> dict[str, Any]:
-    keys = ("title", "text", "publisher", "publisher_type", "theme", "category")
+    """Вход агента по строке манифеста. Сути и тем-кандидатов по ключам (#132) в манифесте #94 нет: тему этот экзамен
+    не мерит (её мерит экзамен #133 на своём наборе), а атрибуты агент находит в тексте."""
+    keys = ("title", "text", "publisher", "publisher_type", "category")
     return {"signal_id": index, "publication": item["id"], **{key: item[key] for key in keys},
             "published": item["published"].isoformat() if item["published"] else None}
+
+
+def _themes(items: list[dict[str, Any]]) -> list[str]:
+    """Тематики для схемы ответа — темы строк манифеста (тематики заказчика на день пакета): экзамен идёт без базы."""
+    return sorted({item["theme"] for item in items if item["theme"]})
 
 
 def _answers(model: str, items: list[dict[str, Any]], runs: int, dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
     """Ответы модели: строка на (прогон, сигнал). Сбой вызова — одна повторная попытка, как у шага
     планировщика; обе попытки оплачены."""
     payload: dict[str, Any] = {"model": model, "reasoning": config.SIGNAL_CARD_REASONING, "dictionaries": dictionaries,
+                               "themes": _themes(items),
                                "signals": [_model_item(index, item) for index, item in enumerate(items)]}
     answers: list[dict[str, Any]] = []
     for number in range(1, runs + 1):
@@ -462,7 +469,12 @@ def _tokens(card: dict[str, Any]) -> tuple[int, int]:
 
 
 def _failed(card: dict[str, Any], item: dict[str, Any], dictionaries: dict[str, Any]) -> bool:
-    return signal_card.card_values(card, item, dictionaries)[1] is not None
+    return signal_card.card_values(card, _publication(item), dictionaries, [])[1] is not None
+
+
+def _publication(item: dict[str, Any]) -> dict[str, Any]:
+    """Строка манифеста как главная публикация ядра (signal_card._publication): поступления в манифесте нет."""
+    return {**item, "received": None}
 
 
 def _finals(answers: list[dict[str, Any]], items: list[dict[str, Any]],
@@ -471,7 +483,7 @@ def _finals(answers: list[dict[str, Any]], items: list[dict[str, Any]],
     by_id = {item["id"]: item for item in items}
     finals: dict[str, list[dict[str, Any] | None]] = {item["id"]: [] for item in items}
     for answer in answers:
-        values, _ = signal_card.card_values(answer, by_id[answer["id"]], dictionaries)
+        values, _ = signal_card.card_values(answer, _publication(by_id[answer["id"]]), dictionaries, [])
         finals[answer["id"]].append(values)
     return finals
 

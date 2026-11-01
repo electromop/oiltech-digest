@@ -124,7 +124,7 @@ def test_each_research_event_is_its_own_cluster():
 
 
 def test_run_in_research_mode_uses_openai_search_not_brave(monkeypatch):
-    client = _Research([_event()])
+    client = _Research([_recent_event()])
     monkeypatch.setattr(signal_research, "make_client", lambda offline: client)
     monkeypatch.setattr(signal_discovery, "_search_web_evidence",
                         lambda *args, **kwargs: pytest.fail("Brave не должен вызываться в режиме openai_web"))
@@ -347,6 +347,12 @@ def _known_cards_prompt(monkeypatch, existing_signals):
 
 def _days_ago(days):
     return (date.today() - timedelta(days=days)).isoformat()
+
+
+def _recent_event(**overrides):
+    """Событие внутри периода поиска, который run_discovery отсчитывает от сегодня: зашитая дата из него со временем
+    выпадает (28.10 так выпало 24.09, и находка не доходила до судьи)."""
+    return _event(**{"event_date": _days_ago(3), **overrides})
 
 
 def test_research_prompt_knows_topic_cards_seen_within_the_search_period(monkeypatch):

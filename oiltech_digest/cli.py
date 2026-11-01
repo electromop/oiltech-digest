@@ -1055,6 +1055,74 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
               f"(id: {', '.join(str(article_id) for article_id in archive)})")
 
 
+def cmd_repair_article_dates(args: argparse.Namespace) -> None:
+    """Дата публикации, противоречащая дате в адресе статьи (#139), по новому разбору страницы.
+
+    Сухой прогон (--ids или --source-id) заново скачивает и разбирает страницы, ничего не пишет и
+    печатает по строке на статью: план «id: было → стало», переезды по месяцам ленты (у закрытого
+    месяца меняется архив) и остальные статьи с тем, что даёт их страница. --save-plan сохраняет
+    план. --apply ПЛАН пишет ровно его, без новой перекачки: дату публикации и её копию у публикации
+    сигнала ленты; перерасчёт ИИ не ставится: он платный, решение отдельное."""
+    from oiltech_digest import feed_window
+    from oiltech_digest.ingestion import date_repair
+
+    def day(value) -> str:
+        return value.date().isoformat() if value else "пусто"
+
+    ids = [int(item) for item in args.ids.split(",") if item.strip()] if args.ids else None
+    if args.apply:
+        if ids or args.source_id is not None or args.save_plan:
+            raise SystemExit("repair-article-dates: --apply пишет план сухого прогона; --ids, --source-id и "
+                             "--save-plan с ним не задаются")
+        try:
+            changes = date_repair.load_plan(args.apply)
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"repair-article-dates: {exc}") from exc
+        written = date_repair.apply_plan(changes)
+        if args.json:
+            print(json.dumps(written, ensure_ascii=False, indent=2, default=str))
+            return
+        print(f"repair-article-dates: в плане={written['planned']} записано={len(written['written_ids'])} "
+              f"копий даты у публикаций сигналов ленты={written['publication_copies']}")
+        if written["not_written_ids"]:
+            print("  не записано, дату после сухого прогона поменяли (новое согласование): "
+                  + ", ".join(str(item) for item in written["not_written_ids"]))
+        return
+
+    if not ids and args.source_id is None:
+        raise SystemExit("repair-article-dates: нужен --ids, --source-id или --apply ПЛАН")
+    if args.limit < 0 or args.pause < 0 or args.days < 1:
+        raise SystemExit("repair-article-dates: --limit и --pause не меньше 0, --days не меньше 1")
+    articles = date_repair.candidate_articles(source_id=args.source_id, days=args.days, ids=ids)
+    if args.limit:
+        articles = articles[: args.limit]
+    result = date_repair.repair_dates(articles, pause_seconds=args.pause)
+    if args.save_plan:
+        Path(args.save_plan).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str),
+                                        encoding="utf-8")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+    scope = (f"статьи {args.ids}" if ids else
+             f"источник {args.source_id}, собранные с {(datetime.now(timezone.utc) - timedelta(days=args.days)).date()}")
+    print(f"repair-article-dates: {scope}; проверено={result['checked']} в плане={result['changed']} "
+          "[сухой прогон, без записи]")
+    for key, count in result["stats"].items():
+        print(f"  {key}: {count}")
+    window = feed_window.current()
+    for move in result["months"]:
+        state = "открыт" if window.is_open(move["new_month"]) else "закрыт"
+        print(f"  месяц ленты {move['old_month']} → {move['new_month']} ({state}): {move['count']}")
+    for item in result["changes"]:
+        print(f"  {item['article_id']}: {day(item['old'])} → {day(item['new'])}  {item['url']}")
+    for item in result["skipped"]:
+        page = day(item["page"]) if item["page_status"] == "read" else item["page_status"]
+        print(f"  {item['article_id']}: было {day(item['old'])}, страница {page}; не в плане ({item['reason']})"
+              f"  {item['url']}")
+    if args.save_plan:
+        print(f"  план: {args.save_plan}")
+
+
 def cmd_repair_url_keys(args: argparse.Namespace) -> None:
     """Ключ адреса 13.09 срезал query целиком и склеил статьи, у которых номер — в query
     (Минэнерго, EIA, Новатэк, Лукойл, РГУ Губкина); схема тогда же спрятала «копии».
@@ -2201,14 +2269,15 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
-    """Шаг планировщика «Отбор» (#130): новые статьи, которые решает агент «Отбор», — в его задачи по полосе
-    ежедневной обработки. За флагом OTBOR_ENABLED. С --ids — названные статьи «Отбора» по полосе пересчётов:
-    повтор после разбора сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
+    """Шаг планировщика «Отбор» (#130, #131): новые статьи, находки поиска и материалы коллег, которые решает агент
+    «Отбор», — в его задачи по полосе ежедневной обработки. За флагом OTBOR_ENABLED. С --ids (статьи) и
+    --signal-ids (находки и материалы) — названные публикации «Отбора» по полосе пересчётов: повтор после разбора
+    сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
     from oiltech_digest import otbor
     from oiltech_digest.db import otbor_store
 
     try:
-        if args.ids:
+        if args.ids or args.signal_ids:
             named = [int(value) for value in args.ids.split(",") if value.strip()]
             ids = otbor_store.own_article_ids(named)
             chosen = otbor_store.chosen_for_digest(named)
@@ -2217,7 +2286,14 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
             other = sorted(set(named) - set(ids) - set(chosen))
             if other:
                 print(f"enqueue-otbor: статьи {other[:20]} решает не «Отбор» — пропущены")
-            result = {"articles": len(ids), "jobs": otbor.enqueue(ids, trigger="manual", bulk=True)}
+            named_signals = [int(value) for value in args.signal_ids.split(",") if value.strip()]
+            signal_ids = otbor_store.own_signal_ids(named_signals)
+            skipped = sorted(set(named_signals) - set(signal_ids))
+            if skipped:
+                print(f"enqueue-otbor: сигналы {skipped[:20]} «Отбор» не пересматривает (не его или выбраны в дайджест)"
+                      " — пропущены")
+            result = {"articles": len(ids), "signals": len(signal_ids),
+                      "jobs": otbor.enqueue(ids, signal_ids=signal_ids, trigger="manual", bulk=True)}
         else:
             result = otbor.scheduler_step()
     except otbor.OtborSetupError as exc:
@@ -2226,14 +2302,82 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
         print(f"enqueue-otbor: skipped reason={result['reason']}")
         return
     queues = sorted({job["queue_name"] for job in result["jobs"]})
-    print(f"enqueue-otbor: статей {result['articles']}, задач {len(result['jobs'])}"
+    print(f"enqueue-otbor: статей {result['articles']}, находок и материалов {result['signals']},"
+          f" задач {len(result['jobs'])}"
           + (f", очередь {', '.join(queues)}" if queues else "")
           + (f", без ответа после попыток {result['unanswered']}" if result.get("unanswered") else ""))
 
 
+def cmd_otbor_materials(args: argparse.Namespace) -> None:
+    """Накопленные материалы коллег (#131): присланные до включения «Отбора» и не ставшие сигналом проходят конвейер
+    один раз. По умолчанию сухой прогон — сколько материалов и оценка цены «Отбора», ничего не пишет; --apply —
+    сигналы материалов и задачи «Отбора» по полосе пересчётов (только при включённом флаге)."""
+    from oiltech_digest import material_signals, otbor
+
+    try:
+        result = material_signals.convert_accumulated(apply=args.apply)
+    except otbor.OtborSetupError as exc:
+        raise SystemExit(f"otbor-materials: {exc}") from exc
+    price = (f", «Отбор» около ${result['cost_usd']:.4f} ({result['model']})" if result["model"]
+             else ", модель «Отбора» не задана (OTBOR_MODEL)")
+    if not result["applied"]:
+        print(f"otbor-materials: накопленных материалов {result['materials']}{price}; сухой прогон, ничего не записано"
+              " (--apply — провести через конвейер)")
+        return
+    print(f"otbor-materials: сигналов материалов {len(result['signal_ids'])}, задач «Отбора» {result['jobs']}{price}")
+
+
+def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
+    """Шаг планировщика «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», без сути или
+    русского заголовка — в задачи по полосе ежедневной обработки. За флагом OTBOR_ENABLED. С --ids — названные
+    сигналы по полосе пересчётов (повтор после сбоя модели), только принятые «Отбором»."""
+    from oiltech_digest import signal_summary
+
+    try:
+        if args.ids:
+            result = signal_summary.enqueue_named([int(value) for value in args.ids.split(",") if value.strip()])
+        else:
+            result = signal_summary.scheduler_step()
+    except signal_summary.SummarySetupError as exc:
+        raise SystemExit(f"enqueue-signal-summary: {exc}") from exc
+    if result.get("reason"):
+        print(f"enqueue-signal-summary: skipped reason={result['reason']}")
+        return
+    queues = sorted({job["queue_name"] for job in result["jobs"]})
+    print(f"enqueue-signal-summary: сигналов {result['signals']}, задач {len(result['jobs'])}"
+          + (f", очередь {', '.join(queues)}" if queues else ""))
+    if result.get("skipped"):
+        print(f"  пропущены (не приняты «Отбором», дубль или нет такого): {', '.join(map(str, result['skipped']))}")
+
+
+def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
+    """Шаг планировщика «баллы» — второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
+    баллами, которые «пересчитываются» после «не тот блок», — в задачи по полосе ежедневной обработки. За флагом
+    OTBOR_ENABLED, модель — SIGNAL_SCORES_MODEL. С --ids — названные сигналы по полосе пересчётов."""
+    from oiltech_digest import signal_scores
+
+    try:
+        if args.ids:
+            result = signal_scores.enqueue_named([int(value) for value in args.ids.split(",") if value.strip()])
+        else:
+            result = signal_scores.scheduler_step()
+    except signal_scores.ScoresSetupError as exc:
+        raise SystemExit(f"enqueue-signal-scores: {exc}") from exc
+    if result.get("reason"):
+        print(f"enqueue-signal-scores: skipped reason={result['reason']}")
+        return
+    queues = sorted({job["queue_name"] for job in result["jobs"]})
+    print(f"enqueue-signal-scores: сигналов {result['signals']}, задач {len(result['jobs'])}"
+          + (f", очередь {', '.join(queues)}" if queues else ""))
+    if result.get("skipped"):
+        print(f"  пропущены (не оцениваются: до «Отбора», отклонённые, «другое», без карточки или нет такого): "
+              f"{', '.join(map(str, result['skipped']))}")
+
+
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
-    """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе
-    пересчётов, сначала текущее окно ленты и радар. По умолчанию сухой прогон: число сигналов и цена."""
+    """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы коллег (дальше
+    «Отбора» — только принятое им) — по полосе пересчётов, сначала текущее окно ленты, радар и материалы. По умолчанию
+    сухой прогон: число сигналов и цена."""
     from oiltech_digest import signal_card, signal_card_history
 
     try:
@@ -2243,10 +2387,11 @@ def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
     estimate, count = plan["estimate"], len(plan["first"]) + len(plan["rest"])
     print(f"enqueue-signal-card-history: модель {plan['model']}, инструкция {plan['prompt_version']}, "
           f"справочники {plan['dictionaries_version']}")
-    print(f"  история — лента с {plan['since']} (по дате сбора статьи) и весь радар, без дублей: сигналов "
-          f"{plan['signals']}; заполнены этим рецептом — {plan['filled']}, уже в задачах агента — {plan['pending']}, "
-          f"без главной публикации — {plan['no_publication']}")
-    print(f"  к заполнению {count}: сначала текущее окно ленты ({', '.join(plan['months'])}) и радар — "
+    print(f"  история — лента с {plan['since']} (по дате сбора статьи), весь радар и материалы коллег, дальше "
+          f"«Отбора» — только принятое им, без дублей: сигналов {plan['signals']}; заполнены этим рецептом — "
+          f"{plan['filled']}, уже в задачах агента — {plan['pending']}, без главной публикации — "
+          f"{plan['no_publication']}")
+    print(f"  к заполнению {count}: сначала текущее окно ленты ({', '.join(plan['months'])}), радар и материалы — "
           f"{len(plan['first'])}, затем остальное — {len(plan['rest'])}")
     print(f"  цена ≈ {_usd(estimate['cost_usd'])}: вызовов {estimate['calls']}, токенов ≈ "
           f"{estimate['input_tokens'] // 1000} тыс. входа и {estimate['output_tokens'] // 1000} тыс. выхода "
@@ -2553,6 +2698,136 @@ def cmd_otbor_markup_check(args: argparse.Namespace) -> None:
         print(f"С выгрузки пакета сменились {note}")
     if violations:
         raise SystemExit(f"otbor-markup-check: разметку нужно поправить, нарушений {len(violations)}")
+
+
+def cmd_otbor_exam(args: argparse.Namespace) -> None:
+    """Экзамен агента «Отбор» (#133) на разметке эксперта: модели лестницей по цене."""
+    from oiltech_digest import otbor_exam, signal_card
+    from oiltech_digest.otbor_exam_report import PART_RU
+
+    if args.rescore and (args.dry_run or args.models or args.runs is not None or args.part or args.all):
+        raise SystemExit("otbor-exam: --rescore берёт модели, прогоны и часть из отчёта, без --dry-run, --models, "
+                         "--runs, --part и --all")
+    if args.workers < 1:
+        raise SystemExit(f"otbor-exam: --workers {args.workers}: параллельных вызовов модели от одного")
+    models = tuple(model.strip() for model in (args.models or "").split(",") if model.strip()) or otbor_exam.MODELS
+    runs = otbor_exam.RUNS if args.runs is None else args.runs
+    options = {"manifest_path": args.manifest, "models": models, "runs": runs, "part": args.part or "exam"}
+    try:
+        if args.rescore:
+            result = otbor_exam.rescore(args.rescore, args.markup, manifest_path=args.manifest)
+        elif args.dry_run:
+            plan = otbor_exam.plan(args.markup, **options)
+        else:
+            result = otbor_exam.run(args.markup, **options, every=args.all, workers=args.workers)
+    except (otbor_exam.ExamError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"otbor-exam: {exc}") from exc
+    if args.rescore or not args.dry_run:
+        decision = result["decision"]
+        print("otbor-exam: решение: " + (f"{decision['model']}, " if decision["model"] else "") + decision["reason"])
+        print(f"Отчёт: {result['readable']}\nОтветы и метрики: {result['report']}")
+        return
+    print("otbor-exam: сухой прогон, ничего не записано и не оплачено")
+    print(f"Набор: строк {plan['rows']}; деление " + ("новое, запишется при первом прогоне" if plan["split_new"]
+                                                    else f"из {otbor_exam.SPLIT_NAME}"))
+    print("Утверждено: " + (plan["approved"] or f"нет, без отметки approved в {otbor_exam.ROWS_NAME} прогона не будет"))
+    for key in ("tuning", "exam"):
+        counts = plan["split"][key]
+        print(f"  {PART_RU[key]} {sum(counts.values())}: " + "; ".join(
+            f"{otbor_exam.stratum_label(stratum)} {count}" for stratum, count in counts.items()))
+    print(f"Часть «{PART_RU[plan['part']]}»: публикаций {plan['publications']}, прогонов на публикацию {plan['runs']}")
+    for number, one in enumerate(plan["models"]):
+        print(f"  {one['model']}: вызовов {one['calls']}, токенов ≈ {one['input_tokens'] // 1000} тыс. входа и "
+              f"{one['output_tokens'] // 1000} тыс. выхода, ≈ {_usd(one['cost_usd'])}"
+              + (", если не пройдёт предыдущая" if number and plan["part"] == "exam" else ""))
+    total = sum(one["cost_usd"] for one in plan["models"])
+    calls = sum(one["calls"] for one in plan["models"])
+    print(("Не больше" if plan["part"] == "exam" else "Всего") + f": вызовов {calls}, "
+          f"≈ {_usd(total)} (оценка: ответ {signal_card.ESTIMATED_OUTPUT_TOKENS} токенов, знаков на токен "
+          f"{signal_card.CHARS_PER_TOKEN}; повтор при конфликте шагов не учтён)")
+
+
+def cmd_otbor_exam_control(args: argparse.Namespace) -> None:
+    """Размеры страт ленты в окне пакета и категория судьи у радарных строк манифеста экзамена «Отбора» (#133) —
+    JSON в stdout: экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    from oiltech_digest import otbor_exam
+
+    try:
+        raw = sys.stdin.read() if args.manifest == "-" else Path(args.manifest).read_text(encoding="utf-8")
+        values = otbor_exam.control_values(json.loads(raw))
+    except (otbor_exam.ExamError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"otbor-exam-control: {exc}") from exc
+    print(json.dumps(values, ensure_ascii=False, indent=1))
+
+
+def cmd_card_scores_exam(args: argparse.Namespace) -> None:
+    """Экзамен «Карточки» (#133) на разметке эксперта: тема основного вызова, модели второго вызова по цене."""
+    from oiltech_digest import card_scores_exam
+
+    if args.rescore and (args.dry_run or args.models or args.runs is not None or args.part or args.all
+                         or args.card_model or args.summary_model):
+        raise SystemExit("card-scores-exam: --rescore берёт модели, прогоны и часть из отчёта, без --dry-run, "
+                         "--models, --card-model, --summary-model, --runs, --part и --all")
+    if args.workers < 1:
+        raise SystemExit(f"card-scores-exam: --workers {args.workers}: параллельных вызовов модели от одного")
+    models = (tuple(model.strip() for model in (args.models or "").split(",") if model.strip())
+              or card_scores_exam.MODELS)
+    options = {"manifest_path": args.manifest, "models": models, "part": args.part or "exam",
+               "runs": card_scores_exam.RUNS if args.runs is None else args.runs, "card_model": args.card_model,
+               "summary_model": args.summary_model}
+    try:
+        if args.rescore:
+            result = card_scores_exam.rescore(args.rescore, args.markup, manifest_path=args.manifest,
+                                              card_markup=args.card_markup)
+        elif args.dry_run:
+            _print_scores_plan(card_scores_exam.plan(args.markup, **options))
+            return
+        else:
+            result = card_scores_exam.run(args.markup, **options, every=args.all, workers=args.workers,
+                                          card_markup=args.card_markup)
+    except (card_scores_exam.ExamError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"card-scores-exam: {exc}") from exc
+    decision = result["decision"]
+    print("card-scores-exam: решение: " + (f"{decision['model']}, " if decision["model"] else "") + decision["reason"])
+    print(f"Отчёт: {result['readable']}\nОтветы и метрики: {result['report']}")
+
+
+def _print_scores_plan(plan: dict) -> None:
+    from oiltech_digest import card_scores_exam, otbor_exam, signal_card
+    from oiltech_digest.card_scores_exam_report import PART_RU
+
+    print("card-scores-exam: сухой прогон, ничего не записано и не оплачено")
+    print("Набор: деление " + ("новое, запишется при первом прогоне" if plan["split_new"]
+                               else f"из {otbor_exam.SPLIT_NAME}"))
+    print("Утверждено: " + (plan["approved"] or f"нет, без отметки {card_scores_exam.APPROVAL_KEY} в "
+                                               f"{otbor_exam.ROWS_NAME} экзамена не будет"))
+    print(f"Часть «{PART_RU[plan['part']]}»: строк пакета {plan['pack']} (бизнес {plan['profiles']['business']}, "
+          f"технология {plan['profiles']['tech_radar']}), «сильных сверх пакета» {plan['extra']}, прогонов на строку "
+          f"{plan['runs']}")
+    for title, one in (("Суть", plan["summary"]), ("Основной вызов", plan["card"])):
+        print(f"{title} ({one['model']}): вызовов {one['calls']}, ≈ {_usd(one['cost_usd'])}"
+              + ("" if one["calls"] else ", всё уже лежит рядом с манифестом"))
+    print("Второй вызов, лестница по цене:")
+    for number, one in enumerate(plan["models"]):
+        print(f"  {one['model']}: вызовов {one['calls']}, ≈ {_usd(one['cost_usd'])}"
+              + (", если не пройдёт предыдущая" if number and plan["part"] == "exam" else ""))
+    stages = [plan["summary"], plan["card"], *plan["models"]]
+    print(("Не больше" if plan["part"] == "exam" else "Всего") + f": вызовов {sum(one['calls'] for one in stages)}, "
+          f"≈ {_usd(sum(one['cost_usd'] for one in stages))} (оценка: ответ {signal_card.ESTIMATED_OUTPUT_TOKENS} "
+          f"токенов, знаков на токен {signal_card.CHARS_PER_TOKEN}; повтор после сбоя не учтён)")
+
+
+def cmd_card_scores_exam_control(args: argparse.Namespace) -> None:
+    """Выгрузка с ядра для экзамена «Карточки» (#133): критерии, теги, контроль, «сильные сверх пакета» — JSON в stdout:
+    экзамен идёт там, где есть модель, а база — на ядре. Манифест — путь или «-» (stdin)."""
+    from oiltech_digest import card_scores_exam_control
+
+    try:
+        raw = sys.stdin.read() if args.manifest == "-" else Path(args.manifest).read_text(encoding="utf-8")
+        values = card_scores_exam_control.control_values(json.loads(raw))
+    except (card_scores_exam_control.ControlError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"card-scores-exam-control: {exc}") from exc
+    print(json.dumps(values, ensure_ascii=False, indent=1))
 
 
 def _usd(value: float) -> str:
@@ -3112,8 +3387,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval_terms = sub.add_parser("eval-terminology", help="прогнать оценку нефтегазовой терминологии и собрать отчет")
     p_eval_terms.add_argument("--limit", type=int, default=100)
     p_eval_terms.add_argument("--show", type=int, default=30)
-    p_eval_terms.add_argument("--csv-path", default="docs/translation_terminology_100_eval.csv")
-    p_eval_terms.add_argument("--markdown-path", default="docs/translation_terminology_work_report.md")
+    p_eval_terms.add_argument("--csv-path", default="exports/translation_terminology_100_eval.csv")
+    p_eval_terms.add_argument("--markdown-path", default="exports/translation_terminology_work_report.md")
     p_eval_terms.add_argument("--json", action="store_true")
     p_eval_terms.set_defaults(func=cmd_eval_terminology)
 
@@ -3330,6 +3605,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_bodies.add_argument("--json", action="store_true")
     p_repair_bodies.set_defaults(func=cmd_repair_article_bodies)
 
+    p_repair_dates = sub.add_parser(
+        "repair-article-dates",
+        help="исправить дату публикации, противоречащую дате в адресе статьи, новым разбором страницы")
+    p_repair_dates.add_argument("--ids", default="", help="id статей через запятую")
+    p_repair_dates.add_argument("--source-id", type=int, default=None, help="все статьи источника за --days")
+    p_repair_dates.add_argument("--days", type=int, default=180, help="окно по дате поступления, дней")
+    p_repair_dates.add_argument("--limit", type=int, default=0, help="не больше N статей, 0 значит все")
+    p_repair_dates.add_argument("--pause", type=float, default=0.5, help="пауза между страницами, с")
+    p_repair_dates.add_argument("--save-plan", default="", help="сохранить план сухого прогона в файл")
+    p_repair_dates.add_argument("--apply", default="", metavar="ПЛАН",
+                                help="записать план сухого прогона из файла; без него ничего не пишется")
+    p_repair_dates.add_argument("--json", action="store_true")
+    p_repair_dates.set_defaults(func=cmd_repair_article_dates)
+
     p_repair_keys = sub.add_parser(
         "repair-url-keys",
         help="пересчитать ключ адреса (номер статьи из query) и вернуть в ленту спрятанное склейкой 13.09")
@@ -3499,17 +3788,49 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_enqueue_otbor = sub.add_parser(
         "enqueue-otbor",
-        help="шаг планировщика «Отбор»: новые статьи — агенту «Отбор» (за флагом OTBOR_ENABLED)",
+        help="шаг планировщика «Отбор»: новые статьи, находки поиска и материалы коллег — агенту «Отбор» "
+             "(за флагом OTBOR_ENABLED)",
     )
     p_enqueue_otbor.add_argument("--ids", default="",
                                  help="повторить «Отбор» названных статей (номера через запятую) — по полосе "
                                       "пересчётов")
+    p_enqueue_otbor.add_argument("--signal-ids", default="",
+                                 help="повторить «Отбор» названных находок и материалов (номера сигналов через "
+                                      "запятую) — по полосе пересчётов")
     p_enqueue_otbor.set_defaults(func=cmd_enqueue_otbor)
+
+    p_enqueue_summary = sub.add_parser(
+        "enqueue-signal-summary",
+        help="шаг планировщика «Суть и перевод» сигналов: принятые «Отбором» находки и материалы без сути или "
+             "русского заголовка (за флагом OTBOR_ENABLED)",
+    )
+    p_enqueue_summary.add_argument("--ids", default="",
+                                   help="повторить для названных сигналов (номера через запятую) — по полосе "
+                                        "пересчётов")
+    p_enqueue_summary.set_defaults(func=cmd_enqueue_signal_summary)
+
+    p_enqueue_scores = sub.add_parser(
+        "enqueue-signal-scores",
+        help="шаг планировщика «баллы» (второй вызов «Карточки»): сигналы после основного вызова без баллов и с "
+             "баллами после «не тот блок» (за флагом OTBOR_ENABLED, модель SIGNAL_SCORES_MODEL)",
+    )
+    p_enqueue_scores.add_argument("--ids", default="",
+                                  help="повторить для названных сигналов (номера через запятую) по полосе "
+                                       "пересчётов")
+    p_enqueue_scores.set_defaults(func=cmd_enqueue_signal_scores)
+
+    p_otbor_materials = sub.add_parser(
+        "otbor-materials",
+        help="накопленные материалы коллег — один раз через «Отбор» (по умолчанию сухой прогон: число и цена)",
+    )
+    p_otbor_materials.add_argument("--apply", action="store_true",
+                                   help="завести сигналы материалов и задачи «Отбора»; без флага ничего не пишет")
+    p_otbor_materials.set_defaults(func=cmd_otbor_materials)
 
     p_card_history = sub.add_parser(
         "enqueue-signal-card-history",
-        help="прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026 и весь радар — по полосе "
-             "пересчётов; по умолчанию сухой прогон — число сигналов и цена",
+        help="прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы "
+             "коллег — по полосе пересчётов; по умолчанию сухой прогон — число сигналов и цена",
     )
     p_card_history.add_argument("--apply", action="store_true",
                                 help="поставить задачи (только при включённом агенте); без флага — число и цена")
@@ -3678,6 +3999,82 @@ def build_parser() -> argparse.ArgumentParser:
     p_otbor_check.add_argument("--manifest", default=None,
                                help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
     p_otbor_check.set_defaults(func=cmd_otbor_markup_check)
+
+    p_otbor_exam = sub.add_parser(
+        "otbor-exam",
+        help="экзамен агента «Отбор» на разметке эксперта (#133): модели лестницей по цене, отчёт с таблицей "
+             "качества и цены рядом с манифестом",
+    )
+    p_otbor_exam.add_argument("--markup", required=True, help="таблица разметки, заполненная экспертом (вне репозитория)")
+    p_otbor_exam.add_argument("--manifest", default=None,
+                              help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
+    p_otbor_exam.add_argument("--models", default=None,
+                              help="лестница моделей через запятую, по цене: следующая только при провале предыдущей "
+                                   "(по умолчанию gpt-6-luna, gpt-5.6-luna, gpt-5.4-nano, gpt-5.4-mini, gpt-5.5)")
+    p_otbor_exam.add_argument("--runs", type=int, default=None,
+                              help="прогонов на публикацию: на экзамене только 3 (спека), на настройке от 1")
+    p_otbor_exam.add_argument("--dry-run", action="store_true",
+                              help="только деление, число вызовов и цена: ничего не записать и не вызвать модель")
+    p_otbor_exam.add_argument("--rescore", default=None, metavar="REPORT",
+                              help="пересчитать сохранённый отчёт без вызовов модели: модели, прогоны и часть из отчёта")
+    p_otbor_exam.add_argument("--part", choices=["exam", "tuning"], default=None,
+                              help="часть набора: экзамен или настройка (по ней и только по ней правят инструкцию)")
+    p_otbor_exam.add_argument("--all", action="store_true",
+                              help="прогнать все модели лестницы, и после прошедшей: полная таблица качества и цены")
+    p_otbor_exam.add_argument("--workers", type=int, default=1,
+                              help="параллельных вызовов модели (по умолчанию 1); ответы и счёт те же")
+    p_otbor_exam.set_defaults(func=cmd_otbor_exam)
+
+    p_otbor_exam_control = sub.add_parser(
+        "otbor-exam-control",
+        help="контроль экзамена «Отбора» (#133): размеры страт ленты и категория судьи у радарных строк манифеста, "
+             "JSON в stdout, запуск на ядре",
+    )
+    p_otbor_exam_control.add_argument("--manifest", required=True, help="манифест пакета эксперту или «-» из stdin")
+    p_otbor_exam_control.set_defaults(func=cmd_otbor_exam_control)
+
+    p_scores_exam = sub.add_parser(
+        "card-scores-exam",
+        help="экзамен «Карточки» на разметке эксперта (#133): тема основного вызова и баллы второго, модели второго "
+             "вызова лестницей по цене, отчёт рядом с манифестом",
+    )
+    p_scores_exam.add_argument("--markup", required=True,
+                               help="таблица разметки, заполненная экспертом (вне репозитория)")
+    p_scores_exam.add_argument("--manifest", default=None,
+                               help="манифест пакета (по умолчанию otbor_markup_manifest.json рядом с таблицей)")
+    p_scores_exam.add_argument("--models", default=None,
+                               help="лестница моделей второго вызова через запятую, по цене (по умолчанию gpt-6-luna, "
+                                    "gpt-5.6-luna, gpt-5.4-nano, gpt-5.4-mini, gpt-6.1-terra, gpt-6-sol, gpt-6.1-sol, "
+                                    "gpt-5.5)")
+    p_scores_exam.add_argument("--card-model", default=None,
+                               help="модель основного вызова (по умолчанию SIGNAL_CARD_MODEL; на проде gpt-6-sol)")
+    p_scores_exam.add_argument("--summary-model", default=None,
+                               help="модель «Сути и перевода» (по умолчанию OPENAI_MODEL, модель ленты)")
+    p_scores_exam.add_argument("--card-markup", default=None,
+                               help="разметка экзамена карточки #98 (манифест рядом): атрибуты основного вызова того "
+                                    "же прогона сверяются с ней на строках его экзамена, по его порогам")
+    p_scores_exam.add_argument("--runs", type=int, default=None,
+                               help="прогонов на строку: на экзамене только 3 (спека), на настройке от 1")
+    p_scores_exam.add_argument("--dry-run", action="store_true",
+                               help="только строки, число вызовов и цена: ничего не записать и не вызвать модель")
+    p_scores_exam.add_argument("--rescore", default=None, metavar="REPORT",
+                               help="пересчитать сохранённый отчёт без вызовов модели: модели, прогоны и часть из "
+                                    "отчёта")
+    p_scores_exam.add_argument("--part", choices=["exam", "tuning"], default=None,
+                               help="часть набора: экзамен или настройка (деление общее с «Отбором»)")
+    p_scores_exam.add_argument("--all", action="store_true",
+                               help="прогнать все модели лестницы, и после прошедшей: полная таблица качества и цены")
+    p_scores_exam.add_argument("--workers", type=int, default=1,
+                               help="параллельных вызовов модели (по умолчанию 1); ответы и счёт те же")
+    p_scores_exam.set_defaults(func=cmd_card_scores_exam)
+
+    p_scores_exam_control = sub.add_parser(
+        "card-scores-exam-control",
+        help="выгрузка с ядра для экзамена «Карточки» (#133): критерии «Скоринга», теги тем, контроль у строк пакета и "
+             "«сильные сверх пакета», JSON в stdout, запуск на ядре",
+    )
+    p_scores_exam_control.add_argument("--manifest", required=True, help="манифест пакета эксперту или «-» из stdin")
+    p_scores_exam_control.set_defaults(func=cmd_card_scores_exam_control)
 
     p_archive_signals = sub.add_parser(
         "archive-signals",

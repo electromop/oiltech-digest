@@ -27,7 +27,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from oiltech_digest import feed_window, otbor_pack_workbook
+from oiltech_digest import colleague_materials, feed_window, otbor_pack_workbook
 from oiltech_digest.db import otbor_pack_store, repository
 from oiltech_digest.otbor_pack_format import (GIVEN_COLUMNS, MANIFEST_KIND, MANIFEST_NAME, MARKUP_SHEET, PROFILE_RU,
                                               RELEVANCE_COLUMN, WORKBOOK_NAME, PackError, answer_columns, fingerprint,
@@ -114,7 +114,7 @@ def select_rows(*, seed: int, since: str, until: str, card: list[dict[str, Any]]
     rows = list(card)
     articles = {item["article_id"] for item in rows if item.get("article_id")}
     signals = {item["signal_id"] for item in rows if item.get("signal_id")}
-    feed = [item for item in _feed_items(since, until) if item["article_id"] not in articles and _markable(item)]
+    feed = feed_pool(since, until, exclude=articles)
     for group in ("feed_rejected", "feed_accepted"):
         pool = [item for item in feed if item["group"] == group]
         rows += sorted(pool, key=lambda item: _rank(seed, group, item["id"]))[:QUOTAS[group]]
@@ -125,6 +125,12 @@ def select_rows(*, seed: int, since: str, until: str, card: list[dict[str, Any]]
     rows += [item for item in _material_items(until) if _markable(item)]
     _complete_from_base(rows)
     return rows
+
+
+def feed_pool(since: str, until: str, *, exclude: set[Any] | frozenset[Any] = frozenset()) -> list[dict[str, Any]]:
+    """Кандидаты выборки ленты в окне: статьи, о которых гейт решил, кроме прежних строк карточки (exclude) и тех,
+    что эксперт не разметит. Из них выбраны строки пакета, а их число по группам — веса страт экзамена (#133)."""
+    return [item for item in _feed_items(since, until) if item["article_id"] not in exclude and _markable(item)]
 
 
 def composition(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -219,28 +225,13 @@ def _radar_items(until: str) -> list[dict[str, Any]]:
 def _material_items(until: str) -> list[dict[str, Any]]:
     items = []
     for row in otbor_pack_store.material_candidates(until):
-        material_text, note = _material_text(row)
+        material = colleague_materials.as_publication(row)
         items.append(_item("materials", "material", f"material:{row['id']}", {
-            "material_id": row["id"], "title": row["title"], "text": material_text, "url": row["url"],
+            "material_id": row["id"], "title": row["title"], "text": material["text"], "url": row["url"],
             "published": row["created_at"], "received": row["created_at"],
-            "publisher": _publisher_label(row) if row["url"] else "", "publisher_type": "", "language": None,
-            "file_note": note}))
+            "publisher": _publisher_label(row), "publisher_type": "", "language": None,
+            "file_note": material["file_note"]}))
     return items
-
-
-def _material_text(row: dict[str, Any]) -> tuple[str, str | None]:
-    """Текст материала — описание автора; у файла и текст файла: так материал пойдёт во вход «Отбора» (спека #128,
-    в тех же пределах, что статья). Файл не прочитался — только описание, причина — в манифесте."""
-    if not row.get("file_path"):
-        return row["description"], None
-    from oiltech_digest.documents.model import DocumentError
-    from oiltech_digest.documents.parsing import parse_document
-
-    try:
-        document = parse_document(Path(row["file_path"]).read_bytes())
-    except (OSError, DocumentError) as exc:
-        return row["description"], f"файл не прочитан: {exc}"
-    return row["description"] + "\n\n" + "\n".join(anchor.text for anchor in document.anchors), None
 
 
 def _item(group: str, origin: str, item_id: str, row: dict[str, Any]) -> dict[str, Any]:

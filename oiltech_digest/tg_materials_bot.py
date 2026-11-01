@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from oiltech_digest import colleague_materials as cm
-from oiltech_digest import config, contract
+from oiltech_digest import config, contract, tg_materials_notices
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +197,17 @@ class CoreClient:
             detail = ""
         retryable = response.status_code >= 500 or response.status_code in {401, 408, 429}
         raise CoreError(detail or f"платформа ответила {response.status_code}", retryable=retryable)
+
+    def notices(self) -> list[dict[str, Any]]:
+        """Итоги «Отбора», которых авторы ещё не получили (#131)."""
+        response = self.session.get(f"{self.url}/api/external-worker/materials/notices", timeout=20)
+        response.raise_for_status()
+        return response.json()["notices"]
+
+    def notice_sent(self, material_id: int, outcome: str) -> None:
+        response = self.session.post(f"{self.url}/api/external-worker/materials/notices",
+                                     json={"material_id": material_id, "outcome": outcome}, timeout=20)
+        response.raise_for_status()
 
     def history(self, tg_user_id: int, limit: int = 10, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
         """Материалы автора, новые первыми, и сколько их всего; ядро старее бота total не отдаёт — тогда счёт по странице."""
@@ -664,6 +675,10 @@ class MaterialsBot:
         due = self.clock() + _GROUP_REPLY_SECONDS
         self._later += [(due, chat_id, int(message_id)) for message_id in message_ids if message_id]
 
+    def notify(self) -> int:
+        """Итоги «Отбора» авторам (#131, tg_materials_notices): сколько разобрано."""
+        return tg_materials_notices.deliver(self.core, self._send, TelegramError)
+
     def tick(self) -> None:
         """Отложенная уборка группы; цикл зовёт её между опросами Telegram (опрос длится до 50 с)."""
         now = self.clock()
@@ -768,9 +783,13 @@ def run(*, core_api_url: str | None = None, token: str | None = None, worker_id:
     logger.info("tg_materials_bot_started username=%s chats=%s", bot.username, sorted(bot.chat_ids))
     offset: int | None = None
     pause = 1.0
+    last_notices: float | None = None
     while not stop["flag"]:
         hello()
         bot.tick()
+        if last_notices is None or time.monotonic() - last_notices >= tg_materials_notices.NOTICES_EVERY_SECONDS:
+            bot.notify()
+            last_notices = time.monotonic()
         try:
             updates = tg.call("getUpdates", http_timeout=_POLL_SECONDS + 15, timeout=_POLL_SECONDS,
                               offset=offset, allowed_updates=["message", "callback_query"])

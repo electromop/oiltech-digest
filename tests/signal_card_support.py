@@ -21,7 +21,7 @@ from oiltech_digest.processing.openai_client import AIResponse
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
 MODEL = "gpt-5.4-nano"
 CARD_KEYS = ("event_date", "participants", "event_type", "region", "technology_class", "technology_maturity",
-             "oilfield_relevance", "oilfield_application", "why_interesting")
+             "why_interesting")
 
 
 class FakeModel:
@@ -43,12 +43,12 @@ class FakeModel:
 
 
 def answer(**overrides):
+    """Ответ основного вызова «Карточки» по схеме (#132: тема вместо связи с нефтесервисом)."""
     return {
         "event_date": "2026-09-24", "event_date_source": "из текста",
         "companies": [{"name": "SLB", "quote": "SLB подписала контракт"}],
         "event_type": "контракт", "region": "Ближний Восток",
-        "technology_class": "неприменимо", "maturity": "неприменимо",
-        "oilfield_relevance": "прямая", "oilfield_application": "Бурение скважин на шельфе",
+        "technology_class": "неприменимо", "maturity": "неприменимо", "theme": "не определено",
         "why_important": "Крупный контракт на буровые услуги",
         **overrides,
     }
@@ -255,7 +255,7 @@ class ExamModel:
                       reasoning_effort=None):
         title = next(line.split(":", 1)[1].strip() for line in user_input.splitlines()
                      if line.startswith("Заголовок:"))
-        self.calls.append({"model": model, "title": title, "input": user_input})
+        self.calls.append({"model": model, "title": title, "input": user_input, "instructions": instructions})
         reply = self.answers[model](title)
         if isinstance(reply, Exception):
             raise reply

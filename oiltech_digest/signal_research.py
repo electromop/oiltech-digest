@@ -9,6 +9,11 @@
 (живая ли ссылка и о том ли она), дальше — наш судья (категория, дата события, смешанные
 события, тема, баллы профиля), ревью пачки, дедуп и запись на ядре. Модуль без базы — идёт
 на NL-воркере вместе с run_discovery.
+
+При «Отборе» (#131, finds_only) поиск только находит и по смыслу не отсеивает ничего: ни «не технологию» по своей
+оценке, ни событие без названной технологии, ни дату вне периода, и потолка числа находок темы нет — решает «Отбор».
+Остаются технические проверки (verify_research_evidence; разделы «Поиск → …» — rejected_sections.SEARCH_SECTIONS); тип
+события, компания, суть и «почему важно» модели поиска — черновые данные находки, во вход агентов они не идут.
 """
 
 from __future__ import annotations
@@ -25,9 +30,16 @@ from oiltech_digest.processing.openai_client import AIClientError, output_budget
 from oiltech_digest.processing.pipeline import make_client
 
 EVIDENCE_SOURCE = "openai_web_search"
-# Причина отсева ссылки, которую не подтвердили ни страница, ни источники поиска: по ней же раздел «Ссылка не
-# подтверждена» (rejected_sections, #130).
+# Технические причины отсева поиска — по ним разделы «Поиск → …» (rejected_sections, #130, #131). Ссылку не подтвердили
+# ни страница, ни источники поиска; страница не открылась, хотя адрес из найденного, — во вход «Отбора» нечего дать:
+# текст у находки только от модели поиска, а это черновые данные; страница-список (лента новостей, оглавление номера,
+# страница пресс-релизов или портфеля) — не одна публикация (черновая проверка разбора разметки 23.10: заголовок
+# короче пяти слов ловит 7 из 8 таких страниц без лишних).
+NO_LINK_OR_TITLE = "нет ссылки или заголовка"
 UNCONFIRMED_LINK = "страница не открылась и адрес не из найденного"
+PAGE_NOT_FETCHED = "страница не открылась, текста издателя нет"
+LIST_PAGE = "заголовок короче пяти слов: похоже на ленту, оглавление или раздел сайта, а не на одну публикацию"
+LIST_PAGE_TITLE_WORDS = 5
 # Тип события от модели поиска. not_technology — поиск сам признал событие не технологическим
 # (премия, контракт без технологии, сделка): отбрасывается до судьи, чтобы бизнес-новости не
 # тратили вызовы судьи (прогон 01.10: 29 бизнес-карточек из 62). other — технологическое событие
@@ -163,9 +175,11 @@ def research_topic(
     client_factory: Callable[[], Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
     feedback: str = "",
+    finds_only: bool = False,
 ) -> dict[str, Any]:
     """События темы за период с первоисточниками. Ошибка модели — пустой итог со статусом,
-    а не падение прогона: у темы остаётся поиск Brave, если он включён."""
+    а не падение прогона: у темы остаётся поиск Brave, если он включён. finds_only (#131) — поиск только
+    находит: без смысловых отсевов и без потолка числа находок, решает «Отбор»."""
     start, end = research_period(days, period_end)
     count = int(limit or app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC)
     stats: dict[str, Any] = {"status": "ok", "provider": "openai_web_search", "model": app_config.SIGNAL_RESEARCH_MODEL,
@@ -175,6 +189,8 @@ def research_topic(
     prompt = (
         f"Тема: {topic}\n"
         f"Период: с {start.isoformat()} по {end.isoformat()}\n"
+        # Сколько просить у модели — настройка и при «Отборе»: потолок снят в нашем коде (finds_only ответ не режет),
+        # промпт широкого поиска — #138.
         f"Сколько событий: до {count}\n"
         + (f"\nЧто входит в тему:\n{topic_context.strip()}\n" if topic_context.strip() else "")
         # Обратная связь заказчика: что одобрено, что отклонено, кому доверяет, что уже есть.
@@ -228,8 +244,9 @@ def research_topic(
     cited = {_url_key(url) for url in data.get("_cited_urls") or []}
     stats["model"] = getattr(response, "model", None) or stats["model"]
     evidence = []
-    for event in (data.get("events") or [])[:count]:
-        item, reason = _event_to_evidence(event, topic, start=start, end=end, cited=cited)
+    events = data.get("events") or []
+    for event in events if finds_only else events[:count]:
+        item, reason = _event_to_evidence(event, topic, start=start, end=end, cited=cited, finds_only=finds_only)
         if item is None:
             # Отсеянное не пропадает: ядро сохранит его карточкой «Отсеяно» для разбора заказчиком.
             stats["dropped"].append({
@@ -253,22 +270,25 @@ def _event_to_evidence(
     start: date,
     end: date,
     cited: set[str],
+    finds_only: bool = False,
 ) -> tuple[dict[str, Any] | None, str]:
     url = str(event.get("source_url") or "").strip()
     title = re.sub(r"\s+", " ", str(event.get("title") or "")).strip()
     if not re.match(r"https?://[^/\s]+\.[^/\s]+", url) or not title:
-        return None, "нет ссылки или заголовка"
+        return None, NO_LINK_OR_TITLE
     url = _strip_tracking(url)
     event_date = _parse_date(event.get("event_date"))
-    # Дата вне периода — модель нарушила условие; без даты оставляем: судья найдёт её сам.
-    if event_date and not (start - timedelta(days=3) <= event_date <= end + timedelta(days=1)):
+    # Дата вне периода — модель нарушила условие; без даты оставляем: судья найдёт её сам. При «Отборе» дата
+    # модели — черновые данные: старое событие решает «Отбор» по тексту.
+    if not finds_only and event_date and not (start - timedelta(days=3) <= event_date <= end + timedelta(days=1)):
         return None, f"дата события {event_date.isoformat()} вне периода"
     technology = re.sub(r"\s+", " ", str(event.get("technology") or "")).strip()
     event_kind = str(event.get("event_kind") or "").strip()
     # Нужны технологические сигналы: до судьи не доходит то, что поиск сам признал не технологией,
     # и находка без названной технологии. Причины раздельные — по общей «нет технологии» нельзя
     # было понять, что резал тип события. Старый ответ без полей (схема до 02.10) — не отбрасываем.
-    if "event_kind" in event:
+    # При «Отборе» категорию ставит он: бизнес-событие поиска не теряется как «не технология».
+    if "event_kind" in event and not finds_only:
         if event_kind not in TECH_EVENT_KINDS:
             return None, "не технологическое событие (по оценке поиска)"
         if not technology:
@@ -303,27 +323,49 @@ def _event_to_evidence(
     }, ""
 
 
-def verify_research_evidence(evidence: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def verify_research_evidence(evidence: list[dict[str, Any]], *,
+                             finds_only: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """После докачки страниц: оставить подтверждённые находки.
 
     Подтверждена, если страница открылась (full_text_fetched) или модель сослалась на адрес в
     найденном (cited_by_search: сайт мог закрыться от бота). Ни то ни другое — вероятно,
     выдуманная ссылка: такой находке судья поверил бы на слово. Сводку модели возвращаем в
-    summary_ru — докачка заменила её текстом страницы, а судье нужны обе."""
+    summary_ru — докачка заменила её текстом страницы, а судье нужны обе.
+
+    При «Отборе» (finds_only, #131) во вход агента идёт текст издателя: находка без открытой страницы и
+    страница-список (is_list_page) — технический отсев поиска, а не публикация."""
     kept, dropped = [], []
     for item in evidence:
         payload = item.get("raw_payload") or {}
         if payload.get("evidence_source") != EVIDENCE_SOURCE:
             kept.append(item)
             continue
-        if payload.get("full_text_fetched") or payload.get("cited_by_search"):
+        reason = None
+        if not (payload.get("full_text_fetched") or payload.get("cited_by_search")):
+            reason = UNCONFIRMED_LINK
+        elif finds_only and not payload.get("full_text_fetched"):
+            reason = PAGE_NOT_FETCHED
+        elif finds_only and is_list_page(str(item.get("title") or "")):
+            reason = LIST_PAGE
+        if reason is None:
             kept.append({**item, "summary_ru": payload.get("research_summary") or item.get("summary_ru")})
         else:
             dropped.append({"title": str(item.get("title") or "")[:300], "url": item.get("source_url"),
-                            "reason": UNCONFIRMED_LINK,
+                            "reason": reason,
                             "summary": str(payload.get("research_summary") or item.get("extracted_fact") or "")[:900],
                             "publisher": item.get("publisher"), "event_date": item.get("published_at")})
     return kept, dropped
+
+
+def is_list_page(title: str) -> bool:
+    """Страница-список, а не одна публикация: заголовок короче LIST_PAGE_TITLE_WORDS слов («Press Releases»,
+    «News», «JPT October 2026 Issue»). Черновая проверка: у статьи о событии заголовок обычно длиннее. Иероглиф —
+    слово: китайский заголовок без пробелов иначе считался бы одним словом (на разметке эксперта 23.10 те же 7 из 8
+    страниц-списков без лишних)."""
+    return len(_TITLE_WORD_RE.findall(title)) < LIST_PAGE_TITLE_WORDS
+
+
+_TITLE_WORD_RE = re.compile(r"[\u3400-\u9fff]|[^\W\u3400-\u9fff]+")
 
 
 def is_research_evidence(item: dict[str, Any]) -> bool:
