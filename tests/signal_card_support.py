@@ -20,8 +20,8 @@ from oiltech_digest.processing.openai_client import AIResponse
 
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
 MODEL = "gpt-5.4-nano"
-CARD_KEYS = ("event_date", "participants", "event_type", "region", "technology_class", "technology_maturity",
-             "why_interesting")
+CARD_KEYS = ("event_date", "participants", "event_type", "region", "event_countries", "technology_class",
+             "technology_maturity", "why_interesting")
 
 
 class FakeModel:
@@ -43,15 +43,17 @@ class FakeModel:
 
 
 def answer(**overrides):
-    """Ответ основного вызова «Карточки» по схеме (#132: тема вместо связи с нефтесервисом)."""
-    return {
+    """Ответ основного вызова «Карточки» по схеме (#132: тема вместо связи с нефтесервисом; #137: страны события и
+    страна участника — пустая строка, если тест её не задал)."""
+    found = {
         "event_date": "2026-09-24", "event_date_source": "из текста",
-        "companies": [{"name": "SLB", "quote": "SLB подписала контракт"}],
+        "companies": [{"name": "SLB", "quote": "SLB подписала контракт"}], "event_countries": [],
         "event_type": "контракт", "region": "Ближний Восток",
         "technology_class": "неприменимо", "maturity": "неприменимо", "theme": "не определено",
         "why_important": "Крупный контракт на буровые услуги",
         **overrides,
     }
+    return {**found, "companies": [{"country": "", **company} for company in found["companies"]]}
 
 
 @pytest.fixture()

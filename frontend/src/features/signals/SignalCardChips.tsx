@@ -19,6 +19,12 @@ export const CHOICE_FIELDS = [
   { field: "technology_maturity", filter: "technologyMaturity", label: "Зрелость", any: "Любая зрелость" },
 ] as const;
 
+// Фильтр «Страна» (#137): ищет и в странах события, и у участников, поэтому не одна колонка, как у CHOICE_FIELDS.
+// Чип на карточке показывает страны события, страна участника стоит у его имени.
+export const COUNTRY_FILTER = {
+  filter: "country", label: "Страна", any: "Любая страна", chip: "Страна события",
+} as const;
+
 const CATEGORY_LABELS: Record<string, string> = { business: "бизнес", technology: "технология", other: "другое" };
 const RELEVANCE_LABELS: Record<string, string> = { direct: "прямая", transferable: "переносимая", none: "нет связи" };
 // Кто поставил дату события, если у неё нет источника агента («из текста», «по дате публикации»).
@@ -42,6 +48,14 @@ function cardChips(signal: Signal): Chip[] {
     const value = signal[field];
     if (isGap(signal, field, value)) chips.push({ key: field, label, value: UNDEFINED, gap: true });
     else if (value) chips.push({ key: field, label, value, gap: false });
+    // Страны события (#137) — после региона: где событие произошло. Страна участника — у его имени (Компании).
+    if (field === "region") {
+      const countries = signal.event_countries;
+      const key = "event_countries";
+      const label = COUNTRY_FILTER.chip;
+      if (isGap(signal, key, countries)) chips.push({ key, label, value: UNDEFINED, gap: true });
+      else if (countries?.length) chips.push({ key, label, value: countries.join(", "), gap: false });
+    }
   }
   // «Не определено» у связи с нефтесервисом — пусто при пометке агента (код радара: direct / transferable / none).
   const relevance = signal.oilfield_relevance;
@@ -89,25 +103,29 @@ export function whyBlock(signal: Signal, business: boolean): { label: string; te
   return { label: "Почему важно", text: isGap(signal, "why_interesting", null) ? UNDEFINED : NOT_FILLED };
 }
 
+type CompanyEntry = { name: string; country?: string | null };
+
 type Props = {
   signal: Signal;
   // Клик по компании — «всё про компанию»: фильтр по ней в этой витрине.
   onCompany: (name: string) => void;
 };
 
-function companiesOf(signal: Signal): string[] {
-  return (signal.participants_json || []).map((item) => item.name).filter(Boolean);
+function companiesOf(signal: Signal): CompanyEntry[] {
+  return (signal.participants_json || []).filter((item) => item.name);
 }
 
-function CompanyButtons({ names, onCompany }: { names: string[]; onCompany: (name: string) => void }) {
+function CompanyButtons({ companies, onCompany }: { companies: CompanyEntry[]; onCompany: (name: string) => void }) {
   return (
     <>
-      {names.map((name, index) => (
+      {companies.map(({ name, country }, index) => (
         <Fragment key={name}>
           {index ? ", " : ""}
           <button type="button" className="signalCompanyButton" title={`Все сигналы с участием ${name}`} onClick={() => onCompany(name)}>
             {name}
           </button>
+          {/* Страна участника (#137): по ней тоже находит фильтр «Страна». */}
+          {country ? ` (${country})` : null}
         </Fragment>
       ))}
     </>
@@ -129,7 +147,7 @@ export function SignalCardLine({ signal, onCompany }: Props) {
         <div className="signalCardFacts">
           {companies.length ? (
             <span className="signalCardLineCompanies">
-              <CompanyButtons names={companies.slice(0, 3)} onCompany={onCompany} />
+              <CompanyButtons companies={companies.slice(0, 3)} onCompany={onCompany} />
               {companies.length > 3 ? ` и ещё ${companies.length - 3}` : ""}
             </span>
           ) : null}
@@ -169,7 +187,7 @@ export function SignalAttributes({ signal, onCompany, extra = [] }: Props & { ex
       {companies.length || companiesGap ? (
         <div className={companiesGap ? "signalAttribute gap" : "signalAttribute"} title={companiesGap ? GAP_HINT : undefined}>
           <dt>Компании</dt>
-          <dd>{companiesGap ? UNDEFINED : <CompanyButtons names={companies} onCompany={onCompany} />}</dd>
+          <dd>{companiesGap ? UNDEFINED : <CompanyButtons companies={companies} onCompany={onCompany} />}</dd>
         </div>
       ) : null}
       {date ? (

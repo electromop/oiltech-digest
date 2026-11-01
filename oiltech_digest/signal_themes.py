@@ -4,6 +4,9 @@
 служебного приёмника, как у радара: signal_discovery.topics_from_tags). Кандидатов ядро считает бесплатно, по ключам
 тематики и её подтегов (то же правило совпадения, что у темы радара: signal_discovery._content_theme): модель получает
 имена всех 13 и три кандидата, а выбирает сама.
+
+Правила темы (#149) — из выпуска эксперта: в итоговом выпуске за октябрь 2026 обзор рынка одной технологии стоит в
+рынке. Правило называет тему рынка её именем в списке тематик, по началу имени (MARKET_PREFIX).
 """
 
 from __future__ import annotations
@@ -12,6 +15,9 @@ from typing import Any
 
 # Сколько тем-кандидатов по ключам получает модель (спека #128).
 CANDIDATES = 3
+# Тема рынка — та из 13, чьё имя начинается с этого слова (на проде «Рынок, бизнес-модели, сервисные модели,
+# партнёрства и M&A»).
+MARKET_PREFIX = "Рынок"
 
 
 def names(tags: list[dict[str, Any]]) -> list[str]:
@@ -19,6 +25,21 @@ def names(tags: list[dict[str, Any]]) -> list[str]:
     from oiltech_digest.signal_discovery import topics_from_tags
 
     return [topic["name"] for topic in topics_from_tags(tags)]
+
+
+def market(themes: list[str]) -> str | None:
+    """Имя темы рынка в списке тематик; нет такой — None."""
+    return next((name for name in themes if name.casefold().startswith(MARKET_PREFIX.casefold())), None)
+
+
+def rules(themes: list[str]) -> list[str]:
+    """Правила темы для инструкции основного вызова «Карточки» (#149), строками под списком тематик. Темы рынка в
+    списке нет — правила нет: модель не должна получить имя темы, которой нет в её выборе."""
+    name = market(themes)
+    if name is None:
+        return []
+    return [f"  Обзор, прогноз или исследование рынка (объёмы, рост, спрос, инвестиции) относится к теме «{name}», "
+            "даже если это рынок одной технологии."]
 
 
 def candidates(text: str, tags: list[dict[str, Any]]) -> list[str]:

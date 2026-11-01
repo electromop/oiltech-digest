@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import re
 
 import pytest
 
@@ -481,6 +482,17 @@ def test_research_asks_for_technology_and_event_kind_and_excludes_business():
     # Каждый тип описан в инструкции: перечень типов и их смысл не расходятся. До 17.10
     # квалификации и испытательному центру было некуда деться, кроме other.
     assert all(f"- {kind} —" in text for kind in signal_research.EVENT_KINDS)
+
+
+def test_research_asks_for_a_russian_title_by_the_title_rules():
+    """#150: правила заголовка «Сути и перевода» (prompts.TRANSLATE_INSTRUCTIONS) — строкой и в промпте поиска: его
+    заголовок остаётся у находки, если у страницы нет своего, и виден в отсеянном поиском. Предел длины один."""
+    from oiltech_digest.processing.prompts import TRANSLATE_INSTRUCTIONS
+
+    limit = re.search(r"Не длиннее (\d+) знаков", TRANSLATE_INSTRUCTIONS).group(1)
+    text = " ".join(signal_research.RESEARCH_INSTRUCTIONS.split())
+
+    assert f"- title: по-русски, по правилам заголовка (кто что сделал, до {limit} знаков, без тире и скобок)" in text
 
 
 # --- Ревью #89 (02.10): итог задачи показывает, чем искали и почему поиск не ответил -------------

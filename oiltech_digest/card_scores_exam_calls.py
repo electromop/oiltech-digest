@@ -267,7 +267,7 @@ class Calls:
 
 
 class _WithModel:
-    """Клиент с заданной моделью: «Суть и перевод» зовёт модель клиента по умолчанию (модель ленты)."""
+    """Клиент с заданной моделью экзамена: она подменяет ту, что передаёт «Суть и перевод» (OPENAI_SUMMARY_MODEL)."""
 
     def __init__(self, client: Any, model: str):
         self.client, self.model = client, model

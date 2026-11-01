@@ -23,12 +23,14 @@ from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT, FeedWindow
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "signal_card"
 # Поле карточки → колонки signals; первая колонка решает, пусто ли поле. Связь с нефтесервисом и применение с #132
-# ставит «Отбор»: «Карточка» их больше не пишет, прежние значения остаются.
+# ставит «Отбор»: «Карточка» их больше не пишет, прежние значения остаются. Страна участника (#137) — в его записи
+# participants_json и пишется вместе с участниками: у участников человека её нет.
 CARD_COLUMNS: dict[str, tuple[str, ...]] = {
     "event_date": ("event_date", "event_date_source", "event_date_precision"),
     "participants": ("participants_json",),
     "event_type": ("event_type",),
     "region": ("region",),
+    "event_countries": ("event_countries",),
     "technology_class": ("technology_class",),
     "technology_maturity": ("technology_maturity",),
     "why_interesting": ("why_interesting",),

@@ -27,6 +27,8 @@ export type SignalFilters = {
   technologyMaturity?: string;
   company?: string;
   tile?: SignalTile;
+  // Страна (#137): имя справочника стран; сервер ищет и по стране события, и по стране участника.
+  country?: string;
 };
 
 // Плашка над списком (решение владельца 23.10): по нажатию — список тех же карточек, что она посчитала.
@@ -60,6 +62,7 @@ function filterParams(filters: SignalFilters) {
   if (filters.technologyMaturity) params.set("technology_maturity", filters.technologyMaturity);
   if (filters.company) params.set("company", filters.company);
   if (filters.tile) params.set("tile", filters.tile);
+  if (filters.country) params.set("country", filters.country);
   return params;
 }
 
@@ -72,6 +75,8 @@ export type SignalDictionaries = {
   technology_maturity: string[];
   // Подсказки к полю «Компания» — канонические имена справочника алиасов.
   companies: string[];
+  // Значения фильтра «Страна» (#137) — имена справочника стран у кода.
+  country: string[];
   // Что можно вписать, возвращая отклонённое (#132): коды и подписи справочника «Отбора».
   otbor_return?: SignalReturnChoices;
 };

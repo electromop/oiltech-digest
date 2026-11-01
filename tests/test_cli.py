@@ -727,6 +727,11 @@ def test_eval_terminology_command_writes_reports(tmp_path, capsys):
     assert "Отчет по нефтегазовой терминологии" in md_path.read_text(encoding="utf-8")
 
 
+def test_eval_terminology_takes_every_case_by_default():
+    """#150: случаев больше 100, а золотые примеры идут первыми — предел по умолчанию отрезал бы часть словаря."""
+    assert cli.build_parser().parse_args(["eval-terminology"]).limit is None
+
+
 def test_apply_source_overrides_prints_missing_and_ambiguous_names(monkeypatch, capsys):
     """Промах реестра виден в ВЫВОДЕ команды, а не только в логе.
 
