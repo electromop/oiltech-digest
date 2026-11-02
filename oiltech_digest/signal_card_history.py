@@ -4,6 +4,8 @@
 
 Задачи выдаются по порядку создания, поэтому первыми ставятся текущее окно ленты, радар и материалы, затем
 остальное.
+Граница since (флаг --since команды) сужает всю историю: ленту по дате сбора статьи, радар и материалы по дате
+появления сигнала.
 «Заполнено» — карточка с рецептом текущих инструкции, справочников и модели: повторный запуск за неё не платит,
 а после смены справочников, инструкции или модели перезаполняет. Дубли, сигналы в идущих задачах агента и
 сигналы без главной публикации (агенту нечего читать) — мимо. Сухой прогон печатает число сигналов и цену — по
@@ -13,6 +15,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 from oiltech_digest import config, feed_window, lanes, network_policy, signal_card
@@ -24,12 +27,14 @@ from oiltech_digest.signal_card_pack import load_dictionaries
 _CHUNK = 200
 
 
-def plan() -> dict[str, Any]:
-    """Что поставит прогон по истории: сигналы по порядку постановки, что пропущено и почему, цена и полоса."""
+def plan(since: date | None = None) -> dict[str, Any]:
+    """Что поставит прогон по истории: сигналы по порядку постановки, что пропущено и почему, цена и полоса.
+    since — одна граница для всей истории: лента по дате сбора статьи, радар и материалы по дате появления
+    сигнала; без неё лента с FEED_SIGNALS_SINCE и весь радар."""
     model = signal_card.configured_model()
     version = load_dictionaries().get("version")
     window = feed_window.current()
-    rows = signal_card_store.history_signals(since=FEED_SIGNALS_SINCE, window=window)
+    rows = signal_card_store.history_signals(since=since or FEED_SIGNALS_SINCE, window=window, radar_since=since)
     live = [row for row in rows if not row["pending"]]
     wanted = [row for row in live if not _filled(row["card_recipe"], model, version)]
     chars = _request_chars([int(row["id"]) for row in wanted])
@@ -37,7 +42,8 @@ def plan() -> dict[str, Any]:
     decision = network_policy.route_ai_bulk()
     return {
         "model": model, "prompt_version": signal_card.PROMPT_VERSION, "dictionaries_version": version,
-        "since": FEED_SIGNALS_SINCE.isoformat(), "months": window.open_months,
+        "since": (since or FEED_SIGNALS_SINCE).isoformat(), "radar_since": since.isoformat() if since else None,
+        "months": window.open_months,
         "signals": len(rows), "pending": len(rows) - len(live), "filled": len(live) - len(wanted),
         "no_publication": len(wanted) - len(queued),
         "first": [int(row["id"]) for row in queued if row["first"]],

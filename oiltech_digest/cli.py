@@ -2387,18 +2387,20 @@ def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_signal_card_history(args: argparse.Namespace) -> None:
     """Прогон по истории агента «Карточка сигнала» (#98): лента с августа 2026, весь радар и материалы коллег (дальше
-    «Отбора» — только принятое им) — по полосе пересчётов, сначала текущее окно ленты, радар и материалы. По умолчанию
-    сухой прогон: число сигналов и цена."""
+    «Отбора» — только принятое им) — по полосе пересчётов, сначала текущее окно ленты, радар и материалы. --since
+    ставит одну границу всей истории. По умолчанию сухой прогон: число сигналов и цена."""
     from oiltech_digest import signal_card, signal_card_history
 
     try:
-        plan = signal_card_history.plan()
+        plan = signal_card_history.plan(date.fromisoformat(args.since) if args.since else None)
     except signal_card.CardSetupError as exc:
         raise SystemExit(f"enqueue-signal-card-history: {exc}") from exc
     estimate, count = plan["estimate"], len(plan["first"]) + len(plan["rest"])
+    radar = (f"радар и материалы коллег с {plan['radar_since']} (по дате появления сигнала)" if plan["radar_since"]
+             else "весь радар и материалы коллег")
     print(f"enqueue-signal-card-history: модель {plan['model']}, инструкция {plan['prompt_version']}, "
           f"справочники {plan['dictionaries_version']}")
-    print(f"  история — лента с {plan['since']} (по дате сбора статьи), весь радар и материалы коллег, дальше "
+    print(f"  история — лента с {plan['since']} (по дате сбора статьи), {radar}, дальше "
           f"«Отбора» — только принятое им, без дублей: сигналов {plan['signals']}; заполнены этим рецептом — "
           f"{plan['filled']}, уже в задачах агента — {plan['pending']}, без главной публикации — "
           f"{plan['no_publication']}")
@@ -3849,6 +3851,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_card_history.add_argument("--apply", action="store_true",
                                 help="поставить задачи (только при включённом агенте); без флага — число и цена")
+    p_card_history.add_argument("--since", type=_iso_date, default=None,
+                                help="граница истории ГГГГ-ММ-ДД: лента по дате сбора статьи, радар и материалы по дате "
+                                     "появления сигнала; без флага лента с августа 2026 и весь радар")
     p_card_history.set_defaults(func=cmd_enqueue_signal_card_history)
 
     p_signals = sub.add_parser("signals", help="список найденных технологических сигналов")

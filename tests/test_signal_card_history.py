@@ -132,6 +132,34 @@ def test_dry_run_prints_signals_and_price_and_enqueues_nothing(user, admin, cont
     assert "сухой прогон" in out
 
 
+def test_since_bounds_the_feed_by_collection_and_the_radar_by_appearance(user, admin, contour, october, capsys):
+    september = feed_signal("Собрана в сентябре", TEXT, published=published(10))
+    collected_in_october = feed_signal("Собрана в октябре", TEXT, published=published(10))
+    old = radar_finding("old", "Найдена в сентябре", "Equinor испытала робота.")
+    new = radar_finding("new", "Найдена в октябре", "Датчик утечек на трубопроводе.")
+    with repository.get_connection() as conn:
+        for article_id, month in ((september, 9), (collected_in_october, 10)):
+            conn.execute("UPDATE articles SET collected_at = %s WHERE id = %s", (published(month), article_id))
+        for signal_id, month in ((old, 9), (new, 10)):
+            conn.execute("UPDATE signals SET first_seen_at = %s WHERE id = %s", (published(month), signal_id))
+        conn.commit()
+    current = signal_of(collected_in_october)
+
+    history("--since", "2026-10-01")
+
+    # Граница одна для всей истории: лента по дате сбора статьи, радар и материалы по дате появления сигнала.
+    out = capsys.readouterr().out
+    assert "лента с 2026-10-01" in out and "радар и материалы коллег с 2026-10-01" in out and "сигналов 2;" in out
+    history("--since", "2026-10-01", "--apply")
+    assert [job["payload"]["signal_ids"] for job in card_jobs(admin)] == [sorted([current, new])]
+    capsys.readouterr()
+
+    history()  # без границы как раньше: лента с августа и весь радар
+    assert "сигналов 4;" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        history("--since", "2026-13-01")
+
+
 def test_history_takes_only_feed_signals_whose_article_the_feed_shows(user, admin, contour, october, capsys):
     feed_signal("Видна в ленте", TEXT, published=published(10))
     rejected = feed_signal("Отбор передумал", TEXT, published=published(10))

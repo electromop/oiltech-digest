@@ -163,12 +163,13 @@ def new_signal_ids(*, days: int, limit: int) -> list[int]:
     return [int(row[0]) for row in rows]
 
 
-def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
+def history_signals(*, since: date, window: FeedWindow, radar_since: date | None = None) -> list[dict[str, Any]]:
     """Сигналы прогона по истории (#98, спека #93): ленты — принятые статьи, собранные с `since` (сигнал не в
     архиве, а статью показывает лента — как у витрины «бизнес»: за карточку, которую никто не увидит, не платим),
-    все находки радара и материалы коллег; дальше «Отбора» — только принятое (_PAST_OTBOR_SQL), дубли — мимо.
-    first — радар, материал или статья в текущем окне ленты (window): их карточки ставятся первыми; pending —
-    сигнал в задаче агента, которая ещё идёт. По порядку постановки."""
+    находки радара и материалы коллег, появившиеся с `radar_since` (без неё все); дальше «Отбора» — только
+    принятое (_PAST_OTBOR_SQL), дубли — мимо. first — радар, материал или статья в текущем окне ленты (window):
+    их карточки ставятся первыми; pending — сигнал в задаче агента, которая ещё идёт. По порядку постановки."""
+    radar_bound = " AND s.first_seen_at >= %(radar_since)s" if radar_since else ""
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -185,11 +186,11 @@ def history_signals(*, since: date, window: FeedWindow) -> list[dict[str, Any]]:
             FROM signals s
             LEFT JOIN articles a ON a.id = s.origin_article_id AND s.origin = '{SIGNAL_ORIGIN_FEED}'
             WHERE s.merged_into_signal_id IS NULL AND {_READY_SQL}
-              AND ({_RADAR_OR_MATERIAL_SQL}
+              AND (({_RADAR_OR_MATERIAL_SQL}{radar_bound})
                    OR (a.collected_at >= %(since)s AND s.archived_at IS NULL AND {_FEED_ARTICLE_SHOWN_SQL}))
             ORDER BY first DESC, s.id
             """,
-            {"since": since},
+            {"since": since, "radar_since": radar_since},
         )
         return cur.fetchall()
 
