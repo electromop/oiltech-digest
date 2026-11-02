@@ -456,12 +456,14 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     else refreshSummary();
   }
 
-  // Снять фильтры выборки. Порядок списка — не фильтр: его возвращает только «Сбросить».
+  // Снять фильтры выборки, нажатая плитка тоже фильтр (ревью PR #155). Порядок списка — не фильтр: его возвращает
+  // только «Сбросить».
   function clearFilters() {
     setSearch("");
     setTheme("");
     setMaturity("");
     setCardFilters(EMPTY_CARD_FILTERS);
+    setTile("");
   }
 
   function resetFilters() {
@@ -512,6 +514,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
   const visibleSignals = signals;
   const remaining = Math.max(0, (summary?.matching ?? signals.length) - signals.length);
   const narrowedByCard = Object.values(cardFilters).some((value) => value.trim());
+  const narrowedBesidesTile = Boolean(search.trim() || theme || maturity) || narrowedByCard;
 
   const groups = useMemo(() => {
     const byTheme = new Map<string, Signal[]>();
@@ -916,8 +919,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           <div className="articleGroupsStack">
           {groups.map(([group, groupSignals]) => {
             // Свёрнуто по умолчанию, как в «Бизнес-сигналах»; раскрыто при поиске, фильтре атрибута
-            // карточки («всё про компанию» видно сразу), выбранной теме или если блок один.
-            const forcedOpen = Boolean(search.trim()) || narrowedByCard || theme === group || groups.length === 1;
+            // карточки («всё про компанию» видно сразу), нажатой плитке, выбранной теме или если блок один.
+            const forcedOpen = Boolean(search.trim()) || narrowedByCard || Boolean(tile) || showHidden
+              || theme === group || groups.length === 1;
             const groupOpen = !collapsedGroups.has(group) && (expandedGroups.has(group) || forcedOpen);
             const groupAvg = Math.round(
               groupSignals.reduce((sum, item) => sum + Number(item.score || 0), 0) / groupSignals.length,
@@ -1289,19 +1293,20 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         ) : (
           <div className="emptyState">
             {/* Компания — целиком, а не подстрокой («Газпром» — не «Газпром нефть»): часть имени ничего
-                не найдёт, и это не «сигналов нет». Пусто под нажатой плиткой — сказать какой и дать выход. */}
+                не найдёт, и это не «сигналов нет». Пусто под нажатой плиткой — сказать какой и дать выход;
+                при других условиях пуста не плитка, а пересечение, поэтому и выход снимает всё. */}
+            <span>
+              {tile && !showHidden && !narrowedBesidesTile
+                ? TILE_EMPTY[tile]
+                : cardFilters.company.trim()
+                  ? "Сигналов по выбранным фильтрам нет. Компания ищется по имени целиком — выберите её из подсказок поля «Компания»."
+                  : "Сигналов по выбранным фильтрам нет."}
+            </span>
             {tile && !showHidden ? (
-              <>
-                <span>{TILE_EMPTY[tile]}</span>
-                <button type="button" className="ghostButton compactButton" onClick={() => setTile("")}>
-                  Показать все сигналы
-                </button>
-              </>
-            ) : cardFilters.company.trim() ? (
-              "Сигналов по выбранным фильтрам нет. Компания ищется по имени целиком — выберите её из подсказок поля «Компания»."
-            ) : (
-              "Сигналов по выбранным фильтрам нет."
-            )}
+              <button type="button" className="ghostButton compactButton" onClick={clearFilters}>
+                Показать все сигналы
+              </button>
+            ) : null}
           </div>
         )}
       </section>

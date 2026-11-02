@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getSignalSummary, type SignalQuery } from "../../api/signals";
+import { getSignalSummary, listSignals, type SignalQuery } from "../../api/signals";
 import type { Signal } from "../../api/types";
 import {
   DICTIONARIES, cardOf, contract, lastListQuery, publication, renderFeed, resetBusinessFeedApi, serve,
@@ -130,5 +130,62 @@ describe("бизнес-лента: фильтры и «всё про компа�
 
     expect(await screen.findByText(/Компания ищется по имени целиком/)).toBeInTheDocument();
     expect(lastListQuery()).toMatchObject({ company: "Газпром" });
+  });
+
+  // Ревью PR #155: плитка не считалась фильтром. «Всё про компанию» показывало пересечение с ней, «Сбросить» её не
+  // снимал, а карточки плитки надо было раскрывать.
+  it("нажатая плитка тоже фильтр: группы раскрыты, клик по компании и «Сбросить» её снимают", async () => {
+    renderFeed();
+    await screen.findByRole("button", { name: "Развернуть всё" });
+    const fresh = screen.getByRole("button", { name: /Новые за 7 дней/ });
+    // Без фильтров блоки тем свёрнуты.
+    expect(screen.queryByText("SLB запустила установку мехдобычи")).not.toBeInTheDocument();
+
+    fireEvent.click(fresh);
+
+    await waitFor(() => expect(lastListQuery().tile).toBe("new_7d"));
+    const card = await cardOf("SLB получила контракт Saudi Aramco на бурение");
+    expect(screen.getByText("SLB запустила установку мехдобычи")).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "SLB" }));
+
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB" }));
+    expect(lastListQuery().tile).toBeUndefined();
+    expect(fresh).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(fresh);
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB", tile: "new_7d" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+
+    await waitFor(() => expect(lastListQuery().tile).toBeUndefined());
+    expect(lastListQuery().company).toBeUndefined();
+    expect(fresh).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("пусто под плиткой: её текст только без других условий, кнопка снимает всё", async () => {
+    const rows = vi.mocked(listSignals).getMockImplementation()!;
+    vi.mocked(listSignals).mockImplementation(async (query: SignalQuery = {}) => (query.tile ? [] : rows(query)));
+    renderFeed();
+    await screen.findByRole("button", { name: "Развернуть всё" });
+    const showAll = () => screen.getByRole("button", { name: "Показать все сигналы" });
+
+    fireEvent.click(screen.getByRole("button", { name: /С обратной связью/ }));
+
+    expect(await screen.findByText("Сигналов с обратной связью здесь нет.")).toBeInTheDocument();
+    expect(showAll()).toBeInTheDocument();
+
+    // Плитка не пуста, пусто её пересечение с темой: текст плитки был бы неправдой.
+    fireEvent.change(screen.getByRole("combobox", { name: /^Тема/ }), { target: { value: "Бурение" } });
+
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ tile: "with_feedback", theme: "Бурение" }));
+    expect(await screen.findByText("Сигналов по выбранным фильтрам нет.")).toBeInTheDocument();
+    expect(screen.queryByText("Сигналов с обратной связью здесь нет.")).not.toBeInTheDocument();
+
+    fireEvent.click(showAll());
+
+    await waitFor(() => expect(lastListQuery().tile).toBeUndefined());
+    expect(lastListQuery().theme).toBeUndefined();
+    expect(await screen.findByRole("button", { name: "Развернуть всё" })).toBeInTheDocument();
   });
 });
