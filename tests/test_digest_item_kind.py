@@ -12,6 +12,7 @@ import time
 
 from docx import Document
 from fastapi.testclient import TestClient
+import pytest
 
 from oiltech_digest import api
 from oiltech_digest.db import repository
@@ -137,4 +138,70 @@ def test_preview_pdf_builds_one_issue_once_and_one_at_a_time(monkeypatch):
     for month in ("2026-06", "2026-07", "2026-08", "2026-09"):
         digest.render_digest_preview_pdf({"month": month, "news": []})
     assert len(digest._PREVIEW_PDF_CACHE) == 4
+
+
+def test_preview_pdf_refuses_readably_while_a_build_holds_the_lock(monkeypatch):
+    """Ревью PR #155: у печати Chromium предела нет, зависшая сборка держит замок. Запрос ждёт не дольше предела и
+    получает понятный отказ: иначе каждое открытие экрана навсегда занимало бы поток API, и на 40-м вставал весь API."""
+    _stub(monkeypatch, [_row(1)])
+    lock = threading.Lock()
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_LOCK", lock)
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_CACHE", OrderedDict())
+    monkeypatch.setattr(digest, "render_digest_pdf", lambda content: b"%PDF-1.4 preview")
+    api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "role": "user"}
+    client = TestClient(api.app)
+    try:
+        with lock:
+            refused = client.get("/api/digest-preview.pdf", params={"month": "2026-10"})
+        served = client.get("/api/digest-preview.pdf", params={"month": "2026-10"})
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+
+    assert refused.status_code == 503
+    assert refused.json()["detail"] == "PDF сейчас собирается. Повторите через минуту."
+    assert served.status_code == 200, served.text
+    assert served.content == b"%PDF-1.4 preview"
+
+
+def test_failed_preview_build_does_not_keep_the_lock(monkeypatch):
+    def broken(content):
+        raise RuntimeError("Браузер не смог собрать PDF. Повторите через минуту.")
+
+    lock = threading.Lock()
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_LOCK", lock)
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_CACHE", OrderedDict())
+    monkeypatch.setattr(digest, "render_digest_pdf", broken)
+
+    with pytest.raises(RuntimeError, match="Браузер не смог"):
+        digest.render_digest_preview_pdf({"month": "2026-10", "news": []})
+
+    assert not lock.locked()
+
+
+def test_browser_failure_is_a_readable_refusal_not_500(monkeypatch, caplog):
+    """Ревью PR #155: ошибка Playwright не наследует RuntimeError, упавший Chromium давал 500 и «Internal Server
+    Error». Человеку понятный отказ, причина в журнале."""
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    class CrashedBrowser:
+        def __enter__(self):
+            raise playwright.Error("Target crashed")
+
+        def __exit__(self, *exc):
+            return False
+
+    _stub(monkeypatch, [_row(1)])
+    monkeypatch.setattr(playwright, "sync_playwright", CrashedBrowser)
+    monkeypatch.setattr(digest, "_PREVIEW_PDF_CACHE", OrderedDict())
+    api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "role": "user"}
+    try:
+        with caplog.at_level("ERROR", logger=digest.__name__):
+            response = TestClient(api.app).get("/api/digest-preview.pdf", params={"month": "2026-10"})
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Браузер не смог собрать PDF. Повторите через минуту."
+    assert "Target crashed" in caplog.text
 

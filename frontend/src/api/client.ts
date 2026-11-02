@@ -89,7 +89,7 @@ export async function apiDownload(path: string, init: RequestInit = {}) {
     try {
       const text = await response.text();
       if (text) {
-        message = text;
+        message = readableErrorMessage(text);
       }
     } catch {
       // ignore text parsing failure
