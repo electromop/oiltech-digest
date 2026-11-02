@@ -220,6 +220,29 @@ describe("экран выпуска: какой месяц открыт по у�
     });
   });
 
+  it("у материала без балла в очереди «без баллов», а не «0», как на витринах", async () => {
+    openMonths = ["2026-09"];
+    archive = [];
+    marked = [{ ...september, score: 0 }];
+    news = [
+      { item_type: "article", article_id: 901, category: "Бурение", title: september.title, summary: "", url: september.url },
+      { item_type: "signal", signal_id: 77, article_id: null, category: "Цифровизация", title: "Находка без баллов",
+        summary: "Суть находки.", url: "https://radar.example/77", score: 0 },
+      { item_type: "signal", signal_id: 78, article_id: null, category: "Цифровизация", title: "Оценённая находка",
+        summary: "Суть находки.", url: "https://radar.example/78", score: 81 },
+    ];
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+    await waitFor(() => expect(screen.getByText("Оценённая находка").closest("li")).not.toBeNull());
+    const rows = screen.getAllByRole("listitem").filter((row) => row.classList.contains("digestPickRow"));
+    for (const row of rows.slice(0, 2)) {
+      expect(within(row).getByText("без баллов")).toBeInTheDocument();
+      expect(within(row).queryByText("0")).not.toBeInTheDocument();
+    }
+    expect(within(rows[2]).getByText("81").closest(".scoreBadge")).not.toBeNull();
+    expect(within(rows[2]).queryByText("без баллов")).not.toBeInTheDocument();
+  });
+
   describe("предпросмотр — сразу PDF", () => {
     let created = 0;
     beforeEach(() => {

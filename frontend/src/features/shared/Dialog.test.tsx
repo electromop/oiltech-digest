@@ -38,4 +38,22 @@ describe("подокно", () => {
     fireEvent(dialog, new Event("cancel", { cancelable: true }));
     expect(onClose).toHaveBeenCalledTimes(2);
   });
+
+  // Отмена в окне выбора файла всплывает от поля тем же событием cancel и закрывала подокно вместе с заполненной
+  // формой (ревью PR #155).
+  it("отмена выбора файла в поле подокна его не закрывает", () => {
+    const onClose = vi.fn();
+    render(
+      <Dialog open title="Внести материал" onClose={onClose}>
+        <label>
+          Файл
+          <input type="file" />
+        </label>
+      </Dialog>,
+    );
+
+    fireEvent(screen.getByLabelText("Файл"), new Event("cancel", { bubbles: true, cancelable: true }));
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
