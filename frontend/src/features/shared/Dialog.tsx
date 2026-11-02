@@ -37,6 +37,8 @@ export function Dialog({ open, title, onClose, children, wide = false }: Props) 
       className={wide ? "dialog dialogWide" : "dialog"}
       aria-labelledby={titleId}
       onCancel={(event) => {
+        // Отмена в окне выбора файла всплывает от поля тем же событием: подокно закрывает только его собственная.
+        if (event.target !== event.currentTarget) return;
         event.preventDefault();
         onClose();
       }}

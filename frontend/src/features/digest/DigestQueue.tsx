@@ -67,6 +67,17 @@ function formatDate(value: string | null) {
   return value ? new Date(`${value}T00:00:00`).toLocaleDateString("ru-RU") : "—";
 }
 
+// Балла ещё нет (приняла «Отбор», «Карточка» не оценила): «без баллов», как на витринах (#132), а не «0».
+function ScoreMark({ score, title }: { score?: number | null; title: string }) {
+  const value = Number(score || 0);
+  if (value <= 0) return <span className="miniPill muted" title="Баллов пока нет">без баллов</span>;
+  return (
+    <span className={`scoreBadge ${scoreClass(value)}`} title={title}>
+      <strong>{Math.round(value)}</strong>
+    </span>
+  );
+}
+
 // Плашка «Технология / Бизнес» у материала выпуска (решение владельца 23.10) — та же, что в самом выпуске.
 export function KindBadge({ kind }: { kind?: ItemKind }) {
   if (!kind?.kind || !kind.label) return null;
@@ -104,9 +115,7 @@ export function DigestQueue(props: Props) {
                   <strong>{article.title}</strong>
                 </a>
               </div>
-              <span className={`scoreBadge ${scoreClass(Number(article.score || 0))}`} title="Балл материала">
-                <strong>{Math.round(Number(article.score || 0))}</strong>
-              </span>
+              <ScoreMark score={article.score} title="Балл материала" />
             </div>
             <p className="digestPickSummary">{issueItems.get(article.id)?.summary || article.summary || "Суть ещё не сформирована."}</p>
             <div className="digestPickFooter">
@@ -156,9 +165,7 @@ export function DigestQueue(props: Props) {
                   <strong>{item.title}</strong>
                 </a>
               </div>
-              <span className={`scoreBadge ${scoreClass(Number(item.score || 0))}`} title="Балл сигнала">
-                <strong>{Math.round(Number(item.score || 0))}</strong>
-              </span>
+              <ScoreMark score={item.score} title="Балл сигнала" />
             </div>
             <p className="digestPickSummary">{item.summary || "Суть ещё не сформирована."}</p>
             <div className="digestPickFooter">

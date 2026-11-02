@@ -1040,6 +1040,7 @@ def render_digest_pdf(content: dict) -> bytes:
     if font_style:
         html_str = html_str.replace("</head>", font_style + "</head>", 1)
     try:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - depends on optional dep
@@ -1048,39 +1049,45 @@ def render_digest_pdf(content: dict) -> bytes:
             "pip install playwright && python -m playwright install --with-deps chromium"
         ) from exc
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(args=["--no-sandbox"])
-        try:
-            page = browser.new_page()
-            page.set_content(html_str, wait_until="domcontentloaded")
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(args=["--no-sandbox"])
             try:
-                page.wait_for_load_state("load", timeout=_PDF_IMAGES_WAIT_MS)
-            except PlaywrightTimeoutError:
-                pass  # недогрузившиеся картинки заменит плашка ниже
-            # Сайт, закрытый для РФ-адресов, отвечает на картинку сразу 403: загрузка кончается
-            # вовремя, а в карточке выходил значок «битой» картинки с повтором заголовка.
-            # Порядок картинок карточек = порядок новостей: у каждой карточки одна.
-            replaced = page.evaluate(
-                _PDF_SWAP_UNLOADED_IMAGES_JS,
-                [_news_placeholder_data_uri(item.get("category")) for item in content.get("news", [])],
-            )
-            if replaced:
-                logger.warning("digest_pdf_images_replaced count=%s", replaced)
-            pdf_bytes = page.pdf(
-                format="A4",
-                print_background=True,
-                # Нумерация страниц — просьба заказчика 25.08. Chromium рисует её
-                # только при display_header_footer, и только в ПОЛЯХ страницы:
-                # при нижнем поле 0 колонтитул физически некуда положить, поэтому
-                # снизу появляется 12 мм. Верхнее поле остаётся нулевым, чтобы
-                # hero-баннер по-прежнему упирался в край листа.
-                display_header_footer=True,
-                header_template="<div></div>",
-                footer_template=_PDF_FOOTER_TEMPLATE,
-                margin={"top": "0", "bottom": "12mm", "left": "0", "right": "0"},
-            )
-        finally:
-            browser.close()
+                page = browser.new_page()
+                page.set_content(html_str, wait_until="domcontentloaded")
+                try:
+                    page.wait_for_load_state("load", timeout=_PDF_IMAGES_WAIT_MS)
+                except PlaywrightTimeoutError:
+                    pass  # недогрузившиеся картинки заменит плашка ниже
+                # Сайт, закрытый для РФ-адресов, отвечает на картинку сразу 403: загрузка кончается
+                # вовремя, а в карточке выходил значок «битой» картинки с повтором заголовка.
+                # Порядок картинок карточек = порядок новостей: у каждой карточки одна.
+                replaced = page.evaluate(
+                    _PDF_SWAP_UNLOADED_IMAGES_JS,
+                    [_news_placeholder_data_uri(item.get("category")) for item in content.get("news", [])],
+                )
+                if replaced:
+                    logger.warning("digest_pdf_images_replaced count=%s", replaced)
+                pdf_bytes = page.pdf(
+                    format="A4",
+                    print_background=True,
+                    # Нумерация страниц — просьба заказчика 25.08. Chromium рисует её
+                    # только при display_header_footer, и только в ПОЛЯХ страницы:
+                    # при нижнем поле 0 колонтитул физически некуда положить, поэтому
+                    # снизу появляется 12 мм. Верхнее поле остаётся нулевым, чтобы
+                    # hero-баннер по-прежнему упирался в край листа.
+                    display_header_footer=True,
+                    header_template="<div></div>",
+                    footer_template=_PDF_FOOTER_TEMPLATE,
+                    margin={"top": "0", "bottom": "12mm", "left": "0", "right": "0"},
+                )
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        # Упал или не запустился сам браузер: ошибка Playwright не RuntimeError, и экран получал 500 (ревью PR #155).
+        # Человеку понятный текст, причина в журнале.
+        logger.exception("digest_pdf_browser_failed")
+        raise RuntimeError("Браузер не смог собрать PDF. Повторите через минуту.") from exc
     return pdf_bytes
 
 
@@ -1090,6 +1097,9 @@ def render_digest_pdf(content: dict) -> bytes:
 _PREVIEW_PDF_LOCK = threading.Lock()
 _PREVIEW_PDF_CACHE: OrderedDict[str, bytes] = OrderedDict()
 _PREVIEW_PDF_CACHE_SIZE = 4
+# Сколько запрос ждёт чужую сборку (обычная идёт 5-20 секунд). У печати Chromium предела нет: зависшая сборка держит
+# замок до перезапуска, и запрос без предела навсегда занимал бы поток API, а их 40 на все ручки (ревью PR #155).
+_PREVIEW_PDF_WAIT_SECONDS = 60
 
 
 def render_digest_preview_pdf(content: dict) -> bytes:
@@ -1098,7 +1108,9 @@ def render_digest_preview_pdf(content: dict) -> bytes:
     Ключ — содержание выпуска целиком (состав, тексты, оформление): сменился черновик, отметка или фильтр — другой
     ключ и новая сборка; тот же выпуск — готовые байты без Chromium."""
     key = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
-    with _PREVIEW_PDF_LOCK:
+    if not _PREVIEW_PDF_LOCK.acquire(timeout=_PREVIEW_PDF_WAIT_SECONDS):
+        raise RuntimeError("PDF сейчас собирается. Повторите через минуту.")
+    try:
         cached = _PREVIEW_PDF_CACHE.get(key)
         if cached is not None:
             _PREVIEW_PDF_CACHE.move_to_end(key)
@@ -1108,6 +1120,8 @@ def render_digest_preview_pdf(content: dict) -> bytes:
         while len(_PREVIEW_PDF_CACHE) > _PREVIEW_PDF_CACHE_SIZE:
             _PREVIEW_PDF_CACHE.popitem(last=False)
         return pdf_bytes
+    finally:
+        _PREVIEW_PDF_LOCK.release()
 
 
 def _fetch_docx_image(url: str | None, timeout: float = 8) -> bytes | None:

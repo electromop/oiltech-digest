@@ -2312,7 +2312,7 @@ def digest_preview_pdf(month: str = "", limit: int = Query(100, ge=1, le=500),
     )
     try:
         pdf = render_digest_preview_pdf(content)
-    except RuntimeError as exc:  # нет Chromium и т.п. — понятное сообщение, не 500
+    except RuntimeError as exc:  # нет Chromium, занят сборкой, браузер упал — понятное сообщение, не 500
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(
         content=pdf,
