@@ -23,12 +23,14 @@ from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT, FeedWindow
 # Вид задачи агента и стадия его расхода в ai_processing_runs.
 KIND = "signal_card"
 # Поле карточки → колонки signals; первая колонка решает, пусто ли поле. Связь с нефтесервисом и применение с #132
-# ставит «Отбор»: «Карточка» их больше не пишет, прежние значения остаются.
+# ставит «Отбор»: «Карточка» их больше не пишет, прежние значения остаются. Страна участника (#137) — в его записи
+# participants_json и пишется вместе с участниками: у участников человека её нет.
 CARD_COLUMNS: dict[str, tuple[str, ...]] = {
     "event_date": ("event_date", "event_date_source", "event_date_precision"),
     "participants": ("participants_json",),
     "event_type": ("event_type",),
     "region": ("region",),
+    "event_countries": ("event_countries",),
     "technology_class": ("technology_class",),
     "technology_maturity": ("technology_maturity",),
     "why_interesting": ("why_interesting",),
@@ -43,8 +45,7 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
     экзамен (#98) сверяет агента с разметкой того же текста. Дата публикации — как в пакете: у находки
     «режима ChatGPT» дата ссылки — это дата события по версии модели, публикационной даты у неё нет.
     publisher_type — тип источника из справочника источников (Media, Company…); у находки без статьи
-    корпуса его нет. Суть — сигнала (#132: вход «Карточки»), дата поступления — для возраста события без даты
-    публикации."""
+    корпуса его нет. Дата поступления — для возраста события без даты публикации."""
     from oiltech_digest.signal_research import EVIDENCE_SOURCE
 
     ids = sorted({int(value) for value in signal_ids})
@@ -54,7 +55,7 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category, s.summary,
+            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
                    'article:' || a.id AS publication, a.title, a.raw_text AS text,
                    COALESCE(a.published_at, a.collected_at) AS published, a.collected_at AS received,
                    src.name AS publisher, src.source_type AS publisher_type
@@ -69,7 +70,7 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
         cur.execute(
             f"""
             SELECT DISTINCT ON (s.id)
-                   s.id AS signal_id, s.origin, s.theme, s.signal_category AS category, s.summary,
+                   s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
                    s.first_seen_at AS received, 'evidence:' || e.id AS publication,
                    COALESCE(a.title, e.title) AS title, COALESCE(a.raw_text, e.extracted_fact) AS text,
                    CASE WHEN a.id IS NOT NULL THEN COALESCE(a.published_at, a.collected_at)
@@ -92,7 +93,7 @@ def card_inputs(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
         # Материал коллеги (#131): публикация — сам материал, как во входе «Отбора».
         cur.execute(
             f"""
-            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category, s.summary,
+            SELECT s.id AS signal_id, s.origin, s.theme, s.signal_category AS category,
                    'material:' || m.id AS publication, m.title, m.description, m.url, m.file_path,
                    m.created_at AS published, m.created_at AS received
             FROM signals s
@@ -125,8 +126,8 @@ _PAST_OTBOR_SQL = (
 # С какого времени сигнал «новый» для шагов конвейера (#132): с принятия «Отбором» или человеком — отказ и возврат
 # могли быть давно; у решённого до «Отбора» — с заведения.
 PIPELINE_SINCE_SQL = "COALESCE(s.accepted_at, s.created_at)"
-# Сигнал после «Отбора» карточку ждёт до сути (#132: на входе «Карточки» суть и категория): её дают обработка ленты
-# (мост «лента → сигнал») и «Суть и перевод». Решённое до «Отбора» — как раньше.
+# Сигнал после «Отбора» карточку ждёт до сути: порядок конвейера (решение гриля 4), хотя сама суть в основной вызов с
+# 01.11 не идёт. Её дают обработка ленты (мост «лента → сигнал») и «Суть и перевод». Решённое до «Отбора» — как раньше.
 _READY_SQL = f"({_PAST_OTBOR_SQL} AND (s.otbor_decision IS NULL OR COALESCE(btrim(s.summary), '') <> ''))"
 _RADAR_OR_MATERIAL_SQL = f"({radar_origin_sql('s')} OR s.origin = '{SIGNAL_ORIGIN_MATERIAL}')"
 

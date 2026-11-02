@@ -14,7 +14,13 @@ from oiltech_digest import config, scoring_profiles
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block, mixed_script_words
-from oiltech_digest.processing.openai_client import AIClientError, AIResponse, OfflineAIClient, OpenAIResponsesClient
+from oiltech_digest.processing.openai_client import (
+    AIClientError,
+    AIResponse,
+    OfflineAIClient,
+    OpenAIResponsesClient,
+    output_budget,
+)
 from oiltech_digest.processing.prompts import (
     RELEVANCE_INSTRUCTIONS,
     RELEVANCE_SCHEMA,
@@ -346,7 +352,9 @@ def summarize_article(article: dict, client) -> AIResponse:
             SUMMARY_INSTRUCTIONS,
             prompt + extra,
             SUMMARY_SCHEMA,
-            max_output_tokens=1200,
+            max_output_tokens=output_budget(1200, config.OPENAI_SUMMARY_REASONING),
+            model=config.OPENAI_SUMMARY_MODEL,
+            reasoning_effort=config.OPENAI_SUMMARY_REASONING,
         ),
         "summary",
         article,
@@ -429,7 +437,7 @@ def translate_article(article: dict, client) -> AIResponse:
             TRANSLATE_INSTRUCTIONS,
             prompt + extra,
             TRANSLATE_SCHEMA,
-            max_output_tokens=300,
+            max_output_tokens=output_budget(300, config.OPENAI_TRANSLATE_REASONING),
             model=config.OPENAI_TRANSLATE_MODEL,
             reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
         ),

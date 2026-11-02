@@ -1,16 +1,16 @@
 """Агент «Карточка сигнала» (#96, спека #93, ADR 0003): атрибуты карточки по тексту главной публикации.
 
 Один вызов модели на сигнал, без инструментов и без выхода в сеть, — не автономный агент: путь
-известен, обязательное проверяет код. Ядро собирает пакет при выдаче задачи (тексты, суть,
-категория, справочники, тематики), воркер без базы зовёт модель со справочниками в каждом вызове и
+известен, обязательное проверяет код. Ядро собирает пакет при выдаче задачи (тексты, категория,
+справочники, тематики), воркер без базы зовёт модель со справочниками в каждом вызове и
 возвращает ответы как есть, ядро проверяет их кодом и записывает: ответ воркера — недоверенный
 ввод. Модель — явная настройка агента (SIGNAL_CARD_MODEL), без отката на модель ленты: едет в
 задаче и попадает в рецепт карточки вместе с версией инструкции и справочников.
 
 С #132 (спека #128) — основной вызов «Карточки» в конвейере «Отбора»: тема (одна из 13 тематик заказчика, три
 кандидата по ключам — signal_themes), дата события с точностью (день, месяц или год). Связь с нефтесервисом и
-применение ставит «Отбор», смешанность — тоже не «Карточка». На входе суть и категория, решения, причины и
-обоснования «Отбора» нет. Дата события из текста старше OTBOR_OLD_EVENT_DAYS у принятой «Отбором» публикации
+применение ставит «Отбор», смешанность — тоже не «Карточка». На входе категория; сути нет (экзамен 01.11:
+короткая суть сбивала тему, её читает второй вызов), решения, причины и обоснования «Отбора» нет. Дата события из текста старше OTBOR_OLD_EVENT_DAYS у принятой «Отбором» публикации
 возвращает её в «Отбор» с этим фактом, один раз (card_return). Баллы — второй вызов (signal_scores).
 """
 
@@ -24,12 +24,13 @@ from oiltech_digest.db import repository, signal_card_store
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
+from oiltech_digest.signal_card_countries import Countries
 from oiltech_digest.signal_card_pack import (CATEGORY_RU, CHOICE_DICTIONARIES, UNDEFINED, load_dictionaries,
                                              publication_day, publication_text)
 
 KIND = signal_card_store.KIND
 # Версия инструкции — в рецепте карточки: другая инструкция — другие карточки.
-PROMPT_VERSION = "2026-10-25.1"
+PROMPT_VERSION = "2026-11-01.1"
 _OUTPUT_TOKENS = 1200
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source")
@@ -121,7 +122,7 @@ def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
 
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
-    """Самодостаточный пакет для воркера без базы: публикации с сутью и категорией, справочники, имена 13 тематик и
+    """Самодостаточный пакет для воркера без базы: публикации с категорией, справочники, имена 13 тематик и
     у каждой публикации — темы-кандидаты по ключам (#132)."""
     tags = repository.list_enabled_tags()
     rows = signal_card_store.card_inputs(job_payload.get("signal_ids") or [])
@@ -136,7 +137,7 @@ def payload_signal(row: dict[str, Any], tags: list[dict[str, Any]]) -> dict[str,
     """Сигнал во входе модели (строка card_inputs → пакет воркера): главная публикация, как её видит модель, и
     темы-кандидаты по ключам. Той же функцией вход строит экзамен (#133): мерится тот же вход."""
     publication = _publication(row)
-    text = " ".join([publication["title"], publication["summary"], publication["text"]])
+    text = " ".join([publication["title"], publication["text"]])
     return {**{key: value for key, value in publication.items() if key != "received"},
             "published": publication["published"].isoformat() if publication["published"] else None,
             "theme_candidates": signal_themes.candidates(text, tags)}
@@ -144,7 +145,7 @@ def payload_signal(row: dict[str, Any], tags: list[dict[str, Any]]) -> dict[str,
 
 def _publication(row: dict[str, Any]) -> dict[str, Any]:
     """Главная публикация сигнала так, как её видит модель, — по ней же ядро сверяет ответ: тот же
-    текст (publication_text), издатель, дата публикации днём по UTC, суть сигнала. Дата поступления — для
+    текст (publication_text), издатель, дата публикации днём по UTC. Дата поступления — для
     возраста события, когда даты публикации нет (#132); модель её не видит."""
     published, received = publication_day(row.get("published")), publication_day(row.get("received"))
     return {
@@ -156,7 +157,6 @@ def _publication(row: dict[str, Any]) -> dict[str, Any]:
         "received": date.fromisoformat(received) if received else None,
         "publisher": row.get("publisher") or "",
         "publisher_type": row.get("publisher_type") or "",
-        "summary": publication_text(row.get("summary")),
         # Без категории — находка радара до 29.09: радар показывает её как технологию.
         "category": CATEGORY_RU.get(row.get("category") or "technology", UNDEFINED),
     }
@@ -217,7 +217,11 @@ _TASK = """Ты заполняешь карточку сигнала — соб�
   продаёт, инвестирует. Издание, которое о событии сообщает, и компании, упомянутые мимоходом, — не
   участники; компания, которая сама сообщает о своём событии, — участник. Для каждой: name —
   название компании; quote — ДОСЛОВНЫЙ фрагмент текста (без изменений, до 30 слов), где она названа
-  участником. Участников нет — пустой список.
+  участником; country — страна компании коротким русским названием: по тексту, иначе по общеизвестной
+  штаб-квартире; не знаешь — пустая строка. Участников нет — пустой список.
+- event_countries — страны события коротким русским названием («Россия», «США», «ОАЭ»), до трёх: где
+  событие произошло; место в тексте не названо — страна главного участника, как у региона; понять
+  нельзя — пустой список.
 - event_type, region, technology_class, maturity — строго одно значение из справочника ниже,
   буквально. Не подходит ни одно — «не определено».
 - theme — тематика заказчика, к которой событие относится по содержанию: строго одна из списка ниже,
@@ -232,7 +236,7 @@ def _instructions(dictionaries: dict[str, Any], themes: list[str]) -> str:
         block = dictionaries.get(field) or {}
         rule = f" ({block['rule']})" if block.get("rule") else ""
         lines.append(f"- {field} — {block.get('title', field)}{rule}: " + "; ".join(_values(dictionaries, field)))
-    lines.append("- theme — тематики заказчика: " + "; ".join(themes))
+    lines += ["- theme — тематики заказчика: " + "; ".join(themes), *signal_themes.rules(themes)]
     return "\n".join(lines)
 
 
@@ -245,9 +249,11 @@ def _answer_schema(dictionaries: dict[str, Any], themes: list[str]) -> dict[str,
         "event_date": {"type": "string"},
         "event_date_source": enum("date_source"),
         "companies": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["name", "quote"],
-            "properties": {"name": {"type": "string"}, "quote": {"type": "string"}},
+            "type": "object", "additionalProperties": False, "required": ["name", "quote", "country"],
+            "properties": {"name": {"type": "string"}, "quote": {"type": "string"}, "country": {"type": "string"}},
         }},
+        # Страны — без перечня: полного списка модель не видит, имя сводит к справочнику код (#137).
+        "event_countries": {"type": "array", "items": {"type": "string"}},
         **{field: enum(field) for field in CHOICE_DICTIONARIES},
         "theme": {"type": "string", "enum": [*themes, UNDEFINED]},
         "why_important": {"type": "string"},
@@ -274,7 +280,6 @@ def _model_input(item: dict[str, Any]) -> str:
         f"Издатель: {item.get('publisher') or 'не указан'}",
         f"Дата публикации: {item.get('published') or 'не указана'}",
         f"Категория: {item.get('category') or UNDEFINED}",
-        f"Суть: {item.get('summary') or 'не указана'}",
         "Темы-кандидаты по ключам: " + ("; ".join(item.get("theme_candidates") or []) or "нет"),
         "Текст публикации:",
         item.get("text") or "",
@@ -373,7 +378,10 @@ def _shape_problem(answer: Any, schema: dict[str, Any]) -> str | None:
         value = answer.get(field)
         if spec["type"] == "string" and not isinstance(value, str):
             return f"нет строки {field}"
-        if spec["type"] == "array":
+        if spec["type"] == "array" and spec["items"]["type"] == "string":
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                return f"{field}: не список строк"
+        elif spec["type"] == "array":
             required = spec["items"]["required"]
             if not isinstance(value, list) or not all(
                 isinstance(item, dict) and all(isinstance(item.get(key), str) for key in required) for item in value
@@ -415,15 +423,18 @@ def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionari
                  themes: list[str]) -> dict[str, Any]:
     """Ответ модели → значения карточки. Значение не из справочника — «не определено»; компания без
     цитаты из текста публикации и издание-издатель отбрасываются, написания одной компании (word_forms.Companies)
-    сводятся к одному участнику. Тема не из 13 тематик — не тема: None, карточка её не пишет."""
+    сводятся к одному участнику. Тема не из 13 тематик — не тема: None, карточка её не пишет. Страна (#137) — имя
+    справочника стран, чужая отбрасывается (signal_card_countries)."""
     source = _listed(dictionaries, "date_source", answer["event_date_source"])
     event_date, source, precision = event_dates.from_answer(answer["event_date"], source, publication["published"],
                                                             UNDEFINED)
+    countries = Countries(dictionaries)
     return {
         "event_date": event_date,
         "event_date_source": source,
         "event_date_precision": precision,
-        "participants_json": _participants(answer["companies"], publication, dictionaries),
+        "participants_json": _participants(answer["companies"], publication, dictionaries, countries),
+        "event_countries": countries.event(answer["event_countries"]),
         **{column: _listed(dictionaries, key, answer[key]) for column, key in CHOICE_COLUMNS.items()},
         "theme": next((name for name in themes if _plain(name) == _plain(answer["theme"])), None),
         # «Почему важно нефтесервису» — в прежнем поле судьи «почему интересно».
@@ -431,8 +442,8 @@ def check_answer(answer: dict[str, Any], publication: dict[str, Any], dictionari
     }
 
 
-def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
-                  dictionaries: dict[str, Any]) -> list[dict[str, Any]]:
+def _participants(companies: list[dict[str, str]], publication: dict[str, Any], dictionaries: dict[str, Any],
+                  countries: Countries) -> list[dict[str, Any]]:
     """Участник — только с дословной цитатой из текста публикации, в которой он назван под любым своим
     написанием (verified — проверено кодом): цитата, где компании нет, — догадка модели, а не участник, как и
     цитата, где её имя стоит только внутри имени другой компании справочника («Газпром» в «Газпром нефть»), и
@@ -441,7 +452,8 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
     сама публикует свою новость, — считается: в её пресс-релизе она главный участник. Одна ли это компания —
     по правилу word_forms.Companies: «PDO signed» называет «Petroleum Development Oman (PDO)», пояснение в скобках
     в имя не входит, «Equinor ASA» — это «Equinor» справочника; повтор под другим написанием отбрасывается, и
-    издатель — под любым написанием. Имя участника — имя записи справочника, вне справочника — как дала модель."""
+    издатель — под любым написанием. Имя участника — имя записи справочника, вне справочника — как дала модель.
+    Страна участника (#137) — при нём: имя справочника стран или None (модель не знает, страны нет в справочнике)."""
     entries = dictionaries.get("companies") or []
     rule = word_forms.companies(entries)
     text = word_forms.quote_form(publication["text"])
@@ -456,7 +468,8 @@ def _participants(companies: list[dict[str, str]], publication: dict[str, Any],
             continue
         if rule.same(name, reporter) or any(rule.same(name, other["name"]) for other in kept):
             continue
-        kept.append({"name": name, "quote": quote, "verified": True})
+        kept.append({"name": name, "quote": quote, "verified": True,
+                     "country": countries.canonical(company["country"])})
     return kept
 
 

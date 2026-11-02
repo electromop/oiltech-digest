@@ -24,7 +24,7 @@ import { radarDigestLockedText } from "../articles/feedWindow";
 import { ratingClass, scoreClass } from "../shared/scoreScale";
 import { SkeletonList } from "../shared/Skeleton";
 import { PROFILES } from "../scoring/ScoringPage";
-import { CHOICE_FIELDS, SignalAttributes, SignalCardLine, whyBlock } from "./SignalCardChips";
+import { CHOICE_FIELDS, COUNTRY_FILTER, SignalAttributes, SignalCardLine, whyBlock } from "./SignalCardChips";
 import { SignalDecisionLog } from "./SignalDecisionLog";
 import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
@@ -346,6 +346,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       region: cardFilters.region || undefined,
       technologyClass: cardFilters.technologyClass || undefined,
       technologyMaturity: cardFilters.technologyMaturity || undefined,
+      country: cardFilters.country || undefined,
       company: cardFilters.company.trim() || undefined,
       tile: !showHidden && tile ? tile : undefined,
     }),
@@ -725,6 +726,12 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     ...CHOICE_FIELDS.filter(({ filter }) => cardFilters[filter]).map(({ filter, label }) => ({
       key: filter, label: `${label}: ${cardFilters[filter]}`, clear: () => updateCardFilters({ [filter]: "" }),
     })),
+    ...(cardFilters.country
+      ? [{
+          key: "country", label: `${COUNTRY_FILTER.label}: ${cardFilters.country}`,
+          clear: () => updateCardFilters({ country: "" }),
+        }]
+      : []),
     ...(cardFilters.company.trim()
       ? [{ key: "company", label: `Компания: ${cardFilters.company.trim()}`, clear: () => updateCardFilters({ company: "" }) }]
       : []),

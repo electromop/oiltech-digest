@@ -40,15 +40,15 @@ class Inputs:
         self.themes = signal_themes.names(self.tags)
         self.dictionaries = card_dictionaries()
 
-    def card_row(self, row: dict[str, Any], summary: str | None) -> dict[str, Any]:
+    def card_row(self, row: dict[str, Any]) -> dict[str, Any]:
         """Строка экзамена как строка ядра для основного вызова (signal_card_store.card_inputs)."""
         return {"signal_id": 0, "publication": row["id"], "title": row["title"], "text": row["text"],
                 "published": row["published"], "received": row["received"], "publisher": row["publisher"],
-                "publisher_type": row["publisher_type"], "summary": summary, "category": row["category"]}
+                "publisher_type": row["publisher_type"], "category": row["category"]}
 
     def card_values(self, row: dict[str, Any], card: dict[str, Any]) -> dict[str, Any] | None:
         """Значения карточки, как их записало бы ядро (signal_card.card_values); None — карточки нет."""
-        publication = signal_card._publication(self.card_row(row, None))
+        publication = signal_card._publication(self.card_row(row))
         return signal_card.card_values(card, publication, self.dictionaries, self.themes)[0]
 
     def context(self, row: dict[str, Any], summary: str, card: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -140,12 +140,12 @@ class Calls:
 
     # --- Основной вызов ---
 
-    def cards(self, rows: list[dict[str, Any]], summaries: dict[str, str], runs: int) -> dict[str, list[dict]]:
+    def cards(self, rows: list[dict[str, Any]], runs: int) -> dict[str, list[dict]]:
         """Ответы основного вызова по прогонам; сбой — одна повторная попытка. В файл идёт только ответ с карточкой."""
         path = self.inputs.folder / CARDS_NAME
         stored = _read(path)
         by_run = stored.setdefault(self.card_model, {})
-        signals, fingerprints, _ = self._card_requests(rows, summaries)
+        signals, fingerprints, _ = self._card_requests(rows)
         payload = {"model": self.card_model, "reasoning": config.SIGNAL_CARD_REASONING,
                    "dictionaries": self.inputs.dictionaries, "themes": self.inputs.themes}
         found: dict[str, list[dict[str, Any]]] = {row["id"]: [] for row in rows}
@@ -167,18 +167,17 @@ class Calls:
         _write(path, stored)
         return found
 
-    def card_todo(self, rows: list[dict[str, Any]], summaries: dict[str, str], runs: int) -> tuple[int, int]:
+    def card_todo(self, rows: list[dict[str, Any]], runs: int) -> tuple[int, int]:
         """Сколько вызовов основного вызова нужно (без ответов в файле рядом с манифестом) и их длина в знаках."""
         by_run = _read(self.inputs.folder / CARDS_NAME).get(self.card_model) or {}
-        _, fingerprints, chars = self._card_requests(rows, summaries)
+        _, fingerprints, chars = self._card_requests(rows)
         todo = [row for run in range(1, runs + 1) for row in _missing(rows, by_run.get(str(run)) or {}, fingerprints)]
         return len(todo), sum(chars[row["id"]] for row in todo)
 
-    def _card_requests(self, rows: list[dict[str, Any]],
-                       summaries: dict[str, str]) -> tuple[dict[str, dict[str, Any]], dict[str, str], dict[str, int]]:
+    def _card_requests(self, rows: list[dict[str, Any]]
+                       ) -> tuple[dict[str, dict[str, Any]], dict[str, str], dict[str, int]]:
         """Вход основного вызова по строкам — кодом ядра (signal_card.payload_signal), его отпечаток и длина."""
-        signals = {row["id"]: signal_card.payload_signal(self.inputs.card_row(row, summaries.get(row["id"])),
-                                                         self.inputs.tags) for row in rows}
+        signals = {row["id"]: signal_card.payload_signal(self.inputs.card_row(row), self.inputs.tags) for row in rows}
         requests = {number: signal_card.request(item, self.inputs.dictionaries, self.inputs.themes)
                     for number, item in signals.items()}
         fingerprints = {number: _fingerprint(self.card_model, config.SIGNAL_CARD_REASONING, request)
@@ -267,7 +266,7 @@ class Calls:
 
 
 class _WithModel:
-    """Клиент с заданной моделью: «Суть и перевод» зовёт модель клиента по умолчанию (модель ленты)."""
+    """Клиент с заданной моделью экзамена: она подменяет ту, что передаёт «Суть и перевод» (OPENAI_SUMMARY_MODEL)."""
 
     def __init__(self, client: Any, model: str):
         self.client, self.model = client, model
