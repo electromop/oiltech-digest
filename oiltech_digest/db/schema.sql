@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS articles (
 -- накопилось 951 статья с побайтово общим телом, а всего чужое тело оказалось
 -- у 10.4% видимой ленты.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS body_hash TEXT;
+-- text_tail: чужой хвост, отрезанный от конца текста (#140). raw_text || text_tail равно тексту,
+-- как он пришёл на запись. По нему сверяются следующие статьи источника. body_hash считается
+-- по тексту до среза: рубеж «то же тело» видит то, что видел всегда.
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS text_tail TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_url ON articles(url);
 CREATE INDEX IF NOT EXISTS idx_articles_content_hash ON articles(content_hash);

@@ -999,11 +999,14 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
 
 
 def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
-    """Перекачать тела статей с дефектом (чужое/кракозябры/простыня) новым извлечением.
+    """Перекачать тела статей с дефектом (чужое/кракозябры/простыня) новым извлечением, срезать хвосты.
 
     По умолчанию сухой прогон. С --apply тела заменяются, а по заменённым ставится
     перерасчёт ИИ (суть, релевантность, тег, баллы посчитаны по старому тексту) —
     пакетами через тот же маршрут, что и обычная обработка.
+
+    --tails: только хвосты (#140), по всем источникам или по названному. В конце по источникам:
+    сколько статей и знаков уйдёт. --all-pages: качать страницу и там, где хвост не виден по тексту.
 
     Перерасчёт — только статьям открытых месяцев окна ленты, как у пересчёта балла
     (rescore_selection): у статьи закрытого месяца новая суть, тег или вердикт гейта
@@ -1015,14 +1018,18 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
 
     ids = [int(item) for item in args.ids.split(",") if item.strip()] if args.ids else None
     statuses = [item.strip() for item in args.statuses.split(",") if item.strip()] if args.statuses else None
-    if not ids and args.source_id is None and not statuses:
-        raise SystemExit("repair-article-bodies: нужен --ids, --source-id или --statuses")
+    if not ids and args.source_id is None and not statuses and not args.tails:
+        raise SystemExit("repair-article-bodies: нужен --ids, --source-id, --statuses или --tails")
+    if args.all_pages and not args.tails:
+        raise SystemExit("repair-article-bodies: --all-pages только вместе с --tails")
     articles = body_repair.candidate_articles(
-        source_id=args.source_id, days=args.days, ids=ids, statuses=statuses,
+        source_id=args.source_id, days=args.days, ids=ids, statuses=statuses, all_sources=args.tails,
     )
     if args.limit:
         articles = articles[: args.limit]
-    result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause)
+    result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause,
+                                       find_tail=body_repair.stored_repeated_tail, only_tails=args.tails,
+                                       all_pages=args.all_pages)
     jobs = []
     archive: list[int] = []
     if args.apply and args.reprocess and result["replaced_ids"]:
@@ -1050,6 +1057,10 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     )
     for key, count in result["stats"].items():
         print(f"  {key}: {count}")
+    if result["tails_by_source"]:
+        print("  хвосты по источникам:" if args.apply else "  хвосты по источникам (уйдёт при --apply):")
+        for row in result["tails_by_source"]:
+            print(f"    {row['source']} (id {row['source_id']}): статей {row['articles']}, знаков {row['chars']}")
     if archive:
         print(f"  без перерасчёта ИИ — закрытый месяц, архив только на просмотр: {len(archive)} "
               f"(id: {', '.join(str(article_id) for article_id in archive)})")
@@ -3590,11 +3601,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_repair_bodies = sub.add_parser(
         "repair-article-bodies",
-        help="перекачать тела статей с дефектом (чужое тело, кракозябры, простыня) новым извлечением")
+        help="перекачать тела статей с дефектом (чужое тело, кракозябры, простыня) новым извлечением, срезать хвосты")
     p_repair_bodies.add_argument("--ids", default="", help="id статей через запятую")
     p_repair_bodies.add_argument("--source-id", type=int, default=None, help="все статьи источника за --days")
     p_repair_bodies.add_argument("--statuses", default="",
                                  help="обрывки всех источников с этим статусом дозагрузки, напр. too_short,mismatch")
+    p_repair_bodies.add_argument("--tails", action="store_true",
+                                 help="только хвосты в конце текста, по всем источникам или по --source-id")
+    p_repair_bodies.add_argument("--all-pages", action="store_true",
+                                 help="с --tails: качать страницу и там, где хвост не виден по тексту")
     p_repair_bodies.add_argument("--days", type=int, default=60)
     p_repair_bodies.add_argument("--limit", type=int, default=0, help="не больше N статей (0 — все)")
     p_repair_bodies.add_argument("--pause", type=float, default=0.5, help="пауза между страницами, с")

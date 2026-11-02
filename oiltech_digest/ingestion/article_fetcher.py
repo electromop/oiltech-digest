@@ -12,10 +12,9 @@ import json
 import logging
 import re
 
-
 from oiltech_digest import config
 from oiltech_digest.db import repository
-from oiltech_digest.ingestion import normalize
+from oiltech_digest.ingestion import article_tails, normalize
 from oiltech_digest.ingestion.http_client import fetch
 
 logger = logging.getLogger(__name__)
@@ -94,7 +93,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
         try:
             result = fetch_article_text(article, min_chars=min_chars)
             if result.status == "ok":
-                repository.update_article_full_text(
+                written = repository.update_article_full_text(
                     int(article["id"]),
                     raw_text=result.text,
                     text_truncated=False,
@@ -104,7 +103,7 @@ def fetch_full_text(limit: int = 50, min_chars: int = MIN_FULL_TEXT_CHARS,
                     image_url=result.image_url,
                 )
                 stats["updated"] += 1
-                stats["replaced"].append((int(article["id"]), article.get("raw_text"), result.text))
+                stats["replaced"].append((int(article["id"]), article.get("raw_text"), written or result.text))
             else:
                 repository.update_article_full_text(
                     int(article["id"]),
@@ -266,14 +265,15 @@ def extract_main_text(content: bytes | str, title: str = "") -> str:
             parent.remove(form)
 
     root = scope if scope is not None else doc
-    candidates = root.xpath("descendant-or-self::article|descendant-or-self::main")
-    candidates.extend(root.xpath("descendant-or-self::" + _CANDIDATE_CLASS_XPATH))
+    # Порядок документа: внешний кандидат чистится раньше вложенных.
+    candidates = root.xpath("descendant-or-self::article|descendant-or-self::main|descendant-or-self::"
+                            + _CANDIDATE_CLASS_XPATH)
     if not candidates:
         candidates = [root]
 
     best_text = structured_text
     best_score = len(structured_text) + 300 if len(structured_text) >= 120 else -1
-    for node in candidates:
+    for node in article_tails.strip_candidates(candidates, root):
         text = _node_text(node)
         if len(text) < 120:
             continue
@@ -283,8 +283,8 @@ def extract_main_text(content: bytes | str, title: str = "") -> str:
             best_text = text
     if scope is not None and best_score < 0:
         # Внутри своего блока нет ни одного узла-кандидата: берём сам блок.
-        best_text = _node_text(scope)
-    return best_text
+        best_text = _node_text(article_tails.strip_block(scope))
+    return article_tails.cut_text_at_heading(best_text)
 
 
 # Слова заголовка должны почти целиком найтись в тексте <h1> страницы. Не «равен»:
@@ -482,7 +482,7 @@ def _trafilatura_extract(content: bytes | str) -> str:
             include_tables=False,
             no_fallback=False,
         )
-        return (text or "").strip()
+        return article_tails.cut_text_at_heading((text or "").strip())
     except Exception:  # noqa: BLE001
         return ""
 

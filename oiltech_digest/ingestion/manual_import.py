@@ -201,7 +201,7 @@ def refresh_full_text(article_id: int) -> dict[str, str | int | None]:
     if article is None:
         return {"status": None, "method": None, "chars": 0}
     result = fetch_article_text(article, min_chars=500)
-    repository.update_article_full_text(
+    written = repository.update_article_full_text(
         article_id,
         raw_text=result.text if result.status == "ok" else None,
         text_truncated=result.status != "ok",
@@ -210,4 +210,4 @@ def refresh_full_text(article_id: int) -> dict[str, str | int | None]:
         error=result.error,
         image_url=result.image_url,
     )
-    return {"status": result.status, "method": result.method, "chars": len(result.text or "")}
+    return {"status": result.status, "method": result.method, "chars": len(written or result.text or "")}
