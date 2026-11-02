@@ -110,3 +110,33 @@ def test_truncated_is_not_replaced_by_text_that_is_not_longer():
     decision, _ = body_repair.plan_repair(_article("Тизер " + OWN_TITLE), page)
 
     assert (decision.action, decision.reason) == ("skip", "new text too short")
+
+
+TAIL_BODY = ("Газотурбинный двигатель прошёл стендовые испытания, и завод подтвердил расчётную мощность. " * 8).strip()
+TAIL_TEXT = f"{TAIL_BODY} Читайте также: 25.09.26 Соседняя новость про завод 17.09.26 Другая соседняя новость"
+
+
+def test_tail_heading_is_a_defect_of_the_stored_body():
+    title = "Газотурбинный двигатель прошёл стендовые испытания завода"
+
+    assert body_repair.stored_body_defect(title, TAIL_TEXT) == "tail"
+    assert body_repair.stored_body_defect(title, TAIL_BODY) is None
+
+
+def test_tail_with_a_heading_is_cut_without_downloading_and_dry_run_writes_nothing(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("сухой прогон пишет в базу")
+
+    monkeypatch.setattr(body_repair, "_store_tail", forbidden)
+    monkeypatch.setattr(body_repair.repository, "update_article_full_text", forbidden)
+    article = _article(TAIL_TEXT, title="Газотурбинный двигатель прошёл стендовые испытания завода")
+
+    result = body_repair.repair_bodies(
+        [{**article, "source_name": "Завод"}], apply=False, pause_seconds=0,
+        fetch_fn=lambda url: (_ for _ in ()).throw(AssertionError("страница тут не нужна")),
+    )
+
+    assert result["replaced_ids"] == [1]
+    assert result["stats"] == {"replace:tail:tail cut": 1}
+    assert result["tails_by_source"] == [{"source_id": 36, "source": "Завод", "articles": 1,
+                                          "chars": len(TAIL_TEXT) - len(TAIL_BODY)}]

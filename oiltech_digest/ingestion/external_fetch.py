@@ -391,12 +391,12 @@ def apply_refetch_text_result(result: dict[str, Any]) -> dict[str, Any]:
                 error=None if same else f"extracted={len(text)} chars, current={len(stored)} chars")
             no_gain += 1
             continue
-        repository.update_article_full_text(
+        written = repository.update_article_full_text(
             article_id, text, normalize.is_truncated(text), status, "external")
         applied += 1
         # too_short тоже в счёт: промежуточное тело иначе становилось точкой отсчёта, и полное
         # после него пересчёта не давало (ревью PR #87: 167 → 440 → 440 → 850 — ноль пересчётов).
-        replaced.append((article_id, stored, text))
+        replaced.append((article_id, stored, written or text))
     return {"applied": applied, "skipped": skipped, "mismatched": mismatched, "no_gain": no_gain,
             "recompute": fulltext_recompute.after_bodies(replaced)}
 

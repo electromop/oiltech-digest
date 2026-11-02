@@ -264,11 +264,11 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
             if fetch_full and article.get("text_truncated") and article.get("url"):
                 result = article_fetcher.fetch_article_text(article)
                 if result.status == "ok":
-                    repository.update_article_full_text(
+                    written = repository.update_article_full_text(
                         int(article["id"]), raw_text=result.text, text_truncated=False,
                         status="ok", method=result.method, error=None,
                     )
-                    article["raw_text"] = result.text
+                    article["raw_text"] = written or result.text
                     article["text_truncated"] = False
                     stats["fulltext"] += 1
 

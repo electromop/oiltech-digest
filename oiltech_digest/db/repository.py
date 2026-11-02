@@ -18,7 +18,7 @@ from psycopg.types.json import Json
 
 from oiltech_digest import auth, config, contract, feed_window, lanes
 from oiltech_digest.ingestion import normalize, verdicts
-from oiltech_digest.db import marks
+from oiltech_digest.db import article_tail_store, marks
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, signal_month_sql, visible_sql
 from oiltech_digest import scoring_profiles
@@ -4836,16 +4836,20 @@ def insert_article(rec: dict) -> bool:
                            rec.get("url"), verdict.holder["id"], verdict.holder["url"])
         if verdict.verdict != verdicts.WOULD_INSERT:
             return False
+        # После рубежей: их проходит только новая статья, а кандидатов за цикл тысячи.
+        kept, tail = article_tail_store.split_for_write(
+            conn, rec.get("source_id"), rec.get("title") or "", rec.get("raw_text"))
         rec = {**rec, "image_url": rec.get("image_url"),
                "body_hash": verdict.body_hash, "url_key": verdict.url_key,
-               "selector": ARTICLE_SELECTOR_OTBOR if config.OTBOR_ENABLED else None}
+               "selector": ARTICLE_SELECTOR_OTBOR if config.OTBOR_ENABLED else None,
+               "raw_text": kept, "text_tail": tail}
         cur = conn.execute(
             """
             INSERT INTO articles (source_id, title, url, url_key, published_at,
-                                  raw_text, text_truncated, language, content_hash, image_url,
+                                  raw_text, text_tail, text_truncated, language, content_hash, image_url,
                                   body_hash, selector)
             VALUES (%(source_id)s, %(title)s, %(url)s, %(url_key)s, %(published_at)s,
-                    %(raw_text)s, COALESCE(%(text_truncated)s, FALSE), %(language)s,
+                    %(raw_text)s, %(text_tail)s, COALESCE(%(text_truncated)s, FALSE), %(language)s,
                     %(content_hash)s, %(image_url)s, %(body_hash)s, %(selector)s)
             ON CONFLICT (url) DO NOTHING
             RETURNING id
@@ -4967,8 +4971,12 @@ def get_articles_needing_full_text(limit: int = 50, retry_too_short: bool = Fals
 
 def update_article_full_text(article_id: int, raw_text: str | None, text_truncated: bool,
                              status: str, method: str, error: str | None = None,
-                             image_url: str | None = None) -> None:
-    """Store full-text extraction result without losing the RSS teaser on failure."""
+                             image_url: str | None = None) -> str | None:
+    """Store full-text extraction result without losing the RSS teaser on failure.
+
+    Возвращает текст, который лёг в базу: от пришедшего отрезан хвост, повторяющийся у других статей
+    источника (#140). None — текст не менялся."""
+    kept = None
     with get_connection() as conn:
         if image_url:
             # Заполняем картинку, только если её ещё нет — RSS-media в приоритете.
@@ -4978,10 +4986,12 @@ def update_article_full_text(article_id: int, raw_text: str | None, text_truncat
                 (image_url, article_id),
             )
         if raw_text is not None:
+            kept, tail = article_tail_store.split_article_text(conn, article_id, raw_text)
             conn.execute(
                 """
                 UPDATE articles
                 SET raw_text = %s,
+                    text_tail = %s,
                     body_hash = %s,
                     text_truncated = %s,
                     full_text_fetched_at = now(),
@@ -4991,7 +5001,7 @@ def update_article_full_text(article_id: int, raw_text: str | None, text_truncat
                     updated_at = now()
                 WHERE id = %s
                 """,
-                (raw_text, normalize.compute_body_hash(raw_text), text_truncated,
+                (kept, tail, normalize.compute_body_hash(raw_text), text_truncated,
                  status, error, method, article_id),
             )
         else:
@@ -5009,6 +5019,7 @@ def update_article_full_text(article_id: int, raw_text: str | None, text_truncat
                 (text_truncated, status, error, method, article_id),
             )
         conn.commit()
+    return kept
 
 
 # ---------------------------------------------------------------------------

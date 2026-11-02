@@ -279,7 +279,7 @@ def test_body_repair_does_not_recount_ai_for_articles_of_a_closed_month(issue, m
     _freeze(monkeypatch, msk(2026, 10, 10, 12, 0))
 
     cli.cmd_repair_article_bodies(argparse.Namespace(
-        ids=f"{september},{october}", source_id=None, statuses="", days=60, limit=0, pause=0,
+        ids=f"{september},{october}", source_id=None, statuses="", tails=False, all_pages=False, days=60, limit=0, pause=0,
         apply=True, reprocess=True, batch=25, json=True,
     ))
 
