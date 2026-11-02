@@ -19,7 +19,8 @@ CONTRACT_TEXT = ("Weatherford получила контракт на бурен�
                  "2026 года, бурение начнётся в 2027 году.")
 
 
-def test_card_gets_the_summary_and_category_but_nothing_of_otbor_and_sets_the_theme(user, pipeline, monkeypatch):
+def test_card_gets_the_category_but_neither_the_summary_nor_anything_of_otbor_and_sets_the_theme(user, pipeline,
+                                                                                                 monkeypatch):
     accepted(monkeypatch, {CONTRACT: answer(industry="oilfield_services")}, {CONTRACT: CONTRACT_TEXT})
     summary = showcase(user)[CONTRACT]["summary"]
     assert summary
@@ -28,8 +29,9 @@ def test_card_gets_the_summary_and_category_but_nothing_of_otbor_and_sets_the_th
 
     [call] = model.calls
     header = call["input"].split("Текст публикации:", 1)[0]
-    # На входе суть и категория; решения, причины и обоснования «Отбора», его отрасли и связи — нет.
-    assert f"Суть: {summary}" in header and "Категория: бизнес" in header
+    # На входе категория. Суть не идёт: короткая суть сбивала тему (экзамен 01.11); её читает только второй вызов.
+    # Решения, причины и обоснования «Отбора», его отрасли и связи — тоже нет.
+    assert "Категория: бизнес" in header and "Суть" not in header and summary not in call["input"]
     assert JUSTIFICATION not in call["input"] and "accept" not in call["input"]
     for word in ("Отрасль", "Связь", "нефтесервис:"):
         assert word not in header

@@ -1,16 +1,16 @@
 """Агент «Карточка сигнала» (#96, спека #93, ADR 0003): атрибуты карточки по тексту главной публикации.
 
 Один вызов модели на сигнал, без инструментов и без выхода в сеть, — не автономный агент: путь
-известен, обязательное проверяет код. Ядро собирает пакет при выдаче задачи (тексты, суть,
-категория, справочники, тематики), воркер без базы зовёт модель со справочниками в каждом вызове и
+известен, обязательное проверяет код. Ядро собирает пакет при выдаче задачи (тексты, категория,
+справочники, тематики), воркер без базы зовёт модель со справочниками в каждом вызове и
 возвращает ответы как есть, ядро проверяет их кодом и записывает: ответ воркера — недоверенный
 ввод. Модель — явная настройка агента (SIGNAL_CARD_MODEL), без отката на модель ленты: едет в
 задаче и попадает в рецепт карточки вместе с версией инструкции и справочников.
 
 С #132 (спека #128) — основной вызов «Карточки» в конвейере «Отбора»: тема (одна из 13 тематик заказчика, три
 кандидата по ключам — signal_themes), дата события с точностью (день, месяц или год). Связь с нефтесервисом и
-применение ставит «Отбор», смешанность — тоже не «Карточка». На входе суть и категория, решения, причины и
-обоснования «Отбора» нет. Дата события из текста старше OTBOR_OLD_EVENT_DAYS у принятой «Отбором» публикации
+применение ставит «Отбор», смешанность — тоже не «Карточка». На входе категория; сути нет (экзамен 01.11:
+короткая суть сбивала тему, её читает второй вызов), решения, причины и обоснования «Отбора» нет. Дата события из текста старше OTBOR_OLD_EVENT_DAYS у принятой «Отбором» публикации
 возвращает её в «Отбор» с этим фактом, один раз (card_return). Баллы — второй вызов (signal_scores).
 """
 
@@ -30,7 +30,7 @@ from oiltech_digest.signal_card_pack import (CATEGORY_RU, CHOICE_DICTIONARIES, U
 
 KIND = signal_card_store.KIND
 # Версия инструкции — в рецепте карточки: другая инструкция — другие карточки.
-PROMPT_VERSION = "2026-10-28.1"
+PROMPT_VERSION = "2026-11-01.1"
 _OUTPUT_TOKENS = 1200
 # Справочники, которые модель видит в каждом вызове: выбор значений и смысл даты.
 _MODEL_DICTIONARIES = (*CHOICE_DICTIONARIES, "date_source")
@@ -122,7 +122,7 @@ def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
 
 
 def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
-    """Самодостаточный пакет для воркера без базы: публикации с сутью и категорией, справочники, имена 13 тематик и
+    """Самодостаточный пакет для воркера без базы: публикации с категорией, справочники, имена 13 тематик и
     у каждой публикации — темы-кандидаты по ключам (#132)."""
     tags = repository.list_enabled_tags()
     rows = signal_card_store.card_inputs(job_payload.get("signal_ids") or [])
@@ -137,7 +137,7 @@ def payload_signal(row: dict[str, Any], tags: list[dict[str, Any]]) -> dict[str,
     """Сигнал во входе модели (строка card_inputs → пакет воркера): главная публикация, как её видит модель, и
     темы-кандидаты по ключам. Той же функцией вход строит экзамен (#133): мерится тот же вход."""
     publication = _publication(row)
-    text = " ".join([publication["title"], publication["summary"], publication["text"]])
+    text = " ".join([publication["title"], publication["text"]])
     return {**{key: value for key, value in publication.items() if key != "received"},
             "published": publication["published"].isoformat() if publication["published"] else None,
             "theme_candidates": signal_themes.candidates(text, tags)}
@@ -145,7 +145,7 @@ def payload_signal(row: dict[str, Any], tags: list[dict[str, Any]]) -> dict[str,
 
 def _publication(row: dict[str, Any]) -> dict[str, Any]:
     """Главная публикация сигнала так, как её видит модель, — по ней же ядро сверяет ответ: тот же
-    текст (publication_text), издатель, дата публикации днём по UTC, суть сигнала. Дата поступления — для
+    текст (publication_text), издатель, дата публикации днём по UTC. Дата поступления — для
     возраста события, когда даты публикации нет (#132); модель её не видит."""
     published, received = publication_day(row.get("published")), publication_day(row.get("received"))
     return {
@@ -157,7 +157,6 @@ def _publication(row: dict[str, Any]) -> dict[str, Any]:
         "received": date.fromisoformat(received) if received else None,
         "publisher": row.get("publisher") or "",
         "publisher_type": row.get("publisher_type") or "",
-        "summary": publication_text(row.get("summary")),
         # Без категории — находка радара до 29.09: радар показывает её как технологию.
         "category": CATEGORY_RU.get(row.get("category") or "technology", UNDEFINED),
     }
@@ -281,7 +280,6 @@ def _model_input(item: dict[str, Any]) -> str:
         f"Издатель: {item.get('publisher') or 'не указан'}",
         f"Дата публикации: {item.get('published') or 'не указана'}",
         f"Категория: {item.get('category') or UNDEFINED}",
-        f"Суть: {item.get('summary') or 'не указана'}",
         "Темы-кандидаты по ключам: " + ("; ".join(item.get("theme_candidates") or []) or "нет"),
         "Текст публикации:",
         item.get("text") or "",
