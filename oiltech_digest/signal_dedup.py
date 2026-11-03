@@ -74,6 +74,7 @@ PAIR_MIN_OVERLAP = 0.25
 # передать свой потолок в снимке (dedup_max_pairs) — без пересборки воркера.
 MAX_JUDGED_PAIRS = 400
 
+
 class DedupSetupError(RuntimeError):
     """Модель дедупа не задана: прогон радара падает с понятной причиной до поиска."""
 
