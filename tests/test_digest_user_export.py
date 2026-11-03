@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from datetime import datetime
@@ -70,6 +71,31 @@ def test_export_of_a_45_item_issue_in_html_and_docx_matches_the_preview(issue):
         document_xml = archive.read("word/document.xml").decode("utf-8")
     for item in preview:
         assert item["title"] in document_xml
+
+
+def test_letter_and_docx_are_built_as_before_the_expert_pdf(issue):
+    """Новый вид получает только PDF (#161, спека #160): письмо и DOCX собираются как раньше. Отпечатки сняты на main
+    af21052, до формата эксперта, на том же выпуске: статьи с картинкой и без, карточка радара, черновик с порядком."""
+    analyst, a, s = issue["analyst"], issue["a"], issue["s"]
+    with connection.get_connection() as conn:
+        pictured = add_article(conn, issue["source"], "pictured", published=utc(2026, 9, 14, 12), score=71,
+                               image_url="https://img.example.org/pictured.jpg")
+        conn.commit()
+    for article_id in (a["hi"], a["mid"], pictured):
+        analyst.mark(article_id)
+    analyst.mark_signal(s["sep"])
+    assert analyst.save(SEPT, [a["mid"], pictured, a["hi"]]).status_code == 200
+
+    letter = analyst.get("/api/digest-email", params={"month": SEPT, "limit": 500, "min_score": 0}).text
+    with ZipFile(BytesIO(analyst.export("docx"))) as archive:
+        document_xml = archive.read("word/document.xml")
+
+    assert hashlib.sha256(letter.encode("utf-8")).hexdigest() == _LETTER_BEFORE_EXPERT_PDF
+    assert hashlib.sha256(document_xml).hexdigest() == _DOCX_BEFORE_EXPERT_PDF
+
+
+_LETTER_BEFORE_EXPERT_PDF = "ff92679c244d70511a05f72c49db8b5c5acb4ca548c330fad8fb2a3f3dba64fc"
+_DOCX_BEFORE_EXPERT_PDF = "a22e75104e8e8684dadbd7aec404fa9e40de279a180152969d2877a47131b284"
 
 
 def test_issue_header_names_the_month_in_words(issue):
