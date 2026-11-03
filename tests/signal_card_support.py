@@ -86,10 +86,10 @@ def tag(name):
 
 
 def feed_signal(title, text, *, published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc), source="Нефтегаз",
-                source_type="Media"):
+                source_type="Media", collected=None):
     """Статья, принятая отбором, — сигнал ленты (мост #95). source_type — как в справочнике источников:
-    Media, News, Company, Company / NOC…"""
-    collected = datetime.now(timezone.utc)
+    Media, News, Company, Company / NOC… collected — когда статью собрали (по умолчанию сейчас)."""
+    collected = collected or datetime.now(timezone.utc)
     with repository.get_connection() as conn:
         source_row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()
         if source_row is None:

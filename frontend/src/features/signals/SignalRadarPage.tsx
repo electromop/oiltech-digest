@@ -26,7 +26,9 @@ import { SkeletonList } from "../shared/Skeleton";
 import { PROFILES } from "../scoring/ScoringPage";
 import { CHOICE_FIELDS, COUNTRY_FILTER, SignalAttributes, SignalCardLine, whyBlock } from "./SignalCardChips";
 import { SignalDecisionLog } from "./SignalDecisionLog";
-import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
+import {
+  ARRIVAL_FILTER_LABEL, CompanyGroupHint, EMPTY_CARD_FILTERS, FEEDBACK_FILTER, SignalCardFilters, arrivalPeriod,
+} from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
 import { SignalReturnForm } from "./SignalReturnForm";
 
@@ -348,6 +350,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       technologyMaturity: cardFilters.technologyMaturity || undefined,
       country: cardFilters.country || undefined,
       company: cardFilters.company.trim() || undefined,
+      since: cardFilters.arrivalFrom || undefined,
+      until: cardFilters.arrivalTo || undefined,
+      feedback: cardFilters.feedback || undefined,
       tile: !showHidden && tile ? tile : undefined,
     }),
     [business, search, theme, maturity, isAdmin, showHidden, cardFilters, tile],
@@ -734,6 +739,19 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       : []),
     ...(cardFilters.company.trim()
       ? [{ key: "company", label: `Компания: ${cardFilters.company.trim()}`, clear: () => updateCardFilters({ company: "" }) }]
+      : []),
+    // Период — один фильтр: один чип снимает обе границы.
+    ...(cardFilters.arrivalFrom || cardFilters.arrivalTo
+      ? [{
+          key: "arrival", label: `${ARRIVAL_FILTER_LABEL}: ${arrivalPeriod(cardFilters)}`,
+          clear: () => updateCardFilters({ arrivalFrom: "", arrivalTo: "" }),
+        }]
+      : []),
+    ...(cardFilters.feedback
+      ? [{
+          key: "feedback", label: FEEDBACK_FILTER.choices[cardFilters.feedback],
+          clear: () => updateCardFilters({ feedback: "" }),
+        }]
       : []),
   ];
 

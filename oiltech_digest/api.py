@@ -1896,6 +1896,9 @@ def _radar_screen_filters(
     # Плашка над списком (решение владельца 23.10): «новые за 7 дней», «в дайджесте», «с обратной связью» —
     # список тех же карточек, что посчитала плашка.
     tile: str | None = Query(None, pattern="^(new_7d|in_digest|with_feedback)$"),
+    # Наличие ОС (решение владельца 03.11): with — у карточки есть запись блока «Обратная связь» (её «Оценки людей»),
+    # without — нет; «В дайджест» не ОС.
+    feedback: str | None = Query(None, pattern="^(with|without)$"),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
         raise HTTPException(status_code=422, detail="«Отсеянные и скрытые» есть только у технологического радара")
@@ -1925,6 +1928,7 @@ def _radar_screen_filters(
         "company_names": None if company_filter is None else company_filter["names"],
         "section": found_section,
         "tile": tile,
+        "feedback": feedback,
     }
 
 

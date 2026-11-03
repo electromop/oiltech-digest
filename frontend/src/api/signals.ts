@@ -29,7 +29,11 @@ export type SignalFilters = {
   tile?: SignalTile;
   // Страна (#137): имя справочника стран; сервер ищет и по стране события, и по стране участника.
   country?: string;
+  // Наличие ОС (задача владельца 03.11): есть ли у карточки блоки ОС, «Оценки людей» на ней; правило у сервера.
+  feedback?: SignalFeedbackFilter;
 };
+
+export type SignalFeedbackFilter = "with" | "without";
 
 // Плашка над списком (решение владельца 23.10): по нажатию — список тех же карточек, что она посчитала.
 export type SignalTile = "new_7d" | "in_digest" | "with_feedback";
@@ -63,6 +67,7 @@ function filterParams(filters: SignalFilters) {
   if (filters.company) params.set("company", filters.company);
   if (filters.tile) params.set("tile", filters.tile);
   if (filters.country) params.set("country", filters.country);
+  if (filters.feedback) params.set("feedback", filters.feedback);
   return params;
 }
 

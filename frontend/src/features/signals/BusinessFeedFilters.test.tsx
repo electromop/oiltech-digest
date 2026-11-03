@@ -232,6 +232,33 @@ describe("бизнес-лента: фильтры и «всё про компа�
     expect(lastListQuery().country).toBeUndefined();
   });
 
+  // Задача владельца 03.11: ОС та же, что карточка показывает блоками «Оценки людей»; правило считает сервер.
+  it("наличие ОС: «Любая», «Есть ОС», «Нет ОС», выбор уходит на сервер, чип и «Сбросить» снимают", async () => {
+    renderFeed();
+    await screen.findByRole("button", { name: "Развернуть всё" });
+    fireEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+    const feedback = screen.getByRole("combobox", { name: "Наличие ОС" });
+    expect(within(feedback).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Любая", "Есть ОС", "Нет ОС"]);
+
+    fireEvent.change(feedback, { target: { value: "with" } });
+
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ showcase: "business", feedback: "with" }));
+    expect(vi.mocked(getSignalSummary).mock.lastCall?.[0]).toMatchObject({ feedback: "with" });
+    expect(screen.getByRole("button", { name: "Фильтры · 1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Снять: Есть ОС" }));
+    await waitFor(() => expect(lastListQuery().feedback).toBeUndefined());
+    expect(feedback).toHaveValue("");
+
+    fireEvent.change(feedback, { target: { value: "without" } });
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ feedback: "without" }));
+    expect(screen.getByRole("button", { name: "Снять: Нет ОС" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+
+    await waitFor(() => expect(lastListQuery().feedback).toBeUndefined());
+    expect(feedback).toHaveValue("");
+  });
+
   it("радар (#137): тот же фильтр «Страна», выбор уходит на сервер", async () => {
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
     fireEvent.click(await screen.findByRole("button", { name: "Фильтры" }));

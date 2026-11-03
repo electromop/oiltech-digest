@@ -5,6 +5,8 @@
 «Дочерние общества».
 """
 
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api
@@ -103,7 +105,8 @@ def test_company_filter_compares_participants_by_the_one_company_rule(user):
 
 
 def _edit(method, path, user, **body):
-    """Правка списка дочек через API экрана «Дочерние общества» (только админ)."""
+    """Правка через API экрана от имени пользователя: список дочек («Дочерние общества», только админ), отзыв,
+    «В дайджест»."""
     api.app.dependency_overrides[api.require_user] = lambda: user
     try:
         response = TestClient(api.app).request(method, path, json=body or None)
@@ -193,6 +196,65 @@ def test_screen_gets_the_filter_values_from_the_dictionaries(user):
     assert "Ближний Восток" in payload["region"] and "робототехника" in payload["technology_class"]
     # Подсказки к полю «Компания» — канонические имена справочника алиасов, без самих алиасов.
     assert "SLB" in payload["companies"] and "Schlumberger" not in payload["companies"]
+
+
+def test_arrival_filter_takes_the_moscow_day_the_article_was_collected_in_the_list_and_the_summary(user):
+    # Задача владельца 03.11: дата поступления — «Поступил» на карточке; у сигнала ленты это день сбора статьи по
+    # Москве. 30.09 в 22:30 UTC по Москве уже 01.10.
+    feed_signal("Поздний сбор", "Текст.", collected=datetime(2026, 9, 30, 22, 30, tzinfo=timezone.utc))
+    feed_signal("Дневной сбор", "Текст.", collected=datetime(2026, 9, 30, 9, 0, tzinfo=timezone.utc))
+
+    assert _titles(user, since="2026-10-01") == ["Поздний сбор"]
+    assert _titles(user, until="2026-09-30") == ["Дневной сбор"]
+    assert _titles(user, since="2026-09-30", until="2026-10-01") == ["Дневной сбор", "Поздний сбор"]
+    summary = api_get("/api/signals/summary", user, showcase="business", since="2026-10-01", until="2026-10-01")
+    assert (summary["total"], summary["matching"]) == (2, 1)
+    # «От» позже «до» — пустой период, а не ошибка; не дата — 422, как чужое значение у остальных фильтров.
+    assert _titles(user, since="2026-10-05", until="2026-10-01") == []
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        client = TestClient(api.app)
+        assert [client.get(path, params={"showcase": "business", "since": "01.10.2026"}).status_code
+                for path in ("/api/signals", "/api/signals/summary")] == [422, 422]
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+
+
+def test_feedback_filter_takes_the_records_of_the_feedback_block_as_the_card_lists_them(user):
+    # Решение владельца 03.11: «есть ОС» — любая запись блока «Обратная связь» карточки (оценка, причина, комментарий),
+    # её карточка показывает списком «Оценки людей». «В дайджест» делается не в этом блоке и ОС не считается.
+    commented = _feed(user, "Контракт с отзывом")
+    _feed(user, "Контракт без отзыва")
+    # «В дайджест» ставят только в открытом месяце выпуска: статья этого месяца.
+    feed_signal("Контракт в дайджесте", "Текст.", published=datetime.now(timezone.utc))
+    picked = business(user)["Контракт в дайджесте"]["id"]
+    _edit("POST", "/api/signals/feedback", user, signal_id=commented, verdict="strong_signal", comment="Конкурент взял объём")
+    _edit("PATCH", f"/api/signals/{picked}", user, selected_for_digest=True)
+    radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
+    sensor = radar_finding("sensor", "Датчик утечек", "Датчик утечек на трубопроводе.")
+    # Отзыв по адресу ссылки, без номера карточки: так карточка получает отзывы о своём склеенном дубле.
+    _edit("POST", "/api/signals/feedback", user, source_url="https://radar.example/robot", reason="Сильный источник")
+    _edit("PATCH", f"/api/signals/{sensor}", user, selected_for_digest=True)
+
+    assert _titles(user, feedback="with") == ["Контракт с отзывом"]
+    assert _titles(user, feedback="without") == ["Контракт без отзыва", "Контракт в дайджесте"]
+    assert _titles(user, "technology", feedback="with") == ["Робот-бурильщик"]
+    assert _titles(user, "technology", feedback="without") == ["Датчик утечек"]
+    # Фильтр и карточка совпадают: у «Есть ОС» список «Оценки людей» не пуст, у «Нет ОС» пуст.
+    for showcase in ("business", "technology"):
+        for choice, listed in (("with", True), ("without", False)):
+            cards = api_get("/api/signals", user, showcase=showcase, feedback=choice)
+            assert [bool(card["feedback_blocks"]) for card in cards] == [listed] * len(cards)
+    summary = api_get("/api/signals/summary", user, showcase="business", feedback="without")
+    assert (summary["total"], summary["matching"]) == (3, 2)
+    # Чужое значение — 422, а не выборка без фильтра.
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        client = TestClient(api.app)
+        assert [client.get(path, params={"feedback": "yes"}).status_code
+                for path in ("/api/signals", "/api/signals/summary")] == [422, 422]
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
 
 
 def test_value_outside_the_dictionaries_is_refused_not_silently_empty(user):

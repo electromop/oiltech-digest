@@ -716,6 +716,46 @@ describe("SignalRadarPage", () => {
       expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toHaveValue("score_desc");
     });
 
+    // Задача владельца 03.11: дата поступления та же, что «Поступил» на карточке; поля «от» и «до» в одной ячейке.
+    it("дата поступления: «от» и «до» в одной ячейке панели, период уходит на сервер одним фильтром", async () => {
+      serve([drilling, { ...ecology, first_seen_at: "2026-10-05T09:00:00Z" }]);
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Фильтры" }));
+      const arrival = screen.getByRole("group", { name: "Дата поступления" });
+      const from = within(arrival).getByLabelText("от");
+      const to = within(arrival).getByLabelText("до");
+      expect([from, to].map((input) => input.getAttribute("type"))).toEqual(["date", "date"]);
+
+      fireEvent.change(from, { target: { value: "2026-10-01" } });
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ since: "2026-10-01" }));
+      expect(lastListQuery().until).toBeUndefined();
+      expect(await screen.findByText("1 из 2 сигналов")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Снять: Дата поступления: от 01.10.2026" })).toBeInTheDocument();
+
+      fireEvent.change(to, { target: { value: "2026-10-15" } });
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ since: "2026-10-01", until: "2026-10-15" }));
+      // Период — один фильтр: одно число на кнопке и один чип; «от» позже «до» выбрать нельзя.
+      expect(screen.getByRole("button", { name: "Фильтры · 1" })).toBeInTheDocument();
+      expect([from.getAttribute("max"), to.getAttribute("min")]).toEqual(["2026-10-15", "2026-10-01"]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Снять: Дата поступления: от 01.10.2026 до 15.10.2026" }));
+
+      await waitFor(() => expect(lastListQuery().since).toBeUndefined());
+      expect(lastListQuery().until).toBeUndefined();
+      expect([from, to].map((input) => (input as HTMLInputElement).value)).toEqual(["", ""]);
+
+      fireEvent.change(to, { target: { value: "2026-09-30" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ until: "2026-09-30" }));
+      expect(screen.getByRole("button", { name: "Снять: Дата поступления: до 30.09.2026" })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+
+      await waitFor(() => expect(lastListQuery().until).toBeUndefined());
+      expect((to as HTMLInputElement).value).toBe("");
+    });
+
     it("форма ОС — поля как в остальных формах, «Отмена» и «Сохранить» справа; «Отмена» ничего не отправляет", async () => {
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
