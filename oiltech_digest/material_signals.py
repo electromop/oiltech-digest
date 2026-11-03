@@ -22,10 +22,11 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import colleague_materials, config
-from oiltech_digest.db import connection, otbor_store
+from oiltech_digest import colleague_materials, config, feed_window
+from oiltech_digest.db import connection, marks, otbor_store
 from oiltech_digest.db.repository import (CARD_SET_BY_HUMAN, SIGNAL_ORIGIN_MATERIAL, SIGNAL_SELECTOR_OTBOR,
-                                          SYSTEM_TAG_UNCLASSIFIED)
+                                          SYSTEM_TAG_UNCLASSIFIED, refresh_platform_decisions,
+                                          signal_publication_count_sql)
 from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 from oiltech_digest.otbor_pack_format import load_dictionaries
 
@@ -66,24 +67,129 @@ def to_signal(material: dict[str, Any]) -> int:
         else:
             signal_id = int(row["id"])
             _author_block(cur, signal_id, material)
-            if material.get("url"):
-                # Адрес, который уже держит другая карточка, к материалу не переходит: он свой сигнал.
-                cur.execute(
-                    """
-                    INSERT INTO signal_evidence (signal_id, source_url, title, publisher, evidence_type, extracted_fact,
-                                                 strength, raw_payload_json)
-                    VALUES (%s, %s, %s, NULL, 'material', %s, 1, %s)
-                    ON CONFLICT (source_url) DO NOTHING
-                    """,
-                    (signal_id, material["url"], material["title"], material["description"],
-                     Json({"evidence_source": "material", "material_id": int(material["id"])})),
-                )
-            cur.execute("UPDATE signals SET evidence_count = (SELECT count(*) FROM signal_evidence WHERE signal_id = %s)"
-                        " WHERE id = %s", (signal_id, signal_id))
+            _link(cur, signal_id, material)
         cur.execute("UPDATE colleague_materials SET signal_id = %s WHERE id = %s AND signal_id IS NULL",
                     (signal_id, int(material["id"])))
         conn.commit()
     return signal_id
+
+
+def _link(cur, signal_id: int, material: dict[str, Any]) -> None:
+    """Ссылка материала — его публикация, если адрес ничей: адрес, который уже держит другая карточка, к материалу не
+    переходит (он свой сигнал). Число публикаций сигнала пересчитывается."""
+    if material.get("url"):
+        cur.execute(
+            """
+            INSERT INTO signal_evidence (signal_id, source_url, title, publisher, evidence_type, extracted_fact,
+                                         strength, raw_payload_json)
+            VALUES (%s, %s, %s, NULL, 'material', %s, 1, %s)
+            ON CONFLICT (source_url) DO NOTHING
+            """,
+            (signal_id, material["url"], material["title"], material["description"],
+             Json({"evidence_source": "material", "material_id": int(material["id"])})),
+        )
+    cur.execute(f"UPDATE signals s SET evidence_count = {signal_publication_count_sql('s')} WHERE s.id = %s",
+                (signal_id,))
+
+
+def apply_edit(cur, material: dict[str, Any], fields: set[str]) -> None:
+    """Правка материала на платформе — его сигналу, в транзакции правки (cur, ревью PR #155): заголовок и русский
+    заголовок, описание как суть, компании как участники (всё «человек»: агенты их не перепишут), оценка и комментарий
+    в блок ОС автора, ссылка как публикация материала. fields — колонки материала, которые правка поменяла. Решение
+    «Отбора» и карточка, принятые по прежнему тексту, не пересчитываются. Сигнал в выпуске закрытого месяца правка не
+    меняет: тот выпуск только на просмотр. Материала-сигнала нет — ничего."""
+    if not material.get("signal_id"):
+        return
+    signal_id = int(material["signal_id"])
+    month = feed_window.signal_month_sql("s")
+    cur.execute(
+        f"SELECT s.card_set_by, ({feed_window.current().closed_sql(month)}"
+        f" AND {marks.signal_marked_sql('s.id', 'digest')}) AS frozen FROM signals s WHERE s.id = %s FOR UPDATE",
+        (signal_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return
+    if row["frozen"]:
+        # Выпуск закрытого месяца только на просмотр, и его текст тоже (решение владельца 30.09).
+        cur.execute(
+            "UPDATE signals SET decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()"
+            " WHERE id = %s",
+            (Json([{"stage": "Человек", "text": "Правка материала не перенесена: сигнал в выпуске закрытого месяца"}]),
+             signal_id),
+        )
+        return
+    set_by = dict(row["card_set_by"] or {})
+    updates: dict[str, Any] = {}
+    changed: list[str] = []
+    if "title" in fields:
+        # Русский заголовок тоже: экран показывает его, а «Суть и перевод» писала его по прежнему заголовку.
+        updates.update(title=material["title"], title_ru=material["title"])
+        set_by["title_ru"] = CARD_SET_BY_HUMAN
+        changed.append("заголовок")
+    if "description" in fields:
+        updates["summary"] = material["description"]
+        set_by["summary"] = CARD_SET_BY_HUMAN
+        changed.append("описание")
+    if "companies_json" in fields:
+        companies = list(material.get("companies_json") or [])
+        updates.update(companies_json=Json(companies),
+                       participants_json=Json([{"name": name, "quote": "", "verified": False} for name in companies]))
+        set_by["participants"] = CARD_SET_BY_HUMAN
+        changed.append("компании")
+    if fields & {"verdict", "verdict_comment"}:
+        cur.execute(
+            """
+            UPDATE signal_feedback_events SET verdict = %s, comment = %s, signal_title = %s
+            WHERE id = (SELECT id FROM signal_feedback_events WHERE signal_id = %s AND author = %s
+                          AND event_type = 'comment_added' ORDER BY id LIMIT 1)
+            RETURNING id
+            """,
+            (material["verdict"], material.get("verdict_comment"), material["title"], signal_id, material["tg_author"]),
+        )
+        if cur.fetchone() is None:
+            _author_block(cur, signal_id, material)
+        changed.append("оценка")
+    if "url" in fields:
+        cur.execute("DELETE FROM signal_evidence WHERE signal_id = %s AND raw_payload_json->>'evidence_source' = 'material'",
+                    (signal_id,))
+        _link(cur, signal_id, material)
+        changed.append("ссылка")
+    if not changed:
+        return
+    updates["card_set_by"] = Json(set_by)
+    step = {"stage": "Человек", "text": "Материал исправлен на платформе: " + ", ".join(changed)}
+    assignments = ", ".join(f"{column} = %s" for column in updates)
+    cur.execute(
+        f"UPDATE signals SET {assignments}, decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb,"
+        " updated_at = now() WHERE id = %s",
+        [*updates.values(), Json([step]), signal_id],
+    )
+    if "url" in fields:
+        # Число публикаций — причина «Решения платформы» (подтверждено): пересчёт в той же транзакции (#132).
+        refresh_platform_decisions([signal_id], conn=cur.connection)
+
+
+# Причина архива сигнала, чей материал удалили на платформе.
+RETIRED_REASON = "материал удалён"
+
+
+def retire(cur, signal_id: int) -> None:
+    """Сигнал удаляемого материала — в архив, в транзакции удаления (cur, ревью PR #155): витрины его не показывают,
+    «Отбор» не берёт, вернуть можно unarchive-signals. Выбранный «в дайджест» не трогается: MaterialInDigest."""
+    cur.execute(f"SELECT {marks.signal_marked_sql('s.id', 'digest')} AS chosen FROM signals s WHERE s.id = %s"
+                " FOR UPDATE", (int(signal_id),))
+    found = cur.fetchone()
+    if found and found["chosen"]:
+        raise colleague_materials.MaterialInDigest(
+            "Материал выбран «в дайджест»: сначала снимите отметку «в дайджест» на его карточке, затем удалите")
+    cur.execute(
+        "UPDATE signals SET archived_at = now(), archive_reason = %s,"
+        " decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()"
+        " WHERE id = %s AND archived_at IS NULL",
+        (RETIRED_REASON, Json([{"stage": "Человек", "text": "Материал удалён на платформе: сигнал в архиве"}]),
+         int(signal_id)),
+    )
 
 
 def _author_block(cur, signal_id: int, material: dict[str, Any]) -> None:

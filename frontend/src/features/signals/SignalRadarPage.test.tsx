@@ -1081,6 +1081,27 @@ describe("качество радара на экране (Виктор 29.09)",
     expect(within(card).queryByText("Переносимость")).not.toBeInTheDocument();
   });
 
+  it("находка радара на пути «Отбора» — без пустых полей судьи, до «Отбора» — с пометкой, что их нет (#134)", async () => {
+    serveWithHidden([
+      { ...scored, origin: "radar", why_now: null, transferability: null, otbor_decision: "accept" },
+      { ...scored, id: scored.id + 1, title_ru: "Находка до «Отбора»", origin: "radar", why_now: null,
+        transferability: null, otbor_decision: null },
+    ], []);
+    renderRadar(false);
+    const card = (await screen.findByText(scored.title_ru as string)).closest("article") as HTMLElement;
+    const before = screen.getByText("Находка до «Отбора»").closest("article") as HTMLElement;
+
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    fireEvent.click(within(before).getByRole("button", { name: "Раскрыть сигнал" }));
+
+    // Судьи на пути «Отбора» нет: пустые блоки не показываются.
+    expect(within(card).queryByText("Почему сейчас")).not.toBeInTheDocument();
+    expect(within(card).queryByText("Переносимость")).not.toBeInTheDocument();
+    // У находки до «Отбора» судья обязан был их заполнить: пустое видно.
+    expect(within(before).getByText("Нет объяснения")).toBeInTheDocument();
+    expect(within(before).getByText("Нет оценки")).toBeInTheDocument();
+  });
+
   it("пометка «спорное» видна на карточке (#130)", async () => {
     serveWithHidden([{
       ...scored,

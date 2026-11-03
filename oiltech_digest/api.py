@@ -2696,10 +2696,12 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
                                            signal_ids=(job.get("payload_json") or {}).get("signal_ids") or [])
         result = {"signal_card": True, "applied": applied}
     if job.get("kind") == otbor.KIND and result.get("otbor"):
-        # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели уже разобраны в решения сигналов и «Ход решения».
+        # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели уже разобраны в решения сигналов и «Ход решения» (у проверки на
+        # реальных данных, #134, в таблицу проверки).
         job_payload = job.get("payload_json") or {}
         applied = otbor.apply_result(result, job_id=job_id, article_ids=job_payload.get("article_ids") or [],
-                                     signal_ids=job_payload.get("signal_ids") or [])
+                                     signal_ids=job_payload.get("signal_ids") or [],
+                                     shadow=otbor.is_shadow(job_payload))
         result = {"otbor": True, "applied": applied}
     if job.get("kind") == signal_summary.KIND and result.get("signal_summary"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: суть и заголовки уже записаны в сигналы.
@@ -3627,8 +3629,13 @@ def update_colleague_material(
 
 @app.delete("/api/materials/{material_id}")
 def delete_colleague_material(material_id: int, _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Удаление материала из бота на платформе (решение владельца 23.10) — только админ."""
-    if not colleague_materials.delete_material(material_id):
+    """Удаление материала из бота на платформе (решение владельца 23.10) — только админ. Сигнал материала уходит в
+    архив; выбранный «в дайджест» — отказ 409 с объяснением (ревью PR #155)."""
+    try:
+        deleted = colleague_materials.delete_material(material_id)
+    except colleague_materials.MaterialInDigest as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail="Материал не найден")
     return {"ok": True}
 

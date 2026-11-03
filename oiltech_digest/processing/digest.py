@@ -706,6 +706,13 @@ def _render_news_item(item: dict, issue: dict | None = None) -> str:
     image_url = item.get("image_url") or ""
     summary = item.get("summary") or issue.get("empty_summary_text") or "Суть ещё не сформирована."
     read_more_label = issue.get("read_more_label") or "ЧИТАТЬ ДАЛЕЕ"
+    # У материала коллеги без ссылки (файл, событие своими словами) читать дальше негде: пустая ссылка вела бы
+    # никуда (ревью PR #155), как в DOCX.
+    read_more = (
+        f'<a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;'
+        f'font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">{_html(read_more_label)} &#8594;</a>'
+        if item.get("url") else ""
+    )
     meta = _render_news_meta(item)
     if image_url and not _is_unusable_digest_image_url(image_url):
         media = (
@@ -738,7 +745,7 @@ def _render_news_item(item: dict, issue: dict | None = None) -> str:
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;">
                       <tr>
                         <td align="left" valign="middle">
-                          <a href="{_html(item.get("url"))}" style="color:#e83d08;text-decoration:none;font-size:13px;line-height:18px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">{_html(read_more_label)} &#8594;</a>
+                          {read_more}
                         </td>
                         <td align="right" valign="middle">
                           <span class="news-card-tag">{_html(item.get("category"))}</span>
