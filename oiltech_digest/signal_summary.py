@@ -4,7 +4,9 @@
 
 Вход — публикация (та же, что видел «Отбор») и поля «Отбора» по договорённости: категория, связь с нефтесервисом и
 применение; решения и обоснования «Отбора» на входе нет. Дальше «Отбора» идут только принятые. Заполняется только
-недостающее: описание автора материала — его суть, правку человека этап не трогает. Модели — те же, что у сути и
+недостающее: описание автора материала — его суть, правку человека этап не трогает. Русский заголовок находки не по
+правилам эксперта правится, как у статьи ленты; заголовок материала написал человек, его этап не правит (решение
+владельца 03.11). Модели — те же, что у сути и
 перевода ленты (OPENAI_SUMMARY_MODEL, OPENAI_TRANSLATE_MODEL на воркере; по проверке на эталоне #150 — gpt-6.1-terra,
 low, вместо снимаемой 11.12.2026 gpt-5-mini). Ядро собирает пакет при выдаче, воркер без базы зовёт модель, ядро пишет:
 ответ воркера — недоверенный ввод.
@@ -16,8 +18,9 @@ from typing import Any, Callable
 
 from oiltech_digest import config
 from oiltech_digest.db import repository, signal_summary_store
+from oiltech_digest.db.repository import SIGNAL_ORIGIN_MATERIAL
 from oiltech_digest.processing.external_ai import StopRequested, _core_glossary
-from oiltech_digest.processing.pipeline import make_client, summarize_article, title_ru_for_article
+from oiltech_digest.processing.pipeline import _needs_translation, make_client, summarize_article, title_ru_for_article
 from oiltech_digest.signal_card_pack import _publisher_label, publication_day, publication_text
 
 KIND = signal_summary_store.KIND
@@ -80,10 +83,12 @@ def build_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
 def _item(row: dict[str, Any]) -> dict[str, Any]:
     """Публикация сигнала так, как её видит этап, — поля статьи ленты (pipeline._article_prompt), публикация та же, что
     у «Отбора» (у материала — colleague_materials.as_publication); поля «Отбора» — ключами сигнала
-    (pipeline.OTBOR_FIELDS)."""
+    (pipeline.OTBOR_FIELDS). edit_title — править ли русский заголовок по правилам эксперта (решение владельца 03.11):
+    у находки да, у материала нет — его заголовок написал человек."""
     return {
         "signal_id": int(row["signal_id"]),
         "needs": signal_summary_store.missing(row),
+        "edit_title": row.get("origin") != SIGNAL_ORIGIN_MATERIAL,
         "title": publication_text(row.get("title"))[:500],
         "source_name": _publisher_label(row),
         "url": row.get("url") or "",
@@ -119,7 +124,8 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
             if "summary" in needs:
                 row["summary"] = _answer(summarize_article(item, client), "summary")
             if "translation" in needs:
-                title_ru, response = title_ru_for_article(item, client)
+                # Править — только по явному разрешению ядра: пакет без пометки (ядро до правки) заголовок не правит.
+                title_ru, response = title_ru_for_article(item, client, edit_russian=item.get("edit_title") is True)
                 if title_ru is not None:
                     row["translation"] = (_answer(response, "title_ru", title_ru) if response is not None
                                           else {"title_ru": title_ru, "model": None})
@@ -156,9 +162,10 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
             applied["errors"].append({"signal_id": signal_id, "error": f"модель: {str(row['error'])[:300]}"})
             continue
         context = _context(contexts.get(signal_id))
+        title_ru = _author_title(contexts.get(signal_id), _text(row.get("translation"), "title_ru", _TITLE_CHARS))
         values = {
             "summary": _core_glossary(_text(row.get("summary"), "summary", _SUMMARY_CHARS), context),
-            "title_ru": _core_glossary(_text(row.get("translation"), "title_ru", _TITLE_CHARS), context),
+            "title_ru": _core_glossary(title_ru, context),
         }
         written = signal_summary_store.write_summary(signal_id, values, log=[_step(values)])
         applied["written"] += bool(written)
@@ -176,6 +183,15 @@ def _signal_id(row: dict[str, Any], expected: set[str] | None) -> int | None:
 def _text(stage: Any, field: str, limit: int) -> str:
     value = stage.get(field) if isinstance(stage, dict) else None
     return " ".join(value.split())[:limit] if isinstance(value, str) else ""
+
+
+def _author_title(row: dict[str, Any] | None, title_ru: str) -> str:
+    """Русский заголовок материала написал человек: ядро пишет его как есть, что бы ни прислал воркер (решение владельца
+    03.11). Перевод иноязычного заголовка материала и заголовки находок — ответ воркера."""
+    if row is None or row.get("origin") != SIGNAL_ORIGIN_MATERIAL or not title_ru:
+        return title_ru
+    title = " ".join(str(row.get("title") or "").split())
+    return title[:_TITLE_CHARS] if title and not _needs_translation(title) else title_ru
 
 
 def _context(row: dict[str, Any] | None) -> dict[str, Any] | None:

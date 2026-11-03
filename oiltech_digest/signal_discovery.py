@@ -840,6 +840,8 @@ def run_discovery(
     heartbeat: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Средний слой: без базы. Возвращает кандидатов в сигналы по каждой теме."""
+    if not config.offline:
+        signal_dedup.configured_model()  # без модели дедупа — сбой до оплаченного поиска, а не после него
     beat = heartbeat or (lambda: None)
     known_urls = set(snapshot.get("known_urls") or [])
     topics_out = []
