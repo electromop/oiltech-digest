@@ -5,9 +5,9 @@
 - enqueue — запуск: задача прогона радара в режиме «поиск только находит» (otbor в задаче, флаг ядра не нужен) с
   меткой пробного прогона. Ядро пишет находки отдельно от радара (signal_discovery, trial): метка пути
   SIGNAL_SELECTOR_TRIAL и свой ключ, существующие сигналы прогон не меняет.
-- after_search — ядро, когда находки записаны: задачи «Отбора» по ним (вид задачи и воркер те же, что в работе).
-- apply_otbor — итог такой задачи: ответы проверяются кодом ядра, как у «Отбора» (otbor_answer.outcome), и решение
-  ложится шагом в «Ход решения» находки пробного прогона, а не в поля сигнала.
+- after_search — ядро, когда находки записаны: задачи «Отбора» по ним в тени проверки #134 (вид задачи и воркер те же,
+  что в работе; ответы проверяет код ядра, otbor.apply_result), решение — в строке находки таблицы проверки
+  (otbor_shadow_store.write_signal), а не в полях сигнала: витрины и шаги конвейера его не видят.
 - report — отчёт: материалы, доля уже собранного сбором, полнота по эталону эксперта, доля принятого «Отбором», цена.
 """
 
@@ -16,14 +16,10 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from oiltech_digest import config, contract, signal_discovery, signal_reference
-from oiltech_digest.db import otbor_inputs, otbor_store, repository, search_trial_store
-from oiltech_digest.otbor_answer import outcome, technical_failure
-from oiltech_digest.otbor_pack_format import load_dictionaries
+from oiltech_digest import config, signal_discovery, signal_reference
+from oiltech_digest.db import otbor_shadow_store, otbor_store, repository, search_trial_store
 
-TRIGGER = "search_trial"
-STAGE = "«Отбор», пробный прогон"
-OTBOR_KIND = "otbor"
+TRIGGER = otbor_shadow_store.SEARCH_TRIAL_TRIGGER
 # Оценка цены до оплаты. Вызов поиска — средний по прошлым прогонам радара (ai_processing_runs), без них — замер 18.10
 # (gpt-5 low: 74 тыс. токенов входа, 5,1 тыс. выхода, 15,6 поиска на вызов); те прогоны просили до 12 событий на тему,
 # поэтому верхняя граница растит выход и поиски по потолку. Вызов «Отбора» — замер 03.11 по 2 649 статьям ленты
@@ -143,8 +139,8 @@ def enqueue(trial: dict[str, Any]) -> dict[str, Any]:
 
 
 def after_search(job_id: int, applied: dict[str, Any], trial: dict[str, Any]) -> dict[str, Any]:
-    """Ядро, когда находки пробного прогона записаны: задачи «Отбора» по ним пачками по OTBOR_BATCH, по полосе
-    пересчётов. Флаг «Отбора» не нужен: решения в витрины не идут."""
+    """Ядро, когда находки пробного прогона записаны: задачи «Отбора» в тени проверки #134 (shadow) пачками по
+    OTBOR_BATCH, по полосе пересчётов. Флаг «Отбора» не нужен: решения в витрины не идут."""
     from oiltech_digest import network_policy
 
     ids = sorted({int(value) for topic in applied.get("topics") or [] for value in topic.get("signal_ids") or []})
@@ -152,67 +148,15 @@ def after_search(job_id: int, applied: dict[str, Any], trial: dict[str, Any]) ->
     batch = config.OTBOR_BATCH
     jobs = [
         repository.create_background_job(
-            OTBOR_KIND,
+            otbor_store.KIND,
             {"signal_ids": ids[start:start + batch], "model": trial.get("otbor_model"),
-             "reasoning": trial.get("otbor_reasoning"), "trigger": TRIGGER, "search_trial_job_id": int(job_id)},
+             "reasoning": trial.get("otbor_reasoning"), "trigger": TRIGGER, "shadow": True,
+             "search_trial_job_id": int(job_id)},
             queue_name=route.queue_name, execution_region=route.execution_region, capability=route.capability,
         )
         for start in range(0, len(ids), batch)
     ]
     return {"findings": len(ids), "otbor_jobs": [int(job["id"]) for job in jobs]}
-
-
-def apply_otbor(result: dict[str, Any], *, job_id: int, signal_ids: list[Any]) -> dict[str, Any]:
-    """Итог задачи «Отбора» пробного прогона: ответы воркера — недоверенный ввод, их проверяет код ядра, как у
-    «Отбора» в работе (otbor_answer.outcome); решение или сбой — шагом «Хода решения» находки, расход — в
-    ai_processing_runs. Строка не о находке этой задачи не пишется."""
-    dictionaries = load_dictionaries()
-    expected = {int(value) for value in signal_ids}
-    decisions = [decision for decision in result.get("decisions") or [] if isinstance(decision, dict)]
-    otbor_store.record_usage(job_id, [row for decision in decisions if (row := _usage(decision, expected))])
-    links = otbor_inputs.links_in_input(sorted(expected))
-    stale = result.get("dictionaries_version") != dictionaries.get("version")
-    applied: dict[str, Any] = {"trial": True, "decided": 0, "failed": 0, "errors": []}
-    for decision in decisions:
-        signal_id = contract.ref_signal_id(decision.get("ref"))
-        if signal_id is None or signal_id not in expected:
-            applied["errors"].append({"ref": str(decision.get("ref"))[:60], "error": "находки нет в этой задаче"})
-            continue
-        checked = (technical_failure(f"справочники сменились после выдачи задачи ({result.get('dictionaries_version')}"
-                                     f" → {dictionaries.get('version')})") if stale
-                   else outcome(decision, dictionaries, links=links.get(signal_id, 0)))
-        values = checked.values or {}
-        verdict = {
-            "decision": values.get("otbor_decision"), "category": values.get("signal_category"),
-            "reject_reason": values.get("reject_reason"), "industry": values.get("industry"),
-            "oilfield_relevance": values.get("oilfield_relevance"), "occasion": values.get("occasion"),
-            "disputed": bool(checked.disputed), "failure": checked.failure, "model": _model(decision),
-            "job_id": job_id,
-        }
-        text = "; ".join(step["text"] for step in checked.log) or (checked.failure_reason or "")
-        if search_trial_store.append_decision(signal_id, [{"stage": STAGE, "text": text, "otbor": verdict}]):
-            applied["failed" if checked.values is None else "decided"] += 1
-    return applied
-
-
-def _model(decision: dict[str, Any]) -> str | None:
-    return str(decision.get("model") or "")[:100] or None
-
-
-def _usage(decision: dict[str, Any], expected: set[int]) -> dict[str, Any] | None:
-    """Оплаченные вызовы модели, и с ответом не по правилам, — по ставкам ядра, как у «Отбора» в работе."""
-    signal_id = contract.ref_signal_id(decision.get("ref"))
-    try:
-        tokens_in = max(0, int(decision.get("input_tokens") or 0))
-        tokens_out = max(0, int(decision.get("output_tokens") or 0))
-    except (TypeError, ValueError):
-        return None
-    if signal_id is None or signal_id not in expected or not tokens_in + tokens_out:
-        return None
-    price_in, price_out = config.price_for_model(_model(decision))
-    return {"article_id": None, "signal_id": signal_id, "model": _model(decision), "input_tokens": tokens_in,
-            "output_tokens": tokens_out,
-            "cost_usd": round((tokens_in * price_in + tokens_out * price_out) / 1_000_000, 6)}
 
 
 # --- Отчёт ---------------------------------------------------------------------------------------
@@ -230,7 +174,7 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
     new_ids = [value for topic in applied.get("topics") or [] for value in topic.get("signal_ids") or []]
     again_ids = [value for topic in applied.get("topics") or [] for value in topic.get("found_again_ids") or []]
     findings = search_trial_store.findings(new_ids)
-    verdicts = {row["id"]: _last_verdict(row) for row in findings}
+    verdicts = {row["signal_id"]: _verdict(row) for row in otbor_shadow_store.signal_rows(new_ids)}
     topics = [_topic_row(topic, verdicts) for topic in applied.get("topics") or []]
     otbor_jobs = search_trial_store.otbor_jobs(int(job_id))
     # Материал — ссылка, прошедшая технические проверки; уже собранная сбором — тоже материал поиска.
@@ -285,9 +229,12 @@ def _topic_row(topic: dict[str, Any], verdicts: dict[int, Any]) -> dict[str, Any
     }
 
 
-def _last_verdict(row: dict[str, Any]) -> dict[str, Any] | None:
-    steps = [step for step in row.get("decision_log") or [] if isinstance(step, dict) and step.get("stage") == STAGE]
-    return (steps[-1].get("otbor") or None) if steps else None
+def _verdict(row: dict[str, Any]) -> dict[str, Any]:
+    """Решение «Отбора» по находке из её строки тени: решение, категория, причина отказа, «спорное», сбой."""
+    values = row.get("values_json") or {}
+    return {"decision": row.get("decision"), "category": values.get("signal_category"),
+            "reject_reason": values.get("reject_reason"), "disputed": bool(row.get("disputed")),
+            "failure": row.get("failure")}
 
 
 def _share(part: int, whole: int) -> float:

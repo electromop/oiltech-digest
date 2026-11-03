@@ -1,5 +1,5 @@
 """Хранилище пробного прогона широкого поиска (#138, signal_search_trial): находки пробного прогона (signals.selector =
-SIGNAL_SELECTOR_TRIAL), решение «Отбора» по ним шагом «Хода решения», чтения для отчёта.
+SIGNAL_SELECTOR_TRIAL) и чтения для отчёта. Решения «Отбора» по находкам — в таблице проверки #134 (otbor_shadow_store).
 
 ВНИМАНИЕ про тесты: соединение — `connection.get_connection()` атрибутом модуля (как в signal_card_store):
 изоляция тестов держится на подмене этого атрибута.
@@ -12,7 +12,6 @@ from datetime import date, datetime
 from typing import Any
 
 from psycopg.rows import dict_row
-from psycopg.types.json import Json
 
 from oiltech_digest.db import connection
 from oiltech_digest.db.repository import SIGNAL_SELECTOR_TRIAL
@@ -29,19 +28,6 @@ def evidence_owners(urls: Sequence[str]) -> dict[str, dict[str, Any]]:
             " WHERE e.source_url = ANY(%s)", (urls,),
         ).fetchall()
     return {row[0]: {"id": int(row[1]), "selector": row[2]} for row in rows}
-
-
-def append_decision(signal_id: int, steps: list[dict[str, Any]]) -> bool:
-    """Решение «Отбора» пробного прогона — шагами в «Ход решения» находки пробного прогона, не в поля сигнала: по полям
-    решения его показали бы витрины и взяли бы шаги конвейера. Только у находки пробного прогона."""
-    with connection.get_connection() as conn:
-        row = conn.execute(
-            "UPDATE signals SET decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()"
-            " WHERE id = %s AND selector = %s RETURNING id",
-            (Json(steps), int(signal_id), SIGNAL_SELECTOR_TRIAL),
-        ).fetchone()
-        conn.commit()
-    return row is not None
 
 
 def findings(signal_ids: Sequence[int]) -> list[dict[str, Any]]:

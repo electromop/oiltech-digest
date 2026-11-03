@@ -6,6 +6,7 @@
 """
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -244,3 +245,26 @@ def test_duplicate_of_a_main_finding_collected_during_the_run_reaches_otbor_itse
 
     trial = [row for row in signals_snapshot() if row[1] == repository.SIGNAL_SELECTOR_TRIAL]
     assert [row[4] for row in trial] == [[other_url]] and len(model.calls) == 1
+
+
+def test_before_deploy_sql_lets_the_shadow_hold_findings_and_repeats_safely(isolated_db):
+    script = Path(__file__).resolve().parents[1] / "scripts" / "signals" / "search-trial-shadow-before-deploy.sql"
+    with repository.get_connection() as conn:
+        conn.execute("DROP INDEX idx_otbor_shadow_signal")
+        conn.execute("ALTER TABLE otbor_shadow_decisions DROP CONSTRAINT otbor_shadow_one_publication")
+        conn.execute("ALTER TABLE otbor_shadow_decisions DROP COLUMN signal_id")
+        conn.execute("ALTER TABLE otbor_shadow_decisions ALTER COLUMN article_id SET NOT NULL")
+        conn.commit()
+
+    for _ in range(2):  # повтор безопасен
+        with repository.get_connection() as conn:
+            conn.commit()  # SET search_path открыл транзакцию — у скрипта своя
+            conn.autocommit = True
+            conn.execute(script.read_text(encoding="utf-8"))
+
+    with repository.get_connection() as conn:
+        nullable = conn.execute(
+            "SELECT column_name, is_nullable FROM information_schema.columns WHERE table_schema = current_schema()"
+            " AND table_name = 'otbor_shadow_decisions' AND column_name IN ('article_id', 'signal_id')").fetchall()
+        indexes = {row[0] for row in conn.execute("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")}
+    assert sorted(nullable) == [("article_id", "YES"), ("signal_id", "YES")] and "idx_otbor_shadow_signal" in indexes
