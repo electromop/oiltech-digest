@@ -18,6 +18,12 @@ CONTRACT_TITLE = "ADNOC Drilling awards SLB a contract to drill 40 wells for Hai
 CONTRACT_RU = "ADNOC Drilling заключила с SLB контракт на бурение 40 скважин"
 
 
+RU_URL = "https://oilcapital.example/news/gpn-drilling-platform"
+RU_TITLE = ("«Газпром нефть» запустила цифровую платформу бурения — Новости о нефти и газе в России и мире - "
+            "Нефть и капитал")
+RU_EDITED = "«Газпром нефть» запустила цифровую платформу бурения"
+
+
 def _sections(admin):
     return {card["title"]: card["section_reason"] for card in api_get("/api/signals", admin, section="all")}
 
@@ -55,6 +61,19 @@ def test_business_finding_the_old_search_dropped_reaches_otbor_and_gets_a_russia
     assert "category: business" in summary_call["input"] and "oilfield_relevance: direct" in summary_call["input"]
     assert "accept" not in summary_call["input"] and "Программа бурения оператора" not in summary_call["input"]
     assert showcase(user, "technology") == {}
+
+
+def test_accepted_finding_gets_its_russian_title_edited_by_the_rules(user, contour, monkeypatch):
+    """Решение владельца 03.11: русский заголовок принятой находки не по правилам эксперта (#150) правит «Суть и
+    перевод», как переводит иноязычный. Заголовок страницы издателя остаётся в title, правленый — в title_ru."""
+    run_radar(monkeypatch, [event(RU_TITLE, RU_URL)], {RU_URL: page(RU_TITLE)})
+    decide(monkeypatch, {RU_TITLE: answer()})
+
+    model = summarize(monkeypatch, {RU_TITLE: (RU_EDITED, "Суть от «Суть и перевод»")})
+
+    assert [call["schema"] for call in model.calls] == ["article_summary", "article_title_edit"]
+    card = showcase(user, "business")[RU_TITLE]
+    assert (card["title"], card["title_ru"]) == (RU_TITLE, RU_EDITED)
 
 
 def test_technical_drops_of_the_search_lie_in_search_sections_and_never_reach_otbor(user, admin, contour, monkeypatch):

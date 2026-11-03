@@ -110,8 +110,13 @@ function serve(cards: Signal[], tiles: Partial<Tiles> = {}) {
   });
   vi.mocked(createSignalFeedback).mockImplementation(async (payload) => {
     const card = state.find((item) => item.id === payload.signal_id);
-    if (card) card.feedback_count = Number(card.feedback_count || 0) + 1;
-    return { ok: true, event_id: 1, memory_ids: [], memories: 0 };
+    // Блок ОС: запись с оценкой, причиной или комментарием; только она идёт в счётчик (решение владельца 03.11).
+    const block = payload.verdict || payload.reason || payload.comment
+      ? { id: 1, author: "radar@example.test", verdict: payload.verdict ?? null, reason: payload.reason ?? null,
+          comment: payload.comment || null, created_at: "2026-11-03T10:00:00Z" }
+      : null;
+    if (card && block) card.feedback_count = Number(card.feedback_count || 0) + 1;
+    return { ok: true, event_id: 1, memory_ids: [], memories: 0, block };
   });
 }
 
@@ -716,6 +721,46 @@ describe("SignalRadarPage", () => {
       expect(screen.getByRole("combobox", { name: /^Сортировка/ })).toHaveValue("score_desc");
     });
 
+    // Задача владельца 03.11: дата поступления та же, что «Поступил» на карточке; поля «от» и «до» в одной ячейке.
+    it("дата поступления: «от» и «до» в одной ячейке панели, период уходит на сервер одним фильтром", async () => {
+      serve([drilling, { ...ecology, first_seen_at: "2026-10-05T09:00:00Z" }]);
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Фильтры" }));
+      const arrival = screen.getByRole("group", { name: "Дата поступления" });
+      const from = within(arrival).getByLabelText("от");
+      const to = within(arrival).getByLabelText("до");
+      expect([from, to].map((input) => input.getAttribute("type"))).toEqual(["date", "date"]);
+
+      fireEvent.change(from, { target: { value: "2026-10-01" } });
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ since: "2026-10-01" }));
+      expect(lastListQuery().until).toBeUndefined();
+      expect(await screen.findByText("1 из 2 сигналов")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Снять: Дата поступления: от 01.10.2026" })).toBeInTheDocument();
+
+      fireEvent.change(to, { target: { value: "2026-10-15" } });
+
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ since: "2026-10-01", until: "2026-10-15" }));
+      // Период как один фильтр: одно число на кнопке и один чип; «от» позже «до» выбрать нельзя.
+      expect(screen.getByRole("button", { name: "Фильтры · 1" })).toBeInTheDocument();
+      expect([from.getAttribute("max"), to.getAttribute("min")]).toEqual(["2026-10-15", "2026-10-01"]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Снять: Дата поступления: от 01.10.2026 до 15.10.2026" }));
+
+      await waitFor(() => expect(lastListQuery().since).toBeUndefined());
+      expect(lastListQuery().until).toBeUndefined();
+      expect([from, to].map((input) => (input as HTMLInputElement).value)).toEqual(["", ""]);
+
+      fireEvent.change(to, { target: { value: "2026-09-30" } });
+      await waitFor(() => expect(lastListQuery()).toMatchObject({ until: "2026-09-30" }));
+      expect(screen.getByRole("button", { name: "Снять: Дата поступления: до 30.09.2026" })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+
+      await waitFor(() => expect(lastListQuery().until).toBeUndefined());
+      expect((to as HTMLInputElement).value).toBe("");
+    });
+
     it("форма ОС — поля как в остальных формах, «Отмена» и «Сохранить» справа; «Отмена» ничего не отправляет", async () => {
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
@@ -746,7 +791,6 @@ describe("SignalRadarPage", () => {
     });
 
     it("после «Сохранить» форма закрывается, а счётчик отзывов растёт", async () => {
-      vi.mocked(createSignalFeedback).mockResolvedValue({ ok: true, event_id: 7, memory_ids: [], memories: 0 });
       renderRadar(false);
       fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
       fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
@@ -758,6 +802,24 @@ describe("SignalRadarPage", () => {
       await waitFor(() => expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument());
       expect(createSignalFeedback).toHaveBeenCalledWith(expect.objectContaining({ signal_id: 21, verdict: "strong_signal" }));
       expect(screen.getByText("Обратная связь: 1")).toBeInTheDocument();
+      expect(within(screen.getByRole("list", { name: "Оценки людей" })).getAllByRole("listitem")).toHaveLength(1);
+    });
+
+    // Решение владельца 03.11: счётчик считает записи «Оценок людей»; правка заголовка без оценки, причины и
+    // комментария блоком не становится, и счётчик за ней не растёт.
+    it("правка заголовка без оценки не меняет счётчик и не добавляет пустую оценку", async () => {
+      renderRadar(false);
+      fireEvent.click(await screen.findByRole("button", { name: "Раскрыть группу Бурение" }));
+      fireEvent.click(screen.getByRole("button", { name: "Раскрыть сигнал" }));
+      fireEvent.click(screen.getByRole("button", { name: "Обратная связь" }));
+
+      fireEvent.change(screen.getByLabelText("Рекомендуемый заголовок"), { target: { value: "Буровой робот" } });
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument());
+      expect(createSignalFeedback).toHaveBeenCalledWith(expect.objectContaining({ corrected_title: "Буровой робот" }));
+      expect(screen.getByText("Обратная связь: 0")).toBeInTheDocument();
+      expect(screen.queryByRole("list", { name: "Оценки людей" })).not.toBeInTheDocument();
     });
 
     it("карточка — свёрнутая строка, как у «Бизнес-сигналов», и раскрывается", async () => {

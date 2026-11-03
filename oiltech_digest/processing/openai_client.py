@@ -56,12 +56,14 @@ class OpenAIResponsesClient:
             raise AIClientError("OPENAI_API_KEY is empty")
 
         used_model = model or self.model
+        requested = reasoning_effort or config.OPENAI_REASONING_EFFORT
+        effort = _reasoning_effort(used_model, requested)
         payload: dict[str, Any] = {
             "model": used_model,
             "instructions": instructions,
             "input": user_input,
             "store": False,
-            "max_output_tokens": max_output_tokens,
+            "max_output_tokens": _budget_for_sent_effort(max_output_tokens, requested, effort),
             "text": {
                 "verbosity": "low",
                 "format": {
@@ -72,7 +74,6 @@ class OpenAIResponsesClient:
                 }
             },
         }
-        effort = _reasoning_effort(used_model, reasoning_effort or config.OPENAI_REASONING_EFFORT)
         if effort:
             payload["reasoning"] = {"effort": effort}
 
@@ -90,10 +91,9 @@ class OpenAIResponsesClient:
 
         raw = response.json()
         text = _extract_output_text(raw)
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise AIClientError(f"OpenAI returned non-JSON output: {text[:500]}") from exc
+        data = _single_json_object(text)
+        if data is None:
+            raise AIClientError(f"OpenAI returned non-JSON output: {text[:500]}")
 
         usage = raw.get("usage") or {}
         return AIResponse(
@@ -115,12 +115,13 @@ class OpenAIResponsesClient:
         опирается на найденное, а не на память модели."""
         if not self.api_key:
             raise AIClientError("OPENAI_API_KEY is empty")
+        effort = _reasoning_effort(model, reasoning_effort)
         payload: dict[str, Any] = {
             "model": model,
             "instructions": instructions,
             "input": user_input,
             "store": False,
-            "max_output_tokens": max_output_tokens,
+            "max_output_tokens": _budget_for_sent_effort(max_output_tokens, reasoning_effort, effort),
             "tools": [{"type": "web_search", "search_context_size": search_context_size}],
             # Адреса, которые поиск реально вернул. Сносок (url_citation) при строгом JSON
             # модель не ставит — прогон 30.09: 0 из 18, — и проверять ссылку было не по чему.
@@ -128,7 +129,6 @@ class OpenAIResponsesClient:
             "text": {"format": {"type": "json_schema", "name": schema["name"], "strict": True,
                                 "schema": schema["schema"]}},
         }
-        effort = _reasoning_effort(model, reasoning_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
         response = requests.post(
@@ -160,6 +160,34 @@ class OpenAIResponsesClient:
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
         )
+
+
+def _single_json_object(text: str) -> dict[str, Any] | None:
+    """Единственный целый объект ответа при строгой схеме. Лёгкие модели изредка портят обёртку: строка перед объектом,
+    мусор или оборванный повтор после него (переигровка «Дедупа» 03.11: у gpt-6-luna без рассуждения 5 ответов из 329 —
+    «[JSON не возвращать…]{…}», «{…}即»), а сам объект цел — его и берём. Два целых объекта (черновик и итог) — сбой:
+    какой из них ответ, не знаем. Оборванный объект — тоже сбой. В отличие от _research_payload (несколько сообщений
+    поиска, берётся то, где больше событий) здесь ответ один."""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        start = text.find("{")
+        if start == -1:
+            return None
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            return None
+        rest = text.find("{", end)
+        while rest != -1:
+            try:
+                decoder.raw_decode(text, rest)
+            except json.JSONDecodeError:
+                rest = text.find("{", rest + 1)
+                continue
+            return None
+    return value if isinstance(value, dict) else None
 
 
 def _research_payload(raw: dict[str, Any]) -> dict[str, Any]:
@@ -197,13 +225,22 @@ def _research_payload(raw: dict[str, Any]) -> dict[str, Any]:
 
 # Сколько токенов ответа добавить на рассуждение: лимиты вызовов подбирались под minimal, и на
 # medium модель тратила весь лимит на рассуждение — «ответ без текста» (прогон 28.09).
-_REASONING_OUTPUT_EXTRA = {"none": 0, "minimal": 0, "low": 2000, "medium": 6000, "high": 14000, "xhigh": 20000}
+_REASONING_OUTPUT_EXTRA = {"none": 0, "minimal": 0, "low": 2000, "medium": 6000, "high": 14000, "xhigh": 20000,
+                           "max": 32000}
 
 
 def output_budget(base: int, reasoning_effort: str | None) -> int:
     """Лимит ответа с запасом на рассуждение; неизвестный уровень — как medium."""
     effort = (reasoning_effort or "").strip().lower()
     return int(base) + _REASONING_OUTPUT_EXTRA.get(effort, _REASONING_OUTPUT_EXTRA["medium"] if effort else 0)
+
+
+def _budget_for_sent_effort(max_output_tokens: int, requested: str | None, sent: str | None) -> int:
+    """Лимит ответа под уровень, который реально уходит в API.
+
+    Стадия считает запас под свой уровень (output_budget), а модель может его не уметь: minimal у gpt-6.1-sol
+    уходит как low — без добавки рассуждение съело бы весь ответ («ответ без текста», прогон 28.09)."""
+    return int(max_output_tokens) + max(0, output_budget(0, sent) - output_budget(0, requested))
 
 
 class OfflineAIClient:
@@ -304,16 +341,50 @@ def _extract_output_text(raw: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
+# Уровни рассуждения от лёгкого к тяжёлому. Неподдержанный уровень заменяется ближайшим поддержанным, при равенстве —
+# более лёгким: minimal у gpt-6-luna уходит как none, у gpt-6.1-sol — как low.
+_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+_ALL_BUT_MINIMAL = frozenset(_EFFORT_ORDER) - {"minimal"}
+_LOW_AND_ABOVE = frozenset(_EFFORT_ORDER[_EFFORT_ORDER.index("low"):])
+# Какие уровни принимает модель — страницы моделей OpenAI, сверено 18.10.2026 (gpt-6-sol и gpt-6.1-terra — 03.11.2026).
+# Ключ — начало имени: в ответе API имя бывает с датой. Незнакомая gpt-6 — уровни, которые принимают все известные
+# gpt-6 (low…max); остальные модели, в том числе gpt-5.6-* (none…max), — правило поколений gpt-5 / gpt-5.N в
+# _reasoning_effort.
+_MODEL_EFFORTS: dict[str, frozenset[str]] = {
+    "gpt-6.1-sol": _LOW_AND_ABOVE,
+    "gpt-6-astra": _LOW_AND_ABOVE,
+    "gpt-6.1-terra": _ALL_BUT_MINIMAL,
+    "gpt-6-sol": _ALL_BUT_MINIMAL,
+    "gpt-6-luna": _ALL_BUT_MINIMAL,
+}
+
+
+def _supported_efforts(model_name: str) -> frozenset[str] | None:
+    for prefix in sorted(_MODEL_EFFORTS, key=len, reverse=True):
+        if model_name.startswith(prefix):
+            return _MODEL_EFFORTS[prefix]
+    return _LOW_AND_ABOVE if model_name.startswith("gpt-6") else None
+
+
 def _reasoning_effort(model: str, configured: str | None) -> str | None:
-    """Normalize reasoning effort across GPT-5 generations.
+    """Normalize reasoning effort across GPT-5 and GPT-6 generations.
 
     GPT-5.1 и новее (5.1, 5.2, 5.3, 5.4, 5.5, …) поддерживают `none` и НЕ принимают
     `minimal`; исходный GPT-5 (gpt-5/-mini/-nano) — наоборот: принимает `minimal`,
-    но не `none`. Подбираем эффективный дефолт под поколение и переводим
-    несовместимые значения, чтобы не ловить 400 при апгрейде модели.
+    но не `none`. GPT-6 — по таблице _MODEL_EFFORTS: `minimal` не принимает никто,
+    gpt-6.1-sol и gpt-6-astra — и `none`. Пустое значение — самый лёгкий уровень
+    модели. Переводим несовместимые значения, чтобы не ловить 400 при смене модели.
     """
     value = (configured or "").strip().lower()
     model_name = (model or "").lower()
+    supported = _supported_efforts(model_name)
+    if supported is not None:
+        if not value:
+            return min(supported, key=_EFFORT_ORDER.index)
+        if value in supported or value not in _EFFORT_ORDER:
+            return value
+        wanted = _EFFORT_ORDER.index(value)
+        return min(supported, key=lambda level: (abs(_EFFORT_ORDER.index(level) - wanted), _EFFORT_ORDER.index(level)))
     match = re.match(r"gpt-5\.(\d+)", model_name)
     supports_none = bool(match and int(match.group(1)) >= 1)  # семейство 5.1+
     if not value:

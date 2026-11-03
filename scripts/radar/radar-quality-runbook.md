@@ -90,6 +90,8 @@
   # по умолчанию уже так, задавать не нужно:
   # SIGNAL_RESEARCH_TIMEOUT_SECONDS=480  SIGNAL_AI_TIMEOUT_SECONDS=240
   # SIGNAL_THEME_CHECK_MODEL — второе мнение о тематике, по умолчанию модель дедупа
+  # обязательно с 03.11 (отката на OPENAI_MODEL нет, без строки прогон падает до поиска):
+  # SIGNAL_DEDUP_MODEL=…  SIGNAL_DEDUP_REASONING=…
   ```
 
   С #138 модель поиска, уровень, потолок на тему и период: строки `.env` ядра, они едут в задаче, NL их не читает.

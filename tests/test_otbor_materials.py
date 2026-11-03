@@ -113,6 +113,10 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
     assert [one["name"] for one in card["participants_json"]] == ["Татнефть", "ТаграС"]
     assert [(block["author"], block["verdict"], block["comment"]) for block in card["feedback_blocks"]] == [
         ("Иван Иванов", "strong_signal", "Конкурент взял объём")]
+    # Оценка автора лежит в «Оценках людей»: счётчик «Обратная связь: N» и фильтр «Наличие ОС» её видят (03.11).
+    assert card["feedback_count"] == 1
+    assert TITLE in showcase(user, "business", feedback="with")
+    assert TITLE not in showcase(user, "business", feedback="without")
     assert colleague_materials.get_material(material["id"])["signal_id"] == card["id"]
 
     # Итог — автору: бот отвечает на карточку материала в группе, с упоминанием автора; второй раз не шлёт.
@@ -125,8 +129,22 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
     assert _bot(telegram).notify() == 0 and len(telegram.sent) == 1
 
 
+def test_author_title_is_not_edited_even_off_the_rules(user, contour, monkeypatch):
+    """Заголовок материала — значение человека: «Суть и перевод» не правит его и тогда, когда он не по правилам
+    эксперта (решение владельца 03.11: правка — у статей и находок)."""
+    title = "Татнефть выбрала подрядчика по ГРП на 2027 год — итоги тендера"
+    _send(_material(title=title))
+    decide(monkeypatch, {title: answer()})
+
+    model = summarize(monkeypatch, {})
+
+    assert model.calls == []
+    assert showcase(user, "business")[title]["title_ru"] == title
+
+
 def test_core_keeps_the_author_fields_whatever_the_worker_returns(user, contour, monkeypatch):
-    # Ответ воркера — недоверенный ввод: суть, которую он прислал материалу с описанием автора, ядро не пишет.
+    # Ответ воркера — недоверенный ввод: суть, которую он прислал материалу с описанием автора, ядро не пишет, а русский
+    # заголовок автора пишет как есть (решение владельца 03.11: заголовок материала не правится).
     _send(_material())
     decide(monkeypatch, {TITLE: answer()})
     [card] = showcase(user, "business").values()
@@ -138,7 +156,7 @@ def test_core_keeps_the_author_fields_whatever_the_worker_returns(user, contour,
     run_worker("external-ai")
 
     card = showcase(user, "business")[TITLE]
-    assert (card["summary"], card["title_ru"]) == (DESCRIPTION, "Чужой заголовок")
+    assert (card["summary"], card["title_ru"]) == (DESCRIPTION, TITLE)
 
 
 def test_rejected_material_is_its_signal_in_the_rejected_list_and_the_author_hears_the_reason(

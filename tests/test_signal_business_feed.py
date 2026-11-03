@@ -5,6 +5,8 @@
 «Дочерние общества».
 """
 
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api
@@ -103,7 +105,8 @@ def test_company_filter_compares_participants_by_the_one_company_rule(user):
 
 
 def _edit(method, path, user, **body):
-    """Правка списка дочек через API экрана «Дочерние общества» (только админ)."""
+    """Правка через API экрана от имени пользователя: список дочек («Дочерние общества», только админ), отзыв,
+    «В дайджест»."""
     api.app.dependency_overrides[api.require_user] = lambda: user
     try:
         response = TestClient(api.app).request(method, path, json=body or None)
@@ -193,6 +196,104 @@ def test_screen_gets_the_filter_values_from_the_dictionaries(user):
     assert "Ближний Восток" in payload["region"] and "робототехника" in payload["technology_class"]
     # Подсказки к полю «Компания» — канонические имена справочника алиасов, без самих алиасов.
     assert "SLB" in payload["companies"] and "Schlumberger" not in payload["companies"]
+
+
+def _statuses(user, **params):
+    """Коды ответа списка и сводки витрины на одни и те же параметры."""
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        client = TestClient(api.app)
+        return [client.get(path, params=params).status_code for path in ("/api/signals", "/api/signals/summary")]
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+
+
+def test_arrival_filter_takes_the_moscow_day_the_article_was_collected_in_the_list_and_the_summary(user):
+    # Задача владельца 03.11: дата поступления та же, что «Поступил» на карточке; у сигнала ленты это день сбора статьи
+    # по Москве. 30.09 в 22:30 UTC по Москве уже 01.10.
+    feed_signal("Поздний сбор", "Текст.", collected=datetime(2026, 9, 30, 22, 30, tzinfo=timezone.utc))
+    feed_signal("Дневной сбор", "Текст.", collected=datetime(2026, 9, 30, 9, 0, tzinfo=timezone.utc))
+
+    assert _titles(user, since="2026-10-01") == ["Поздний сбор"]
+    assert _titles(user, until="2026-09-30") == ["Дневной сбор"]
+    assert _titles(user, since="2026-09-30", until="2026-10-01") == ["Дневной сбор", "Поздний сбор"]
+    summary = api_get("/api/signals/summary", user, showcase="business", since="2026-10-01", until="2026-10-01")
+    assert (summary["total"], summary["matching"]) == (2, 1)
+    # «От» позже «до» даёт пустой период, а не ошибку; не дата даёт 422, как чужое значение у остальных фильтров.
+    assert _titles(user, since="2026-10-05", until="2026-10-01") == []
+    assert _statuses(user, showcase="business", since="01.10.2026") == [422, 422]
+
+
+def test_feedback_filter_takes_the_records_of_the_feedback_block_as_the_card_lists_them(user):
+    # Решение владельца 03.11: «есть ОС» значит любая запись блока «Обратная связь» карточки (оценка, причина,
+    # комментарий), её карточка показывает списком «Оценки людей». «В дайджест» делается не в этом блоке, это не ОС.
+    commented = _feed(user, "Контракт с отзывом")
+    _feed(user, "Контракт без отзыва")
+    # «В дайджест» ставят только в открытом месяце выпуска: статья этого месяца.
+    feed_signal("Контракт в дайджесте", "Текст.", published=datetime.now(timezone.utc))
+    picked = business(user)["Контракт в дайджесте"]["id"]
+    _edit("POST", "/api/signals/feedback", user, signal_id=commented, verdict="strong_signal", comment="Конкурент взял объём")
+    _edit("PATCH", f"/api/signals/{picked}", user, selected_for_digest=True)
+    radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
+    sensor = radar_finding("sensor", "Датчик утечек", "Датчик утечек на трубопроводе.")
+    # Отзыв по адресу ссылки, без номера карточки: так карточка получает отзывы о своём склеенном дубле.
+    _edit("POST", "/api/signals/feedback", user, source_url="https://radar.example/robot", reason="Сильный источник")
+    _edit("PATCH", f"/api/signals/{sensor}", user, selected_for_digest=True)
+
+    assert _titles(user, feedback="with") == ["Контракт с отзывом"]
+    assert _titles(user, feedback="without") == ["Контракт без отзыва", "Контракт в дайджесте"]
+    assert _titles(user, "technology", feedback="with") == ["Робот-бурильщик"]
+    assert _titles(user, "technology", feedback="without") == ["Датчик утечек"]
+    # Фильтр и карточка совпадают: у «Есть ОС» список «Оценки людей» не пуст, у «Нет ОС» пуст.
+    for showcase in ("business", "technology"):
+        for choice, listed in (("with", True), ("without", False)):
+            cards = api_get("/api/signals", user, showcase=showcase, feedback=choice)
+            assert [bool(card["feedback_blocks"]) for card in cards] == [listed] * len(cards)
+    summary = api_get("/api/signals/summary", user, showcase="business", feedback="without")
+    assert (summary["total"], summary["matching"]) == (3, 2)
+    # Чужое значение даёт 422, а не выборку без фильтра.
+    assert _statuses(user, feedback="yes") == [422, 422]
+
+
+def test_feedback_tile_and_card_counter_count_the_same_records_as_the_filter(user):
+    # Решение владельца 03.11: плашка «С обратной связью» и счётчик «Обратная связь: N» считают то же, что фильтр
+    # «Наличие ОС»: записи блока «Обратная связь», а не нажатия «В дайджест».
+    robot = radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
+    sensor = radar_finding("sensor", "Датчик утечек", "Датчик утечек на трубопроводе.")
+    contract = _feed(user, "Контракт ленты")
+    _edit("POST", "/api/signals/feedback", user, signal_id=robot, verdict="strong_signal")
+    _edit("POST", "/api/signals/feedback", user, source_url="https://radar.example/robot", comment="Сильный источник")
+    _edit("PATCH", f"/api/signals/{sensor}", user, selected_for_digest=True)
+    # Отзыв о сигнале ленты с адресом ссылки карточки радара: карточке другого происхождения он не засчитывается.
+    with repository.get_connection() as conn:
+        conn.execute("INSERT INTO signal_feedback_events (signal_id, source_url, event_type, comment) "
+                     "VALUES (%s, 'https://radar.example/sensor', 'comment_added', 'о статье ленты')", (contract,))
+        conn.commit()
+
+    summary = api_get("/api/signals/summary", user)
+    assert (summary["with_feedback"], summary["in_digest"]) == (1, 1)
+    assert api_get("/api/signals/summary", user, showcase="business")["with_feedback"] == 1
+    assert _titles(user, "technology", tile="with_feedback") == _titles(user, "technology", feedback="with") == [
+        "Робот-бурильщик"]
+    cards = {card["title"]: card for card in api_get("/api/signals", user)}
+    assert [(cards[title]["feedback_count"], len(cards[title]["feedback_blocks"]))
+            for title in ("Робот-бурильщик", "Датчик утечек")] == [(2, 2), (0, 0)]
+    assert business(user)["Контракт ленты"]["feedback_count"] == 1
+
+
+def test_feedback_without_a_rating_reason_or_comment_is_not_a_feedback_block(user):
+    # Правка заголовка без оценки, причины и комментария (форма судьи радара) пишется в журнал, но записью блока ОС не
+    # становится: ответ без блока, счётчик 0, карточка «Нет ОС», плашка её не считает (решение владельца 03.11).
+    robot = radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
+
+    saved = _edit("POST", "/api/signals/feedback", user, signal_id=robot, corrected_title="Буровой робот Equinor")
+
+    assert saved["block"] is None
+    [card] = api_get("/api/signals", user)
+    assert (card["id"], card["title_ru"], card["feedback_count"], card["feedback_blocks"]) == (
+        robot, "Буровой робот Equinor", 0, [])
+    assert [row["id"] for row in api_get("/api/signals", user, feedback="without")] == [robot]
+    assert api_get("/api/signals/summary", user)["with_feedback"] == 0
 
 
 def test_value_outside_the_dictionaries_is_refused_not_silently_empty(user):
