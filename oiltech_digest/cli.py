@@ -983,7 +983,10 @@ def cmd_find_reprints(args: argparse.Namespace) -> None:
         return
 
     client = make_client(offline=args.offline)
-    result = reprints.review_candidates(candidates, client, dry_run=not args.apply)
+    try:
+        result = reprints.review_candidates(candidates, client, dry_run=not args.apply)
+    except reprints.ReprintSetupError as exc:
+        raise SystemExit(f"find-reprints: {exc}") from exc
     st = result["stats"]
     print(f"проверено моделью: {st['checked']}, перепечаток: {st['reprints']}, "
           f"разные события: {st['distinct']}, ошибок: {st['errors']}")
