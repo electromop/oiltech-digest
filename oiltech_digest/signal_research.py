@@ -117,37 +117,20 @@ technology опиши её. Для каждого события назови te
 - summary и why_important — по-русски, 1–3 предложения, с фактами (кто, что, где, цифры).
 Упорядочь по значимости для нефтесервиса: первое — самое важное."""
 
-RESEARCH_SCHEMA = {
-    "name": "radar_topic_research",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["events"],
-        "properties": {
-            "events": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["title", "company", "event_date", "summary", "why_important",
-                                 "source_url", "publisher", "source_kind", "technology", "event_kind"],
-                    "properties": {
-                        "title": {"type": "string"},
-                        "company": {"type": "string"},
-                        "event_date": {"type": "string"},
-                        "summary": {"type": "string"},
-                        "why_important": {"type": "string"},
-                        "source_url": {"type": "string"},
-                        "publisher": {"type": "string"},
-                        "source_kind": {"type": "string", "enum": ["primary", "trade_press", "secondary"]},
-                        "technology": {"type": "string"},
-                        "event_kind": {"type": "string", "enum": list(EVENT_KINDS)},
-                    },
-                },
-            },
-        },
-    },
-}
+def _research_schema(name: str, kind_field: str, kinds: tuple[str, ...]) -> dict[str, Any]:
+    """Схема ответа поиска: события с первоисточником; у прежнего поиска — тип события, у широкого (#138) — вид
+    материала. Строгий JSON: все поля обязательны."""
+    properties: dict[str, Any] = {field: {"type": "string"} for field in (
+        "title", "company", "event_date", "summary", "why_important", "source_url", "publisher")}
+    properties["source_kind"] = {"type": "string", "enum": ["primary", "trade_press", "secondary"]}
+    properties["technology"] = {"type": "string"}
+    properties[kind_field] = {"type": "string", "enum": list(kinds)}
+    item = {"type": "object", "additionalProperties": False, "required": list(properties), "properties": properties}
+    return {"name": name, "schema": {"type": "object", "additionalProperties": False, "required": ["events"],
+                                     "properties": {"events": {"type": "array", "items": item}}}}
+
+
+RESEARCH_SCHEMA = _research_schema("radar_topic_research", "event_kind", EVENT_KINDS)
 
 # Широкий поиск (#138, спека #128): при «Отборе» поиск ищет все материалы нефтесервиса и нефтегаза за период, а не
 # только технологии, — что брать, решает «Отбор». Вид материала от модели поиска — черновые данные находки (во вход
@@ -192,37 +175,7 @@ material_kind:
 - summary и why_important — по-русски, 1–3 предложения, с фактами (кто, что, где, цифры).
 Упорядочь по значимости для нефтесервиса: первое — самое важное."""
 
-RESEARCH_SCHEMA_BROAD = {
-    "name": "radar_topic_research_broad",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["events"],
-        "properties": {
-            "events": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["title", "company", "event_date", "summary", "why_important",
-                                 "source_url", "publisher", "source_kind", "material_kind", "technology"],
-                    "properties": {
-                        "title": {"type": "string"},
-                        "company": {"type": "string"},
-                        "event_date": {"type": "string"},
-                        "summary": {"type": "string"},
-                        "why_important": {"type": "string"},
-                        "source_url": {"type": "string"},
-                        "publisher": {"type": "string"},
-                        "source_kind": {"type": "string", "enum": ["primary", "trade_press", "secondary"]},
-                        "material_kind": {"type": "string", "enum": list(MATERIAL_KINDS)},
-                        "technology": {"type": "string"},
-                    },
-                },
-            },
-        },
-    },
-}
+RESEARCH_SCHEMA_BROAD = _research_schema("radar_topic_research_broad", "material_kind", MATERIAL_KINDS)
 
 # Модели, которые OpenAI снимает 11.12.2026: исходное поколение gpt-5 (с датой в имени — тоже). gpt-5.4, gpt-5.5 и
 # новее не снимаются.

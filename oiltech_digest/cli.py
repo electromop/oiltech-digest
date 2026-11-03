@@ -2650,6 +2650,8 @@ def _print_search_trial_report(result: dict) -> None:
         for item in recall["items"]:
             if item["search"]:
                 print(f"  + поиск{'' if item['collection'] else ', только поиск'}: {item['title'][:100]}")
+            elif item["collection"]:
+                print(f"  = только сбор: {item['title'][:100]}")
         for title in recall["missed"]:
             print(f"  - не нашёл никто: {title[:100]}")
 
@@ -4033,8 +4035,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_search_trial = sub.add_parser(
         "radar-search-trial",
-        help="пробный прогон широкого поиска (#138): сухой по умолчанию — вызовы и цена; --run — один прогон, находки "
-             "проходят «Отбор», витрины не меняются; --report N — отчёт",
+        help="пробный прогон широкого поиска (#138): без флага сухой прогон с вызовами и ценой; --run: один прогон, "
+             "находки проходят «Отбор», витрины не меняются; --report N: отчёт",
     )
     p_search_trial.add_argument("--since", type=_iso_date, default=None,
                                 help="период поиска с ГГГГ-ММ-ДД (по умолчанию SIGNAL_RESEARCH_DAYS до --until)")
@@ -4045,7 +4047,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_search_trial.add_argument("--reasoning", default=None, help="уровень рассуждения поиска")
     p_search_trial.add_argument("--otbor-model", default=None, help="модель «Отбора» (по умолчанию OTBOR_MODEL)")
     p_search_trial.add_argument("--otbor-reasoning", default=None, help="уровень рассуждения «Отбора»")
-    p_search_trial.add_argument("--run", action="store_true", help="поставить прогон; без флага — сухой прогон")
+    p_search_trial.add_argument("--run", action="store_true", help="поставить прогон; без флага сухой прогон")
     p_search_trial.add_argument("--report", type=int, default=None, help="отчёт по задаче пробного прогона N")
     p_search_trial.add_argument("--reference", default=None,
                                 help="эталон эксперта (xlsx, как у radar-recall) для полноты в отчёте")

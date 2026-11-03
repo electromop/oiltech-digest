@@ -3190,7 +3190,7 @@ def set_signal_agent_memory_status(memory_id: int, status: str) -> bool:
         return cur.rowcount > 0
 
 
-def collected_article_url_keys(*, since: date | datetime) -> list[str]:
+def collected_url_keys_since(*, since: date | datetime) -> list[str]:
     """Ключи адресов статей сбора, собранных с этой даты (normalize.url_key): широкий поиск радара (#138) не делает
     находкой ссылку, которая уже есть в сборе. Статья на удалении в счёт не идёт."""
     with get_connection() as conn:
@@ -3202,8 +3202,8 @@ def collected_article_url_keys(*, since: date | datetime) -> list[str]:
     return sorted(row[0] for row in rows)
 
 
-def collected_url_keys(keys: list[str]) -> set[str]:
-    """Какие из ключей адресов (normalize.url_key) есть среди статей сбора за всё время (#138)."""
+def collected_url_keys_among(keys: list[str]) -> set[str]:
+    """Какие из этих ключей адресов (normalize.url_key) есть среди статей сбора за всё время (#138)."""
     keys = [key for key in keys if key]
     if not keys:
         return set()

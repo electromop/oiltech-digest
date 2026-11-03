@@ -39,6 +39,10 @@ OTBOR_RETRY_SHARE = 0.1
 FINDINGS_LOW_SHARE = 0.5
 # Сколько примеров принятых находок с русским заголовком страницы показать в отчёте.
 RUSSIAN_EXAMPLES = 5
+# Границы того, что пробный прогон принимает из командной строки: потолок на тему и уровни рассуждения поиска (у
+# gpt-6.1-sol нет minimal и none).
+MAX_PER_TOPIC = 100
+REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
 class TrialError(ValueError):
@@ -64,6 +68,11 @@ def plan(*, since: date, until: date, per_topic: int | None = None, model: str |
     problem = signal_discovery.research_problem(model, reasoning)
     if problem:
         raise TrialError(problem)
+    if reasoning not in REASONING_LEVELS:
+        raise TrialError(f"уровень рассуждения поиска {reasoning!r}: нужен один из {', '.join(REASONING_LEVELS)}")
+    per_topic = config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC if per_topic is None else int(per_topic)
+    if not 1 <= per_topic <= MAX_PER_TOPIC:
+        raise TrialError(f"материалов на тему от 1 до {MAX_PER_TOPIC}, получено {per_topic}")
     if not otbor_model:
         raise TrialError("модель «Отбора» не задана: --otbor-model или OTBOR_MODEL в .env ядра")
     for name in (model, otbor_model):
@@ -73,7 +82,7 @@ def plan(*, since: date, until: date, per_topic: int | None = None, model: str |
         "topics": signal_discovery.search_topic_names(market=True),
         # Период поиска — days до until (research_period); ноль код прочёл бы как «по умолчанию», поэтому хотя бы день.
         "since": since.isoformat(), "until": until.isoformat(), "days": max(1, (until - since).days),
-        "per_topic": int(per_topic or config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC),
+        "per_topic": per_topic,
         "model": model, "reasoning": reasoning, "otbor_model": otbor_model, "otbor_reasoning": otbor_reasoning,
     }
 
@@ -216,7 +225,7 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
     job = repository.get_background_job(int(job_id))
     payload = (job or {}).get("payload_json") or {}
     if job is None or job.get("kind") != "signal_discovery" or not payload.get("search_trial"):
-        raise TrialError(f"задача {job_id} — не пробный прогон широкого поиска")
+        raise TrialError(f"задача {job_id} не пробный прогон широкого поиска")
     applied = ((job.get("result_json") or {}).get("applied") or {}) if job.get("status") == "ok" else {}
     new_ids = [value for topic in applied.get("topics") or [] for value in topic.get("signal_ids") or []]
     again_ids = [value for topic in applied.get("topics") or [] for value in topic.get("found_again_ids") or []]

@@ -45,14 +45,20 @@ def signals_snapshot():
             " FROM signals s ORDER BY s.id").fetchall()
 
 
-def run_trial(monkeypatch, events, pages, answers, *args, cited=None):
+def run_trial(monkeypatch, events, pages, answers, *args, cited=None, same_event=False, on_fetch=None):
     """radar-search-trial --run за октябрь → воркер NL полосы агентов с подставными поиском и страницами → ядро ставит
-    «Отбор» находок → воркер с подставной моделью «Отбора» → ядро. Номер задачи прогона, поиск и модель «Отбора»."""
+    «Отбор» находок → воркер с подставной моделью «Отбора» → ядро. same_event — ответ судьи «Дедупа», on_fetch — что
+    происходит, пока воркер докачивает страницу. Номер задачи прогона, поиск и модель «Отбора»."""
     search = SearchModel(events, cited)
     monkeypatch.setattr(signal_research, "make_client", lambda offline=False: search)
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
-                        lambda url, fallback_title="", **kwargs: pages.get(url, NO_PAGE))
-    monkeypatch.setattr(signal_discovery, "_radar_client", lambda: _DedupJudge(False))
+
+    def fetch(url, fallback_title="", **kwargs):
+        if on_fetch is not None:
+            on_fetch(url)
+        return pages.get(url, NO_PAGE)
+
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text", fetch)
+    monkeypatch.setattr(signal_discovery, "_radar_client", lambda: _DedupJudge(same_event))
     model = OtborModel(answers)
     monkeypatch.setattr(otbor, "make_client", lambda: model)
     cli.main(["radar-search-trial", *PERIOD, "--otbor-model", "gpt-6-sol", "--run", *args])
@@ -84,6 +90,8 @@ def test_dry_run_prints_calls_and_price_and_writes_nothing(user, contour, monkey
     (["--model", "gpt-5", "--otbor-model", "gpt-6-sol"], "снимается 11.12.2026"),
     (["--model", "gpt-7-preview", "--otbor-model", "gpt-6-sol"], "нет строки в OPENAI_MODEL_PRICES"),
     (["--otbor-model", "gpt-6-sol", "--since", "2026-11-01", "--until", "2026-10-01"], "период пуст"),
+    (["--otbor-model", "gpt-6-sol", "--per-topic", "0"], "материалов на тему от 1 до 100"),
+    (["--otbor-model", "gpt-6-sol", "--reasoning", "minimal"], "уровень рассуждения поиска"),
 ])
 def test_trial_is_refused_without_priced_models_or_a_period(user, contour, monkeypatch, args, problem):
     monkeypatch.setattr(config, "OTBOR_MODEL", "")
@@ -205,3 +213,34 @@ def test_dates_of_the_period_are_whole_days(user, contour):
 
     # research_period отсчитывает days до period_end: 30 дней до 31.10 — с 01.10.
     assert (trial["days"], trial["until"]) == (30, "2026-10-31")
+
+
+def test_trial_runs_with_otbor_switched_off_as_on_prod(user, contour, monkeypatch):
+    # На проде флаг «Отбора» выключен: пробный прогон сам везёт «поиск только находит» и сам ставит «Отбор» находок.
+    monkeypatch.setattr(config, "OTBOR_ENABLED", False)
+    tag(DRILLING)
+
+    job_id, _, model = run_trial(monkeypatch, [event(DEAL, DEAL_URL)], {DEAL_URL: page(DEAL)}, {DEAL: answer()})
+
+    from oiltech_digest import signal_search_trial
+    result = signal_search_trial.report(job_id)
+    assert len(model.calls) == 1 and (result["new_findings"], result["otbor"]["accepted"]) == (1, 1)
+    assert showcase(user, "technology") == {} and showcase(user, "business") == {}
+
+
+def test_duplicate_of_a_main_finding_collected_during_the_run_reaches_otbor_itself(user, contour, monkeypatch):
+    tag(DRILLING)
+    other_url = "https://aramco.example/news/autonomous-rig"
+
+    def parser_collects(url):
+        if url == TECH_URL:
+            collected(url, source="SLB news", site="https://www.slb.example", days_ago=0)
+
+    # «Дедуп» склеил две ссылки одного события, а одну из них сбор собрал, пока шёл прогон: вторая ссылка — новая
+    # находка и идёт в «Отбор», а не пропадает вместе с собранной.
+    _, _, model = run_trial(monkeypatch, [event(TECH, TECH_URL), event(TECH + " this week", other_url)],
+                            {TECH_URL: page(TECH), other_url: page(TECH + " this week")},
+                            {TECH: answer(), TECH + " this week": answer()}, same_event=True, on_fetch=parser_collects)
+
+    trial = [row for row in signals_snapshot() if row[1] == repository.SIGNAL_SELECTOR_TRIAL]
+    assert [row[4] for row in trial] == [[other_url]] and len(model.calls) == 1

@@ -42,8 +42,9 @@
 стране и правиле темы «Карточки» (#137, #149, тикеты владельца по спеке #128, порядок 28.10): `signal_card*.py`,
 `signal_themes.py`, фильтр в `repository`, экраны радара и бизнес-ленты (фильтр «Страна», чипы), тесты
 `test_signal_card*`. И в широком поиске радара (#138, тикет владельца по спеке #128, решение 03.11): промпт и запись
-находок (`signal_research.py`, `signal_discovery.py`), пробный прогон (`signal_search_trial.py`), тесты
-`test_signal_search_*`.
+находок (`signal_research.py`, `signal_discovery.py`), пробный прогон (`signal_search_trial.py`), блок уже найденного
+(`signal_feedback.known_titles_block`), тесты `test_signal_search_*` и модель поиска в задаче у тестов радара
+(`test_signal_research.py`, `test_signal_quality.py`, `test_signal_quality_ops.py`, `test_signal_reference.py`).
 
 ## Технологический радар — ядро и NL
 
