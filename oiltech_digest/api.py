@@ -2698,7 +2698,7 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         # мегабайты и уже лежат в signal_training_examples — в задаче только счётчики.
         # Пробный прогон широкого поиска (#138) — по задаче ядра: находки отдельно от радара, затем их «Отбор».
         trial = (job.get("payload_json") or {}).get("search_trial")
-        applied = signal_discovery.apply_external_result(result, job_id=job_id, trial=bool(trial))
+        applied = signal_discovery.apply_external_result(result, job_id=job_id, **({"trial": True} if trial else {}))
         if trial:
             applied["search_trial"] = signal_search_trial.after_search(job_id, applied, trial)
         result = {"signal_discovery": True, "applied": applied}

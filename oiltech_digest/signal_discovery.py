@@ -731,7 +731,8 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
     for_external=True добавляет теги и память ОС: у внешнего воркера базы нет, и без
     снимка эти обогащения молча отваливались бы в except — тот же класс, что тематики
     гейта 17.09 (фича, которая на проде пустая, а в тестах зелёная)."""
-    topics = _selected_topics(config.topic, market=config.otbor)
+    # Тема рынка ищется только при «Отборе» (#138); без него выбор тем прежний.
+    topics = _selected_topics(config.topic, market=True) if config.otbor else _selected_topics(config.topic)
     if not topics:
         topics = [{"name": config.topic or "HSE technology radar", "query_seeds_json": []}]
     article_evidence: dict[str, list[dict[str, Any]]] = {}
@@ -1868,7 +1869,7 @@ def process_external_payload(payload: dict[str, Any], heartbeat: Callable[[], No
     return {"signal_discovery": True, "config": payload.get("config") or {}, "run": run}
 
 
-def apply_external_result(result: dict[str, Any], *, job_id: int, trial: bool | None = None) -> dict[str, Any]:
+def apply_external_result(result: dict[str, Any], *, job_id: int, trial: bool = False) -> dict[str, Any]:
     """Ядро, при завершении задачи: записать сигналы и вернуть компактный итог.
 
     Полный результат (все кандидаты с подтверждениями и промптами) в result_json задачи
@@ -1881,8 +1882,7 @@ def apply_external_result(result: dict[str, Any], *, job_id: int, trial: bool | 
         }),
         background_job_id=job_id,
     )
-    if trial is not None:
-        config = replace(config, trial=trial)
+    config = replace(config, trial=trial)
     generation_run_id = None
     if config.persist_training_examples and not config.dry_run:
         generation_run_id = repository.create_signal_generation_run(

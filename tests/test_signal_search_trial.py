@@ -69,12 +69,12 @@ def test_dry_run_prints_calls_and_price_and_writes_nothing(user, contour, monkey
     cli.main(["radar-search-trial", *PERIOD, "--per-topic", "20", "--model", "gpt-6.1-sol", "--otbor-model", "gpt-6-sol"])
 
     out = capsys.readouterr().out
-    # Две темы (с рынком), по одному вызову; «Отбор» — от половины до всего потолка. Цена — по ставкам config: поиск
-    # 74 тыс. входа × $2/млн + 5,1 тыс. выхода × $10/млн + 15,6 поиска × $0,01 на тему, верхняя граница растит выход и
-    # поиски в 20/12 раза; вызов «Отбора» 4 900 × $2/млн + 600 × $10/млн, с повтором ×1,1.
+    # Две темы (с рынком); «Отбор» — от половины до всего потолка. Цена — по ставкам config: вызов поиска 74 тыс. входа
+    # × $2/млн + 5,1 тыс. выхода × $10/млн + 15,6 поиска × $0,01, на тему 1,25 вызова (повтор пустого ответа), верхняя
+    # граница растит выход и поиски в 20/12 раза; вызов «Отбора» 4 900 × $2/млн + 600 × $10/млн, с повтором ×1,1.
     assert "[сухой прогон]: тем 2, период с 2026-10-01 по 2026-10-31, поиск gpt-6.1-sol low, до 20" in out
     assert "Вызовов поиска 2 (до 4 с повтором пустого ответа), «Отбора» от 20 до 40" in out
-    assert "поиск от 0.71 до 0.99, «Отбор» от 0.35 до 0.7, всего от 1.06 до 1.68" in out
+    assert "поиск от 0.89 до 1.23, «Отбор» от 0.35 до 0.7, всего от 1.24 до 1.93" in out
     assert "Ничего не записано" in out
     assert jobs() == [] and signals_snapshot() == []
 
@@ -159,7 +159,10 @@ def test_report_measures_recall_against_the_expert_reference(user, contour, monk
 
     tag(DRILLING)
     collected(COLLECTED_URL)
-    job_id, _, _ = run_trial(monkeypatch, [event(DEAL, DEAL_URL)], {DEAL_URL: page(DEAL)}, {DEAL: answer()})
+    # Поиск принёс и сделку, и ссылку, которая уже есть в сборе: обе — его находки для полноты.
+    job_id, _, _ = run_trial(monkeypatch, [event(DEAL, DEAL_URL), event("Upstream: rig contract in Kuwait",
+                                                                         COLLECTED_URL)],
+                             {DEAL_URL: page(DEAL)}, {DEAL: answer()})
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = "Октябрь_2026"
@@ -174,7 +177,7 @@ def test_report_measures_recall_against_the_expert_reference(user, contour, monk
     cli.main(["radar-search-trial", "--report", str(job_id), "--reference", str(reference)])
 
     out = capsys.readouterr().out
-    assert "Полнота по эталону: поиск 1 из 3 (33%), сбор 1, поиск или сбор 2 (67%)" in out
+    assert "Полнота по эталону: поиск 2 из 3 (67%), сбор 1, поиск или сбор 2 (67%)" in out
     assert "+ только поиск: ADNOC Drilling — покупка трёх СПБУ" in out
     assert "- не нашёл никто: Halliburton Octiv — автоматизация ГРП" in out
 

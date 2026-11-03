@@ -203,7 +203,8 @@ def test_run_collects_ai_usage_by_stage(monkeypatch):
     monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Judge())
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True, search_mode="openai_web")
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True, search_mode="openai_web",
+                                                        research_model="gpt-6.1-sol", research_reasoning="low")
 
     run = signal_discovery.run_discovery(run_config, {"topics": [{"name": "Бурение"}], "tags": []})
 

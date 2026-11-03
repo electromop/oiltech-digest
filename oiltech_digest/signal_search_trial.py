@@ -30,6 +30,9 @@ OTBOR_KIND = "otbor"
 # (4 900 токенов входа, 600 выхода) плюс повтор при конфликте шагов.
 DEFAULT_SEARCH_CALL = {"input_tokens": 74_000.0, "output_tokens": 5_100.0, "web_search_calls": 15.6}
 HISTORY_EVENTS_PER_TOPIC = 12
+# Повтор вызова поиска при пустом ответе: 7 прогонов 02.10-18.10 сделали 105 вызовов на 84 темы. С ним формула на тех же
+# прогонах даёт их фактическую цену ($4,45 за прогон gpt-5 по 12 темам).
+SEARCH_RETRY_SHARE = 0.25
 OTBOR_CALL = {"input_tokens": 4_900, "output_tokens": 600}
 OTBOR_RETRY_SHARE = 0.1
 # Нижняя граница числа находок: половина потолка (технический отсев и уже собранное сбором).
@@ -66,7 +69,8 @@ def plan(*, since: date, until: date, per_topic: int | None = None, model: str |
             raise TrialError(f"у модели {name} нет строки в OPENAI_MODEL_PRICES: цену до оплаты не посчитать")
     return {
         "topics": signal_discovery.search_topic_names(market=True),
-        "since": since.isoformat(), "until": until.isoformat(), "days": (until - since).days,
+        # Период поиска — days до until (research_period); ноль код прочёл бы как «по умолчанию», поэтому хотя бы день.
+        "since": since.isoformat(), "until": until.isoformat(), "days": max(1, (until - since).days),
         "per_topic": int(per_topic or config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC),
         "model": model, "reasoning": reasoning, "otbor_model": otbor_model, "otbor_reasoning": otbor_reasoning,
     }
@@ -81,7 +85,8 @@ def estimate(trial: dict[str, Any]) -> dict[str, Any]:
 
     def search_cost(scale: float) -> float:
         tokens = call["input_tokens"] * price_in + call["output_tokens"] * scale * price_out
-        return topics * (tokens / 1_000_000 + call["web_search_calls"] * scale * config.SIGNAL_WEB_SEARCH_USD_PER_CALL)
+        per_call = tokens / 1_000_000 + call["web_search_calls"] * scale * config.SIGNAL_WEB_SEARCH_USD_PER_CALL
+        return topics * (1 + SEARCH_RETRY_SHARE) * per_call
 
     otbor_in, otbor_out = config.price_for_model(trial["otbor_model"])
     otbor_call = (OTBOR_CALL["input_tokens"] * otbor_in + OTBOR_CALL["output_tokens"] * otbor_out) / 1_000_000
@@ -244,7 +249,8 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
         "cost_usd": {**costs, "total": round(sum(costs.values()), 4)},
     }
     if reference is not None:
-        result["recall"] = _recall(reference, findings, again_ids, payload["search_trial"])
+        collected_links = [item for topic in applied.get("topics") or [] for item in topic.get("already_collected") or []]
+        result["recall"] = _recall(reference, findings, again_ids, collected_links, payload["search_trial"])
     return result
 
 
@@ -295,12 +301,14 @@ def _russian_titles(findings: list[dict[str, Any]], verdicts: dict[int, Any]) ->
 
 
 def _recall(reference: list[dict[str, Any]], findings: list[dict[str, Any]], again_ids: list[Any],
-            trial: dict[str, Any]) -> dict[str, Any]:
-    """Полнота по эталону эксперта (signal_reference.recall): что нашёл поиск (новые находки и сигналы платформы,
-    найденные снова), что есть в сборе за период и что не нашёл никто."""
+            collected_links: list[dict[str, Any]], trial: dict[str, Any]) -> dict[str, Any]:
+    """Полнота по эталону эксперта (signal_reference.recall): что нашёл поиск (новые находки, сигналы платформы,
+    найденные снова, и ссылки, которые уже были в сборе), что есть в сборе за период и что не нашёл никто."""
     search_cards = [{"id": f"signal:{row['id']}", "title": row.get("title"), "urls": row.get("urls") or []}
                     for row in findings]
     search_cards += [{**row, "id": f"signal:{row['id']}"} for row in search_trial_store.platform_cards(again_ids)]
+    search_cards += [{"id": f"collected:{number}", "title": item.get("title"), "urls": [item.get("url")]}
+                     for number, item in enumerate(collected_links)]
     since = date.fromisoformat(trial["since"]) - timedelta(days=signal_discovery.COLLECTED_MARGIN_DAYS)
     collected_cards = [{**row, "id": f"article:{row['id']}"} for row in search_trial_store.collected_cards(since=since)]
     by_search = signal_reference.recall(reference, search_cards)
