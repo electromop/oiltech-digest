@@ -137,7 +137,8 @@ def test_author_title_is_not_edited_even_off_the_rules(user, contour, monkeypatc
 
 
 def test_core_keeps_the_author_fields_whatever_the_worker_returns(user, contour, monkeypatch):
-    # Ответ воркера — недоверенный ввод: суть, которую он прислал материалу с описанием автора, ядро не пишет.
+    # Ответ воркера — недоверенный ввод: суть, которую он прислал материалу с описанием автора, ядро не пишет, а русский
+    # заголовок автора пишет как есть (решение владельца 03.11: заголовок материала не правится).
     _send(_material())
     decide(monkeypatch, {TITLE: answer()})
     [card] = showcase(user, "business").values()
@@ -149,7 +150,7 @@ def test_core_keeps_the_author_fields_whatever_the_worker_returns(user, contour,
     run_worker("external-ai")
 
     card = showcase(user, "business")[TITLE]
-    assert (card["summary"], card["title_ru"]) == (DESCRIPTION, "Чужой заголовок")
+    assert (card["summary"], card["title_ru"]) == (DESCRIPTION, TITLE)
 
 
 def test_rejected_material_is_its_signal_in_the_rejected_list_and_the_author_hears_the_reason(

@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 
 from fastapi.testclient import TestClient
+import pytest
 
 from oiltech_digest import api, feed_window
 from oiltech_digest.db import connection
@@ -86,6 +87,7 @@ def test_dry_run_counts_russian_copies_off_the_rules_in_open_months_and_enqueues
     # Октябрь открыт, но собрана раньше двух недель: пересчёты только по последним двум неделям (владелец 03.11).
     _article(OFF_RULES, published="2026-10-15 12:00+00")
     _article(OFF_RULES, relevant=False)  # отклонён
+    _article(OFF_RULES, relevant=False, digest=True)  # отклонён гейтом: из ленты скрыт, отметка его не возвращает
     _article(OFF_RULES, pending_deletion=True)  # помечен на удаление
     _translation_run("gpt-6.1-terra", 1_000, 200)
 
@@ -96,6 +98,22 @@ def test_dry_run_counts_russian_copies_off_the_rules_in_open_months_and_enqueues
     # (1 000·1 + 200·5) / 10⁶ = 0,002 за вызов; N = 2 → 0,004.
     assert "модель gpt-6.1-terra" in out and "$0.00200 за вызов" in out and "цена ≈ $0.00" in out
     assert "[dry-run]" in out and _jobs() == []
+
+
+def test_refuses_without_the_external_contour_or_the_bulk_lane(isolated_db, monkeypatch):
+    """Как у пересчёта балла (rescore.enqueue_stage): локальный конвейер пометки only не знает, а в потоке дня пачки
+    встали бы перед новыми статьями — только сознательно, --allow-live-lane."""
+    _freeze(monkeypatch)
+    _article(OFF_RULES)
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", False)
+    with pytest.raises(SystemExit, match="внешний контур"):
+        _cli("enqueue-title-edit", "--no-dry-run")
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr("oiltech_digest.config.AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr("oiltech_digest.config.AI_BULK_LANE_ENABLED", False)
+    with pytest.raises(SystemExit, match="полоса пересчётов выключена"):
+        _cli("enqueue-title-edit", "--no-dry-run")
+    assert _jobs() == []
 
 
 def test_jobs_edit_the_title_on_the_worker_and_the_core_writes_it(isolated_db, monkeypatch, capsys):

@@ -20,7 +20,7 @@ from oiltech_digest import config
 from oiltech_digest.db import repository, signal_summary_store
 from oiltech_digest.db.repository import SIGNAL_ORIGIN_MATERIAL
 from oiltech_digest.processing.external_ai import StopRequested, _core_glossary
-from oiltech_digest.processing.pipeline import make_client, summarize_article, title_ru_for_article
+from oiltech_digest.processing.pipeline import _needs_translation, make_client, summarize_article, title_ru_for_article
 from oiltech_digest.signal_card_pack import _publisher_label, publication_day, publication_text
 
 KIND = signal_summary_store.KIND
@@ -162,9 +162,10 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None,
             applied["errors"].append({"signal_id": signal_id, "error": f"модель: {str(row['error'])[:300]}"})
             continue
         context = _context(contexts.get(signal_id))
+        title_ru = _author_title(contexts.get(signal_id), _text(row.get("translation"), "title_ru", _TITLE_CHARS))
         values = {
             "summary": _core_glossary(_text(row.get("summary"), "summary", _SUMMARY_CHARS), context),
-            "title_ru": _core_glossary(_text(row.get("translation"), "title_ru", _TITLE_CHARS), context),
+            "title_ru": _core_glossary(title_ru, context),
         }
         written = signal_summary_store.write_summary(signal_id, values, log=[_step(values)])
         applied["written"] += bool(written)
@@ -182,6 +183,15 @@ def _signal_id(row: dict[str, Any], expected: set[str] | None) -> int | None:
 def _text(stage: Any, field: str, limit: int) -> str:
     value = stage.get(field) if isinstance(stage, dict) else None
     return " ".join(value.split())[:limit] if isinstance(value, str) else ""
+
+
+def _author_title(row: dict[str, Any] | None, title_ru: str) -> str:
+    """Русский заголовок материала написал человек: ядро пишет его как есть, что бы ни прислал воркер (решение владельца
+    03.11). Перевод иноязычного заголовка материала и заголовки находок — ответ воркера."""
+    if row is None or row.get("origin") != SIGNAL_ORIGIN_MATERIAL or not title_ru:
+        return title_ru
+    title = " ".join(str(row.get("title") or "").split())
+    return title[:_TITLE_CHARS] if title and not _needs_translation(title) else title_ru
 
 
 def _context(row: dict[str, Any] | None) -> dict[str, Any] | None:

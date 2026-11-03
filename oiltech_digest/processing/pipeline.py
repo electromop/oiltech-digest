@@ -32,6 +32,7 @@ from oiltech_digest.processing.prompts import (
     SUMMARY_SCHEMA,
     TAG_SCHEMA,
     TAGGING_INSTRUCTIONS,
+    TITLE_MAX_CHARS,
     TRANSLATE_INSTRUCTIONS,
     TRANSLATE_SCHEMA,
     tags_scope_block,
@@ -433,29 +434,22 @@ def relevance_article(article: dict, client, tags: list[dict] | None = None) -> 
 def translate_article(article: dict, client) -> AIResponse:
     """AI-перевод заголовка на русский. Отдельная стадия (раньше был частью summary).
     Модель/effort — собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
-    prompt = _title_prompt(article)
-    return _complete_one_script(
-        lambda extra: client.complete_json(
-            TRANSLATE_INSTRUCTIONS,
-            prompt + extra,
-            TRANSLATE_SCHEMA,
-            max_output_tokens=output_budget(300, config.OPENAI_TRANSLATE_REASONING),
-            model=config.OPENAI_TRANSLATE_MODEL,
-            reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
-        ),
-        "title_ru",
-        article,
-    )
+    return _title_call(article, client, TRANSLATE_INSTRUCTIONS, TRANSLATE_SCHEMA)
 
 
 def edit_title_article(article: dict, client) -> AIResponse:
     """Правка русского заголовка по правилам эксперта (#150, решение владельца 03.11): вход и модель — перевода."""
+    return _title_call(article, client, EDIT_TITLE_INSTRUCTIONS, EDIT_TITLE_SCHEMA)
+
+
+def _title_call(article: dict, client, instructions: str, schema: dict) -> AIResponse:
+    """Вызов модели заголовка (перевод или правка): вход _title_prompt, модель и уровень перевода, словарь."""
     prompt = _title_prompt(article)
     return _complete_one_script(
         lambda extra: client.complete_json(
-            EDIT_TITLE_INSTRUCTIONS,
+            instructions,
             prompt + extra,
-            EDIT_TITLE_SCHEMA,
+            schema,
             max_output_tokens=output_budget(300, config.OPENAI_TRANSLATE_REASONING),
             model=config.OPENAI_TRANSLATE_MODEL,
             reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
@@ -468,8 +462,8 @@ def edit_title_article(article: dict, client) -> AIResponse:
 def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -> tuple[str | None, AIResponse | None]:
     """Вернуть (title_ru, ai_response). Иностранный заголовок переводим через AI. Русский не переводим
     (ai_response=None); с edit_russian — у принятой публикации — правим по правилам эксперта, если он
-    им не отвечает (title_follows_rules). Правка с числом, которого нет ни в заголовке, ни в тексте, не
-    берётся: остаётся заголовок издателя. Пустой заголовок → (None, None)."""
+    им не отвечает (title_follows_rules). Правка с числом, которого нет в том, что видела модель (заголовок и
+    текст, как в _title_prompt), не берётся: остаётся заголовок издателя. Пустой заголовок → (None, None)."""
     title = (article.get("title") or "").strip()
     if not title:
         return None, None
@@ -478,16 +472,16 @@ def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -
             return title[:200], None
         response = edit_title_article(article, client)
         edited = (response.data.get("title_ru") or "").strip()
-        known = _numbers(" ".join(str(article.get(key) or "") for key in ("title", "raw_text", "summary")))
+        known = _numbers(f"{title} {article.get('raw_text') or article.get('summary') or ''}")
         return (edited if edited and _numbers(edited) <= known else title)[:200], response
     response = translate_article(article, client)
     translated = (response.data.get("title_ru") or title).strip()
     return (translated or title)[:200], response
 
 
-# Правила заголовка эксперта (#150), которые видно кодом. Русский заголовок, который им отвечает, модель не правит
-# (решение владельца 03.11): называет ли он событие, а не публикацию, код не видит.
-TITLE_MAX_CHARS = 90
+# Правила заголовка эксперта (#150), которые видно кодом; предел длины — prompts.TITLE_MAX_CHARS, тот же, что в
+# инструкциях. Русский заголовок, который им отвечает, модель не правит (решение владельца 03.11): называет ли он
+# событие, а не публикацию, код не видит.
 # Тире между частями (кроме тире диапазона между числами: «2027–2029»), дефис с пробелами, черта, скобки.
 _TITLE_PARTS = re.compile(r"(?<!\d)[–—]|[–—](?!\d)|\s-\s|[|()\[\]]")
 # Издание доменом: «Вести.ru», «Нефтегаз.РУ».
