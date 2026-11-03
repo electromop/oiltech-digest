@@ -180,7 +180,9 @@ OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").st
 OPENAI_SUMMARY_MODEL = os.environ.get("OPENAI_SUMMARY_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SUMMARY_REASONING = os.environ.get("OPENAI_SUMMARY_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 # Теги — своя модель (переезд с gpt-5 до 11.12.2026): стадия старой цепочки ленты, до её снятия. Пусто — откат на
-# OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки. На OPENAI_MODEL остаётся ИИ-оценка агента источников.
+# OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки. Откат оставлен намеренно, в отличие от «Дедупа»: тег и
+# балл статьи идут на воркере одной цепочкой, и сбой тега без строки оставил бы статьи и без балла. На OPENAI_MODEL
+# остаётся ИИ-оценка агента источников.
 OPENAI_TAG_MODEL = os.environ.get("OPENAI_TAG_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_TAG_REASONING = os.environ.get("OPENAI_TAG_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 

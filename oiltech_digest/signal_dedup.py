@@ -75,11 +75,11 @@ PAIR_MIN_OVERLAP = 0.25
 MAX_JUDGED_PAIRS = 400
 
 
-class DedupSetupError(RuntimeError):
+class DedupSetupError(ValueError):
     """Модель дедупа не задана: прогон радара падает с понятной причиной до поиска."""
 
 
-def dedup_model() -> str:
+def configured_model() -> str:
     """Модель судьи пар — явная настройка SIGNAL_DEDUP_MODEL, без отката на модель ленты (спека #128, история 48).
 
     До 03.11 дедуп молча шёл на OPENAI_MODEL (gpt-5-mini, её снимают 11.12.2026), а сбой пары считается «разными
@@ -322,7 +322,7 @@ def dedupe(
     stats = {"pairs": len(pairs), "judged": 0, "same": 0, "errors": 0,
              "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     # Сбой вызова ниже — «разные события» у пары, поэтому отсутствие модели проверяется до вызовов.
-    model = dedup_model() if judged else None
+    model = configured_model() if judged else None
     client = client_factory() if judged else None
 
     def ask(i: int, j: int) -> Any:

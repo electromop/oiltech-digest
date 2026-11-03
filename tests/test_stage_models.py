@@ -7,6 +7,7 @@ none…max (без minimal). Наш код слал gpt-6 «minimal» как е�
 """
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from oiltech_digest import config, signal_dedup, signal_discovery
+from oiltech_digest import cli, config, signal_dedup, signal_discovery
 from oiltech_digest.db import connection, repository
 from oiltech_digest.processing import external_ai, openai_client, pipeline, reprints
 from oiltech_digest.processing.openai_client import (
@@ -304,12 +305,12 @@ def _reprint_runs(job_id: int) -> list[tuple]:
         ).fetchall()
 
 
-def test_reprint_usage_is_recorded_for_partial_and_rest_and_dry_run(isolated_db):
+def test_reprint_usage_is_recorded_for_partial_and_rest_but_not_for_dry_run(isolated_db):
     # Частичный итог (воркер остановлен) и итог остатка той же задачи судят разные пары — строки складываются.
     external_ai.apply_reprint_review_result({"reprint_review": True, "verdicts": [_verdict(1, 2)]}, job_id=41)
     external_ai.apply_reprint_review_result({"reprint_review": True, "verdicts": [_verdict(3, 4), _verdict(5, 6)]},
                                             job_id=41)
-    # Сухой прогон пометок не пишет, а вызовы оплачены и в нём.
+    # Сухой прогон ничего не пишет, как у радара (apply_discovery): токены остаются в итоге задачи.
     applied = external_ai.apply_reprint_review_result(
         {"reprint_review": True, "dry_run": True, "verdicts": [_verdict(7, 8, model="gpt-5-mini-2025-08-07")]},
         job_id=42)
@@ -321,7 +322,33 @@ def test_reprint_usage_is_recorded_for_partial_and_rest_and_dry_run(isolated_db)
         ("reprint_review", "gpt-6-luna", 2_000_000, 0.3, "pairs=2", None),
     ]
     assert applied == {"applied": 0, "dry_run": True}
-    assert [(r[1], float(r[4])) for r in _reprint_runs(42)] == [("gpt-5-mini-2025-08-07", 0.45)]
+    assert _reprint_runs(42) == []
+
+
+def test_local_review_records_usage_only_with_apply(monkeypatch):
+    """find-reprints --local судит пары на месте: расход пишется так же, как у задачи, и тоже не у сухого прогона."""
+    written: list = []
+    monkeypatch.setattr(reprints.repository, "get_article", lambda article_id: {**ARTICLE, "id": article_id})
+    monkeypatch.setattr(reprints.repository, "mark_article_reprint", lambda **kwargs: None)
+    monkeypatch.setattr(reprints.repository, "record_reprint_usage", lambda job_id, rows: written.append((job_id, rows)))
+    pair = [{"a_id": 1, "b_id": 2, "overlap": 0.5}]
+
+    reprints.review_candidates(pair, _RecordingClient(), dry_run=True)
+    reprints.review_candidates(pair, _RecordingClient(), dry_run=False)
+
+    assert written == [(None, [{"model": "test-reprint-model", "input_tokens": 1500, "output_tokens": 60}])]
+
+
+def test_find_reprints_local_without_model_exits_with_reason(monkeypatch):
+    """Как у соседних команд агентов: понятный выход вместо трейсбека."""
+    monkeypatch.setattr(config, "OPENAI_REPRINT_MODEL", "")
+    monkeypatch.setattr(reprints, "find_candidates",
+                        lambda **kwargs: [{"a_id": 1, "b_id": 2, "overlap": 0.5, "a_title": "A", "b_title": "B"}])
+    args = argparse.Namespace(min_overlap=0.35, max_overlap=1.0, days=14, limit=10, max_days_apart=5, apply=False,
+                              min_interval_hours=0, candidates_only=False, show=5, local=True, offline=True)
+
+    with pytest.raises(SystemExit, match="find-reprints: OPENAI_REPRINT_MODEL не задан"):
+        cli.cmd_find_reprints(args)
 
 
 def test_reprint_usage_skips_errors_and_old_build_verdicts(isolated_db):

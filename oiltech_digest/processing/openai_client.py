@@ -321,16 +321,14 @@ _ALL_BUT_MINIMAL = frozenset(_EFFORT_ORDER) - {"minimal"}
 _LOW_AND_ABOVE = frozenset(_EFFORT_ORDER[_EFFORT_ORDER.index("low"):])
 # Какие уровни принимает модель — страницы моделей OpenAI, сверено 18.10.2026 (gpt-6-sol и gpt-6.1-terra — 03.11.2026).
 # Ключ — начало имени: в ответе API имя бывает с датой. Незнакомая gpt-6 — уровни, которые принимают все известные
-# gpt-6 (low…max); остальные модели — правило поколений gpt-5 / gpt-5.N в _reasoning_effort.
+# gpt-6 (low…max); остальные модели, в том числе gpt-5.6-* (none…max), — правило поколений gpt-5 / gpt-5.N в
+# _reasoning_effort.
 _MODEL_EFFORTS: dict[str, frozenset[str]] = {
     "gpt-6.1-sol": _LOW_AND_ABOVE,
     "gpt-6-astra": _LOW_AND_ABOVE,
     "gpt-6.1-terra": _ALL_BUT_MINIMAL,
     "gpt-6-sol": _ALL_BUT_MINIMAL,
     "gpt-6-luna": _ALL_BUT_MINIMAL,
-    "gpt-5.6-sol": _ALL_BUT_MINIMAL,
-    "gpt-5.6-terra": _ALL_BUT_MINIMAL,
-    "gpt-5.6-luna": _ALL_BUT_MINIMAL,
 }
 
 
@@ -346,8 +344,8 @@ def _reasoning_effort(model: str, configured: str | None) -> str | None:
 
     GPT-5.1 и новее (5.1, 5.2, 5.3, 5.4, 5.5, …) поддерживают `none` и НЕ принимают
     `minimal`; исходный GPT-5 (gpt-5/-mini/-nano) — наоборот: принимает `minimal`,
-    но не `none`. GPT-6 и GPT-5.6 — по таблице _MODEL_EFFORTS: `minimal` не принимает
-    никто, gpt-6.1-sol и gpt-6-astra — и `none`. Пустое значение — самый лёгкий уровень
+    но не `none`. GPT-6 — по таблице _MODEL_EFFORTS: `minimal` не принимает никто,
+    gpt-6.1-sol и gpt-6-astra — и `none`. Пустое значение — самый лёгкий уровень
     модели. Переводим несовместимые значения, чтобы не ловить 400 при смене модели.
     """
     value = (configured or "").strip().lower()
