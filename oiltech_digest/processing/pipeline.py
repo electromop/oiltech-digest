@@ -22,6 +22,8 @@ from oiltech_digest.processing.openai_client import (
     output_budget,
 )
 from oiltech_digest.processing.prompts import (
+    EDIT_TITLE_INSTRUCTIONS,
+    EDIT_TITLE_SCHEMA,
     RELEVANCE_INSTRUCTIONS,
     RELEVANCE_SCHEMA,
     SCORING_INSTRUCTIONS,
@@ -30,6 +32,7 @@ from oiltech_digest.processing.prompts import (
     SUMMARY_SCHEMA,
     TAG_SCHEMA,
     TAGGING_INSTRUCTIONS,
+    TITLE_MAX_CHARS,
     TRANSLATE_INSTRUCTIONS,
     TRANSLATE_SCHEMA,
     tags_scope_block,
@@ -305,9 +308,9 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
                 article["summary"] = summary_resp.data["summary"]
                 stats["summary"] += 1
 
-            # 3b. Перевод заголовка — отдельная стадия (AI только для иностранных).
+            # 3b. Перевод заголовка — отдельная стадия: иностранный переводится, русский не по правилам эксперта правится.
             if not article.get("title_ru"):
-                title_ru, translate_resp = title_ru_for_article(article, client)
+                title_ru, translate_resp = title_ru_for_article(article, client, edit_russian=True)
                 if title_ru is not None:
                     repository.set_article_title_ru(article["id"], title_ru)
                     if translate_resp is not None:
@@ -431,12 +434,22 @@ def relevance_article(article: dict, client, tags: list[dict] | None = None) -> 
 def translate_article(article: dict, client) -> AIResponse:
     """AI-перевод заголовка на русский. Отдельная стадия (раньше был частью summary).
     Модель/effort — собственные (обычно дешёвые: ответ короткий), фолбэк на основные."""
+    return _title_call(article, client, TRANSLATE_INSTRUCTIONS, TRANSLATE_SCHEMA)
+
+
+def edit_title_article(article: dict, client) -> AIResponse:
+    """Правка русского заголовка по правилам эксперта (#150, решение владельца 03.11): вход и модель — перевода."""
+    return _title_call(article, client, EDIT_TITLE_INSTRUCTIONS, EDIT_TITLE_SCHEMA)
+
+
+def _title_call(article: dict, client, instructions: str, schema: dict) -> AIResponse:
+    """Вызов модели заголовка (перевод или правка): вход _title_prompt, модель и уровень перевода, словарь."""
     prompt = _title_prompt(article)
     return _complete_one_script(
         lambda extra: client.complete_json(
-            TRANSLATE_INSTRUCTIONS,
+            instructions,
             prompt + extra,
-            TRANSLATE_SCHEMA,
+            schema,
             max_output_tokens=output_budget(300, config.OPENAI_TRANSLATE_REASONING),
             model=config.OPENAI_TRANSLATE_MODEL,
             reasoning_effort=config.OPENAI_TRANSLATE_REASONING,
@@ -446,17 +459,60 @@ def translate_article(article: dict, client) -> AIResponse:
     )
 
 
-def title_ru_for_article(article: dict, client) -> tuple[str | None, AIResponse | None]:
-    """Вернуть (title_ru, ai_response). Русский заголовок не переводим (ai_response=None);
-    иностранный — переводим через AI. Пустой заголовок → (None, None)."""
+def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -> tuple[str | None, AIResponse | None]:
+    """Вернуть (title_ru, ai_response). Иностранный заголовок переводим через AI. Русский не переводим
+    (ai_response=None); с edit_russian — у принятой публикации — правим по правилам эксперта, если он
+    им не отвечает (title_follows_rules). Правка с числом, которого нет в том, что видела модель (заголовок и
+    текст, как в _title_prompt), не берётся: остаётся заголовок издателя. Пустой заголовок → (None, None)."""
     title = (article.get("title") or "").strip()
     if not title:
         return None, None
     if not _needs_translation(title):
-        return title[:200], None
+        if not edit_russian or title_follows_rules(title, article.get("source_name")):
+            return title[:200], None
+        response = edit_title_article(article, client)
+        edited = (response.data.get("title_ru") or "").strip()
+        known = _numbers(f"{title} {article.get('raw_text') or article.get('summary') or ''}")
+        return (edited if edited and _numbers(edited) <= known else title)[:200], response
     response = translate_article(article, client)
     translated = (response.data.get("title_ru") or title).strip()
     return (translated or title)[:200], response
+
+
+# Правила заголовка эксперта (#150), которые видно кодом; предел длины — prompts.TITLE_MAX_CHARS, тот же, что в
+# инструкциях. Русский заголовок, который им отвечает, модель не правит (решение владельца 03.11): называет ли он
+# событие, а не публикацию, код не видит.
+# Тире между частями (кроме тире диапазона между числами: «2027–2029»), дефис с пробелами, черта, скобки.
+_TITLE_PARTS = re.compile(r"(?<!\d)[–—]|[–—](?!\d)|\s-\s|[|()\[\]]")
+# Издание доменом: «Вести.ru», «Нефтегаз.РУ».
+_TITLE_DOMAIN = re.compile(r"\w\.(?:ru|рф|ру|su|com|net|org|info|io|media|tv|kz|by|uz)\b", re.IGNORECASE)
+# Обрыв: многоточие или двоеточие в конце.
+_TITLE_CUT = re.compile(r"(?:…|\.\.\.|:)$")
+# Эмодзи (пиктограммы, флаги, знак варианта) и хэштег; «№» и «°» эмодзи не считаются.
+_TITLE_EMOJI = re.compile(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]|(?:^|\s)#\w")
+
+
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _numbers(text: str) -> set[str]:
+    return {value.replace(",", ".") for value in _NUMBER.findall(text)}
+
+
+def title_follows_rules(title: str, source_name: str | None = None) -> bool:
+    """Отвечает ли заголовок правилам эксперта, которые видно кодом: не длиннее TITLE_MAX_CHARS знаков, без тире,
+    черты и скобок, без издания (доменом или именем источника в конце: издатель — автор события, его имя в начале
+    и в середине не помеха), без обрыва, эмодзи и хэштегов."""
+    text = " ".join(title.split())
+    source = " ".join(re.sub(r"\([^)]*\)", " ", source_name or "").split()).casefold()
+    return not (
+        len(text) > TITLE_MAX_CHARS
+        or _TITLE_PARTS.search(text)
+        or _TITLE_DOMAIN.search(text)
+        or _TITLE_CUT.search(text)
+        or _TITLE_EMOJI.search(text)
+        or (len(source) >= 3 and text.rstrip(" .:!?»\"'").casefold().endswith(source))
+    )
 
 
 def _needs_translation(title: str) -> bool:

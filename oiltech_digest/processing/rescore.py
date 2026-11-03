@@ -6,7 +6,9 @@
 
 Только окно ленты (feed_window: текущий месяц, до дня смены окна по МСК — ещё и прошлый): архив —
 только просмотр. Задачи — process_articles с пометкой only=["scoring"] в полосе пересчётов:
-воркер зовёт одну оценку по записанной сути, ядро пишет только балл (stages_to_write).
+воркер зовёт одну оценку по записанной сути, ядро пишет только балл (stages_to_write). Цену стадии,
+полосу и задачи с пометкой only (stage_cost_estimate, rescore_lane, enqueue_stage) берёт и правка
+русских заголовков (title_edit, enqueue-title-edit).
 """
 
 from __future__ import annotations
@@ -139,10 +141,11 @@ def rescore_lane(*, now: datetime | None = None) -> dict[str, Any]:
     return lane
 
 
-def scoring_cost_estimate(count: int, *, days: int = 30) -> dict[str, Any]:
-    """Стоимость `count` вызовов оценки: N × (in·p_in + out·p_out) / 10⁶ (ADR 0002).
+def stage_cost_estimate(stage: str, count: int, *, days: int = 30) -> dict[str, Any]:
+    """Стоимость `count` вызовов стадии (scoring — оценка, translation — перевод и правка заголовка):
+    N × (in·p_in + out·p_out) / 10⁶ (ADR 0002).
 
-    in и out — средние токены стадии scoring за `days` дней у модели, что оценивала чаще всех:
+    in и out — средние токены стадии за `days` дней у модели, что вызывалась на ней чаще всех:
     это модель из .env воркера NL, на ядре её иначе не узнать. Рассуждение модели входит в
     output_tokens. Ставки — config.price_for_model. Сверять — со счётом провайдера."""
     with connection.get_connection() as conn:
@@ -150,13 +153,13 @@ def scoring_cost_estimate(count: int, *, days: int = 30) -> dict[str, Any]:
             """
             SELECT model, count(*), avg(input_tokens), avg(output_tokens)
             FROM ai_processing_runs
-            WHERE stage = 'scoring' AND status = 'ok' AND provider = 'openai' AND model IS NOT NULL
+            WHERE stage = %s AND status = 'ok' AND provider = 'openai' AND model IS NOT NULL
               AND created_at > now() - make_interval(days => %s)
             GROUP BY model
             ORDER BY count(*) DESC, model
             LIMIT 1
             """,
-            (days,),
+            (stage, days),
         ).fetchone()
     if row is None:
         return {"count": count, "days": days, "model": None, "runs": 0, "usd_per_call": None, "usd_total": None}
@@ -171,16 +174,18 @@ def scoring_cost_estimate(count: int, *, days: int = 30) -> dict[str, Any]:
     }
 
 
-def enqueue_rescore(article_ids: list[int], *, batch_size: int = 20, allow_live_lane: bool = False) -> list[int]:
-    """Задачи внешнего контура: process_articles с явным списком и пометкой only=["scoring"].
+def enqueue_stage(article_ids: list[int], stages: list[str], *, what: str, batch_size: int = 20,
+                  allow_live_lane: bool = False) -> list[int]:
+    """Задачи внешнего контура: process_articles с явным списком и пометкой only=stages (пересчёт балла —
+    RESCORE_STAGES, правка заголовков — title_edit.STAGES); `what` — что ставится, для текста отказа.
 
     Только в полосу пересчётов: в потоке дня сотня пачек встала бы перед новыми статьями.
     Сознательно в поток дня — allow_live_lane."""
     decision = network_policy.route_ai_bulk()
     if decision.execution_region != "external":
-        # Локальный конвейер пометки only не знает, а у оценённой статьи балл пропускает:
+        # Локальный конвейер пометки only не знает, а готовую стадию у статьи пропускает:
         # задача прошла бы молча впустую.
-        raise RuntimeError("пересчёт балла идёт только через внешний контур ИИ")
+        raise RuntimeError(f"{what} идёт только через внешний контур ИИ")
     if decision.queue_name != lanes.AI_BULK and not allow_live_lane:
         raise RuntimeError(
             f"полоса пересчётов выключена (AI_BULK_LANE_ENABLED): задачи встали бы в поток дня "
@@ -193,7 +198,7 @@ def enqueue_rescore(article_ids: list[int], *, batch_size: int = 20, allow_live_
         chunk = article_ids[start : start + batch]
         job = repository.create_background_job(
             "process_articles",
-            {"article_ids": chunk, "limit": len(chunk), "offline": False, "only": RESCORE_STAGES},
+            {"article_ids": chunk, "limit": len(chunk), "offline": False, "only": list(stages)},
             queue_name=decision.queue_name,
             execution_region=decision.execution_region,
             capability=decision.capability,

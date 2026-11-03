@@ -825,6 +825,41 @@ def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
     print(f"  задач: {len(jobs)} ({jobs})")
 
 
+def cmd_enqueue_title_edit(args: argparse.Namespace) -> None:
+    """Правка русских заголовков, написанных до правки (решение владельца 03.11): принятые и отмеченные «в дайджест»
+    статьи последних двух недель в открытых месяцах, заголовок копией не по правилам эксперта. По умолчанию — сухой
+    прогон с N и ценой; задачи — только с --no-dry-run, после пересборки NL."""
+    from oiltech_digest.processing import rescore, title_edit
+
+    selection = title_edit.selection()
+    ids = selection["article_ids"][: args.limit] if args.limit else selection["article_ids"]
+    estimate = rescore.stage_cost_estimate("translation", len(ids))
+    lane = rescore.rescore_lane()
+    in_digest = sum(1 for article_id in ids if article_id in selection["digest_ids"])
+    print(f"enqueue-title-edit: собраны с {selection['since']:%d.%m.%Y}, открытые месяцы {', '.join(selection['months'])}"
+          f"; русских заголовков копией не по правилам: N={len(ids)} (из них в дайджест: {in_digest})")
+    if estimate["model"] is None:
+        print(f"  цену не оценить: вызовов translation за {estimate['days']} дней нет")
+    else:
+        print(f"  цена ≈ ${estimate['usd_total']:.2f}: модель {estimate['model']}, вызовов translation за "
+              f"{estimate['days']} дней: {estimate['runs']}, в среднем in={estimate['avg_input_tokens']} / "
+              f"out={estimate['avg_output_tokens']} токенов, ставки ${estimate['price_in']}/${estimate['price_out']} "
+              f"за 1М → ${estimate['usd_per_call']:.5f} за вызов; сверять со счётом провайдера")
+    workers = ", ".join(f"{name} (задачу просил {minutes} мин назад)" for name, minutes in lane["workers"]) or "нет"
+    print(f"  полоса: {lane['queue']} ({lane['region']}); воркеры полосы: {workers}")
+    for warning in lane["warnings"]:
+        print(f"  ВНИМАНИЕ: {warning}")
+    if args.dry_run:
+        print("  [dry-run] задачи не поставлены (поставить: --no-dry-run)")
+        return
+    try:
+        jobs = rescore.enqueue_stage(ids, title_edit.STAGES, what="правка заголовков", batch_size=args.batch_size,
+                                     allow_live_lane=args.allow_live_lane)
+    except RuntimeError as exc:
+        raise SystemExit(f"enqueue-title-edit: {exc}") from exc
+    print(f"  задач: {len(jobs)} ({jobs[:20]}{' …' if len(jobs) > 20 else ''})")
+
+
 def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
     """Пересчитать балл статей месяца с ИИ — после смены текстов или набора критериев профиля.
 
@@ -837,7 +872,7 @@ def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
     except ValueError as exc:
         raise SystemExit(f"enqueue-rescore: {exc}") from exc
     ids = selection["article_ids"][: args.limit] if args.limit else selection["article_ids"]
-    estimate = rescore.scoring_cost_estimate(len(ids))
+    estimate = rescore.stage_cost_estimate("scoring", len(ids))
     lane = rescore.rescore_lane()
     print(
         f"enqueue-rescore: профиль {selection['profile']}, месяц {selection['month']} — видимых оценённых статей "
@@ -865,7 +900,8 @@ def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
         print("  [dry-run] задачи не поставлены (поставить: --no-dry-run)")
         return
     try:
-        jobs = rescore.enqueue_rescore(ids, batch_size=args.batch_size, allow_live_lane=args.allow_live_lane)
+        jobs = rescore.enqueue_stage(ids, rescore.RESCORE_STAGES, what="пересчёт балла", batch_size=args.batch_size,
+                                     allow_live_lane=args.allow_live_lane)
     except RuntimeError as exc:
         raise SystemExit(f"enqueue-rescore: {exc}") from exc
     print(f"  задач: {len(jobs)} ({jobs[:20]}{' …' if len(jobs) > 20 else ''})")
@@ -3523,6 +3559,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_resummarize.add_argument("--batch-size", type=int, default=20)
     p_resummarize.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
     p_resummarize.set_defaults(func=cmd_enqueue_resummarize)
+
+    p_title_edit = sub.add_parser("enqueue-title-edit", help="править русские заголовки принятых статей последних двух "
+                                  "недель по правилам эксперта (по умолчанию сухой прогон с ценой)")
+    p_title_edit.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = все)")
+    p_title_edit.add_argument("--batch-size", type=int, default=20)
+    p_title_edit.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_title_edit.add_argument("--allow-live-lane", action="store_true",
+                              help="ставить в поток дня, если полоса пересчётов выключена (обычно — нет)")
+    p_title_edit.set_defaults(func=cmd_enqueue_title_edit)
 
     p_tg_titles = sub.add_parser("repair-telegram-titles", help="починить склеенные заголовки Telegram по сохранённым данным (по умолчанию dry-run)")
     p_tg_titles.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
