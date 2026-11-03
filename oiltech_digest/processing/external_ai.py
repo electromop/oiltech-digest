@@ -279,8 +279,10 @@ def process_payload(payload: dict[str, Any], heartbeat: Callable[..., None] | No
                 result["stats"]["summary"] += 1
 
             if "translation" in todo:
-                # Перевод заголовка — отдельная стадия (AI только для иностранных заголовков).
-                title_ru, translate_resp = title_ru_for_article(article, client)
+                # Перевод заголовка — отдельная стадия: иностранный переводится, русский не по правилам эксперта
+                # правится. Статья здесь принята: отклонённую гейтом или «Отбором» конвейер сюда не пускает, а явные
+                # списки с пометкой only ставятся по принятым (перегенерация сути, правка заголовков месяца).
+                title_ru, translate_resp = title_ru_for_article(article, client, edit_russian=True)
                 if title_ru is not None:
                     if translate_resp is not None:
                         item["translation"] = _response_payload(translate_resp, {"title_ru": title_ru})

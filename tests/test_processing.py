@@ -47,6 +47,8 @@ class _RecordingClient:
             return AIResponse(data={"relevant": self.relevant, "reason": "x"}, model=model or "fake")
         if name == "article_summary":
             return AIResponse(data={"summary": "s"}, model="fake")
+        if name == "article_title_edit":
+            return AIResponse(data={"title_ru": "Хуситы ударили по НПЗ в Эр-Рияде"}, model="fake")
         if name == "article_tag":
             return AIResponse(data={"tag_id": 10, "confidence": 0.5, "rationale": "r"}, model="fake")
         if name == "article_score":
@@ -106,6 +108,22 @@ def test_scheduler_batch_does_not_rescore_scored_article(monkeypatch):
     item = result["articles"][0]
     assert set(item) == {"article_id", "errors", "translation"}  # недостающее — только перевод
     assert item["translation"]["title_ru"] == payload["articles"][0]["title"]  # русский — без модели
+
+
+def test_accepted_article_gets_its_russian_title_edited_by_the_rules(monkeypatch):
+    """Решение владельца 03.11: у принятой статьи русский заголовок не по правилам эксперта (#150) правит «Суть и
+    перевод» — тем же шагом, что переводит иноязычный; в итоге модель и токены, ядро учтёт расход."""
+    client = _RecordingClient(relevant=True)
+    monkeypatch.setattr(external_ai, "make_client", lambda offline: client)
+    title = "Хуситы ударили по НПЗ в Эр-Рияде — Новости о нефти и газе в России и мире - Нефть и капитал"
+    payload = _external_payload({"title": title, "relevant": True, "summary": "готовая суть", "title_ru": None,
+                                 "existing_tag_id": 10, "existing_score_id": 7})
+
+    item = external_ai.process_payload(payload)["articles"][0]
+
+    assert [c["name"] for c in client.calls] == ["article_title_edit"]
+    assert item["translation"]["title_ru"] == "Хуситы ударили по НПЗ в Эр-Рияде"
+    assert item["translation"]["model"] == "fake" and item["translation"]["provider"] == "openai"
 
 
 _READY = {"relevant": True, "summary": "готовая суть", "title_ru": "готовый заголовок"}

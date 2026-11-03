@@ -123,6 +123,19 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
     assert _bot(telegram).notify() == 0 and len(telegram.sent) == 1
 
 
+def test_author_title_is_not_edited_even_off_the_rules(user, contour, monkeypatch):
+    """Заголовок материала — значение человека: «Суть и перевод» не правит его и тогда, когда он не по правилам
+    эксперта (решение владельца 03.11: правка — у статей и находок)."""
+    title = "Татнефть выбрала подрядчика по ГРП на 2027 год — итоги тендера"
+    _send(_material(title=title))
+    decide(monkeypatch, {title: answer()})
+
+    model = summarize(monkeypatch, {})
+
+    assert model.calls == []
+    assert showcase(user, "business")[title]["title_ru"] == title
+
+
 def test_core_keeps_the_author_fields_whatever_the_worker_returns(user, contour, monkeypatch):
     # Ответ воркера — недоверенный ввод: суть, которую он прислал материалу с описанием автора, ядро не пишет.
     _send(_material())
