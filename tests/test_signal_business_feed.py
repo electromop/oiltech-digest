@@ -281,6 +281,21 @@ def test_feedback_tile_and_card_counter_count_the_same_records_as_the_filter(use
     assert business(user)["Контракт ленты"]["feedback_count"] == 1
 
 
+def test_feedback_without_a_rating_reason_or_comment_is_not_a_feedback_block(user):
+    # Правка заголовка без оценки, причины и комментария (форма судьи радара) пишется в журнал, но записью блока ОС не
+    # становится: ответ без блока, счётчик 0, карточка «Нет ОС», плашка её не считает (решение владельца 03.11).
+    robot = radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
+
+    saved = _edit("POST", "/api/signals/feedback", user, signal_id=robot, corrected_title="Буровой робот Equinor")
+
+    assert saved["block"] is None
+    [card] = api_get("/api/signals", user)
+    assert (card["id"], card["title_ru"], card["feedback_count"], card["feedback_blocks"]) == (
+        robot, "Буровой робот Equinor", 0, [])
+    assert [row["id"] for row in api_get("/api/signals", user, feedback="without")] == [robot]
+    assert api_get("/api/signals/summary", user)["with_feedback"] == 0
+
+
 def test_value_outside_the_dictionaries_is_refused_not_silently_empty(user):
     api.app.dependency_overrides[api.require_user] = lambda: user
     try:

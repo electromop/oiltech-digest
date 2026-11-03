@@ -40,7 +40,7 @@ export const ARRIVAL_FILTER_LABEL = "Дата поступления";
 export const FEEDBACK_FILTER = {
   label: "Наличие ОС",
   any: "Любая",
-  choices: { with: "Есть ОС", without: "Нет ОС" } as Record<SignalFeedbackFilter, string>,
+  choices: { with: "Есть ОС", without: "Нет ОС" } satisfies Record<SignalFeedbackFilter, string>,
 };
 
 // Период чипа «Включённые фильтры»: «от 01.10.2026 до 15.10.2026», без одной из границ только другая.

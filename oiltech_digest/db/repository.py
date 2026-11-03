@@ -2263,23 +2263,24 @@ def _radar_hidden_reason_sql() -> str:
 _RADAR_TOPIC_SQL = (
     "(s.theme IN (SELECT t.name FROM tags t WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s))"
 )
+# Публикация бывает общей у сигнала ленты и карточки радара (#95): отзыв о сигнале другого происхождения, найденный по
+# адресу ссылки, этой карточке не засчитывается.
+_FEEDBACK_SAME_ORIGIN_SQL = "NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin)"
 # Отзыв о карточке — по её номеру или по адресу её ссылки. То же правило двумя EXISTS в SIGNAL_HAS_FEEDBACK_SQL:
 # менять вместе.
-_FEEDBACK_OF_SIGNAL_SQL = """(
+_FEEDBACK_OF_SIGNAL_SQL = f"""(
   sfe.signal_id = s.id
      OR (sfe.source_url IS NOT NULL AND EXISTS (
           SELECT 1 FROM signal_evidence se
           WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
         )
-        -- Публикация бывает общей у сигнала ленты и карточки радара (#95): отзыв о сигнале
-        -- другого происхождения этой карточке не засчитывается.
-        AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin)))"""
+        AND {_FEEDBACK_SAME_ORIGIN_SQL}))"""
 # Запись блока ОС (#130): оценка, причина или комментарий человека из блока «Обратная связь» карточки. «В дайджест»
 # и смена статуса пишутся тем же журналом, но не в этом блоке (решение владельца 03.11): по записям блока считают
 # фильтр «Наличие ОС», плашка «С обратной связью» и счётчик «Обратная связь: N».
-_FEEDBACK_BLOCK_SQL = (
-    "sfe.event_type = 'comment_added'"
-    " AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> '')"
+_FEEDBACK_IS_BLOCK_SQL = (
+    "(sfe.event_type = 'comment_added'"
+    " AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> ''))"
 )
 # Блоки ОС сигнала (#130, решение владельца 22.10): каждый человек добавляет свой блок (оценка, причина,
 # комментарий), чужие не перезаписываются; показываются списком, на отбор и показ не влияют. Автор — почта
@@ -2292,17 +2293,16 @@ _FEEDBACK_BLOCKS_SQL = f"""(
          '[]'::jsonb)
   FROM signal_feedback_events sfe
   LEFT JOIN users u ON u.id = sfe.user_id
-  WHERE {_FEEDBACK_OF_SIGNAL_SQL} AND {_FEEDBACK_BLOCK_SQL})"""
+  WHERE {_FEEDBACK_OF_SIGNAL_SQL} AND {_FEEDBACK_IS_BLOCK_SQL})"""
 
 
 # У карточки есть запись блока ОС, та, что в списке «Оценки людей» (решение владельца 03.11). Правило отзыва то же, что
 # _FEEDBACK_OF_SIGNAL_SQL, но двумя EXISTS по индексам номера и адреса: один EXISTS с OR перебирал все отзывы на каждую
 # карточку витрины (прод 03.11, бизнес-лента: 801 мс против 190 мс, карточки те же).
 SIGNAL_HAS_FEEDBACK_SQL = (
-    f"(EXISTS (SELECT 1 FROM signal_feedback_events sfe WHERE sfe.signal_id = s.id AND {_FEEDBACK_BLOCK_SQL})"
+    f"(EXISTS (SELECT 1 FROM signal_feedback_events sfe WHERE sfe.signal_id = s.id AND {_FEEDBACK_IS_BLOCK_SQL})"
     " OR EXISTS (SELECT 1 FROM signal_evidence se JOIN signal_feedback_events sfe ON sfe.source_url = se.source_url"
-    f" WHERE se.signal_id = s.id AND {_FEEDBACK_BLOCK_SQL}"
-    " AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin)))"
+    f" WHERE se.signal_id = s.id AND {_FEEDBACK_IS_BLOCK_SQL} AND {_FEEDBACK_SAME_ORIGIN_SQL}))"
 )
 # Фильтр «Наличие ОС»: значение параметра и условие выборки, как у плашек (RADAR_TILE_SQL).
 SIGNAL_FEEDBACK_SQL = {"with": SIGNAL_HAS_FEEDBACK_SQL, "without": f"NOT {SIGNAL_HAS_FEEDBACK_SQL}"}
@@ -2487,10 +2487,6 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    {signal_digest_sql('s')} AS selected_for_digest,
                    sm.analyst_comment AS user_comment,
                    sm.updated_at AS user_status_updated_at,
-                   -- «Обратная связь: N» считает записи блока ОС, те же, что в списке feedback_blocks
-                   -- (решение владельца 03.11): «В дайджест» не ОС.
-                   (SELECT COUNT(*) FROM signal_feedback_events sfe
-                    WHERE {_FEEDBACK_OF_SIGNAL_SQL} AND {_FEEDBACK_BLOCK_SQL}) AS feedback_count,
                    (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
                    {_FEEDBACK_BLOCKS_SQL} AS feedback_blocks,
                    corr.corrected_title,
@@ -2504,7 +2500,11 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             """,
             params,
         )
-        return [apply_signal_corrections(row) for row in cur.fetchall()]
+        rows = [apply_signal_corrections(row) for row in cur.fetchall()]
+    # «Обратная связь: N» — число записей в списке «Оценки людей» (решение владельца 03.11): «В дайджест» не ОС.
+    for row in rows:
+        row["feedback_count"] = len(row["feedback_blocks"])
+    return rows
 
 
 # Плашки над списком радара и бизнес-ленты: число плашки и выборка по её нажатию — одно условие.
