@@ -2208,9 +2208,17 @@ def cmd_discover_signals(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
+    from oiltech_digest import signal_discovery
     from oiltech_digest.db import repository
 
+    try:
+        # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
+        research = signal_discovery.research_settings(search_mode=args.search_mode, offline=args.offline,
+                                                      days=args.days)
+    except signal_discovery.SearchSetupError as exc:
+        raise SystemExit(f"enqueue-signal-discovery: {exc}") from exc
     payload = {
+        **research,
         "topic": args.topic,
         "days": args.days,
         "limit": args.limit,
@@ -2244,9 +2252,12 @@ def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue_daily_signal_discovery(args: argparse.Namespace) -> None:
-    from oiltech_digest import background_jobs
+    from oiltech_digest import background_jobs, signal_discovery
 
-    result = background_jobs.enqueue_daily_signal_discovery(force=args.force)
+    try:
+        result = background_jobs.enqueue_daily_signal_discovery(force=args.force)
+    except signal_discovery.SearchSetupError as exc:
+        raise SystemExit(f"enqueue-daily-signal-discovery: {exc}") from exc
     if not result["enqueued"]:
         print(f"enqueue-daily-signal-discovery: skipped reason={result['reason']}")
         return

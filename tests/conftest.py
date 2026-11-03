@@ -20,6 +20,9 @@ config.AUTH_COOKIE_SECURE = False
 # Тесты окна месяца проверяют механизм на дне смены 5 (решение 21.09) и не зависят ни от
 # .env разработчика, ни от правила прода (config.FEED_ROLLOVER_DAY_DEFAULT, 05.10 — 11).
 config.FEED_ROLLOVER_DAY = 5
+# Модель поиска радара (#138) — явная строка .env ядра без умолчания в коде; тесты идут с заданной, как прод после
+# выката, и не зависят от .env разработчика. Отказ без неё проверяется отдельно (test_signal_search_broad).
+config.SIGNAL_RESEARCH_MODEL = "gpt-6.1-sol"
 
 
 @pytest.fixture(scope="session")

@@ -2257,12 +2257,19 @@ def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, An
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
     if payload.max_signals < 1 or payload.max_signals > 50:
         raise HTTPException(status_code=400, detail="max_signals must be between 1 and 50")
+    from oiltech_digest import signal_discovery
+
+    try:
+        # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
+        research = signal_discovery.research_settings(offline=payload.offline, days=payload.days)
+    except signal_discovery.SearchSetupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Не-offline прогон радара зовёт OpenAI, поэтому маршрут берём у политики:
     # прямой вызов с РФ-адреса возвращает 403 unsupported_country_region_territory.
     decision = network_policy.route_ai_processing()
     job = background_jobs.enqueue(
         "signal_discovery",
-        payload.model_dump(),
+        {**payload.model_dump(), **research},
         user_id=int(user["id"]),
         queue_name=decision.queue_name if not payload.offline else "default",
         execution_region=decision.execution_region if not payload.offline else "ru",
@@ -3189,7 +3196,11 @@ def _get_scoped_background_job(job_id: int, user: dict[str, Any]) -> dict[str, A
 def _signal_discovery_payload(payload: dict[str, Any]) -> dict[str, Any]:
     from oiltech_digest import signal_discovery
 
-    return signal_discovery.build_external_payload(payload)
+    try:
+        return signal_discovery.build_external_payload(payload)
+    except signal_discovery.SearchSetupError as exc:
+        # Поиску GPT без годной модели задача не выдаётся (#138): падает с причиной, оплаты нет.
+        raise external_ai.InvalidJobPayload(str(exc)) from exc
 
 
 _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {

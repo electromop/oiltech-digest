@@ -33,7 +33,12 @@ DAILY_SIGNAL_DISCOVERY_TZ = ZoneInfo("Europe/Moscow")
 
 
 def daily_signal_discovery_payload() -> dict[str, Any]:
+    """Задача ежедневного прогона радара. Модель и прочие настройки поиска GPT (#138) — решение ядра при постановке:
+    без годной модели поиска задача не ставится (signal_discovery.SearchSetupError)."""
+    from oiltech_digest import signal_discovery
+
     return {
+        **signal_discovery.research_settings(days=config.SIGNAL_DISCOVERY_DAYS),
         "topic": None,
         "days": config.SIGNAL_DISCOVERY_DAYS,
         "limit": config.SIGNAL_DISCOVERY_LIMIT,

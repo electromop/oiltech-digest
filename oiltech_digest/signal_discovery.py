@@ -27,6 +27,7 @@ import requests
 from oiltech_digest import config as app_config
 from oiltech_digest import signal_dedup, signal_research
 from oiltech_digest.db import repository
+from oiltech_digest.ingestion.normalize import url_key as article_url_key
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, output_budget
 from oiltech_digest import scoring_profiles
@@ -627,6 +628,14 @@ class SignalDiscoveryConfig:
     # Решение ядра (OTBOR_ENABLED) едет в задаче, как search_mode; сборка NL до #131 поле не знает и гонит
     # прежнюю цепочку — ядро пишет каждую находку по её метке (candidate["otbor"]), а не по задаче.
     otbor: bool = False
+    # Поиск GPT (#138): модель, уровень рассуждения, потолок материалов на тему и период — решение ядра при постановке
+    # (research_settings), едут в задаче: своих строк поиска NL не читает. Модель без умолчания и без отката.
+    # period_end — ГГГГ-ММ-ДД, пусто — сегодня; research_days — дней до него (пробный прогон берёт месяц целиком).
+    research_model: str = ""
+    research_reasoning: str = ""
+    research_limit: int = 0
+    research_days: int = 0
+    period_end: str = ""
 
 
 def seed_default_radar_topics() -> int:
@@ -707,13 +716,19 @@ def _topic_name(topic: dict[str, Any], config: SignalDiscoveryConfig) -> str:
     return str(topic.get("name") or config.topic or "").strip()
 
 
+# Ссылки статей сбора в снимке широкого поиска (#138) — собранные с начала периода поиска и ещё за столько дней до
+# него: материал периода парсер мог взять раньше его даты. Ссылку статьи старше этого ловит запись на ядре
+# (_store_otbor_finding сверяет все статьи сбора).
+COLLECTED_MARGIN_DAYS = 7
+
+
 def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: bool = False) -> dict[str, Any]:
     """Всё, что разведке нужно из базы, одним JSON-снимком.
 
     for_external=True добавляет теги и память ОС: у внешнего воркера базы нет, и без
     снимка эти обогащения молча отваливались бы в except — тот же класс, что тематики
     гейта 17.09 (фича, которая на проде пустая, а в тестах зелёная)."""
-    topics = _selected_topics(config.topic)
+    topics = _selected_topics(config.topic, market=config.otbor)
     if not topics:
         topics = [{"name": config.topic or "HSE technology radar", "query_seeds_json": []}]
     article_evidence: dict[str, list[dict[str, Any]]] = {}
@@ -745,6 +760,14 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         "radar_criteria": _radar_criteria(),
         "score_calibration": _score_calibration(),
     }
+    if config.otbor:
+        # Широкий поиск (#138): ссылка, которая уже есть в статьях сбора, новой находкой не становится — воркер
+        # отбрасывает её до докачки страницы; сайты, которые парсер собирает целиком, поиск получает как «уже есть».
+        start, end = _research_window(config)
+        snapshot["collected_url_keys"] = repository.collected_article_url_keys(
+            since=start - timedelta(days=COLLECTED_MARGIN_DAYS))
+        snapshot["covered_sites"] = repository.covered_collection_sites(
+            since=start, until=end + timedelta(days=1), min_articles=app_config.SIGNAL_RESEARCH_COVERED_MIN_ARTICLES)
     if for_external:
         try:
             tags = repository.list_enabled_tags()
@@ -858,7 +881,9 @@ def _run_discovery_topics(
     topics_out: list[dict[str, Any]],
 ) -> dict[str, Any]:
     with use_discovery_snapshot(snapshot):
-        research_start, _ = signal_research.research_period(_research_days(config))
+        research_start, _ = _research_window(config)
+        collected = set(snapshot.get("collected_url_keys") or [])
+        covered = [str(site) for site in snapshot.get("covered_sites") or []]
         tag_topic_names = [
             _topic_name(topic, config)
             for topic in snapshot.get("topics") or []
@@ -873,7 +898,8 @@ def _run_discovery_topics(
             web_search = None
             if config.web_search or config.web_only or config.otbor:
                 known_titles = _known_titles(snapshot, topic_name, since=research_start)
-                web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat, known_titles=known_titles)
+                web_search = _topic_web_evidence(topic, topic_name, config, heartbeat=beat, known_titles=known_titles,
+                                                 collected=collected, covered=covered)
                 evidence.extend(web_search["evidence"])
                 # Дальше блок нужен только счётчиками: сами тексты уже в кандидатах. Без
                 # этого результат воркера вёз каждую докачанную страницу лишний раз.
@@ -1178,6 +1204,9 @@ def apply_discovery(
             filtered_stored = _store_filtered_findings(topic_name, topic["filtered_findings"])
         judged = []
         topic_duplicates = 0
+        # Ссылки из статей сбора (#138): отброшенные воркером по снимку и записью здесь.
+        already_collected = list(((topic.get("web_search") or {}).get("research") or {}).get("already_collected")
+                                 or [])
         for candidate in topic.get("candidates") or []:
             signal = candidate["signal"]
             rejected = bool(candidate.get("rejected"))
@@ -1192,7 +1221,8 @@ def apply_discovery(
             signal_id = _store_candidate(config, topic_name, candidate, generation_run_id)
             if signal_id is not None:
                 stored_keys[signal["signal_key"]] = signal_id
-            if rejected:
+            already_collected.extend(candidate.get("already_collected") or [])
+            if rejected or candidate.get("collected_whole"):
                 continue
             judged.append(signal)
             all_signals.append(signal)
@@ -1208,11 +1238,16 @@ def apply_discovery(
             "duplicates": topic_duplicates,
             "filtered_stored": filtered_stored,
             "batch_review": topic.get("batch_review"),
+            "already_collected": already_collected,
         })
     dedup = dict(run.get("dedup") or {})
     merged = 0
+    results_by_topic = {row["topic"]: row for row in topic_results}
     for topic_name, candidate in duplicates:
-        if _merge_duplicate(config, topic_name, candidate, stored_keys, generation_run_id):
+        merged_now = _merge_duplicate(config, topic_name, candidate, stored_keys, generation_run_id)
+        if candidate.get("already_collected") and topic_name in results_by_topic:
+            results_by_topic[topic_name]["already_collected"].extend(candidate["already_collected"])
+        if merged_now:
             merged += 1
         elif not config.dry_run:
             # Главной карточки нет (удалена, не записана) — сигнал не теряем.
@@ -1348,11 +1383,14 @@ def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any
     if config.dry_run:
         return None
     signal = candidate["signal"]
-    cluster = signal.get("evidence") or []
+    cluster = _drop_collected_links(candidate)
+    if not cluster:
+        return None
     repeat_of = _repeat_of_existing_card(signal, cluster)
     if repeat_of is not None:
         repository.touch_signal(repeat_of)
         signal["id"] = repeat_of
+        signal["found_again"] = True
         return repeat_of
     signal_id, created = repository.insert_otbor_finding({**signal, "decision_log": _otbor_finding_log(cluster)})
     if created:
@@ -1361,8 +1399,28 @@ def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any
         signal["evidence_count"] = repository.refresh_signal_evidence_count(signal_id)
     else:
         repository.touch_signal(signal_id)
+        signal["found_again"] = True
     signal["id"] = signal_id
     return signal_id
+
+
+def _drop_collected_links(candidate: dict[str, Any]) -> list[dict[str, Any]]:
+    """Ссылки находки без тех, что уже есть в статьях сбора (#138): воркер отбросил известные ему по снимку, здесь —
+    собранные, пока шёл прогон, и старше окна снимка. Отброшенные — в candidate["already_collected"] для итога
+    задачи; все ссылки собраны — находки нет (candidate["collected_whole"])."""
+    signal = candidate["signal"]
+    cluster = list(signal.get("evidence") or [])
+    keys = {article_url_key(str(item.get("source_url") or "")): item for item in cluster if item.get("source_url")}
+    collected = repository.collected_url_keys(list(keys)) if keys else set()
+    if not collected:
+        return cluster
+    candidate["already_collected"] = [{"title": _trim(str(item.get("title") or ""), 300), "url": item["source_url"]}
+                                      for key, item in keys.items() if key in collected]
+    cluster = [item for item in cluster
+               if not item.get("source_url") or article_url_key(str(item["source_url"])) not in collected]
+    signal["evidence"] = cluster
+    candidate["collected_whole"] = not cluster
+    return cluster
 
 
 def _otbor_finding_log(cluster: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -1563,6 +1621,9 @@ def _merge_duplicate(
     if owner_id and owner_id != target_id:
         # Ключ дубля — у видимой карточки: это тот же материал, она тоже дубль главной.
         repository.mark_signal_merged(int(owner_id), target_id, str(candidate.get("duplicate_reason") or ""))
+    if candidate.get("otbor"):
+        # Ссылка, которую сбор успел собрать, пока шёл прогон (#138), к главной находке не прибавляется.
+        _drop_collected_links(candidate)
     for item in signal.get("evidence") or []:
         repository.upsert_signal_evidence(target_id, item)
     repository.refresh_signal_evidence_count(target_id)
@@ -1585,7 +1646,15 @@ def _merge_duplicate(
 
 
 def discover_signals(config: SignalDiscoveryConfig) -> dict[str, Any]:
-    """Прогон целиком на ядре (CLI, локальная очередь, тесты)."""
+    """Прогон целиком на ядре (CLI, локальная очередь, тесты). Настройки поиска GPT, которых нет в конфиге разовой
+    команды, — настройки ядра (#138): прогон идёт там же, где они заданы."""
+    config = replace(
+        config,
+        research_model=config.research_model or app_config.SIGNAL_RESEARCH_MODEL,
+        research_reasoning=config.research_reasoning or app_config.SIGNAL_RESEARCH_REASONING,
+        research_limit=config.research_limit or app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC,
+        research_days=_research_days(config),
+    )
     generation_run_id = None
     if config.persist_training_examples and not config.dry_run:
         generation_run_id = repository.create_signal_generation_run(
@@ -1645,7 +1714,59 @@ def config_from_payload(payload: dict[str, Any], *, background_job_id: int | Non
         search_mode=_search_mode(payload.get("search_mode")),
         # Флаг ядра в момент выдачи (#131): NL своего .env для этого не читает.
         otbor=bool(payload["otbor"]) if "otbor" in payload else app_config.OTBOR_ENABLED,
+        # Задача, поставленная до #138, настроек поиска не несёт: те же решения ядра, но в момент выдачи.
+        research_model=str(payload.get("research_model") or app_config.SIGNAL_RESEARCH_MODEL or "").strip(),
+        research_reasoning=str(payload.get("research_reasoning") or app_config.SIGNAL_RESEARCH_REASONING or "").strip(),
+        research_limit=_payload_number(payload, "research_limit", app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC, int),
+        research_days=_payload_number(payload, "research_days",
+                                      max(_payload_number(payload, "days", 14, int), app_config.SIGNAL_RESEARCH_DAYS),
+                                      int),
+        period_end=str(payload.get("period_end") or ""),
     )
+
+
+class SearchSetupError(ValueError):
+    """Прогон радара с поиском GPT нельзя поставить: модель поиска не задана, снимается или нет уровня (#138)."""
+
+
+def research_settings(*, search_mode: Any = None, otbor: bool | None = None, offline: bool = False,
+                      days: int | None = None) -> dict[str, Any]:
+    """Настройки поиска GPT для задачи прогона радара (#138): решение ядра в момент постановки, их и исполнит NL.
+    Прогону без поиска GPT (прежняя цепочка на Brave, офлайн) — ничего. Модель без умолчания и отката: не задана,
+    снимается 11.12.2026 (gpt-5, gpt-5-mini, gpt-5-nano) или нет уровня рассуждения — отказ с причиной."""
+    otbor = app_config.OTBOR_ENABLED if otbor is None else otbor
+    if offline or not (otbor or _search_mode(search_mode) in ("openai_web", "both")):
+        return {}
+    settings = {
+        "research_model": app_config.SIGNAL_RESEARCH_MODEL,
+        "research_reasoning": app_config.SIGNAL_RESEARCH_REASONING,
+        "research_limit": app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC,
+        "research_days": max(int(days or 0), app_config.SIGNAL_RESEARCH_DAYS),
+    }
+    problem = research_problem(settings["research_model"], settings["research_reasoning"])
+    if problem:
+        raise SearchSetupError(problem)
+    return settings
+
+
+def research_problem(model: str, reasoning: str) -> str | None:
+    if not model:
+        return "SIGNAL_RESEARCH_MODEL не задан в .env ядра: модели поиска по умолчанию нет"
+    if signal_research.retired_model(model):
+        return f"модель поиска {model} снимается 11.12.2026: задайте SIGNAL_RESEARCH_MODEL не из семейства gpt-5"
+    if not reasoning:
+        return "SIGNAL_RESEARCH_REASONING не задан: у новых моделей нет уровня minimal, нужен явный (low и выше)"
+    return None
+
+
+def _needs_research(config: SignalDiscoveryConfig) -> bool:
+    return not config.offline and (config.otbor or _search_mode(config.search_mode) in ("openai_web", "both"))
+
+
+def _research_window(config: SignalDiscoveryConfig) -> tuple[date, date]:
+    """Период поиска GPT: research_days до period_end (по умолчанию — сегодня)."""
+    end = date.fromisoformat(config.period_end) if config.period_end else None
+    return signal_research.research_period(_research_days(config), end)
 
 
 SEARCH_MODES = ("brave", "openai_web", "both")
@@ -1657,8 +1778,13 @@ def _search_mode(value: Any) -> str:
 
 
 def build_external_payload(job_payload: dict[str, Any]) -> dict[str, Any]:
-    """Ядро, в момент выдачи задачи воркеру: параметры + снимок базы."""
+    """Ядро, в момент выдачи задачи воркеру: параметры + снимок базы. Поиску GPT без годной модели задача не
+    выдаётся (#138): воркер искал бы моделью своего .env или не искал вовсе, а прогон прошёл бы «ok» с нулём."""
     config = config_from_payload(job_payload)
+    if _needs_research(config):
+        problem = research_problem(config.research_model, config.research_reasoning)
+        if problem:
+            raise SearchSetupError(problem)
     config_dict = {key: value for key, value in asdict(config).items() if key != "background_job_id"}
     return {
         "kind": "signal_discovery",
@@ -1724,6 +1850,12 @@ def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, A
             "clusters": row.get("clusters"),
             "signals": len(row.get("signals") or []),
             "duplicates": row.get("duplicates", 0),
+            # Широкий поиск (#138): какие находки заведены этим прогоном, сколько найдено снова и какие ссылки уже были
+            # в сборе — для отчёта пробного прогона (radar-search-trial); номера и адреса, не тексты.
+            **({"signal_ids": [int(signal["id"]) for signal in row.get("signals") or []
+                               if signal.get("id") and not signal.get("found_again")],
+                "found_again": sum(1 for signal in row.get("signals") or [] if signal.get("found_again")),
+                "already_collected": row.get("already_collected") or []} if config.otbor else {}),
         })
     summary = {
         "generation_run_id": generation_run_id,
@@ -1793,6 +1925,8 @@ def _research_summary(research: dict[str, Any] | None) -> dict[str, Any] | None:
     }
     summary["unverified"] = len(research.get("unverified") or [])
     summary["dropped"] = len(research.get("dropped") or [])
+    if "already_collected" in research:
+        summary["already_collected"] = len(research["already_collected"] or [])
     if research.get("error"):
         summary["error"] = _trim(str(research["error"]), 160)
     return summary
@@ -2266,11 +2400,12 @@ def _radar_topics() -> list[dict]:
     return repository.list_signal_radar_topics(enabled_only=True)
 
 
-def _selected_topics(topic: str | None) -> list[dict]:
+def _selected_topics(topic: str | None, *, market: bool = False) -> list[dict]:
     rows = _radar_topics()
     if not topic:
-        # Бизнес-темы радар не ищет (решение 21.09 №4); явный --topic — можно, для проверки.
-        searched = [row for row in rows if not _is_excluded_topic(str(row.get("name") or ""))]
+        # Бизнес-темы радар не ищет (решение 21.09 №4); явный --topic — можно, для проверки. При «Отборе» поиск
+        # широкий (#138): тема рынка возвращается — что брать, решает «Отбор».
+        searched = [row for row in rows if market or not _is_excluded_topic(str(row.get("name") or ""))]
         return searched or rows or DEFAULT_RADAR_TOPICS
     topic_l = topic.lower()
     selected = [row for row in rows if topic_l in str(row.get("name") or "").lower()]
@@ -2761,7 +2896,7 @@ def _contains_cyrillic(text: str) -> bool:
 
 
 def _research_days(config: SignalDiscoveryConfig) -> int:
-    return max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS)
+    return int(config.research_days or 0) or max(int(config.days or 0), app_config.SIGNAL_RESEARCH_DAYS)
 
 
 def _known_titles(snapshot: dict[str, Any], topic_name: str, *, since: date) -> list[str]:
@@ -2791,10 +2926,14 @@ def _topic_web_evidence(
     *,
     heartbeat: Callable[[], None],
     known_titles: list[str] | None = None,
+    collected: set[str] | frozenset[str] = frozenset(),
+    covered: list[str] | None = None,
 ) -> dict[str, Any]:
     """Находки темы из веба по режиму прогона: Brave, «режим ChatGPT» или оба. При «Отборе» (#131) — только поиск
     GPT, и он только находит (signal_research, finds_only): Brave во вход «Отбора» не подключается, текст страницы
-    хранится до предела входа агента (TEXT_LIMIT, как у статьи сбора), а в прежней цепочке — прежним обрывком."""
+    хранится до предела входа агента (TEXT_LIMIT, как у статьи сбора), а в прежней цепочке — прежним обрывком.
+    Широкий поиск (#138): ссылка из статей сбора (collected — ключи normalize.url_key) отбрасывается до докачки
+    страницы, сайты, которые парсер собирает целиком (covered), поиск получает как «уже есть, ищи дальше»."""
     mode = _search_mode(config.search_mode)
     if mode == "brave" and not config.otbor:
         return _search_web_evidence(topic, config, heartbeat=heartbeat)
@@ -2804,15 +2943,22 @@ def _topic_web_evidence(
         "; ".join(context.get("descriptions") or []),
         "Ключевые слова: " + ", ".join((context.get("keywords_ru") or [])[:12] + (context.get("keywords_en") or [])[:12]),
     ) if part.strip() and not part.endswith(": "))
-    research = signal_research.research_topic(topic_name, days=_research_days(config),
-                                              topic_context=topic_context, heartbeat=heartbeat,
-                                              feedback=research_feedback_block(topic_name, known_titles=known_titles),
-                                              finds_only=config.otbor)
+    feedback = research_feedback_block(topic_name, known_titles=known_titles)
+    if config.otbor:
+        feedback = "\n\n".join(part for part in (signal_research.covered_sites_block(covered or []), feedback) if part)
+    _, period_end = _research_window(config)
+    research = signal_research.research_topic(topic_name, days=_research_days(config), period_end=period_end,
+                                              limit=config.research_limit or None, topic_context=topic_context,
+                                              heartbeat=heartbeat, feedback=feedback, finds_only=config.otbor,
+                                              model=config.research_model, reasoning=config.research_reasoning)
     heartbeat()
     # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье или «Отбору». При «Отборе» срока
     # на тему нет: находка без страницы во вход агента не идёт, и срезать её по времени значило бы потерять её молча
     # (признак продвижения подаётся перед каждой страницей, аренда держится).
     events = research.pop("evidence")
+    if config.otbor:
+        events, already = _split_collected(events, collected)
+        research["already_collected"] = already
     found, fulltext = _enrich_web_evidence_with_full_text(
         events, topic_name, limit=len(events), heartbeat=heartbeat, budget_seconds=0 if config.otbor else None,
         text_chars=TEXT_LIMIT if config.otbor else WEB_EVIDENCE_FULLTEXT_CHARS)
@@ -2827,6 +2973,22 @@ def _topic_web_evidence(
                 "evidence": verified}
     brave = _search_web_evidence(topic, config, heartbeat=heartbeat)
     return {**brave, "research": research, "evidence": verified + list(brave.get("evidence") or [])}
+
+
+def _split_collected(events: list[dict[str, Any]], collected: set[str] | frozenset[str],
+                     ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Находки поиска, чья ссылка уже есть в статьях сбора (#138), — не новые материалы: (новые, уже собранные).
+    Ключ — тот же, что у статьи сбора (normalize.url_key): другое написание адреса — тот же материал."""
+    if not collected:
+        return events, []
+    fresh, already = [], []
+    for item in events:
+        url = str(item.get("source_url") or "")
+        if url and article_url_key(url) in collected:
+            already.append({"title": _trim(str(item.get("title") or ""), 300), "url": url})
+        else:
+            fresh.append(item)
+    return fresh, already
 
 
 def _choose_theme(

@@ -3178,6 +3178,55 @@ def set_signal_agent_memory_status(memory_id: int, status: str) -> bool:
         return cur.rowcount > 0
 
 
+def collected_article_url_keys(*, since: date | datetime) -> list[str]:
+    """Ключи адресов статей сбора, собранных с этой даты (normalize.url_key): широкий поиск радара (#138) не делает
+    находкой ссылку, которая уже есть в сборе. Статья на удалении в счёт не идёт."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT url_key FROM articles WHERE collected_at >= %s AND url_key IS NOT NULL"
+            " AND NOT pending_deletion",
+            (since,),
+        ).fetchall()
+    return sorted(row[0] for row in rows)
+
+
+def collected_url_keys(keys: list[str]) -> set[str]:
+    """Какие из ключей адресов (normalize.url_key) есть среди статей сбора за всё время (#138)."""
+    keys = [key for key in keys if key]
+    if not keys:
+        return set()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT url_key FROM articles WHERE url_key = ANY(%s) AND NOT pending_deletion", (keys,),
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+def covered_collection_sites(*, since: date | datetime, until: date | datetime, min_articles: int) -> list[str]:
+    """Сайты, которые сбор за период охватывает целиком (#138): у сайта источников сбора не меньше min_articles
+    статей, собранных за период; Telegram-каналы — не сайты для поиска. Сайт — хост адреса источника без www;
+    у нескольких источников одного сайта (разделы JPT) статьи складываются. Больше статей — раньше в списке."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.url, count(*) AS n
+            FROM articles a
+            JOIN sources s ON s.id = a.source_id
+            WHERE a.collected_at >= %s AND a.collected_at < %s AND NOT a.pending_deletion
+              AND s.source_type IS DISTINCT FROM 'Telegram'
+            GROUP BY s.url
+            """,
+            (since, until),
+        ).fetchall()
+    counts: dict[str, int] = {}
+    for url, count in rows:
+        host = (urlsplit(str(url or "").strip().lower()).hostname or "").removeprefix("www.")
+        if host and host != "t.me":
+            counts[host] = counts.get(host, 0) + int(count)
+    return [host for host, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            if count >= min_articles]
+
+
 def list_reviewed_signal_urls() -> list[str]:
     """Адреса материалов, по которым человек уже вынес суждение о сигнале.
 

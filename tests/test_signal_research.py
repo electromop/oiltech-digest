@@ -48,6 +48,12 @@ class _Research:
                           model="gpt-5-test", input_tokens=17000, output_tokens=1300)
 
 
+def _run_config():
+    """Задача прогона радара в «режиме ChatGPT»: модель и уровень поиска едут в ней (#138), воркер своих не читает."""
+    return signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web",
+                                                  research_model="gpt-6.1-sol", research_reasoning="low")
+
+
 def _research(client, **kwargs):
     return signal_research.research_topic(TOPIC, period_end=date(2026, 9, 30), days=30,
                                           client_factory=lambda: client, **kwargs)
@@ -131,7 +137,7 @@ def test_run_in_research_mode_uses_openai_search_not_brave(monkeypatch):
                         lambda *args, **kwargs: pytest.fail("Brave не должен вызываться в режиме openai_web"))
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+    run_config = _run_config()
 
     run = signal_discovery.run_discovery(run_config, {"topics": [{"name": TOPIC}], "tags": []})
 
@@ -313,7 +319,7 @@ def test_research_prompt_gets_feedback_and_cards_already_on_the_radar(monkeypatc
     monkeypatch.setattr(signal_research, "make_client", lambda offline: client)
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+    run_config = _run_config()
     snapshot = {
         "topics": [{"name": TOPIC}], "tags": [],
         "memory": _memory(signal_verdict=[_verdict("reject", "Вебинар по бурению", "нет события")]),
@@ -338,7 +344,7 @@ def _known_cards_prompt(monkeypatch, existing_signals):
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
     monkeypatch.setattr(config, "SIGNAL_RESEARCH_DAYS", 30)
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+    run_config = _run_config()
     snapshot = {"topics": [{"name": TOPIC}], "tags": [], "memory": _memory(), "existing_signals": existing_signals}
 
     signal_discovery.run_discovery(run_config, snapshot)
