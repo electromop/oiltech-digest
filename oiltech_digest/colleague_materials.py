@@ -59,6 +59,10 @@ class InvalidMaterial(ValueError):
     """Материал не принят; текст — для человека."""
 
 
+class MaterialInDigest(ValueError):
+    """Материал нельзя удалить: его сигнал выбран «в дайджест» (ревью PR #155); текст — для человека."""
+
+
 def check_url(value: str) -> str:
     url = (value or "").strip()
     parsed = urlparse(url)
@@ -285,7 +289,10 @@ def check_edit(row: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_material(material_id: int, patch: dict[str, Any]) -> dict[str, Any] | None:
-    """Записать правку; нет материала — None, правка не по правилам — InvalidMaterial."""
+    """Записать правку; нет материала — None, правка не по правилам — InvalidMaterial. Если материал уже сигнал
+    (#131), правка в той же транзакции доходит и до сигнала (material_signals.apply_edit, ревью PR #155)."""
+    from oiltech_digest import material_signals
+
     row = get_material(material_id)
     if row is None:
         return None
@@ -298,15 +305,27 @@ def update_material(material_id: int, patch: dict[str, Any]) -> dict[str, Any] |
             (*fields.values(), material_id),
         )
         updated = cur.fetchone()
+        if updated:
+            # Форма шлёт все поля разом: до сигнала доходит только то, что правка действительно поменяла.
+            changed = {column for column, value in fields.items() if getattr(value, "obj", value) != row.get(column)}
+            material_signals.apply_edit(cur, dict(updated), changed)
         conn.commit()
     return dict(updated) if updated else None
 
 
 def delete_material(material_id: int) -> bool:
-    """Удалить материал. Файл на диске назван по отпечатку и бывает общим у одинаковых файлов: удаляется,
-    только если на него не ссылается другой материал."""
+    """Удалить материал. Его сигнал (#131) уходит в архив в той же транзакции, а если он выбран «в дайджест» —
+    MaterialInDigest, ничего не удалено (ревью PR #155): иначе карточка осталась бы в витрине без материала. Файл на
+    диске назван по отпечатку и бывает общим у одинаковых файлов: удаляется, только если на него не ссылается другой
+    материал."""
+    from oiltech_digest import material_signals
+
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT signal_id FROM colleague_materials WHERE id = %s FOR UPDATE", (material_id,))
+        found = cur.fetchone()
+        if found and found["signal_id"]:
+            material_signals.retire(cur, int(found["signal_id"]))
         cur.execute("DELETE FROM colleague_materials WHERE id = %s RETURNING file_path", (material_id,))
         deleted = cur.fetchone()
         shared = False
