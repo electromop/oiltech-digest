@@ -2692,11 +2692,16 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
     if job.get("kind") == "refetch_text" and result.get("kind") == "refetch_text":
         result = {**result, "applied": external_fetch.apply_refetch_text_result(result)}
     if job.get("kind") == "signal_discovery" and result.get("signal_discovery"):
-        from oiltech_digest import signal_discovery
+        from oiltech_digest import signal_discovery, signal_search_trial
 
         # Конверт ЗАМЕНЯЕТСЯ итогом: кандидаты с подтверждениями и промптами весят
         # мегабайты и уже лежат в signal_training_examples — в задаче только счётчики.
-        result = {"signal_discovery": True, "applied": signal_discovery.apply_external_result(result, job_id=job_id)}
+        # Пробный прогон широкого поиска (#138) — по задаче ядра: находки отдельно от радара, затем их «Отбор».
+        trial = (job.get("payload_json") or {}).get("search_trial")
+        applied = signal_discovery.apply_external_result(result, job_id=job_id, trial=bool(trial))
+        if trial:
+            applied["search_trial"] = signal_search_trial.after_search(job_id, applied, trial)
+        result = {"signal_discovery": True, "applied": applied}
     if job.get("kind") == "signal_card" and result.get("signal_card"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели с цитатами уже разобраны в карточки сигналов.
         applied = signal_card.apply_result(result, job_id=job_id,
@@ -2705,8 +2710,15 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
     if job.get("kind") == otbor.KIND and result.get("otbor"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели уже разобраны в решения сигналов и «Ход решения».
         job_payload = job.get("payload_json") or {}
-        applied = otbor.apply_result(result, job_id=job_id, article_ids=job_payload.get("article_ids") or [],
-                                     signal_ids=job_payload.get("signal_ids") or [])
+        if job_payload.get("search_trial_job_id"):
+            from oiltech_digest import signal_search_trial
+
+            # «Отбор» находок пробного прогона (#138): решения — в «Ход решения» находок, не в витрины.
+            applied = signal_search_trial.apply_otbor(result, job_id=job_id,
+                                                      signal_ids=job_payload.get("signal_ids") or [])
+        else:
+            applied = otbor.apply_result(result, job_id=job_id, article_ids=job_payload.get("article_ids") or [],
+                                         signal_ids=job_payload.get("signal_ids") or [])
         result = {"otbor": True, "applied": applied}
     if job.get("kind") == signal_summary.KIND and result.get("signal_summary"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: суть и заголовки уже записаны в сигналы.

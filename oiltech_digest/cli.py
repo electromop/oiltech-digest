@@ -2577,6 +2577,77 @@ def cmd_radar_recall(args: argparse.Namespace) -> None:
         print(f"  - {item['title'][:90]}")
 
 
+def cmd_radar_search_trial(args: argparse.Namespace) -> None:
+    """Пробный прогон широкого поиска (#138): сухой прогон по умолчанию — темы, вызовы и цена, ничего не пишет; --run —
+    один прогон, находки пройдут «Отбор», в витрины не попадёт ничего; --report N — отчёт по задаче N."""
+    from oiltech_digest import config, signal_reference, signal_search_trial
+
+    try:
+        if args.report:
+            reference = (signal_reference.read_reference(args.reference, sheets=args.sheet or None)
+                         if args.reference else None)
+            result = signal_search_trial.report(args.report, reference=reference)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            else:
+                _print_search_trial_report(result)
+            return
+        until = date.fromisoformat(args.until) if args.until else date.today()
+        since = date.fromisoformat(args.since) if args.since else until - timedelta(days=config.SIGNAL_RESEARCH_DAYS)
+        trial = signal_search_trial.plan(since=since, until=until, per_topic=args.per_topic, model=args.model,
+                                         reasoning=args.reasoning, otbor_model=args.otbor_model,
+                                         otbor_reasoning=args.otbor_reasoning)
+        cost = signal_search_trial.estimate(trial)
+        job = signal_search_trial.enqueue(trial) if args.run else None
+    except signal_search_trial.TrialError as exc:
+        raise SystemExit(f"radar-search-trial: {exc}") from exc
+    print(f"radar-search-trial{'' if job else ' [сухой прогон]'}: тем {len(trial['topics'])}, период с {trial['since']} "
+          f"по {trial['until']}, поиск {trial['model']} {trial['reasoning']}, до {trial['per_topic']} материалов на "
+          f"тему, «Отбор» {trial['otbor_model']} {trial['otbor_reasoning']}")
+    print("  Темы: " + "; ".join(trial["topics"]))
+    print(f"  Вызовов поиска {cost['search_calls']} (до {cost['search_calls_max']} с повтором пустого ответа), "
+          f"«Отбора» от {cost['otbor_calls'][0]} до {cost['otbor_calls'][1]}")
+    print(f"  Оценка цены, USD: поиск от {cost['search_usd'][0]} до {cost['search_usd'][1]}, «Отбор» от "
+          f"{cost['otbor_usd'][0]} до {cost['otbor_usd'][1]}, всего от {cost['total_usd'][0]} до {cost['total_usd'][1]}"
+          + (" (вызов поиска по прошлым прогонам радара)" if cost["history"] else " (вызов поиска по замеру 18.10)"))
+    if job is None:
+        print("Ничего не записано. Запуск: тот же вызов с --run.")
+        return
+    print(f"Задача id={job['id']}, очередь {job['queue_name']}. Находки пройдут «Отбор» после поиска; в витрины не "
+          f"попадёт ничего. Отчёт: radar-search-trial --report {job['id']} [--reference эталон.xlsx]")
+
+
+def _print_search_trial_report(result: dict) -> None:
+    otbor = result["otbor"]
+    print(f"radar-search-trial: задача {result['job_id']} ({result['status']}), поиск {result['model']}, до "
+          f"{result['per_topic']} на тему, период с {result['trial'].get('since')} по {result['trial'].get('until')}")
+    for topic in result["topics"]:
+        print(f"  {topic['topic']}: принёс поиск {topic['found']}, технический отсев {topic['dropped']}, ссылок "
+              f"{topic['links']}, из них в сборе {topic['already_collected']}, новых находок {topic['new']}, найдено "
+              f"снова {topic['found_again']}" + (f", сбой: {topic['error']}" if topic.get("error") else ""))
+    print(f"Материалов (ссылок после технических проверок) {result['materials']}, уже в сборе "
+          f"{result['already_collected']} ({result['already_collected_share']:.0%}), новых находок "
+          f"{result['new_findings']}, сигналов платформы найдено снова {result['found_again']}")
+    print(f"«Отбор»: решил {otbor['decided']}, принял {otbor['accepted']} ({otbor['accepted_share']:.0%}), сбоев "
+          f"{otbor['failed']}, ждут решения {otbor['waiting']}, спорных {otbor['disputed']}")
+    print("  Принятое по категориям: " + (", ".join(f"{key} {value}" for key, value in otbor["by_category"].items())
+                                          or "нет"))
+    print("  Причины отказа: " + (", ".join(f"{key} {value}" for key, value in otbor["reject_reasons"].items())
+                                  or "нет"))
+    titles = result["russian_titles"]
+    print(f"Русский заголовок страницы у принятых: {titles['russian']} из {titles['accepted']} ({titles['share']:.0%})")
+    cost = result["cost_usd"]
+    print("Фактическая цена, USD: " + ", ".join(f"{stage} {value}" for stage, value in cost.items()))
+    recall = result.get("recall")
+    if recall:
+        print(f"Полнота по эталону: поиск {recall['search']} из {recall['total']} ({recall['search_share']:.0%}), сбор "
+              f"{recall['collection']}, поиск или сбор {recall['either']} ({recall['either_share']:.0%})")
+        for title in recall["search_only"]:
+            print(f"  + только поиск: {title[:100]}")
+        for title in recall["missed"]:
+            print(f"  - не нашёл никто: {title[:100]}")
+
+
 def _iso_date(value: str) -> str:
     """День ГГГГ-ММ-ДД из командной строки: опечатка — ошибка разбора, а не трассировка базы."""
     try:
@@ -3953,6 +4024,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_radar_recall.add_argument("--sheet", action="append")
     p_radar_recall.add_argument("--json", action="store_true")
     p_radar_recall.set_defaults(func=cmd_radar_recall)
+
+    p_search_trial = sub.add_parser(
+        "radar-search-trial",
+        help="пробный прогон широкого поиска (#138): сухой по умолчанию — вызовы и цена; --run — один прогон, находки "
+             "проходят «Отбор», витрины не меняются; --report N — отчёт",
+    )
+    p_search_trial.add_argument("--since", type=_iso_date, default=None,
+                                help="период поиска с ГГГГ-ММ-ДД (по умолчанию SIGNAL_RESEARCH_DAYS до --until)")
+    p_search_trial.add_argument("--until", type=_iso_date, default=None, help="… по ГГГГ-ММ-ДД (по умолчанию сегодня)")
+    p_search_trial.add_argument("--per-topic", type=int, default=None,
+                                help="до скольких материалов просить на тему (по умолчанию SIGNAL_RESEARCH_EVENTS_PER_TOPIC)")
+    p_search_trial.add_argument("--model", default=None, help="модель поиска (по умолчанию SIGNAL_RESEARCH_MODEL)")
+    p_search_trial.add_argument("--reasoning", default=None, help="уровень рассуждения поиска")
+    p_search_trial.add_argument("--otbor-model", default=None, help="модель «Отбора» (по умолчанию OTBOR_MODEL)")
+    p_search_trial.add_argument("--otbor-reasoning", default=None, help="уровень рассуждения «Отбора»")
+    p_search_trial.add_argument("--run", action="store_true", help="поставить прогон; без флага — сухой прогон")
+    p_search_trial.add_argument("--report", type=int, default=None, help="отчёт по задаче пробного прогона N")
+    p_search_trial.add_argument("--reference", default=None,
+                                help="эталон эксперта (xlsx, как у radar-recall) для полноты в отчёте")
+    p_search_trial.add_argument("--sheet", action="append")
+    p_search_trial.add_argument("--json", action="store_true")
+    p_search_trial.set_defaults(func=cmd_radar_search_trial)
 
     p_card_pack = sub.add_parser(
         "signal-card-expert-pack",

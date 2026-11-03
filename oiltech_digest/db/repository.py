@@ -959,6 +959,10 @@ ARTICLE_SELECTOR_OTBOR = "otbor"
 # То же у сигнала (signals.selector, #131): находка поиска или материал коллеги, заведённые при включённом флаге. Пока
 # решения нет, сигнал не виден нигде (правила показа и «Карточка» его не берут).
 SIGNAL_SELECTOR_OTBOR = "otbor"
+# Находка пробного прогона широкого поиска (#138, signal_search_trial): её не видят витрины, разделы отклонённого,
+# шаги конвейера (они берут только NULL или «otbor») и снимок дедупа радара; «Отбор» решает её в задаче пробного
+# прогона, и решение — шагом «Хода решения», а не в полях сигнала.
+SIGNAL_SELECTOR_TRIAL = "otbor_trial"
 # Поля карточки сигнала, которые ставит судья радара: их значения агент у находки радара не
 # перезаписывает, а пустые — заполняет.
 RADAR_JUDGE_CARD_FIELDS = ("event_date", "oilfield_relevance", "oilfield_application", "why_interesting")
@@ -1356,6 +1360,8 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
               -- Только находки радара (#95): сигналы ленты (тысячи в месяц) вытеснили бы
               -- карточки радара из снимка в 300 штук; склейку ленты с радаром сделает агент дедупа.
               AND {radar}
+              -- Находка пробного прогона (#138) не видна нигде: повтор её события — новая находка, а не её дубль.
+              AND s.selector IS DISTINCT FROM '{trial}'
               -- Отсеянное в дедуп не идёт: новое событие не склеится с браком. Разобранное
               -- человеком — идёт: одобренная отсеянная видна на радаре, и её повтор должен
               -- стать её дублем; отклонённая — главной (_rank), повтор не вернётся.
@@ -1364,7 +1370,7 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
             ORDER BY {reviewed} DESC, s.last_seen_at DESC, s.id DESC
             LIMIT %s
             """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s"), visible=_any_showcase_quality_sql("s"),
-                       radar=radar_origin_sql("s")),
+                       radar=radar_origin_sql("s"), trial=SIGNAL_SELECTOR_TRIAL),
             (fresh_days, window_days, limit),
         )
         rows = cur.fetchall()
@@ -1429,18 +1435,20 @@ def mark_signal_merged(signal_id: int, into_signal_id: int, reason: str = "", *,
         return row is not None
 
 
-def insert_otbor_finding(signal: dict) -> tuple[int, bool]:
+def insert_otbor_finding(signal: dict, *, selector: str = SIGNAL_SELECTOR_OTBOR) -> tuple[int, bool]:
     """Находка поиска, которую решит «Отбор» (#131): сигнал радара с меткой пути и без решения — заголовок, тема,
-    «Ход решения» поиска. Уже есть с этим ключом — прежний сигнал как есть (найдено снова). (id, заведён ли сейчас)."""
+    «Ход решения» поиска. Уже есть с этим ключом — прежний сигнал как есть (найдено снова). (id, заведён ли сейчас).
+    selector — у находки пробного прогона (#138) своя метка пути."""
     with get_connection() as conn:
         row = conn.execute(
             f"""
             INSERT INTO signals (signal_key, origin, selector, title, theme, maturity, decision_log)
-            VALUES (%s, '{SIGNAL_ORIGIN_RADAR}', '{SIGNAL_SELECTOR_OTBOR}', %s, %s, 'watch', %s)
+            VALUES (%s, '{SIGNAL_ORIGIN_RADAR}', %s, %s, %s, 'watch', %s)
             ON CONFLICT (signal_key) DO NOTHING
             RETURNING id
             """,
-            (signal["signal_key"], signal["title"], signal["theme"], Json(_jsonable(signal.get("decision_log") or []))),
+            (signal["signal_key"], selector, signal["title"], signal["theme"],
+             Json(_jsonable(signal.get("decision_log") or []))),
         ).fetchone()
         created = row is not None
         if row is None:
@@ -1463,8 +1471,10 @@ def _signal_holds_evidence_sql(alias: str) -> str:
     ней (02.10). Ссылки разобранной радар заново не приносит (list_reviewed_signal_urls)."""
     # Сигнал ленты ссылку у радара не держит (#95): иначе находка поиска с адресом статьи
     # ленты стала бы его повтором и пропала с радара. Бизнес-находка радара держит — её
-    # видно в витрине «бизнес».
+    # видно в витрине «бизнес». Находка пробного прогона (#138) не держит: она не видна нигде, и
+    # обычный прогон, нашедший то же событие, заводит свою находку.
     return (f"({radar_origin_sql(alias)} AND {alias}.merged_into_signal_id IS NULL"
+            f" AND {alias}.selector IS DISTINCT FROM '{SIGNAL_SELECTOR_TRIAL}'"
             f" AND ({_any_showcase_quality_sql(alias)} OR {_SIGNAL_REVIEWED_SQL.format(alias=alias)}))")
 
 
@@ -1782,6 +1792,8 @@ def radar_cards_for_recall() -> list[dict]:
             FROM signals s
             WHERE s.merged_into_signal_id IS NULL
               AND {radar_origin_sql("s")}
+              -- Пробный прогон широкого поиска (#138) мерит свою полноту сам (signal_search_trial.report).
+              AND s.selector IS DISTINCT FROM '{SIGNAL_SELECTOR_TRIAL}'
               AND (s.filter_stage IS NULL OR {_SIGNAL_APPROVED_SQL.format(alias="s")}
                    OR {_SIGNAL_IN_DIGEST_SQL.format(alias="s")})
             """

@@ -26,7 +26,7 @@ import requests
 
 from oiltech_digest import config as app_config
 from oiltech_digest import signal_dedup, signal_research
-from oiltech_digest.db import repository
+from oiltech_digest.db import repository, search_trial_store
 from oiltech_digest.ingestion.normalize import url_key as article_url_key
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, output_budget
@@ -636,6 +636,9 @@ class SignalDiscoveryConfig:
     research_limit: int = 0
     research_days: int = 0
     period_end: str = ""
+    # Пробный прогон широкого поиска (#138, signal_search_trial): находки ядро пишет отдельно от радара — метка пути
+    # пробного прогона и свой ключ, существующие сигналы прогон не меняет. Воркеру признак не нужен: ищет он так же.
+    trial: bool = False
 
 
 def seed_default_radar_topics() -> int:
@@ -1200,7 +1203,8 @@ def apply_discovery(
     for topic in run.get("topics") or []:
         topic_name = str(topic.get("topic") or "")
         filtered_stored = 0
-        if not config.dry_run and topic.get("filtered_findings"):
+        # Технический отсев пробного прогона (#138) в разделы отклонённого не пишется: в итоге задачи — счётчики.
+        if not config.dry_run and not config.trial and topic.get("filtered_findings"):
             filtered_stored = _store_filtered_findings(topic_name, topic["filtered_findings"])
         judged = []
         topic_duplicates = 0
@@ -1247,6 +1251,9 @@ def apply_discovery(
         merged_now = _merge_duplicate(config, topic_name, candidate, stored_keys, generation_run_id)
         if candidate.get("already_collected") and topic_name in results_by_topic:
             results_by_topic[topic_name]["already_collected"].extend(candidate["already_collected"])
+        if candidate["signal"].get("found_again") and topic_name in results_by_topic:
+            results_by_topic[topic_name].setdefault("found_again_duplicates", []).append(
+                candidate["signal"].get("found_again_id"))
         if merged_now:
             merged += 1
         elif not config.dry_run:
@@ -1255,7 +1262,8 @@ def apply_discovery(
             candidate["signal"]["id"] = signal_id
             all_signals.append(candidate["signal"])
     merged_existing = 0
-    if not config.dry_run:
+    # Сигналы платформы пробный прогон (#138) не склеивает: он их не меняет.
+    if not config.dry_run and not config.trial:
         for merge in dedup.pop("existing_merges", None) or []:
             if repository.mark_signal_merged(int(merge["signal_id"]), int(merge["into"]), str(merge.get("reason") or "")):
                 merged_existing += 1
@@ -1382,6 +1390,8 @@ def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any
     карточка, которая их держит, как у прежней цепочки."""
     if config.dry_run:
         return None
+    if config.trial:
+        return _store_trial_finding(candidate)
     signal = candidate["signal"]
     cluster = _drop_collected_links(candidate)
     if not cluster:
@@ -1402,6 +1412,58 @@ def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any
         signal["found_again"] = True
     signal["id"] = signal_id
     return signal_id
+
+
+# Ключ находки пробного прогона (#138) — свой: повтор того же события обычным прогоном радара заводит обычную находку,
+# а не уходит в невидимую находку пробного прогона.
+TRIAL_KEY_PREFIX = "trial:"
+
+
+def _store_trial_finding(candidate: dict[str, Any]) -> int | None:
+    """Находка пробного прогона широкого поиска (#138): сигнал с меткой пути пробного прогона и своим ключом — его не
+    видят витрины, разделы отклонённого, шаги конвейера и следующий прогон радара (снимок дедупа его не берёт).
+    Существующие сигналы прогон не меняет: ссылка, которая уже есть у сигнала радара, ленты или материала, к находке
+    не переходит; все ссылки уже есть — находка найдена снова (found_again_id — у кого ссылка), без отметки. Ссылку
+    находки прошлого пробного прогона новая забирает себе: каждый пробный прогон меряется целиком."""
+    signal = candidate["signal"]
+    own, held = _trial_own_links(_drop_collected_links(candidate))
+    if not own:
+        if held:
+            signal["found_again"] = True
+            signal["found_again_id"] = int(next(iter(held.values()))["id"])
+        return None
+    signal_id, _ = repository.insert_otbor_finding(
+        {**signal, "signal_key": TRIAL_KEY_PREFIX + signal["signal_key"], "decision_log": _otbor_finding_log(own)},
+        selector=repository.SIGNAL_SELECTOR_TRIAL)
+    for item in own:
+        repository.upsert_signal_evidence(signal_id, item)
+    signal["evidence_count"] = repository.refresh_signal_evidence_count(signal_id)
+    signal["id"] = signal_id
+    return signal_id
+
+
+def _trial_own_links(cluster: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict]]:
+    """Ссылки находки пробного прогона (#138), которых нет у сигналов платформы, и те, что есть: {url: владелец}."""
+    owners = search_trial_store.evidence_owners([str(item.get("source_url") or "") for item in cluster])
+    held = {url: owner for url, owner in owners.items() if owner["selector"] != repository.SIGNAL_SELECTOR_TRIAL}
+    return [item for item in cluster if item.get("source_url") and item["source_url"] not in held], held
+
+
+def _merge_trial_duplicate(candidate: dict[str, Any], stored_keys: dict[str, int]) -> bool:
+    """Дубль в пробном прогоне (#138): его ссылки — в главную находку этого прогона; дубль сигнала платформы — найден
+    снова (found_again_id), сам сигнал прогон не трогает."""
+    signal = candidate["signal"]
+    target = candidate.get("duplicate_of") or {}
+    target_id = stored_keys.get(str(target.get("signal_key") or ""))
+    if target_id is None:
+        signal["found_again"] = True
+        signal["found_again_id"] = int(target["signal_id"]) if target.get("signal_id") else None
+        return True
+    own, _ = _trial_own_links(_drop_collected_links(candidate))
+    for item in own:
+        repository.upsert_signal_evidence(target_id, item)
+    repository.refresh_signal_evidence_count(target_id)
+    return True
 
 
 def _drop_collected_links(candidate: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1613,6 +1675,8 @@ def _merge_duplicate(
     target = candidate.get("duplicate_of") or {}
     if config.dry_run:
         return True
+    if config.trial:
+        return _merge_trial_duplicate(candidate, stored_keys)
     target_id = target.get("signal_id") or stored_keys.get(str(target.get("signal_key") or ""))
     target_id = repository.resolve_signal_merge_root(int(target_id)) if target_id else None
     if target_id is None:
@@ -1722,6 +1786,7 @@ def config_from_payload(payload: dict[str, Any], *, background_job_id: int | Non
                                       max(_payload_number(payload, "days", 14, int), app_config.SIGNAL_RESEARCH_DAYS),
                                       int),
         period_end=str(payload.get("period_end") or ""),
+        trial=bool(payload.get("search_trial")),
     )
 
 
@@ -1803,11 +1868,12 @@ def process_external_payload(payload: dict[str, Any], heartbeat: Callable[[], No
     return {"signal_discovery": True, "config": payload.get("config") or {}, "run": run}
 
 
-def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, Any]:
+def apply_external_result(result: dict[str, Any], *, job_id: int, trial: bool | None = None) -> dict[str, Any]:
     """Ядро, при завершении задачи: записать сигналы и вернуть компактный итог.
 
     Полный результат (все кандидаты с подтверждениями и промптами) в result_json задачи
-    не кладём — он осядет в signal_training_examples; в задаче остаются счётчики."""
+    не кладём — он осядет в signal_training_examples; в задаче остаются счётчики. Пробный ли это прогон (#138),
+    решает задача ядра (trial), а не конфиг, который вернул воркер."""
     allowed = {item.name for item in fields(SignalDiscoveryConfig)}
     config = replace(
         SignalDiscoveryConfig(**{
@@ -1815,6 +1881,8 @@ def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, A
         }),
         background_job_id=job_id,
     )
+    if trial is not None:
+        config = replace(config, trial=trial)
     generation_run_id = None
     if config.persist_training_examples and not config.dry_run:
         generation_run_id = repository.create_signal_generation_run(
@@ -1854,7 +1922,9 @@ def apply_external_result(result: dict[str, Any], *, job_id: int) -> dict[str, A
             # в сборе — для отчёта пробного прогона (radar-search-trial); номера и адреса, не тексты.
             **({"signal_ids": [int(signal["id"]) for signal in row.get("signals") or []
                                if signal.get("id") and not signal.get("found_again")],
-                "found_again": sum(1 for signal in row.get("signals") or [] if signal.get("found_again")),
+                "found_again_ids": [signal.get("found_again_id") or signal.get("id")
+                                    for signal in row.get("signals") or [] if signal.get("found_again")]
+                + list(row.get("found_again_duplicates") or []),
                 "already_collected": row.get("already_collected") or []} if config.otbor else {}),
         })
     summary = {
@@ -2413,6 +2483,11 @@ def _selected_topics(topic: str | None, *, market: bool = False) -> list[dict]:
         return selected
     default_selected = [row for row in DEFAULT_RADAR_TOPICS if topic_l in row["name"].lower()]
     return default_selected or [{"name": topic, "query_seeds_json": []}]
+
+
+def search_topic_names(*, market: bool) -> list[str]:
+    """Темы, которые ищет прогон радара (пробный прогон #138 считает по ним вызовы и цену)."""
+    return [str(topic.get("name") or "") for topic in _selected_topics(None, market=market)]
 
 
 def _is_excluded_topic(name: str) -> bool:
