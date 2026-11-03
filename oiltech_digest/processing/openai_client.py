@@ -91,10 +91,9 @@ class OpenAIResponsesClient:
 
         raw = response.json()
         text = _extract_output_text(raw)
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise AIClientError(f"OpenAI returned non-JSON output: {text[:500]}") from exc
+        data = _leading_json_object(text)
+        if data is None:
+            raise AIClientError(f"OpenAI returned non-JSON output: {text[:500]}")
 
         usage = raw.get("usage") or {}
         return AIResponse(
@@ -161,6 +160,23 @@ class OpenAIResponsesClient:
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
         )
+
+
+def _leading_json_object(text: str) -> dict[str, Any] | None:
+    """Объект ответа при строгой схеме. Лёгкие модели изредка портят обёртку: строка перед объектом или хвост после
+    него (переигровка «Дедупа» 03.11: у gpt-6-luna без рассуждения 5 ответов из 329 — «[JSON не возвращать…]{…}»,
+    «{…}即»), а сам объект цел. Берём первый объект; оборванный не читается и остаётся сбоем."""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        if start == -1:
+            return None
+        try:
+            value, _ = json.JSONDecoder().raw_decode(text, start)
+        except json.JSONDecodeError:
+            return None
+    return value if isinstance(value, dict) else None
 
 
 def _research_payload(raw: dict[str, Any]) -> dict[str, Any]:

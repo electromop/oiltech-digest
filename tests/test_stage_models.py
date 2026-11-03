@@ -357,3 +357,28 @@ def test_reprint_usage_skips_errors_and_old_build_verdicts(isolated_db):
 
     assert repository.record_reprint_usage(43, [old_build, {"a_id": 3, "b_id": 4, "error": "timeout"}, broken]) == 0
     assert _reprint_runs(43) == []
+
+
+# --- Испорченная обёртка ответа при строгой схеме ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text, expected", [
+    ('{"same_event": true, "primary_id": 2, "reason": "одно"}即\n', {"same_event": True, "primary_id": 2, "reason": "одно"}),
+    (' \n[JSON не возвращать в fenced code]\n{"same_event": false, "reason": "разные"}',
+     {"same_event": False, "reason": "разные"}),
+])
+def test_client_reads_object_despite_broken_wrapper(monkeypatch, text, expected):
+    """Переигровка 03.11: у gpt-6-luna без рассуждения 5 ответов из 329 с хвостом или строкой перед объектом."""
+    monkeypatch.setattr(openai_client.requests, "post", _Post(text))
+    client = OpenAIResponsesClient(api_key="k", model="gpt-6-luna")
+
+    assert client.complete_json("i", "u", SCHEMA, model="gpt-6-luna", reasoning_effort="none").data == expected
+
+
+@pytest.mark.parametrize("text", ['{"same_event": true, "reason": "обор', "не JSON", "[1, 2]"])
+def test_client_still_fails_on_cut_or_foreign_output(monkeypatch, text):
+    monkeypatch.setattr(openai_client.requests, "post", _Post(text))
+    client = OpenAIResponsesClient(api_key="k", model="gpt-6-luna")
+
+    with pytest.raises(openai_client.AIClientError, match="non-JSON"):
+        client.complete_json("i", "u", SCHEMA, model="gpt-6-luna", reasoning_effort="none")
