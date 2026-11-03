@@ -1,4 +1,4 @@
-"""Правка русских заголовков принятых статей открытых месяцев (решение владельца 03.11): enqueue-title-edit.
+"""Правка русских заголовков принятых статей последних двух недель (решение владельца 03.11): enqueue-title-edit.
 
 Новые принятые статьи правит «Суть и перевод» сам; заголовки, написанные до правки, — только этим прогоном, по слову
 владельца: сначала всегда сухой прогон с N и ценой.
@@ -35,7 +35,7 @@ def _freeze(monkeypatch) -> None:
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 11, 3, 12, 0, tzinfo=feed_window.MSK))
 
 
-def _article(title: str, *, title_ru=COPY, relevant: bool | None = True, published: str = "2026-10-20 12:00+00",
+def _article(title: str, *, title_ru=COPY, relevant: bool | None = True, published: str = "2026-10-28 12:00+00",
              pending_deletion: bool = False, digest: bool = False) -> int:
     """Статья ленты с карточкой; title_ru по умолчанию — копия заголовка, как у русского до правки."""
     with connection.get_connection() as conn:
@@ -83,6 +83,8 @@ def test_dry_run_counts_russian_copies_off_the_rules_in_open_months_and_enqueues
     _article("Halliburton wins a contract — Reuters", title_ru="Halliburton выиграла контракт")  # иноязычный
     _article(OFF_RULES, title_ru=EDITED)  # уже правлен
     _article(OFF_RULES, published="2026-09-20 12:00+00")  # закрытый месяц: выпуск только на просмотр
+    # Октябрь открыт, но собрана раньше двух недель: пересчёты только по последним двум неделям (владелец 03.11).
+    _article(OFF_RULES, published="2026-10-15 12:00+00")
     _article(OFF_RULES, relevant=False)  # отклонён
     _article(OFF_RULES, pending_deletion=True)  # помечен на удаление
     _translation_run("gpt-6.1-terra", 1_000, 200)

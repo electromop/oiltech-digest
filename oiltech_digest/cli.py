@@ -827,16 +827,16 @@ def cmd_enqueue_resummarize(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_title_edit(args: argparse.Namespace) -> None:
     """Правка русских заголовков, написанных до правки (решение владельца 03.11): принятые и отмеченные «в дайджест»
-    статьи открытых месяцев, заголовок копией не по правилам эксперта. По умолчанию — сухой прогон с N и ценой; задачи —
-    только с --no-dry-run, после пересборки NL."""
+    статьи последних двух недель в открытых месяцах, заголовок копией не по правилам эксперта. По умолчанию — сухой
+    прогон с N и ценой; задачи — только с --no-dry-run, после пересборки NL."""
     from oiltech_digest.processing import title_edit
 
     selection = title_edit.selection()
     ids = selection["article_ids"][: args.limit] if args.limit else selection["article_ids"]
     estimate = title_edit.cost_estimate(len(ids))
     in_digest = sum(1 for article_id in ids if article_id in selection["digest_ids"])
-    print(f"enqueue-title-edit: открытые месяцы {', '.join(selection['months'])} — русских заголовков копией не по "
-          f"правилам: N={len(ids)} (из них в дайджест: {in_digest})")
+    print(f"enqueue-title-edit: собраны с {selection['since']:%d.%m.%Y}, открытые месяцы {', '.join(selection['months'])}"
+          f"; русских заголовков копией не по правилам: N={len(ids)} (из них в дайджест: {in_digest})")
     if estimate["model"] is None:
         print(f"  цену не оценить: вызовов translation за {estimate['days']} дней нет")
     else:
@@ -3441,8 +3441,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_resummarize.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
     p_resummarize.set_defaults(func=cmd_enqueue_resummarize)
 
-    p_title_edit = sub.add_parser("enqueue-title-edit", help="править русские заголовки принятых статей открытых "
-                                  "месяцев по правилам эксперта (по умолчанию сухой прогон с ценой)")
+    p_title_edit = sub.add_parser("enqueue-title-edit", help="править русские заголовки принятых статей последних двух "
+                                  "недель по правилам эксперта (по умолчанию сухой прогон с ценой)")
     p_title_edit.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = все)")
     p_title_edit.add_argument("--batch-size", type=int, default=20)
     p_title_edit.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)

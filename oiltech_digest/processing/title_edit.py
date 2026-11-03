@@ -1,10 +1,11 @@
-"""Правка русских заголовков принятых статей открытых месяцев ленты (решение владельца 03.11).
+"""Правка русских заголовков принятых статей последних двух недель (решение владельца 03.11).
 
 Новые принятые публикации правит «Суть и перевод» (pipeline.title_ru_for_article с edit_russian). Написанные до правки
-заголовки сами не переписываются, как суть и перевод после #150: этот прогон — по слову владельца. Он берёт статьи
-открытых месяцев ленты (feed_window), принятые или отмеченные «в дайджест», у которых русский заголовок лежит копией
-заголовка издателя и не отвечает правилам, которые видно кодом (pipeline.title_follows_rules). Закрытые месяцы не
-трогает: выпуск закрытого месяца только на просмотр.
+заголовки сами не переписываются, как суть и перевод после #150: этот прогон — по слову владельца. Он берёт статьи,
+собранные за последние RECENT_DAYS дней (правило владельца 03.11: пересчёты только по сигналам последних двух недель,
+старше их уже не смотрят), принятые или отмеченные «в дайджест», у которых русский заголовок лежит копией заголовка
+издателя и не отвечает правилам, которые видно кодом (pipeline.title_follows_rules). Закрытые месяцы ленты не трогает:
+выпуск закрытого месяца только на просмотр.
 
 Задачи — process_articles с явным списком и пометкой only=["translation"] в полосе пересчётов: правит тот же шаг
 воркера, что у новых статей, ядро пишет только заголовок. Сборка NL до правки оставит заголовок копией, поэтому прогон —
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 from oiltech_digest import config, feed_window, network_policy
@@ -23,13 +25,17 @@ from oiltech_digest.processing.pipeline import _needs_translation, title_follows
 
 # Что пишет ядро по задаче прогона (external_ai.stages_to_write).
 STAGES = ["translation"]
+# Окно прогона по дате сбора: последние две недели (правило владельца 03.11).
+RECENT_DAYS = 14
 _PENDING = ("queued", "running", "finalizing")
 
 
 def selection() -> dict[str, Any]:
-    """Статьи открытых месяцев, принятые или отмеченные «в дайджест» и видимые в ленте, с русским заголовком копией не
-    по правилам. Статья, которая уже стоит в задаче прогона, не берётся: её правка ещё не записана."""
+    """Статьи открытых месяцев, собранные за последние RECENT_DAYS дней, принятые или отмеченные «в дайджест» и видимые
+    в ленте, с русским заголовком копией не по правилам. Статья, которая уже стоит в задаче прогона, не берётся: её
+    правка ещё не записана. Окно считается от сегодняшнего дня окна ленты: те же часы, что у открытых месяцев."""
     window = feed_window.current()
+    since = window.today - timedelta(days=RECENT_DAYS)
     with connection.get_connection() as conn:
         rows = conn.execute(
             f"""
@@ -38,7 +44,7 @@ def selection() -> dict[str, Any]:
             JOIN sources s ON s.id = a.source_id
             JOIN article_cards c ON c.article_id = a.id
             LEFT JOIN article_marks m ON m.article_id = a.id
-            WHERE {window.sql('a')}
+            WHERE {window.sql('a')} AND a.collected_at >= %s
               AND ({feed_window.relevance_sql('a', 'c')} IS TRUE OR m.status = 'digest')
               AND {feed_window.ungated_visible_sql('a', 's')}
               AND NOT EXISTS (
@@ -47,11 +53,11 @@ def selection() -> dict[str, Any]:
                   AND j.payload_json->'article_ids' @> to_jsonb(a.id))
             ORDER BY a.id
             """,
-            (list(_PENDING), json.dumps(STAGES)),
+            (since, list(_PENDING), json.dumps(STAGES)),
         ).fetchall()
     picked = [(int(article_id), in_digest) for article_id, title, title_ru, source, in_digest in rows
               if _copy_off_the_rules((title or "").strip(), title_ru, source)]
-    return {"months": window.open_months, "article_ids": [one for one, _ in picked],
+    return {"months": window.open_months, "since": since, "article_ids": [one for one, _ in picked],
             "digest_ids": {one for one, in_digest in picked if in_digest}}
 
 
