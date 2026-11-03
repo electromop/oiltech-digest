@@ -3951,6 +3951,34 @@
   min-width: 0;
 }
 
+/* Дата поступления (03.11): «от» и «до» одной ячейкой панели, подпись у поля слева. */
+.signalArrivalField {
+  container-type: inline-size;
+}
+
+.signalArrivalRange {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ot-space-03);
+}
+
+.signalArrivalRange > label {
+  display: contents;
+}
+
+/* Отступ уже, чем у .field input: «дд.мм.гггг» и значок календаря помещаются в треть панели. */
+.signalArrivalRange input[type="date"] {
+  padding-inline: var(--ot-space-03);
+}
+
+/* Узкая ячейка (панель в три колонки на планшете): «от» и «до» друг под другом, дата видна целиком. */
+@container (max-width: 18rem) {
+  .signalArrivalRange {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
+
 /* Плашка «Отклонённые» (#130): кнопка-счётчик, открывает их список; открыт — подсвечена. */
 .statCardButton {
   font: inherit;

@@ -26,7 +26,9 @@ import { SkeletonList } from "../shared/Skeleton";
 import { PROFILES } from "../scoring/ScoringPage";
 import { CHOICE_FIELDS, COUNTRY_FILTER, SignalAttributes, SignalCardLine, whyBlock } from "./SignalCardChips";
 import { SignalDecisionLog } from "./SignalDecisionLog";
-import { CompanyGroupHint, EMPTY_CARD_FILTERS, SignalCardFilters } from "./SignalCardFilters";
+import {
+  ARRIVAL_FILTER_LABEL, CompanyGroupHint, EMPTY_CARD_FILTERS, FEEDBACK_FILTER, SignalCardFilters, arrivalPeriod,
+} from "./SignalCardFilters";
 import type { CardFilterValues } from "./SignalCardFilters";
 import { SignalReturnForm } from "./SignalReturnForm";
 
@@ -348,6 +350,9 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       technologyMaturity: cardFilters.technologyMaturity || undefined,
       country: cardFilters.country || undefined,
       company: cardFilters.company.trim() || undefined,
+      since: cardFilters.arrivalFrom || undefined,
+      until: cardFilters.arrivalTo || undefined,
+      feedback: cardFilters.feedback || undefined,
       tile: !showHidden && tile ? tile : undefined,
     }),
     [business, search, theme, maturity, isAdmin, showHidden, cardFilters, tile],
@@ -623,20 +628,20 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         duplicate_of_signal_id: duplicateOfSignalId,
       });
       setFeedbackDrafts((current) => ({ ...current, [signal.id]: EMPTY_FEEDBACK_DRAFT }));
-      // Сохранено — форма закрывается: счётчик «Обратная связь: N» рядом подтверждает отзыв, а сохранённый
-      // блок ОС ложится в список на карточке (#130).
+      // Сохранено, форма закрывается. Сохранённый блок ОС ложится в список на карточке (#130), и счётчик
+      // «Обратная связь: N» растёт: он считает записи этого списка, как сервер (решение владельца 03.11). Запись без
+      // оценки, причины и комментария блоком не приходит и карточку не меняет.
       closeFeedback(signal.id);
-      setSignals((current) =>
-        current.map((item) =>
-          item.id === signal.id
-            ? {
-                ...item,
-                feedback_count: (item.feedback_count || 0) + 1,
-                feedback_blocks: result.block ? [...(item.feedback_blocks || []), result.block] : item.feedback_blocks,
-              }
-            : item,
-        ),
-      );
+      const block = result.block;
+      if (block) {
+        setSignals((current) =>
+          current.map((item) =>
+            item.id === signal.id
+              ? { ...item, feedback_count: (item.feedback_count || 0) + 1, feedback_blocks: [...(item.feedback_blocks || []), block] }
+              : item,
+          ),
+        );
+      }
       if (result.recategorized) {
         // «Не тот блок» у сигнала после «Отбора» (#132): категория сменилась сразу — карточка уже в другой
         // витрине, баллы там пересчитываются по профилю новой категории.
@@ -734,6 +739,19 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       : []),
     ...(cardFilters.company.trim()
       ? [{ key: "company", label: `Компания: ${cardFilters.company.trim()}`, clear: () => updateCardFilters({ company: "" }) }]
+      : []),
+    // Период как один фильтр: один чип снимает обе границы.
+    ...(cardFilters.arrivalFrom || cardFilters.arrivalTo
+      ? [{
+          key: "arrival", label: `${ARRIVAL_FILTER_LABEL}: ${arrivalPeriod(cardFilters)}`,
+          clear: () => updateCardFilters({ arrivalFrom: "", arrivalTo: "" }),
+        }]
+      : []),
+    ...(cardFilters.feedback
+      ? [{
+          key: "feedback", label: FEEDBACK_FILTER.choices[cardFilters.feedback],
+          clear: () => updateCardFilters({ feedback: "" }),
+        }]
       : []),
   ];
 
@@ -845,7 +863,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
         </div>
 
         {/* Вариант A (решение владельца 23.10): на виду поиск, тема и сортировка, остальные фильтры — в панели
-            «Фильтры · N», включённые — чипами со снятием. Поля балла и дат сняты. */}
+            «Фильтры · N», включённые — чипами со снятием. Поля балла сняты; дата поступления с 03.11 в панели. */}
         <div className="articlesFiltersRow signalToolbar">
           <label className="field">
             <span>Поиск</span>

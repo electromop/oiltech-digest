@@ -2263,19 +2263,25 @@ def _radar_hidden_reason_sql() -> str:
 _RADAR_TOPIC_SQL = (
     "(s.theme IN (SELECT t.name FROM tags t WHERE t.parent_id IS NULL AND t.enabled AND t.name <> %s))"
 )
-# Отзыв о карточке — по её номеру или по адресу её ссылки (как «Обратная связь: N» на ней).
-_FEEDBACK_OF_SIGNAL_SQL = """(
+# Публикация бывает общей у сигнала ленты и карточки радара (#95): отзыв о сигнале другого происхождения, найденный по
+# адресу ссылки, этой карточке не засчитывается.
+_FEEDBACK_SAME_ORIGIN_SQL = "NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin)"
+# Отзыв о карточке — по её номеру или по адресу её ссылки. То же правило двумя EXISTS в SIGNAL_HAS_FEEDBACK_SQL:
+# менять вместе.
+_FEEDBACK_OF_SIGNAL_SQL = f"""(
   sfe.signal_id = s.id
      OR (sfe.source_url IS NOT NULL AND EXISTS (
           SELECT 1 FROM signal_evidence se
           WHERE se.signal_id = s.id AND se.source_url = sfe.source_url
         )
-        -- Публикация бывает общей у сигнала ленты и карточки радара (#95): отзыв о сигнале
-        -- другого происхождения этой карточке не засчитывается.
-        AND NOT EXISTS (SELECT 1 FROM signals fs WHERE fs.id = sfe.signal_id AND fs.origin <> s.origin)))"""
-_RADAR_FEEDBACK_SQL = f"""
-  FROM signal_feedback_events sfe
-  WHERE {_FEEDBACK_OF_SIGNAL_SQL}"""
+        AND {_FEEDBACK_SAME_ORIGIN_SQL}))"""
+# Запись блока ОС (#130): оценка, причина или комментарий человека из блока «Обратная связь» карточки. «В дайджест»
+# и смена статуса пишутся тем же журналом, но не в этом блоке (решение владельца 03.11): по записям блока считают
+# фильтр «Наличие ОС», плашка «С обратной связью» и счётчик «Обратная связь: N».
+_FEEDBACK_IS_BLOCK_SQL = (
+    "(sfe.event_type = 'comment_added'"
+    " AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> ''))"
+)
 # Блоки ОС сигнала (#130, решение владельца 22.10): каждый человек добавляет свой блок (оценка, причина,
 # комментарий), чужие не перезаписываются; показываются списком, на отбор и показ не влияют. Автор — почта
 # учётки (другого имени у неё нет); у оценки автора материала коллеги (#131) учётки нет — его имя в Telegram.
@@ -2287,8 +2293,19 @@ _FEEDBACK_BLOCKS_SQL = f"""(
          '[]'::jsonb)
   FROM signal_feedback_events sfe
   LEFT JOIN users u ON u.id = sfe.user_id
-  WHERE {_FEEDBACK_OF_SIGNAL_SQL} AND sfe.event_type = 'comment_added'
-    AND (COALESCE(sfe.verdict, '') <> '' OR COALESCE(sfe.reason, '') <> '' OR COALESCE(sfe.comment, '') <> ''))"""
+  WHERE {_FEEDBACK_OF_SIGNAL_SQL} AND {_FEEDBACK_IS_BLOCK_SQL})"""
+
+
+# У карточки есть запись блока ОС, та, что в списке «Оценки людей» (решение владельца 03.11). Правило отзыва то же, что
+# _FEEDBACK_OF_SIGNAL_SQL, но двумя EXISTS по индексам номера и адреса: один EXISTS с OR перебирал все отзывы на каждую
+# карточку витрины (прод 03.11, бизнес-лента: 801 мс против 190 мс, карточки те же).
+SIGNAL_HAS_FEEDBACK_SQL = (
+    f"(EXISTS (SELECT 1 FROM signal_feedback_events sfe WHERE sfe.signal_id = s.id AND {_FEEDBACK_IS_BLOCK_SQL})"
+    " OR EXISTS (SELECT 1 FROM signal_evidence se JOIN signal_feedback_events sfe ON sfe.source_url = se.source_url"
+    f" WHERE se.signal_id = s.id AND {_FEEDBACK_IS_BLOCK_SQL} AND {_FEEDBACK_SAME_ORIGIN_SQL}))"
+)
+# Фильтр «Наличие ОС»: значение параметра и условие выборки, как у плашек (RADAR_TILE_SQL).
+SIGNAL_FEEDBACK_SQL = {"with": SIGNAL_HAS_FEEDBACK_SQL, "without": f"NOT {SIGNAL_HAS_FEEDBACK_SQL}"}
 # «Поступил» на экране — дата первой находки по Москве (сутки радара — московские).
 _RADAR_ARRIVAL_DATE_SQL = "(s.first_seen_at AT TIME ZONE 'Europe/Moscow')::date"
 RADAR_SORTS = {
@@ -2356,7 +2373,7 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
                    region: str | None = None, technology_class: str | None = None,
                    technology_maturity: str | None = None, country: str | None = None,
                    company_names: Sequence[str] | None = None, section=None,
-                   tile: str | None = None) -> tuple[list[str], list]:
+                   tile: str | None = None, feedback: str | None = None) -> tuple[list[str], list]:
     """Условия выборки экрана радара. Поиск — по тому, что человек видит в карточке: заголовок
     и суть (с правками людей), тезис, тема, переносимость, заголовки и издатели ссылок, в том
     числе ссылок склеенного дубля; «#123» — номер карточки из поля «ID дубля». Атрибуты карточки
@@ -2364,9 +2381,15 @@ def _radar_filters(*, maturity: str | None = None, theme: str | None = None, q: 
     компания: участник карточки под любым из имён company_names (signal_card_filters.group_names); пустой
     список — имён нет, и карточек тоже: фильтр есть и ничего не нашёл, а не «без фильтра». Страна — имя
     справочника стран в любой роли: страна события или страна участника. tile — плашка над
-    списком (решение владельца 23.10): то же условие, что у её числа в signal_radar_summary."""
+    списком (решение владельца 23.10): то же условие, что у её числа в signal_radar_summary. feedback: наличие
+    ОС (решение владельца 03.11), with значит у карточки есть запись блока ОС, without значит нет."""
     clauses = [_showcase_visible_sql(showcase, hidden=hidden, section=section)]
     params: list = []
+    if feedback:
+        feedback_sql = SIGNAL_FEEDBACK_SQL.get(feedback)
+        if feedback_sql is None:
+            raise ValueError(f"Неизвестный фильтр ОС: {feedback!r}")
+        clauses.append(feedback_sql)
     if tile:
         tile_sql = RADAR_TILE_SQL.get(tile)
         if tile_sql is None:
@@ -2428,7 +2451,8 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                  hidden: bool = False, showcase: str = "technology", event_type: str | None = None,
                  region: str | None = None, technology_class: str | None = None,
                  technology_maturity: str | None = None, country: str | None = None,
-                 company_names: Sequence[str] | None = None, section=None, tile: str | None = None) -> list[dict]:
+                 company_names: Sequence[str] | None = None, section=None, tile: str | None = None,
+                 feedback: str | None = None) -> list[dict]:
     """Карточки радара для экрана: выборка и страница — в базе, а не по загруженным на экран
     (замечание заказчика 19.09: поиск находил только среди первых 150 по баллу).
     hidden=True — скрытые правилами качества (для админа), с причиной в hidden_reason; section —
@@ -2437,7 +2461,7 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
         maturity=maturity, theme=theme, q=q, since=since, until=until, min_score=min_score, max_score=max_score,
         hidden=hidden, showcase=showcase, event_type=event_type, region=region, technology_class=technology_class,
         technology_maturity=technology_maturity, country=country, company_names=company_names, section=section,
-        tile=tile,
+        tile=tile, feedback=feedback,
     )
     order_by = RADAR_SORTS.get(sort)
     if order_by is None:
@@ -2463,7 +2487,6 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    {signal_digest_sql('s')} AS selected_for_digest,
                    sm.analyst_comment AS user_comment,
                    sm.updated_at AS user_status_updated_at,
-                   (SELECT COUNT(*) {_RADAR_FEEDBACK_SQL}) AS feedback_count,
                    (SELECT COUNT(*) FROM signals m WHERE m.merged_into_signal_id = s.id) AS merged_count,
                    {_FEEDBACK_BLOCKS_SQL} AS feedback_blocks,
                    corr.corrected_title,
@@ -2477,14 +2500,19 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
             """,
             params,
         )
-        return [apply_signal_corrections(row) for row in cur.fetchall()]
+        rows = [apply_signal_corrections(row) for row in cur.fetchall()]
+    # «Обратная связь: N» — число записей в списке «Оценки людей» (решение владельца 03.11): «В дайджест» не ОС.
+    for row in rows:
+        row["feedback_count"] = len(row["feedback_blocks"])
+    return rows
 
 
 # Плашки над списком радара и бизнес-ленты: число плашки и выборка по её нажатию — одно условие.
 RADAR_TILE_SQL = {
     "new_7d": "s.first_seen_at >= now() - interval '7 days'",
     "in_digest": signal_digest_sql("s"),
-    "with_feedback": f"EXISTS (SELECT 1 {_RADAR_FEEDBACK_SQL})",
+    # «С обратной связью» считает то же, что фильтр «Есть ОС» (решение владельца 03.11).
+    "with_feedback": SIGNAL_HAS_FEEDBACK_SQL,
 }
 
 

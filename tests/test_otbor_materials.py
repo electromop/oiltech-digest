@@ -113,6 +113,10 @@ def test_material_becomes_a_signal_passes_the_pipeline_and_keeps_the_author_fiel
     assert [one["name"] for one in card["participants_json"]] == ["Татнефть", "ТаграС"]
     assert [(block["author"], block["verdict"], block["comment"]) for block in card["feedback_blocks"]] == [
         ("Иван Иванов", "strong_signal", "Конкурент взял объём")]
+    # Оценка автора лежит в «Оценках людей»: счётчик «Обратная связь: N» и фильтр «Наличие ОС» её видят (03.11).
+    assert card["feedback_count"] == 1
+    assert TITLE in showcase(user, "business", feedback="with")
+    assert TITLE not in showcase(user, "business", feedback="without")
     assert colleague_materials.get_material(material["id"])["signal_id"] == card["id"]
 
     # Итог — автору: бот отвечает на карточку материала в группе, с упоминанием автора; второй раз не шлёт.
