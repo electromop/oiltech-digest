@@ -302,8 +302,8 @@ def test_edit_form_sends_every_field_and_only_what_changed_reaches_the_signal(us
         "title": TITLE, "description": DESCRIPTION, "companies": ["Татнефть", "ТаграС"], "verdict": "strong_signal",
         "verdict_comment": "Конкурент взял объём на три года", "url": "https://news.example/tender"})
 
-    card = showcase(user, "business")["Заголовок «Сути и перевода»"]
-    assert "title_ru" not in card["card_set_by"]
+    card = showcase(user, "business")[TITLE]
+    assert card["title_ru"] == "Заголовок «Сути и перевода»" and "title_ru" not in card["card_set_by"]
     assert [link["source_url"] for link in card["evidence"]] == ["https://news.example/tender"]
     assert card["decision_log"][-1]["text"] == "Материал исправлен на платформе: оценка"
     assert [block["comment"] for block in card["feedback_blocks"]] == ["Конкурент взял объём на три года"]

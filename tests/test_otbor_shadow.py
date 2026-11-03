@@ -98,7 +98,7 @@ def test_dry_run_counts_window_articles_and_price_and_queues_nothing(user, befor
                            analyst_comment="проверить объём")
     api_send("POST", "/api/feedback", user,
              {"article_id": _gated("С отзывом", "Weatherford открыла базу в Кувейте.", False), "usefulness": 2})
-    _gated("Закрытый месяц", "Baker Hughes поставит компрессоры в Катар.", True,
+    _gated("Закрытый месяц", "Schlumberger открыла центр цементирования в Тюмени.", True,
            published=datetime(2026, 1, 15, 9, tzinfo=timezone.utc))
     capsys.readouterr()
 
