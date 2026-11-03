@@ -136,6 +136,9 @@ def test_trial_run_passes_findings_through_otbor_and_changes_no_showcase_section
     assert ("Материалов (ссылок после технических проверок) 4, уже в сборе 1 (25%), новых находок 2, сигналов "
             "платформы найдено снова 1") in out
     assert "«Отбор»: решил 2, принял 1 (50%), сбоев 0, ждут решения 0, спорных 0" in out
+    # База будущей ОС поиска: по теме — сколько нашёл поиск и сколько принял «Отбор».
+    assert f"  {DRILLING}: принёс поиск 5, технический отсев 1, ссылок 4, из них в сборе 1, новых находок 2, «Отбор» " \
+           "принял 1, отклонил 1, найдено снова 1" in out
     assert "Принятое по категориям: business 1" in out and "Причины отказа: oil_gas_no_link 1" in out
     assert known in [row[0] for row in signals_before]
 
@@ -166,10 +169,10 @@ def test_report_measures_recall_against_the_expert_reference(user, contour, monk
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = "Октябрь_2026"
-    sheet.append(["Сигнал / технология", "Ссылка"])
-    sheet.append(["ADNOC Drilling — покупка трёх СПБУ", DEAL_URL])
-    sheet.append(["Upstream — контракт на буровую в Кувейте", COLLECTED_URL])
-    sheet.append(["Halliburton Octiv — автоматизация ГРП", "https://halliburton.example/news/octiv"])
+    sheet.append(["Направление", "Сигнал / технология", "Ссылка"])
+    sheet.append(["Рынок", "ADNOC Drilling — покупка трёх СПБУ", DEAL_URL])
+    sheet.append(["Рынок", "Upstream — контракт на буровую в Кувейте", COLLECTED_URL])
+    sheet.append(["ГРП", "Halliburton Octiv — автоматизация ГРП", "https://halliburton.example/news/octiv"])
     reference = tmp_path / "reference.xlsx"
     book.save(reference)
     capsys.readouterr()
@@ -178,7 +181,10 @@ def test_report_measures_recall_against_the_expert_reference(user, contour, monk
 
     out = capsys.readouterr().out
     assert "Полнота по эталону: поиск 2 из 3 (67%), сбор 1, поиск или сбор 2 (67%)" in out
-    assert "+ только поиск: ADNOC Drilling — покупка трёх СПБУ" in out
+    # По направлениям эксперта и по каждой строке: что нашёл поиск, что есть только в сборе, что пропущено.
+    assert "  Рынок: поиск 2 из 2, поиск или сбор 2" in out and "  ГРП: поиск 0 из 1, поиск или сбор 0" in out
+    assert "+ поиск, только поиск: ADNOC Drilling — покупка трёх СПБУ" in out
+    assert "+ поиск: Upstream — контракт на буровую в Кувейте" in out
     assert "- не нашёл никто: Halliburton Octiv — автоматизация ГРП" in out
 
 

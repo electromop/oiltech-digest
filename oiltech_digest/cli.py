@@ -2623,8 +2623,9 @@ def _print_search_trial_report(result: dict) -> None:
           f"{result['per_topic']} на тему, период с {result['trial'].get('since')} по {result['trial'].get('until')}")
     for topic in result["topics"]:
         print(f"  {topic['topic']}: принёс поиск {topic['found']}, технический отсев {topic['dropped']}, ссылок "
-              f"{topic['links']}, из них в сборе {topic['already_collected']}, новых находок {topic['new']}, найдено "
-              f"снова {topic['found_again']}" + (f", сбой: {topic['error']}" if topic.get("error") else ""))
+              f"{topic['links']}, из них в сборе {topic['already_collected']}, новых находок {topic['new']}, «Отбор» "
+              f"принял {topic['accepted']}, отклонил {topic['rejected']}, найдено снова {topic['found_again']}"
+              + (f", сбой: {topic['error']}" if topic.get("error") else ""))
     print(f"Материалов (ссылок после технических проверок) {result['materials']}, уже в сборе "
           f"{result['already_collected']} ({result['already_collected_share']:.0%}), новых находок "
           f"{result['new_findings']}, сигналов платформы найдено снова {result['found_again']}")
@@ -2636,14 +2637,19 @@ def _print_search_trial_report(result: dict) -> None:
                                   or "нет"))
     titles = result["russian_titles"]
     print(f"Русский заголовок страницы у принятых: {titles['russian']} из {titles['accepted']} ({titles['share']:.0%})")
+    for title in titles["examples"]:
+        print(f"  {title}")
     cost = result["cost_usd"]
     print("Фактическая цена, USD: " + ", ".join(f"{stage} {value}" for stage, value in cost.items()))
     recall = result.get("recall")
     if recall:
         print(f"Полнота по эталону: поиск {recall['search']} из {recall['total']} ({recall['search_share']:.0%}), сбор "
               f"{recall['collection']}, поиск или сбор {recall['either']} ({recall['either_share']:.0%})")
-        for title in recall["search_only"]:
-            print(f"  + только поиск: {title[:100]}")
+        for direction, counts in recall["by_direction"].items():
+            print(f"  {direction}: поиск {counts['search']} из {counts['total']}, поиск или сбор {counts['either']}")
+        for item in recall["items"]:
+            if item["search"]:
+                print(f"  + поиск{'' if item['collection'] else ', только поиск'}: {item['title'][:100]}")
         for title in recall["missed"]:
             print(f"  - не нашёл никто: {title[:100]}")
 

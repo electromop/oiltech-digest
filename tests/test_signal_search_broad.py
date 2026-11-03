@@ -14,7 +14,7 @@ from oiltech_digest.ingestion.normalize import url_key
 from tests.otbor_radar_support import event, page, run_radar
 from tests.otbor_support import answer, decide
 from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import DRILLING, run_worker, tag, user, worker  # noqa: F401 — фикстуры
+from tests.signal_card_support import DRILLING, radar_finding, run_worker, tag, user, worker  # noqa: F401 — фикстуры
 
 MARKET = "Рынок, бизнес-модели, сервисные модели, партнёрства и M&A"
 DEAL_URL = "https://adnoc.example/news/adnoc-buys-stake"
@@ -129,6 +129,29 @@ def test_search_is_told_which_outlets_the_parser_collects_whole(user, contour, m
     # Пара статей — издание собирается не целиком; Telegram-канал не сайт, который ищет поиск.
     for site in ("bakerhughes.example", "t.me", "offshore.example"):
         assert site not in prompt
+
+
+def test_search_prompt_under_otbor_carries_no_expert_feedback_only_what_is_already_found(user, contour, monkeypatch):
+    # Память ОС экспертов: одобренный пример, отказ с причиной, правило заказчика, доверенный сайт.
+    memory = (("signal_verdict", "approved", {"signal_title": "Одобренный пример SLB", "topic": DRILLING,
+                                              "reason": "Причина одобрения экспертом"}),
+              ("signal_verdict", "wrong_block", {"signal_title": "Отклонённый контракт",
+                                                 "reason": "Причина отказа экспертом"}),
+              ("signal_quality_rule", "Правило эксперта про заголовки", {}),
+              ("signal_source_preference", "trusted.example", {}))
+    for number, (kind, subject, facts) in enumerate(memory):
+        repository.upsert_signal_agent_memory(memory_key=f"{kind}:{number}", memory_type=kind, subject=subject,
+                                              score=50, facts=facts)
+    radar_finding("known-card", "Уже найденная находка о бурении", "Текст страницы")
+
+    search, _ = run_radar(monkeypatch, [event(DEAL_TITLE, DEAL_URL)], {DEAL_URL: page(DEAL_TITLE)})
+
+    # Граница данных О-7 (решение владельца 03.11): поиск только находит, из прошлого ему нужен список уже найденного.
+    prompt = search.calls[0]["input"]
+    assert "Уже найденная находка о бурении" in prompt
+    for text in ("Одобренный пример SLB", "Причина одобрения экспертом", "Отклонённый контракт", "Причина отказа экспертом",
+                 "Правило эксперта", "trusted.example", "заказчик"):
+        assert text not in prompt
 
 
 def test_search_model_reasoning_and_cap_are_core_settings_carried_in_the_task(user, contour, monkeypatch):

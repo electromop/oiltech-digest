@@ -37,6 +37,8 @@ OTBOR_CALL = {"input_tokens": 4_900, "output_tokens": 600}
 OTBOR_RETRY_SHARE = 0.1
 # Нижняя граница числа находок: половина потолка (технический отсев и уже собранное сбором).
 FINDINGS_LOW_SHARE = 0.5
+# Сколько примеров принятых находок с русским заголовком страницы показать в отчёте.
+RUSSIAN_EXAMPLES = 5
 
 
 class TrialError(ValueError):
@@ -216,11 +218,11 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
     if job is None or job.get("kind") != "signal_discovery" or not payload.get("search_trial"):
         raise TrialError(f"задача {job_id} — не пробный прогон широкого поиска")
     applied = ((job.get("result_json") or {}).get("applied") or {}) if job.get("status") == "ok" else {}
-    topics = [_topic_row(topic) for topic in applied.get("topics") or []]
     new_ids = [value for topic in applied.get("topics") or [] for value in topic.get("signal_ids") or []]
     again_ids = [value for topic in applied.get("topics") or [] for value in topic.get("found_again_ids") or []]
     findings = search_trial_store.findings(new_ids)
     verdicts = {row["id"]: _last_verdict(row) for row in findings}
+    topics = [_topic_row(topic, verdicts) for topic in applied.get("topics") or []]
     otbor_jobs = search_trial_store.otbor_jobs(int(job_id))
     # Материал — ссылка, прошедшая технические проверки; уже собранная сбором — тоже материал поиска.
     materials = sum(topic["links"] for topic in topics)
@@ -254,11 +256,13 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
     return result
 
 
-def _topic_row(topic: dict[str, Any]) -> dict[str, Any]:
-    """Тема в отчёте: сколько принёс поиск, сколько отсеяли технические проверки, сколько ссылок прошло их (links: и
-    уже собранные сбором — воркер отбросил их до докачки страницы), сколько из них в сборе, сколько новых находок
-    после «Дедупа» и сколько сигналов платформы найдено снова."""
+def _topic_row(topic: dict[str, Any], verdicts: dict[int, Any]) -> dict[str, Any]:
+    """Тема в отчёте (и база будущей ОС поиска по темам): сколько принёс поиск, сколько отсеяли технические проверки,
+    сколько ссылок прошло их (links: и уже собранные сбором — воркер отбросил их до докачки страницы), сколько из них
+    в сборе, сколько новых находок после «Дедупа», сколько из них принял «Отбор» и сколько сигналов платформы найдено
+    снова."""
     research = topic.get("research") or {}
+    decided = [verdicts.get(int(value)) or {} for value in topic.get("signal_ids") or []]
     return {
         "topic": topic.get("topic"), "status": topic.get("web_status"), "error": topic.get("web_error"),
         "found": int(research.get("events") or 0) + int(research.get("dropped") or 0),
@@ -266,6 +270,8 @@ def _topic_row(topic: dict[str, Any]) -> dict[str, Any]:
         "links": int(research.get("evidence_count") or 0) + int(research.get("already_collected") or 0),
         "already_collected": len(topic.get("already_collected") or []),
         "new": len(topic.get("signal_ids") or []), "found_again": len(topic.get("found_again_ids") or []),
+        "accepted": sum(1 for verdict in decided if verdict.get("decision") == "accept"),
+        "rejected": sum(1 for verdict in decided if verdict.get("decision") == "reject"),
         "web_search_calls": int(research.get("web_search_calls") or 0),
     }
 
@@ -297,7 +303,7 @@ def _russian_titles(findings: list[dict[str, Any]], verdicts: dict[int, Any]) ->
     accepted = [row for row in findings if (verdicts.get(row["id"]) or {}).get("decision") == "accept"]
     russian = [row for row in accepted if _cyrillic(str(row.get("title") or ""))]
     return {"accepted": len(accepted), "russian": len(russian), "share": _share(len(russian), len(accepted)),
-            "examples": [str(row["title"])[:160] for row in russian[:10]]}
+            "examples": [str(row["title"])[:160] for row in russian[:RUSSIAN_EXAMPLES]]}
 
 
 def _recall(reference: list[dict[str, Any]], findings: list[dict[str, Any]], again_ids: list[Any],
@@ -316,6 +322,17 @@ def _recall(reference: list[dict[str, Any]], findings: list[dict[str, Any]], aga
     found_search = {item["title"] for item in by_search["found_items"]}
     found_collection = {item["title"] for item in by_collection["found_items"]}
     titles = [row["title"] for row in reference]
+    # База будущей ОС поиска (решение владельца 03.11): по каждой строке эталона и по направлению эксперта — что нашёл
+    # поиск, что есть только в сборе, что пропущено.
+    items = [{"title": row["title"], "direction": row.get("direction") or "без направления",
+              "search": row["title"] in found_search, "collection": row["title"] in found_collection}
+             for row in reference]
+    by_direction: dict[str, dict[str, int]] = {}
+    for item in items:
+        counts = by_direction.setdefault(item["direction"], {"total": 0, "search": 0, "either": 0})
+        counts["total"] += 1
+        counts["search"] += int(item["search"])
+        counts["either"] += int(item["search"] or item["collection"])
     return {
         "total": len(titles),
         "search": len(found_search), "collection": len(found_collection),
@@ -324,4 +341,5 @@ def _recall(reference: list[dict[str, Any]], findings: list[dict[str, Any]], aga
         "missed": [title for title in titles if title not in found_search | found_collection],
         "search_share": _share(len(found_search), len(titles)),
         "either_share": _share(len(found_search | found_collection), len(titles)),
+        "items": items, "by_direction": by_direction,
     }

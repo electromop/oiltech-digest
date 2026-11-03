@@ -37,6 +37,7 @@ from oiltech_digest.signal_feedback import (
     apply_feedback_glossary,
     feedback_prompt_block,
     feedback_query_hints,
+    known_titles_block,
     research_feedback_block,
     memory_snapshot_rows,
     topic_term_stems,
@@ -3018,9 +3019,14 @@ def _topic_web_evidence(
         "; ".join(context.get("descriptions") or []),
         "Ключевые слова: " + ", ".join((context.get("keywords_ru") or [])[:12] + (context.get("keywords_en") or [])[:12]),
     ) if part.strip() and not part.endswith(": "))
-    feedback = research_feedback_block(topic_name, known_titles=known_titles)
     if config.otbor:
-        feedback = "\n\n".join(part for part in (signal_research.covered_sites_block(covered or []), feedback) if part)
+        # Поиск только находит (спека #128, граница данных О-7, решение владельца 03.11): из прошлого ему нужны только
+        # уже найденное и сайты сбора; ОС экспертов (одобренные и отклонённые с причинами, правила, доверенные сайты) в
+        # его промпт не идёт. ОС поиска строится позже из итогов воронки.
+        feedback = "\n\n".join(part for part in (signal_research.covered_sites_block(covered or []),
+                                                 known_titles_block(known_titles)) if part)
+    else:
+        feedback = research_feedback_block(topic_name, known_titles=known_titles)
     _, period_end = _research_window(config)
     research = signal_research.research_topic(topic_name, days=_research_days(config), period_end=period_end,
                                               limit=config.research_limit or None, topic_context=topic_context,
