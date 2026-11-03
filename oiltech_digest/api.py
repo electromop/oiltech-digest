@@ -2267,12 +2267,19 @@ def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, An
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
     if payload.max_signals < 1 or payload.max_signals > 50:
         raise HTTPException(status_code=400, detail="max_signals must be between 1 and 50")
+    from oiltech_digest import signal_discovery
+
+    try:
+        # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
+        research = signal_discovery.research_settings(offline=payload.offline, days=payload.days)
+    except signal_discovery.SearchSetupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Не-offline прогон радара зовёт OpenAI, поэтому маршрут берём у политики:
     # прямой вызов с РФ-адреса возвращает 403 unsupported_country_region_territory.
     decision = network_policy.route_ai_processing()
     job = background_jobs.enqueue(
         "signal_discovery",
-        payload.model_dump(),
+        {**payload.model_dump(), **research},
         user_id=int(user["id"]),
         queue_name=decision.queue_name if not payload.offline else "default",
         execution_region=decision.execution_region if not payload.offline else "ru",
@@ -2695,11 +2702,16 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
     if job.get("kind") == "refetch_text" and result.get("kind") == "refetch_text":
         result = {**result, "applied": external_fetch.apply_refetch_text_result(result)}
     if job.get("kind") == "signal_discovery" and result.get("signal_discovery"):
-        from oiltech_digest import signal_discovery
+        from oiltech_digest import signal_discovery, signal_search_trial
 
         # Конверт ЗАМЕНЯЕТСЯ итогом: кандидаты с подтверждениями и промптами весят
         # мегабайты и уже лежат в signal_training_examples — в задаче только счётчики.
-        result = {"signal_discovery": True, "applied": signal_discovery.apply_external_result(result, job_id=job_id)}
+        # Пробный прогон широкого поиска (#138) — по задаче ядра: находки отдельно от радара, затем их «Отбор».
+        trial = (job.get("payload_json") or {}).get("search_trial")
+        applied = signal_discovery.apply_external_result(result, job_id=job_id, **({"trial": True} if trial else {}))
+        if trial:
+            applied["search_trial"] = signal_search_trial.after_search(job_id, applied, trial)
+        result = {"signal_discovery": True, "applied": applied}
     if job.get("kind") == "signal_card" and result.get("signal_card"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: ответы модели с цитатами уже разобраны в карточки сигналов.
         applied = signal_card.apply_result(result, job_id=job_id,
@@ -3201,7 +3213,11 @@ def _get_scoped_background_job(job_id: int, user: dict[str, Any]) -> dict[str, A
 def _signal_discovery_payload(payload: dict[str, Any]) -> dict[str, Any]:
     from oiltech_digest import signal_discovery
 
-    return signal_discovery.build_external_payload(payload)
+    try:
+        return signal_discovery.build_external_payload(payload)
+    except signal_discovery.SearchSetupError as exc:
+        # Поиску GPT без годной модели задача не выдаётся (#138): падает с причиной, оплаты нет.
+        raise external_ai.InvalidJobPayload(str(exc)) from exc
 
 
 _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {

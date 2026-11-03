@@ -308,7 +308,8 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
 
 
 def is_shadow(job_payload: dict[str, Any]) -> bool:
-    """Задача проверки на реальных данных (#134, её ставит otbor_shadow.enqueue): итог — в таблицу проверки, а не в
+    """Задача проверки на реальных данных (#134, её ставит otbor_shadow.enqueue; находки — пробный прогон #138): итог —
+    в таблицу проверки, а не в
     сигнал."""
     return bool(job_payload.get("shadow"))
 
@@ -325,7 +326,8 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
         {contract.article_ref(value) for value in article_ids or []}
         | {contract.signal_ref(value) for value in signal_ids or []})
     otbor_store.record_usage(job_id, [usage for decision in decisions if (usage := _usage(decision, expected))],
-                             stage=otbor_shadow_store.STAGE if shadow else KIND)
+                             stage=((otbor_shadow_store.SEARCH_TRIAL_STAGE if signal_ids else otbor_shadow_store.STAGE)
+                                    if shadow else KIND))
     links = otbor_inputs.links_in_input([signal_id for decision in decisions
                                         if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
     stale = result.get("dictionaries_version") != dictionaries.get("version")
@@ -344,7 +346,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
         else:
             checked = outcome(decision, dictionaries, links=links.get(signal_id, 0))
         if shadow:
-            _record_shadow(applied, article_id, checked, {**recipe, "model": _model_name(decision)})
+            _record_shadow(applied, article_id, signal_id, checked, {**recipe, "model": _model_name(decision)})
             continue
         if checked.values is None:
             failed = (otbor_store.write_failure(article_id, checked.failure, checked.failure_reason, log=checked.log)
@@ -366,18 +368,25 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
     return applied
 
 
-def _record_shadow(applied: dict[str, Any], article_id: int | None, checked: Any, recipe: dict[str, Any]) -> None:
-    """Итог проверки на реальных данных (#134) — в её таблицу: решение или сбой статьи. Сигналов проверка не берёт."""
-    if article_id is None:
-        applied["errors"].append({"error": "проверка на реальных данных берёт только статьи"})
-        return
+def _record_shadow(applied: dict[str, Any], article_id: int | None, signal_id: int | None, checked: Any,
+                   recipe: dict[str, Any]) -> None:
+    """Итог проверки на реальных данных (#134) — в её таблицу: решение или сбой статьи. Находку радара в тень ставит
+    только пробный прогон широкого поиска (#138): её строка своя (signal_id), перенос в витрины её не берёт."""
     decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    if otbor_shadow_store.write(article_id, values=checked.values, disputed=checked.disputed, failure=checked.failure,
-                                failure_reason=checked.failure_reason, log=checked.log,
-                                recipe={**recipe, "decided_at": decided_at, "trigger": otbor_shadow_store.TRIGGER}):
+    outcome_kwargs = {"values": checked.values, "disputed": checked.disputed, "failure": checked.failure,
+                      "failure_reason": checked.failure_reason, "log": checked.log}
+    if article_id is not None:
+        written = otbor_shadow_store.write(article_id, **outcome_kwargs, recipe={
+            **recipe, "decided_at": decided_at, "trigger": otbor_shadow_store.TRIGGER})
+    else:
+        written = otbor_shadow_store.write_signal(signal_id, **outcome_kwargs, recipe={**recipe, "decided_at": decided_at})
+    if written:
         applied["decided" if checked.values is not None else "failed"] += 1
-    if checked.values is None:
-        applied["errors"].append({"article_id": article_id, "error": checked.failure_reason})
+    publication = {"article_id": article_id} if article_id is not None else {"signal_id": signal_id}
+    if not written and article_id is None:
+        applied["errors"].append({**publication, "error": "не находка пробного прогона: тень находок только у него"})
+    elif checked.values is None:
+        applied["errors"].append({**publication, "error": checked.failure_reason})
 
 
 def _publication(decision: dict[str, Any], expected: set[str] | None) -> tuple[int | None, int | None]:

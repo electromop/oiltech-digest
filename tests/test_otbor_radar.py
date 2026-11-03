@@ -181,13 +181,13 @@ def test_old_worker_build_is_refused_the_radar_run_and_the_otbor_of_findings(use
 
     # Сборка NL контракта 4 не знает ни прогона радара при «Отборе», ни «Ссылок находки» (и повода публикации,
     # #133): задачи она не получает, и они падают с явной причиной (история 50 спеки), а не идут прежней цепочкой
-    # мимо «Отбора».
+    # мимо «Отбора». Прогону радара с #138 нужен контракт 9: широкий промпт и модель поиска из задачи.
     assert [worker(queue, contract_number=4).claim() for queue in ("external-ai", "external-agents")] == [None, None]
     with repository.get_connection() as conn:
         failed = conn.execute("SELECT kind, error_message FROM background_jobs WHERE status = 'failed'").fetchall()
     assert sorted(kind for kind, _ in failed) == ["otbor", "signal_discovery"]
     needed = dict(failed)
-    assert "нужен контракт 5" in needed["signal_discovery"] and "нужен контракт 7" in needed["otbor"]
+    assert "нужен контракт 9" in needed["signal_discovery"] and "нужен контракт 7" in needed["otbor"]
 
 
 def test_summary_by_number_is_not_paid_for_a_finding_otbor_rejected(user, contour, monkeypatch, capsys):

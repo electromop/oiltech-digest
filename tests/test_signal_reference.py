@@ -126,7 +126,8 @@ def test_research_mode_judges_every_verified_event_beyond_max_signals(monkeypatc
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
     run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True,
-                                                        search_mode="openai_web", max_signals=6)
+                                                        search_mode="openai_web", max_signals=6,
+                                                        research_model="gpt-6.1-sol", research_reasoning="low")
 
     run = signal_discovery.run_discovery(run_config, {"topics": [{"name": "Бурение"}], "tags": []})
 

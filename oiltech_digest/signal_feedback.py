@@ -654,11 +654,20 @@ def research_feedback_block(topic: str | None = None, *, known_titles: list[str]
     ])[:10]
     if domains:
         sections.append("Источники, которым заказчик доверяет, — проверь их в первую очередь: " + ", ".join(domains))
-    known = _dedupe([re.sub(r"\s+", " ", str(title)).strip()[:140] for title in known_titles or [] if str(title).strip()])
+    known = known_titles_block(known_titles)
     if known:
-        sections.append("Уже есть на радаре по этой теме — не повторяй, ищи новое:\n"
-                        + "\n".join(f"- {title}" for title in known[:RESEARCH_KNOWN_TITLES]))
+        sections.append(known)
     return "\n\n".join(sections)
+
+
+def known_titles_block(known_titles: list[str] | None) -> str:
+    """Уже найденное по теме — чтобы поиск искал новое, а не повторы. При «Отборе» (#138, граница данных О-7, решение
+    владельца 03.11) это единственное из прошлого, что получает поиск: ОС экспертов в его промпт не идёт."""
+    known = _dedupe([re.sub(r"\s+", " ", str(title)).strip()[:140] for title in known_titles or [] if str(title).strip()])
+    if not known:
+        return ""
+    return ("Уже есть на радаре по этой теме — не повторяй, ищи новое:\n"
+            + "\n".join(f"- {title}" for title in known[:RESEARCH_KNOWN_TITLES]))
 
 
 def apply_feedback_glossary(text: str, topic: str | None = None) -> str:

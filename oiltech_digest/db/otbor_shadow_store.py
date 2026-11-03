@@ -23,7 +23,7 @@ from psycopg.types.json import Json
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection, feed_signals, marks
 from oiltech_digest.db.otbor_store import DECIDED, FAILURE_TECHNICAL, KIND, _signal_for_update, _write_decision
-from oiltech_digest.db.repository import _RADAR_VISIBLE_SQL
+from oiltech_digest.db.repository import _RADAR_VISIBLE_SQL, SIGNAL_SELECTOR_TRIAL
 from oiltech_digest.db.signal_card_store import KIND as CARD_KIND
 
 # Пометка запуска проверки #134.
@@ -100,24 +100,8 @@ def pending_articles() -> int:
     return int(row[0])
 
 
-def write(article_id: int, *, values: dict[str, Any] | None, disputed: str | None, failure: str | None,
-          failure_reason: str | None, log: list[dict[str, str]], recipe: dict[str, Any]) -> bool:
-    """Записать итог проверки по статье: решение (values) или сбой. Сбой решения прошлой попытки не снимает (как у
-    сигнала, otbor_store._write_failure): шаги ложатся в ход решения. Перенесённую строку не трогает. False — статьи
-    нет или строка уже перенесена."""
-    decision = (values or {}).get("otbor_decision")
-    with connection.get_connection() as conn:
-        if conn.execute("SELECT 1 FROM articles WHERE id = %s", (int(article_id),)).fetchone() is None:
-            return False
-        gate = conn.execute("SELECT relevant FROM article_cards WHERE article_id = %s", (int(article_id),)).fetchone()
-        row = conn.execute(
-            """
-            INSERT INTO otbor_shadow_decisions
-              (article_id, trigger, decision, values_json, disputed, failure, failure_reason, decision_log, recipe,
-               gate_relevant)
-            VALUES (%(article)s, %(trigger)s, %(decision)s, %(values)s, %(disputed)s, %(failure)s, %(failure_reason)s,
-                    %(log)s, %(recipe)s, %(gate)s)
-            ON CONFLICT (article_id) DO UPDATE SET
+# Повтор итога у строки: решение прошлой попытки сбой не снимает, шаги ложатся в ход решения (общее у статьи и находки).
+_UPSERT_SET = """
               trigger = EXCLUDED.trigger,
               decision = COALESCE(EXCLUDED.decision, otbor_shadow_decisions.decision),
               values_json = CASE WHEN EXCLUDED.decision IS NULL THEN otbor_shadow_decisions.values_json
@@ -133,6 +117,27 @@ def write(article_id: int, *, values: dict[str, Any] | None, disputed: str | Non
                             THEN otbor_shadow_decisions.recipe ELSE EXCLUDED.recipe END,
               gate_relevant = EXCLUDED.gate_relevant,
               updated_at = now()
+"""
+
+
+def write(article_id: int, *, values: dict[str, Any] | None, disputed: str | None, failure: str | None,
+          failure_reason: str | None, log: list[dict[str, str]], recipe: dict[str, Any]) -> bool:
+    """Записать итог проверки по статье: решение (values) или сбой. Сбой решения прошлой попытки не снимает (как у
+    сигнала, otbor_store._write_failure): шаги ложатся в ход решения. Перенесённую строку не трогает. False — статьи
+    нет или строка уже перенесена."""
+    decision = (values or {}).get("otbor_decision")
+    with connection.get_connection() as conn:
+        if conn.execute("SELECT 1 FROM articles WHERE id = %s", (int(article_id),)).fetchone() is None:
+            return False
+        gate = conn.execute("SELECT relevant FROM article_cards WHERE article_id = %s", (int(article_id),)).fetchone()
+        row = conn.execute(
+            f"""
+            INSERT INTO otbor_shadow_decisions
+              (article_id, trigger, decision, values_json, disputed, failure, failure_reason, decision_log, recipe,
+               gate_relevant)
+            VALUES (%(article)s, %(trigger)s, %(decision)s, %(values)s, %(disputed)s, %(failure)s, %(failure_reason)s,
+                    %(log)s, %(recipe)s, %(gate)s)
+            ON CONFLICT (article_id) DO UPDATE SET {_UPSERT_SET}
             WHERE otbor_shadow_decisions.switched_at IS NULL
             RETURNING id
             """,
@@ -143,6 +148,50 @@ def write(article_id: int, *, values: dict[str, Any] | None, disputed: str | Non
         ).fetchone()
         conn.commit()
     return row is not None
+
+
+# Пометка запуска и стадия расхода у строк находок пробного прогона широкого поиска (#138): оплата прогона видна
+# отдельно от проверки #134.
+SEARCH_TRIAL_TRIGGER = "search_trial"
+SEARCH_TRIAL_STAGE = "otbor_search_trial"
+
+
+def write_signal(signal_id: int, *, values: dict[str, Any] | None, disputed: str | None, failure: str | None,
+                 failure_reason: str | None, log: list[dict[str, str]], recipe: dict[str, Any]) -> bool:
+    """Итог «Отбора» по находке пробного прогона широкого поиска (#138): решение или сбой — в строку находки, по тем же
+    правилам повтора, что у статьи. Только находка пробного прогона (signals.selector): False — не она или её нет."""
+    with connection.get_connection() as conn:
+        if conn.execute("SELECT 1 FROM signals WHERE id = %s AND selector = %s",
+                        (int(signal_id), SIGNAL_SELECTOR_TRIAL)).fetchone() is None:
+            return False
+        row = conn.execute(
+            f"""
+            INSERT INTO otbor_shadow_decisions
+              (signal_id, trigger, decision, values_json, disputed, failure, failure_reason, decision_log, recipe)
+            VALUES (%(signal)s, %(trigger)s, %(decision)s, %(values)s, %(disputed)s, %(failure)s, %(failure_reason)s,
+                    %(log)s, %(recipe)s)
+            ON CONFLICT (signal_id) WHERE signal_id IS NOT NULL DO UPDATE SET {_UPSERT_SET}
+            WHERE otbor_shadow_decisions.switched_at IS NULL
+            RETURNING id
+            """,
+            {"signal": int(signal_id), "trigger": SEARCH_TRIAL_TRIGGER,
+             "decision": (values or {}).get("otbor_decision"), "values": Json(values) if values is not None else None,
+             "disputed": disputed, "failure": failure, "failure_reason": failure_reason, "log": Json(log),
+             "recipe": Json({**recipe, "trigger": SEARCH_TRIAL_TRIGGER})},
+        ).fetchone()
+        conn.commit()
+    return row is not None
+
+
+def signal_rows(signal_ids: list[int]) -> list[dict[str, Any]]:
+    """Строки проверки по находкам пробного прогона (#138) — для его отчёта."""
+    ids = sorted({int(value) for value in signal_ids})
+    if not ids:
+        return []
+    with connection.get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT * FROM otbor_shadow_decisions WHERE signal_id = ANY(%s) ORDER BY signal_id", (ids,))
+        return cur.fetchall()
 
 
 def article_rows(*, since: date) -> list[dict[str, Any]]:

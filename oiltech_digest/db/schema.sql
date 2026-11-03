@@ -1247,3 +1247,13 @@ CREATE TABLE IF NOT EXISTS otbor_shadow_decisions (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Решения «Отбора» по находкам пробного прогона широкого поиска (#138) — в той же таблице: у строки статья или находка
+-- (signal_id), одно из двух. Перенос в витрины строки находок не берёт (его запросы идут от статьи).
+ALTER TABLE otbor_shadow_decisions ALTER COLUMN article_id DROP NOT NULL;
+ALTER TABLE otbor_shadow_decisions ADD COLUMN IF NOT EXISTS signal_id BIGINT REFERENCES signals(id) ON DELETE CASCADE;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_otbor_shadow_signal ON otbor_shadow_decisions(signal_id) WHERE signal_id IS NOT NULL;
+DO $$ BEGIN
+  ALTER TABLE otbor_shadow_decisions ADD CONSTRAINT otbor_shadow_one_publication
+    CHECK ((article_id IS NULL) <> (signal_id IS NULL));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;

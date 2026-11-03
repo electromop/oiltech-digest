@@ -19,15 +19,16 @@ NO_PAGE = {"ok": False, "error": "http_403", "raw_text": "", "title": "", "publi
 
 class SearchModel:
     """Подставной поиск GPT: события темы — заготовка; адреса из найденного — все события, если не сказано иначе.
-    Вызовы запоминает."""
+    Вызовы и докачанные страницы (fetched) запоминает."""
 
     def __init__(self, events, cited=None):
         self.events = events
         self.cited = cited if cited is not None else [item["source_url"] for item in events]
         self.calls = []
+        self.fetched = []
 
     def research_json(self, instructions, user_input, schema, **kwargs):
-        self.calls.append({"instructions": instructions, "input": user_input, **kwargs})
+        self.calls.append({"instructions": instructions, "input": user_input, "schema": schema["name"], **kwargs})
         return AIResponse(data={"events": self.events, "_cited_urls": self.cited, "_web_search_calls": 3},
                           model="gpt-research", input_tokens=4000, output_tokens=800)
 
@@ -55,16 +56,24 @@ class _DedupJudge:
                           model="gpt-dedup", input_tokens=100, output_tokens=20)
 
 
-def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False):
+def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False, before_worker=None, on_fetch=None):
     """Ежедневная задача радара (тема — тематика бурения) → воркер NL полосы агентов с подставным поиском и
     страницами → ядро. Судья, ревью пачки и проверка темы при «Отборе» не зовутся: их вызовы копятся в
-    отдельном списке. Поиск и список вызовов прежней цепочки."""
+    отдельном списке. before_worker — что меняется между постановкой задачи и её выдачей (.env NL), on_fetch —
+    что происходит, пока воркер докачивает страницу (сбор успел собрать её же). Поиск и список вызовов прежней
+    цепочки."""
     tag(DRILLING)
     search = SearchModel(events, cited)
     old_chain = []
     monkeypatch.setattr(signal_research, "make_client", lambda offline=False: search)
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
-                        lambda url, fallback_title="", **kwargs: pages.get(url, NO_PAGE))
+
+    def fetch(url, fallback_title="", **kwargs):
+        search.fetched.append(url)
+        if on_fetch is not None:
+            on_fetch(url)
+        return pages.get(url, NO_PAGE)
+
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text", fetch)
     monkeypatch.setattr(signal_discovery, "judge_signal_snapshot",
                         lambda *args, **kwargs: old_chain.append("судья") or ({}, {}))
     monkeypatch.setattr(signal_discovery, "_batch_review_candidates",
@@ -75,6 +84,8 @@ def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False):
                         lambda *args, **kwargs: old_chain.append("Brave") or {"evidence": []})
     monkeypatch.setattr(signal_discovery, "_radar_client", lambda: _DedupJudge(same_event))
     background_jobs.enqueue_daily_signal_discovery(force=True)
+    if before_worker is not None:
+        before_worker()
     run_worker("external-agents")
     return search, old_chain
 

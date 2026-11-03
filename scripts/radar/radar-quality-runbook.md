@@ -88,12 +88,16 @@
   SIGNAL_REVIEW_MODEL=gpt-5
   SIGNAL_REVIEW_REASONING=medium
   # по умолчанию уже так, задавать не нужно:
-  # SIGNAL_RESEARCH_MODEL=gpt-5  SIGNAL_RESEARCH_REASONING=low  SIGNAL_RESEARCH_DAYS=30
-  # SIGNAL_RESEARCH_EVENTS_PER_TOPIC=12  SIGNAL_RESEARCH_TIMEOUT_SECONDS=480  SIGNAL_AI_TIMEOUT_SECONDS=240
+  # SIGNAL_RESEARCH_TIMEOUT_SECONDS=480  SIGNAL_AI_TIMEOUT_SECONDS=240
   # SIGNAL_THEME_CHECK_MODEL — второе мнение о тематике, по умолчанию модель дедупа
   # обязательно с 03.11 (отката на OPENAI_MODEL нет, без строки прогон падает до поиска):
   # SIGNAL_DEDUP_MODEL=…  SIGNAL_DEDUP_REASONING=…
   ```
+
+  С #138 модель поиска, уровень, потолок на тему и период: строки `.env` ядра, они едут в задаче, NL их не читает.
+  `SIGNAL_RESEARCH_MODEL` (без умолчания: пусто, и прогон с поиском GPT не ставится; gpt-5, gpt-5-mini, gpt-5-nano
+  отказ, их снимают 11.12.2026), `SIGNAL_RESEARCH_REASONING=low` (у gpt-6 нет minimal), `SIGNAL_RESEARCH_EVENTS_PER_TOPIC`,
+  `SIGNAL_RESEARCH_DAYS`. Пробный прогон широкого поиска: `radar-search-trial` (раздел #138 в `CLAUDE.md`).
 
   `OPENAI_MODEL` воркера не трогать: им идут суть, теги и скоринг всей ленты. Ключ `OPENAI_API_KEY`
   воркера обязан пускать в web_search. Полная таблица переменных (ядро / NL) —

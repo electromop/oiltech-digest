@@ -14,6 +14,11 @@
 оценке, ни событие без названной технологии, ни дату вне периода, и потолка числа находок темы нет — решает «Отбор».
 Остаются технические проверки (verify_research_evidence; разделы «Поиск → …» — rejected_sections.SEARCH_SECTIONS); тип
 события, компания, суть и «почему важно» модели поиска — черновые данные находки, во вход агентов они не идут.
+
+С #138 при «Отборе» поиск ещё и широкий: все материалы нефтесервиса и нефтегаза за период (технологии, контракты,
+сделки, программы бурения, регулирование, рынок) — RESEARCH_INSTRUCTIONS_BROAD. Ссылка, которая уже есть в статьях
+сбора, новой находкой не становится (это решает прогон радара), а сайты, которые парсер собирает целиком, поиск
+получает как «уже есть, ищи дальше» (covered_sites_block). Модель и уровень — из задачи прогона, решение ядра.
 """
 
 from __future__ import annotations
@@ -112,37 +117,74 @@ technology опиши её. Для каждого события назови te
 - summary и why_important — по-русски, 1–3 предложения, с фактами (кто, что, где, цифры).
 Упорядочь по значимости для нефтесервиса: первое — самое важное."""
 
-RESEARCH_SCHEMA = {
-    "name": "radar_topic_research",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["events"],
-        "properties": {
-            "events": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["title", "company", "event_date", "summary", "why_important",
-                                 "source_url", "publisher", "source_kind", "technology", "event_kind"],
-                    "properties": {
-                        "title": {"type": "string"},
-                        "company": {"type": "string"},
-                        "event_date": {"type": "string"},
-                        "summary": {"type": "string"},
-                        "why_important": {"type": "string"},
-                        "source_url": {"type": "string"},
-                        "publisher": {"type": "string"},
-                        "source_kind": {"type": "string", "enum": ["primary", "trade_press", "secondary"]},
-                        "technology": {"type": "string"},
-                        "event_kind": {"type": "string", "enum": list(EVENT_KINDS)},
-                    },
-                },
-            },
-        },
-    },
-}
+def _research_schema(name: str, kind_field: str, kinds: tuple[str, ...]) -> dict[str, Any]:
+    """Схема ответа поиска: события с первоисточником; у прежнего поиска — тип события, у широкого (#138) — вид
+    материала. Строгий JSON: все поля обязательны."""
+    properties: dict[str, Any] = {field: {"type": "string"} for field in (
+        "title", "company", "event_date", "summary", "why_important", "source_url", "publisher")}
+    properties["source_kind"] = {"type": "string", "enum": ["primary", "trade_press", "secondary"]}
+    properties["technology"] = {"type": "string"}
+    properties[kind_field] = {"type": "string", "enum": list(kinds)}
+    item = {"type": "object", "additionalProperties": False, "required": list(properties), "properties": properties}
+    return {"name": name, "schema": {"type": "object", "additionalProperties": False, "required": ["events"],
+                                     "properties": {"events": {"type": "array", "items": item}}}}
+
+
+RESEARCH_SCHEMA = _research_schema("radar_topic_research", "event_kind", EVENT_KINDS)
+
+# Широкий поиск (#138, спека #128): при «Отборе» поиск ищет все материалы нефтесервиса и нефтегаза за период, а не
+# только технологии, — что брать, решает «Отбор». Вид материала от модели поиска — черновые данные находки (во вход
+# агентов не идёт), поэтому перечень без «не технологии»: отбрасывать по нему нечего.
+MATERIAL_KINDS = ("technology", "contract", "deal", "drilling_program", "regulation", "market", "other")
+
+RESEARCH_INSTRUCTIONS_BROAD = """Ты — аналитик, который следит за нефтегазовой отраслью и нефтесервисом
+(бурение, заканчивание, ГРП, КРС, добыча, промысловая инфраструктура, HSE, цифровизация).
+
+Найди в интернете материалы по теме за указанный период: все значимые публикации о нефтегазе и
+нефтесервисе, а не только о технологиях. Что из найденного брать, решит следующий этап, поэтому
+не отбирай по своей оценке, интересно ли это заказчику. Ищи:
+- технологии: внедрение, испытания, пилоты, запуск продуктов, НИОКР с результатом, квалификация;
+- контракты и тендеры: подряды на бурение и сервис, поставки оборудования, итоги тендеров;
+- сделки: слияния и поглощения, совместные предприятия, партнёрства, крупные инвестиции;
+- программы бурения и разработки: планы бурения, ввод скважин и месторождений, FID;
+- регулирование: законы, налоги, квоты, стандарты, решения государства и регуляторов;
+- рынок: итоги и планы сервисных и нефтегазовых компаний, обзоры и прогнозы рынка нефтесервиса.
+Тема задаёт направление поиска. Из других отраслей (горнодобыча, производство, транспорт,
+энергетика) — только то, у чего очевидно применение на операции нефтесервиса. Вид материала —
+material_kind:
+- technology — технология и её применение;
+- contract — контракт, подряд, тендер;
+- deal — сделка, совместное предприятие, партнёрство, инвестиции;
+- drilling_program — программа бурения или разработки, ввод скважин и месторождений;
+- regulation — регулирование, налоги, стандарты, решения государства;
+- market — итоги и планы компаний, обзор или прогноз рынка;
+- other — другое.
+Если материал о технологии, назови её в technology (продукт, метод, система), иначе technology —
+пустая строка.
+
+Правила:
+- материал опубликован внутри периода;
+- одно событие — один пункт со ссылкой на первоисточник: пресс-релиз или новость
+  компании-участника, отраслевое или деловое издание; разные события одной компании — разные пункты;
+- ссылка — на страницу самого материала, а не на раздел сайта, ленту новостей или главную; не
+  агрегаторы и не SEO-блоги;
+- ищи и на английском, и на русском; российские события важны не меньше мировых: пресс-службы
+  нефтегазовых и сервисных компаний, производителей оборудования и ИТ, отраслевые издания;
+- лучше меньше, но настоящих: не добавляй материал, ссылку на который ты не нашёл поиском;
+- title: по-русски, по правилам заголовка (кто что сделал, до 90 знаков, без тире и скобок);
+- summary и why_important — по-русски, 1–3 предложения, с фактами (кто, что, где, цифры).
+Упорядочь по значимости для нефтесервиса: первое — самое важное."""
+
+RESEARCH_SCHEMA_BROAD = _research_schema("radar_topic_research_broad", "material_kind", MATERIAL_KINDS)
+
+# Модели, которые OpenAI снимает 11.12.2026: исходное поколение gpt-5 (с датой в имени — тоже). gpt-5.4, gpt-5.5 и
+# новее не снимаются.
+_RETIRED_MODEL_RE = re.compile(r"^gpt-5(?:-mini|-nano)?(?:-\d{4}-\d{2}-\d{2})?$", re.IGNORECASE)
+
+
+def retired_model(model: str) -> bool:
+    return bool(_RETIRED_MODEL_RE.match((model or "").strip()))
+
 
 _STRENGTH = {"primary": 0.9, "trade_press": 0.82, "secondary": 0.6}
 RESEARCH_ATTEMPTS = 2
@@ -156,6 +198,16 @@ def research_period(days: int | None = None, period_end: date | None = None) -> 
     для списка уже известного, который поиску передаёт run_discovery."""
     end = period_end or date.today()
     return end - timedelta(days=int(days or app_config.SIGNAL_RESEARCH_DAYS)), end
+
+
+def covered_sites_block(sites: list[str]) -> str:
+    """«Уже есть, ищи дальше» (#138): сайты, которые парсер собирает целиком, — их материалы у нас уже есть, и тратить
+    на них поиски незачем (сами ссылки статей сбора новыми находками всё равно не станут)."""
+    sites = [site for site in sites if site]
+    if not sites:
+        return ""
+    return ("Эти сайты наш парсер собирает целиком, их материалы у нас уже есть: не трать на них поиски, ищи дальше, "
+            "на других сайтах:\n" + ", ".join(sites))
 
 
 def _add_usage(stats: dict[str, Any], response: Any) -> None:
@@ -177,21 +229,33 @@ def research_topic(
     heartbeat: Callable[[], None] | None = None,
     feedback: str = "",
     finds_only: bool = False,
+    model: str | None = None,
+    reasoning: str | None = None,
 ) -> dict[str, Any]:
     """События темы за период с первоисточниками. Ошибка модели — пустой итог со статусом,
     а не падение прогона: у темы остаётся поиск Brave, если он включён. finds_only (#131) — поиск только
-    находит: без смысловых отсевов и без потолка числа находок, решает «Отбор»."""
+    находит: без смысловых отсевов и без потолка числа находок, решает «Отбор»; и ищет широко (#138): все материалы
+    нефтесервиса и нефтегаза, а не только технологии.
+
+    Модель и уровень прогон радара передаёт свои — из задачи (решение ядра, #138): пустая модель — ошибка темы, а
+    не откат на строку .env воркера. None — вызов на ядре (тесты, разовые команды): настройка ядра."""
     start, end = research_period(days, period_end)
     count = int(limit or app_config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC)
-    stats: dict[str, Any] = {"status": "ok", "provider": "openai_web_search", "model": app_config.SIGNAL_RESEARCH_MODEL,
+    used_model = app_config.SIGNAL_RESEARCH_MODEL if model is None else model
+    effort = app_config.SIGNAL_RESEARCH_REASONING if reasoning is None else reasoning
+    stats: dict[str, Any] = {"status": "ok", "provider": "openai_web_search", "model": used_model,
                              "period": [start.isoformat(), end.isoformat()], "events": 0, "dropped": [],
                              "feedback_chars": len(feedback.strip()),
                              "web_search_calls": 0, "input_tokens": 0, "output_tokens": 0}
+    if not used_model:
+        return {**stats, "status": "error", "error": "модель поиска не задана (SIGNAL_RESEARCH_MODEL в .env ядра)",
+                "evidence": []}
+    instructions, schema = ((RESEARCH_INSTRUCTIONS_BROAD, RESEARCH_SCHEMA_BROAD) if finds_only
+                            else (RESEARCH_INSTRUCTIONS, RESEARCH_SCHEMA))
     prompt = (
         f"Тема: {topic}\n"
         f"Период: с {start.isoformat()} по {end.isoformat()}\n"
-        # Сколько просить у модели — настройка и при «Отборе»: потолок снят в нашем коде (finds_only ответ не режет),
-        # промпт широкого поиска — #138.
+        # Сколько просить у модели — настройка и при «Отборе»: потолок снят в нашем коде (finds_only ответ не режет).
         f"Сколько событий: до {count}\n"
         + (f"\nЧто входит в тему:\n{topic_context.strip()}\n" if topic_context.strip() else "")
         # Обратная связь заказчика: что одобрено, что отклонено, кому доверяет, что уже есть.
@@ -213,13 +277,13 @@ def research_topic(
         attempt_prompt = prompt if attempt == 1 else prompt + RETRY_HINT
         try:
             response = client.research_json(
-                RESEARCH_INSTRUCTIONS,
+                instructions,
                 attempt_prompt,
-                RESEARCH_SCHEMA,
-                model=app_config.SIGNAL_RESEARCH_MODEL,
-                reasoning_effort=app_config.SIGNAL_RESEARCH_REASONING,
+                schema,
+                model=used_model,
+                reasoning_effort=effort,
                 # Ответ — до count событий по ~150 токенов плюс рассуждение между поисками.
-                max_output_tokens=output_budget(1500 + 250 * count, app_config.SIGNAL_RESEARCH_REASONING),
+                max_output_tokens=output_budget(1500 + 250 * count, effort),
                 timeout=app_config.SIGNAL_RESEARCH_TIMEOUT_SECONDS,
             )
         except AttributeError as exc:  # клиент без поиска (офлайн) — повтор не поможет
@@ -297,6 +361,7 @@ def _event_to_evidence(
     summary = str(event.get("summary") or "").strip()
     why = str(event.get("why_important") or "").strip()
     kind = str(event.get("source_kind") or "secondary")
+    material_kind = str(event.get("material_kind") or "").strip()
     return {
         "article_id": None,
         "source_url": url,
@@ -315,6 +380,8 @@ def _event_to_evidence(
             "source_kind": kind,
             "technology": technology,
             "event_kind": event_kind or None,
+            # Вид материала широкого поиска (#138) — черновые данные, как тип события прежнего.
+            **({"material_kind": material_kind} if material_kind else {}),
             "why_important": why,
             "research_summary": summary,
             # Сослалась ли модель на этот адрес в найденном — признак, что он из поиска, а

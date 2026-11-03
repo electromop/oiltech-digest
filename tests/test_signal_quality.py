@@ -1019,7 +1019,8 @@ def test_each_failed_cluster_gets_its_own_error(monkeypatch):
         return {"title": "Б", "theme": DRILLING, "score": 60, "maturity": "watch"}, {}
 
     monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web",
+                                                        research_model="gpt-6.1-sol", research_reasoning="low")
 
     run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING}], "tags": []})
 
@@ -1062,7 +1063,8 @@ def test_run_collects_search_drops_and_judge_failures(monkeypatch):
         return {"title": "Б", "theme": DRILLING, "score": 60, "maturity": "watch"}, {}
 
     monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web")
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web",
+                                                        research_model="gpt-6.1-sol", research_reasoning="low")
 
     run = signal_discovery.run_discovery(run_config, {"topics": [{"name": DRILLING}], "tags": []})
 

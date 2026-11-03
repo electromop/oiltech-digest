@@ -341,7 +341,11 @@ SIGNAL_DEDUP_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_DEDUP_CONCURRENCY",
 # openai_web — «режим ChatGPT»: на тему один вызов модели со встроенным поиском OpenAI
 # (signal_research.py); both — обе выдачи вместе.
 SIGNAL_SEARCH_MODE = os.environ.get("SIGNAL_SEARCH_MODE", "brave").strip().lower()
-SIGNAL_RESEARCH_MODEL = os.environ.get("SIGNAL_RESEARCH_MODEL", "gpt-5").strip()
+# Модель поиска GPT (#138, спека #128) — явная настройка ядра, без умолчания и без отката: едет в задаче прогона
+# радара вместе с уровнем, потолком на тему и периодом, свои строки поиска NL не читает. Прежнее умолчание gpt-5
+# OpenAI снимает 11.12.2026 — его, gpt-5-mini и gpt-5-nano постановка отказывает (signal_discovery.research_settings).
+# Уровень рассуждения — тоже явный: у gpt-6.1-sol нет ни minimal, ни none, а без уровня клиент подставил бы minimal.
+SIGNAL_RESEARCH_MODEL = os.environ.get("SIGNAL_RESEARCH_MODEL", "").strip()
 SIGNAL_RESEARCH_REASONING = os.environ.get("SIGNAL_RESEARCH_REASONING", "low").strip()
 # 8 давали полноту 6 из 20 по сентябрьскому эталону заказчика (01.10): модель брала только
 # громкие новости, а пресс-релизы производителей и российские события не доходили.
@@ -352,6 +356,10 @@ SIGNAL_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_RESEARCH_TIMEOUT_
 # Плата OpenAI за один вызов встроенного поиска (web_search), USD — сверх токенов. Сверить с
 # прайс-листом: по умолчанию $10 за 1 000 вызовов.
 SIGNAL_WEB_SEARCH_USD_PER_CALL = float(os.environ.get("SIGNAL_WEB_SEARCH_USD_PER_CALL", "0.01"))
+# Сайт сбора, который широкий поиск (#138) получает как «уже есть, ищи дальше»: за период поиска у него столько
+# статей сбора и больше. Сайт с парой статей парсер собирает не целиком (пресс-релизы компаний), и отправить поиск
+# мимо него значило бы потерять его материалы.
+SIGNAL_RESEARCH_COVERED_MIN_ARTICLES = max(1, int(os.environ.get("SIGNAL_RESEARCH_COVERED_MIN_ARTICLES", "20")))
 
 # --- Агент «Карточка сигнала» (#96, спека #93) ---
 # Шаг планировщика «заполнить карточки»: новые сигналы без карточки — в задачу агента во внешний
