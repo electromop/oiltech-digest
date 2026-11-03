@@ -610,7 +610,7 @@ def _run_otbor(payload: dict[str, Any], job_id: int) -> dict[str, Any]:
     repository.update_background_job_progress(job_id, 20)
     result = otbor.process_payload(otbor.build_payload(payload))
     applied = otbor.apply_result(result, job_id=job_id, article_ids=payload.get("article_ids") or [],
-                                 signal_ids=payload.get("signal_ids") or [])
+                                 signal_ids=payload.get("signal_ids") or [], shadow=otbor.is_shadow(payload))
     repository.update_background_job_progress(job_id, 95)
     return {"otbor": True, "applied": applied}
 

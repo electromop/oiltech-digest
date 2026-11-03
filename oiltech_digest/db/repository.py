@@ -7386,12 +7386,14 @@ def _issue_article_sql(selected_sql: str) -> str:
 
 
 def _issue_signal_sql(selected_sql: str) -> str:
-    """Карточка радара идёт в выпуск: выбрана «в дайджест», не дубль и с радара.
+    """Карточка радара или материала коллеги идёт в выпуск: выбрана «в дайджест», не дубль.
 
-    Сигнал ленты в выпуске был бы второй копией статьи (#95). Зрелости «Отклонено» здесь нет
+    Сигнал ленты в выпуске был бы второй копией статьи (#95): статья идёт сама. Материал коллеги (#131) — свой
+    сигнал, статьи у него нет: без него выбор редактора молча терялся (ревью PR #155). Зрелости «Отклонено» здесь нет
     (29.09): это оценка модели, а экран радара показывает такие карточки с кнопкой «В дайджест», и
     повторная находка перезаписывает зрелость выбранной карточки. Выбор человека — членство."""
-    return f"{selected_sql} AND sig.merged_into_signal_id IS NULL AND {radar_origin_sql('sig')}"
+    return (f"{selected_sql} AND sig.merged_into_signal_id IS NULL"
+            f" AND ({radar_origin_sql('sig')} OR sig.origin = '{SIGNAL_ORIGIN_MATERIAL}')")
 
 
 def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60,
@@ -7507,7 +7509,8 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
                         ELSE (sig.first_seen_at AT TIME ZONE 'Europe/Moscow')::date END AS published_on,
                    'mixed' AS language,
                    '' AS image_url,
-                   COALESCE(best_evidence.publisher, 'Технологический радар') AS source_name,
+                   COALESCE(best_evidence.publisher, CASE WHEN sig.origin = '{SIGNAL_ORIGIN_MATERIAL}'
+                            THEN 'Материал коллеги' ELSE 'Технологический радар' END) AS source_name,
                    COALESCE(corr.corrected_thesis, sig.summary, sig.thesis, '') AS summary,
                    TRUE AS selected_for_digest,
                    sig.score AS total_score,
