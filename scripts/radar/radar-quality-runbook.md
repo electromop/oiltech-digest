@@ -91,6 +91,8 @@
   # SIGNAL_RESEARCH_MODEL=gpt-5  SIGNAL_RESEARCH_REASONING=low  SIGNAL_RESEARCH_DAYS=30
   # SIGNAL_RESEARCH_EVENTS_PER_TOPIC=12  SIGNAL_RESEARCH_TIMEOUT_SECONDS=480  SIGNAL_AI_TIMEOUT_SECONDS=240
   # SIGNAL_THEME_CHECK_MODEL — второе мнение о тематике, по умолчанию модель дедупа
+  # обязательно с 03.11 (отката на OPENAI_MODEL нет, без строки прогон падает до поиска):
+  # SIGNAL_DEDUP_MODEL=…  SIGNAL_DEDUP_REASONING=…
   ```
 
   `OPENAI_MODEL` воркера не трогать: им идут суть, теги и скоринг всей ленты. Ключ `OPENAI_API_KEY`

@@ -33,8 +33,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from oiltech_digest import config
 from oiltech_digest.db import repository
-from oiltech_digest.processing.openai_client import AIResponse
+from oiltech_digest.processing.openai_client import AIResponse, output_budget
 from oiltech_digest.processing.prompts import REPRINT_INSTRUCTIONS, REPRINT_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,20 @@ def find_candidates(days: int = 14, min_overlap: float = DEFAULT_MIN_OVERLAP,
     )
 
 
+class ReprintSetupError(ValueError):
+    """Модель судьи не задана: задача падает с понятной причиной до первого вызова."""
+
+
+def configured_model() -> str:
+    """Модель судьи — явная настройка OPENAI_REPRINT_MODEL, без отката на модель ленты (спека #128, история 48).
+
+    До 03.11 судья молча шёл на OPENAI_MODEL (gpt-5-mini, её снимают 11.12.2026). Сбой пары считается «разными
+    событиями», поэтому без модели прогон выглядел бы зелёным, а перепечатки копились бы в ленте: падаем сразу."""
+    if not config.OPENAI_REPRINT_MODEL:
+        raise ReprintSetupError("OPENAI_REPRINT_MODEL не задан: модель ленты судья перепечаток не берёт")
+    return config.OPENAI_REPRINT_MODEL
+
+
 def judge_pair(left: dict, right: dict, client) -> AIResponse:
     """Спросить модель, одно ли это событие. Тела режем: решение принимается по
     факту, а не по объёму, и длинный хвост только удорожает вызов."""
@@ -70,14 +85,18 @@ def judge_pair(left: dict, right: dict, client) -> AIResponse:
         REPRINT_INSTRUCTIONS,
         _pair_prompt(left, right),
         REPRINT_SCHEMA,
-        max_output_tokens=700,
+        max_output_tokens=output_budget(700, config.OPENAI_REPRINT_REASONING),
+        model=configured_model(),
+        reasoning_effort=config.OPENAI_REPRINT_REASONING,
     )
 
 
 def review_candidates(candidates: list[dict], client, *, dry_run: bool = True) -> dict[str, Any]:
-    """Прогнать кандидатов через судью и, если не сухой прогон, записать решения."""
+    """Прогнать кандидатов через судью и, если не сухой прогон, записать решения и расход."""
+    configured_model()
     stats = {"checked": 0, "reprints": 0, "distinct": 0, "errors": 0, "skipped": 0}
     decisions: list[dict[str, Any]] = []
+    usage: list[dict[str, Any]] = []
     for pair in candidates:
         left = repository.get_article(int(pair["a_id"]))
         right = repository.get_article(int(pair["b_id"]))
@@ -90,6 +109,8 @@ def review_candidates(candidates: list[dict], client, *, dry_run: bool = True) -
             logger.warning("reprint_judge_failed a=%s b=%s: %s", pair["a_id"], pair["b_id"], exc)
             stats["errors"] += 1
             continue
+        usage.append({"model": response.model, "input_tokens": response.input_tokens,
+                      "output_tokens": response.output_tokens})
 
         same = bool(response.data.get("same_event"))
         reason = str(response.data.get("reason") or "")[:500]
@@ -118,6 +139,8 @@ def review_candidates(candidates: list[dict], client, *, dry_run: bool = True) -
                                pair["a_id"], pair["b_id"], exc)
                 stats["skipped"] += 1
                 stats["reprints"] -= 1
+    if not dry_run:
+        repository.record_reprint_usage(None, usage)
     return {"stats": stats, "decisions": decisions, "dry_run": dry_run}
 
 

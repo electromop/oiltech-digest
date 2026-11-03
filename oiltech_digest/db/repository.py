@@ -7254,6 +7254,45 @@ def record_radar_ai_usage(job_id: int | None, usage: list[dict] | None) -> int:
     return len(rows)
 
 
+def record_reprint_usage(job_id: int | None, verdicts: list[dict] | None) -> int:
+    """Расход судьи перепечаток — в ai_processing_runs, строка на модель за каждый принятый итог задачи.
+
+    Стадия reprint_review, статьи у строки нет: пара — это две статьи. Частичный итог (воркер остановлен) и итог
+    остатка той же задачи судят разные пары, поэтому строки складываются, а не заменяют друг друга. Вердикт без
+    токенов (сборка NL до 03.11, сбой пары) в счёт не идёт: старая сборка в учёт не писала и раньше."""
+    totals: dict[str, list[int]] = {}
+    for verdict in verdicts or []:
+        if verdict.get("error") or "input_tokens" not in verdict:
+            continue
+        try:
+            input_tokens = max(0, int(verdict.get("input_tokens") or 0))
+            output_tokens = max(0, int(verdict.get("output_tokens") or 0))
+        except (TypeError, ValueError):
+            continue  # итог воркера — недоверенный вход: битая строка не валит запись пометок
+        row = totals.setdefault(str(verdict.get("model") or ""), [0, 0, 0])
+        row[0] += 1
+        row[1] += input_tokens
+        row[2] += output_tokens
+    if not totals:
+        return 0
+    with get_connection() as conn:
+        for model, (pairs, input_tokens, output_tokens) in totals.items():
+            price_in, price_out = config.price_for_model(model)
+            cost = (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+            conn.execute(
+                """
+                INSERT INTO ai_processing_runs
+                  (job_id, article_id, stage, provider, model, language, input_tokens, output_tokens,
+                   total_tokens, cost_usd, status, error_message)
+                VALUES (%s, NULL, 'reprint_review', 'openai', %s, NULL, %s, %s, %s, %s, 'ok', %s)
+                """,
+                (job_id, model or None, input_tokens, output_tokens, input_tokens + output_tokens,
+                 round(cost, 6), f"pairs={pairs}"),
+            )
+        conn.commit()
+    return len(totals)
+
+
 def ai_cost_report() -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

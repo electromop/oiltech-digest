@@ -20,6 +20,11 @@ config.AUTH_COOKIE_SECURE = False
 # Тесты окна месяца проверяют механизм на дне смены 5 (решение 21.09) и не зависят ни от
 # .env разработчика, ни от правила прода (config.FEED_ROLLOVER_DAY_DEFAULT, 05.10 — 11).
 config.FEED_ROLLOVER_DAY = 5
+# Модели «Дедупа» — явные настройки без отката на модель ленты (спека #128, история 48): без них прогон радара и задача
+# перепечаток падают до вызовов. Тестам — подставные имена, а не .env разработчика; поведение без модели проверяют
+# свои тесты (test_stage_models).
+config.SIGNAL_DEDUP_MODEL = "test-dedup-model"
+config.OPENAI_REPRINT_MODEL = "test-reprint-model"
 
 
 @pytest.fixture(scope="session")

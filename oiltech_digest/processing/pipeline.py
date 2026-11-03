@@ -532,12 +532,34 @@ def tag_article(article: dict, tags: list[dict], client) -> AIResponse:
             f"{tag['id']}: {path} | EN: {tag.get('name_en') or ''} | "
             f"keywords: {', '.join((tag.get('keywords_en_json') or [])[:12])}"
         )
+    rules = tag_rules(tags)
     return client.complete_json(
         TAGGING_INSTRUCTIONS,
-        _article_prompt(article) + "\n\navailable_tags:\n" + "\n".join(tag_lines),
+        _article_prompt(article) + "\n\navailable_tags:\n" + "\n".join(tag_lines)
+        + ("\n\nrules:\n" + "\n".join(f"- {rule}" for rule in rules) if rules else ""),
         TAG_SCHEMA,
-        max_output_tokens=1000,
+        max_output_tokens=output_budget(1000, config.OPENAI_TAG_REASONING),
+        model=config.OPENAI_TAG_MODEL,
+        reasoning_effort=config.OPENAI_TAG_REASONING,
     )
+
+
+def tag_rules(tags: list[dict]) -> list[str]:
+    """Правила выбора тега под списком тегов — с именами из списка, а не из кода (как правило темы «Карточки», #149).
+
+    Переигровка 03.11 (переезд с gpt-5): новые модели клали новости о ценах на сырьё в тег-приёмник, считая, что тега
+    для них нет (gpt-6-luna — 26% статей, у прода 3%). Общая фраза «тема рынка, если такой тег есть» luna не убедила:
+    «тега рынка в списке нет» — у 26 из 34 таких статей; поэтому правило называет тег. Нет тега в списке — нет правила."""
+    from oiltech_digest import signal_themes
+
+    names = [str(tag.get("name") or "") for tag in tags]
+    rules = []
+    market = signal_themes.market(names)
+    if market:
+        rules.append(f"Цены и котировки сырья и их прогнозы, спрос и предложение, квоты и ограничения поставок — тег «{market}».")
+    if UNCLASSIFIED_TAG_NAME in names:
+        rules.append(f"«{UNCLASSIFIED_TAG_NAME}» — только когда не подходит ни один тег.")
+    return rules
 
 
 def score_article(article: dict, criteria: list[dict], client) -> AIResponse:

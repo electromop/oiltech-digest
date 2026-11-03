@@ -46,8 +46,8 @@ https://github.com/electromop/oiltech-digest/compare/main...fix/radar-quality-vi
 | `SIGNAL_AI_TIMEOUT_SECONDS` | `240` | Таймаут судьи, ревью, дедупа | `240` |
 | `SIGNAL_JUDGE_CONCURRENCY` | `4` | Сколько кластеров темы судья оценивает одновременно (1 — по одному) | `4` |
 | `SIGNAL_DEDUP_CONCURRENCY` | `4` | Сколько пар дедуп сверяет одновременно | `4` |
-| `SIGNAL_DEDUP_MODEL` / `_REASONING` | можно не задавать | Судья дедупа | `OPENAI_MODEL` |
-| `SIGNAL_THEME_CHECK_MODEL` / `_REASONING` | можно не задавать | Второе мнение о тематике | как у дедупа |
+| `SIGNAL_DEDUP_MODEL` / `_REASONING` | обязательно (с 03.11) | Судья дедупа | нет: без строки прогон падает до поиска |
+| `SIGNAL_THEME_CHECK_MODEL` / `_REASONING` | можно не задавать | Второе мнение о тематике | как у дедупа, без неё `OPENAI_MODEL` |
 
 Минимум, чтобы заработал новый поиск:
 - на ядре — `SIGNAL_SEARCH_MODE=openai_web`;
