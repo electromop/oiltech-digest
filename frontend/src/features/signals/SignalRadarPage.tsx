@@ -973,8 +973,10 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
             // Отклонённое «Отбором» и не решённое им в выпуск не выбирают: вернуть отклонённое можно только
             // полями «Отбора» (#132). Скрытое прежними правилами — как раньше, выбранное выходит на радар.
             const digestOffered = signal.otbor_decision !== "reject" && !(signal.otbor_failure && !signal.otbor_decision);
-            // Поля судьи радара («Почему сейчас», «Переносимость») у статьи сбора и материала коллеги пусты — их нет.
-            const judgeFieldsOptional = business || (signal.origin ?? "radar") !== "radar";
+            // Поля судьи радара («Почему сейчас», «Переносимость») у статьи сбора и материала коллеги пусты — их нет; у
+            // находки на пути «Отбора» (решение или сбой) тоже: судьи там нет (#134).
+            const judgeFieldsOptional = business || (signal.origin ?? "radar") !== "radar"
+              || Boolean(signal.otbor_decision || signal.otbor_failure);
             return (
               <article className="articleCardReact" key={signal.id}>
                 {/* Свёрнутая строка, как у «Бизнес-сигналов» (документ заказчика 19.09):

@@ -108,11 +108,12 @@ def configured_model() -> str:
     return config.SIGNAL_CARD_MODEL
 
 
-def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
+def estimate(chars: int, calls: int, model: str, *, output_tokens: int = ESTIMATED_OUTPUT_TOKENS) -> dict[str, Any]:
     """Цена вызовов до оплаты — для сухих прогонов экзамена и истории (#98): вход — по длине запросов в
-    знаках (request_chars), ответ — ESTIMATED_OUTPUT_TOKENS на вызов, ставки ядра (config.price_for_model)."""
+    знаках (request_chars), ответ — output_tokens на вызов (у другого агента свой), ставки ядра
+    (config.price_for_model)."""
     tokens_in = -(-chars // CHARS_PER_TOKEN)
-    tokens_out = ESTIMATED_OUTPUT_TOKENS * calls
+    tokens_out = output_tokens * calls
     price_in, price_out = config.price_for_model(model)
     return {"model": model, "calls": calls, "input_tokens": tokens_in, "output_tokens": tokens_out,
             "cost_usd": (tokens_in * price_in + tokens_out * price_out) / 1_000_000}

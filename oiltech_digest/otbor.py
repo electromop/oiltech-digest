@@ -24,7 +24,7 @@ from functools import partial
 from typing import Any, Callable
 
 from oiltech_digest import config, contract
-from oiltech_digest.db import otbor_inputs, otbor_store, repository
+from oiltech_digest.db import otbor_inputs, otbor_shadow_store, otbor_store, repository
 from oiltech_digest.otbor_answer import NO_REASON, answer_problem, answer_schema, conflicts, outcome, technical_failure
 from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.external_ai import StopRequested
@@ -36,6 +36,9 @@ KIND = otbor_store.KIND
 # Версия инструкции (и таблицы конфликтов, otbor_answer) — в рецепте решения: другая инструкция — другие решения.
 PROMPT_VERSION = "2026-10-26.2"
 _OUTPUT_TOKENS = 600
+# Оценка ответа до вызова — для сухого прогона проверки на реальных данных (#134): на экзамене 26.10 у gpt-6-sol с
+# рассуждением low 116 токенов на вызов; с запасом на повтор при конфликте шагов.
+ESTIMATED_OUTPUT_TOKENS = 150
 # Справочники, из которых модель выбирает коды, — в порядке её рассуждения (поля ответа).
 CHOICES = ("industry", "occasion", "oilfield_relevance", "decision", "reject_reason", "category")
 
@@ -286,17 +289,27 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
 # --- Применение (ядро) ---------------------------------------------------------------------------
 
 
+def shadow_trigger(job_payload: dict[str, Any]) -> str | None:
+    """Пометка запуска проверки на реальных данных (#134) у задачи: итог — в таблицу проверки; None — решение
+    «Отбора» в сигнал. Задачу проверки ставит otbor_shadow.enqueue."""
+    if not job_payload.get("shadow"):
+        return None
+    return str(job_payload.get("trigger") or otbor_shadow_store.TRIGGER)[:50]
+
+
 def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_ids: list[Any] | None = None,
-                 signal_ids: list[Any] | None = None) -> dict[str, Any]:
+                 signal_ids: list[Any] | None = None, shadow: str | None = None) -> dict[str, Any]:
     """Сторона ядра: проверить ответы кодом и записать решения или сбои — у статьи в её сигнал ленты, у находки и
     материала (#131) в сам сигнал. Строка не о публикации задачи не пишется; ссылок у находки ядро считает само.
-    Справочники сменились после выдачи — модель выбирала из других: технический сбой, шаг повторит."""
+    Справочники сменились после выдачи — модель выбирала из других: технический сбой, шаг повторит. shadow — пометка
+    запуска проверки на реальных данных (#134): те же проверки, но итог — рядом, в таблицу проверки, а не в сигнал."""
     dictionaries = load_dictionaries()
     decisions = [decision for decision in result.get("decisions") or [] if isinstance(decision, dict)]
     expected = None if article_ids is None and signal_ids is None else (
         {contract.article_ref(value) for value in article_ids or []}
         | {contract.signal_ref(value) for value in signal_ids or []})
-    otbor_store.record_usage(job_id, [usage for decision in decisions if (usage := _usage(decision, expected))])
+    otbor_store.record_usage(job_id, [usage for decision in decisions if (usage := _usage(decision, expected))],
+                             stage=otbor_shadow_store.STAGE if shadow else KIND)
     links = otbor_inputs.links_in_input([signal_id for decision in decisions
                                         if (signal_id := contract.ref_signal_id(decision.get("ref"))) is not None])
     stale = result.get("dictionaries_version") != dictionaries.get("version")
@@ -314,6 +327,17 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
             checked = technical_failure(reason)
         else:
             checked = outcome(decision, dictionaries, links=links.get(signal_id, 0))
+        if shadow:
+            decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            if otbor_shadow_store.write(
+                    article_id=article_id, signal_id=signal_id, values=checked.values, disputed=checked.disputed,
+                    failure=checked.failure, failure_reason=checked.failure_reason, log=checked.log,
+                    recipe={**recipe, "model": _model_name(decision), "decided_at": decided_at, "trigger": shadow}):
+                applied["decided" if checked.values is not None else "failed"] += 1
+            if checked.values is None:
+                applied["errors"].append({"article_id": article_id, "signal_id": signal_id,
+                                          "error": checked.failure_reason})
+            continue
         if checked.values is None:
             failed = (otbor_store.write_failure(article_id, checked.failure, checked.failure_reason, log=checked.log)
                       if article_id is not None else

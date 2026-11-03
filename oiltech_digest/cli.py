@@ -1002,8 +1002,10 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     """Перекачать тела статей с дефектом (чужое/кракозябры/простыня) новым извлечением, срезать хвосты.
 
     По умолчанию сухой прогон. С --apply тела заменяются, а по заменённым ставится
-    перерасчёт ИИ (суть, релевантность, тег, баллы посчитаны по старому тексту) —
-    пакетами через тот же маршрут, что и обычная обработка.
+    перерасчёт сути, тега и балла (посчитаны по старому тексту) тем же путём, что пересчёт после
+    полного текста (fulltext_recompute.enqueue_after_body): без гейта (решение ленты дальше за
+    «Отбором», правило владельца 02.11), мимо выбранного «в дайджест», черновика выпуска, скрытого и
+    отклонённого, по полосе пересчётов.
 
     --tails: только хвосты (#140), по всем источникам или по названному. В конце по источникам:
     сколько статей и знаков уйдёт. --all-pages: качать страницу и там, где хвост не виден по тексту.
@@ -1012,9 +1014,10 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     (rescore_selection): у статьи закрытого месяца новая суть, тег или вердикт гейта
     переписали бы закрытый выпуск, а он только на просмотр (решение владельца 30.09). Тело
     такой статьи меняется (выпуск его не показывает); пропущенные — в отчёте."""
-    from oiltech_digest import feed_window, network_policy
+    from oiltech_digest import feed_window
     from oiltech_digest.db import repository
     from oiltech_digest.ingestion import body_repair
+    from oiltech_digest.processing import fulltext_recompute
 
     ids = [int(item) for item in args.ids.split(",") if item.strip()] if args.ids else None
     statuses = [item.strip() for item in args.statuses.split(",") if item.strip()] if args.statuses else None
@@ -1030,24 +1033,19 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     result = body_repair.repair_bodies(articles, apply=args.apply, pause_seconds=args.pause,
                                        find_tail=body_repair.stored_repeated_tail, only_tails=args.tails,
                                        all_pages=args.all_pages)
-    jobs = []
+    jobs: list[int] = []
     archive: list[int] = []
+    left_out: list[int] = []
     if args.apply and args.reprocess and result["replaced_ids"]:
-        decision = network_policy.route_ai_bulk()  # пересчёт — своя полоса (lanes.py)
         archive = repository.closed_month_article_ids(result["replaced_ids"], feed_window.current())
         replaced = [article_id for article_id in result["replaced_ids"] if article_id not in archive]
-        for start in range(0, len(replaced), args.batch):
-            chunk = replaced[start:start + args.batch]
-            job = repository.create_background_job(
-                "process_articles",
-                {"article_ids": chunk, "limit": len(chunk)},
-                queue_name=decision.queue_name,
-                execution_region=decision.execution_region,
-                capability=decision.capability,
-            )
-            jobs.append(int(job["id"]))
+        recount = fulltext_recompute.enqueue_after_body(replaced, batch_size=args.batch)
+        jobs = recount["jobs"]
+        left_out = sorted(set(replaced) - set(recount["articles"]))
+        result["reprocess_skipped"] = recount["skipped"]
     result["reprocess_jobs"] = jobs
     result["reprocess_skipped_archive"] = archive
+    result["reprocess_left_out"] = left_out
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return
@@ -1064,6 +1062,11 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     if archive:
         print(f"  без перерасчёта ИИ — закрытый месяц, архив только на просмотр: {len(archive)} "
               f"(id: {', '.join(str(article_id) for article_id in archive)})")
+    if left_out:
+        print(f"  без перерасчёта ИИ: выбрано в выпуск, в черновике выпуска, скрыто или не принято: {len(left_out)} "
+              f"(id: {', '.join(str(article_id) for article_id in left_out[:50])})")
+    if result.get("reprocess_skipped"):
+        print(f"  перерасчёт не поставлен: {result['reprocess_skipped']}")
 
 
 def cmd_repair_article_dates(args: argparse.Namespace) -> None:
@@ -2336,6 +2339,107 @@ def cmd_otbor_materials(args: argparse.Namespace) -> None:
               " (--apply — провести через конвейер)")
         return
     print(f"otbor-materials: сигналов материалов {len(result['signal_ids'])}, задач «Отбора» {result['jobs']}{price}")
+
+
+def cmd_otbor_shadow(args: argparse.Namespace) -> None:
+    """Проверка «Отбора» на реальных данных (#134): статьи ленты с --since, решённые гейтом до «Отбора», без решения
+    человека и в открытом месяце, проходят «Отбор»; решения пишутся рядом, витрины не меняются. По умолчанию сухой
+    прогон: число статей и цена, ничего не пишет; --apply ставит задачи по полосе пересчётов. Флаг не нужен."""
+    from oiltech_digest import otbor, otbor_shadow
+
+    try:
+        plan = otbor_shadow.plan(date.fromisoformat(args.since), model=args.model or None)
+    except otbor.OtborSetupError as exc:
+        raise SystemExit(f"otbor-shadow: {exc}") from exc
+    estimate, count = plan["estimate"], len(plan["article_ids"])
+    print(f"otbor-shadow: модель {plan['model']}, инструкция {plan['prompt_version']}, справочники "
+          f"{plan['dictionaries_version']}")
+    print(f"  статьи ленты с {plan['since']}, решённые гейтом, без решения человека, в открытом месяце: статей {count}")
+    print(f"  цена около {_usd(estimate['cost_usd'])}: вызовов {estimate['calls']}, токенов около "
+          f"{estimate['input_tokens'] // 1000} тыс. входа и {estimate['output_tokens'] // 1000} тыс. выхода (ответ "
+          f"{otbor.ESTIMATED_OUTPUT_TOKENS} токенов на вызов, знаков на токен 3)")
+    print(f"  полоса {plan['queue']}: задач {-(-count // plan['batch'])} по {plan['batch']} статей")
+    if not plan["bulk_lane"]:
+        print("  ВНИМАНИЕ: полоса пересчётов выключена (AI_BULK_LANE_ENABLED): задачи встали бы в поток дня перед "
+              "новыми статьями; --apply откажет")
+    if not args.apply:
+        print("  сухой прогон: задачи не поставлены и не оплачены (поставить: --apply)")
+        return
+    try:
+        jobs = otbor_shadow.enqueue_plan(plan)
+    except otbor.OtborSetupError as exc:
+        raise SystemExit(f"otbor-shadow: {exc}") from exc
+    print(f"  поставлено задач {len(jobs)}")
+
+
+def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
+    """Отчёт по проверке «Отбора» на реальных данных (#134), только чтение: разделы отказа, категории, технологии из
+    сбора на радар, гейт против «Отбора» с примерами, повод публикации. --json — всё как есть."""
+    from oiltech_digest import otbor_shadow
+
+    report = otbor_shadow.report(date.fromisoformat(args.since), examples=args.examples)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        return
+    print(f"otbor-shadow-report: статьи с {report['since']}: строк {report['publications']}, решено "
+          f"{report['decided']}, сбоев {sum(report['failed'].values())} {report['failed'] or ''}".rstrip())
+    print("  инструкция / справочники: " + "; ".join(f"{key}: {count}" for key, count in report["versions"].items()))
+    print("  гейт против «Отбора» (строка: гейт, столбцы: «Отбор» брать / не брать):")
+    for side, label in (("accept", "гейт принял"), ("reject", "гейт отклонил")):
+        cell = report["gate"].get(side) or {"accept": 0, "reject": 0}
+        print(f"    {label}: брать {cell['accept']}, не брать {cell['reject']}")
+    print("  принятое по категориям: " + ", ".join(f"{key}: {count}" for key, count in report["categories"].items()))
+    print(f"  технологий из сбора на радар: {report['technology_from_feed']}; сигналов радара за то же время сейчас: "
+          f"{report['radar_now']}")
+    print(f"  разделы отказа (спорных решений всего {report['disputed']}):")
+    for row in report["reasons"]:
+        print(f"    {row['label']}: {row['count']}")
+    print("  повод публикации (брать / не брать):")
+    for row in report["occasions"]:
+        print(f"    {row['label']}: {row['accept']} / {row['reject']}")
+    for key, title in (("gate_accepted_otbor_rejected", "гейт принял, «Отбор» не взял"),
+                       ("gate_rejected_otbor_accepted", "гейт отклонил, «Отбор» взял")):
+        print(f"  примеры: {title}")
+        for row in report["examples"][key]:
+            why = row["reason"] if key == "gate_accepted_otbor_rejected" else row["category"]
+            print(f"    {row['article_id']} {row['title']} ({row['source']}): {why}; {row['justification'] or ''}")
+
+
+def cmd_otbor_switch(args: argparse.Namespace) -> None:
+    """Переключение витрин на «Отбор» (#134): решения проверки на реальных данных — в сигналы, принятые идут дальше по
+    конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём. --apply только
+    при включённом флаге и когда у всех статей окна, решённых гейтом, есть решение проверки."""
+    from oiltech_digest import otbor, otbor_shadow
+    from oiltech_digest.otbor_pack_format import load_dictionaries as load_otbor_dictionaries
+
+    triggers = tuple(value.strip() for value in args.triggers.split(",") if value.strip())
+    try:
+        result = otbor_shadow.switch(date.fromisoformat(args.since), triggers=triggers, apply=args.apply)
+    except otbor_shadow.SwitchError as exc:
+        raise SystemExit(f"otbor-switch: {exc}") from exc
+
+    def price(value):
+        return f"около {_usd(value)}" if value is not None else "цены на этой базе нет"
+
+    print(f"otbor-switch: решения проверки с {result['since']} (пометки: {', '.join(result['triggers'])}): перенести "
+          f"{result['transfer']}: в бизнес-ленту {result['business']}, на радар {result['technology']}, «Другое» "
+          f"{result['other']}, отклонено {result['rejected']}")
+    if result["versions"]:
+        print("  инструкция / справочники решений: "
+              + "; ".join(f"{key}: {count}" for key, count in result["versions"].items())
+              + f" (сейчас {otbor.PROMPT_VERSION} / {load_otbor_dictionaries().get('version')})")
+    print(f"  пропущено: сбой проверки {result['failed']}, решение человека, закрытый месяц или иное после проверки "
+          f"{result['not_eligible']}")
+    print(f"  статей окна, решённых гейтом, без решения проверки {len(result['missing'])}"
+          + (": перенос откажет, сначала otbor-shadow --apply" if result["missing"] else ""))
+    print(f"  дальше конвейер: карточка заново {result['cards']} ({price(result['card_cost_usd'])}), баллы второго "
+          f"вызова {result['scores']} ({price(result['scores_cost_usd'])}), суть и перевод ленты принятым без сути "
+          f"{result['feed_stages']}")
+    if not result["applied"]:
+        print("  сухой прогон: ничего не перенесено (перенести: --apply)")
+        return
+    print(f"  перенесено {result['switched']}; карточка заново поставлена {result['card_signals']} сигналам, "
+          f"задач {result['card_jobs']}")
 
 
 def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
@@ -3617,7 +3721,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_bodies.add_argument("--pause", type=float, default=0.5, help="пауза между страницами, с")
     p_repair_bodies.add_argument("--apply", action="store_true", help="записать тела (без флага — сухой прогон)")
     p_repair_bodies.add_argument("--reprocess", action=argparse.BooleanOptionalAction, default=True,
-                                 help="после --apply поставить перерасчёт ИИ по заменённым")
+                                 help="после --apply поставить перерасчёт сути, тега и балла по заменённым (без "
+                                      "гейта, мимо выпуска)")
     p_repair_bodies.add_argument("--batch", type=int, default=25, help="статей в задаче перерасчёта")
     p_repair_bodies.add_argument("--json", action="store_true")
     p_repair_bodies.set_defaults(func=cmd_repair_article_bodies)
@@ -3843,6 +3948,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_otbor_materials.add_argument("--apply", action="store_true",
                                    help="завести сигналы материалов и задачи «Отбора»; без флага ничего не пишет")
     p_otbor_materials.set_defaults(func=cmd_otbor_materials)
+
+    p_otbor_shadow = sub.add_parser(
+        "otbor-shadow",
+        help="проверка «Отбора» на реальных данных (#134): статьи ленты, решённые гейтом, проходят «Отбор», решения "
+             "пишутся рядом, витрины не меняются; по умолчанию сухой прогон: число и цена",
+    )
+    p_otbor_shadow.add_argument("--since", type=_iso_date, required=True,
+                                help="начало окна ГГГГ-ММ-ДД по дате сбора статьи")
+    p_otbor_shadow.add_argument("--model", default="",
+                                help="модель «Отбора»; без флага OTBOR_MODEL")
+    p_otbor_shadow.add_argument("--apply", action="store_true",
+                                help="поставить задачи по полосе пересчётов; без флага ничего не пишет")
+    p_otbor_shadow.set_defaults(func=cmd_otbor_shadow)
+
+    p_otbor_shadow_report = sub.add_parser(
+        "otbor-shadow-report",
+        help="отчёт по проверке «Отбора» на реальных данных (только чтение): разделы отказа, категории, технологии "
+             "из сбора на радар, гейт против «Отбора» с примерами",
+    )
+    p_otbor_shadow_report.add_argument("--since", type=_iso_date, required=True,
+                                       help="начало окна ГГГГ-ММ-ДД по дате сбора статьи")
+    p_otbor_shadow_report.add_argument("--examples", type=int, default=15,
+                                       help="примеров в каждой клетке расхождения с гейтом")
+    p_otbor_shadow_report.add_argument("--json", action="store_true", help="весь отчёт JSON")
+    p_otbor_shadow_report.set_defaults(func=cmd_otbor_shadow_report)
+
+    p_otbor_switch = sub.add_parser(
+        "otbor-switch",
+        help="переключение витрин на «Отбор» (#134): решения проверки на реальных данных в сигналы; по умолчанию "
+             "сухой прогон",
+    )
+    p_otbor_switch.add_argument("--since", type=_iso_date, required=True,
+                                help="начало окна ГГГГ-ММ-ДД по дате сбора статьи (как у проверки)")
+    p_otbor_switch.add_argument("--triggers", default="shadow",
+                                help="пометки запусков проверки через запятую; по умолчанию только shadow (#134)")
+    p_otbor_switch.add_argument("--apply", action="store_true",
+                                help="перенести (только при включённом флаге); без флага ничего не пишет")
+    p_otbor_switch.set_defaults(func=cmd_otbor_switch)
 
     p_card_history = sub.add_parser(
         "enqueue-signal-card-history",

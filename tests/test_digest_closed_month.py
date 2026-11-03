@@ -290,3 +290,39 @@ def test_body_repair_does_not_recount_ai_for_articles_of_a_closed_month(issue, m
             "SELECT payload_json FROM background_jobs WHERE kind = 'process_articles' ORDER BY id"
         ).fetchall()]
     assert queued == [[october]]
+
+
+def test_body_repair_recount_skips_the_gate_and_articles_chosen_for_the_issue(issue, monkeypatch, capsys):
+    """#134 (заметка 02.11): перерасчёт после починки тел звал гейт и переписывал статьи выпуска. Теперь он идёт тем
+    же путём, что пересчёт после полного текста: суть, тег и балл без гейта (решение ленты дальше за «Отбором»), мимо
+    выбранного «в дайджест» и черновика выпуска."""
+    from oiltech_digest import cli, network_policy
+    from oiltech_digest.db import marks
+    from oiltech_digest.ingestion import body_repair
+
+    with connection.get_connection() as conn:
+        plain = add_article(conn, issue["source"], "oct-plain", published=utc(2026, 10, 6, 9))
+        chosen = add_article(conn, issue["source"], "oct-chosen", published=utc(2026, 10, 7, 9))
+        conn.commit()
+    marks.set_article_mark(chosen, status="digest")
+    replaced = [plain, chosen]
+    monkeypatch.setattr(body_repair, "candidate_articles", lambda **kwargs: [{"id": i} for i in replaced])
+    monkeypatch.setattr(body_repair, "repair_bodies", lambda articles, **kwargs: {
+        "apply": True, "checked": 2, "replaced": 2, "replaced_ids": replaced, "stats": {}, "sample": [],
+    })
+    monkeypatch.setattr(network_policy, "route_ai_bulk",
+                        lambda: network_policy.ExecutionDecision("external-ai-bulk", "external", "openai", "test"))
+    _freeze(monkeypatch, msk(2026, 10, 10, 12, 0))
+
+    cli.cmd_repair_article_bodies(argparse.Namespace(
+        ids=f"{plain},{chosen}", source_id=None, statuses="", tails=False, all_pages=False, days=60, limit=0, pause=0,
+        apply=True, reprocess=True, batch=25, json=True,
+    ))
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["reprocess_left_out"] == [chosen]
+    with connection.get_connection() as conn:
+        queued = [(row[0]["article_ids"], row[0].get("only")) for row in conn.execute(
+            "SELECT payload_json FROM background_jobs WHERE kind = 'process_articles' ORDER BY id"
+        ).fetchall()]
+    assert queued == [([plain], ["summary", "tagging", "scoring"])]

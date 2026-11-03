@@ -44,11 +44,12 @@ _SET_BY_COLUMNS = ("industry", "oilfield_relevance", "oilfield_application", "si
 
 def _tried_sql(key: str) -> str:
     """Задачи агента с публикацией: строка на номер из списка задачи (article_ids или signal_ids) и идёт ли такая
-    задача сейчас."""
+    задача сейчас. Задачи проверки на реальных данных (#134, пометка shadow) — не попытки «Отбора»: их итог рядом."""
     return (
         f"SELECT (jsonb_array_elements_text(j.payload_json->'{key}'))::bigint AS id,"
         " j.status IN ('queued', 'running', 'finalizing') AS pending"
         f" FROM background_jobs j WHERE j.kind = '{KIND}' AND jsonb_typeof(j.payload_json->'{key}') = 'array'"
+        " AND j.payload_json->>'shadow' IS DISTINCT FROM 'true'"
     )
 
 
@@ -60,8 +61,13 @@ _OTBOR_ARTICLE_SQL = (
     " AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)"
 )
 # Сигнал, который решает «Отбор» (#131): находка поиска или материал коллеги, заведённые при включённом флаге. Дубль
-# не в счёт: его ссылки — у главной карточки.
-_OTBOR_SIGNAL_SQL = f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL"
+# не в счёт: его ссылки — у главной карточки. Архив (материал удалили) — тоже. Сигнал с решением проверки на реальных
+# данных, которое ещё не перенесли (#134: находки пробного прогона поиска), «Отбор» не решает и в раздел сбоя не
+# кладёт: в витрины он попадает только переносом.
+_OTBOR_SIGNAL_SQL = (
+    f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL AND s.archived_at IS NULL"
+    " AND NOT EXISTS (SELECT 1 FROM otbor_shadow_decisions sh WHERE sh.signal_id = s.id AND sh.switched_at IS NULL)"
+)
 # Задачи «Отбора» у находки или материала: сколько их было и идёт ли одна сейчас — строка на сигнал (LEFT JOIN по s.id).
 SIGNAL_TRIES_SQL = (f"SELECT id, count(*) AS tries, bool_or(pending) AS pending FROM ({_TRIED_SIGNALS_SQL}) tried"
                     " GROUP BY id")
@@ -452,10 +458,10 @@ def write_signal_failure(signal_id: int, kind: str, reason: str, *, log: list[di
     return True
 
 
-def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
+def record_usage(job_id: int | None, rows: list[dict[str, Any]], *, stage: str = KIND) -> None:
     """Расход агента — в ai_processing_runs под его именем, строка на (задача, публикация): статья — article_id,
     находка и материал — signal_id. Повторное применение итога той же задачи счёт не удваивает (уникальные индексы
-    по job_id, article_id или signal_id, stage)."""
+    по job_id, article_id или signal_id, stage). stage — у проверки на реальных данных (#134) своя стадия."""
     if not rows:
         return
     with connection.get_connection() as conn:
@@ -470,7 +476,7 @@ def record_usage(job_id: int | None, rows: list[dict[str, Any]]) -> None:
                 VALUES (%s, %s, %s, 'openai', %s, %s, %s, %s, %s, 'ok')
                 ON CONFLICT {conflict} DO NOTHING
                 """,
-                (job_id, row[key], KIND, row.get("model"), row["input_tokens"], row["output_tokens"],
+                (job_id, row[key], stage, row.get("model"), row["input_tokens"], row["output_tokens"],
                  row["input_tokens"] + row["output_tokens"], row["cost_usd"]),
             )
         conn.commit()
