@@ -2701,7 +2701,7 @@ def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: 
         job_payload = job.get("payload_json") or {}
         applied = otbor.apply_result(result, job_id=job_id, article_ids=job_payload.get("article_ids") or [],
                                      signal_ids=job_payload.get("signal_ids") or [],
-                                     shadow=otbor.shadow_trigger(job_payload))
+                                     shadow=otbor.is_shadow(job_payload))
         result = {"otbor": True, "applied": applied}
     if job.get("kind") == signal_summary.KIND and result.get("signal_summary"):
         # Конверт ЗАМЕНЯЕТСЯ итогом: суть и заголовки уже записаны в сигналы.

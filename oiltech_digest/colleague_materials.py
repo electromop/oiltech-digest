@@ -306,7 +306,9 @@ def update_material(material_id: int, patch: dict[str, Any]) -> dict[str, Any] |
         )
         updated = cur.fetchone()
         if updated:
-            material_signals.apply_edit(cur, dict(updated), set(fields))
+            # Форма шлёт все поля разом: до сигнала доходит только то, что правка действительно поменяла.
+            changed = {column for column, value in fields.items() if getattr(value, "obj", value) != row.get(column)}
+            material_signals.apply_edit(cur, dict(updated), changed)
         conn.commit()
     return dict(updated) if updated else None
 

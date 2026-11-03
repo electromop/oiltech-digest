@@ -61,13 +61,9 @@ _OTBOR_ARTICLE_SQL = (
     " AND NOT EXISTS (SELECT 1 FROM article_cards c WHERE c.article_id = a.id AND c.relevant IS NOT NULL)"
 )
 # Сигнал, который решает «Отбор» (#131): находка поиска или материал коллеги, заведённые при включённом флаге. Дубль
-# не в счёт: его ссылки — у главной карточки. Архив (материал удалили) — тоже. Сигнал с решением проверки на реальных
-# данных, которое ещё не перенесли (#134: находки пробного прогона поиска), «Отбор» не решает и в раздел сбоя не
-# кладёт: в витрины он попадает только переносом.
-_OTBOR_SIGNAL_SQL = (
-    f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL AND s.archived_at IS NULL"
-    " AND NOT EXISTS (SELECT 1 FROM otbor_shadow_decisions sh WHERE sh.signal_id = s.id AND sh.switched_at IS NULL)"
-)
+# не в счёт: его ссылки — у главной карточки. Архив (материал удалили на платформе) — тоже.
+_OTBOR_SIGNAL_SQL = (f"s.selector = '{SIGNAL_SELECTOR_OTBOR}' AND s.merged_into_signal_id IS NULL"
+                     " AND s.archived_at IS NULL")
 # Задачи «Отбора» у находки или материала: сколько их было и идёт ли одна сейчас — строка на сигнал (LEFT JOIN по s.id).
 SIGNAL_TRIES_SQL = (f"SELECT id, count(*) AS tries, bool_or(pending) AS pending FROM ({_TRIED_SIGNALS_SQL}) tried"
                     " GROUP BY id")

@@ -22,10 +22,11 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import colleague_materials, config
+from oiltech_digest import colleague_materials, config, feed_window
 from oiltech_digest.db import connection, marks, otbor_store
 from oiltech_digest.db.repository import (CARD_SET_BY_HUMAN, SIGNAL_ORIGIN_MATERIAL, SIGNAL_SELECTOR_OTBOR,
-                                          SYSTEM_TAG_UNCLASSIFIED)
+                                          SYSTEM_TAG_UNCLASSIFIED, refresh_platform_decisions,
+                                          signal_publication_count_sql)
 from oiltech_digest.feed_window import OTBOR_ACCEPT, OTBOR_REJECT
 from oiltech_digest.otbor_pack_format import load_dictionaries
 
@@ -87,21 +88,36 @@ def _link(cur, signal_id: int, material: dict[str, Any]) -> None:
             (signal_id, material["url"], material["title"], material["description"],
              Json({"evidence_source": "material", "material_id": int(material["id"])})),
         )
-    cur.execute("UPDATE signals SET evidence_count = (SELECT count(*) FROM signal_evidence WHERE signal_id = %s)"
-                " WHERE id = %s", (signal_id, signal_id))
+    cur.execute(f"UPDATE signals s SET evidence_count = {signal_publication_count_sql('s')} WHERE s.id = %s",
+                (signal_id,))
 
 
 def apply_edit(cur, material: dict[str, Any], fields: set[str]) -> None:
     """Правка материала на платформе — его сигналу, в транзакции правки (cur, ревью PR #155): заголовок и русский
     заголовок, описание как суть, компании как участники (всё «человек»: агенты их не перепишут), оценка и комментарий
     в блок ОС автора, ссылка как публикация материала. fields — колонки материала, которые правка поменяла. Решение
-    «Отбора» и карточка, принятые по прежнему тексту, не пересчитываются. Материала-сигнала нет — ничего."""
+    «Отбора» и карточка, принятые по прежнему тексту, не пересчитываются. Сигнал в выпуске закрытого месяца правка не
+    меняет: тот выпуск только на просмотр. Материала-сигнала нет — ничего."""
     if not material.get("signal_id"):
         return
     signal_id = int(material["signal_id"])
-    cur.execute("SELECT card_set_by FROM signals WHERE id = %s FOR UPDATE", (signal_id,))
+    month = feed_window.signal_month_sql("s")
+    cur.execute(
+        f"SELECT s.card_set_by, ({feed_window.current().closed_sql(month)}"
+        f" AND {marks.signal_marked_sql('s.id', 'digest')}) AS frozen FROM signals s WHERE s.id = %s FOR UPDATE",
+        (signal_id,),
+    )
     row = cur.fetchone()
     if row is None:
+        return
+    if row["frozen"]:
+        # Выпуск закрытого месяца только на просмотр, и его текст тоже (решение владельца 30.09).
+        cur.execute(
+            "UPDATE signals SET decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb, updated_at = now()"
+            " WHERE id = %s",
+            (Json([{"stage": "Человек", "text": "Правка материала не перенесена: сигнал в выпуске закрытого месяца"}]),
+             signal_id),
+        )
         return
     set_by = dict(row["card_set_by"] or {})
     updates: dict[str, Any] = {}
@@ -139,6 +155,8 @@ def apply_edit(cur, material: dict[str, Any], fields: set[str]) -> None:
                     (signal_id,))
         _link(cur, signal_id, material)
         changed.append("ссылка")
+    if not changed:
+        return
     updates["card_set_by"] = Json(set_by)
     step = {"stage": "Человек", "text": "Материал исправлен на платформе: " + ", ".join(changed)}
     assignments = ", ".join(f"{column} = %s" for column in updates)
@@ -147,6 +165,9 @@ def apply_edit(cur, material: dict[str, Any], fields: set[str]) -> None:
         " updated_at = now() WHERE id = %s",
         [*updates.values(), Json([step]), signal_id],
     )
+    if "url" in fields:
+        # Число публикаций — причина «Решения платформы» (подтверждено): пересчёт в той же транзакции (#132).
+        refresh_platform_decisions([signal_id], conn=cur.connection)
 
 
 # Причина архива сигнала, чей материал удалили на платформе.
@@ -156,8 +177,10 @@ RETIRED_REASON = "материал удалён"
 def retire(cur, signal_id: int) -> None:
     """Сигнал удаляемого материала — в архив, в транзакции удаления (cur, ревью PR #155): витрины его не показывают,
     «Отбор» не берёт, вернуть можно unarchive-signals. Выбранный «в дайджест» не трогается: MaterialInDigest."""
-    cur.execute(f"SELECT {marks.signal_marked_sql('%s', 'digest')} AS chosen", (int(signal_id),))
-    if cur.fetchone()["chosen"]:
+    cur.execute(f"SELECT {marks.signal_marked_sql('s.id', 'digest')} AS chosen FROM signals s WHERE s.id = %s"
+                " FOR UPDATE", (int(signal_id),))
+    found = cur.fetchone()
+    if found and found["chosen"]:
         raise colleague_materials.MaterialInDigest(
             "Материал выбран «в дайджест»: сначала снимите отметку «в дайджест» на его карточке, затем удалите")
     cur.execute(

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from oiltech_digest import api, cli, colleague_materials, signal_card, signal_summary, tg_materials_bot
+from oiltech_digest.db import repository
 from oiltech_digest.processing.digest import render_digest_export_html
 from oiltech_digest.processing.openai_client import AIClientError
 from tests.otbor_radar_support import event, page, run_radar, summarize
@@ -287,6 +288,44 @@ def test_edit_of_a_material_on_the_platform_reaches_its_signal(user, admin, cont
     assert showcase(user, "business")[NEW_TITLE]["title_ru"] == NEW_TITLE
 
 
+def test_edit_form_sends_every_field_and_only_what_changed_reaches_the_signal(user, admin, contour, monkeypatch):
+    material = _send(_material(kind="link", url="https://news.example/tender"))
+    decide(monkeypatch, {TITLE: answer(category="business")})
+    card = showcase(user, "business")[TITLE]
+    # Русский заголовок дала «Суть и перевод».
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET title_ru = 'Заголовок «Сути и перевода»' WHERE id = %s", (card["id"],))
+        conn.commit()
+
+    # Форма правки шлёт все поля разом; поменялся только комментарий оценки.
+    api_send("PATCH", f"/api/materials/{material['id']}", admin, {
+        "title": TITLE, "description": DESCRIPTION, "companies": ["Татнефть", "ТаграС"], "verdict": "strong_signal",
+        "verdict_comment": "Конкурент взял объём на три года", "url": "https://news.example/tender"})
+
+    card = showcase(user, "business")["Заголовок «Сути и перевода»"]
+    assert "title_ru" not in card["card_set_by"]
+    assert [link["source_url"] for link in card["evidence"]] == ["https://news.example/tender"]
+    assert card["decision_log"][-1]["text"] == "Материал исправлен на платформе: оценка"
+    assert [block["comment"] for block in card["feedback_blocks"]] == ["Конкурент взял объём на три года"]
+
+
+def test_edit_does_not_rewrite_a_signal_in_the_issue_of_a_closed_month(user, admin, contour, monkeypatch):
+    material = _send(_material())
+    decide(monkeypatch, {TITLE: answer(category="business")})
+    card = showcase(user, "business")[TITLE]
+    api_send("PATCH", f"/api/signals/{card['id']}", user, {"status": "digest"})
+    # Карточка поступила в августе: выпуск августа закрыт и только на просмотр, его текст тоже (решение 30.09).
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET first_seen_at = '2026-08-15 09:00+00' WHERE id = %s", (card["id"],))
+        conn.commit()
+
+    api_send("PATCH", f"/api/materials/{material['id']}", admin, {"title": NEW_TITLE})
+
+    [item] = [item for item in api_get("/api/digest-content", user, month="2026-08")["news"]]
+    assert item["title"] == TITLE
+    assert colleague_materials.get_material(material["id"])["title"] == NEW_TITLE
+
+
 def test_deleting_a_material_archives_its_signal_unless_it_is_chosen_for_the_digest(
         user, admin, contour, monkeypatch):
     kept = _send(_material(tg_message_id=90))
@@ -315,7 +354,7 @@ def test_material_chosen_for_the_digest_is_in_the_issue_without_a_dead_link(user
 
     content = api_get("/api/digest-content", user)
     [item] = [item for item in content["news"] if item["title"] == TITLE]
-    assert (item["item_type"], item["url"], item["source_name"]) == ("signal", "", "Материал коллеги")
+    assert (item["item_type"], item["url"], item["source"]) == ("signal", "", "Материал коллеги")
     # У материала без ссылки «Читать далее» в выпуске не рисуется: пустая ссылка вела бы никуда.
     html = render_digest_export_html(content)
     assert TITLE in html and 'href=""' not in html

@@ -30,6 +30,7 @@ from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.external_ai import StopRequested
 from oiltech_digest.processing.openai_client import output_budget
 from oiltech_digest.processing.pipeline import make_client
+from oiltech_digest.signal_card import CHARS_PER_TOKEN
 from oiltech_digest.signal_card_pack import _publisher_label, publication_day, publication_text
 
 KIND = otbor_store.KIND
@@ -37,7 +38,7 @@ KIND = otbor_store.KIND
 PROMPT_VERSION = "2026-10-26.2"
 _OUTPUT_TOKENS = 600
 # Оценка ответа до вызова — для сухого прогона проверки на реальных данных (#134): на экзамене 26.10 у gpt-6-sol с
-# рассуждением low 116 токенов на вызов; с запасом на повтор при конфликте шагов.
+# рассуждением low 116 токенов на вызов; с запасом на повтор при конфликте шагов. Знаков на токен — как у «Карточки».
 ESTIMATED_OUTPUT_TOKENS = 150
 # Справочники, из которых модель выбирает коды, — в порядке её рассуждения (поля ответа).
 CHOICES = ("industry", "occasion", "oilfield_relevance", "decision", "reject_reason", "category")
@@ -96,6 +97,23 @@ def enqueue(article_ids: list[int], *, signal_ids: list[int] | tuple[int, ...] =
         for key, ids in (("article_ids", list(article_ids)), ("signal_ids", list(signal_ids)))
         for start in range(0, len(ids), batch)
     ]
+
+
+def request_chars(article_rows: list[dict[str, Any]]) -> int:
+    """Длина запросов модели о статьях (otbor_inputs.article_inputs) в знаках: инструкция со справочниками и вход
+    каждой статьи, как их соберёт пакет при выдаче задачи."""
+    instructions = len(_instructions(load_dictionaries()))
+    return sum(instructions + len(model_input(_item(row))) for row in article_rows)
+
+
+def estimate(chars: int, calls: int, model: str) -> dict[str, Any]:
+    """Цена вызовов до оплаты для сухого прогона (#134): вход по длине запросов, ответ ESTIMATED_OUTPUT_TOKENS на
+    вызов, ставки ядра (config.price_for_model)."""
+    tokens_in = -(-chars // CHARS_PER_TOKEN)
+    tokens_out = ESTIMATED_OUTPUT_TOKENS * calls
+    price_in, price_out = config.price_for_model(model)
+    return {"model": model, "calls": calls, "input_tokens": tokens_in, "output_tokens": tokens_out,
+            "cost_usd": (tokens_in * price_in + tokens_out * price_out) / 1_000_000}
 
 
 def configured_model() -> str:
@@ -289,20 +307,18 @@ def model_input(item: dict[str, Any], *, conflict: list[str] | None = None) -> s
 # --- Применение (ядро) ---------------------------------------------------------------------------
 
 
-def shadow_trigger(job_payload: dict[str, Any]) -> str | None:
-    """Пометка запуска проверки на реальных данных (#134) у задачи: итог — в таблицу проверки; None — решение
-    «Отбора» в сигнал. Задачу проверки ставит otbor_shadow.enqueue."""
-    if not job_payload.get("shadow"):
-        return None
-    return str(job_payload.get("trigger") or otbor_shadow_store.TRIGGER)[:50]
+def is_shadow(job_payload: dict[str, Any]) -> bool:
+    """Задача проверки на реальных данных (#134, её ставит otbor_shadow.enqueue): итог — в таблицу проверки, а не в
+    сигнал."""
+    return bool(job_payload.get("shadow"))
 
 
 def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_ids: list[Any] | None = None,
-                 signal_ids: list[Any] | None = None, shadow: str | None = None) -> dict[str, Any]:
+                 signal_ids: list[Any] | None = None, shadow: bool = False) -> dict[str, Any]:
     """Сторона ядра: проверить ответы кодом и записать решения или сбои — у статьи в её сигнал ленты, у находки и
     материала (#131) в сам сигнал. Строка не о публикации задачи не пишется; ссылок у находки ядро считает само.
-    Справочники сменились после выдачи — модель выбирала из других: технический сбой, шаг повторит. shadow — пометка
-    запуска проверки на реальных данных (#134): те же проверки, но итог — рядом, в таблицу проверки, а не в сигнал."""
+    Справочники сменились после выдачи — модель выбирала из других: технический сбой, шаг повторит. shadow — задача
+    проверки на реальных данных (#134): те же проверки, но итог статьи — рядом, в таблицу проверки (_record_shadow)."""
     dictionaries = load_dictionaries()
     decisions = [decision for decision in result.get("decisions") or [] if isinstance(decision, dict)]
     expected = None if article_ids is None and signal_ids is None else (
@@ -328,15 +344,7 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
         else:
             checked = outcome(decision, dictionaries, links=links.get(signal_id, 0))
         if shadow:
-            decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            if otbor_shadow_store.write(
-                    article_id=article_id, signal_id=signal_id, values=checked.values, disputed=checked.disputed,
-                    failure=checked.failure, failure_reason=checked.failure_reason, log=checked.log,
-                    recipe={**recipe, "model": _model_name(decision), "decided_at": decided_at, "trigger": shadow}):
-                applied["decided" if checked.values is not None else "failed"] += 1
-            if checked.values is None:
-                applied["errors"].append({"article_id": article_id, "signal_id": signal_id,
-                                          "error": checked.failure_reason})
+            _record_shadow(applied, article_id, checked, {**recipe, "model": _model_name(decision)})
             continue
         if checked.values is None:
             failed = (otbor_store.write_failure(article_id, checked.failure, checked.failure_reason, log=checked.log)
@@ -356,6 +364,20 @@ def apply_result(result: dict[str, Any], *, job_id: int | None = None, article_i
         if written:
             applied[written] += 1
     return applied
+
+
+def _record_shadow(applied: dict[str, Any], article_id: int | None, checked: Any, recipe: dict[str, Any]) -> None:
+    """Итог проверки на реальных данных (#134) — в её таблицу: решение или сбой статьи. Сигналов проверка не берёт."""
+    if article_id is None:
+        applied["errors"].append({"error": "проверка на реальных данных берёт только статьи"})
+        return
+    decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if otbor_shadow_store.write(article_id, values=checked.values, disputed=checked.disputed, failure=checked.failure,
+                                failure_reason=checked.failure_reason, log=checked.log,
+                                recipe={**recipe, "decided_at": decided_at, "trigger": otbor_shadow_store.TRIGGER}):
+        applied["decided" if checked.values is not None else "failed"] += 1
+    if checked.values is None:
+        applied["errors"].append({"article_id": article_id, "error": checked.failure_reason})
 
 
 def _publication(decision: dict[str, Any], expected: set[str] | None) -> tuple[int | None, int | None]:

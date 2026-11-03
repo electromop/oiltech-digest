@@ -1227,14 +1227,13 @@ ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS signal_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_signal_stage
   ON ai_processing_runs(job_id, signal_id, stage) WHERE signal_id IS NOT NULL;
 
--- Проверка «Отбора» на реальных данных (#134, спека #128): публикации последних недель проходят «Отбор», решения
--- пишутся сюда, рядом, а не в сигнал: витрины, лента и шаги дальше «Отбора» их не видят. Строка на публикацию:
--- статья ленты или сигнал (находка, материал). Переключение (otbor-switch) переносит решение в сигнал и ставит
--- switched_at. trigger: пометка запуска (shadow — проверка #134; у пробного прогона поиска своя).
+-- Проверка «Отбора» на реальных данных (#134, спека #128): статьи ленты последних недель, решённые гейтом, проходят
+-- «Отбор», решения пишутся сюда, рядом, а не в сигнал: витрины, лента и шаги дальше «Отбора» их не видят. Строка на
+-- статью. Переключение (otbor-switch) переносит решение в сигнал статьи и ставит switched_at. trigger: пометка
+-- запуска (shadow).
 CREATE TABLE IF NOT EXISTS otbor_shadow_decisions (
   id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  article_id     BIGINT REFERENCES articles(id) ON DELETE CASCADE,
-  signal_id      BIGINT REFERENCES signals(id) ON DELETE CASCADE,
+  article_id     BIGINT NOT NULL UNIQUE REFERENCES articles(id) ON DELETE CASCADE,
   trigger        TEXT NOT NULL,
   decision       TEXT,                 -- accept / reject; NULL: решения нет, сбой
   values_json    JSONB,                -- проверенные поля «Отбора», как их пишет сигнал (otbor_answer.outcome)
@@ -1246,10 +1245,5 @@ CREATE TABLE IF NOT EXISTS otbor_shadow_decisions (
   gate_relevant  BOOLEAN,              -- решение гейта статьи на момент записи
   switched_at    TIMESTAMPTZ,          -- перенесено в сигнал
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT otbor_shadow_one_publication CHECK ((article_id IS NULL) <> (signal_id IS NULL))
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_otbor_shadow_article
-  ON otbor_shadow_decisions(article_id) WHERE article_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_otbor_shadow_signal
-  ON otbor_shadow_decisions(signal_id) WHERE signal_id IS NOT NULL;

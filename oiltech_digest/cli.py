@@ -2357,7 +2357,7 @@ def cmd_otbor_shadow(args: argparse.Namespace) -> None:
     print(f"  статьи ленты с {plan['since']}, решённые гейтом, без решения человека, в открытом месяце: статей {count}")
     print(f"  цена около {_usd(estimate['cost_usd'])}: вызовов {estimate['calls']}, токенов около "
           f"{estimate['input_tokens'] // 1000} тыс. входа и {estimate['output_tokens'] // 1000} тыс. выхода (ответ "
-          f"{otbor.ESTIMATED_OUTPUT_TOKENS} токенов на вызов, знаков на токен 3)")
+          f"{otbor.ESTIMATED_OUTPUT_TOKENS} токенов на вызов, знаков на токен {otbor.CHARS_PER_TOKEN})")
     print(f"  полоса {plan['queue']}: задач {-(-count // plan['batch'])} по {plan['batch']} статей")
     if not plan["bulk_lane"]:
         print("  ВНИМАНИЕ: полоса пересчётов выключена (AI_BULK_LANE_ENABLED): задачи встали бы в поток дня перед "
@@ -2366,7 +2366,7 @@ def cmd_otbor_shadow(args: argparse.Namespace) -> None:
         print("  сухой прогон: задачи не поставлены и не оплачены (поставить: --apply)")
         return
     try:
-        jobs = otbor_shadow.enqueue_plan(plan)
+        jobs = otbor_shadow.enqueue(plan)
     except otbor.OtborSetupError as exc:
         raise SystemExit(f"otbor-shadow: {exc}") from exc
     print(f"  поставлено задач {len(jobs)}")
@@ -2389,8 +2389,8 @@ def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
         cell = report["gate"].get(side) or {"accept": 0, "reject": 0}
         print(f"    {label}: брать {cell['accept']}, не брать {cell['reject']}")
     print("  принятое по категориям: " + ", ".join(f"{key}: {count}" for key, count in report["categories"].items()))
-    print(f"  технологий из сбора на радар: {report['technology_from_feed']}; сигналов радара за то же время сейчас: "
-          f"{report['radar_now']}")
+    print(f"  технологий из сбора на радар: {report['technology_from_feed']} ({report['technology_per_week']} в неделю);"
+          f" радар находил до окна {report['radar_before_per_week']} в неделю, за окно {report['radar_now']}")
     print(f"  разделы отказа (спорных решений всего {report['disputed']}):")
     for row in report["reasons"]:
         print(f"    {row['label']}: {row['count']}")
@@ -2406,40 +2406,45 @@ def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
 
 
 def cmd_otbor_switch(args: argparse.Namespace) -> None:
-    """Переключение витрин на «Отбор» (#134): решения проверки на реальных данных — в сигналы, принятые идут дальше по
-    конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём. --apply только
-    при включённом флаге и когда у всех статей окна, решённых гейтом, есть решение проверки."""
+    """Переключение витрин на «Отбор» (#134): решения проверки на реальных данных в сигналы, принятые идут дальше по
+    конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём; --json — то же с
+    номерами статей (поимённый список для дампа и согласования). --apply только при включённом флаге, когда задачи
+    проверки дошли и у всех статей окна, решённых гейтом, есть решение проверки."""
     from oiltech_digest import otbor, otbor_shadow
     from oiltech_digest.otbor_pack_format import load_dictionaries as load_otbor_dictionaries
 
-    triggers = tuple(value.strip() for value in args.triggers.split(",") if value.strip())
     try:
-        result = otbor_shadow.switch(date.fromisoformat(args.since), triggers=triggers, apply=args.apply)
+        result = otbor_shadow.switch(date.fromisoformat(args.since), apply=args.apply)
     except otbor_shadow.SwitchError as exc:
         raise SystemExit(f"otbor-switch: {exc}") from exc
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
 
     def price(value):
         return f"около {_usd(value)}" if value is not None else "цены на этой базе нет"
 
-    print(f"otbor-switch: решения проверки с {result['since']} (пометки: {', '.join(result['triggers'])}): перенести "
-          f"{result['transfer']}: в бизнес-ленту {result['business']}, на радар {result['technology']}, «Другое» "
-          f"{result['other']}, отклонено {result['rejected']}")
+    ids = result["ids"]
+    print(f"otbor-switch: решения проверки с {result['since']}: перенести {result['transfer']}: в бизнес-ленту "
+          f"{len(ids['business'])}, на радар {len(ids['technology'])}, «Другое» {len(ids['other'])}, отклонено "
+          f"{len(ids['rejected'])}")
     if result["versions"]:
         print("  инструкция / справочники решений: "
               + "; ".join(f"{key}: {count}" for key, count in result["versions"].items())
               + f" (сейчас {otbor.PROMPT_VERSION} / {load_otbor_dictionaries().get('version')})")
-    print(f"  пропущено: сбой проверки {result['failed']}, решение человека, закрытый месяц или иное после проверки "
-          f"{result['not_eligible']}")
+    print(f"  пропущено: сбой проверки {len(result['failed'])}, решение человека, закрытый месяц или иное после "
+          f"проверки {len(result['not_eligible'])}")
     print(f"  статей окна, решённых гейтом, без решения проверки {len(result['missing'])}"
-          + (": перенос откажет, сначала otbor-shadow --apply" if result["missing"] else ""))
+          + (": перенос откажет, сначала otbor-shadow --apply" if result["missing"] else "")
+          + (f"; в идущих задачах проверки {result['pending']}" if result["pending"] else ""))
     print(f"  дальше конвейер: карточка заново {result['cards']} ({price(result['card_cost_usd'])}), баллы второго "
           f"вызова {result['scores']} ({price(result['scores_cost_usd'])}), суть и перевод ленты принятым без сути "
           f"{result['feed_stages']}")
     if not result["applied"]:
-        print("  сухой прогон: ничего не перенесено (перенести: --apply)")
+        print("  сухой прогон: ничего не перенесено (перенести: --apply; номера статей: --json)")
         return
-    print(f"  перенесено {result['switched']}; карточка заново поставлена {result['card_signals']} сигналам, "
-          f"задач {result['card_jobs']}")
+    print(f"  перенесено {len(result['switched'])}, не подошло в момент переноса {len(result['skipped'])}; задач "
+          f"«Карточки» заново {result['card_jobs']}")
 
 
 def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
@@ -3981,10 +3986,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_otbor_switch.add_argument("--since", type=_iso_date, required=True,
                                 help="начало окна ГГГГ-ММ-ДД по дате сбора статьи (как у проверки)")
-    p_otbor_switch.add_argument("--triggers", default="shadow",
-                                help="пометки запусков проверки через запятую; по умолчанию только shadow (#134)")
     p_otbor_switch.add_argument("--apply", action="store_true",
                                 help="перенести (только при включённом флаге); без флага ничего не пишет")
+    p_otbor_switch.add_argument("--json", action="store_true", help="всё с номерами статей, JSON")
     p_otbor_switch.set_defaults(func=cmd_otbor_switch)
 
     p_card_history = sub.add_parser(

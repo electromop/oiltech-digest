@@ -259,7 +259,7 @@ def test_card_without_a_link_date_is_dated_by_its_moscow_arrival_day(issue):
 
 def test_body_repair_does_not_recount_ai_for_articles_of_a_closed_month(issue, monkeypatch, capsys):
     """repair-article-bodies --apply меняет тела статей и по умолчанию ставит пересчёт ИИ заменённых:
-    суть, релевантность, тег и балл заново. У статьи закрытого месяца это переписало бы закрытый
+    суть, тег и балл заново (с #134 без гейта). У статьи закрытого месяца это переписало бы закрытый
     выпуск. Тело меняется (выпуск его не показывает), а пересчёт — только в окне ленты, как у
     пересчёта балла (rescore_selection): архив — только просмотр. Кого пропустили — в отчёте."""
     from oiltech_digest import cli, network_policy
