@@ -375,10 +375,44 @@ def test_client_reads_object_despite_broken_wrapper(monkeypatch, text, expected)
     assert client.complete_json("i", "u", SCHEMA, model="gpt-6-luna", reasoning_effort="none").data == expected
 
 
-@pytest.mark.parametrize("text", ['{"same_event": true, "reason": "обор', "не JSON", "[1, 2]"])
+def test_client_reads_object_before_cut_repeat(monkeypatch):
+    """Форма из переигровки: целый объект, мусор и оборванный повтор — берётся целый."""
+    text = '{"same_event": true, "reason": "одно"}\n\nОтвет:\n{"same_event": tr'
+    monkeypatch.setattr(openai_client.requests, "post", _Post(text))
+    client = OpenAIResponsesClient(api_key="k", model="gpt-6-luna")
+
+    assert client.complete_json("i", "u", SCHEMA, model="gpt-6-luna", reasoning_effort="none").data == {
+        "same_event": True, "reason": "одно"}
+
+
+@pytest.mark.parametrize("text", ['{"same_event": true, "reason": "обор', "не JSON", "[1, 2]",
+                                  # Черновик и итог: какой из них ответ, неизвестно.
+                                  '{"same_event": true, "reason": "черновик"}\n{"same_event": false, "reason": "итог"}'])
 def test_client_still_fails_on_cut_or_foreign_output(monkeypatch, text):
     monkeypatch.setattr(openai_client.requests, "post", _Post(text))
     client = OpenAIResponsesClient(api_key="k", model="gpt-6-luna")
 
     with pytest.raises(openai_client.AIClientError, match="non-JSON"):
         client.complete_json("i", "u", SCHEMA, model="gpt-6-luna", reasoning_effort="none")
+
+
+def test_tag_rules_name_tags_from_the_list():
+    """Правило темы рынка называет тег из списка (переигровка 03.11: общая фраза «если такой тег есть» не сработала у
+    gpt-6-luna); нет тега в списке — нет правила."""
+    tags = [{"id": 31, "name": "Рынок, бизнес-модели и M&A"}, {"id": 32, "name": pipeline.UNCLASSIFIED_TAG_NAME},
+            {"id": 20, "name": "Бурение"}]
+
+    rules = pipeline.tag_rules(tags)
+
+    assert rules[0].endswith("— тег «Рынок, бизнес-модели и M&A».")
+    assert rules[1] == f"«{pipeline.UNCLASSIFIED_TAG_NAME}» — только когда не подходит ни один тег."
+    assert pipeline.tag_rules([{"id": 20, "name": "Бурение"}]) == []
+
+    client = _RecordingClient()
+    prompts: list[str] = []
+    original = client.complete_json
+    client.complete_json = lambda instructions, user_input, *args, **kwargs: (prompts.append(user_input),
+                                                                              original(instructions, user_input, *args,
+                                                                                       **kwargs))[1]
+    pipeline.tag_article(ARTICLE, tags, client)
+    assert prompts[0].endswith("rules:\n- " + "\n- ".join(rules))

@@ -91,7 +91,7 @@ class OpenAIResponsesClient:
 
         raw = response.json()
         text = _extract_output_text(raw)
-        data = _leading_json_object(text)
+        data = _single_json_object(text)
         if data is None:
             raise AIClientError(f"OpenAI returned non-JSON output: {text[:500]}")
 
@@ -162,19 +162,30 @@ class OpenAIResponsesClient:
         )
 
 
-def _leading_json_object(text: str) -> dict[str, Any] | None:
-    """Объект ответа при строгой схеме. Лёгкие модели изредка портят обёртку: строка перед объектом или хвост после
-    него (переигровка «Дедупа» 03.11: у gpt-6-luna без рассуждения 5 ответов из 329 — «[JSON не возвращать…]{…}»,
-    «{…}即»), а сам объект цел. Берём первый объект; оборванный не читается и остаётся сбоем."""
+def _single_json_object(text: str) -> dict[str, Any] | None:
+    """Единственный целый объект ответа при строгой схеме. Лёгкие модели изредка портят обёртку: строка перед объектом,
+    мусор или оборванный повтор после него (переигровка «Дедупа» 03.11: у gpt-6-luna без рассуждения 5 ответов из 329 —
+    «[JSON не возвращать…]{…}», «{…}即»), а сам объект цел — его и берём. Два целых объекта (черновик и итог) — сбой:
+    какой из них ответ, не знаем. Оборванный объект — тоже сбой. В отличие от _research_payload (несколько сообщений
+    поиска, берётся то, где больше событий) здесь ответ один."""
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
         start = text.find("{")
         if start == -1:
             return None
         try:
-            value, _ = json.JSONDecoder().raw_decode(text, start)
+            value, end = decoder.raw_decode(text, start)
         except json.JSONDecodeError:
+            return None
+        rest = text.find("{", end)
+        while rest != -1:
+            try:
+                decoder.raw_decode(text, rest)
+            except json.JSONDecodeError:
+                rest = text.find("{", rest + 1)
+                continue
             return None
     return value if isinstance(value, dict) else None
 
