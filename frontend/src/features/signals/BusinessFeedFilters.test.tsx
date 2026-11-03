@@ -251,8 +251,16 @@ describe("бизнес-лента: фильтры и «всё про компа�
     expect(feedback).toHaveValue("");
 
     fireEvent.change(feedback, { target: { value: "without" } });
-    await waitFor(() => expect(lastListQuery()).toMatchObject({ feedback: "without" }));
+    fireEvent.change(screen.getByLabelText("от"), { target: { value: "2026-09-01" } });
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ feedback: "without", since: "2026-09-01" }));
     expect(screen.getByRole("button", { name: "Снять: Нет ОС" })).toBeInTheDocument();
+    // «Всё про компанию» снимает и новые фильтры, как остальные.
+    fireEvent.click(within(await cardOf("SLB получила контракт Saudi Aramco на бурение")).getAllByRole("button", { name: "SLB" })[0]);
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ company: "SLB" }));
+    expect([lastListQuery().feedback, lastListQuery().since]).toEqual([undefined, undefined]);
+
+    fireEvent.change(feedback, { target: { value: "with" } });
+    await waitFor(() => expect(lastListQuery()).toMatchObject({ feedback: "with" }));
     fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
 
     await waitFor(() => expect(lastListQuery().feedback).toBeUndefined());

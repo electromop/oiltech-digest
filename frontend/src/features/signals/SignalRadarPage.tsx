@@ -636,7 +636,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
           item.id === signal.id
             ? {
                 ...item,
-                feedback_count: (item.feedback_count || 0) + 1,
+                // Счётчик считает блоки ОС, как сервер (решение владельца 03.11): запись без блока его не меняет.
+                feedback_count: result.block ? (item.feedback_count || 0) + 1 : item.feedback_count,
                 feedback_blocks: result.block ? [...(item.feedback_blocks || []), result.block] : item.feedback_blocks,
               }
             : item,
@@ -740,7 +741,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
     ...(cardFilters.company.trim()
       ? [{ key: "company", label: `Компания: ${cardFilters.company.trim()}`, clear: () => updateCardFilters({ company: "" }) }]
       : []),
-    // Период — один фильтр: один чип снимает обе границы.
+    // Период как один фильтр: один чип снимает обе границы.
     ...(cardFilters.arrivalFrom || cardFilters.arrivalTo
       ? [{
           key: "arrival", label: `${ARRIVAL_FILTER_LABEL}: ${arrivalPeriod(cardFilters)}`,

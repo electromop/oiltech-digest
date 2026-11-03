@@ -198,9 +198,19 @@ def test_screen_gets_the_filter_values_from_the_dictionaries(user):
     assert "SLB" in payload["companies"] and "Schlumberger" not in payload["companies"]
 
 
+def _statuses(user, **params):
+    """Коды ответа списка и сводки витрины на одни и те же параметры."""
+    api.app.dependency_overrides[api.require_user] = lambda: user
+    try:
+        client = TestClient(api.app)
+        return [client.get(path, params=params).status_code for path in ("/api/signals", "/api/signals/summary")]
+    finally:
+        api.app.dependency_overrides.pop(api.require_user, None)
+
+
 def test_arrival_filter_takes_the_moscow_day_the_article_was_collected_in_the_list_and_the_summary(user):
-    # Задача владельца 03.11: дата поступления — «Поступил» на карточке; у сигнала ленты это день сбора статьи по
-    # Москве. 30.09 в 22:30 UTC по Москве уже 01.10.
+    # Задача владельца 03.11: дата поступления та же, что «Поступил» на карточке; у сигнала ленты это день сбора статьи
+    # по Москве. 30.09 в 22:30 UTC по Москве уже 01.10.
     feed_signal("Поздний сбор", "Текст.", collected=datetime(2026, 9, 30, 22, 30, tzinfo=timezone.utc))
     feed_signal("Дневной сбор", "Текст.", collected=datetime(2026, 9, 30, 9, 0, tzinfo=timezone.utc))
 
@@ -209,20 +219,14 @@ def test_arrival_filter_takes_the_moscow_day_the_article_was_collected_in_the_li
     assert _titles(user, since="2026-09-30", until="2026-10-01") == ["Дневной сбор", "Поздний сбор"]
     summary = api_get("/api/signals/summary", user, showcase="business", since="2026-10-01", until="2026-10-01")
     assert (summary["total"], summary["matching"]) == (2, 1)
-    # «От» позже «до» — пустой период, а не ошибка; не дата — 422, как чужое значение у остальных фильтров.
+    # «От» позже «до» даёт пустой период, а не ошибку; не дата даёт 422, как чужое значение у остальных фильтров.
     assert _titles(user, since="2026-10-05", until="2026-10-01") == []
-    api.app.dependency_overrides[api.require_user] = lambda: user
-    try:
-        client = TestClient(api.app)
-        assert [client.get(path, params={"showcase": "business", "since": "01.10.2026"}).status_code
-                for path in ("/api/signals", "/api/signals/summary")] == [422, 422]
-    finally:
-        api.app.dependency_overrides.pop(api.require_user, None)
+    assert _statuses(user, showcase="business", since="01.10.2026") == [422, 422]
 
 
 def test_feedback_filter_takes_the_records_of_the_feedback_block_as_the_card_lists_them(user):
-    # Решение владельца 03.11: «есть ОС» — любая запись блока «Обратная связь» карточки (оценка, причина, комментарий),
-    # её карточка показывает списком «Оценки людей». «В дайджест» делается не в этом блоке и ОС не считается.
+    # Решение владельца 03.11: «есть ОС» значит любая запись блока «Обратная связь» карточки (оценка, причина,
+    # комментарий), её карточка показывает списком «Оценки людей». «В дайджест» делается не в этом блоке, это не ОС.
     commented = _feed(user, "Контракт с отзывом")
     _feed(user, "Контракт без отзыва")
     # «В дайджест» ставят только в открытом месяце выпуска: статья этого месяца.
@@ -247,14 +251,34 @@ def test_feedback_filter_takes_the_records_of_the_feedback_block_as_the_card_lis
             assert [bool(card["feedback_blocks"]) for card in cards] == [listed] * len(cards)
     summary = api_get("/api/signals/summary", user, showcase="business", feedback="without")
     assert (summary["total"], summary["matching"]) == (3, 2)
-    # Чужое значение — 422, а не выборка без фильтра.
-    api.app.dependency_overrides[api.require_user] = lambda: user
-    try:
-        client = TestClient(api.app)
-        assert [client.get(path, params={"feedback": "yes"}).status_code
-                for path in ("/api/signals", "/api/signals/summary")] == [422, 422]
-    finally:
-        api.app.dependency_overrides.pop(api.require_user, None)
+    # Чужое значение даёт 422, а не выборку без фильтра.
+    assert _statuses(user, feedback="yes") == [422, 422]
+
+
+def test_feedback_tile_and_card_counter_count_the_same_records_as_the_filter(user):
+    # Решение владельца 03.11: плашка «С обратной связью» и счётчик «Обратная связь: N» считают то же, что фильтр
+    # «Наличие ОС»: записи блока «Обратная связь», а не нажатия «В дайджест».
+    robot = radar_finding("robot", "Робот-бурильщик", "Equinor испытала робота-бурильщика.")
+    sensor = radar_finding("sensor", "Датчик утечек", "Датчик утечек на трубопроводе.")
+    contract = _feed(user, "Контракт ленты")
+    _edit("POST", "/api/signals/feedback", user, signal_id=robot, verdict="strong_signal")
+    _edit("POST", "/api/signals/feedback", user, source_url="https://radar.example/robot", comment="Сильный источник")
+    _edit("PATCH", f"/api/signals/{sensor}", user, selected_for_digest=True)
+    # Отзыв о сигнале ленты с адресом ссылки карточки радара: карточке другого происхождения он не засчитывается.
+    with repository.get_connection() as conn:
+        conn.execute("INSERT INTO signal_feedback_events (signal_id, source_url, event_type, comment) "
+                     "VALUES (%s, 'https://radar.example/sensor', 'comment_added', 'о статье ленты')", (contract,))
+        conn.commit()
+
+    summary = api_get("/api/signals/summary", user)
+    assert (summary["with_feedback"], summary["in_digest"]) == (1, 1)
+    assert api_get("/api/signals/summary", user, showcase="business")["with_feedback"] == 1
+    assert _titles(user, "technology", tile="with_feedback") == _titles(user, "technology", feedback="with") == [
+        "Робот-бурильщик"]
+    cards = {card["title"]: card for card in api_get("/api/signals", user)}
+    assert [(cards[title]["feedback_count"], len(cards[title]["feedback_blocks"]))
+            for title in ("Робот-бурильщик", "Датчик утечек")] == [(2, 2), (0, 0)]
+    assert business(user)["Контракт ленты"]["feedback_count"] == 1
 
 
 def test_value_outside_the_dictionaries_is_refused_not_silently_empty(user):

@@ -1896,8 +1896,8 @@ def _radar_screen_filters(
     # Плашка над списком (решение владельца 23.10): «новые за 7 дней», «в дайджесте», «с обратной связью» —
     # список тех же карточек, что посчитала плашка.
     tile: str | None = Query(None, pattern="^(new_7d|in_digest|with_feedback)$"),
-    # Наличие ОС (решение владельца 03.11): with — у карточки есть запись блока «Обратная связь» (её «Оценки людей»),
-    # without — нет; «В дайджест» не ОС.
+    # Наличие ОС (решение владельца 03.11): with значит у карточки есть запись блока «Обратная связь» (её «Оценки
+    # людей»), without значит нет; «В дайджест» не ОС.
     feedback: str | None = Query(None, pattern="^(with|without)$"),
 ) -> dict[str, Any]:
     if hidden and showcase != "technology":
@@ -2205,13 +2205,19 @@ def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[s
     return {"recategorized": category} if category else {}
 
 
-def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
+def _feedback_block(event_id: Any, payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any] | None:
     """Сохранённый блок ОС (#130) — как его показывает список на карточке (repository._FEEDBACK_BLOCKS_SQL):
-    экран добавляет его, не перечитывая витрину. Оценка — тем же словарём, каким её сохранили оба пути."""
+    экран добавляет его, не перечитывая витрину. Оценка — тем же словарём, каким её сохранили оба пути. Запись без
+    оценки, причины и комментария (только правка заголовка, сути или «дубль») не блок: список и счётчик
+    «Обратная связь: N» её не берут (решение владельца 03.11), поэтому None."""
     from oiltech_digest.signal_feedback import _normalize_verdict
 
-    return {"id": event_id, "author": user.get("email"), "verdict": _normalize_verdict(payload.verdict),
-            "reason": (payload.reason or "").strip() or None, "comment": payload.comment.strip() or None,
+    verdict = _normalize_verdict(payload.verdict)
+    reason = (payload.reason or "").strip() or None
+    comment = payload.comment.strip() or None
+    if not (verdict or reason or comment):
+        return None
+    return {"id": event_id, "author": user.get("email"), "verdict": verdict, "reason": reason, "comment": comment,
             "created_at": datetime.now(timezone.utc).isoformat()}
 
 
