@@ -1226,3 +1226,24 @@ CREATE INDEX IF NOT EXISTS idx_ai_runs_document_id ON ai_processing_runs(documen
 ALTER TABLE ai_processing_runs ADD COLUMN IF NOT EXISTS signal_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_runs_job_signal_stage
   ON ai_processing_runs(job_id, signal_id, stage) WHERE signal_id IS NOT NULL;
+
+-- Проверка «Отбора» на реальных данных (#134, спека #128): статьи ленты последних недель, решённые гейтом, проходят
+-- «Отбор», решения пишутся сюда, рядом, а не в сигнал: витрины, лента и шаги дальше «Отбора» их не видят. Строка на
+-- статью. Переключение (otbor-switch) переносит решение в сигнал статьи и ставит switched_at. trigger: пометка
+-- запуска (shadow).
+CREATE TABLE IF NOT EXISTS otbor_shadow_decisions (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  article_id     BIGINT NOT NULL UNIQUE REFERENCES articles(id) ON DELETE CASCADE,
+  trigger        TEXT NOT NULL,
+  decision       TEXT,                 -- accept / reject; NULL: решения нет, сбой
+  values_json    JSONB,                -- проверенные поля «Отбора», как их пишет сигнал (otbor_answer.outcome)
+  disputed       TEXT,                 -- пометка «спорное»: почему
+  failure        TEXT,                 -- technical / invalid_answer, пока решения нет
+  failure_reason TEXT,
+  decision_log   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recipe         JSONB NOT NULL,       -- инструкция, справочники, модель, задача, время, пометка запуска
+  gate_relevant  BOOLEAN,              -- решение гейта статьи на момент записи
+  switched_at    TIMESTAMPTZ,          -- перенесено в сигнал
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
