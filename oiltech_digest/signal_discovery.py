@@ -1399,7 +1399,7 @@ def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any
     if config.dry_run:
         return None
     if config.trial:
-        return _store_trial_finding(candidate)
+        return _store_trial_finding(candidate, run=config.background_job_id)
     signal = candidate["signal"]
     cluster = _drop_collected_links(candidate)
     if not cluster:
@@ -1427,12 +1427,13 @@ def _store_otbor_finding(config: SignalDiscoveryConfig, candidate: dict[str, Any
 TRIAL_KEY_PREFIX = "trial:"
 
 
-def _store_trial_finding(candidate: dict[str, Any]) -> int | None:
+def _store_trial_finding(candidate: dict[str, Any], *, run: int | None) -> int | None:
     """Находка пробного прогона широкого поиска (#138): сигнал с меткой пути пробного прогона и своим ключом — его не
     видят витрины, разделы отклонённого, шаги конвейера и следующий прогон радара (снимок дедупа его не берёт).
     Существующие сигналы прогон не меняет: ссылка, которая уже есть у сигнала радара, ленты или материала, к находке
     не переходит; все ссылки уже есть — находка найдена снова (found_again_id — у кого ссылка), без отметки. Ссылку
-    находки прошлого пробного прогона новая забирает себе: каждый пробный прогон меряется целиком."""
+    находки прошлого пробного прогона новая забирает себе, а ключ у находки свой у каждого прогона (run — задача
+    прогона): каждый пробный прогон меряется целиком, и его решения «Отбора» не смешиваются с прошлыми."""
     signal = candidate["signal"]
     own, held = _trial_own_links(_drop_collected_links(candidate))
     if not own:
@@ -1441,7 +1442,7 @@ def _store_trial_finding(candidate: dict[str, Any]) -> int | None:
             signal["found_again_id"] = int(next(iter(held.values()))["id"])
         return None
     signal_id, _ = repository.insert_otbor_finding(
-        {**signal, "signal_key": TRIAL_KEY_PREFIX + signal["signal_key"], "decision_log": _otbor_finding_log(own)},
+        {**signal, "signal_key": f"{TRIAL_KEY_PREFIX}{run}:{signal['signal_key']}", "decision_log": _otbor_finding_log(own)},
         selector=repository.SIGNAL_SELECTOR_TRIAL)
     for item in own:
         repository.upsert_signal_evidence(signal_id, item)

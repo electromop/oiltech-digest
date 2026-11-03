@@ -31,7 +31,7 @@ def evidence_owners(urls: Sequence[str]) -> dict[str, dict[str, Any]]:
 
 
 def findings(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
-    """Находки пробного прогона для отчёта: заголовок, тема, «Ход решения», ссылки с заголовками."""
+    """Находки пробного прогона для отчёта: заголовок, тема, ссылки."""
     ids = sorted({int(value) for value in signal_ids})
     if not ids:
         return []
@@ -39,7 +39,7 @@ def findings(signal_ids: Sequence[int]) -> list[dict[str, Any]]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            SELECT s.id, s.title, s.theme, s.decision_log,
+            SELECT s.id, s.title, s.theme,
                    ARRAY(SELECT e.source_url FROM signal_evidence e WHERE e.signal_id = s.id ORDER BY e.id) AS urls
             FROM signals s
             WHERE s.id = ANY(%s) AND s.selector = %s

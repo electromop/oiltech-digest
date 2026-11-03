@@ -8,6 +8,7 @@
 from datetime import date
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from oiltech_digest import cli, config, otbor, signal_discovery, signal_research
@@ -46,7 +47,7 @@ def signals_snapshot():
             " FROM signals s ORDER BY s.id").fetchall()
 
 
-def run_trial(monkeypatch, events, pages, answers, *args, cited=None, same_event=False, on_fetch=None):
+def run_trial(monkeypatch, events, pages, answers, *args, cited=None, same_event=False, on_fetch=None, otbor_runs=True):
     """radar-search-trial --run за октябрь → воркер NL полосы агентов с подставными поиском и страницами → ядро ставит
     «Отбор» находок → воркер с подставной моделью «Отбора» → ядро. same_event — ответ судьи «Дедупа», on_fetch — что
     происходит, пока воркер докачивает страницу. Номер задачи прогона, поиск и модель «Отбора»."""
@@ -65,7 +66,8 @@ def run_trial(monkeypatch, events, pages, answers, *args, cited=None, same_event
     cli.main(["radar-search-trial", *PERIOD, "--otbor-model", "gpt-6-sol", "--run", *args])
     job_id = radar_job_id()
     run_worker("external-agents")
-    run_worker("external-ai")
+    if otbor_runs:
+        run_worker("external-ai")
     return job_id, search, model
 
 
@@ -268,3 +270,24 @@ def test_before_deploy_sql_lets_the_shadow_hold_findings_and_repeats_safely(isol
             " AND table_name = 'otbor_shadow_decisions' AND column_name IN ('article_id', 'signal_id')").fetchall()
         indexes = {row[0] for row in conn.execute("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")}
     assert sorted(nullable) == [("article_id", "YES"), ("signal_id", "YES")] and "idx_otbor_shadow_signal" in indexes
+    # У строки одно из двух: статья или находка.
+    with repository.get_connection() as conn:
+        signal_id = conn.execute("INSERT INTO signals (signal_key, title, theme) VALUES ('trial:1:k', 't', 'тема')"
+                                 " RETURNING id").fetchone()[0]
+        conn.execute("INSERT INTO otbor_shadow_decisions (signal_id, trigger, recipe) VALUES (%s, 'search_trial', '{}')",
+                     (signal_id,))
+        conn.commit()
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute("INSERT INTO otbor_shadow_decisions (trigger, recipe) VALUES ('search_trial', '{}')")
+
+
+def test_report_counts_findings_otbor_has_not_decided_yet(user, contour, monkeypatch, capsys):
+    tag(DRILLING)
+    # Задачи «Отбора» поставлены, но ещё не прошли: находки ждут решения, а не выпадают из отчёта.
+    job_id, _, _ = run_trial(monkeypatch, [event(DEAL, DEAL_URL), event(TECH, TECH_URL)],
+                             {DEAL_URL: page(DEAL), TECH_URL: page(TECH)}, {}, otbor_runs=False)
+    capsys.readouterr()
+
+    cli.main(["radar-search-trial", "--report", str(job_id)])
+
+    assert "«Отбор»: решил 0, принял 0 (0%), сбоев 0, ждут решения 2, спорных 0" in capsys.readouterr().out

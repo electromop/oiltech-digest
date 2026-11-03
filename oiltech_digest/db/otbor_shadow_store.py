@@ -23,7 +23,7 @@ from psycopg.types.json import Json
 from oiltech_digest import feed_window
 from oiltech_digest.db import connection, feed_signals, marks
 from oiltech_digest.db.otbor_store import DECIDED, FAILURE_TECHNICAL, KIND, _signal_for_update, _write_decision
-from oiltech_digest.db.repository import _RADAR_VISIBLE_SQL
+from oiltech_digest.db.repository import _RADAR_VISIBLE_SQL, SIGNAL_SELECTOR_TRIAL
 from oiltech_digest.db.signal_card_store import KIND as CARD_KIND
 
 # Пометка запуска проверки #134.
@@ -150,16 +150,19 @@ def write(article_id: int, *, values: dict[str, Any] | None, disputed: str | Non
     return row is not None
 
 
-# Пометка запуска у строк находок пробного прогона широкого поиска (#138).
+# Пометка запуска и стадия расхода у строк находок пробного прогона широкого поиска (#138): оплата прогона видна
+# отдельно от проверки #134.
 SEARCH_TRIAL_TRIGGER = "search_trial"
+SEARCH_TRIAL_STAGE = "otbor_search_trial"
 
 
 def write_signal(signal_id: int, *, values: dict[str, Any] | None, disputed: str | None, failure: str | None,
                  failure_reason: str | None, log: list[dict[str, str]], recipe: dict[str, Any]) -> bool:
     """Итог «Отбора» по находке пробного прогона широкого поиска (#138): решение или сбой — в строку находки, по тем же
-    правилам повтора, что у статьи. False — находки нет."""
+    правилам повтора, что у статьи. Только находка пробного прогона (signals.selector): False — не она или её нет."""
     with connection.get_connection() as conn:
-        if conn.execute("SELECT 1 FROM signals WHERE id = %s", (int(signal_id),)).fetchone() is None:
+        if conn.execute("SELECT 1 FROM signals WHERE id = %s AND selector = %s",
+                        (int(signal_id), SIGNAL_SELECTOR_TRIAL)).fetchone() is None:
             return False
         row = conn.execute(
             f"""

@@ -194,7 +194,7 @@ def report(job_id: int, *, reference: list[dict[str, Any]] | None = None) -> dic
         "otbor": {
             "decided": len(decided), "accepted": len(accepted), "accepted_share": _share(len(accepted), len(decided)),
             "failed": sum(1 for verdict in verdicts.values() if verdict and verdict.get("failure")),
-            "waiting": sum(1 for verdict in verdicts.values() if not verdict),
+            "waiting": len(set(new_ids) - set(verdicts)),
             "disputed": sum(1 for verdict in decided if verdict.get("disputed")),
             "by_category": _count(verdict.get("category") or "без категории" for verdict in accepted),
             "reject_reasons": _count(verdict.get("reject_reason") or "без причины" for verdict in decided

@@ -1,7 +1,8 @@
 -- Пробный прогон широкого поиска (#138): решения «Отбора» по находкам — в таблице проверки #134
 -- (otbor_shadow_decisions), ДО выката кода, который их туда пишет. У строки статья или находка (signal_id).
 --
--- Только добавление, повторный прогон безопасен; строк таблица держит немного, замок на миг.
+-- Только добавление, повторный прогон безопасен; строк таблица держит немного. Внешний ключ на signals берёт короткий
+-- замок SHARE ROW EXCLUSIVE на signals (lock_timeout 5 с): не запускать во время otbor-switch --apply.
 --
 --   ssh <РФ-ядро> 'docker exec -i oiltech_pg psql -U oiltech -d oiltech_digest -X -v ON_ERROR_STOP=1' \
 --     < scripts/signals/search-trial-shadow-before-deploy.sql
