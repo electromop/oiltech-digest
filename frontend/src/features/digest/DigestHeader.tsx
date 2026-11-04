@@ -7,11 +7,13 @@ type Props = {
   activeMonth: string;
   issueCount: number;
   archive: boolean;
+  // Пока открыт и прошлый месяц: сколько уже отмечено на следующий выпуск и с какого дня он соберётся (LOW-5).
+  nextIssue?: { month: string; materials: number; opens_on: string } | null;
 };
 
 // Шапка дайджеста: какой выпуск открыт и сколько в нём материалов. Выбора выпуска здесь нет (решение владельца 24.10):
 // собирается текущий, прошлые — во вкладке «Архив выпусков» и только на просмотр.
-export function DigestHeader({ activeMonth, issueCount, archive }: Props) {
+export function DigestHeader({ activeMonth, issueCount, archive, nextIssue }: Props) {
   return (
     <header className="screenHeader digestHeader">
       <div>
@@ -20,6 +22,15 @@ export function DigestHeader({ activeMonth, issueCount, archive }: Props) {
           {archive ? "Прошлый выпуск" : "Выпуск"} за {monthLabel(activeMonth)}: {issueCount} {materialsWord(issueCount)} в выпуске.
           {archive ? " Только просмотр и выгрузка." : " Предпросмотр PDF показывает выпуск таким, каким он уйдёт."}
         </p>
+        {nextIssue && !archive ? (
+          <p className="metaText" role="status">
+            На следующий выпуск, за {monthLabel(nextIssue.month)},{" "}
+            {nextIssue.materials
+              ? `уже ${nextIssue.materials === 1 ? "отмечен" : "отмечено"} ${nextIssue.materials} ${materialsWord(nextIssue.materials)}`
+              : "пока ничего не отмечено"}
+            : он откроется здесь {openDay(nextIssue.opens_on)}.
+          </p>
+        ) : null}
       </div>
     </header>
   );
@@ -77,6 +88,11 @@ export function DigestActions({ archive, busy, draftBusy, hasManualChanges, onSa
       </div>
     </div>
   );
+}
+
+function openDay(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
 }
 
 function materialsWord(count: number): string {

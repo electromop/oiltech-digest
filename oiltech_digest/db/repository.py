@@ -2050,17 +2050,31 @@ LEFT JOIN LATERAL (
 """
 
 
-def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = None) -> str:
+def _signal_corrections_lateral(alias: str, issue_window: FeedWindow | None = None, *,
+                                month_sql: str | None = None) -> str:
     """LEFT JOIN LATERAL corr: последние правки заголовка и сути у карточки `alias`.
 
     Экран радара — все правки. Выпуск (`issue_window` — окно ленты на сейчас) у карточки
     закрытого месяца берёт только правки, поданные до закрытия (решение владельца 30.09:
     «архив только на просмотр» — и текст закрытого выпуска). Отзыв после закрытия принимается
-    как раньше и виден на радаре — он нужен агенту для обучения, — но выпуск не меняет."""
+    как раньше и виден на радаре — он нужен агенту для обучения, — но выпуск не меняет.
+    `month_sql`: месяц выпуска материала, если он не месяц поступления карточки (у статьи ленты её месяц)."""
     until = ""
     if issue_window is not None:
-        until = " AND " + issue_window.before_close_sql(signal_month_sql(alias), "e.created_at")
+        until = " AND " + issue_window.before_close_sql(month_sql or signal_month_sql(alias), "e.created_at")
     return _SIGNAL_CORRECTIONS_LATERAL.format(alias=alias, until=until)
+
+
+def _article_corrections_lateral(issue_window: FeedWindow) -> str:
+    """LEFT JOIN LATERAL fs и corr: правки заголовка и сути статьи `a` в выпуске, у её сигнала ленты (#162, ADR 0006):
+    правка с экрана «Дайджест» ложится на сигнал, и выпуск показывает тот же текст, что бизнес-лента. Сигнал ленты у
+    статьи один (порядок как у issue_material_fields); закрытый выпуск берёт правки до закрытия месяца статьи."""
+    return (
+        "LEFT JOIN LATERAL (SELECT fs.id FROM signals fs WHERE fs.origin_article_id = a.id"
+        f" AND fs.origin = '{SIGNAL_ORIGIN_FEED}'"
+        " ORDER BY fs.merged_into_signal_id NULLS FIRST, fs.id LIMIT 1) fs ON TRUE"
+        + _signal_corrections_lateral("fs", issue_window, month_sql=period_month_sql("a"))
+    )
 
 
 def apply_signal_corrections(row: dict) -> dict:
@@ -2489,12 +2503,9 @@ def list_signals(*, maturity: str | None = None, theme: str | None = None, limit
                    {_RADAR_TOPIC_SQL} AS theme_is_topic,
                    {_radar_hidden_reason_sql() if showcase == "technology" else "NULL"} AS hidden_reason,
                    {section.short_reason if section is not None else "NULL"} AS section_reason,
-                   -- Месяц выпуска карточки (поступление на радар по Москве): по нему экран
-                   -- гасит «В дайджест» в закрытом месяце — тем же выражением, что у выпуска. У
-                   -- сигнала ленты — месяц его статьи: «в дайджест» у него — отметка статьи (#130).
-                   CASE WHEN s.origin = '{SIGNAL_ORIGIN_FEED}'
-                        THEN (SELECT {period_month_sql('da')} FROM articles da WHERE da.id = s.origin_article_id)
-                        ELSE {signal_month_sql('s')} END AS digest_month,
+                   -- Месяц выпуска карточки: по нему экран гасит «В дайджест» и правку материала в
+                   -- закрытом месяце тем же выражением, что у выпуска (signal_issue_month_sql).
+                   {signal_issue_month_sql('s')} AS digest_month,
                    {marks.signal_status_sql()} AS user_status,
                    {signal_digest_sql('s')} AS selected_for_digest,
                    sm.analyst_comment AS user_comment,
@@ -3167,6 +3178,33 @@ def get_signal_theme(signal_id: int) -> str | None:
     with get_connection() as conn:
         row = conn.execute("SELECT theme FROM signals WHERE id = %s", (signal_id,)).fetchone()
         return str(row[0]) if row and row[0] else None
+
+
+def signal_issue_month_sql(alias: str = "s") -> str:
+    """Месяц выпуска сигнала строкой «ГГГГ-ММ»: у сигнала ленты месяц его статьи («в дайджест» у него отметка статьи,
+    #130), у прочих месяц поступления по Москве (signal_month_sql), как у сборщика выпуска."""
+    return (f"CASE WHEN {alias}.origin = '{SIGNAL_ORIGIN_FEED}'"
+            f" THEN (SELECT {period_month_sql('da')} FROM articles da WHERE da.id = {alias}.origin_article_id)"
+            f" ELSE {signal_month_sql(alias)} END")
+
+
+def signal_issue_month(signal_id: int) -> str | None:
+    """Месяц выпуска сигнала (signal_issue_month_sql): по нему правка материала закрытого месяца получает отказ (#162).
+    Сигнала нет: KeyError; месяц не определить (у сигнала ленты нет статьи): None."""
+    with get_connection() as conn:
+        row = conn.execute(f"SELECT {signal_issue_month_sql('s')} FROM signals s WHERE s.id = %s",
+                           (int(signal_id),)).fetchone()
+    if row is None:
+        raise KeyError(signal_id)
+    return row[0]
+
+
+def signal_selected_for_digest(signal_id: int) -> bool:
+    """Отмечен ли сигнал «в дайджест» (signal_digest_sql: у сигнала ленты отметка его статьи): материал выпуска (#162)."""
+    with get_connection() as conn:
+        row = conn.execute(f"SELECT {signal_digest_sql('s')} FROM signals s WHERE s.id = %s",
+                           (int(signal_id),)).fetchone()
+    return bool(row and row[0])
 
 
 def feed_signal_article(signal_id: int) -> int | None:
@@ -5273,32 +5311,40 @@ def feed_archive_months(window: FeedWindow) -> list[dict]:
     В выпуске идут и карточки радара, выбранные «в дайджест» (ревью 24.10): «digest» считает их
     теми же условиями, что сборщик (_issue_signal_sql, signal_month_sql), а месяц только из
     карточек радара тоже есть в списке — иначе такой прошлый выпуск было бы не открыть.
+
+    «digest»: материалы выпуска, тот же состав, что у выгрузки (issue_composition_by_rule, LOW-4 ревью PR #155):
+    статьи черновика месяца, которые до сих пор отмечены, а нет таких, все отмеченные статьи месяца; статья, убранная
+    из черновика кнопкой «Из выпуска», в число не идёт.
     """
     month_expr = period_month_sql("a")
+    in_issue = _issue_article_sql(marks.article_marked_sql("a.id", "digest"))
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
             SELECT {month_expr} AS month,
                    COUNT(*) AS articles,
-                   COUNT(*) FILTER (WHERE am.status = 'digest') AS digest
+                   COUNT(*) FILTER (WHERE {in_issue}) AS marked,
+                   COUNT(*) FILTER (WHERE {in_issue} AND EXISTS (
+                     SELECT 1 FROM monthly_digests d JOIN monthly_digest_items i ON i.digest_id = d.id
+                     WHERE d.user_id IS NULL AND d.month = {month_expr} AND i.article_id = a.id)) AS in_draft
               FROM articles a
               JOIN sources s ON s.id = a.source_id
               LEFT JOIN article_cards c ON c.article_id = a.id
-              {marks.article_mark_join()}
              WHERE {visible_sql()}
                AND {month_expr} < %s
              GROUP BY 1
             """,
             (window.open_months[0],),
         )
-        months = {row["month"]: {"month": row["month"], "articles": int(row["articles"]), "digest": int(row["digest"])}
+        months = {row["month"]: {"month": row["month"], "articles": int(row["articles"]),
+                                 "digest": int(row["in_draft"] or row["marked"])}
                   for row in cur.fetchall()}
         cur.execute(
             f"""
             SELECT {signal_month_sql("sig")} AS month, COUNT(*) AS digest
               FROM signals sig
-             WHERE {_issue_signal_sql(marks.signal_marked_sql("sig.id", "digest"))}
+             WHERE {_issue_signal_member_sql(marks.signal_marked_sql("sig.id", "digest"))}
                AND {signal_month_sql("sig")} < %s
              GROUP BY 1
             """,
@@ -7488,6 +7534,12 @@ def _issue_signal_sql(selected_sql: str) -> str:
             f" AND ({radar_origin_sql('sig')} OR sig.origin = '{SIGNAL_ORIGIN_MATERIAL}')")
 
 
+def _issue_signal_member_sql(selected_sql: str) -> str:
+    """Карточка в составе выпуска без фильтров экрана: _issue_signal_sql и порог балла 0, как у сборщика с порогом 0.
+    Одно условие у состава (issue_composition_by_rule) и у числа архива (feed_archive_months, LOW-4 ревью PR #155)."""
+    return f"{_issue_signal_sql(selected_sql)} AND sig.score >= 0"
+
+
 def digest_candidates(month: str | None = None, limit: int = 20, min_score: float = 60,
                       max_score: float | None = None,
                       search: str | None = None, top_tag: str | None = None) -> list[dict]:
@@ -7528,13 +7580,16 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
               )
         """
         params["top_tag"] = top_tag
+    # Текст закрытого выпуска не меняется (решение владельца 30.09): правки после закрытия месяца в него не идут.
+    issue_window = feed_window.current()
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.published_at, a.language, a.image_url,
+            SELECT a.id, COALESCE(corr.corrected_title, c.title_ru, a.title) AS title, a.url, a.published_at,
+                   a.language, a.image_url,
                    s.name AS source_name,
-                   c.summary, TRUE AS selected_for_digest,
+                   COALESCE(corr.corrected_thesis, c.summary) AS summary, TRUE AS selected_for_digest,
                    sc.total_score, sc.score_label,
                    t.name AS tag_name, parent.name AS parent_tag_name
             FROM articles a
@@ -7544,6 +7599,7 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
+            {_article_corrections_lateral(issue_window)}
             WHERE {_issue_article_sql(marks.article_marked_sql('a.id', 'digest'))}
               AND COALESCE(sc.total_score, 0) >= %(min_score)s
               {max_score_clause}
@@ -7584,7 +7640,6 @@ def digest_candidates(month: str | None = None, limit: int = 20, min_score: floa
         # месяца правки коллег — только поданные до его закрытия, ссылка — лучшая из найденных
         # до закрытия (пока такие есть). Окно — то же, что у отказа отметке «в дайджест»
         # (api._guard_signal_digest_month).
-        issue_window = feed_window.current()
         link_before_close = issue_window.before_close_sql(signal_month_sql("sig"), "e.created_at")
         cur.execute(
             f"""
@@ -7736,10 +7791,10 @@ def digest_item_kinds(article_ids: Sequence[int], signal_ids: Sequence[int]) -> 
 
 _ISSUE_MATERIAL_COLUMNS = (
     "s.id AS signal_id, s.signal_category, s.theme, s.event_type, s.technology_maturity, s.event_date,"
-    " s.event_date_precision, s.oilfield_relevance, s.score, s.score_profile, s.score_items_json, s.criteria_snapshot"
+    " s.event_date_precision, s.oilfield_relevance, s.score, s.score_profile, s.score_items_json, s.criteria_snapshot,"
+    " s.issue_label, s.hypothesis, s.hypothesis_set_at, s.hypothesis_author,"
+    " s.card_set_by->>'hypothesis' AS hypothesis_set_by, s.issue_picture"
 )
-
-
 def issue_material_fields(article_ids: Sequence[int],
                           signal_ids: Sequence[int]) -> tuple[dict[int, dict], dict[int, dict]]:
     """Поля материала выпуска (#161, ADR 0006) с его сигнала: категория, тема, тип события и зрелость «Карточки», дата
@@ -7755,7 +7810,7 @@ def issue_material_fields(article_ids: Sequence[int],
                 f"""
                 SELECT DISTINCT ON (s.origin_article_id) s.origin_article_id, {_ISSUE_MATERIAL_COLUMNS}
                 FROM signals s
-                WHERE s.origin_article_id = ANY(%s)
+                WHERE s.origin_article_id = ANY(%s) AND s.origin = '{SIGNAL_ORIGIN_FEED}'
                 ORDER BY s.origin_article_id, s.merged_into_signal_id NULLS FIRST, s.id
                 """,
                 (list(article_ids),),
@@ -7791,9 +7846,10 @@ def digest_items_by_article_ids(article_ids: list[int], *, month: str | None = N
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.published_at, a.language, a.image_url,
+            SELECT a.id, COALESCE(corr.corrected_title, c.title_ru, a.title) AS title, a.url, a.published_at,
+                   a.language, a.image_url,
                    s.name AS source_name,
-                   c.summary,
+                   COALESCE(corr.corrected_thesis, c.summary) AS summary,
                    sc.total_score, sc.score_label,
                    t.name AS tag_name, parent.name AS parent_tag_name
             FROM articles a
@@ -7803,6 +7859,7 @@ def digest_items_by_article_ids(article_ids: list[int], *, month: str | None = N
             LEFT JOIN article_tags at ON at.article_id = a.id
             LEFT JOIN tags t ON t.id = at.tag_id
             LEFT JOIN tags parent ON parent.id = t.parent_id
+            {_article_corrections_lateral(feed_window.current())}
             WHERE a.id = ANY(%s)
               -- Членство и видимость — те же, что у сборщика (_issue_article_sql): выгрузка = то,
               -- что видно. Решение владельца 23.09 «одно правило везде»: статья, которую
@@ -7862,8 +7919,7 @@ def issue_composition_by_rule(conn, month: str, *, article_selected_sql: str, si
         f"""
         SELECT sig.id
         FROM signals sig
-        WHERE {_issue_signal_sql(signal_selected_sql)}
-          AND sig.score >= 0
+        WHERE {_issue_signal_member_sql(signal_selected_sql)}
           AND {signal_month_sql('sig')} = %s
         """,
         (month,),

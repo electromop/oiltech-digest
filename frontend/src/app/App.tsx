@@ -6,6 +6,7 @@ import { getDashboardStats } from "../api/stats";
 import type { Article, AuthResponse, DashboardStats, User } from "../api/types";
 import { ArticlesPage, DEFAULT_SIGNAL_ARTICLE_QUERY } from "../features/articles/ArticlesPage";
 import { BacklogPage } from "../features/backlog/BacklogPage";
+import { CompanyDescriptionPage } from "../features/companies/CompanyDescriptionPage";
 import { CompanyParentsPage } from "../features/companies/CompanyParentsPage";
 import { DigestPage } from "../features/digest/DigestPage";
 import { JobsPage } from "../features/jobs/JobsPage";
@@ -31,7 +32,7 @@ const TechnologiesPreview = lazy(() =>
 
 type ScreenId =
   | "articles" | "business-feed" | "signal-radar" | "digest" | "documents" | "colleague-materials" | "sources" | "source-candidates" | "source-agent" | "scoring" | "tags" | "users" | "jobs" | "maintenance"
-  | "company-parents" | "statistics" | "analytics-preview" | "tech-preview";
+  | "company-parents" | "company-description" | "statistics" | "analytics-preview" | "tech-preview";
 
 // Экраны только для администратора (настройка источников/скоринга/тегов, пользователи, операции).
 // Прототипы (*-preview) тоже admin-only: это статичные макеты с ВЫМЫШЛЕННЫМИ данными, их не должен
@@ -40,6 +41,8 @@ const ADMIN_SCREENS = new Set<ScreenId>([
   "sources", "source-candidates", "source-agent", "scoring", "tags", "users", "jobs", "maintenance",
   // Список «дочка → мать» правят, как теги, только админы (сервер — require_admin).
   "company-parents",
+  // Описание Компании для агента гипотезы (#162): права как у тегов (ADR 0004).
+  "company-description",
   // Статистика сводная (видно работу КАЖДОГО пользователя) — решение владельца:
   // раздел только для администраторов. Серверный гейт на /api/stats/monthly тоже
   // require_admin: фронтовый гейт без серверного — это дыра (аудит изоляции 24.07).
@@ -160,6 +163,15 @@ const screens: ScreenDef[] = [
     status: "Экран активен",
   },
   {
+    id: "company-description",
+    // #162: по этому тексту агент «Гипотеза для Компании» (#163) понимает, для кого пишет.
+    label: "Описание Компании",
+    eyebrow: "Компании",
+    title: "Описание Компании",
+    description: "Публичное описание Компании для агента гипотезы: текст, кто и когда правил.",
+    status: "Экран активен",
+  },
+  {
     id: "users",
     label: "Пользователи",
     eyebrow: "Доступ",
@@ -209,7 +221,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Настройки",
-    screens: ["sources", "scoring", "tags", "company-parents"],
+    screens: ["sources", "scoring", "tags", "company-parents", "company-description"],
   },
   {
     label: "Администрирование",
@@ -412,6 +424,10 @@ export function App() {
 
   if (activeScreen === "company-parents") {
     currentScreen = <CompanyParentsPage onUnauthorized={resetSession} showToast={showToast} />;
+  }
+
+  if (activeScreen === "company-description") {
+    currentScreen = <CompanyDescriptionPage onUnauthorized={resetSession} showToast={showToast} />;
   }
 
   if (activeScreen === "jobs") {
@@ -935,6 +951,16 @@ function ScreenIcon(props: { screenId: ScreenId }) {
       <svg {...common}>
         <path d="M3 12.5 6.2 8.5l2.2 2.2L13 5.5" />
         <path d="M10.5 5.5H13v2.5" />
+      </svg>
+    );
+  }
+
+  if (props.screenId === "company-description") {
+    // Лист с текстом.
+    return (
+      <svg {...common}>
+        <rect x="3.5" y="2.5" width="9" height="11" rx="1" />
+        <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
       </svg>
     );
   }

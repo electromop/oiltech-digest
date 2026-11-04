@@ -406,3 +406,26 @@ def test_material_chosen_for_the_digest_is_in_the_issue_without_a_dead_link(user
     # У материала без ссылки «Читать далее» в выпуске не рисуется: пустая ссылка вела бы никуда.
     html = render_digest_export_html(content)
     assert TITLE in html and 'href=""' not in html
+
+
+def test_edits_on_the_materials_screen_and_on_the_digest_screen_do_not_hide_each_other(
+        user, admin, contour, monkeypatch):
+    """Правка материала на экране «Материалы» и правка его сигнала на экране «Дайджест» (#162) не прячут друг друга: у
+    сигнала один текст, последний по времени, с какого бы экрана он ни пришёл."""
+    material = _send(_material(kind="link", url="https://news.example/tender"))
+    decide(monkeypatch, {TITLE: answer(category="business")})
+    summarize(monkeypatch, {})
+    signal_id = colleague_materials.get_material(material["id"])["signal_id"]
+    api_send("PATCH", f"/api/signals/{signal_id}", user, {"selected_for_digest": True})
+
+    def shown():
+        [card] = [card for card in showcase(user, "business").values() if card["id"] == signal_id]
+        return card["title_ru"], card["summary"]
+
+    api_send("PATCH", f"/api/signals/{signal_id}/issue-material", user,
+             {"title": "Заголовок с экрана «Дайджест»", "summary": "Суть с экрана «Дайджест»."})
+    assert shown() == ("Заголовок с экрана «Дайджест»", "Суть с экрана «Дайджест».")
+    api_send("PATCH", f"/api/materials/{material['id']}", admin, {"title": NEW_TITLE, "description": NEW_DESCRIPTION})
+    assert shown() == (NEW_TITLE, NEW_DESCRIPTION)
+    api_send("PATCH", f"/api/signals/{signal_id}/issue-material", user, {"title": "Снова с экрана «Дайджест»"})
+    assert shown() == ("Снова с экрана «Дайджест»", NEW_DESCRIPTION)

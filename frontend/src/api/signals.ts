@@ -1,5 +1,5 @@
 import { apiFetch } from "./client";
-import type { Signal, SignalFeedbackBlock, SignalFeedbackPayload, SignalPatch } from "./types";
+import type { IssueMaterialPatch, Signal, SignalFeedbackBlock, SignalFeedbackPayload, SignalPatch } from "./types";
 
 // Витрина (#95): технологический радар или бизнес-лента — сигналы категории «бизнес».
 export type SignalShowcase = "technology" | "business";
@@ -192,5 +192,14 @@ export function createSignalFeedback(payload: SignalFeedbackPayload) {
   }>("/api/signals/feedback", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+// Правка полей материала выпуска (#162, ADR 0006): с экрана «Дайджест» и с карточки сигнала. Поля живут на сигнале
+// материала (у статьи ленты на её сигнале ленты); в закрытом месяце сервер отвечает 409.
+export function editIssueMaterial(signalId: number, patch: IssueMaterialPatch) {
+  return apiFetch<{ ok: boolean; author?: string | null }>(`/api/signals/${signalId}/issue-material`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
   });
 }

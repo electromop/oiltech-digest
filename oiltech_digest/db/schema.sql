@@ -415,6 +415,27 @@ CREATE TABLE IF NOT EXISTS company_parents (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- «Главное в выпуске» (#162): строка на раздел месяца, пишет человек на экране «Дайджест»; строки нет: перечень рубрик
+-- раздела (digest_materials.cover). Не в черновике выпуска: он нужен только письму и DOCX (ADR 0006).
+CREATE TABLE IF NOT EXISTS issue_highlights (
+  month        TEXT NOT NULL,          -- ГГГГ-ММ
+  section      TEXT NOT NULL,          -- business / technology
+  text         TEXT NOT NULL,
+  updated_by   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (month, section)
+);
+
+-- Описание Компании для агента гипотезы (#162, #163): строка на сохранение, действует последняя; прежние видно на
+-- экране «Описание Компании» (кто и когда правил). Вносится только публичная версия, утверждённая заказчиком; текста нет ни в
+-- репозитории, ни в брендинге выпуска.
+CREATE TABLE IF NOT EXISTS company_descriptions (
+  id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  text         TEXT NOT NULL,
+  created_by   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- =========================================================================
 -- Метрики AI-обработки (для Issue #10)
 -- =========================================================================
@@ -959,6 +980,16 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS scores_stale_since TIMESTAMPTZ;  --
 -- конвейера (суть, оба вызова «Карточки»); NULL — решённое до «Отбора», окна от заведения сигнала.
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
 ALTER TABLE signals ALTER COLUMN maturity DROP NOT NULL;
+-- Поля материала выпуска (#162, ADR 0006): живут на сигнале, у статьи ленты на её сигнале ленты. Подпись выпуска
+-- (пусто: подпись по типу события), «Гипотеза для Компании» (кто поставил: card_set_by->>'hypothesis', agent или human;
+-- когда и почта человека), выбор картинки (placeholder: заглушка темы вместо своей; пусто: своя). Заголовок и суть
+-- правятся записью журнала ОС (corrected_title, corrected_thesis), как у находок радара. На живой базе этими же
+-- ALTER до выката кода (scripts/digest/issue-edits-before-deploy.sql).
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS issue_label TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS hypothesis TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS hypothesis_set_at TIMESTAMPTZ;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS hypothesis_author TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS issue_picture TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS title_ru TEXT;
 ALTER TABLE signal_evidence ADD COLUMN IF NOT EXISTS summary_ru TEXT;
 ALTER TABLE signal_feedback_events ALTER COLUMN article_id DROP NOT NULL;
