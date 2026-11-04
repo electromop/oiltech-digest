@@ -4814,6 +4814,10 @@
   margin-top: var(--ot-space-02);
 }
 
+.digestPickHypothesis {
+  margin-top: var(--ot-space-02);
+}
+
 .digestMissing {
   margin-top: var(--ot-space-02);
   font-size: var(--ot-size-caption);

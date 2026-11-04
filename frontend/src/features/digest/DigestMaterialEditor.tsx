@@ -26,6 +26,17 @@ export function MissingLine({ material }: { material?: DigestMaterial }) {
   );
 }
 
+// «Гипотеза для Компании» в строке очереди (#162): текст, кто поставил и когда; видна и в выпуске закрытого месяца.
+export function HypothesisLine({ material }: { material?: DigestMaterial }) {
+  if (!material?.hypothesis) return null;
+  const authorship = hypothesisAuthorship(material.hypothesis_set_by, material.hypothesis_author, material.hypothesis_set_at);
+  return (
+    <p className="digestPickHypothesis">
+      <b>Гипотеза для Компании{authorship ? ` · ${authorship}` : ""}:</b> {material.hypothesis}
+    </p>
+  );
+}
+
 // Правка материала выпуска на экране «Дайджест» (#162, ADR 0006): заголовок, суть, подпись, «Гипотеза для Компании»
 // и картинка. Правка ложится на сигнал материала: витрина и выпуск показывают один текст. Уходит только изменённое.
 export function DigestMaterialEditor({ material, busy, onSave, onCancel }: Props) {

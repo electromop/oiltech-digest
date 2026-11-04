@@ -1157,7 +1157,7 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                           <p>{signal.oilfield_application}</p>
                         </div>
                       ) : null}
-                      {/* «Гипотеза для Компании» (#162) — сразу после «Применения», та же, что в выпуске. */}
+                      {/* «Гипотеза для Компании» (#162) сразу после «Применения», та же, что в выпуске. */}
                       <SignalHypothesis signal={signal} saving={savingThis} onSave={(text) => void saveHypothesis(signal, text)} />
                       {judgeFieldsOptional && !signal.transferability ? null : (
                         <div>

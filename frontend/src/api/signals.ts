@@ -196,7 +196,7 @@ export function createSignalFeedback(payload: SignalFeedbackPayload) {
 }
 
 // Правка полей материала выпуска (#162, ADR 0006): с экрана «Дайджест» и с карточки сигнала. Поля живут на сигнале
-// материала (у статьи ленты — на её сигнале ленты); в закрытом месяце сервер отвечает 409.
+// материала (у статьи ленты на её сигнале ленты); в закрытом месяце сервер отвечает 409.
 export function editIssueMaterial(signalId: number, patch: IssueMaterialPatch) {
   return apiFetch<{ ok: boolean; author?: string | null }>(`/api/signals/${signalId}/issue-material`, {
     method: "PATCH",

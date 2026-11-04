@@ -327,12 +327,11 @@ export type Signal = {
   // на отбор и показ они не влияют.
   feedback_blocks?: SignalFeedbackBlock[];
   evidence?: SignalEvidence[];
-  // Поля материала выпуска на сигнале (#162, ADR 0006): «Гипотеза для Компании» (кто поставил — card_set_by.hypothesis,
+  // Поля материала выпуска на сигнале (#162, ADR 0006): «Гипотеза для Компании» (кто поставил: card_set_by.hypothesis,
   // почта человека и когда), подпись выпуска (пусто: по типу события).
   hypothesis?: string | null;
   hypothesis_set_at?: string | null;
   hypothesis_author?: string | null;
-  issue_label?: string | null;
 };
 
 // Правка полей материала выпуска (#162): прислано только меняемое; пустая подпись и гипотеза стирают значение.
@@ -974,21 +973,25 @@ export type DigestContentItem = {
   kind_label?: string | null;
 };
 
-// Материал PDF выпуска в формате эксперта (#161, #162): поля его сигнала, у статьи ленты — её сигнала ленты.
+// Раздел выпуска: бизнес-сигналы и технологические сигналы (digest_materials.SECTIONS).
+export type DigestSectionKey = "business" | "technology";
+
+// Материал PDF выпуска в формате эксперта (#161, #162): поля его сигнала, у статьи ленты её сигнала ленты.
 export type DigestMaterial = {
   item_type: "article" | "signal";
   article_id: number | null;
   signal_id: number | null;
-  // Сигнал, которому принадлежат поля материала: правка идёт ему; пусто — у статьи нет сигнала ленты, править нечего.
+  // Сигнал, которому принадлежат поля материала: правка идёт ему; пусто: у статьи нет сигнала ленты, править нечего.
   material_signal_id: number | null;
-  section: "business" | "technology";
+  section: DigestSectionKey;
   rubric: string;
   label: string;
   label_default: string;
   title: string;
   summary: string;
   hypothesis: string | null;
-  hypothesis_set_by: "human" | "agent" | string | null;
+  // Кто поставил гипотезу: human или agent (агент гипотезы, #163).
+  hypothesis_set_by: string | null;
   hypothesis_author: string | null;
   hypothesis_set_at: string | null;
   relevance: string;
@@ -1000,15 +1003,15 @@ export type DigestMaterial = {
 };
 
 export type DigestSection = {
-  key: "business" | "technology";
+  key: DigestSectionKey;
   number: string;
   title: string;
   materials: DigestMaterial[];
 };
 
-// «Главное в выпуске»: строка раздела на обложке; edited — написал человек, default — перечень рубрик раздела.
+// «Главное в выпуске»: строка раздела на обложке; edited: написал человек, default: перечень рубрик раздела.
 export type DigestHighlight = {
-  key: "business" | "technology";
+  key: DigestSectionKey;
   label: string;
   text: string;
   default: string;

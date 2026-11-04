@@ -37,7 +37,7 @@ describe("экран «Описание Компании» (#162)", () => {
     expect(screen.getByRole("note")).toHaveTextContent("утверждённую заказчиком");
     expect(screen.getByText(/функции \(бурение, ТКРС, геологоразведка, промышленная безопасность\), а не подразделения/))
       .toBeInTheDocument();
-    expect(await screen.findByText(/Описания ещё нет/)).toBeInTheDocument();
+    expect(await screen.findByText("Описания ещё нет.")).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Описание" }), { target: { value: STUB } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));

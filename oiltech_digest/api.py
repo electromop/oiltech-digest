@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import secrets
 import time
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -54,10 +54,10 @@ from oiltech_digest.processing.digest import (
     save_digest_draft,
     write_digest_export,
 )
-from oiltech_digest.processing import external_ai
+from oiltech_digest.processing import digest_materials, external_ai
 from oiltech_digest.source_discovery.learning import apply_candidate_learning
 from oiltech_digest import company_parents
-from oiltech_digest.db import company_description_store, company_parents_repo
+from oiltech_digest.db import company_description_store, company_parents_repo, issue_edits_store
 
 WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -190,7 +190,7 @@ class IssueMaterialPatch(BaseModel):
     summary: str | None = Field(default=None, max_length=6000)
     label: str | None = Field(default=None, max_length=200)
     hypothesis: str | None = Field(default=None, max_length=1000)
-    picture: Literal["own", "placeholder"] | None = None
+    picture: str | None = None  # issue_edits_store.PICTURES
 
 
 class SignalReturnIn(BaseModel):
@@ -2230,6 +2230,23 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
     return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user), **moved}
 
 
+def _guard_material_month(signal_id: int) -> None:
+    """Правка материала выпуска закрытого месяца получает отказ (#162): выпуск прошлого месяца только на просмотр (решение
+    владельца 30.09), как отметка «в дайджест» (_guard_signal_digest_month). Месяц тот же, что у выпуска
+    (repository.signal_issue_month_sql); у сигнала ленты без статьи месяца нет, и править его нечего."""
+    try:
+        month = repository.signal_issue_month(signal_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    if month and feed_window.current().is_open(month):
+        return
+    where = f"к архиву за {feed_window.month_label(feed_window.parse_month(month))}" if month else "к архиву"
+    raise HTTPException(status_code=409, detail=(
+        f"Материал относится {where}. Архив открыт только для просмотра: "
+        "заголовок, суть, подпись, гипотезу и картинку материала прошлых месяцев менять нельзя."
+    ))
+
+
 @app.patch("/api/signals/{signal_id}/issue-material")
 def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
                         user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
@@ -2238,25 +2255,23 @@ def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
     любой допущенной учётке (ADR 0004). Заголовок и суть ложатся в журнал ОС с автором, как правка находки радара, но
     мимо памяти судьи радара: это правка текста выпуска, а не отзыв о его работе. Выпуск закрытого месяца только на
     просмотр (решение владельца 30.09): правка его материала получает отказ, поэтому закрытый выпуск хранит поля,
-    какими они были до закрытия. Месяц — тот же, что у выпуска (repository.signal_issue_month_sql)."""
-    try:
-        month = repository.signal_issue_month(signal_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Signal not found")
-    if not month or not feed_window.current().is_open(month):
-        closed = feed_window.month_label(feed_window.parse_month(month)) if month else "прошлый месяц"
-        raise HTTPException(status_code=409, detail=(
-            f"Материал относится к архиву за {closed}. Архив открыт только для просмотра: "
-            "заголовок, суть, подпись, гипотезу и картинку материала прошлых месяцев менять нельзя."
-        ))
+    какими они были до закрытия. Месяц тот же, что у выпуска (repository.signal_issue_month_sql)."""
+    if patch.picture is not None and patch.picture not in issue_edits_store.PICTURES:
+        raise HTTPException(status_code=422, detail="Картинка материала: своя (own) или заглушка темы (placeholder)")
+    _guard_material_month(signal_id)
     title = " ".join((patch.title or "").split())
     summary = (patch.summary or "").strip()
+    if (title or summary) and not repository.signal_selected_for_digest(signal_id):
+        # Правка текста мимо отзыва есть только у материала выпуска (#162): у прочих сигналов ленты и бизнес-ленты
+        # заголовок и суть не правятся (отзыв о них остаётся блоком ОС, api.create_signal_feedback).
+        raise HTTPException(status_code=409, detail="Заголовок и суть правятся у материала выпуска: "
+                                                    "сначала отметьте его «в дайджест»")
     if title or summary:
         repository.record_signal_feedback_event(
             None, "comment_added", signal_id=signal_id, user_id=int(user["id"]),
             corrected_title=title or None, corrected_thesis=summary or None,
         )
-    repository.set_issue_material(
+    issue_edits_store.set_material(
         signal_id,
         label=" ".join(patch.label.split()) if patch.label is not None else None,
         hypothesis=" ".join(patch.hypothesis.split()) if patch.hypothesis is not None else None,
@@ -2465,7 +2480,7 @@ def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
 
 
 class IssueHighlightIn(BaseModel):
-    section: Literal["business", "technology"]
+    section: str  # ключ раздела выпуска (digest_materials.SECTIONS)
     text: str = Field(default="", max_length=600)
 
 
@@ -2474,8 +2489,10 @@ def save_issue_highlight(month: str, payload: IssueHighlightIn,
                          user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """«Главное в выпуске» (#162): строка раздела месяца на обложке PDF, пишет человек на экране «Дайджест»; пустая
     возвращает перечень рубрик раздела. Выпуск закрытого месяца только на просмотр, как его черновик."""
+    if payload.section not in {section.key for section in digest_materials.SECTIONS}:
+        raise HTTPException(status_code=422, detail="Раздел выпуска: business или technology")
     _guard_issue_edit(month, [])
-    repository.save_issue_highlight(month, payload.section, " ".join(payload.text.split()), user_id=int(user["id"]))
+    issue_edits_store.save_highlight(month, payload.section, " ".join(payload.text.split()), user_id=int(user["id"]))
     return {"ok": True}
 
 

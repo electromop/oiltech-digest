@@ -15,8 +15,8 @@ function formatDay(value: string | null): string {
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Moscow" });
 }
 
-// «Главное в выпуске» на обложке PDF (#162): строка на раздел месяца, пишет человек. Пока не написано или стёрто —
-// перечень рубрик раздела (решение владельца 04.11). Раздел без материалов строки не даёт. В закрытом месяце — только
+// «Главное в выпуске» на обложке PDF (#162): строка на раздел месяца, пишет человек. Пока не написано или стёрто,
+// перечень рубрик раздела (решение владельца 04.11). Раздел без материалов строки не даёт. В закрытом месяце только
 // просмотр.
 export function DigestHighlights({ sections, highlights, readOnly, busy, onSave }: Props) {
   const filled = sections.filter((section) => section.materials.length);
@@ -36,7 +36,7 @@ export function DigestHighlights({ sections, highlights, readOnly, busy, onSave 
         return (
           <div className="digestHighlightRow" key={section.key}>
             {readOnly ? (
-              <p><b>{section.title}.</b> {row?.text || "—"}</p>
+              <p><b>{section.title}.</b> {row?.text || "строки нет"}</p>
             ) : (
               <>
                 <label className="field">

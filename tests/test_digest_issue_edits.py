@@ -10,11 +10,12 @@
 
 from __future__ import annotations
 
+from oiltech_digest import feed_window
 from oiltech_digest.db import connection
 from oiltech_digest.processing import digest as digest_module
 from tests.digest_pdf_support import image_host  # noqa: F401 — фикстура
 from tests.digest_pdf_support import pdf_figures, pdf_pages
-from tests.digest_user_path_support import (DRILLING, MARKET, Person, add_article, add_signal, feed_signal,
+from tests.digest_user_path_support import (DRILLING, MARKET, SEPT, Person, add_article, add_signal, feed_signal,
                                             issue_key, msk, set_card, utc)
 from tests.digest_user_path_support import chromium, issue  # noqa: F401 — фикстуры
 
@@ -77,7 +78,7 @@ def test_edit_from_the_digest_screen_keeps_its_author_and_does_not_teach_the_rad
     analyst, colleague, admin = issue["analyst"], issue["colleague"], issue["admin"]
     finding = _finding("find", "Находка радара", signal_category="technology", theme=DRILLING)
     analyst.mark_signal(finding)
-    # Выбор «в дайджест» сам учит судью («сильный сигнал»): память до правки — точка отсчёта.
+    # Выбор «в дайджест» сам учит судью («сильный сигнал»): память до правки служит точкой отсчёта.
     memory_before = admin.get("/api/signals/memory", params={"status": ""}).json()
 
     response = _edit(colleague, finding, title="Правка заголовка", summary="Правка сути.")
@@ -85,6 +86,8 @@ def test_edit_from_the_digest_screen_keeps_its_author_and_does_not_teach_the_rad
 
     card = _card(analyst, finding)
     assert (card["title_ru"], card["summary"]) == ("Правка заголовка", "Правка сути.")
+    # Запись только с правкой текста не блок ОС и не «Обратная связь: N» (решение владельца 03.11).
+    assert (card["feedback_blocks"], card["feedback_count"]) == ([], 0)
     material = _material(analyst, "signal", finding)
     assert (material["title"], material["summary"]) == ("Правка заголовка", "Правка сути.")
     assert admin.get("/api/signals/memory", params={"status": ""}).json() == memory_before
@@ -94,6 +97,12 @@ def test_edit_from_the_digest_screen_keeps_its_author_and_does_not_teach_the_rad
             (finding,),
         ).fetchall()
     assert authors == [(colleague.id,)]
+
+    # Заголовок и суть правятся у материала выпуска: у сигнала вне выпуска отказ, как у отзыва о нём.
+    outside = _finding("outside", "Находка вне выпуска", signal_category="technology", theme=DRILLING)
+    response = _edit(colleague, outside, title="Правка вне выпуска")
+    assert response.status_code == 409, response.text
+    assert _card(analyst, outside)["title_ru"] == "Находка вне выпуска"
 
 
 def test_label_edited_by_a_person_replaces_the_event_type_label_and_an_empty_one_returns_it(issue, chromium):
@@ -191,8 +200,6 @@ def test_edit_of_a_closed_month_material_is_refused_everywhere_and_the_closed_is
         issue, monkeypatch):
     """Выпуск закрытого месяца только на просмотр: правку любого поля материала сервер отклоняет и с экрана «Дайджест»,
     и с карточки сигнала; выпуск берёт то, что было до закрытия. Сентябрь закрыт с 05.10 00:00 МСК."""
-    from oiltech_digest import feed_window
-
     analyst, colleague, a = issue["analyst"], issue["colleague"], issue["a"]
     finding = _finding("closed", "Сентябрьская находка", signal_category="technology", theme=DRILLING)
     article_signal = feed_signal(a["hi"])
@@ -252,8 +259,6 @@ def test_highlights_are_written_per_section_over_the_rubric_default_and_only_whi
         issue, chromium, monkeypatch):
     """«Главное в выпуске»: строка на раздел месяца, пишет человек на экране «Дайджест»; пока не написано или стёрто,
     перечень рубрик раздела (решение владельца 04.11). В закрытом месяце только просмотр."""
-    from oiltech_digest import feed_window
-
     analyst, colleague = issue["analyst"], issue["colleague"]
     for signal_id in (_finding("market", "Сделка сервисных компаний", signal_category="business", theme=MARKET),
                       _finding("drill", "Буровая с автоматикой", signal_category="technology", theme=DRILLING)):
@@ -280,3 +285,48 @@ def test_highlights_are_written_per_section_over_the_rubric_default_and_only_whi
     assert _highlights(analyst)[1] == ("Технологические сигналы", "Буровые без людей.", True)
     assert colleague.put("/api/issue-highlights/2026-11",
                          json={"section": "nowhere", "text": "Раздела нет."}).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+#  Мелочи экрана «Дайджест» (ревью PR #155, #162)
+# ---------------------------------------------------------------------------
+
+def test_archive_counts_exactly_the_materials_of_the_issue_export(issue, monkeypatch):
+    """LOW-4: число в таблице архива равно числу материалов выпуска месяца, тот же состав, что у выгрузки: статьи,
+    убранные из черновика кнопкой «Из выпуска», в него не идут, сигналы идут."""
+    analyst, a, s = issue["analyst"], issue["a"], issue["s"]
+    for name in ("hi", "mid", "low"):
+        analyst.mark(a[name])
+    analyst.mark_signal(s["sep"])
+    assert analyst.save(SEPT, [a["hi"], a["mid"]]).status_code == 200
+
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 12, 12, 0))
+    archive = {row["month"]: row for row in analyst.get("/api/feed-window").json()["archive"]}
+    exported = analyst.issue(SEPT)
+    assert sorted(exported) == sorted([("article", a["hi"]), ("article", a["mid"]), ("signal", s["sep"])])
+    assert archive[SEPT]["digest"] == len(exported)
+
+
+def test_until_the_rollover_the_screen_says_how_many_are_marked_for_the_next_issue_and_when_it_opens(
+        issue, monkeypatch):
+    """LOW-5: с 1-го до дня смены окна экран собирает прошлый выпуск, а отметки на материалах нового месяца уже
+    копятся. Экран одной строкой называет, сколько их и с какого числа выпуск откроется (в тестах окно меняется 5-го);
+    отметки не теряются и в прошлый выпуск не попадают."""
+    analyst = issue["analyst"]
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 2, 12, 0))
+    with connection.get_connection() as conn:
+        october = add_article(conn, issue["source"], "oct", published=utc(2026, 10, 1, 12), score=70)
+        conn.commit()
+    finding = add_signal("oct", first_seen=msk(2026, 10, 1, 9, 0), evidence_published=utc(2026, 10, 1, 8))
+    analyst.mark(october)
+    analyst.mark_signal(finding)
+
+    window = analyst.get("/api/feed-window").json()
+    assert window["months"] == [SEPT, "2026-10"]
+    assert window["next_issue"] == {"month": "2026-10", "materials": 2, "opens_on": "2026-10-05"}
+    assert analyst.issue(SEPT) == []
+
+    monkeypatch.setattr(feed_window, "_now", lambda: msk(2026, 10, 5, 0, 1))
+    window = analyst.get("/api/feed-window").json()
+    assert window["months"] == ["2026-10"] and window.get("next_issue") is None
+    assert sorted(analyst.issue("2026-10")) == [("article", october), ("signal", finding)]

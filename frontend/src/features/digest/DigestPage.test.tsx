@@ -338,6 +338,7 @@ describe("правки человека в выпуске (#162)", () => {
     summary: "Суть пилота.", url: "https://radar.example.org/77", source: "radar.example.org", score: 75,
   }];
   let nextIssue: unknown = null;
+  let shown: typeof material = material;
 
   beforeEach(() => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -352,7 +353,7 @@ describe("правки человека в выпуске (#162)", () => {
           month: "2026-09", title: "Нефтесервисный дайджест", news,
           sections: [
             { key: "business", number: "01", title: "Бизнес-сигналы", materials: [] },
-            { key: "technology", number: "02", title: "Технологические сигналы", materials: [material] },
+            { key: "technology", number: "02", title: "Технологические сигналы", materials: [shown] },
           ],
           cover: { highlights_title: "Главное в сентябрьском выпуске", highlights: [
             { key: "technology", label: "Технологические сигналы", text: "Бурение.", default: "Бурение.", edited: false,
@@ -372,6 +373,7 @@ describe("правки человека в выпуске (#162)", () => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     nextIssue = null;
+    shown = material;
   });
 
   const sent = (path: string) =>
@@ -391,6 +393,16 @@ describe("правки человека в выпуске (#162)", () => {
     await waitFor(() => expect(sent("/api/signals/77/issue-material")).toEqual([
       { hypothesis: "Оценить пилот для Компании.", picture: "placeholder" },
     ]));
+  });
+
+  it("в строке очереди видна гипотеза, кто и когда её поставил", async () => {
+    shown = { ...material, hypothesis: "Оценить пилот для Компании.", hypothesis_set_by: "human",
+      hypothesis_author: "expert@example.test", hypothesis_set_at: "2026-10-20T09:00:00Z", missing: ["criteria"] };
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    const row = (await screen.findByText("Пилот буровой")).closest("li") as HTMLElement;
+    expect(within(row).getByText(/Гипотеза для Компании · человек \(expert@example\.test\), 20\.10\.2026:/)).toBeInTheDocument();
+    expect(within(row).getByText(/Оценить пилот для Компании\./)).toBeInTheDocument();
+    expect(within(row).getByRole("note")).toHaveTextContent("Не хватает: нет баллов по критериям");
   });
 
   it("«Главное в выпуске» пишут по разделу поверх перечня рубрик; пустое возвращает перечень", async () => {

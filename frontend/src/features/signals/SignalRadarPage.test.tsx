@@ -1498,7 +1498,7 @@ describe("«Гипотеза для Компании» на карточке (#1
     expect(await within(card).findByText("Рассмотреть сервис бурения для Компании.")).toBeInTheDocument();
     expect(within(card).getByText(/человек \(editor@example\.test\)/)).toBeInTheDocument();
 
-    // Выбранная без гипотезы — «Написать гипотезу»; невыбранная без гипотезы — блока нет; закрытый месяц — без правки.
+    // Выбранная без гипотезы: «Написать гипотезу»; невыбранная без гипотезы: блока нет; закрытый месяц: без правки.
     const empty = await openCard("Выбранная без гипотезы");
     expect(within(empty).getByRole("button", { name: "Написать гипотезу" })).toBeInTheDocument();
     const outside = await openCard("Не в выпуске");

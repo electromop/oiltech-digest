@@ -20,7 +20,8 @@ from html import escape
 from pathlib import Path
 from urllib.parse import urlparse
 
-from oiltech_digest.processing.digest_materials import MAX_IMAGE_RATIO, MIN_IMAGE_WIDTH, PICTURE_PLACEHOLDER, THEMES
+from oiltech_digest.db.issue_edits_store import PICTURE_PLACEHOLDER
+from oiltech_digest.processing.digest_materials import MAX_IMAGE_RATIO, MIN_IMAGE_WIDTH, THEMES
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,7 @@ def _card_html(material: dict, section_names: list[str]) -> str:
 
 
 def _hypothesis_html(material: dict) -> str:
-    """«Гипотеза для Компании» под сутью, на всю ширину карточки (макет 02.11); нет гипотезы — нет и строки."""
+    """«Гипотеза для Компании» под сутью, на всю ширину карточки (макет 02.11); нет гипотезы: нет и строки."""
     text = _text(material.get("hypothesis"))
     if not text:
         return ""

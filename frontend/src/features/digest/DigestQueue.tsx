@@ -1,6 +1,6 @@
 import type { Article, DigestContentItem, DigestMaterial, IssueMaterialPatch } from "../../api/types";
 import { scoreClass } from "../shared/scoreScale";
-import { DigestMaterialEditor, MissingLine } from "./DigestMaterialEditor";
+import { DigestMaterialEditor, HypothesisLine, MissingLine } from "./DigestMaterialEditor";
 
 export type ItemKind = { kind: string | null; label: string | null };
 // Материал, как он выглядит в самом выпуске: вид и суть, сжатая сервером под площадь карточки выпуска.
@@ -148,6 +148,7 @@ export function DigestQueue(props: Props) {
               <ScoreMark score={article.score} title="Балл материала" />
             </div>
             <p className="digestPickSummary">{issueItems.get(article.id)?.summary || article.summary || "Суть ещё не сформирована."}</p>
+            <HypothesisLine material={materials.get(materialKey("article", article.id))} />
             <MissingLine material={materials.get(materialKey("article", article.id))} />
             <div className="digestPickFooter">
               <span>{article.source}</span>
@@ -201,6 +202,7 @@ export function DigestQueue(props: Props) {
               <ScoreMark score={item.score} title="Балл сигнала" />
             </div>
             <p className="digestPickSummary">{item.summary || "Суть ещё не сформирована."}</p>
+            <HypothesisLine material={materials.get(materialKey("signal", item.signal_id))} />
             <MissingLine material={materials.get(materialKey("signal", item.signal_id))} />
             <div className="digestPickFooter">
               {item.source ? <span>{item.source}</span> : null}

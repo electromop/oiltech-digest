@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listArticles, updateArticle } from "../../api/articles";
 import { editIssueMaterial, updateSignal } from "../../api/signals";
 import { getDigestContent, getMonthlyDigest, saveIssueHighlight, updateMonthlyDigest } from "../../api/digest";
-import type { Article, DigestContent, DigestMaterial, IssueMaterialPatch, MonthlyDigestDraft } from "../../api/types";
+import type { Article, DigestContent, DigestMaterial, DigestSectionKey, IssueMaterialPatch, MonthlyDigestDraft } from "../../api/types";
 import { monthLabel, useFeedWindow } from "../articles/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
 import { DigestArchive } from "./DigestArchive";
@@ -201,8 +201,8 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     }
   }
 
-  // Правка материала выпуска (#162, ADR 0006): поля ложатся на его сигнал — витрина и выпуск показывают один текст.
-  // Выпуск на сервере сменился — состав и PDF собираются заново.
+  // Правка материала выпуска (#162, ADR 0006): поля ложатся на его сигнал, витрина и выпуск показывают один текст.
+  // Выпуск на сервере сменился: состав и PDF собираются заново.
   async function saveMaterial(material: DigestMaterial, patch: IssueMaterialPatch) {
     if (!material.material_signal_id) return;
     try {
@@ -220,7 +220,7 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   }
 
   // «Главное в выпуске» (#162): строка раздела месяца на обложке; пустая возвращает перечень рубрик.
-  async function saveHighlight(section: "business" | "technology", text: string) {
+  async function saveHighlight(section: DigestSectionKey, text: string) {
     try {
       setBusy(true);
       await saveIssueHighlight(activeMonth, section, text);

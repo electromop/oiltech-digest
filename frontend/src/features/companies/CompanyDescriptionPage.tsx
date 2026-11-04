@@ -99,7 +99,7 @@ export function CompanyDescriptionPage({ onUnauthorized, showToast }: Props) {
             <div className="metaText" role="status">
               {description.updated_at
                 ? `Последняя правка: ${description.updated_by || "учётка удалена"}, ${formatMoment(description.updated_at)}`
-                : "Описания ещё нет: агент гипотезы не включается, пока его нет."}
+                : "Описания ещё нет."}
             </div>
             <div className="digestActionGroup">
               <button type="button" className="primaryButton" disabled={saving || !changed} onClick={() => void save()}>

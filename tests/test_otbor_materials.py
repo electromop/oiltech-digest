@@ -416,6 +416,7 @@ def test_edits_on_the_materials_screen_and_on_the_digest_screen_do_not_hide_each
     decide(monkeypatch, {TITLE: answer(category="business")})
     summarize(monkeypatch, {})
     signal_id = colleague_materials.get_material(material["id"])["signal_id"]
+    api_send("PATCH", f"/api/signals/{signal_id}", user, {"selected_for_digest": True})
 
     def shown():
         [card] = [card for card in showcase(user, "business").values() if card["id"] == signal_id]
