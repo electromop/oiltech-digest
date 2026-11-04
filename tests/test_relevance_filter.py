@@ -65,6 +65,33 @@ def test_prefilter_does_not_match_english_noise_inside_words():
     assert "actor" not in result.matched_noise
 
 
+def test_prefilter_does_not_match_ru_noise_inside_words(monkeypatch):
+    """Слово шума совпадает с начала слова: «спорт» внутри «транспорта», «актер» внутри
+    «охарактеризовали» статью не отсеивают (АНГИ 04.11: так терялись «зимники Ямала»).
+    Тематики заказчика выключены: их кэш от соседних тестов не должен менять вердикт."""
+    monkeypatch.setattr(relevance_filter, "tag_keywords", lambda: ((), ()))
+    winter_roads = should_keep_article(
+        "В ЯНАО готовят к открытию три зимника общей протяженностью 614 км",
+        "Сезонные дороги нужны для транспорта грузов на удалённые участки.",
+        {"name": "Агентство нефтегазовой информации (сайт)", "category": ""},
+    )
+    material = should_keep_article("Учёные охарактеризовали новый материал для мембран", "")
+
+    assert winter_roads.keep is True
+    assert "спорт" not in winter_roads.matched_noise
+    assert material.keep is True
+    assert "актер" not in material.matched_noise
+
+
+def test_prefilter_still_rejects_ru_noise_at_word_start(monkeypatch):
+    """Основа шума с начала слова по-прежнему отсеивает: окончание любое."""
+    monkeypatch.setattr(relevance_filter, "tag_keywords", lambda: ((), ()))
+    result = should_keep_article("Итоги спортивного сезона и новый состав сборной", "")
+
+    assert result.keep is False
+    assert "спорт" in result.matched_noise
+
+
 def test_prefilter_uses_customer_tag_keywords(monkeypatch):
     """Ключевые слова тематик заказчика участвуют в предфильтре.
 
