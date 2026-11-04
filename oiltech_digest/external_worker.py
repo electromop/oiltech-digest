@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime
 from decimal import Decimal
 import json
@@ -15,7 +16,7 @@ import requests
 
 from oiltech_digest import (admission, config, contract, otbor, signal_card, signal_discovery, signal_scores,
                             signal_summary, worker_shutdown)
-from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.ingestion import external_fetch, publisher_page
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
 
@@ -185,6 +186,21 @@ class ExternalWorkerClient:
             timeout=60,
         )
         response.raise_for_status()
+
+    def fetch_page(self, url: str) -> dict[str, Any]:
+        """Сбор на РФ (добор находок радара, 04.11): ядро качает страницу, которую воркер не открыл
+        (publisher_page.download). Ядро без этого адреса (сборка до 04.11) отвечает 404: страницы нет, прогон идёт
+        дальше без ядра."""
+        response = self.session.post(
+            f"{self.core_api_url}/api/external-worker/page",
+            json={"url": url},
+            timeout=publisher_page.CORE_ANSWER_SECONDS,
+        )
+        if response.status_code == 404:
+            return {"ok": False, "error": "у ядра нет сбора страниц (сборка ядра до 04.11)"}
+        response.raise_for_status()
+        answer = response.json() or {}
+        return {**answer, "content": base64.b64decode(answer.get("content_b64") or "")}
 
     def fail(self, job: dict[str, Any], error: str, *, retryable: bool = True, retry_after_seconds: int = 300,
              result: dict[str, Any] | None = None) -> None:
@@ -483,7 +499,9 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[.
         client.progress(job, 20)
         # Heartbeat по каждому шагу (статья, страница, кусок документа) продлевает lease —
         # большой батч на медленной модели не истекает по аренде и не уходит в ретрай-петлю.
-        result = handler(job.get("payload") or {}, heartbeat=beat)
+        # Тем же клиентом — сбор на РФ: страницу, которую воркер не открыл, качает ядро (добор находок радара).
+        with publisher_page.core_pages(client):
+            result = handler(job.get("payload") or {}, heartbeat=beat)
     except external_ai.StopRequested:
         # Вид без частичного итога (сбор, документ): задача уходит в очередь целиком.
         if _claim_report(job):

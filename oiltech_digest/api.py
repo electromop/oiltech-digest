@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -39,7 +40,7 @@ from oiltech_digest.processing.pipeline import (
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
-from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.ingestion import external_fetch, publisher_page
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.documents import parsing as doc_parsing
 from oiltech_digest.documents.model import DocumentError
@@ -354,6 +355,10 @@ class ExternalWorkerClaimRequest(BaseModel):
 
 class ExternalWorkerLeaseRequest(BaseModel):
     lease_token: str
+
+
+class ExternalWorkerPageRequest(BaseModel):
+    url: str
 
 
 class ExternalWorkerProgressRequest(ExternalWorkerLeaseRequest):
@@ -2597,6 +2602,27 @@ def external_worker_claim(
 def external_worker_consumers(_: None = Depends(require_external_worker)) -> dict[str, Any]:
     """Сборки и контракты контейнеров NL — для скрипта выката на NL, где базы нет."""
     return _clean(repository.external_consumers_status())
+
+
+# Адрес находки длиннее не бывает: у поиска самые длинные — около 300 знаков (04.11).
+_PAGE_URL_MAX_CHARS = 4096
+
+
+@app.post("/api/external-worker/page")
+def external_worker_page(
+    payload: ExternalWorkerPageRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    """Сбор на РФ (добор находок радара, поручение владельца 04.11): страницу, которую воркер NL не открыл, качает
+    ядро со своего адреса. Только http(s), только публичные адреса, переадресации проверяются, размер ограничен —
+    publisher_page.download. Ответ — байты страницы как есть: разбирает их воркер тем же разбором, что и свои."""
+    if len(payload.url) > _PAGE_URL_MAX_CHARS:
+        raise HTTPException(status_code=422, detail="Слишком длинный адрес")
+    page = publisher_page.download(payload.url)
+    content = page.pop("content", None) or b""
+    logger.info("external_worker_page url=%s ok=%s status=%s bytes=%s error=%s",
+                payload.url[:200], page["ok"], page.get("status"), len(content), page.get("error"))
+    return {**page, "content_b64": base64.b64encode(content).decode("ascii") if content else ""}
 
 
 @app.post("/api/external-worker/jobs/{job_id}/progress")

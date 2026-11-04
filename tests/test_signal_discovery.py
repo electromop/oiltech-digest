@@ -850,7 +850,7 @@ def test_web_search_enriches_evidence_with_fetched_full_text(monkeypatch):
     published_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
     fetched_calls = []
 
-    def fake_fetch_full_text(url, fallback_title=""):
+    def fake_fetch_full_text(url, fallback_title="", **kwargs):
         fetched_calls.append(url)
         return {
             "ok": True,
@@ -942,7 +942,7 @@ def test_web_search_full_text_fetch_falls_back_gracefully(monkeypatch):
 
     monkeypatch.setattr(source_agent, "search_web", fake_search_web)
 
-    def fake_fetch_full_text(url, fallback_title=""):
+    def fake_fetch_full_text(url, fallback_title="", **kwargs):
         if url == "https://example.com/blocked":
             return {"ok": False, "error": "http_403", "raw_text": "", "published_at": None, "title": ""}
         return {"ok": True, "error": None, "raw_text": "Too short.", "published_at": None, "title": "Thin page"}
