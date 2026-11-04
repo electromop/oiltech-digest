@@ -280,7 +280,26 @@ def test_accumulated_materials_go_through_once_with_a_dry_run_by_default(user, a
     assert "сигналов материалов 0, задач «Отбора» 0" in capsys.readouterr().out
 
 
-NEW_TITLE = "Татнефть продлила контракт с подрядчиком по ГРП до 2029 года"
+def test_accumulated_materials_tell_no_author_but_a_new_material_does(user, contour, monkeypatch):
+    """Накопленные проходят конвейер молча: итог «Отбора» их авторам не уходит (решение владельца 04.11, присланы до
+    включения, ответа никто не ждёт). Материал, присланный при включённом флаге, итог получает, как прежде."""
+    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
+    _send(_material())
+    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    cli.main(["otbor-materials", "--apply"])
+    _send(_material(title=NEW_TITLE, tg_message_id=79))
+
+    decide(monkeypatch, {TITLE: answer(), NEW_TITLE: answer()})
+    run_worker("external-ai-bulk")
+
+    assert {TITLE, NEW_TITLE} <= set(showcase(user, "business"))
+    telegram = _Telegram()
+    assert _bot(telegram).notify() == 1
+    [message] = telegram.sent
+    assert message["reply_parameters"]["message_id"] == 79
+
+
+NEW_TITLE ="Татнефть продлила контракт с подрядчиком по ГРП до 2029 года"
 NEW_DESCRIPTION = "Итог тендера уточнили: договор на три года, объём операций ГРП вырос на 25 %."
 
 

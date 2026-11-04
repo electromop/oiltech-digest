@@ -2375,7 +2375,8 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
 def cmd_otbor_materials(args: argparse.Namespace) -> None:
     """Накопленные материалы коллег (#131): присланные до включения «Отбора» и не ставшие сигналом проходят конвейер
     один раз. По умолчанию сухой прогон — сколько материалов и оценка цены «Отбора», ничего не пишет; --apply —
-    сигналы материалов и задачи «Отбора» по полосе пересчётов (только при включённом флаге)."""
+    сигналы материалов и задачи «Отбора» по полосе пересчётов (только при включённом флаге), итог авторам бот не
+    сообщает (решение владельца 04.11)."""
     from oiltech_digest import material_signals, otbor
 
     try:
@@ -2388,7 +2389,8 @@ def cmd_otbor_materials(args: argparse.Namespace) -> None:
         print(f"otbor-materials: накопленных материалов {result['materials']}{price}; сухой прогон, ничего не записано"
               " (--apply — провести через конвейер)")
         return
-    print(f"otbor-materials: сигналов материалов {len(result['signal_ids'])}, задач «Отбора» {result['jobs']}{price}")
+    print(f"otbor-materials: сигналов материалов {len(result['signal_ids'])}, задач «Отбора» {result['jobs']}{price};"
+          " итог авторам бот не сообщает")
 
 
 def cmd_otbor_shadow(args: argparse.Namespace) -> None:
