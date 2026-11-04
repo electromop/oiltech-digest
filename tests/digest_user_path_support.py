@@ -24,6 +24,12 @@ from oiltech_digest.processing import digest as digest_module
 MSK = feed_window.MSK
 SEPT = "2026-09"
 THEME = "Бурение и заканчивание скважин"
+# Темы выпуска в формате эксперта (#161) — корневые теги заказчика (13 тематик), как на проде.
+MARKET = "Рынок, бизнес-модели, сервисные модели, партнёрства и M&A"
+DRILLING = "Бурение, направленное бурение, буровые растворы и буровое оборудование"
+ENERGY = "Энергетика и промышленные энергосистемы"
+AUTOMATION = "Автоматизация, цифровизация, промышленный AI и автономные операции"
+HSE = "HSE, промышленная безопасность, охрана труда и экология"
 
 
 def utc(*args: int) -> datetime:
@@ -86,12 +92,28 @@ class Person:
         return [issue_key(item) for item in self.issue_items(month)]
 
     def issue_items(self, month: str = SEPT) -> list[dict]:
+        return self.issue_content(month)["news"]
+
+    def issue_content(self, month: str = SEPT) -> dict:
         response = self.get(
             "/api/digest-content",
             params={"month": month, "limit": 500, "min_score": 0, "max_score": 100},
         )
         assert response.status_code == 200, response.text
-        return response.json()["news"]
+        return response.json()
+
+    def materials(self, month: str = SEPT) -> dict[str, list[dict]]:
+        """Карточки PDF выпуска по разделам, в порядке листов: ключ раздела → материалы."""
+        return {section["key"]: section["materials"] for section in self.issue_content(month)["sections"]}
+
+    def preview_pdf(self, month: str = SEPT, **params) -> bytes:
+        """Предпросмотр PDF на экране «Дайджест» теми же параметрами, что шлёт экран."""
+        response = self.get(
+            "/api/digest-preview.pdf",
+            params={"month": month, "limit": 500, "min_score": 0, "max_score": 100, **params},
+        )
+        assert response.status_code == 200, response.text
+        return response.content
 
     def save(self, month: str, article_ids: list[int]):
         return self.put(
@@ -171,6 +193,44 @@ def add_signal(key: str, *, first_seen: datetime, score: float = 75, maturity: s
     return signal_id
 
 
+def feed_signal(article_id: int) -> int:
+    """Сигнал ленты статьи (#95): его заводит мост «лента → сигнал», как при обработке статьи."""
+    from oiltech_digest.db import feed_signals
+
+    feed_signals.sync_feed_signals([article_id])
+    with connection.get_connection() as conn:
+        return int(conn.execute(
+            "SELECT id FROM signals WHERE origin = 'feed' AND origin_article_id = %s", (article_id,)
+        ).fetchone()[0])
+
+
+def set_card(signal_id: int, **fields) -> None:
+    """Поля сигнала, как их записали «Отбор», «Карточка» и судья радара: категория, тема, тип события, зрелость, дата
+    события, связь, балл с разбивкой (score_profile, score_items_json, criteria_snapshot)."""
+    from psycopg.types.json import Json
+
+    values = [Json(value) if isinstance(value, (list, dict)) else value for value in fields.values()]
+    with connection.get_connection() as conn:
+        conn.execute(
+            f"UPDATE signals SET {', '.join(f'{name} = %s' for name in fields)} WHERE id = %s", (*values, signal_id)
+        )
+        conn.commit()
+
+
+def breakdown(profile: str, *scores: float | None, ids_from: int = 1) -> dict:
+    """Разбивка балла по пяти критериям профиля, как её пишет «Карточка»: снимок набора на момент оценки (имена и веса
+    набора эксперта) и баллы по критериям; None — «Свежесть» без даты события, в итог не входит."""
+    from oiltech_digest.scoring_profiles import SCORING_PRESETS
+
+    preset = SCORING_PRESETS["viktor"][profile]
+    snapshot = [{"id": ids_from + index, "name": item["name"], "weight": item["weight"]}
+                for index, item in enumerate(preset)]
+    items = [{"criterion_id": ids_from + index, "final_score": 0 if score is None else score,
+              **({"excluded": "нет даты события в тексте"} if score is None else {})}
+             for index, score in enumerate(scores)]
+    return {"score_profile": profile, "criteria_snapshot": snapshot, "score_items_json": items}
+
+
 def pdf_content(count: int, images: dict[int, str]) -> dict:
     """Готовый выпуск для рендера без базы: count карточек, картинки — у номеров из images."""
     news = [
@@ -184,10 +244,20 @@ def pdf_content(count: int, images: dict[int, str]) -> dict:
         }
         for n in range(count)
     ]
+    # Те же карточки в разделе технологий PDF в формате эксперта (#161): картинка своя, у прочих заглушка темы.
+    materials = [
+        {"item_type": "article", "article_id": item["article_id"], "signal_id": None, "section": "technology",
+         "rubric": "БУРЕНИЕ", "label": "", "title": item["title"], "summary": item["summary"], "criteria": [],
+         "relevance": "не определено", "url": item["url"], "image_url": item["image_url"],
+         "image_own": bool(item["image_url"]), "placeholder": "drilling", "score": None, "topic": "бурение"}
+        for item in news
+    ]
     return {
         "month": SEPT,
         "issue": {"title": "Нефтесервисный дайджест", "intro": "Вступление.", "news_title": "Новости"},
         "hero": {}, "news": news, "items": news,
+        "sections": [{"key": "technology", "number": "02", "title": "Технологические сигналы", "criteria_names": [],
+                      "materials": materials}],
         "footer": {"contact_text": "", "contact_email": "", "note": "Информационная рассылка", "socials": []},
     }
 

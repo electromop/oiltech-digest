@@ -7709,6 +7709,39 @@ def digest_item_kinds(article_ids: Sequence[int], signal_ids: Sequence[int]) -> 
     return by_article, by_signal
 
 
+_ISSUE_MATERIAL_COLUMNS = (
+    "s.id AS signal_id, s.signal_category, s.theme, s.event_type, s.technology_maturity, s.event_date,"
+    " s.event_date_precision, s.oilfield_relevance, s.score, s.score_profile, s.score_items_json, s.criteria_snapshot"
+)
+
+
+def issue_material_fields(article_ids: Sequence[int],
+                          signal_ids: Sequence[int]) -> tuple[dict[int, dict], dict[int, dict]]:
+    """Поля материала выпуска (#161, ADR 0006) с его сигнала: категория, тема, тип события и зрелость «Карточки», дата
+    события, связь с нефтесервисом, балл с разбивкой. У статьи — её сигнала ленты (он у статьи один, ключ
+    feed:<статья>; при категории без значения тоже он, в отличие от плашки digest_item_kinds), у находки радара и
+    материала коллеги — свои. Статьи без сигнала ленты (собрана до 01.08.2026) в первом словаре нет."""
+    by_article: dict[int, dict] = {}
+    by_signal: dict[int, dict] = {}
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if article_ids:
+            cur.execute(
+                f"""
+                SELECT DISTINCT ON (s.origin_article_id) s.origin_article_id, {_ISSUE_MATERIAL_COLUMNS}
+                FROM signals s
+                WHERE s.origin_article_id = ANY(%s)
+                ORDER BY s.origin_article_id, s.merged_into_signal_id NULLS FIRST, s.id
+                """,
+                (list(article_ids),),
+            )
+            by_article = {int(row.pop("origin_article_id")): row for row in cur.fetchall()}
+        if signal_ids:
+            cur.execute(f"SELECT {_ISSUE_MATERIAL_COLUMNS} FROM signals s WHERE s.id = ANY(%s)", (list(signal_ids),))
+            by_signal = {int(row["signal_id"]): row for row in cur.fetchall()}
+    return by_article, by_signal
+
+
 def digest_items_by_article_ids(article_ids: list[int], *, month: str | None = None) -> list[dict]:
     """Детали статей сохранённого черновика выпуска по списку id (порядок сохраняется).
 

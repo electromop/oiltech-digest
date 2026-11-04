@@ -277,7 +277,7 @@ describe("экран выпуска: какой месяц открыт по у�
       expect(screen.queryByRole("spinbutton", { name: "Балл от" })).not.toBeInTheDocument();
     });
 
-    it("собирается при открытии выпуска; порядок поменяли — PDF прежний, пока черновик не сохранён; сохранили — собран заново", async () => {
+    it("собирается при открытии выпуска; порядок черновика PDF не задаёт (#161), сохранённый черновик — собран заново", async () => {
       openMonths = ["2026-09"];
       archive = [];
       marked = [september, septemberTwo];
@@ -290,14 +290,32 @@ describe("экран выпуска: какой месяц открыт по у�
       expect(pdfRequests()).toHaveLength(1);
       expect(pdfRequests()[0]).toContain("month=2026-09");
 
+      // Порядок в PDF считается сам: перестановка в очереди меняет письмо и DOCX, а PDF устаревшим не помечает.
       await user.click((await screen.findAllByRole("button", { name: "Опустить материал ниже" }))[0]);
-      expect(await screen.findByText(/Порядок изменён, но не сохранён/)).toBeInTheDocument();
+      expect(screen.getByText(/В PDF порядок считается сам: раздел, рубрика, балл/)).toBeInTheDocument();
+      expect(screen.queryByText(/PDF собирается из сохранённого черновика/)).not.toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
 
       await waitFor(() => expect(pdfRequests()).toHaveLength(2));
       await waitFor(() => expect(screen.getByTitle("Предпросмотр выпуска в PDF")).toHaveAttribute("src", "blob:pdf-2#navpanes=0&view=FitH"));
-      expect(screen.queryByText(/Порядок изменён, но не сохранён/)).not.toBeInTheDocument();
+    });
+
+    it("«Обновить PDF» собирает заново мимо памяти предпросмотра, открытие выпуска — через неё (LOW-2 ревью PR #155)", async () => {
+      openMonths = ["2026-09"];
+      archive = [];
+      marked = [september];
+      const user = userEvent.setup();
+      render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+      const frame = await screen.findByTitle("Предпросмотр выпуска в PDF");
+      await waitFor(() => expect(frame).toHaveAttribute("src", "blob:pdf-1#navpanes=0&view=FitH"));
+      expect(pdfRequests()[0]).not.toContain("fresh");
+
+      await user.click(screen.getByRole("button", { name: "Обновить PDF" }));
+      await waitFor(() => expect(pdfRequests()).toHaveLength(2));
+      expect(pdfRequests()[1]).toContain("fresh=1");
+      await waitFor(() => expect(screen.getByTitle("Предпросмотр выпуска в PDF")).toHaveAttribute("src", "blob:pdf-2#navpanes=0&view=FitH"));
     });
   });
 });

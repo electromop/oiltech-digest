@@ -16,9 +16,8 @@ type Props = {
   // Число растёт — PDF собирается заново (открытие экрана, смена выпуска, сохранённый черновик, «Обновить PDF»);
   // 0 — ещё не собирать.
   refreshToken: number;
-  // PDF показывает прежнее состояние: порядок изменён и не сохранён (PDF собирается из сохранённого черновика)
-  // или фильтры сменились после сборки.
-  staleReason: "order" | "filters" | null;
+  // PDF показывает прежнее состояние: фильтры сменились после сборки. Порядок черновика PDF не задаёт (#161).
+  staleReason: "filters" | null;
   onRefresh: () => void;
   onError: (error: unknown) => void;
 };
@@ -33,6 +32,9 @@ export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh
   const urlRef = useRef<string | null>(null);
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
+  // Сборку начала кнопка «Обновить PDF»: мимо памяти предпросмотра на сервере. Открытие экрана, смена выпуска и
+  // сохранённый черновик берут готовый PDF того же выпуска.
+  const freshRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,7 +43,9 @@ export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh
     if (refreshToken === 0 || typeof URL.createObjectURL !== "function") return;
     setLoading(true);
     setFailed(null);
-    getDigestPreviewPdf(filtersRef.current)
+    const fresh = freshRef.current;
+    freshRef.current = false;
+    getDigestPreviewPdf(filtersRef.current, { fresh })
       .then((file) => {
         if (cancelled) return;
         const next = URL.createObjectURL(file.blob);
@@ -73,17 +77,21 @@ export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh
     <section className="digestPdfPane" aria-label="Предпросмотр выпуска в PDF">
       <div className="panelHeader">
         <h2>Предпросмотр PDF</h2>
-        <button type="button" className="ghostButton compactButton" disabled={loading} onClick={onRefresh}>
+        <button
+          type="button"
+          className="ghostButton compactButton"
+          disabled={loading}
+          onClick={() => {
+            freshRef.current = true;
+            onRefresh();
+          }}
+        >
           {loading ? "Собираем PDF…" : "Обновить PDF"}
         </button>
       </div>
       {staleReason && !loading ? (
         <div className="archiveNotice digestPdfStale" role="status">
-          <span>
-            {staleReason === "order"
-              ? "Порядок изменён, но не сохранён: PDF собирается из сохранённого черновика. Сохраните черновик, чтобы увидеть выпуск как есть."
-              : "Фильтры изменились после сборки PDF: обновите предпросмотр, чтобы увидеть выпуск как есть."}
-          </span>
+          <span>Фильтры изменились после сборки PDF: обновите предпросмотр, чтобы увидеть выпуск как есть.</span>
         </div>
       ) : null}
       {failed ? <div className="documentAlert bad" role="alert">{failed}</div> : null}

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d4a9e"/>
+<stop offset="0.55" stop-color="#062c6b"/><stop offset="1" stop-color="#021637"/></linearGradient>
+<radialGradient id="glow" cx="0.5" cy="0.56" r="0.5"><stop offset="0" stop-color="#3d8bff" stop-opacity="0.42"/>
+<stop offset="1" stop-color="#3d8bff" stop-opacity="0"/></radialGradient>
+<pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+<path d="M20 0H0V20" fill="none" stroke="#ffffff" stroke-opacity="0.055"/></pattern>
+</defs>
+<rect width="400" height="300" fill="url(#bg)"/><rect width="400" height="300" fill="url(#grid)"/>
+<rect width="400" height="300" fill="url(#glow)"/>
+<path d="M18 262 L58 236 L96 252 L124 222 M296 34 L334 58 L370 36 M334 58 L350 94" fill="none" stroke="#9cc8ff"
+  stroke-opacity="0.32"/>
+<g fill="#9cc8ff" fill-opacity="0.6"><circle cx="18" cy="262" r="2.4"/><circle cx="58" cy="236" r="2.4"/><circle cx="96" cy="252" r="2.4"/><circle cx="124" cy="222" r="2.4"/><circle cx="296" cy="34" r="2.4"/><circle cx="334" cy="58" r="2.4"/><circle cx="370" cy="36" r="2.4"/><circle cx="350" cy="94" r="2.4"/></g>
+<g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+<path d="M60 236 H340"/>
+<rect x="150" y="224" width="176" height="12" rx="2" fill="#ffffff" fill-opacity="0.1"/>
+<path d="M188 224 L212 132 L236 224 M197 190 H227"/>
+<path d="M112 128 L300 150" stroke-width="7"/>
+<path d="M118 121 L98 124 C88 142 92 168 104 188 L114 184 C106 166 104 146 112 136 Z" fill="#ffffff" fill-opacity="0.16"/>
+<path d="M104 188 V226" stroke-width="2.5"/>
+<rect x="94" y="224" width="20" height="12" rx="2" fill="#ffffff" fill-opacity="0.2"/>
+<path d="M292 149 L274 198"/>
+<circle cx="274" cy="200" r="22" fill="#ffffff" fill-opacity="0.06"/>
+<path d="M253 207 A22 22 0 0 0 295 207" stroke="#ff5600" stroke-width="9"/>
+<circle cx="212" cy="139" r="6" fill="#ff5600" stroke="none"/>
+<rect x="300" y="200" width="30" height="24" rx="3" fill="#ffffff" fill-opacity="0.1"/>
+</g>
+</svg>

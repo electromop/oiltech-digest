@@ -37,9 +37,12 @@ export function getDigestContent(filters: DigestFilters) {
 }
 
 // Предпросмотр выпуска сразу в PDF (решение владельца 23.10): тот же PDF и та же вёрстка, что у выгрузки, для окна
-// экрана; сервер отдаёт его inline и не пишет файл.
-export function getDigestPreviewPdf(filters: DigestFilters) {
-  return apiDownload(`/api/digest-preview.pdf?${buildDigestParams(filters).toString()}`);
+// экрана; сервер отдаёт его inline и не пишет файл. `fresh` — «Обновить PDF»: собрать заново мимо памяти
+// предпросмотра на сервере (картинка сайта, который не ответил при прошлой сборке, LOW-2 ревью PR #155).
+export function getDigestPreviewPdf(filters: DigestFilters, options?: { fresh?: boolean }) {
+  const params = buildDigestParams(filters);
+  if (options?.fresh) params.set("fresh", "1");
+  return apiDownload(`/api/digest-preview.pdf?${params.toString()}`);
 }
 
 export function saveDigestDraft(payload: SaveDigestPayload) {

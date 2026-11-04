@@ -29,6 +29,19 @@
     "note": "Информационная рассылка",
     "socials": []
   },
+  "cover": {
+    "banner_file": "",
+    "logo_file": "",
+    "masthead_caption": "",
+    "tab_text": "",
+    "intro": "",
+    "platform_title": "",
+    "platform_url": "",
+    "telegram_url": "",
+    "qr_file": "",
+    "feedback_email": "",
+    "platform_note": ""
+  },
   "highlights": {
     "analytics_source_keywords": [
       "mckinsey",
