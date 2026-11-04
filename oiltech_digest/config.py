@@ -279,6 +279,9 @@ SIGNAL_DISCOVERY_DAILY_ENABLED = os.environ.get("SIGNAL_DISCOVERY_DAILY_ENABLED"
     "yes",
     "on",
 }
+# Раз в сколько суток Москвы суточный шаг ставит радар: 1 каждые сутки. Решение владельца 04.11: 3, окно 3 дня
+# (SIGNAL_DISCOVERY_DAYS и SIGNAL_RESEARCH_DAYS).
+SIGNAL_DISCOVERY_DAILY_EVERY_DAYS = max(1, int(os.environ.get("SIGNAL_DISCOVERY_DAILY_EVERY_DAYS", "1")))
 SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
 SIGNAL_DISCOVERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_LIMIT", "120"))
 SIGNAL_DISCOVERY_MIN_SCORE = float(os.environ.get("SIGNAL_DISCOVERY_MIN_SCORE", "40"))
