@@ -22,6 +22,7 @@ from oiltech_digest import config, feed_window
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
+from oiltech_digest.processing import digest_materials, digest_pdf
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text
 
 logger = logging.getLogger(__name__)
@@ -32,44 +33,6 @@ BRANDING_CONFIG = "digest_branding.json"
 ASSETS_DIR = TEMPLATE_DIR / "assets"
 HERO_ASSET = "oiltech_digest_hero_600x305.png"
 HERO_ALT = "Нефтесервисный дайджест — технологии, рынок и возможности для бизнеса"
-
-# Корпоративный шрифт GPN Din для PDF (Chromium рендерит @font-face). В email
-# оставляем Arial-фолбэк (почтовые клиенты вырезают кастомные шрифты).
-_PDF_FONT_FILES = {
-    "GPN Din": [("GPN_DIN-Regular.ttf", 400), ("GPN_DIN-Bold.ttf", 700)],
-    "GPN Din Condensed": [("GPN_DIN_Condensed-Bold.ttf", 700)],
-}
-
-# Колонтитул с номером страницы. Классы pageNumber/totalPages подставляет сам
-# Chromium. Размер шрифта задаём явно: по умолчанию колонтитул рисуется ~6px и
-# читается как грязь. Корпоративный GPN Din здесь не используем — колонтитул
-# рендерится в отдельном контексте, куда @font-face из документа не долетает.
-_PDF_FOOTER_TEMPLATE = (
-    '<div style="width:100%;padding:0 14mm;font-size:9px;'
-    'font-family:Arial,Helvetica,sans-serif;color:#68768f;text-align:right;">'
-    '<span class="pageNumber"></span> / <span class="totalPages"></span>'
-    "</div>"
-)
-
-# Сколько PDF ждёт картинки карточек. Их Chromium грузит сам, с сайтов-источников; хост,
-# который принял соединение и молчит (или режет пакеты), держал set_content(wait_until=
-# "load") до потолка Playwright в 30 с, и выгрузка падала TimeoutError на каждой попытке
-# (замер 29.09: две такие картинки из сорока). Не дождались или сайт отказал (403/404) —
-# плашка рубрики, как у статьи без картинки. Возвращает, сколько картинок заменено.
-_PDF_IMAGES_WAIT_MS = 15_000
-_PDF_SWAP_UNLOADED_IMAGES_JS = """
-async (fallbacks) => {
-  window.stop();
-  const swapped = [];
-  document.querySelectorAll("img.news-card-image").forEach((img, index) => {
-    if (img.complete && img.naturalWidth > 0) return;
-    img.src = fallbacks[index] || "";
-    swapped.push(img.decode().catch(() => undefined));
-  });
-  await Promise.all(swapped);
-  return swapped.length;
-}
-"""
 
 
 def _asset_bytes(name: str) -> bytes | None:
@@ -86,28 +49,6 @@ def _hero_data_uri() -> str:
     полоса срезана — на ресурсе не должно быть корпоративной символики."""
     data = _asset_bytes(HERO_ASSET)
     return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else ""
-
-
-def _embedded_font_faces() -> str:
-    """@font-face с GPN Din в base64 для HTML/PDF-рендера без зависимости от ОС."""
-    faces = []
-    for family, files in _PDF_FONT_FILES.items():
-        for fname, weight in files:
-            data = _asset_bytes(fname)
-            if not data:
-                continue
-            b64 = base64.b64encode(data).decode("ascii")
-            faces.append(
-                f"@font-face{{font-family:'{family}';font-style:normal;font-weight:{weight};"
-                f"src:url(data:font/ttf;base64,{b64}) format('truetype');}}"
-            )
-    return "".join(faces)
-
-
-def _pdf_font_face_style() -> str:
-    """<style> с GPN Din в base64 — добавляется в PDF-рендер для Chromium."""
-    faces = _embedded_font_faces()
-    return "<style>" + faces + "</style>" if faces else ""
 
 
 def _branding_store_path() -> Path:
@@ -170,6 +111,21 @@ def _load_digest_branding() -> dict:
             "contact_email": "",
             "note": "Информационная рассылка",
             "socials": [],
+        },
+        # Обложка PDF в формате эксперта (#161). Значения только на сервере: в репозитории пусто, пустое поле — нет
+        # элемента в выпуске. Файлы баннера, логотипа и QR лежат рядом с файлом брендинга, здесь их имена.
+        "cover": {
+            "banner_file": "",
+            "logo_file": "",
+            "masthead_caption": "",
+            "tab_text": "",
+            "intro": "",
+            "platform_title": "",
+            "platform_url": "",
+            "telegram_url": "",
+            "qr_file": "",
+            "feedback_email": "",
+            "platform_note": "",
         },
         "highlights": {
             "analytics_source_keywords": [
@@ -243,6 +199,7 @@ def _load_digest_branding() -> dict:
         "hero": {**defaults["hero"], **(loaded.get("hero") or {})},
         "issue": {**defaults["issue"], **(loaded.get("issue") or {})},
         "footer": {**defaults["footer"], **(loaded.get("footer") or {})},
+        "cover": {**defaults["cover"], **(loaded.get("cover") or {})},
         "highlights": {**defaults["highlights"], **(loaded.get("highlights") or {})},
     }
 
@@ -271,6 +228,8 @@ def save_digest_branding(payload: dict) -> dict:
             **payload_footer,
             "socials": socials,
         },
+        # Обложку PDF правят на сервере (файлы рядом с брендингом): экран её не присылает, сохранение её не теряет.
+        "cover": current["cover"],
         "highlights": {
             **current["highlights"],
             **(payload.get("highlights") or {}),
@@ -336,6 +295,9 @@ def build_digest_content(
             *(row for row in rows if row.get("item_type") == "signal"),
         ]
     news = []
+    # Позиции выпуска для PDF в формате эксперта (#161): тот же состав, что у письма, но суть целиком, а поля материала
+    # (раздел, рубрика, подпись, критерии, связь) с его сигнала — digest_materials.
+    positions = []
     for row in rows:
         tag = row.get("tag_name") or "Без тега"
         if row.get("parent_tag_name"):
@@ -354,24 +316,38 @@ def build_digest_content(
         # Сигнал радара — не статья: его номер из таблицы signals. Раньше он уезжал в
         # article_id, и сохранение черновика падало на внешнем ключе или цепляло чужую статью.
         item_type = row.get("item_type") or "article"
+        # Общее у позиции письма и PDF: кто она, заголовок, ссылка, балл.
+        position = {
+            "item_type": item_type,
+            "article_id": row["id"] if item_type == "article" else None,
+            "signal_id": row["id"] if item_type == "signal" else None,
+            "title": title,
+            "url": row["url"],
+            "score": float(row["total_score"]) if row.get("total_score") is not None else None,
+        }
         news.append(
             {
                 "category": tag,
-                "item_type": item_type,
-                "article_id": row["id"] if item_type == "article" else None,
-                "signal_id": row["id"] if item_type == "signal" else None,
-                "title": title,
+                **position,
                 "source": row["source_name"],
-                "url": row["url"],
                 "published_at": published,
                 "tag": tag,
-                "score": float(row["total_score"]) if row.get("total_score") is not None else None,
                 "score_label": row.get("score_label"),
                 "summary": _compact_digest_summary(summary, title),
                 "image_url": row.get("image_url") or "",
             }
         )
+        positions.append(
+            {
+                **position,
+                "summary": _digest_summary_text(summary, title),
+                # Своя картинка — та, что платформа уже знает (у статьи ленты); годна ли она, видно при печати.
+                "image_url": "" if _is_unusable_digest_image_url(row.get("image_url")) else row["image_url"],
+                "root_tag": row.get("parent_tag_name") or row.get("tag_name"),
+            }
+        )
     _attach_item_kinds(news)
+    sections = digest_materials.sections(positions, month=month)
     title_template = issue_cfg["title_template_with_month"] if month else issue_cfg["title_template"]
     intro_template = issue_cfg["intro_template_with_month"] if month else issue_cfg["intro_template"]
     month_text = _issue_month_text(month)
@@ -399,6 +375,10 @@ def build_digest_content(
         },
         "news": news,
         "items": news,
+        # PDF в формате эксперта (#161): разделы с карточками, обложка и название с темой документа.
+        "sections": sections,
+        "cover": digest_materials.cover(month, sections),
+        "document": digest_materials.document(month, sections, name=issue_cfg["title_template"]),
         "highlights": _digest_highlights(news, branding.get("highlights")),
         "footer": {
             "contact_text": branding["footer"]["contact_text"],
@@ -480,11 +460,8 @@ def _render_footer_contact(footer: dict) -> str:
 
 
 def render_digest_email(content: dict) -> str:
-    """Render the branded Gazprom Neft digest HTML from issue/hero/news/footer.
-
-    The same render is used for the on-screen HTML, the file export and the PDF —
-    one template, identical to the reference (digest_email_claude_pack).
-    """
+    """Письмо выпуска из issue/hero/news/footer: тот же HTML для экрана и выгрузки HTML (DOCX собирается из тех же
+    news). PDF в формате эксперта собирается отдельно (digest_pdf, #161)."""
     template = (TEMPLATE_DIR / EMAIL_TEMPLATE).read_text(encoding="utf-8")
     news_items = content.get("news", [])
     branding = content.get("branding") or _load_digest_branding()
@@ -493,7 +470,8 @@ def render_digest_email(content: dict) -> str:
         "header_brand_text": _html(branding.get("header", {}).get("brand_text")),
         "header_brand_suffix": _html(branding.get("header", {}).get("brand_suffix")),
         "header_department_text": _html(branding.get("header", {}).get("department_text")),
-        "font_face_style": _embedded_font_faces(),
+        # Шрифт выпуска, как у PDF; почтовые клиенты его вырезают, остаётся Arial.
+        "font_face_style": digest_pdf.font_faces(),
         "issue_title": _html(content.get("issue", {}).get("title")),
         "issue_preheader": _html(content.get("issue", {}).get("preheader")),
         "issue_intro": _html(content.get("issue", {}).get("intro")),
@@ -528,18 +506,24 @@ def _digest_glossary_context(row: dict, tag: str) -> dict:
     }
 
 
-def _compact_digest_summary(summary: str, title: str, max_chars: int = 250) -> str:
-    """Суть для карточки выпуска: целыми предложениями, сколько входит в площадь карточки — около трёх строк
-    колонки 600 px (решение владельца 23.10: текст ровно вмещается в отведённое место, без обрыва фразы).
-    Первое предложение длиннее места — обрезка по слову с многоточием."""
+def _digest_summary_text(summary: str, title: str) -> str:
+    """Суть материала для выпуска целиком: пробелы сведены, повтор заголовка в начале снят. PDF в формате эксперта
+    берёт её так (#161), письмо и DOCX режут по площади карточки (_compact_digest_summary)."""
     text = re.sub(r"\s+", " ", (summary or "").strip())
-    if not text:
-        return ""
-
     # Our summaries often start with the article title prefix. Remove it for the digest.
     title_prefix = f"{(title or '').strip()}:"
     if title and text.lower().startswith(title_prefix.lower()):
         text = text[len(title_prefix):].strip()
+    return text
+
+
+def _compact_digest_summary(summary: str, title: str, max_chars: int = 250) -> str:
+    """Суть для карточки выпуска: целыми предложениями, сколько входит в площадь карточки — около трёх строк
+    колонки 600 px (решение владельца 23.10: текст ровно вмещается в отведённое место, без обрыва фразы).
+    Первое предложение длиннее места — обрезка по слову с многоточием."""
+    if not (summary or "").strip():
+        return ""
+    text = _digest_summary_text(summary, title)
 
     sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
     taken = ""
@@ -563,19 +547,6 @@ _HL_ICONS = {
     "chart": '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 16 9 11 13 14 20 6"/><polyline points="15 6 20 6 20 11"/></svg>',
     "people": '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 7.5a3 3 0 0 1 0 5.5"/><path d="M15.5 14.5a5.5 5.5 0 0 1 5 5.5"/></svg>',
 }
-
-
-def _plural(n: int, one: str, few: str, many: str) -> str:
-    """Русское склонение существительного по числу (1 новость / 2 новости / 5 новостей)."""
-    n = abs(int(n)) % 100
-    if 10 < n < 20:
-        return many
-    n1 = n % 10
-    if n1 == 1:
-        return one
-    if 2 <= n1 <= 4:
-        return few
-    return many
 
 
 def _digest_highlights(news: list[dict], config: dict | None = None) -> list[dict]:
@@ -615,7 +586,7 @@ def _digest_highlights(news: list[dict], config: dict | None = None) -> list[dic
         value = int(metric_values.get(metric, 0))
         prefix = str(card.get("prefix") or "").strip()
         suffix = str(card.get("suffix") or "").strip()
-        noun = _plural(
+        noun = digest_materials.plural(
             value,
             str(card.get("noun_one") or "материал"),
             str(card.get("noun_few") or "материала"),
@@ -1034,68 +1005,9 @@ def save_digest_draft(
 
 
 def render_digest_pdf(content: dict) -> bytes:
-    """Render the branded digest to PDF via headless Chromium (pixel-perfect).
-
-    Playwright/Chromium is an optional, server-side dependency (it is heavy and not
-    needed for tests or for the HTML/Word paths), so it is imported lazily and a
-    clear, actionable error is raised when it is missing.
-    """
-    html_str = render_digest_email(content)
-    # Вшиваем GPN Din только в PDF: Chromium рендерит @font-face, корпоративный шрифт
-    # попадает в PDF (в email он не нужен — клиенты вырезают кастомные шрифты).
-    font_style = _pdf_font_face_style()
-    if font_style:
-        html_str = html_str.replace("</head>", font_style + "</head>", 1)
-    try:
-        from playwright.sync_api import Error as PlaywrightError
-        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:  # pragma: no cover - depends on optional dep
-        raise RuntimeError(
-            "PDF-экспорт требует Playwright с Chromium. Установите на сервере: "
-            "pip install playwright && python -m playwright install --with-deps chromium"
-        ) from exc
-
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(args=["--no-sandbox"])
-            try:
-                page = browser.new_page()
-                page.set_content(html_str, wait_until="domcontentloaded")
-                try:
-                    page.wait_for_load_state("load", timeout=_PDF_IMAGES_WAIT_MS)
-                except PlaywrightTimeoutError:
-                    pass  # недогрузившиеся картинки заменит плашка ниже
-                # Сайт, закрытый для РФ-адресов, отвечает на картинку сразу 403: загрузка кончается
-                # вовремя, а в карточке выходил значок «битой» картинки с повтором заголовка.
-                # Порядок картинок карточек = порядок новостей: у каждой карточки одна.
-                replaced = page.evaluate(
-                    _PDF_SWAP_UNLOADED_IMAGES_JS,
-                    [_news_placeholder_data_uri(item.get("category")) for item in content.get("news", [])],
-                )
-                if replaced:
-                    logger.warning("digest_pdf_images_replaced count=%s", replaced)
-                pdf_bytes = page.pdf(
-                    format="A4",
-                    print_background=True,
-                    # Нумерация страниц — просьба заказчика 25.08. Chromium рисует её
-                    # только при display_header_footer, и только в ПОЛЯХ страницы:
-                    # при нижнем поле 0 колонтитул физически некуда положить, поэтому
-                    # снизу появляется 12 мм. Верхнее поле остаётся нулевым, чтобы
-                    # hero-баннер по-прежнему упирался в край листа.
-                    display_header_footer=True,
-                    header_template="<div></div>",
-                    footer_template=_PDF_FOOTER_TEMPLATE,
-                    margin={"top": "0", "bottom": "12mm", "left": "0", "right": "0"},
-                )
-            finally:
-                browser.close()
-    except PlaywrightError as exc:
-        # Упал или не запустился сам браузер: ошибка Playwright не RuntimeError, и экран получал 500 (ревью PR #155).
-        # Человеку понятный текст, причина в журнале.
-        logger.exception("digest_pdf_browser_failed")
-        raise RuntimeError("Браузер не смог собрать PDF. Повторите через минуту.") from exc
-    return pdf_bytes
+    """PDF выпуска в формате эксперта (#161) через headless Chromium: обложка и листы карточек (digest_pdf). Файлы
+    брендинга (баннер, логотип, QR) — в каталоге брендинга на сервере."""
+    return digest_pdf.render(content, files_dir=_branding_store_path().parent)
 
 
 # Предпросмотр PDF на экране дайджеста собирает Chromium в процессе API (выгрузка файлом идёт полосой playwright).
@@ -1109,21 +1021,25 @@ _PREVIEW_PDF_CACHE_SIZE = 4
 _PREVIEW_PDF_WAIT_SECONDS = 60
 
 
-def render_digest_preview_pdf(content: dict) -> bytes:
+def render_digest_preview_pdf(content: dict, *, fresh: bool = False) -> bytes:
     """PDF предпросмотра: тот же render_digest_pdf, но по одной сборке за раз и с памятью на последние выпуски.
 
     Ключ — содержание выпуска целиком (состав, тексты, оформление): сменился черновик, отметка или фильтр — другой
-    ключ и новая сборка; тот же выпуск — готовые байты без Chromium."""
+    ключ и новая сборка; тот же выпуск — готовые байты без Chromium. Картинок карточек и файлов брендинга в ключе нет:
+    картинки Chromium грузит при сборке, сайт, который не ответил, потом оживает, а файл баннера, логотипа или QR на
+    сервере могут заменить под тем же именем. Поэтому «Обновить PDF» (`fresh`) собирает заново мимо памяти, и новый файл
+    заменяет прежний (LOW-2 ревью PR #155): предпросмотр снова совпадает с выгрузкой."""
     key = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
     if not _PREVIEW_PDF_LOCK.acquire(timeout=_PREVIEW_PDF_WAIT_SECONDS):
         raise RuntimeError("PDF сейчас собирается. Повторите через минуту.")
     try:
-        cached = _PREVIEW_PDF_CACHE.get(key)
+        cached = None if fresh else _PREVIEW_PDF_CACHE.get(key)
         if cached is not None:
             _PREVIEW_PDF_CACHE.move_to_end(key)
             return cached
         pdf_bytes = render_digest_pdf(content)
         _PREVIEW_PDF_CACHE[key] = pdf_bytes
+        _PREVIEW_PDF_CACHE.move_to_end(key)
         while len(_PREVIEW_PDF_CACHE) > _PREVIEW_PDF_CACHE_SIZE:
             _PREVIEW_PDF_CACHE.popitem(last=False)
         return pdf_bytes

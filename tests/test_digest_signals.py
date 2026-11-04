@@ -13,8 +13,11 @@ from oiltech_digest.processing.digest import build_digest_content, save_digest_d
 
 @pytest.fixture(autouse=True)
 def _no_item_kinds_lookup(monkeypatch):
-    """Категорию элементов (плашка «Технология / Бизнес») берёт база; эти проверки — без базы."""
+    """Категорию элементов (плашка «Технология / Бизнес») и поля материала PDF (#161) берёт база; эти проверки — без
+    базы."""
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: ({}, {}))
+    monkeypatch.setattr(digest.repository, "issue_material_fields", lambda articles, signals: ({}, {}))
+    monkeypatch.setattr(digest.repository, "list_enabled_scoring_criteria", lambda profile: [])
 
 
 def _row(row_id, *, item_type="article", title=None):

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from datetime import datetime
@@ -15,6 +16,7 @@ from zipfile import ZipFile
 
 from oiltech_digest.db import connection
 from oiltech_digest.processing import digest as digest_module
+from oiltech_digest.processing import digest_pdf
 from tests.digest_user_path_support import SEPT, add_article, add_signal, issue_key, msk, pdf_content, utc
 from tests.digest_user_path_support import (  # noqa: F401 — фикстуры
     chromium,
@@ -72,6 +74,33 @@ def test_export_of_a_45_item_issue_in_html_and_docx_matches_the_preview(issue):
         assert item["title"] in document_xml
 
 
+def test_letter_and_docx_are_built_as_before_the_expert_pdf(issue):
+    """Новый вид получает только PDF (#161, спека #160): письмо и DOCX собираются как раньше. Отпечатки сняты на main
+    af21052, до формата эксперта, на том же выпуске: статьи с картинкой и без, карточка радара, черновик с порядком."""
+    analyst, a, s = issue["analyst"], issue["a"], issue["s"]
+    with connection.get_connection() as conn:
+        pictured = add_article(conn, issue["source"], "pictured", published=utc(2026, 9, 14, 12), score=71,
+                               image_url="https://img.example.org/pictured.jpg")
+        conn.commit()
+    for article_id in (a["hi"], a["mid"], pictured):
+        analyst.mark(article_id)
+    analyst.mark_signal(s["sep"])
+    assert analyst.save(SEPT, [a["mid"], pictured, a["hi"]]).status_code == 200
+
+    letter = analyst.get("/api/digest-email", params={"month": SEPT, "limit": 500, "min_score": 0}).text
+    with ZipFile(BytesIO(analyst.export("docx"))) as archive:
+        document_xml = archive.read("word/document.xml")
+
+    # Отпечаток разошёлся — изменилось письмо или DOCX (или данные этого теста). Намеренная правка их вида: снять
+    # отпечаток заново и сказать об этом в PR; иначе это поломка письма.
+    assert hashlib.sha256(letter.encode("utf-8")).hexdigest() == _LETTER_BEFORE_EXPERT_PDF, "письмо изменилось"
+    assert hashlib.sha256(document_xml).hexdigest() == _DOCX_BEFORE_EXPERT_PDF, "DOCX изменился"
+
+
+_LETTER_BEFORE_EXPERT_PDF = "ff92679c244d70511a05f72c49db8b5c5acb4ca548c330fad8fb2a3f3dba64fc"
+_DOCX_BEFORE_EXPERT_PDF = "a22e75104e8e8684dadbd7aec404fa9e40de279a180152969d2877a47131b284"
+
+
 def test_issue_header_names_the_month_in_words(issue):
     """Дефект до 29.09. Заказчик 24.08 (#428915) в выпуске за август: «за 2026-08» → «за
     август 2026 г», и в заголовке выпуска. Август собирали скриптом с этой правкой, а продукт
@@ -125,14 +154,12 @@ def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(
     без внешних картинок — PDF за 1,9 с; две «молчащие» картинки из сорока — set_content(
     wait_until="load") ждал до потолка Playwright и через 30 с падал TimeoutError: выгрузка PDF
     не получалась ни с одной из трёх попыток задачи. Теперь картинки ждём ограниченное время,
-    недогрузившуюся меняем на плашку рубрики — как у статьи без картинки."""
-    # Локальный адрес сборщик считает «тестовым» и сам меняет на плашку — здесь пропускаем его.
-    monkeypatch.setattr(digest_module, "_is_unusable_digest_image_url", lambda url: not url)
-    monkeypatch.setattr(digest_module, "_PDF_IMAGES_WAIT_MS", 2000)
+    недогрузившуюся меняем на заглушку темы — как у статьи без картинки."""
+    monkeypatch.setattr(digest_pdf, "IMAGES_WAIT_MS", 2000)
     content = pdf_content(40, {3: f"{silent_image_host}/a.jpg", 17: f"{silent_image_host}/b.jpg"})
 
     started = time.monotonic()
-    with caplog.at_level("WARNING", logger=digest_module.__name__):
+    with caplog.at_level("WARNING", logger=digest_pdf.__name__):
         pdf = digest_module.render_digest_pdf(content)
     elapsed = time.monotonic() - started
 
@@ -141,15 +168,14 @@ def test_pdf_of_40_items_is_printed_although_an_article_image_never_answers(
     assert "digest_pdf_images_replaced count=2" in caplog.text
 
 
-def test_pdf_shows_the_rubric_tile_instead_of_a_refused_image(chromium, refusing_image_host, monkeypatch, caplog):
+def test_pdf_shows_the_theme_placeholder_instead_of_a_refused_image(chromium, refusing_image_host, caplog):
     """Сайт, закрытый для РФ-адресов, отвечает на картинку сразу 403: загрузка страницы
     кончается вовремя, но в PDF на месте картинки выходил значок «битой» картинки с повтором
     заголовка статьи (проверено снимком карточки 29.09). Такая картинка тоже меняется на
-    плашку рубрики; DOCX битые картинки и раньше просто пропускал."""
-    monkeypatch.setattr(digest_module, "_is_unusable_digest_image_url", lambda url: not url)
+    заглушку темы; DOCX битые картинки и раньше просто пропускал."""
     content = pdf_content(3, {0: f"{refusing_image_host}/a.jpg"})
 
-    with caplog.at_level("WARNING", logger=digest_module.__name__):
+    with caplog.at_level("WARNING", logger=digest_pdf.__name__):
         pdf = digest_module.render_digest_pdf(content)
 
     assert pdf.startswith(b"%PDF")
