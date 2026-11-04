@@ -1285,6 +1285,8 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda article_ids, signal_ids: ({}, {}))
     # Поля материала PDF (#161) и имена критериев раздела тоже из базы — без неё полей нет.
     monkeypatch.setattr(digest.repository, "issue_material_fields", lambda article_ids, signal_ids: ({}, {}))
+    # «Главное в выпуске», написанное человеком (#162), тоже из базы.
+    monkeypatch.setattr("oiltech_digest.db.issue_edits_store.highlights", lambda month: {})
     monkeypatch.setattr(digest.repository, "list_enabled_scoring_criteria", lambda profile: [])
 
     content = digest.build_digest_content("2026-06", min_score=65)

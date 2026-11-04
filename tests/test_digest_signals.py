@@ -17,6 +17,8 @@ def _no_item_kinds_lookup(monkeypatch):
     базы."""
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: ({}, {}))
     monkeypatch.setattr(digest.repository, "issue_material_fields", lambda articles, signals: ({}, {}))
+    # «Главное в выпуске», написанное человеком (#162), тоже из базы.
+    monkeypatch.setattr("oiltech_digest.db.issue_edits_store.highlights", lambda month: {})
     monkeypatch.setattr(digest.repository, "list_enabled_scoring_criteria", lambda profile: [])
 
 
