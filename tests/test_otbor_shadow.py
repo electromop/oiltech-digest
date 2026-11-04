@@ -10,6 +10,7 @@ import pytest
 
 from oiltech_digest import api, cli, feed_window, otbor
 from oiltech_digest.db import marks, repository
+from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIClientError
 from tests.card_pipeline_support import (MARKET, SCORES_MODEL, card_answer, even, fill_cards,  # noqa: F401
@@ -126,7 +127,7 @@ def test_apply_writes_decisions_beside_and_leaves_feed_and_showcases_as_they_wer
     report = _report(capsys)
     assert (report["publications"], report["decided"]) == (2, 2)
     assert report["gate"] == {"accept": {"accept": 0, "reject": 1}, "reject": {"accept": 1, "reject": 0}}
-    assert report["versions"] == {f"{otbor.PROMPT_VERSION} / 2026-10-26.3": 2}
+    assert report["versions"] == {f"{otbor.PROMPT_VERSION} / {load_dictionaries()['version']}": 2}
     # Лента статей и витрины — как были: решает по-прежнему гейт.
     assert _feed(user) == {"Контракт Weatherford"}
     assert set(showcase(user)) == {"Контракт Weatherford"}
