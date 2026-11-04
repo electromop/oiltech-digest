@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Article, ArchiveMonth, DigestContentItem } from "../../api/types";
+import type { Article, ArchiveMonth, DigestContentItem, DigestMaterial } from "../../api/types";
 import { DigestPage } from "./DigestPage";
 
 // Какой выпуск открыт по умолчанию (решение владельца 29.09: сентябрьский выпуск собирают
@@ -326,19 +326,19 @@ describe("экран выпуска: какой месяц открыт по у�
 
 describe("правки человека в выпуске (#162)", () => {
   const fetchMock = vi.fn();
-  const material = {
-    item_type: "signal" as const, article_id: null, signal_id: 77, material_signal_id: 77, section: "technology" as const,
+  const material: DigestMaterial = {
+    item_type: "signal", article_id: null, signal_id: 77, material_signal_id: 77, section: "technology",
     rubric: "БУРЕНИЕ", label: "Пилот", label_default: "Пилот", title: "Пилот буровой", summary: "Суть пилота.",
     hypothesis: null, hypothesis_set_by: null, hypothesis_author: null, hypothesis_set_at: null,
-    relevance: "не определено", url: "https://radar.example.org/77", image_own: false, picture: "own" as const,
-    missing: ["hypothesis" as const, "criteria" as const, "relevance" as const, "picture" as const],
+    relevance: "не определено", url: "https://radar.example.org/77", image_own: false, picture: "own",
+    missing: ["hypothesis", "criteria", "relevance", "picture"],
   };
   const news: DigestContentItem[] = [{
     item_type: "signal", article_id: null, signal_id: 77, category: "Бурение", title: "Пилот буровой",
     summary: "Суть пилота.", url: "https://radar.example.org/77", source: "radar.example.org", score: 75,
   }];
   let nextIssue: unknown = null;
-  let shown: typeof material = material;
+  let shown: DigestMaterial = material;
 
   beforeEach(() => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
