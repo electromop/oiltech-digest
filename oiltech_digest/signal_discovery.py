@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, timedelta
 import hashlib
 import json
+import logging
 import re
 import time
 from typing import Any, Callable, Iterator
@@ -44,6 +45,8 @@ from oiltech_digest.signal_feedback import (
     topic_term_stems,
     use_memory_snapshot,
 )
+
+logger = logging.getLogger(__name__)
 
 
 INDUSTRY_CONTEXT_RE = re.compile(
@@ -756,11 +759,21 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         existing_signals = repository.list_signals_for_dedup()
     except Exception:  # noqa: BLE001 - без сверки с базой дедуп ограничится карточками прогона
         existing_signals = []
+    # Видимые сигналы ленты окна поиска (блок А5, 04.11): находка того же события садится в них, а не заводит вторую
+    # карточку. Окно — как у ссылок сбора: материал периода сбор мог взять раньше его даты.
+    feed_since = _research_window(config)[0] - timedelta(days=COLLECTED_MARGIN_DAYS)
+    try:
+        feed_signals = repository.list_feed_signals_for_dedup(since=feed_since)
+    except Exception:  # noqa: BLE001 - без сверки с лентой дедуп сверит находки только с радаром
+        # Не молча: в итоге прогона это видно и по feed_signals = 0 у «Дедупа».
+        logger.exception("radar_feed_snapshot_failed since=%s", feed_since)
+        feed_signals = []
     snapshot: dict[str, Any] = {
         "topics": [{key: topic.get(key) for key in _TOPIC_SNAPSHOT_FIELDS if key in topic} for topic in topics],
         "article_evidence": article_evidence,
         "known_urls": sorted({_normalize_url_for_key(url) for url in known_urls if url}),
         "existing_signals": existing_signals,
+        "feed_signals": feed_signals,
         "dedup_max_pairs": app_config.SIGNAL_DEDUP_MAX_PAIRS,
         "radar_themes": _radar_theme_names(),
         "radar_criteria": _radar_criteria(),
@@ -1125,9 +1138,12 @@ def _dedupe_run(
     if config.offline:
         return {"skipped": "offline"}
     nodes: list[dict[str, Any]] = []
-    for row in snapshot.get("existing_signals") or []:
+    # Сохранённые карточки радара и видимые сигналы ленты окна поиска (feed_signals, 04.11): сигнал ленты сверяется
+    # только с находками прогона (signal_dedup._eligible), находка того же события уходит ссылкой в сигнал ленты.
+    for row in [*(snapshot.get("existing_signals") or []), *(snapshot.get("feed_signals") or [])]:
         nodes.append({
             "kind": "existing",
+            "origin": row.get("origin"),
             "id": int(row["id"]),
             "reviewed": bool(row.get("reviewed") or row.get("verdict")),
             "verdict": row.get("verdict"),
@@ -1156,7 +1172,7 @@ def _dedupe_run(
                 "fresh": True,
                 "order": len(refs),
                 "urls": [item.get("source_url") for item in signal.get("evidence") or [] if item.get("source_url")],
-                "signal": signal,
+                "signal": _finding_dedup_view(signal) if candidate.get("otbor") else signal,
             })
     result = signal_dedup.dedupe(
         nodes,
@@ -1183,11 +1199,33 @@ def _dedupe_run(
         primary = by_key.get(str(candidate["duplicate_of"].get("signal_key") or ""))
         if primary is not None and primary.get("duplicate_of"):
             candidate["duplicate_of"] = dict(primary["duplicate_of"])
+    feed = {index for index, node in enumerate(nodes) if node.get("origin") == signal_dedup.FEED_ORIGIN}
     return {
         **result["stats"],
         "duplicates_new": sum(1 for index in result["assigned"] if index in refs),
+        # Сверка с лентой (04.11): сколько сигналов ленты было в снимке и сколько находок ушло в них ссылкой.
+        "feed_signals": len(feed),
+        "duplicates_of_feed": sum(1 for index, (primary_index, _) in result["assigned"].items()
+                                  if index in refs and primary_index in feed),
         "batch_duplicates": len(batch_duplicates),
         "existing_merges": existing_merges,
+    }
+
+
+def _finding_dedup_view(signal: dict[str, Any]) -> dict[str, Any]:
+    """Что «Дедуп» знает о находке поиска при «Отборе»: сигнал несёт только заголовок страницы (#131), а черновые
+    данные модели поиска лежат в её ссылках — русский заголовок, компании и суть. Правилу пар и судье они нужны:
+    без них пара Halliburton и Keystone прогона 51351 с английскими заголовками сошлась на 0,18 при пороге 0,25, а
+    пара с русской статьёй ленты не сошлась бы вовсе (замер 04.11). В сигнал и во вход «Отбора» они не идут."""
+    payloads = [item.get("raw_payload") or {} for item in signal.get("evidence") or []]
+    titles = [str(payload["research_title"]) for payload in payloads if payload.get("research_title")]
+    return {
+        **signal,
+        "title_ru": titles[0] if titles else None,
+        "research_titles": titles,
+        "companies": [str(payload["company"]) for payload in payloads if payload.get("company")],
+        "summary": next((str(payload["research_summary"]) for payload in payloads
+                         if payload.get("research_summary")), ""),
     }
 
 
@@ -1681,6 +1719,17 @@ def _same_event_by_rule(candidate: dict[str, Any], target: dict[str, Any]) -> bo
     return signal_dedup._overlap(signal_dedup.title_stems(left), signal_dedup.title_stems(right)) >= signal_dedup.PAIR_MIN_OVERLAP
 
 
+MERGE_LOG_STAGE = "«Дедуп»"
+
+
+def _merge_log_text(added: list[dict[str, Any]], reason: Any) -> str:
+    """Строка «Хода решения» главной: какую публикацию поиска «Дедуп» к ней прибавил и почему."""
+    found = "; ".join(f"{item.get('title') or item['source_url']} ({_domain_of(str(item['source_url']))})"
+                      for item in added)
+    text = f"Та же новость найдена поиском радара: {found}"
+    return _trim(f"{text}. Судья: {reason}" if reason else text, 600)
+
+
 def _merge_duplicate(
     config: SignalDiscoveryConfig,
     topic_name: str,
@@ -1700,15 +1749,28 @@ def _merge_duplicate(
     target_id = repository.resolve_signal_merge_root(int(target_id)) if target_id else None
     if target_id is None:
         return False
+    if candidate.get("otbor") and target.get("signal_id") and not repository.signal_takes_findings(target_id):
+        # Сохранённая главная скрылась, пока шёл прогон (04.11): находка — своей карточкой, её решит «Отбор».
+        return False
     owner_id = candidate.get("key_owner_id")
     if owner_id and owner_id != target_id:
         # Ключ дубля — у видимой карточки: это тот же материал, она тоже дубль главной.
         repository.mark_signal_merged(int(owner_id), target_id, str(candidate.get("duplicate_reason") or ""))
+    held = None
     if candidate.get("otbor"):
         # Ссылка, которую сбор успел собрать, пока шёл прогон (#138), к главной находке не прибавляется.
         _drop_collected_links(candidate)
+        held = repository.signal_evidence_urls(target_id)
     for item in signal.get("evidence") or []:
         repository.upsert_signal_evidence(target_id, item)
+    if held is not None:
+        # Главная — и сигнал ленты (04.11): в её «Ходе решения» видно, откуда у неё ссылка поиска. Только когда
+        # ссылка прибавилась: та же находка следующего прогона строку не повторяет.
+        new_urls = repository.signal_evidence_urls(target_id) - held
+        added = [item for item in signal.get("evidence") or [] if item.get("source_url") in new_urls]
+        if added:
+            repository.append_signal_decision_log(target_id, MERGE_LOG_STAGE,
+                                                  _merge_log_text(added, candidate.get("duplicate_reason")))
     repository.refresh_signal_evidence_count(target_id)
     if owner_id and owner_id != target_id:
         repository.refresh_signal_evidence_count(int(owner_id))

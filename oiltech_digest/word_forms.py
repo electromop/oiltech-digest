@@ -68,6 +68,24 @@ def _stems(word: str) -> set[str]:
             if word.endswith(ending) and len(word) - len(ending) >= 3}
 
 
+# Основы слов заголовка для сверки пар «одно ли событие» (signal_dedup: дедуп радара; repository.reprint_candidates:
+# перепечатки ленты по русскому заголовку): слово от TITLE_STEM_LEN букв, его первые TITLE_STEM_LEN знаков, без чисел и
+# слов, которые есть почти в каждом заголовке отрасли. Грубее лемматизации намеренно: решает судья, правило только
+# отбирает пары.
+TITLE_STEM_LEN = 4
+TITLE_STOP_WORDS = frozenset({
+    "для", "как", "или", "что", "это", "при", "над", "под", "после", "the", "and", "for",
+    "with", "from", "нефтегаз", "нефтегазов", "нефтегазовой", "нефтегаза", "систем",
+    "системы", "решени", "технолог", "мониторинг",
+})
+
+
+def title_stems(text: str) -> set[str]:
+    """Основы слов заголовка (TITLE_STEM_LEN, TITLE_STOP_WORDS)."""
+    found = re.findall(rf"[a-zа-яё0-9]{{{TITLE_STEM_LEN},}}", str(text or "").lower())
+    return {word[:TITLE_STEM_LEN] for word in found if word not in TITLE_STOP_WORDS and not word.isdigit()}
+
+
 def words(text: str) -> list[str]:
     """Слова имени, цитаты или текста для сверки имён: регистр — как написано, «ё» — «е», слово делит и апостроф
     ' ‘ ’, и буква-апостроф (_APOSTROPHE_LETTERS)."""
@@ -304,6 +322,17 @@ def _required(name: Sequence[str]) -> list[str]:
     """Слова имени без формы собственности (_OPTIONAL), в том числе с точками: «S.A.» words режет на «S» и «A» —
     однобуквенные слова подряд, вместе дающие форму собственности, снимаются тоже. Имя из одной формы
     собственности — целиком."""
+    return _without_legal_form(name) or list(name)
+
+
+def bare_words(name: str) -> tuple[str, ...]:
+    """Слова имени компании без формы собственности, в нижнем регистре: ключ «общая компания» у пар «Дедупа»
+    (signal_dedup.company_keys). Имя только из формы собственности («Inc.» после запятой в «Select Water Solutions,
+    Inc.») — пусто: это не компания, и общим участником всех «Inc.» она стать не должна."""
+    return tuple(word.casefold() for word in _without_legal_form(words(name)))
+
+
+def _without_legal_form(name: Sequence[str]) -> list[str]:
     kept: list[str] = []
     index = 0
     while index < len(name):
@@ -316,7 +345,7 @@ def _required(name: Sequence[str]) -> list[str]:
         if name[index].casefold() not in _OPTIONAL:
             kept.append(name[index])
         index += 1
-    return kept or list(name)
+    return kept
 
 
 def _named_word(word: str, token: str) -> bool:

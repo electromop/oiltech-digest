@@ -136,18 +136,33 @@ WHERE s.signal_key = {_key_sql('f.id')}
 """
 
 # Свой сигнал у статьи, ставшей перепечаткой, — дубль сигнала главной (тот же механизм
-# склейки, что у радара: merged_into_signal_id, дубль не удаляется).
+# склейки, что у радара: merged_into_signal_id, дубль не удаляется). Сигнал главной сам может быть дублем (человек
+# склеил его с другой карточкой, «Дубль #ID»): тогда перепечатка — к корню группы, а не к спрятанному сигналу; группа
+# в один шаг, как у mark_signal_merged (04.11).
 _MERGE_REPRINTS = f"""
 UPDATE signals d
-SET merged_into_signal_id = p.id,
+SET merged_into_signal_id = COALESCE(p.merged_into_signal_id, p.id),
     merge_reason = '{REPRINT_MERGE_REASON} ' || ar.primary_id,
     updated_at = now()
 FROM feed_scope f
 JOIN article_reprints ar ON ar.article_id = f.id
 JOIN signals p ON p.signal_key = {_key_sql('ar.primary_id')}
 WHERE d.signal_key = {_key_sql('f.id')}
-  AND p.id <> d.id
-  AND d.merged_into_signal_id IS DISTINCT FROM p.id
+  AND COALESCE(p.merged_into_signal_id, p.id) <> d.id
+  AND d.merged_into_signal_id IS DISTINCT FROM COALESCE(p.merged_into_signal_id, p.id)
+"""
+
+# Дубли сигнала, который сам стал дублем, — к его корню: в главной карточке видны ссылки только её прямых дублей
+# (list_radar_evidence). Карточка радара, которую «Дедуп» склеил с сигналом ленты (04.11), иначе ушла бы с экрана
+# вместе со ссылками, когда статья этого сигнала стала перепечаткой.
+_FLATTEN_MERGED = f"""
+UPDATE signals c
+SET merged_into_signal_id = d.merged_into_signal_id, updated_at = now()
+FROM signals d
+JOIN feed_scope f ON d.signal_key = {_key_sql('f.id')}
+WHERE c.merged_into_signal_id = d.id
+  AND d.merged_into_signal_id IS NOT NULL
+  AND d.merged_into_signal_id <> c.id
 """
 
 
@@ -210,8 +225,10 @@ WHERE s.id = n.id AND s.evidence_count <> n.count
 """
 
 # Сигналы статей прогона и их перепечаток. Перепечатка — новая публикация события главной статьи («Дедуп» ленты):
-# «Решение платформы» сигнала после «Отбора» пересчитывается (#132; «подтверждено» с третьей публикацией сильного).
-_SCOPE_SIGNALS = f"SELECT s.id FROM signals s JOIN feed_scope f ON s.signal_key = {_key_sql('f.id')}"
+# «Решение платформы» сигнала после «Отбора» пересчитывается (#132; «подтверждено» с третьей публикацией сильного),
+# и у корня группы, если главная сама склеена (_MERGE_REPRINTS): корень может быть вне охвата, карточкой радара.
+_SCOPE_SIGNALS = (f"SELECT s.id, s.merged_into_signal_id FROM signals s"
+                  f" JOIN feed_scope f ON s.signal_key = {_key_sql('f.id')}")
 
 
 def sync_feed_signals(
@@ -265,9 +282,11 @@ def sync_feed_signals(
         conn.execute(_CLEAR_GATE_DECIDED_FAILURES)
         unmerged = conn.execute(_UNMERGE_FORMER_REPRINTS).rowcount
         merged = conn.execute(_MERGE_REPRINTS).rowcount
+        conn.execute(_FLATTEN_MERGED)
         publications = conn.execute(_UPSERT_PUBLICATIONS).rowcount
         conn.execute(_REFRESH_COUNTS)
-        refresh_platform_decisions([row[0] for row in conn.execute(_SCOPE_SIGNALS).fetchall()], conn=conn)
+        refresh_platform_decisions([value for row in conn.execute(_SCOPE_SIGNALS).fetchall() for value in row],
+                                   conn=conn)
         if dry_run:
             conn.rollback()
         else:
