@@ -86,3 +86,11 @@ export function enqueueDigestExport(
     }),
   });
 }
+
+// «Главное в выпуске» (#162): строка раздела месяца на обложке PDF; пустая возвращает перечень рубрик раздела.
+export function saveIssueHighlight(month: string, section: "business" | "technology", text: string) {
+  return apiFetch<{ ok: boolean }>(`/api/issue-highlights/${encodeURIComponent(month)}`, {
+    method: "PUT",
+    body: JSON.stringify({ section, text }),
+  });
+}

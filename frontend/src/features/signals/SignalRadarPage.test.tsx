@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSignalFeedback,
+  editIssueMaterial,
   getSignalDictionaries,
   getSignalSearchHealth,
   getSignalSummary,
@@ -43,6 +44,7 @@ vi.mock("../../api/signals", () => ({
   listSignals: vi.fn(),
   getSignalSummary: vi.fn(),
   updateSignal: vi.fn(),
+  editIssueMaterial: vi.fn(),
   createSignalFeedback: vi.fn(),
   returnSignal: vi.fn(),
   getSignalSearchHealth: vi.fn(),
@@ -1451,5 +1453,58 @@ describe("итоги недели (03.10)", () => {
     render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
     await screen.findByText("Всего сигналов");
     expect(screen.queryByText(/Итоги за 7 дн/)).not.toBeInTheDocument();
+  });
+});
+
+describe("«Гипотеза для Компании» на карточке (#162)", () => {
+  beforeEach(() => {
+    vi.mocked(listSignals).mockReset();
+    vi.mocked(getSignalSummary).mockReset();
+    vi.mocked(editIssueMaterial).mockReset();
+  });
+
+  async function openCard(title: string) {
+    const card = (await screen.findByText(title)).closest("article") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Раскрыть сигнал" }));
+    return card;
+  }
+
+  it("стоит сразу после «Применения», показывает, кто и когда поставил, и правится там же", async () => {
+    vi.mocked(editIssueMaterial).mockResolvedValue({ ok: true, author: "editor@example.test" });
+    serve([
+      { ...baseSignal, id: 801, signal_key: "k801", title_ru: "Буровая с гипотезой", selected_for_digest: true,
+        oilfield_relevance: "direct", oilfield_application: "Бурение на суше",
+        hypothesis: "Оценить применение буровой на месторождениях Компании.", hypothesis_author: "expert@example.test",
+        hypothesis_set_at: "2026-10-20T09:00:00Z", card_set_by: { hypothesis: "human" } },
+      { ...baseSignal, id: 802, signal_key: "k802", title_ru: "Выбранная без гипотезы", selected_for_digest: true },
+      { ...baseSignal, id: 803, signal_key: "k803", title_ru: "Не в выпуске" },
+      { ...baseSignal, id: 804, signal_key: "k804", title_ru: "Закрытый месяц", selected_for_digest: true,
+        digest_locked: true, hypothesis: "Изучить опыт закрытого месяца." },
+    ]);
+    render(<SignalRadarPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+
+    const card = await openCard("Буровая с гипотезой");
+    const facts = card.querySelector(".signalRadarFacts") as HTMLElement;
+    const labels = [...facts.querySelectorAll(":scope > div > span:first-child")].map((node) => node.textContent ?? "");
+    expect(labels.findIndex((text) => text.startsWith("Гипотеза для Компании")))
+      .toBe(labels.findIndex((text) => text.startsWith("Применение в нефтесервисе")) + 1);
+    expect(within(card).getByText(/человек \(expert@example\.test\), 20\.10\.2026/)).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Править гипотезу" }));
+    fireEvent.change(within(card).getByRole("textbox", { name: "Гипотеза для Компании" }),
+      { target: { value: "Рассмотреть сервис бурения для Компании." } });
+    fireEvent.click(within(card).getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(editIssueMaterial).toHaveBeenCalledWith(801, { hypothesis: "Рассмотреть сервис бурения для Компании." }));
+    expect(await within(card).findByText("Рассмотреть сервис бурения для Компании.")).toBeInTheDocument();
+    expect(within(card).getByText(/человек \(editor@example\.test\)/)).toBeInTheDocument();
+
+    // Выбранная без гипотезы — «Написать гипотезу»; невыбранная без гипотезы — блока нет; закрытый месяц — без правки.
+    const empty = await openCard("Выбранная без гипотезы");
+    expect(within(empty).getByRole("button", { name: "Написать гипотезу" })).toBeInTheDocument();
+    const outside = await openCard("Не в выпуске");
+    expect(within(outside).queryByText(/Гипотеза для Компании/)).not.toBeInTheDocument();
+    const locked = await openCard("Закрытый месяц");
+    expect(within(locked).getByText("Изучить опыт закрытого месяца.")).toBeInTheDocument();
+    expect(within(locked).queryByRole("button", { name: /гипотезу/ })).not.toBeInTheDocument();
   });
 });

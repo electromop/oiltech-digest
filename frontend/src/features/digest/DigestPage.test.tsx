@@ -323,3 +323,94 @@ describe("экран выпуска: какой месяц открыт по у�
     });
   });
 });
+
+describe("правки человека в выпуске (#162)", () => {
+  const fetchMock = vi.fn();
+  const material = {
+    item_type: "signal" as const, article_id: null, signal_id: 77, material_signal_id: 77, section: "technology" as const,
+    rubric: "БУРЕНИЕ", label: "Пилот", label_default: "Пилот", title: "Пилот буровой", summary: "Суть пилота.",
+    hypothesis: null, hypothesis_set_by: null, hypothesis_author: null, hypothesis_set_at: null,
+    relevance: "не определено", url: "https://radar.example.org/77", image_own: false, picture: "own" as const,
+    missing: ["hypothesis" as const, "criteria" as const, "relevance" as const, "picture" as const],
+  };
+  const news: DigestContentItem[] = [{
+    item_type: "signal", article_id: null, signal_id: 77, category: "Бурение", title: "Пилот буровой",
+    summary: "Суть пилота.", url: "https://radar.example.org/77", source: "radar.example.org", score: 75,
+  }];
+  let nextIssue: unknown = null;
+
+  beforeEach(() => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/feed-window") {
+        return Promise.resolve(jsonResponse({ months: ["2026-09", "2026-10"], month: null, read_only: false, rollover_day: 11,
+          archive: [], next_issue: nextIssue }));
+      }
+      if (url.startsWith("/api/articles")) return Promise.resolve(jsonResponse([]));
+      if (url.startsWith("/api/digest-content")) {
+        return Promise.resolve(jsonResponse({
+          month: "2026-09", title: "Нефтесервисный дайджест", news,
+          sections: [
+            { key: "business", number: "01", title: "Бизнес-сигналы", materials: [] },
+            { key: "technology", number: "02", title: "Технологические сигналы", materials: [material] },
+          ],
+          cover: { highlights_title: "Главное в сентябрьском выпуске", highlights: [
+            { key: "technology", label: "Технологические сигналы", text: "Бурение.", default: "Бурение.", edited: false,
+              edited_by: null, edited_at: null },
+          ] },
+        }));
+      }
+      if (url.startsWith("/api/monthly-digests/")) {
+        return Promise.resolve(jsonResponse({ detail: "Digest not found" }, { status: 404 }));
+      }
+      return Promise.resolve(jsonResponse({ ok: true, author: "editor@example.test" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+    nextIssue = null;
+  });
+
+  const sent = (path: string) =>
+    fetchMock.mock.calls.filter(([input]) => String(input) === path).map(([, init]) => JSON.parse(String(init?.body)));
+
+  it("у материала видно, чего не хватает; правка уходит на его сигнал только изменённым", async () => {
+    const user = userEvent.setup();
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    const row = (await screen.findByText("Пилот буровой")).closest("li") as HTMLElement;
+    expect(within(row).getByRole("note")).toHaveTextContent(
+      "Не хватает: нет гипотезы, нет баллов по критериям, связь с нефтесервисом не определена, нет своей картинки");
+
+    await user.click(within(row).getByRole("button", { name: "Править" }));
+    await user.type(within(row).getByRole("textbox", { name: /Гипотеза для Компании/ }), "Оценить пилот для Компании.");
+    await user.click(within(row).getByRole("radio", { name: "заглушка темы" }));
+    await user.click(within(row).getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(sent("/api/signals/77/issue-material")).toEqual([
+      { hypothesis: "Оценить пилот для Компании.", picture: "placeholder" },
+    ]));
+  });
+
+  it("«Главное в выпуске» пишут по разделу поверх перечня рубрик; пустое возвращает перечень", async () => {
+    const user = userEvent.setup();
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    const field = await screen.findByRole("textbox", { name: "Технологические сигналы" });
+    expect(field).toHaveAttribute("placeholder", "по умолчанию: Бурение.");
+    expect(screen.queryByRole("textbox", { name: "Бизнес-сигналы" })).not.toBeInTheDocument();
+    await user.type(field, "Буровые без людей.");
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(sent("/api/issue-highlights/2026-09")).toEqual([
+      { section: "technology", text: "Буровые без людей." },
+    ]));
+  });
+
+  it("с 1-го до смены окна экран называет, сколько отмечено на следующий выпуск и когда он откроется (LOW-5)", async () => {
+    nextIssue = { month: "2026-10", materials: 2, opens_on: "2026-10-11" };
+    render(<DigestPage onUnauthorized={() => undefined} showToast={() => undefined} />);
+    expect(await screen.findByText(
+      "На следующий выпуск, за октябрь 2026, уже отмечено 2 материала: он откроется здесь 11 октября.",
+    )).toBeInTheDocument();
+  });
+});

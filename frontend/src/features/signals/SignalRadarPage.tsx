@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
 import {
   createSignalFeedback,
+  editIssueMaterial,
   getSignalDictionaries,
   getSignalSearchHealth,
   getSignalSummary,
@@ -26,6 +27,7 @@ import { SkeletonList } from "../shared/Skeleton";
 import { PROFILES } from "../scoring/ScoringPage";
 import { CHOICE_FIELDS, COUNTRY_FILTER, SignalAttributes, SignalCardLine, whyBlock } from "./SignalCardChips";
 import { SignalDecisionLog } from "./SignalDecisionLog";
+import { SignalHypothesis } from "./SignalHypothesis";
 import {
   ARRIVAL_FILTER_LABEL, CompanyGroupHint, EMPTY_CARD_FILTERS, FEEDBACK_FILTER, SignalCardFilters, arrivalPeriod,
 } from "./SignalCardFilters";
@@ -573,6 +575,29 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
       handleError(error, "Не удалось обновить статус сигнала");
       // 409 — месяц карточки закрылся, пока экран был открыт (день смены окна): выборка заново,
       // чтобы кнопка погасла по признаку сервера, а не ждала «Обновить».
+      if (error instanceof ApiError && error.status === 409) reload({ keepLoaded: true });
+    } finally {
+      setSaving((current) => ({ ...current, [signal.id]: false }));
+    }
+  }
+
+  // «Гипотеза для Компании» с карточки сигнала (#162): та же правка, что на экране «Дайджест»; поле на сигнале.
+  async function saveHypothesis(signal: Signal, text: string) {
+    try {
+      setSaving((current) => ({ ...current, [signal.id]: true }));
+      const saved = await editIssueMaterial(signal.id, { hypothesis: text });
+      const now = new Date().toISOString();
+      setSignals((current) =>
+        current.map((item) =>
+          item.id === signal.id
+            ? { ...item, hypothesis: text || null, hypothesis_set_at: now, hypothesis_author: saved.author ?? null,
+                card_set_by: { ...(item.card_set_by || {}), hypothesis: "human" } }
+            : item,
+        ),
+      );
+      showToast(text ? "Гипотеза сохранена" : "Гипотеза стёрта");
+    } catch (error) {
+      handleError(error, "Не удалось сохранить гипотезу");
       if (error instanceof ApiError && error.status === 409) reload({ keepLoaded: true });
     } finally {
       setSaving((current) => ({ ...current, [signal.id]: false }));
@@ -1132,6 +1157,8 @@ export function SignalRadarPage({ onUnauthorized, showToast, isAdmin = false, sh
                           <p>{signal.oilfield_application}</p>
                         </div>
                       ) : null}
+                      {/* «Гипотеза для Компании» (#162) — сразу после «Применения», та же, что в выпуске. */}
+                      <SignalHypothesis signal={signal} saving={savingThis} onSave={(text) => void saveHypothesis(signal, text)} />
                       {judgeFieldsOptional && !signal.transferability ? null : (
                         <div>
                           <span>Переносимость</span>

@@ -23,6 +23,8 @@ from oiltech_digest.signal_card_pack import UNDEFINED
 BUSINESS, TECHNOLOGY = "business", "technology"
 # Своя картинка публикации годна, если она не уже 400 px и не вытянута сильнее 3:1: иначе это логотип или полоска.
 MIN_IMAGE_WIDTH, MAX_IMAGE_RATIO = 400, 3.0
+# Выбор картинки человеком (#162): своя картинка публикации или заглушка темы (repository.set_issue_material).
+PICTURE_OWN, PICTURE_PLACEHOLDER = "own", repository.ISSUE_PICTURE_PLACEHOLDER
 
 
 @dataclass(frozen=True)
@@ -132,15 +134,24 @@ def plural(n: int, one: str, few: str, many: str) -> str:
 
 
 def cover(month: str | None, sections: list[dict]) -> dict:
-    """«Главное в выпуске» на обложке: строка на раздел, по умолчанию перечень рубрик раздела (у давнего события — его
-    тема). Пустой раздел строки не даёт. Правку человека даёт тикет правок (#162)."""
+    """«Главное в выпуске» на обложке: строка на раздел. Пишет человек на экране «Дайджест» (#162); не написано —
+    перечень рубрик раздела (у давнего события — его тема; решение владельца 04.11). Раздел без материалов строки не
+    даёт, даже написанной: она говорила бы о том, чего в выпуске нет. default и кто правил — экрану."""
     adjective = f"{_MONTH_ADJECTIVES[feed_window.parse_month(month).month - 1]} " if month else ""
+    written = repository.issue_highlights(month) if month else {}
     rows = []
     for section in sections:
+        if not section["materials"]:
+            continue
         topics = list(dict.fromkeys(material["topic"] for material in section["materials"] if material.get("topic")))
-        if topics:
-            text = ", ".join(topics)
-            rows.append({"label": section["title"], "text": f"{text[0].upper()}{text[1:]}."})
+        joined = ", ".join(topics)
+        default = f"{joined[0].upper()}{joined[1:]}." if joined else ""
+        own = written.get(section["key"])
+        text = own["text"] if own else default
+        if text:
+            rows.append({"key": section["key"], "label": section["title"], "text": text, "default": default,
+                         "edited": own is not None, "edited_by": own["updated_by_email"] if own else None,
+                         "edited_at": own["updated_at"] if own else None})
     return {"highlights_title": f"Главное в {adjective}выпуске", "highlights": rows}
 
 
@@ -276,22 +287,47 @@ def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tupl
     if is_old_event(fields, month):
         rubric, label, rank = OLD_PRACTICE_RUBRIC, OLD_PRACTICE_LABEL, rank + 1
     score = float(fields["score"]) if fields.get("score") is not None else None
+    # Подпись человека (#162) главнее таблицы, в том числе у давнего события; умолчание — экрану, как подсказка правки.
+    label_default, label = label, fields.get("issue_label") or label
+    criteria = criteria_of(fields)
+    relevance = relevance_of(fields.get("oilfield_relevance"))
+    # Чего не хватает материалу до выпуска (экран «Дайджест», #162): гипотезы, баллов по критериям, связи, своей
+    # картинки (заглушку, выбранную человеком, нехваткой не считаем: это решение).
+    picture = PICTURE_PLACEHOLDER if fields.get("issue_picture") == PICTURE_PLACEHOLDER else PICTURE_OWN
+    missing = [code for code, lacking in (
+        ("hypothesis", not fields.get("hypothesis")),
+        ("criteria", not criteria),
+        ("relevance", relevance == UNDEFINED),
+        ("picture", not item["image_url"] and picture == PICTURE_OWN),
+    ) if lacking]
     material = {
         "item_type": item["item_type"],
         "article_id": item.get("article_id"),
         "signal_id": item.get("signal_id"),
+        # Сигнал, которому принадлежат поля материала (ADR 0006): правка с экрана «Дайджест» идёт ему. У статьи без
+        # сигнала ленты (собрана до 01.08.2026) пусто: править нечего.
+        "material_signal_id": fields.get("signal_id"),
         "section": section,
         "rubric": rubric,
         "label": label,
+        "label_default": label_default,
         "title": item["title"],
         "summary": item["summary"],
-        "criteria": criteria_of(fields),
-        "relevance": relevance_of(fields.get("oilfield_relevance")),
+        # «Гипотеза для Компании» (#162): кто поставил (human или agent), почта человека и когда.
+        "hypothesis": fields.get("hypothesis"),
+        "hypothesis_set_by": fields.get("hypothesis_set_by"),
+        "hypothesis_author": fields.get("hypothesis_author"),
+        "hypothesis_set_at": fields.get("hypothesis_set_at"),
+        "criteria": criteria,
+        "relevance": relevance,
         "url": item["url"],
         # Своя картинка: у материала есть её адрес. Годна ли она (MIN_IMAGE_WIDTH, MAX_IMAGE_RATIO), видно только на
         # загруженной: это проверяет печать, и негодная или не загрузившаяся меняется на заглушку темы (digest_pdf).
+        # picture — выбор человека (#162): placeholder рисует заглушку темы и при своей картинке.
         "image_url": item["image_url"],
         "image_own": bool(item["image_url"]),
+        "picture": picture,
+        "missing": missing,
         "placeholder": theme.placeholder if theme else _SECTION[section].fallback_placeholder,
         "score": score,
         # Тема карточки строчными для «Главного» по умолчанию: у давнего события — его своя тема.

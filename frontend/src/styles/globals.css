@@ -4795,3 +4795,15 @@
   }
 }
 
+
+/* «Гипотеза для Компании» на карточке сигнала (#162): правка на месте, под текстом. */
+.signalHypothesis textarea {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  margin: 6px 0;
+}
+
+.signalHypothesis button {
+  margin-top: 6px;
+}

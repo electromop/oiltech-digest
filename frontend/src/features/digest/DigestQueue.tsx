@@ -1,9 +1,12 @@
-import type { Article, DigestContentItem } from "../../api/types";
+import type { Article, DigestContentItem, DigestMaterial, IssueMaterialPatch } from "../../api/types";
 import { scoreClass } from "../shared/scoreScale";
+import { DigestMaterialEditor, MissingLine } from "./DigestMaterialEditor";
 
 export type ItemKind = { kind: string | null; label: string | null };
 // Материал, как он выглядит в самом выпуске: вид и суть, сжатая сервером под площадь карточки выпуска.
 export type IssueItem = ItemKind & { summary: string | null };
+// Ключ материала выпуска: «article:12» или «signal:34» (поля материала PDF, #162).
+export const materialKey = (kind: "article" | "signal", id: number | null | undefined) => `${kind}:${id}`;
 
 type Props = {
   items: Article[];
@@ -20,6 +23,11 @@ type Props = {
   onRemoveFromDigest: (articleId: number) => void;
   onRemoveSignal: (signalId: number) => void;
   onAdd: (articleId: number) => void;
+  // Поля материалов PDF по ключу (#162): правленый заголовок, чего не хватает, правка материала.
+  materials: Map<string, DigestMaterial>;
+  editing: string | null;
+  onEdit: (key: string | null) => void;
+  onSaveMaterial: (material: DigestMaterial, patch: IssueMaterialPatch) => void;
 };
 
 type FilterProps = {
@@ -89,7 +97,28 @@ export function KindBadge({ kind }: { kind?: ItemKind }) {
 // (#161). Статьи двигаются стрелками, «Из выпуска» убирает только из этого выпуска, «Из дайджеста» снимает отметку;
 // ниже — отмеченное, но не вошедшее в выпуск. Суть здесь, как в письме, короткая; в PDF она целиком.
 export function DigestQueue(props: Props) {
-  const { items, radarItems, available, issueItems, readOnly, busy } = props;
+  const { items, radarItems, available, issueItems, readOnly, busy, materials, editing } = props;
+
+  // «Править» у материала, чьи поля можно менять: месяц открыт и у материала есть сигнал (ADR 0006).
+  function editButton(key: string) {
+    const material = materials.get(key);
+    if (readOnly || !material?.material_signal_id) return null;
+    return (
+      <button type="button" className="ghostButton compactButton" aria-expanded={editing === key}
+        onClick={() => props.onEdit(editing === key ? null : key)}>
+        Править
+      </button>
+    );
+  }
+
+  function editor(key: string) {
+    const material = materials.get(key);
+    if (editing !== key || !material) return null;
+    return (
+      <DigestMaterialEditor material={material} busy={busy} onCancel={() => props.onEdit(null)}
+        onSave={(patch) => props.onSaveMaterial(material, patch)} />
+    );
+  }
   return (
     <div className="digestQueuePanel">
       <div className="digestQueueHeader">
@@ -113,17 +142,19 @@ export function DigestQueue(props: Props) {
                   <span className="metaText">{article.tag}</span>
                 </div>
                 <a href={article.url} target="_blank" rel="noreferrer">
-                  <strong>{article.title}</strong>
+                  <strong>{materials.get(materialKey("article", article.id))?.title || article.title}</strong>
                 </a>
               </div>
               <ScoreMark score={article.score} title="Балл материала" />
             </div>
             <p className="digestPickSummary">{issueItems.get(article.id)?.summary || article.summary || "Суть ещё не сформирована."}</p>
+            <MissingLine material={materials.get(materialKey("article", article.id))} />
             <div className="digestPickFooter">
               <span>{article.source}</span>
               <span>{formatDate(article.date)}</span>
               {readOnly ? null : (
                 <span className="digestPickActions">
+                  {editButton(materialKey("article", article.id))}
                   <button
                     type="button"
                     className="ghostButton compactButton"
@@ -151,6 +182,7 @@ export function DigestQueue(props: Props) {
                 </span>
               )}
             </div>
+            {editor(materialKey("article", article.id))}
           </li>
         ))}
         {radarItems.map((item, index) => (
@@ -169,17 +201,20 @@ export function DigestQueue(props: Props) {
               <ScoreMark score={item.score} title="Балл сигнала" />
             </div>
             <p className="digestPickSummary">{item.summary || "Суть ещё не сформирована."}</p>
+            <MissingLine material={materials.get(materialKey("signal", item.signal_id))} />
             <div className="digestPickFooter">
               {item.source ? <span>{item.source}</span> : null}
               {item.published_at ? <span>{formatDate(item.published_at)}</span> : null}
               {readOnly || item.signal_id == null ? null : (
                 <span className="digestPickActions">
+                  {editButton(materialKey("signal", item.signal_id))}
                   <button type="button" className="dangerButton compactButton" disabled={busy} onClick={() => props.onRemoveSignal(Number(item.signal_id))}>
                     Из дайджеста
                   </button>
                 </span>
               )}
             </div>
+            {editor(materialKey("signal", item.signal_id))}
           </li>
         ))}
       </ol>

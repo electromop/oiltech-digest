@@ -327,6 +327,21 @@ export type Signal = {
   // на отбор и показ они не влияют.
   feedback_blocks?: SignalFeedbackBlock[];
   evidence?: SignalEvidence[];
+  // Поля материала выпуска на сигнале (#162, ADR 0006): «Гипотеза для Компании» (кто поставил — card_set_by.hypothesis,
+  // почта человека и когда), подпись выпуска (пусто: по типу события).
+  hypothesis?: string | null;
+  hypothesis_set_at?: string | null;
+  hypothesis_author?: string | null;
+  issue_label?: string | null;
+};
+
+// Правка полей материала выпуска (#162): прислано только меняемое; пустая подпись и гипотеза стирают значение.
+export type IssueMaterialPatch = {
+  title?: string;
+  summary?: string;
+  label?: string;
+  hypothesis?: string;
+  picture?: "own" | "placeholder";
 };
 
 export type SignalFeedbackBlock = {
@@ -782,6 +797,9 @@ export type ArchiveMonth = {
 
 export type FeedWindowPayload = FeedWindowInfo & {
   archive: ArchiveMonth[];
+  // Пока открыт и прошлый месяц (до дня смены окна): сколько материалов уже отмечено на следующий выпуск и с какого
+  // дня экран «Дайджест» его соберёт (LOW-5 ревью PR #155).
+  next_issue?: { month: string; materials: number; opens_on: string } | null;
 };
 
 export type BacklogTaskStatus = "new" | "in_progress" | "done" | "paused" | "rejected";
@@ -956,9 +974,54 @@ export type DigestContentItem = {
   kind_label?: string | null;
 };
 
+// Материал PDF выпуска в формате эксперта (#161, #162): поля его сигнала, у статьи ленты — её сигнала ленты.
+export type DigestMaterial = {
+  item_type: "article" | "signal";
+  article_id: number | null;
+  signal_id: number | null;
+  // Сигнал, которому принадлежат поля материала: правка идёт ему; пусто — у статьи нет сигнала ленты, править нечего.
+  material_signal_id: number | null;
+  section: "business" | "technology";
+  rubric: string;
+  label: string;
+  label_default: string;
+  title: string;
+  summary: string;
+  hypothesis: string | null;
+  hypothesis_set_by: "human" | "agent" | string | null;
+  hypothesis_author: string | null;
+  hypothesis_set_at: string | null;
+  relevance: string;
+  url: string;
+  image_own: boolean;
+  picture: "own" | "placeholder";
+  // Чего не хватает до выпуска: гипотезы, баллов по критериям, связи с нефтесервисом, своей картинки.
+  missing: Array<"hypothesis" | "criteria" | "relevance" | "picture">;
+};
+
+export type DigestSection = {
+  key: "business" | "technology";
+  number: string;
+  title: string;
+  materials: DigestMaterial[];
+};
+
+// «Главное в выпуске»: строка раздела на обложке; edited — написал человек, default — перечень рубрик раздела.
+export type DigestHighlight = {
+  key: "business" | "technology";
+  label: string;
+  text: string;
+  default: string;
+  edited: boolean;
+  edited_by: string | null;
+  edited_at: string | null;
+};
+
 export type DigestContent = {
   month: string | null;
   title: string;
+  sections?: DigestSection[];
+  cover?: { highlights_title: string; highlights: DigestHighlight[] };
   issue?: {
     title?: string;
     period?: string;

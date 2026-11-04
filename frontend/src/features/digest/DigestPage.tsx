@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listArticles, updateArticle } from "../../api/articles";
-import { updateSignal } from "../../api/signals";
-import { getDigestContent, getMonthlyDigest, updateMonthlyDigest } from "../../api/digest";
-import type { Article, DigestContent, MonthlyDigestDraft } from "../../api/types";
+import { editIssueMaterial, updateSignal } from "../../api/signals";
+import { getDigestContent, getMonthlyDigest, saveIssueHighlight, updateMonthlyDigest } from "../../api/digest";
+import type { Article, DigestContent, DigestMaterial, IssueMaterialPatch, MonthlyDigestDraft } from "../../api/types";
 import { monthLabel, useFeedWindow } from "../articles/feedWindow";
 import { SkeletonList } from "../shared/Skeleton";
 import { DigestArchive } from "./DigestArchive";
 import { exportDigestFile, type DigestExportFormat } from "./digestExport";
 import { DigestActions, DigestHeader, DigestViewSwitch, type DigestView } from "./DigestHeader";
+import { DigestHighlights } from "./DigestHighlights";
 import { DigestPdfPreview } from "./DigestPdfPreview";
-import { DigestFilters, DigestQueue, type IssueItem } from "./DigestQueue";
+import { DigestFilters, DigestQueue, materialKey, type IssueItem } from "./DigestQueue";
 
 type ToastWriter = (text: string, tone?: "default" | "error") => void;
 
@@ -49,6 +50,8 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   // Дружелюбная метка готовящегося документа («PDF»/«DOCX»/«HTML») — без понятий
   // «задача/очередь/№N»: пользователь видит процесс и результат, а не job-runner.
   const [exporting, setExporting] = useState<string | null>(null);
+  // Материал, открытый на правку (#162): ключ «article:12» или «signal:34».
+  const [editing, setEditing] = useState<string | null>(null);
   // Окно месяца (ADR 0001, п. 6): открытые месяцы и прошлые выпуски с выбранными статьями.
   // Прошлый выпуск — только просмотр и выгрузка (решение владельца 23.09): статусы и
   // черновик не меняются, сервер такие правки отклоняет.
@@ -198,6 +201,39 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     }
   }
 
+  // Правка материала выпуска (#162, ADR 0006): поля ложатся на его сигнал — витрина и выпуск показывают один текст.
+  // Выпуск на сервере сменился — состав и PDF собираются заново.
+  async function saveMaterial(material: DigestMaterial, patch: IssueMaterialPatch) {
+    if (!material.material_signal_id) return;
+    try {
+      setBusy(true);
+      await editIssueMaterial(material.material_signal_id, patch);
+      setEditing(null);
+      await loadDigestPreview();
+      rebuildPdf();
+      showToast("Материал сохранён");
+    } catch (error) {
+      handleError(error, "Не удалось сохранить материал");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // «Главное в выпуске» (#162): строка раздела месяца на обложке; пустая возвращает перечень рубрик.
+  async function saveHighlight(section: "business" | "technology", text: string) {
+    try {
+      setBusy(true);
+      await saveIssueHighlight(activeMonth, section, text);
+      await loadDigestPreview();
+      rebuildPdf();
+      showToast(text ? "«Главное» сохранено" : "На обложке снова перечень рубрик раздела");
+    } catch (error) {
+      handleError(error, "Не удалось сохранить «Главное»");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeFromDigest(articleId: number) {
     try {
       setBusy(true);
@@ -246,6 +282,17 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
   // звал setManualOrderIds с новым массивом — рендер за рендером, пока не придёт превью (23.09).
   const exportPreviewItems = useMemo(() => digestPreview?.news || [], [digestPreview]);
   const radarItems = useMemo(() => exportPreviewItems.filter((item) => item.item_type === "signal"), [exportPreviewItems]);
+  // Поля материалов PDF (#161, #162) по ключу материала: правленый заголовок, чего не хватает, правка.
+  const materials = useMemo(() => {
+    const map = new Map<string, DigestMaterial>();
+    for (const section of digestPreview?.sections ?? []) {
+      for (const material of section.materials) {
+        const id = material.item_type === "article" ? material.article_id : material.signal_id;
+        map.set(materialKey(material.item_type, id), material);
+      }
+    }
+    return map;
+  }, [digestPreview]);
   // Материал, как он выйдет в выпуске (состав на сервере): плашка «Технология / Бизнес» и суть, сжатая под площадь
   // карточки выпуска, — очередь показывает то же, что уйдёт в PDF.
   const issueItems = useMemo(() => {
@@ -419,6 +466,15 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
             onScoreMax={setScoreMax}
           />
         )}
+        {loading ? null : (
+          <DigestHighlights
+            sections={digestPreview?.sections ?? []}
+            highlights={digestPreview?.cover?.highlights ?? []}
+            readOnly={isArchiveMonth}
+            busy={busy}
+            onSave={(section, text) => void saveHighlight(section, text)}
+          />
+        )}
         {loading ? (
           <SkeletonList rows={4} label="Загружаем материалы выпуска" />
         ) : orderedDigestCandidates.length || availableDigestCandidates.length || radarItems.length ? (
@@ -436,6 +492,10 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
             onRemoveFromDigest={(articleId) => void removeFromDigest(articleId)}
             onRemoveSignal={(signalId) => void removeSignalFromDigest(signalId)}
             onAdd={addToIssue}
+            materials={materials}
+            editing={editing}
+            onEdit={setEditing}
+            onSaveMaterial={(material, patch) => void saveMaterial(material, patch)}
           />
         ) : (
           <div className="emptyState">
@@ -468,7 +528,8 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
 
   return (
     <section className="screenStack">
-      <DigestHeader activeMonth={activeMonth} issueCount={issueCount} archive={isArchiveMonth} />
+      <DigestHeader activeMonth={activeMonth} issueCount={issueCount} archive={isArchiveMonth}
+        nextIssue={feedWindow?.next_issue ?? null} />
 
       <DigestViewSwitch view={view} archiveCount={archiveIssueMonths.length} onChange={switchView} />
 

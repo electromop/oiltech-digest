@@ -20,7 +20,7 @@ from html import escape
 from pathlib import Path
 from urllib.parse import urlparse
 
-from oiltech_digest.processing.digest_materials import MAX_IMAGE_RATIO, MIN_IMAGE_WIDTH, THEMES
+from oiltech_digest.processing.digest_materials import MAX_IMAGE_RATIO, MIN_IMAGE_WIDTH, PICTURE_PLACEHOLDER, THEMES
 
 logger = logging.getLogger(__name__)
 
@@ -198,16 +198,26 @@ def _card_html(material: dict, section_names: list[str]) -> str:
         '<div class="card"><div class="top">'
         f'<div class="side">{_picture_html(material)}{read}</div>'
         f'<div class="txt">{rubric}{title_html}{_paragraph("sum", material.get("summary"))}</div>'
-        f"</div>{_criteria_html(material, section_names)}</div>"
+        f"</div>{_hypothesis_html(material)}{_criteria_html(material, section_names)}</div>"
     )
+
+
+def _hypothesis_html(material: dict) -> str:
+    """«Гипотеза для Компании» под сутью, на всю ширину карточки (макет 02.11); нет гипотезы — нет и строки."""
+    text = _text(material.get("hypothesis"))
+    if not text:
+        return ""
+    return ('<div class="hyp"><div class="hyp-label">Гипотеза для Компании</div>'
+            f'<p class="hyp-text">{_e(text)}</p></div>')
 
 
 def _picture_html(material: dict) -> str:
     """Своя картинка публикации или заглушка темы. Своя, которая не загрузилась или негодна, при печати меняется на
-    заглушку своей темы (_SWAP_IMAGES_JS)."""
+    заглушку своей темы (_SWAP_IMAGES_JS); заглушку, выбранную человеком (#162), печать рисует и при своей."""
     placeholder = _placeholder_uri(material.get("placeholder"))
     placeholder_alt = _e(_PLACEHOLDER_ALTS.get(material.get("placeholder"), ""))
-    own = material.get("image_url") if material.get("image_own") else ""
+    chosen_own = material.get("picture") != PICTURE_PLACEHOLDER
+    own = material.get("image_url") if material.get("image_own") and chosen_own else ""
     if own:
         return (f'<img class="pic" src="{_e(own)}" data-placeholder="{placeholder}" '
                 f'data-placeholder-alt="{placeholder_alt}" alt="{OWN_PICTURE_ALT}">')
@@ -402,6 +412,9 @@ h1{font:700 29pt/1.1 'GPN Din Condensed';color:#00469d;margin:0 0 4mm;}
 .rub{font:700 8.5pt 'GPN Din';color:#ff5600;margin:0 0 1.2mm;}
 .title{display:block;font:700 16pt/1.1 'GPN Din Condensed';color:#00469d;margin:0 0 1.3mm;}
 .sum{font-size:10.5pt;line-height:1.29;text-align:justify;margin:0;}
+.hyp{margin:0 0 1.6mm;}
+.hyp-label{font:700 8.5pt 'GPN Din';color:#00469d;margin:0 0 .5mm;}
+.hyp-text{font:700 10.5pt/1.29 'GPN Din';color:#00469d;margin:0;}
 .read{font:700 8.3pt 'GPN Din';color:#ff5600;}
 .crit{width:100%;border-collapse:collapse;table-layout:fixed;margin:1.4mm 0 0;}
 .crit th{font:400 6.4pt/1.12 'GPN Din';color:#56677e;text-align:left;vertical-align:bottom;padding:1mm 1.6mm .5mm;

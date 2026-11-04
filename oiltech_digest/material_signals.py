@@ -100,12 +100,12 @@ def _link(cur, signal_id: int, material: dict[str, Any]) -> None:
                 (signal_id,))
 
 
-def apply_edit(cur, material: dict[str, Any], fields: set[str]) -> None:
+def apply_edit(cur, material: dict[str, Any], fields: set[str], *, user_id: int | None = None) -> None:
     """Правка материала на платформе — его сигналу, в транзакции правки (cur, ревью PR #155): заголовок и русский
     заголовок, описание как суть, компании как участники (всё «человек»: агенты их не перепишут), оценка и комментарий
     в блок ОС автора, ссылка как публикация материала. fields — колонки материала, которые правка поменяла. Решение
     «Отбора» и карточка, принятые по прежнему тексту, не пересчитываются. Сигнал в выпуске закрытого месяца правка не
-    меняет: тот выпуск только на просмотр. Материала-сигнала нет — ничего."""
+    меняет: тот выпуск только на просмотр. Материала-сигнала нет — ничего. user_id — кто правил (журнал ОС)."""
     if not material.get("signal_id"):
         return
     signal_id = int(material["signal_id"])
@@ -165,6 +165,15 @@ def apply_edit(cur, material: dict[str, Any], fields: set[str]) -> None:
         changed.append("ссылка")
     if not changed:
         return
+    if fields & {"title", "description"}:
+        # Правка заголовка и сути с экрана «Дайджест» лежит в журнале ОС поверх текста сигнала (#162): правка материала
+        # ложится туда же, иначе прежняя правка с «Дайджеста» прятала бы её. У сигнала один текст, последний по времени.
+        cur.execute(
+            "INSERT INTO signal_feedback_events (signal_id, user_id, event_type, corrected_title, corrected_thesis)"
+            " VALUES (%s, %s, 'comment_added', %s, %s)",
+            (signal_id, user_id, material["title"] if "title" in fields else None,
+             (material.get("description") or None) if "description" in fields else None),
+        )
     updates["card_set_by"] = Json(set_by)
     step = {"stage": "Человек", "text": "Материал исправлен на платформе: " + ", ".join(changed)}
     assignments = ", ".join(f"{column} = %s" for column in updates)

@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import secrets
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -57,7 +57,7 @@ from oiltech_digest.processing.digest import (
 from oiltech_digest.processing import external_ai
 from oiltech_digest.source_discovery.learning import apply_candidate_learning
 from oiltech_digest import company_parents
-from oiltech_digest.db import company_parents_repo
+from oiltech_digest.db import company_description_store, company_parents_repo
 
 WEB_DIR = REPO_ROOT / "web"
 FRONTEND_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -181,6 +181,16 @@ class SignalPatch(BaseModel):
     status: str | None = None
     selected_for_digest: bool | None = None
     analyst_comment: str | None = None
+
+
+class IssueMaterialPatch(BaseModel):
+    """Правка полей материала выпуска (#162, ADR 0006): прислано только меняемое; пустая строка у подписи и гипотезы
+    стирает значение человека."""
+    title: str | None = Field(default=None, max_length=500)
+    summary: str | None = Field(default=None, max_length=6000)
+    label: str | None = Field(default=None, max_length=200)
+    hypothesis: str | None = Field(default=None, max_length=1000)
+    picture: Literal["own", "placeholder"] | None = None
 
 
 class SignalReturnIn(BaseModel):
@@ -805,10 +815,18 @@ def dashboard_stats(
 
 @app.get("/api/feed-window")
 def feed_window_months(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Открытые месяцы ленты и прошлые месяцы для переключателя «Архив» (с числом статей)."""
+    """Открытые месяцы ленты и прошлые месяцы для переключателя «Архив» (с числом статей). Пока открыт и прошлый месяц,
+    ещё и следующий выпуск: сколько материалов на него уже отмечено (тот же состав, что у выгрузки) и с какого дня
+    экран «Дайджест» его соберёт (LOW-5 ревью PR #155)."""
     window = feed_window.current()
-    archive = repository.feed_archive_months(window)
-    return _clean({**window.describe(), "archive": archive})
+    payload = {**window.describe(), "archive": repository.feed_archive_months(window)}
+    opens_on = window.next_issue_opens_on
+    if opens_on is not None:
+        month = window.open_months[-1]
+        composition = repository.issue_composition(month)
+        payload["next_issue"] = {"month": month, "opens_on": opens_on.isoformat(),
+                                 "materials": len(composition["article_ids"]) + len(composition["signal_ids"])}
+    return _clean(payload)
 
 
 @app.get("/api/backlog", dependencies=[Depends(require_backlog_module)])
@@ -1695,6 +1713,25 @@ def _company_parent_lines(text: str, pairs: list[tuple[str, str]]) -> list[dict[
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class CompanyDescriptionIn(BaseModel):
+    text: str = Field(max_length=4000)
+
+
+@app.get("/api/company-description")
+def get_company_description(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Описание Компании для агента гипотезы (#162): текст, кто и когда правил, прежние правки. Читает любая допущенная
+    учётка, правят права как у тегов (ADR 0004)."""
+    return _clean(company_description_store.current())
+
+
+@app.put("/api/company-description")
+def save_company_description(payload: CompanyDescriptionIn,
+                             user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """Новая версия описания Компании; уже написанные гипотезы она не пересчитывает (#163)."""
+    text = "\n".join(line.rstrip() for line in payload.text.strip().splitlines())
+    return _clean(company_description_store.save(text, user_id=int(user["id"])))
+
+
 @app.get("/api/scoring-criteria")
 def list_scoring_criteria(
     profile: str = Query(ARTICLE_SCORING_PROFILE),
@@ -2193,6 +2230,42 @@ def create_signal_feedback(payload: SignalFeedbackCreate, user: dict[str, Any] =
     return {"ok": True, **result, "block": _feedback_block(result.get("event_id"), payload, user), **moved}
 
 
+@app.patch("/api/signals/{signal_id}/issue-material")
+def edit_issue_material(signal_id: int, patch: IssueMaterialPatch,
+                        user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Правка материала выпуска с экрана «Дайджест» и с карточки сигнала (#162, ADR 0006): поля живут на сигнале
+    материала, у статьи ленты на её сигнале ленты, поэтому витрина и выпуск показывают один текст. Правка доступна
+    любой допущенной учётке (ADR 0004). Заголовок и суть ложатся в журнал ОС с автором, как правка находки радара, но
+    мимо памяти судьи радара: это правка текста выпуска, а не отзыв о его работе. Выпуск закрытого месяца только на
+    просмотр (решение владельца 30.09): правка его материала получает отказ, поэтому закрытый выпуск хранит поля,
+    какими они были до закрытия. Месяц — тот же, что у выпуска (repository.signal_issue_month_sql)."""
+    try:
+        month = repository.signal_issue_month(signal_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Signal not found")
+    if not month or not feed_window.current().is_open(month):
+        closed = feed_window.month_label(feed_window.parse_month(month)) if month else "прошлый месяц"
+        raise HTTPException(status_code=409, detail=(
+            f"Материал относится к архиву за {closed}. Архив открыт только для просмотра: "
+            "заголовок, суть, подпись, гипотезу и картинку материала прошлых месяцев менять нельзя."
+        ))
+    title = " ".join((patch.title or "").split())
+    summary = (patch.summary or "").strip()
+    if title or summary:
+        repository.record_signal_feedback_event(
+            None, "comment_added", signal_id=signal_id, user_id=int(user["id"]),
+            corrected_title=title or None, corrected_thesis=summary or None,
+        )
+    repository.set_issue_material(
+        signal_id,
+        label=" ".join(patch.label.split()) if patch.label is not None else None,
+        hypothesis=" ".join(patch.hypothesis.split()) if patch.hypothesis is not None else None,
+        picture=patch.picture, author=user.get("email"),
+    )
+    # Кто правил: экран показывает автора гипотезы сразу, не перечитывая витрину.
+    return {"ok": True, "author": user.get("email")}
+
+
 def _recategorize(payload: SignalFeedbackCreate, user: dict[str, Any]) -> dict[str, Any]:
     """«Не тот блок» у сигнала после «Отбора» (#132, спека #128) — не только блок ОС: категория меняется сразу, баллы
     «пересчитываются», перезапускается только второй вызов «Карточки». У решённого до «Отбора» — как раньше: блок ОС
@@ -2389,6 +2462,21 @@ def _guard_issue_edit(month: str, article_ids: list[int]) -> None:
                 f"месяца ({labels}): у каждого месяца свой выпуск — выберите месяц выпуска."
             ),
         )
+
+
+class IssueHighlightIn(BaseModel):
+    section: Literal["business", "technology"]
+    text: str = Field(default="", max_length=600)
+
+
+@app.put("/api/issue-highlights/{month}")
+def save_issue_highlight(month: str, payload: IssueHighlightIn,
+                         user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """«Главное в выпуске» (#162): строка раздела месяца на обложке PDF, пишет человек на экране «Дайджест»; пустая
+    возвращает перечень рубрик раздела. Выпуск закрытого месяца только на просмотр, как его черновик."""
+    _guard_issue_edit(month, [])
+    repository.save_issue_highlight(month, payload.section, " ".join(payload.text.split()), user_id=int(user["id"]))
+    return {"ok": True}
 
 
 @app.post("/api/monthly-digests")
@@ -3642,11 +3730,12 @@ class ColleagueMaterialPatch(BaseModel):
 def update_colleague_material(
     material_id: int,
     payload: ColleagueMaterialPatch,
-    _: dict[str, Any] = Depends(require_admin),
+    user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Правка материала из бота на платформе (решение владельца 23.10) — только админ, проверки как у бота."""
     try:
-        row = colleague_materials.update_material(material_id, payload.model_dump(exclude_unset=True))
+        row = colleague_materials.update_material(material_id, payload.model_dump(exclude_unset=True),
+                                                  user_id=int(user["id"]))
     except colleague_materials.InvalidMaterial as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if row is None:
