@@ -288,7 +288,7 @@ def check_edit(row: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-def update_material(material_id: int, patch: dict[str, Any]) -> dict[str, Any] | None:
+def update_material(material_id: int, patch: dict[str, Any], *, user_id: int | None = None) -> dict[str, Any] | None:
     """Записать правку; нет материала — None, правка не по правилам — InvalidMaterial. Если материал уже сигнал
     (#131), правка в той же транзакции доходит и до сигнала (material_signals.apply_edit, ревью PR #155)."""
     from oiltech_digest import material_signals
@@ -308,7 +308,7 @@ def update_material(material_id: int, patch: dict[str, Any]) -> dict[str, Any] |
         if updated:
             # Форма шлёт все поля разом: до сигнала доходит только то, что правка действительно поменяла.
             changed = {column for column, value in fields.items() if getattr(value, "obj", value) != row.get(column)}
-            material_signals.apply_edit(cur, dict(updated), changed)
+            material_signals.apply_edit(cur, dict(updated), changed, user_id=user_id)
         conn.commit()
     return dict(updated) if updated else None
 

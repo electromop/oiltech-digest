@@ -152,8 +152,8 @@ def test_running_header_from_the_second_sheet_numbers_on_every_sheet_bookmarks_t
 
 
 def test_highlights_default_to_the_rubrics_of_each_section_one_row_per_section(issue, chromium, empty_branding):
-    """«Главное в выпуске» по умолчанию: перечень рубрик раздела, строка на раздел (правку человека даёт тикет правок
-    #162). У давнего события в перечне его тема, а не «справочная практика»."""
+    """«Главное в выпуске» по умолчанию: перечень рубрик раздела, строка на раздел (правка человека поверх него:
+    test_digest_issue_edits.py). У давнего события в перечне его тема, а не «справочная практика»."""
     _issue_of_three(issue)
     analyst = issue["analyst"]
     automation = add_signal("auto", first_seen=msk(2026, 9, 13, 0, 20), evidence_published=utc(2026, 9, 12, 9),
@@ -163,9 +163,9 @@ def test_highlights_default_to_the_rubrics_of_each_section_one_row_per_section(i
 
     cover = analyst.issue_content()["cover"]
     assert cover["highlights_title"] == "Главное в сентябрьском выпуске"
-    assert cover["highlights"] == [
-        {"label": "Бизнес-сигналы", "text": "Рынок и сервисные модели, рынок автоматизации."},
-        {"label": "Технологические сигналы", "text": "Бурение, энергетика."},
+    assert [(row["label"], row["text"], row["edited"]) for row in cover["highlights"]] == [
+        ("Бизнес-сигналы", "Рынок и сервисные модели, рынок автоматизации.", False),
+        ("Технологические сигналы", "Бурение, энергетика.", False),
     ]
     text = pdf_pages(analyst.preview_pdf())[0]
     assert "Бизнес-сигналы Рынок и сервисные модели, рынок автоматизации." in text

@@ -203,6 +203,15 @@ class FeedWindow:
         return [month_key(month) for month in months]
 
     @property
+    def next_issue_opens_on(self) -> date | None:
+        """С какого дня экран «Дайджест» соберёт выпуск текущего месяца, пока открыт и прошлый (до FEED_ROLLOVER_DAY):
+        до того дня он собирает прошлый, а отметки на текущий уже копятся (LOW-5 ревью PR #155). Открыт один месяц:
+        None."""
+        if self.start >= self.today.replace(day=1):
+            return None
+        return self.today.replace(day=config.FEED_ROLLOVER_DAY)
+
+    @property
     def read_only(self) -> bool:
         """Запрошен прошлый месяц — архив, только просмотр."""
         return self.month is not None and self.month < self.start
