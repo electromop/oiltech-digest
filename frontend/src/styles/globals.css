@@ -4796,14 +4796,61 @@
 }
 
 
+/* Правки человека на экране «Дайджест» (#162): «Главное в выпуске», чего не хватает материалу, правка материала. */
+.digestHighlights {
+  display: grid;
+  gap: var(--ot-space-03);
+  margin: var(--ot-space-04) 0;
+  padding: var(--ot-space-04);
+  border: 1px solid var(--ot-border-subtle);
+}
+
+.digestHighlightMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ot-space-03);
+  margin-top: var(--ot-space-02);
+}
+
+.digestMissing {
+  margin-top: var(--ot-space-02);
+  font-size: var(--ot-size-caption);
+  color: var(--ot-text-secondary);
+}
+
+.digestMaterialEditor {
+  display: grid;
+  gap: var(--ot-space-03);
+  margin-top: var(--ot-space-04);
+  padding-top: var(--ot-space-04);
+  border-top: 1px solid var(--ot-border-subtle);
+}
+
+.digestPictureChoice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ot-space-05);
+  margin: 0;
+  padding: var(--ot-space-03) var(--ot-space-04);
+  border: 1px solid var(--ot-border-subtle);
+}
+
+.digestPictureChoice label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ot-space-02);
+}
+
 /* «Гипотеза для Компании» на карточке сигнала (#162): правка на месте, под текстом. */
 .signalHypothesis textarea {
   display: block;
   width: 100%;
   min-height: 64px;
-  margin: 6px 0;
+  margin: var(--ot-space-02) 0;
 }
 
 .signalHypothesis button {
-  margin-top: 6px;
+  margin-top: var(--ot-space-02);
 }

@@ -57,7 +57,7 @@ export function DigestHighlights({ sections, highlights, readOnly, busy, onSave 
                   </span>
                   <button type="button" className="ghostButton compactButton" disabled={busy || draft.trim() === saved}
                     onClick={() => onSave(section.key, draft.trim())}>
-                    {draft.trim() ? "Сохранить" : "Вернуть перечень рубрик"}
+                    {draft.trim() || !saved ? "Сохранить" : "Вернуть перечень рубрик"}
                   </button>
                 </div>
               </>

@@ -24,8 +24,11 @@ export function DigestHeader({ activeMonth, issueCount, archive, nextIssue }: Pr
         </p>
         {nextIssue && !archive ? (
           <p className="metaText" role="status">
-            На следующий выпуск, за {monthLabel(nextIssue.month)}, уже {nextIssue.materials === 1 ? "отмечен" : "отмечено"}{" "}
-            {nextIssue.materials} {materialsWord(nextIssue.materials)}: он откроется здесь {openDay(nextIssue.opens_on)}.
+            На следующий выпуск, за {monthLabel(nextIssue.month)},{" "}
+            {nextIssue.materials
+              ? `уже ${nextIssue.materials === 1 ? "отмечен" : "отмечено"} ${nextIssue.materials} ${materialsWord(nextIssue.materials)}`
+              : "пока ничего не отмечено"}
+            : он откроется здесь {openDay(nextIssue.opens_on)}.
           </p>
         ) : null}
       </div>

@@ -23,13 +23,13 @@ def test_anyone_reads_the_description_admins_write_it_and_the_screen_shows_who_a
         assert saved.status_code == 200, saved.text
 
         shown = reader.get("/api/company-description").json()
-        assert (shown["text"], shown["updated_by"]) == (STUB, f"user{admin.id}@example.test")
+        assert (shown["text"], shown["updated_by"]) == (STUB, "editor@example.test")
         assert shown["updated_at"].startswith("20")
 
         admin.put("/api/company-description", json={"text": STUB + " Без внутренних проектов."})
         history = reader.get("/api/company-description").json()["history"]
         assert [(row["updated_by"], row["chars"]) for row in history] == [
-            (f"user{admin.id}@example.test", len(STUB) + 25), (f"user{admin.id}@example.test", len(STUB))]
+            ("editor@example.test", len(STUB) + 25), ("editor@example.test", len(STUB))]
     finally:
         from oiltech_digest import api
 
