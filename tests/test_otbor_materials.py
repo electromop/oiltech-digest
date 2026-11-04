@@ -280,26 +280,37 @@ def test_accumulated_materials_go_through_once_with_a_dry_run_by_default(user, a
     assert "сигналов материалов 0, задач «Отбора» 0" in capsys.readouterr().out
 
 
-def test_accumulated_materials_tell_no_author_but_a_new_material_does(user, contour, monkeypatch):
-    """Накопленные проходят конвейер молча: итог «Отбора» их авторам не уходит (решение владельца 04.11, присланы до
-    включения, ответа никто не ждёт). Материал, присланный при включённом флаге, итог получает, как прежде."""
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    _send(_material())
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
-    cli.main(["otbor-materials", "--apply"])
-    _send(_material(title=NEW_TITLE, tg_message_id=79))
+LATE_TITLE = "Газпром нефть выбрала подрядчика по бурению на 2027 год"
 
-    decide(monkeypatch, {TITLE: answer(), NEW_TITLE: answer()})
+
+def test_silent_accumulated_materials_tell_no_author_but_a_new_material_does(user, admin, contour, monkeypatch):
+    """С --silent накопленные проходят конвейер молча: итог «Отбора» их авторам не уходит, ни первый, ни следующий
+    (решение владельца 04.11 для присланных до включения: ответа никто не ждёт). Материал, присланный при включённом
+    флаге, итог получает, как прежде."""
+    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
+    material = _send(_material())
+    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    cli.main(["otbor-materials", "--apply", "--silent"])
+    _send(_material(title=LATE_TITLE, tg_message_id=79))
+
+    decide(monkeypatch, {TITLE: reject("oil_gas_no_link"), LATE_TITLE: answer()})
     run_worker("external-ai-bulk")
 
-    assert {TITLE, NEW_TITLE} <= set(showcase(user, "business"))
     telegram = _Telegram()
     assert _bot(telegram).notify() == 1
     [message] = telegram.sent
     assert message["reply_parameters"]["message_id"] == 79
+    # Следующий итог (человек вернул отклонённое) тоже уходит молча.
+    signal_id = colleague_materials.get_material(material["id"])["signal_id"]
+    response = api_request("POST", f"/api/signals/{signal_id}/return", admin, {
+        "industry": "oil_gas", "oilfield_relevance": "direct", "oilfield_application": "",
+        "signal_category": "business"})
+    assert response.status_code == 200, response.text
+    assert {TITLE, LATE_TITLE} <= set(showcase(user, "business"))
+    assert _bot(telegram).notify() == 0 and len(telegram.sent) == 1
 
 
-NEW_TITLE ="Татнефть продлила контракт с подрядчиком по ГРП до 2029 года"
+NEW_TITLE = "Татнефть продлила контракт с подрядчиком по ГРП до 2029 года"
 NEW_DESCRIPTION = "Итог тендера уточнили: договор на три года, объём операций ГРП вырос на 25 %."
 
 
