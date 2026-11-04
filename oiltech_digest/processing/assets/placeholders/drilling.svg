@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d4a9e"/>
+<stop offset="0.55" stop-color="#062c6b"/><stop offset="1" stop-color="#021637"/></linearGradient>
+<radialGradient id="glow" cx="0.5" cy="0.56" r="0.5"><stop offset="0" stop-color="#3d8bff" stop-opacity="0.42"/>
+<stop offset="1" stop-color="#3d8bff" stop-opacity="0"/></radialGradient>
+<pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+<path d="M20 0H0V20" fill="none" stroke="#ffffff" stroke-opacity="0.055"/></pattern>
+</defs>
+<rect width="400" height="300" fill="url(#bg)"/><rect width="400" height="300" fill="url(#grid)"/>
+<rect width="400" height="300" fill="url(#glow)"/>
+<path d="M18 262 L58 236 L96 252 L124 222 M296 34 L334 58 L370 36 M334 58 L350 94" fill="none" stroke="#9cc8ff"
+  stroke-opacity="0.32"/>
+<g fill="#9cc8ff" fill-opacity="0.6"><circle cx="18" cy="262" r="2.4"/><circle cx="58" cy="236" r="2.4"/><circle cx="96" cy="252" r="2.4"/><circle cx="124" cy="222" r="2.4"/><circle cx="296" cy="34" r="2.4"/><circle cx="334" cy="58" r="2.4"/><circle cx="370" cy="36" r="2.4"/><circle cx="350" cy="94" r="2.4"/></g>
+<g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+<path d="M70 236 H330"/>
+<path d="M152 206 L186 62 M248 206 L214 62 M180 62 H220"/>
+<path d="M160.5 170 H239.5 M169 134 H231 M177.5 98 H222.5"/>
+<path d="M152 206 L239.5 170 M248 206 L160.5 170 M160.5 170 L231 134 M239.5 170 L169 134 M169 134 L222.5 98 M231 134 L177.5 98"
+  stroke-width="2" stroke-opacity="0.6"/>
+<rect x="184" y="46" width="32" height="16" rx="3" fill="#ffffff" fill-opacity="0.1"/>
+<rect x="128" y="206" width="144" height="14" rx="2" fill="#ffffff" fill-opacity="0.1"/>
+<path d="M142 220 V236 M258 220 V236"/>
+<path d="M200 62 V206" stroke-width="3"/>
+<rect x="192" y="86" width="16" height="20" rx="3" fill="#ffffff" fill-opacity="0.2"/>
+<path d="M200 236 V280" stroke="#9cc8ff" stroke-width="3" stroke-dasharray="6 6"/>
+<path d="M190 280 H210 L200 296 Z" fill="#ff5600" stroke="#ff5600"/>
+</g>
+</svg>

@@ -370,15 +370,23 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
     setArchiveOpen(null);
   }
 
+  // Порядок PDF в формате эксперта считается сам (раздел, рубрика, балл, #161); стрелки и черновик задают порядок
+  // письма и DOCX.
   const draftInfo = isArchiveMonth
     ? "Прошлый выпуск: только просмотр и выгрузка"
     : (savedDraft?.month === activeMonth
-        ? "Порядок статей меняется стрелками; «Сохранить черновик» закрепляет его в выпуске."
-        : "Порядок как в выпуске на сервере; черновик ещё не сохранён.") +
-      (radarItems.length ? " Сигналы радара идут после статей, по баллу." : "");
+        ? "Стрелки задают порядок статей в письме и DOCX, «Сохранить черновик» его закрепляет."
+        : "Порядок письма и DOCX как в выпуске на сервере, черновик ещё не сохранён.") +
+      (radarItems.length ? " Сигналы радара в письме идут после статей, по баллу." : "") +
+      " В PDF порядок считается сам: раздел, рубрика, балл.";
   const issueCount = orderedDigestCandidates.length + radarItems.length;
-  // PDF собран из сохранённого черновика: несохранённый порядок в нём не виден, сменившиеся фильтры — тоже.
-  const pdfStaleReason = pdfToken === 0 ? null : draftDirty ? "order" : pdfFilterSignature !== filterSignature ? "filters" : null;
+  // PDF собирается из сохранённого черновика: «Из выпуска» и «Добавить» меняют его состав, и до сохранения PDF прежний.
+  // Порядок черновика PDF не задаёт (#161): перестановка PDF устаревшим не делает.
+  const draftBaseIds = savedDraftVisibleIds.length ? savedDraftVisibleIds : previewCandidateIds;
+  const compositionChanged =
+    draftDirty && (manualOrderIds.length !== draftBaseIds.length || manualOrderIds.some((id) => !draftBaseIds.includes(id)));
+  const pdfStaleReason =
+    pdfToken === 0 ? null : compositionChanged ? "composition" : pdfFilterSignature !== filterSignature ? "filters" : null;
 
   const workspace = (
     <div className="digestWorkspace">

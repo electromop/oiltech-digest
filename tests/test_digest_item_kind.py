@@ -16,7 +16,7 @@ import pytest
 
 from oiltech_digest import api
 from oiltech_digest.db import repository
-from oiltech_digest.processing import digest
+from oiltech_digest.processing import digest, digest_pdf
 from oiltech_digest.processing.digest import build_digest_content, render_digest_docx, render_digest_export_html
 
 
@@ -32,6 +32,8 @@ def _stub(monkeypatch, rows, kinds=({}, {})):
     monkeypatch.setattr(digest.repository, "get_monthly_digest", lambda month: None)
     monkeypatch.setattr(digest.repository, "digest_candidates", lambda month, limit=20, min_score=60, **kw: rows)
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda articles, signals: kinds)
+    monkeypatch.setattr(digest.repository, "issue_material_fields", lambda articles, signals: ({}, {}))
+    monkeypatch.setattr(digest.repository, "list_enabled_scoring_criteria", lambda profile: [])
 
 
 def test_items_carry_kind_and_the_issue_shows_the_badge(monkeypatch):
@@ -196,7 +198,7 @@ def test_browser_failure_is_a_readable_refusal_not_500(monkeypatch, caplog):
     monkeypatch.setattr(digest, "_PREVIEW_PDF_CACHE", OrderedDict())
     api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "role": "user"}
     try:
-        with caplog.at_level("ERROR", logger=digest.__name__):
+        with caplog.at_level("ERROR", logger=digest_pdf.__name__):
             response = TestClient(api.app).get("/api/digest-preview.pdf", params={"month": "2026-10"})
     finally:
         api.app.dependency_overrides.pop(api.require_user, None)

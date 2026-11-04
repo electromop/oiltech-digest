@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d4a9e"/>
+<stop offset="0.55" stop-color="#062c6b"/><stop offset="1" stop-color="#021637"/></linearGradient>
+<radialGradient id="glow" cx="0.5" cy="0.56" r="0.5"><stop offset="0" stop-color="#3d8bff" stop-opacity="0.42"/>
+<stop offset="1" stop-color="#3d8bff" stop-opacity="0"/></radialGradient>
+<pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+<path d="M20 0H0V20" fill="none" stroke="#ffffff" stroke-opacity="0.055"/></pattern>
+</defs>
+<rect width="400" height="300" fill="url(#bg)"/><rect width="400" height="300" fill="url(#grid)"/>
+<rect width="400" height="300" fill="url(#glow)"/>
+<path d="M18 262 L58 236 L96 252 L124 222 M296 34 L334 58 L370 36 M334 58 L350 94" fill="none" stroke="#9cc8ff"
+  stroke-opacity="0.32"/>
+<g fill="#9cc8ff" fill-opacity="0.6"><circle cx="18" cy="262" r="2.4"/><circle cx="58" cy="236" r="2.4"/><circle cx="96" cy="252" r="2.4"/><circle cx="124" cy="222" r="2.4"/><circle cx="296" cy="34" r="2.4"/><circle cx="334" cy="58" r="2.4"/><circle cx="370" cy="36" r="2.4"/><circle cx="350" cy="94" r="2.4"/></g>
+<g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+<path d="M50 132 H350 M50 168 H90 M134 168 H350 M50 246 H350" stroke="#9cc8ff" stroke-opacity="0.35" stroke-width="2.5"/>
+<path d="M50 80 H350"/>
+<rect x="62" y="58" width="52" height="22" rx="3" fill="#ffffff" fill-opacity="0.1"/>
+<path d="M110 80 V150 C110 186 132 200 168 200 H336" stroke-width="5"/>
+<path d="M190 200 L182 184 L194 172 L186 156 M190 200 L198 216 L186 228 L196 244" stroke="#ff5600" stroke-width="3"/>
+<path d="M245 200 L237 182 L250 170 L240 150 M245 200 L254 218 L241 230 L252 248" stroke="#ff5600" stroke-width="3"/>
+<path d="M300 200 L292 186 L304 174 L296 160 M300 200 L308 214 L296 226 L306 240" stroke="#ff5600" stroke-width="3"/>
+<rect x="214" y="193" width="8" height="14" rx="2" fill="#ffffff" stroke="none"/>
+<rect x="269" y="193" width="8" height="14" rx="2" fill="#ffffff" stroke="none"/>
+</g>
+</svg>

@@ -1283,6 +1283,9 @@ def test_offline_pipeline_outputs_digest_ready_content(monkeypatch):
 
     # Плашка «Технология / Бизнес» (23.10) ищет вид элемента в базе — тест без базы отвечает «вид неизвестен».
     monkeypatch.setattr(digest.repository, "digest_item_kinds", lambda article_ids, signal_ids: ({}, {}))
+    # Поля материала PDF (#161) и имена критериев раздела тоже из базы — без неё полей нет.
+    monkeypatch.setattr(digest.repository, "issue_material_fields", lambda article_ids, signal_ids: ({}, {}))
+    monkeypatch.setattr(digest.repository, "list_enabled_scoring_criteria", lambda profile: [])
 
     content = digest.build_digest_content("2026-06", min_score=65)
 
