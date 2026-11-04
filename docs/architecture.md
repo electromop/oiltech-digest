@@ -227,7 +227,10 @@ PostgreSQL 16, `psycopg` и SQL вручную, без ORM: схема прос�
 оценки ОС статьи (`feedback_entries`).
 
 **Дайджест:** `monthly_digests` — черновик один на месяц (строка без учётки; личные — архив) ·
-`monthly_digest_items`. Состав выпуска месяца — `repository.issue_composition`.
+`monthly_digest_items`. Состав выпуска месяца — `repository.issue_composition`; число в архиве выпусков считает
+тот же состав одним запросом по месяцам (`feed_archive_months`, условие сигнала общее: `_issue_signal_member_sql`).
+Правки человека в выпуске (#162): поля материала на сигнале (`db/issue_edits_store.py`), «Главное в выпуске» в
+`issue_highlights`, описание Компании для агента гипотезы в `company_descriptions`.
 
 **Служебное:** `background_jobs` (владелец, очередь, регион исполнения, lease, попытки) ·
 `ai_processing_runs` (аудит каждого AI-вызова и его стоимости) · `export_jobs`.
