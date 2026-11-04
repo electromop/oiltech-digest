@@ -10,7 +10,12 @@
 завод сорбентов «Татнефти», четыре — про FleetRabbit, пять обзоров лития из пластовых вод.
 
 Судья зовёт OpenAI, поэтому работает на внешнем воркере (`run_discovery`);
-ядро только пишет решения (`apply_discovery`)."""
+ядро только пишет решения (`apply_discovery`).
+
+Одно событие — одна карточка во всей базе (блок А5 схемы агентов, 04.11): в снимке прогона и видимые сигналы
+ленты (origin feed). Они сверяются только с находками прогона (_eligible): ленту с лентой склеивают перепечатки
+(processing/reprints.py). Замер прогона 51351 (01-04.11): у 9 из 24 находок то же событие уже было в ленте под
+другой ссылкой, у пяти принятых — видимой карточкой."""
 
 from __future__ import annotations
 
@@ -21,7 +26,7 @@ import re
 from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
 
-from oiltech_digest import config as app_config
+from oiltech_digest import config as app_config, word_forms
 from oiltech_digest.processing.openai_client import output_budget
 
 SIGNAL_DUPLICATE_INSTRUCTIONS = """Ты сверяешь две карточки технологического радара и отвечаешь на ОДИН вопрос:
@@ -73,6 +78,8 @@ PAIR_MIN_OVERLAP = 0.25
 # остались как раз дубли: ZenaTech и FleetRabbit прошли новыми карточками. Ядро может
 # передать свой потолок в снимке (dedup_max_pairs) — без пересборки воркера.
 MAX_JUDGED_PAIRS = 400
+# Происхождение узла снимка — сигнал ленты (repository.SIGNAL_ORIGIN_FEED; модуль работает на NL без базы).
+FEED_ORIGIN = "feed"
 
 
 class DedupSetupError(ValueError):
@@ -94,7 +101,9 @@ def configured_model() -> str:
 _POSITIVE_VERDICTS = {"strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation", "overrated"}
 
 _STEM_LEN = 4
-_STOP_WORDS = {
+# Слова, которые есть почти в каждом заголовке отрасли: общими основами пары не делают. Те же — у правила перепечаток
+# ленты по русскому заголовку (repository.reprint_candidates).
+TITLE_STOP_WORDS = {
     "для", "как", "или", "что", "это", "при", "над", "под", "после", "the", "and", "for",
     "with", "from", "нефтегаз", "нефтегазов", "нефтегазовой", "нефтегаза", "систем",
     "системы", "решени", "технолог", "мониторинг",
@@ -121,10 +130,32 @@ def wait_beating(pool: ThreadPoolExecutor, futures: Iterable[Future], beat: Call
         raise
 
 
+def _stems(text: str) -> set[str]:
+    words = re.findall(r"[a-zа-яё0-9]{4,}", str(text or "").lower())
+    return {word[:_STEM_LEN] for word in words if word not in TITLE_STOP_WORDS and not word.isdigit()}
+
+
 def title_stems(signal: dict[str, Any]) -> set[str]:
-    text = str(signal.get("title_ru") or signal.get("title") or "").lower()
-    words = re.findall(r"[a-zа-яё0-9]{4,}", text)
-    return {word[:_STEM_LEN] for word in words if word not in _STOP_WORDS and not word.isdigit()}
+    return _stems(signal.get("title_ru") or signal.get("title") or "")
+
+
+def title_variants(signal: dict[str, Any]) -> list[set[str]]:
+    """Основы каждого заголовка карточки: русского, исходного и русских заголовков поиска (research_titles).
+
+    Пара сравнивается по лучшему сочетанию, а не по одному заголовку: у находки на этапе поиска заголовок страницы
+    (часто английский), у сигнала ленты — исходный и русский. Замер 04.11 на прогоне 51351: заголовок страницы против
+    исходного заголовка статьи ловит 23 из 29 известных пар ленты и поиска, с русским заголовком поиска — 27."""
+    texts = [signal.get("title_ru"), signal.get("title"), *(signal.get("research_titles") or [])]
+    variants: list[set[str]] = []
+    for text in texts:
+        stems = _stems(text or "")
+        if stems and stems not in variants:
+            variants.append(stems)
+    return variants
+
+
+def _title_overlap(left: list[set[str]], right: list[set[str]]) -> float:
+    return max((_overlap(a, b) for a in left for b in right), default=0.0)
 
 
 def company_keys(signal: dict[str, Any]) -> set[str]:
@@ -137,9 +168,11 @@ def company_keys(signal: dict[str, Any]) -> set[str]:
         key = re.sub(r"[«»\"'?]", "", key)
         # Модель пишет участников одной строкой: «EDF / MethaneSAT» против «MethaneSAT»
         # в соседней карточке — без разбора по «/» общей компании не видно, и пара
-        # №107–№3 одного события не попала к судье (20.09).
-        for part in re.split(r"\s*[/;]\s*", key):
-            part = re.sub(r"\s+", " ", part).strip()
+        # №107–№3 одного события не попала к судье (20.09). Черновая компания поиска — через запятую:
+        # «Halliburton, Keystone AS» против «Halliburton; Keystone AS» (пара прогона 51351, 04.11).
+        for part in re.split(r"\s*[/;,]\s*", key):
+            # Форма собственности — не имя: «Keystone AS» — это «Keystone», а «Inc.» после запятой — не компания.
+            part = " ".join(word_forms.bare_words(part))
             if len(re.findall(r"[a-zа-яё]", part)) >= 2:
                 keys.add(part)
     return keys
@@ -164,9 +197,14 @@ def _eligible(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
     Свежая карточка из этого прогона — всегда. Две сохранённые — только если одна из
     них свежая и не разобрана: иначе каждый прогон заново оплачивал бы одни и те же
-    пары, а две разобранные Виктором сверялись бы вопреки его решению."""
+    пары, а две разобранные Виктором сверялись бы вопреки его решению. Сигнал ленты —
+    только с находкой прогона: ленту с лентой склеивают перепечатки, а склейка двух уже видимых
+    карточек, ленты и радара, спрятала бы одну из них, в том числе свежую статью ленты в карточку
+    прошлого месяца, которой в ленте этого месяца нет (04.11)."""
     if a["kind"] == "new" or b["kind"] == "new":
         return True
+    if FEED_ORIGIN in (a.get("origin"), b.get("origin")):
+        return False
     return any(node["fresh"] and not node["reviewed"] for node in (a, b))
 
 
@@ -176,9 +214,10 @@ def find_pairs(nodes: list[dict[str, Any]], *, min_overlap: float = PAIR_MIN_OVE
     Порядок — для потолка: сначала пары со свежими карточками (решать надо сейчас),
     среди них — с общей компанией или ссылкой, потом по убыванию сходства заголовков.
     Общая компания — сильный признак даже при низком сходстве: английский заголовок
-    против русского (ZenaTech, 19.09) даёт почти ноль общих основ."""
+    против русского (ZenaTech, 19.09) даёт почти ноль общих основ. Сходство заголовков —
+    лучшее из сочетаний заголовков пары (title_variants)."""
     features = [
-        (title_stems(node["signal"]), company_keys(node["signal"]), url_keys(node.get("urls") or []))
+        (title_variants(node["signal"]), company_keys(node["signal"]), url_keys(node.get("urls") or []))
         for node in nodes
     ]
     pairs = []
@@ -187,7 +226,7 @@ def find_pairs(nodes: list[dict[str, Any]], *, min_overlap: float = PAIR_MIN_OVE
             continue
         stems_i, companies_i, urls_i = features[i]
         stems_j, companies_j, urls_j = features[j]
-        overlap = _overlap(stems_i, stems_j)
+        overlap = _title_overlap(stems_i, stems_j)
         shared = bool(companies_i & companies_j or urls_i & urls_j)
         if overlap >= min_overlap or shared:
             pairs.append((i, j, overlap, shared))
@@ -209,12 +248,17 @@ def _hosts(urls: list[str] | set[str]) -> str:
 
 
 def pair_prompt(a: dict[str, Any], b: dict[str, Any]) -> str:
+    """Две карточки для судьи. Исходный заголовок — рядом с русским, если они разные: у сигнала ленты и у находки
+    поиска (заголовок страницы и русский заголовок модели поиска) — оба."""
     blocks = []
     for label, node in (("A", a), ("B", b)):
         signal = node["signal"]
+        title = str(signal.get("title_ru") or signal.get("title") or "")
+        original = str(signal.get("title") or "")
         blocks.append("\n".join([
             f"Карточка {label}",
-            f"заголовок: {signal.get('title_ru') or signal.get('title') or ''}",
+            f"заголовок: {title}",
+            *([f"исходный заголовок: {original}"] if original and original != title else []),
             f"компании: {', '.join(str(c) for c in signal.get('companies') or []) or 'не указаны'}",
             f"тема радара: {signal.get('theme') or ''}",
             f"суть: {str(signal.get('summary') or '')[:600]}",

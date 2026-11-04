@@ -304,6 +304,17 @@ def _required(name: Sequence[str]) -> list[str]:
     """Слова имени без формы собственности (_OPTIONAL), в том числе с точками: «S.A.» words режет на «S» и «A» —
     однобуквенные слова подряд, вместе дающие форму собственности, снимаются тоже. Имя из одной формы
     собственности — целиком."""
+    return _without_legal_form(name) or list(name)
+
+
+def bare_words(name: str) -> tuple[str, ...]:
+    """Слова имени компании без формы собственности, в нижнем регистре: ключ «общая компания» у пар «Дедупа»
+    (signal_dedup.company_keys). Имя только из формы собственности («Inc.» после запятой в «Select Water Solutions,
+    Inc.») — пусто: это не компания, и общим участником всех «Inc.» она стать не должна."""
+    return tuple(word.casefold() for word in _without_legal_form(words(name)))
+
+
+def _without_legal_form(name: Sequence[str]) -> list[str]:
     kept: list[str] = []
     index = 0
     while index < len(name):
@@ -316,7 +327,7 @@ def _required(name: Sequence[str]) -> list[str]:
         if name[index].casefold() not in _OPTIONAL:
             kept.append(name[index])
         index += 1
-    return kept or list(name)
+    return kept
 
 
 def _named_word(word: str, token: str) -> bool:

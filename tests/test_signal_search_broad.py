@@ -216,6 +216,6 @@ def test_worker_build_before_the_broad_search_gets_no_radar_run(user, contour, m
     assert worker("external-agents", contract_number=8).claim() is None
     with repository.get_connection() as conn:
         [(error,)] = conn.execute("SELECT error_message FROM background_jobs WHERE status = 'failed'").fetchall()
-    assert "нужен контракт 9" in error
+    assert "нужен контракт 10" in error
     run_worker("external-agents")
     assert findings() == []

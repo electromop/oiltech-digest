@@ -136,18 +136,33 @@ WHERE s.signal_key = {_key_sql('f.id')}
 """
 
 # Свой сигнал у статьи, ставшей перепечаткой, — дубль сигнала главной (тот же механизм
-# склейки, что у радара: merged_into_signal_id, дубль не удаляется).
+# склейки, что у радара: merged_into_signal_id, дубль не удаляется). Сигнал главной сам может быть дублем:
+# «Дедуп» прогона радара склеивает его с более ранней карточкой радара того же события (04.11). Тогда перепечатка —
+# к корню группы, а не к спрятанному сигналу: группа в один шаг, как у mark_signal_merged.
 _MERGE_REPRINTS = f"""
 UPDATE signals d
-SET merged_into_signal_id = p.id,
+SET merged_into_signal_id = COALESCE(p.merged_into_signal_id, p.id),
     merge_reason = '{REPRINT_MERGE_REASON} ' || ar.primary_id,
     updated_at = now()
 FROM feed_scope f
 JOIN article_reprints ar ON ar.article_id = f.id
 JOIN signals p ON p.signal_key = {_key_sql('ar.primary_id')}
 WHERE d.signal_key = {_key_sql('f.id')}
-  AND p.id <> d.id
-  AND d.merged_into_signal_id IS DISTINCT FROM p.id
+  AND COALESCE(p.merged_into_signal_id, p.id) <> d.id
+  AND d.merged_into_signal_id IS DISTINCT FROM COALESCE(p.merged_into_signal_id, p.id)
+"""
+
+# Дубли сигнала, который сам стал дублем (перепечатка или склейка «Дедупа»), — к его корню: в главной карточке
+# видны ссылки только её прямых дублей (list_radar_evidence), и ссылки карточки радара, склеенной с сигналом
+# статьи-перепечатки, пропали бы с экрана.
+_FLATTEN_MERGED = f"""
+UPDATE signals c
+SET merged_into_signal_id = d.merged_into_signal_id, updated_at = now()
+FROM signals d
+JOIN feed_scope f ON d.signal_key = {_key_sql('f.id')}
+WHERE c.merged_into_signal_id = d.id
+  AND d.merged_into_signal_id IS NOT NULL
+  AND d.merged_into_signal_id <> c.id
 """
 
 
@@ -265,6 +280,7 @@ def sync_feed_signals(
         conn.execute(_CLEAR_GATE_DECIDED_FAILURES)
         unmerged = conn.execute(_UNMERGE_FORMER_REPRINTS).rowcount
         merged = conn.execute(_MERGE_REPRINTS).rowcount
+        conn.execute(_FLATTEN_MERGED)
         publications = conn.execute(_UPSERT_PUBLICATIONS).rowcount
         conn.execute(_REFRESH_COUNTS)
         refresh_platform_decisions([row[0] for row in conn.execute(_SCOPE_SIGNALS).fetchall()], conn=conn)

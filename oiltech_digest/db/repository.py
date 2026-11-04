@@ -16,7 +16,7 @@ from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from oiltech_digest import auth, config, contract, feed_window, lanes
+from oiltech_digest import auth, config, contract, feed_window, lanes, signal_dedup
 from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db import article_tail_store, marks
 from oiltech_digest.db.connection import get_connection
@@ -1324,19 +1324,61 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
     находку того же события (signal_dedup._rank). Бизнес-находка видна в витрине «бизнес» —
     не скрытая (#95). last_seen_day — когда радар нашёл событие последний раз: поиск темы
     получает карточки, найденные за его период, чтобы не приносить их снова (17.10)."""
+    reviewed = _SIGNAL_REVIEWED_SQL.format(alias="s")
+    return _dedup_snapshot_rows(
+        hidden=f"NOT {_any_showcase_quality_sql('s')}",
+        where=f"""
+              -- Только находки радара (#95): сигналы ленты (тысячи в месяц) вытеснили бы карточки радара из снимка
+              -- в 300 штук. Видимые сигналы ленты окна поиска едут отдельным списком (list_feed_signals_for_dedup).
+              {radar_origin_sql("s")}
+              -- Находка пробного прогона (#138) не видна нигде: повтор её события — новая находка, а не её дубль.
+              AND s.selector IS DISTINCT FROM '{SIGNAL_SELECTOR_TRIAL}'
+              -- Отсеянное в дедуп не идёт: новое событие не склеится с браком. Разобранное
+              -- человеком — идёт: одобренная отсеянная видна на радаре, и её повтор должен
+              -- стать её дублем; отклонённая — главной (_rank), повтор не вернётся.
+              AND (s.filter_stage IS NULL OR {reviewed})
+              AND ({reviewed} OR s.last_seen_at >= now() - make_interval(days => %(window)s))""",
+        order=f"{reviewed} DESC, s.last_seen_at DESC, s.id DESC",
+        params={"fresh": fresh_days, "window": window_days, "limit": limit},
+    )
+
+
+def list_feed_signals_for_dedup(*, since: date | datetime, fresh_days: int = 3, limit: int = 1500) -> list[dict]:
+    """Сигналы ленты для «Дедупа» прогона радара (блок А5 схемы агентов, 04.11): видимые в витрине (технологий или
+    бизнеса) и разобранные человеком, поступившие с since. Находка поиска того же события садится в такой сигнал,
+    а не заводит вторую карточку (прогон 51351: у 9 из 24 находок событие уже было в ленте под другой ссылкой).
+    Сверяется он только с находками прогона (signal_dedup._eligible): ленту с лентой склеивают перепечатки. Скрытый
+    неразобранный не нужен: главным он не стал бы (signal_dedup._rank), а склейку «сохранённая → новая» ядро не
+    пишет."""
+    reviewed = _SIGNAL_REVIEWED_SQL.format(alias="s")
+    visible = f"({_RADAR_VISIBLE_SQL} OR {_BUSINESS_VISIBLE_SQL})"
+    return _dedup_snapshot_rows(
+        hidden=f"NOT {visible}",
+        where=f"""
+              s.origin = '{SIGNAL_ORIGIN_FEED}'
+              AND s.first_seen_at >= %(since)s
+              AND ({visible} OR {reviewed})""",
+        order=f"{reviewed} DESC, s.first_seen_at DESC, s.id DESC",
+        params={"fresh": fresh_days, "since": since, "limit": limit},
+    )
+
+
+def _dedup_snapshot_rows(*, hidden: str, where: str, order: str, params: dict) -> list[dict]:
+    """Строки снимка дедупа (несклеенные карточки) по условию where: что знает о карточке воркер NL — заголовки,
+    суть, участники, вердикт, разобрана ли, скрыта ли (hidden), свежая ли (params fresh: дней), первые 10 ссылок."""
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            """
-            SELECT s.id, s.signal_key, s.title, s.title_ru, s.theme,
+            f"""
+            SELECT s.id, s.signal_key, s.origin, s.title, s.title_ru, s.theme,
                    left(s.summary, 400) AS summary,
-                   s.companies_json AS companies, s.score, s.evidence_count,
-                   (s.first_seen_at >= now() - make_interval(days => %s)) AS fresh,
+                   {_dedup_companies_sql("s")} AS companies, s.score, s.evidence_count,
+                   (s.first_seen_at >= now() - make_interval(days => %(fresh)s)) AS fresh,
                    to_char(s.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS first_seen_day,
                    to_char(s.last_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS last_seen_day,
                    v.verdict,
-                   {reviewed} AS reviewed,
-                   NOT {visible} AS hidden,
+                   {_SIGNAL_REVIEWED_SQL.format(alias="s")} AS reviewed,
+                   {hidden} AS hidden,
                    COALESCE(ev.urls, ARRAY[]::text[]) AS evidence_urls
             FROM signals s
             LEFT JOIN LATERAL (
@@ -1356,22 +1398,11 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
                 LIMIT 10
               ) top
             ) ev ON TRUE
-            WHERE s.merged_into_signal_id IS NULL
-              -- Только находки радара (#95): сигналы ленты (тысячи в месяц) вытеснили бы
-              -- карточки радара из снимка в 300 штук; склейку ленты с радаром сделает агент дедупа.
-              AND {radar}
-              -- Находка пробного прогона (#138) не видна нигде: повтор её события — новая находка, а не её дубль.
-              AND s.selector IS DISTINCT FROM '{trial}'
-              -- Отсеянное в дедуп не идёт: новое событие не склеится с браком. Разобранное
-              -- человеком — идёт: одобренная отсеянная видна на радаре, и её повтор должен
-              -- стать её дублем; отклонённая — главной (_rank), повтор не вернётся.
-              AND (s.filter_stage IS NULL OR {reviewed})
-              AND ({reviewed} OR s.last_seen_at >= now() - make_interval(days => %s))
-            ORDER BY {reviewed} DESC, s.last_seen_at DESC, s.id DESC
-            LIMIT %s
-            """.format(reviewed=_SIGNAL_REVIEWED_SQL.format(alias="s"), visible=_any_showcase_quality_sql("s"),
-                       radar=radar_origin_sql("s"), trial=SIGNAL_SELECTOR_TRIAL),
-            (fresh_days, window_days, limit),
+            WHERE s.merged_into_signal_id IS NULL AND {where}
+            ORDER BY {order}
+            LIMIT %(limit)s
+            """,
+            params,
         )
         rows = cur.fetchall()
     return [
@@ -1379,6 +1410,20 @@ def list_signals_for_dedup(*, window_days: int = 30, fresh_days: int = 3, limit:
          "evidence_urls": list(row["evidence_urls"] or [])}
         for row in rows
     ]
+
+
+def _dedup_companies_sql(alias: str = "s") -> str:
+    """Компании карточки для правила пар «Дедупа»: у прежней цепочки — компании судьи (companies_json), у сигнала
+    после «Отбора» и у сигнала ленты — участники «Карточки» (participants_json): companies_json у них пуст, и общей
+    компании дедуп не видел (прогон 51351, 04.11)."""
+    a = alias
+    return (
+        f"(CASE WHEN (CASE WHEN jsonb_typeof({a}.companies_json) = 'array'"
+        f" THEN jsonb_array_length({a}.companies_json) ELSE 0 END) > 0 THEN {a}.companies_json"
+        f" WHEN jsonb_typeof({a}.participants_json) = 'array' THEN COALESCE((SELECT jsonb_agg(p->>'name')"
+        f" FROM jsonb_array_elements({a}.participants_json) p WHERE COALESCE(p->>'name', '') <> ''), '[]'::jsonb)"
+        " ELSE '[]'::jsonb END)"
+    )
 
 
 def resolve_signal_merge_root(signal_id: int) -> int | None:
@@ -1458,8 +1503,27 @@ def insert_otbor_finding(signal: dict, *, selector: str = SIGNAL_SELECTOR_OTBOR)
 
 
 def touch_signal(signal_id: int) -> None:
+    """Радар нашёл карточку снова. Только находку радара: сигнал ленты, в который «Дедуп» склеил находку поиска
+    (04.11), радар не находил, его время — время сбора статьи, а last_seen_at берёт сортировка витрин."""
     with get_connection() as conn:
-        conn.execute("UPDATE signals SET last_seen_at = now(), updated_at = now() WHERE id = %s", (int(signal_id),))
+        conn.execute(f"UPDATE signals s SET last_seen_at = now(), updated_at = now() WHERE s.id = %s"
+                     f" AND {radar_origin_sql('s')}", (int(signal_id),))
+        conn.commit()
+
+
+def signal_evidence_urls(signal_id: int) -> set[str]:
+    """Свои ссылки карточки (без ссылок склеенных дублей)."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT source_url FROM signal_evidence WHERE signal_id = %s", (int(signal_id),)).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def append_signal_decision_log(signal_id: int, stage: str, text: str) -> None:
+    """Шаг в «Ход решения» карточки: «Дедуп» склеил с ней находку поиска того же события (04.11)."""
+    with get_connection() as conn:
+        conn.execute("UPDATE signals SET decision_log = COALESCE(decision_log, '[]'::jsonb) || %s::jsonb,"
+                     " updated_at = now() WHERE id = %s",
+                     (Json([{"stage": stage, "text": text}]), int(signal_id)))
         conn.commit()
 
 
@@ -5566,7 +5630,8 @@ def get_articles_for_external_refetch(article_ids: list[int]) -> list[dict]:
 
 def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
                        max_overlap: float = 1.0,
-                       max_days_apart: int = 5, limit: int = 200) -> list[dict]:
+                       max_days_apart: int = 5, limit: int = 200,
+                       ru_min_overlap: float = signal_dedup.PAIR_MIN_OVERLAP) -> list[dict]:
     """Пары-кандидаты в перепечатки: разные источники, близкие даты, общие слова.
 
     Правило намеренно широкое — оно отвечает за полноту, а решает модель. Замер на
@@ -5576,6 +5641,13 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
     Слова режем до 6 знаков вместо лемматизации: «установки/установок/установках»
     сходятся, а тащить морфологию в SQL ради этого незачем. Короче 5 знаков
     отбрасываем — предлоги и «нефть» есть почти везде и только шумят.
+
+    Второе сходство — по русскому заголовку карточки статьи (у русской статьи без него — по её заголовку): основами по 4
+    знака без общих слов отрасли и с порогом ru_min_overlap, как у «Дедупа» радара (signal_dedup.title_stems,
+    PAIR_MIN_OVERLAP): на шести знаках русские глаголы расходятся («продала», «продаст»). Замер 04.11 на видимых
+    карточках ленты за 25.10-04.11: из 51 пары с русским или исходным заголовком от 0,35 судья счёл одним событием 45,
+    исходный заголовок ловил 5 из них; ниже 0,35 лежат и настоящие дубли (Halliburton и Keystone: World Oil и
+    Drilling Contractor, 0,33; ADNOC и OpenAI: 0,30). overlap пары — лучшее из двух сходств.
 
     Разные источники — условие, а не настройка: внутри одного издания повтор
     заголовка это серийная сводка, и схлопывание таких пар уже уничтожало сотни
@@ -5591,7 +5663,11 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
                            FROM unnest(regexp_split_to_array(
                                 lower(regexp_replace(a.title, '[^[:alnum:][:space:]]', ' ', 'g')),
                                 '\s+')) w
-                           WHERE length(w) >= 5) AS toks
+                           WHERE length(w) >= 5) AS toks,
+                     ARRAY(SELECT DISTINCT left(w, 4)
+                           FROM unnest(regexp_split_to_array(
+                                lower(COALESCE(NULLIF(c.title_ru, ''), a.title)), '[^a-zа-яё0-9]+')) w
+                           WHERE length(w) >= 4 AND w !~ '^[0-9]+$' AND NOT (w = ANY(%(stop_words)s))) AS ru_toks
               FROM articles a
               LEFT JOIN article_reprints r ON r.article_id = a.id
               JOIN sources s ON s.id = a.source_id
@@ -5609,26 +5685,28 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
                 AND s.archived_at IS NULL
                 AND NOT a.pending_deletion
                 AND {feed_window.selected_sql('a', 'c')}
+            ),
+            p AS MATERIALIZED (
+              SELECT x.id AS a_id, y.id AS b_id, x.title AS a_title, y.title AS b_title,
+                     CASE WHEN cardinality(x.toks) >= 3 AND cardinality(y.toks) >= 3 THEN
+                       cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
+                       / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0)
+                     ELSE 0 END AS title_overlap,
+                     CASE WHEN cardinality(x.ru_toks) >= 3 AND cardinality(y.ru_toks) >= 3 THEN
+                       cardinality(ARRAY(SELECT unnest(x.ru_toks) INTERSECT SELECT unnest(y.ru_toks)))::numeric
+                       / NULLIF(cardinality(ARRAY(SELECT unnest(x.ru_toks) UNION SELECT unnest(y.ru_toks))), 0)
+                     ELSE 0 END AS ru_overlap
+              FROM t x
+              JOIN t y ON y.id > x.id
+                      AND y.source_id <> x.source_id
+                      AND (x.published_at IS NULL OR y.published_at IS NULL
+                           OR abs(EXTRACT(EPOCH FROM (x.published_at - y.published_at)))
+                              < %(apart)s * 86400)
             )
-            SELECT x.id AS a_id, y.id AS b_id,
-                   x.title AS a_title, y.title AS b_title,
-                   round(
-                     cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
-                     / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0),
-                   3) AS overlap
-            FROM t x
-            JOIN t y ON y.id > x.id
-                    AND y.source_id <> x.source_id
-                    AND (x.published_at IS NULL OR y.published_at IS NULL
-                         OR abs(EXTRACT(EPOCH FROM (x.published_at - y.published_at)))
-                            < %(apart)s * 86400)
-            WHERE cardinality(x.toks) >= 3 AND cardinality(y.toks) >= 3
-              AND cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
-                  / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0)
-                  >= %(overlap)s
-              AND cardinality(ARRAY(SELECT unnest(x.toks) INTERSECT SELECT unnest(y.toks)))::numeric
-                  / NULLIF(cardinality(ARRAY(SELECT unnest(x.toks) UNION SELECT unnest(y.toks))), 0)
-                  <= %(max_overlap)s
+            SELECT a_id, b_id, a_title, b_title, round(GREATEST(title_overlap, ru_overlap), 3) AS overlap
+            FROM p
+            WHERE (title_overlap >= %(overlap)s OR ru_overlap >= %(ru_overlap)s)
+              AND GREATEST(title_overlap, ru_overlap) <= %(max_overlap)s
             -- Порядок намеренно НЕ по overlap. Замер 17.09 на живом корпусе: из 318
             -- пар за 14 дней только 57 тривиальных (100%%), а полоса, ради которой
             -- судья и заведён (35-49%% — случай заказчика от 08.09), самая большая:
@@ -5636,11 +5714,12 @@ def reprint_candidates(*, days: int = 14, min_overlap: float = 0.35,
             -- верхушку, и спорные пары не доезжали до неё никогда. md5 по паре id
             -- даёт порядок, не связанный с силой совпадения, и при этом устойчивый
             -- между прогонами.
-            ORDER BY md5(x.id::text || ':' || y.id::text)
+            ORDER BY md5(a_id::text || ':' || b_id::text)
             LIMIT %(limit)s
             """,
             {"days": days, "apart": max_days_apart, "overlap": min_overlap,
-             "max_overlap": max_overlap, "limit": limit},
+             "max_overlap": max_overlap, "limit": limit, "ru_overlap": ru_min_overlap,
+             "stop_words": sorted(signal_dedup.TITLE_STOP_WORDS)},
         )
         return cur.fetchall()
 
@@ -5707,6 +5786,28 @@ def _chosen_for_digest(conn, article_id: int) -> bool:
     ).fetchone()[0]
 
 
+# Почему копию нельзя спрятать перепечаткой (_kept_by_people): как это сказать в причине отказа и в пометке.
+_KEPT_BY_PEOPLE = {
+    "digest": ("выбрана в дайджест", "выбраны в дайджест", "главная — выбранная в дайджест"),
+    "feedback": ("разобрана человеком", "разобраны людьми", "главная — разобранная человеком"),
+}
+
+
+def _kept_by_people(conn, article_id: int) -> str | None:
+    """Чьё решение держит статью на виду: её выбрали «в дайджест» (digest) или её сигнал ленты разобран человеком
+    (feedback: запись блока ОС, оценка, причина или комментарий, SIGNAL_HAS_FEEDBACK_SQL). Решение людей важнее
+    выбора судьи, как у «Дедупа» радара (_SIGNAL_REVIEWED_SQL): с правилом по русскому заголовку (04.11) судья
+    склеивает в разы больше пар, и разобранная карточка ушла бы с экрана вместе с обратной связью. None — ничьё."""
+    if _chosen_for_digest(conn, article_id):
+        return "digest"
+    reviewed = conn.execute(
+        f"SELECT EXISTS (SELECT 1 FROM signals s WHERE s.origin = '{SIGNAL_ORIGIN_FEED}'"
+        f" AND s.origin_article_id = %s AND {SIGNAL_HAS_FEEDBACK_SQL})",
+        (int(article_id),),
+    ).fetchone()[0]
+    return "feedback" if reviewed else None
+
+
 def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float | None,
                          reason: str | None, decided_by: str = "ai",
                          model: str | None = None) -> None:
@@ -5716,7 +5817,8 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
     не отмечал, и новость ушла бы из его выпуска и из ленты целиком (29.09; так же радар не прячет
     карточку, выбранную в дайджест, — mark_signal_merged). Если главную при этом не выбирал
     никто, главной становится выбранная копия, а прячется прежняя главная вместе со своей группой
-    (ревью #84: отказ оставлял в ленте у всех обе копии). Выбраны обе — не прячем ни одну."""
+    (ревью #84: отказ оставлял в ленте у всех обе копии). Выбраны обе — не прячем ни одну. Так же —
+    копию, разобранную человеком (блок ОС у её сигнала ленты, 04.11): _kept_by_people."""
     if int(article_id) == int(primary_id):
         raise ValueError("статья не может быть перепечаткой самой себя")
     duplicate_id = int(article_id)
@@ -5726,16 +5828,20 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
         primary_id = resolve_reprint_root(conn, int(primary_id))
         if duplicate_id == primary_id:
             raise ValueError("статья уже является корнем своей группы перепечаток")
-        if _chosen_for_digest(conn, duplicate_id):
-            if _chosen_for_digest(conn, primary_id):
+        kept = _kept_by_people(conn, duplicate_id)
+        if kept:
+            kept_label, both_label, swapped_reason = _KEPT_BY_PEOPLE[kept]
+            other = _kept_by_people(conn, primary_id)
+            if other:
+                both_label = both_label if other == kept else "выбраны в дайджест или разобраны людьми"
                 raise ValueError(
-                    f"обе копии ({duplicate_id} и {primary_id}) выбраны в дайджест — не прячем ни одну"
+                    f"обе копии ({duplicate_id} и {primary_id}) {both_label} — не прячем ни одну"
                 )
             # Выбранная копия становится главной, если может ею быть: сама не спрятана и видна в
             # ленте. Иначе — отказ: прятать видимую ради невидимой значит убрать новость целиком.
             if (resolve_reprint_root(conn, duplicate_id) != duplicate_id
                     or not article_visible_in_feed(conn, duplicate_id)):
-                raise ValueError(f"статья {duplicate_id} выбрана в дайджест — её не прячем как перепечатку")
+                raise ValueError(f"статья {duplicate_id} {kept_label} — её не прячем как перепечатку")
             # Выбранная копия из закрытого месяца, а прежняя главная — из открытого: главной стала бы
             # архивная, и новость пропала бы из ленты открытого месяца у всех (ревью #88: копия
             # 30.09 в сентябрьском выпуске, копия 01.10 — главная после 05.10). Не переставляем,
@@ -5743,16 +5849,16 @@ def mark_article_reprint(*, article_id: int, primary_id: int, similarity: float 
             closed = _closed_month_article_ids(conn, [duplicate_id, primary_id], feed_window.current())
             if duplicate_id in closed and primary_id not in closed:
                 raise ValueError(
-                    f"статья {duplicate_id} выбрана в дайджест закрытого месяца, а копия {primary_id} — "
+                    f"статья {duplicate_id} {kept_label} в закрытом месяце, а копия {primary_id} — "
                     "из открытого: главную не переставляем"
                 )
-            logger.info("reprint_primary_swapped: главная %s, спрятана %s — копию выбрали в дайджест",
-                        duplicate_id, primary_id)
+            logger.info("reprint_primary_swapped: главная %s, спрятана %s — копия %s",
+                        duplicate_id, primary_id, kept_label)
             duplicate_id, primary_id = primary_id, duplicate_id
             # Перестановку видно в базе (ревью #88): главная — не та, что выбрал судья, и его довод о
             # главной к этой пометке не относится; что это одно событие — его слова, после «судья:».
             # decided_by — как у вызывающего: иных значений, кроме «ai», в базе нет.
-            reason = ("главная — выбранная в дайджест" + (f"; судья: {reason}" if reason else ""))[:500]
+            reason = (swapped_reason + (f"; судья: {reason}" if reason else ""))[:500]
         elif not article_visible_in_feed(conn, primary_id):
             # Прятать копию можно только в пользу той, которую читатель увидит.
             raise ValueError(

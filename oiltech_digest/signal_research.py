@@ -376,6 +376,9 @@ def _event_to_evidence(
         "topic": topic,
         "raw_payload": {
             "evidence_source": EVIDENCE_SOURCE,
+            # Русский заголовок модели поиска: докачка страницы ставит в title заголовок страницы, а «Дедупу» прогона
+            # нужен и этот (пара английской страницы с русской статьёй ленты, замер 04.11). Черновые данные.
+            "research_title": title,
             "company": str(event.get("company") or "").strip(),
             "source_kind": kind,
             "technology": technology,

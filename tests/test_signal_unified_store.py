@@ -3,7 +3,8 @@
 выдаёт ровно то же, что раньше. Шов — API списка сигналов на изолированной базе.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -474,3 +475,133 @@ def test_feed_signals_stay_out_of_the_issue_and_the_radar_context_bundle(user):
     bundle = signal_training._build_signal_context_bundle(include_rejected=True)
     assert [row["id"] for row in bundle["signals"]] == [radar]
     assert bundle["signal_feedback_events"] == []
+
+
+# --- Блок А5 схемы агентов (04.11): сигналы ленты в «Дедупе» радара, перепечатки по русскому заголовку ---------
+
+
+def _feed_signal_id(article_id):
+    with repository.get_connection() as conn:
+        return int(conn.execute("SELECT id FROM signals WHERE origin = 'feed' AND origin_article_id = %s",
+                                (article_id,)).fetchone()[0])
+
+
+def _titled(n, title, source, *, language="en"):
+    """Статья сбора своего издания с заголовком — для правила перепечаток (разные издания)."""
+    collected = datetime.now(timezone.utc)
+    with repository.get_connection() as conn:
+        row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()
+        if row is None:
+            row = conn.execute("INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+                               "VALUES (%s, 'News', %s, TRUE, 'rss') RETURNING id",
+                               (source, f"https://source-{n}.example")).fetchone()
+        article_id = conn.execute(
+            "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
+            "VALUES (%s, %s, %s, %s, %s, 'текст', %s) RETURNING id",
+            (row[0], title, f"https://feed.example/{n}", collected, collected, language),
+        ).fetchone()[0]
+        conn.commit()
+    return int(article_id)
+
+
+def _feedback(signal_id, verdict="approved", event_type="comment_added"):
+    with repository.get_connection() as conn:
+        conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict) VALUES (%s, %s, %s)",
+                     (signal_id, event_type, verdict))
+        conn.commit()
+
+
+def _participants(signal_id, *names):
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET participants_json = %s::jsonb WHERE id = %s",
+                     (json.dumps([{"name": name, "quote": name, "verified": True} for name in names]), signal_id))
+        conn.commit()
+
+
+def test_dedup_snapshot_of_the_feed_takes_visible_and_reviewed_signals_of_the_search_window(user):
+    visible, reviewed, hidden = _article(61), _article(62), _article(63)
+    old = _article(64, collected=datetime.now(timezone.utc) - timedelta(days=40))
+    for article in (visible, reviewed, hidden, old):
+        _process(article)
+    for article in (reviewed, hidden):
+        repository.set_article_relevance(article, False, "перепроверка: не нефтесервис")
+    _feedback(_feed_signal_id(reviewed), "reject", event_type="verdict")
+    _participants(_feed_signal_id(visible), "Halliburton", "Keystone AS")
+
+    rows = {row["id"]: row for row in repository.list_feed_signals_for_dedup(since=date.today() - timedelta(days=10))}
+
+    # Видимый сигнал окна и разобранный человеком (его повтор не вернётся); скрытый неразобранный и старый — нет.
+    assert set(rows) == {_feed_signal_id(visible), _feed_signal_id(reviewed)}
+    row = rows[_feed_signal_id(visible)]
+    assert (row["origin"], row["companies"], row["hidden"], row["reviewed"], row["fresh"]) == (
+        "feed", ["Halliburton", "Keystone AS"], False, False, True)
+    assert row["evidence_urls"] == ["https://feed.example/61"]
+    assert (rows[_feed_signal_id(reviewed)]["hidden"], rows[_feed_signal_id(reviewed)]["verdict"]) == (True, "reject")
+    # Снимок радара ленту не берёт; участники «Карточки» — его компании, если судья их не писал (после «Отбора»).
+    radar = _radar_card("radar-keystone", "Halliburton купила Keystone", category="business")
+    _participants(radar, "Halliburton")
+    [radar_row] = repository.list_signals_for_dedup()
+    assert (radar_row["id"], radar_row["origin"], radar_row["companies"]) == (radar, "radar", ["Halliburton"])
+
+
+def test_reprint_candidates_pair_an_english_article_with_its_russian_retelling(user):
+    # Прод 03.11: World Oil и Drilling Contractor об одной сделке — две видимые карточки бизнес-ленты: исходные
+    # заголовки сходятся на 0,2 при пороге 0,35, русские заголовки карточек — на 0,33 (основы как у «Дедупа»).
+    world_oil = _titled(71, "Halliburton acquires Norway’s Keystone AS to expand digital well construction software",
+                        "World Oil")
+    contractor = _titled(72, "Halliburton buys Keystone to link well planning with rig execution",
+                         "Drilling Contractor")
+    other = _titled(73, "Shell agrees to sell its stake in North West Shelf to XRG", "Upstream")
+    _process(world_oil, title_ru="Halliburton приобрела норвежскую Keystone для развития цифровых решений "
+                                 "по строительству скважин")
+    _process(contractor, title_ru="Halliburton купила Keystone для интеграции планирования и строительства скважин")
+    _process(other, title_ru="Shell продаст долю в СПГ-проекте North West Shelf компании XRG")
+
+    pairs = {(row["a_id"], row["b_id"]): row["overlap"] for row in repository.reprint_candidates(days=14)}
+
+    assert set(pairs) == {(world_oil, contractor)} and float(pairs[(world_oil, contractor)]) == 0.333
+    # Без русского заголовка пары нет: правило до 04.11 её не видело.
+    assert repository.reprint_candidates(days=14, ru_min_overlap=1.01) == []
+
+
+def test_reprint_keeps_on_screen_the_copy_people_gave_feedback_on(user):
+    main, copy, third = _article(81), _article(82), _article(83)
+    for article in (main, copy, third):
+        _process(article)
+    _feedback(_feed_signal_id(copy))
+
+    repository.mark_article_reprint(article_id=copy, primary_id=main, similarity=0.4, reason="одно событие")
+
+    # Как с выбранной «в дайджест»: копия с блоком ОС — главная, прежняя главная спрятана вместе с группой.
+    assert sorted(card["origin_article_id"] for card in _business(user)) == [copy, third]
+    with repository.get_connection() as conn:
+        assert conn.execute("SELECT primary_id, reason FROM article_reprints WHERE article_id = %s",
+                            (main,)).fetchone() == (copy, "главная — разобранная человеком; судья: одно событие")
+    # Блок ОС у обеих — не прячем ни одну.
+    _feedback(_feed_signal_id(third))
+    with pytest.raises(ValueError, match="разобраны людьми"):
+        repository.mark_article_reprint(article_id=third, primary_id=copy, similarity=0.4, reason="одно событие")
+    assert sorted(card["origin_article_id"] for card in _business(user)) == [copy, third]
+
+
+def test_reprint_of_an_article_whose_signal_the_dedup_merged_joins_the_root_card(user):
+    radar = _radar_card("radar-root", "Halliburton купила Keystone", category="business")
+    main, copy = _article(91), _article(92)
+    _process(main)
+    _process(copy)
+    # «Дедуп» склеил сигнал главной статьи с более ранней карточкой радара, а с сигналом копии — карточку радара.
+    child = _radar_card("radar-child", "Keystone: сделка", category="business")
+    assert repository.mark_signal_merged(_feed_signal_id(main), radar, "то же событие")
+    assert repository.mark_signal_merged(child, _feed_signal_id(copy), "то же событие")
+
+    repository.mark_article_reprint(article_id=copy, primary_id=main, similarity=0.9, reason="одно событие")
+
+    # Группа в один шаг: сигнал перепечатки и склеенная с ним карточка — у корня, их ссылки видны в его карточке.
+    with repository.get_connection() as conn:
+        merged = dict(conn.execute("SELECT id, merged_into_signal_id FROM signals WHERE id = ANY(%s)",
+                                   ([_feed_signal_id(copy), child],)).fetchall())
+    assert merged == {_feed_signal_id(copy): radar, child: radar}
+    (card,) = _business(user)
+    assert card["id"] == radar
+    assert {item["source_url"] for item in card["evidence"]} >= {
+        "https://feed.example/91", "https://feed.example/92", "https://radar.example/radar-child"}

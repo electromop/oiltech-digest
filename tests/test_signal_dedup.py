@@ -380,6 +380,7 @@ def test_core_sets_dedup_cap_for_worker(monkeypatch):
     monkeypatch.setattr(signal_discovery.app_config, "SIGNAL_DEDUP_MAX_PAIRS", 7)
     monkeypatch.setattr(repository, "list_reviewed_signal_urls", lambda: [])
     monkeypatch.setattr(repository, "list_signals_for_dedup", lambda: [])
+    monkeypatch.setattr(repository, "list_feed_signals_for_dedup", lambda **kwargs: [])
     monkeypatch.setattr(repository, "list_signal_article_evidence", lambda **kwargs: [])
     monkeypatch.setattr(signal_discovery, "_selected_topics", lambda topic: [{"name": GEO}])
     snapshot = signal_discovery.build_discovery_snapshot(signal_discovery.SignalDiscoveryConfig())
@@ -540,3 +541,124 @@ def test_hidden_reviewed_card_keeps_its_links(isolated_db):
 
     assert _urls(rejected) == {"https://a.example/1"} and _urls(other) == set()
     assert repository.visible_evidence_owners(["https://a.example/1"])["https://a.example/1"]["id"] == rejected
+
+
+# --- Блок А5 схемы агентов (04.11): одно событие из ленты и поиска — одна карточка; черновые данные находки -----
+
+HALLIBURTON_PAGE = "Halliburton acquires Keystone AS to strengthen digital well construction capabilities"
+HALLIBURTON_PAGE_2 = "Halliburton Buys Keystone AS for AI Software in Norway 2026"
+# Русские заголовки модели поиска — как у этих находок после «Сути и перевода» (прогон 51351, 04.11).
+HALLIBURTON_RU = "Halliburton приобрела Keystone AS для развития цифрового строительства скважин"
+HALLIBURTON_RU_2 = "Halliburton купила норвежскую Keystone AS для развития ПО с ИИ"
+
+
+def _feed(signal_id, title, title_ru=None, companies=(), *, fresh=True, urls=()):
+    """Сигнал ленты из снимка ядра (list_feed_signals_for_dedup): исходный и русский заголовок, участники."""
+    node = _existing(signal_id, title_ru, list(companies), fresh=fresh,
+                     urls=urls or [f"https://feed.example/{signal_id}"])
+    node["origin"] = signal_dedup.FEED_ORIGIN
+    node["signal"].update({"title": title, "origin": signal_dedup.FEED_ORIGIN})
+    return node
+
+
+def _finding_evidence(url, page_title, research_title, company, summary="Суть модели поиска"):
+    """Ссылка находки после докачки страницы: в title заголовок страницы, черновые данные поиска — в raw_payload."""
+    return {"source_url": url, "title": page_title, "title_ru": page_title, "strength": 0.9,
+            "raw_payload": {"evidence_source": "openai_web_search", "research_title": research_title,
+                            "company": company, "research_summary": summary, "full_text_fetched": True}}
+
+
+def _otbor_finding(key, url, page_title, research_title, company):
+    """Находка при «Отборе», как её отдаёт _finding_candidate: в сигнале только заголовок страницы."""
+    evidence = _finding_evidence(url, page_title, research_title, company)
+    return {"signal": {"title": page_title, "theme": GEO, "summary": "", "companies": [], "maturity": "watch",
+                       "score": 0, "signal_key": key, "evidence_count": 1, "evidence": [evidence]},
+            "raw_output": {}, "rejected": False, "otbor": True}
+
+
+def test_company_written_with_comma_or_legal_form_is_the_same_company():
+    # Черновая компания поиска (прогон 51351): «Halliburton; Keystone AS» и «Halliburton, Keystone AS» — одни
+    # участники; «Inc.» после запятой — не компания, иначе общим участником стали бы все «Inc.».
+    assert signal_dedup.company_keys({"companies": ["Halliburton; Keystone AS"]}) == \
+        signal_dedup.company_keys({"companies": ["Halliburton, Keystone AS"]}) == {"halliburton", "keystone"}
+    assert signal_dedup.company_keys({"companies": ["Select Water Solutions, Inc."]}) == {"select water solutions"}
+    assert signal_dedup.company_keys({"companies": ["CVR Energy, Inc.", "Equinor ASA"]}) == {"cvr energy", "equinor"}
+
+
+def test_drafts_of_the_search_catch_the_pair_its_page_titles_miss():
+    # Пара прогона 51351: заголовки страниц сходятся на 0,18 при пороге 0,25, компаний у находки нет — пара не
+    # дошла до судьи, и событие стало двумя принятыми карточками (30812 и 30836).
+    stored = _otbor_finding("a", "https://halliburton.example/keystone", HALLIBURTON_PAGE, HALLIBURTON_RU,
+                            "Halliburton; Keystone AS")["signal"]
+    first = signal_discovery._finding_dedup_view(stored)
+    second = signal_discovery._finding_dedup_view(_otbor_finding(
+        "b", "https://norwaypost.example/keystone", HALLIBURTON_PAGE_2, HALLIBURTON_RU_2,
+        "Halliburton, Keystone AS")["signal"])
+    pages = [{"kind": "new", "reviewed": False, "fresh": True, "urls": [],
+              "signal": {"title": title, "companies": []}} for title in (HALLIBURTON_PAGE, HALLIBURTON_PAGE_2)]
+    assert signal_dedup.find_pairs(pages) == []
+
+    nodes = [{"kind": "new", "reviewed": False, "fresh": True, "urls": [], "signal": view} for view in (first, second)]
+    [(i, j, overlap)] = signal_dedup.find_pairs(nodes)
+    assert (i, j) == (0, 1) and round(overlap, 2) == 0.33  # русские заголовки поиска
+    # Черновые данные — только у «Дедупа»: в сигнал (и во вход «Отбора») они не идут.
+    assert first["title_ru"] == HALLIBURTON_RU and first["companies"] == ["Halliburton; Keystone AS"]
+    assert first["summary"] == "Суть модели поиска"
+    assert (stored["companies"], stored["summary"], "title_ru" in stored, "research_titles" in stored) == (
+        [], "", False, False)
+
+
+def test_feed_signal_is_paired_only_with_findings_of_the_run():
+    nodes = [
+        _feed(1, "Halliburton buys Keystone to link well planning with rig execution",
+              "Halliburton купила Keystone для связи планирования и бурения", ["Halliburton"]),
+        _feed(2, "Halliburton acquires Norway's Keystone AS to expand digital well construction",
+              "Halliburton приобрела норвежскую Keystone AS", ["Halliburton", "Keystone AS"]),
+        # Свежая неразобранная карточка радара прошлого прогона того же события.
+        _existing(30, "Halliburton приобрела Keystone AS", ["Halliburton"], fresh=True),
+        _new("Halliburton приобрела Keystone AS", ["Halliburton"], key="new"),
+    ]
+
+    pairs = {(i, j) for i, j, _ in signal_dedup.find_pairs(nodes)}
+
+    # Лента с лентой — перепечатки; лента с сохранённой карточкой радара — нет: склейка спрятала бы видимую.
+    assert pairs == {(0, 3), (1, 3), (2, 3)}
+
+
+def test_judge_sees_both_titles_of_a_card():
+    prompt = signal_dedup.pair_prompt(
+        _feed(1, "Consortium to invest $3.1 billion for slice of Mitsubishi's stake in LNG Canada",
+              "Консорциум вложит $3,1 млрд в часть доли Mitsubishi в LNG Canada"),
+        _new("Mitsubishi продаст Blackstone почти половину холдинга с долей в LNG Canada", []))
+
+    card_a, card_b = prompt.split("Карточка B")
+    assert "заголовок: Консорциум вложит" in card_a and "исходный заголовок: Consortium to invest" in card_a
+    assert "исходный заголовок" not in card_b  # у карточки один заголовок — одна строка
+
+
+def test_worker_sends_a_finding_of_an_event_already_in_the_feed_into_the_feed_signal(monkeypatch):
+    snapshot = {"existing_signals": [], "feed_signals": [{
+        "id": 26009, "origin": "feed", "signal_key": "feed:7350937",
+        "title": "Halliburton acquires Norway’s Keystone AS",
+        "title_ru": "Halliburton приобрела норвежскую Keystone AS для цифрового строительства скважин",
+        "theme": MARKET, "summary": "Сделка", "companies": ["Halliburton", "Keystone AS"], "score": 62.4,
+        "evidence_count": 1, "fresh": True, "first_seen_day": "2026-11-03", "verdict": None, "reviewed": False,
+        "hidden": False, "evidence_urls": ["https://worldoil.example/keystone"]}]}
+    topics = [{"topic": GEO, "candidates": [
+        _otbor_finding("k1", "https://halliburton.example/keystone", HALLIBURTON_PAGE, HALLIBURTON_RU,
+                       "Halliburton; Keystone AS"),
+        _otbor_finding("k2", "https://other.example/drone", "Drone inspects a pipeline", "Дрон осмотрел трубопровод",
+                       "DroneCo")]}]
+    judge = _Judge("Keystone")
+    monkeypatch.setattr(signal_discovery, "_radar_client", lambda: judge)
+    config = signal_discovery.SignalDiscoveryConfig(offline=False)
+
+    stats = signal_discovery._dedupe_run(config, snapshot, topics, lambda: None)
+
+    found, other = topics[0]["candidates"]
+    assert found["duplicate_of"] == {"signal_id": 26009} and "duplicate_of" not in other
+    assert (stats["feed_signals"], stats["duplicates_of_feed"], stats["existing_merges"]) == (1, 1, [])
+    # Судья видит русский заголовок поиска рядом с заголовком страницы, компании и суть поиска.
+    [prompt] = judge.prompts
+    assert HALLIBURTON_RU in prompt and HALLIBURTON_PAGE in prompt and "Halliburton; Keystone AS" in prompt
+    assert "Суть модели поиска" in prompt

@@ -9,9 +9,10 @@ from oiltech_digest import background_jobs, cli, signal_card, signal_discovery
 from oiltech_digest.db import repository
 from oiltech_digest.signal_research import LIST_PAGE, PAGE_NOT_FETCHED, UNCONFIRMED_LINK
 from tests.otbor_radar_support import DRAFT_SUMMARY, DRAFT_WHY, PAGE_TEXT, event, page, run_radar, summarize
-from tests.otbor_support import answer, decide, reject, showcase
+from tests.otbor_support import answer, article, decide, reject, showcase
 from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import FakeModel, admin, api_get, run_worker, user, worker  # noqa: F401 — фикстуры
+from tests.signal_card_support import DRILLING, FakeModel, api_get, run_worker, tag, worker
+from tests.signal_card_support import admin, user  # noqa: F401 — фикстуры
 
 CONTRACT_URL = "https://adnoc.example/news/hail-ghasha-drilling"
 CONTRACT_TITLE = "ADNOC Drilling awards SLB a contract to drill 40 wells for Hail and Ghasha"
@@ -181,13 +182,14 @@ def test_old_worker_build_is_refused_the_radar_run_and_the_otbor_of_findings(use
 
     # Сборка NL контракта 4 не знает ни прогона радара при «Отборе», ни «Ссылок находки» (и повода публикации,
     # #133): задачи она не получает, и они падают с явной причиной (история 50 спеки), а не идут прежней цепочкой
-    # мимо «Отбора». Прогону радара с #138 нужен контракт 9: широкий промпт и модель поиска из задачи.
+    # мимо «Отбора». Прогону радара с #138 нужен контракт 9: широкий промпт и модель поиска из задачи; с 04.11 — 10:
+    # «Дедуп» сверяет находки и с лентой.
     assert [worker(queue, contract_number=4).claim() for queue in ("external-ai", "external-agents")] == [None, None]
     with repository.get_connection() as conn:
         failed = conn.execute("SELECT kind, error_message FROM background_jobs WHERE status = 'failed'").fetchall()
     assert sorted(kind for kind, _ in failed) == ["otbor", "signal_discovery"]
     needed = dict(failed)
-    assert "нужен контракт 9" in needed["signal_discovery"] and "нужен контракт 7" in needed["otbor"]
+    assert "нужен контракт 10" in needed["signal_discovery"] and "нужен контракт 7" in needed["otbor"]
 
 
 def test_summary_by_number_is_not_paid_for_a_finding_otbor_rejected(user, contour, monkeypatch, capsys):
@@ -253,3 +255,56 @@ def test_before_deploy_sql_adds_the_columns_to_the_old_schema_and_repeats_safely
     assert {("signals", "selector"), ("colleague_materials", "notified_outcome"), ("colleague_materials", "notified_at"),
             ("signal_feedback_events", "author")} <= columns
     assert "idx_signals_otbor_waiting" in indexes
+
+
+# --- Блок А5 схемы агентов (04.11): находка события, которое уже есть в ленте, — ссылка его карточки ----------------
+
+FEED_TITLE = "ADNOC Drilling заключила с SLB контракт на бурение 40 скважин Hail и Ghasha"
+
+
+def _last_seen(signal_id):
+    with repository.get_connection() as conn:
+        return conn.execute("SELECT last_seen_at FROM signals WHERE id = %s", (signal_id,)).fetchone()[0]
+
+
+def test_finding_of_an_event_already_in_the_feed_becomes_a_link_of_its_card_and_skips_otbor(
+        user, contour, monkeypatch):
+    # Статья сбора, принятая «Отбором», — видимая карточка бизнес-ленты.
+    article(FEED_TITLE, PAGE_TEXT)
+    decide(monkeypatch, {FEED_TITLE: answer()})
+    [feed_card] = showcase(user, "business").values()
+    seen = _last_seen(feed_card["id"])
+
+    # Поиск нашёл то же событие на сайте оператора: заголовок страницы английский, русский заголовок модели поиска —
+    # как у статьи ленты. Судья «Дедупа» говорит «одно событие».
+    run_radar(monkeypatch, [event(FEED_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)}, same_event=True)
+    otbor_model = decide(monkeypatch, {})
+
+    # Второй карточки нет, «Отбор» за находку не платится: её ссылка — публикация карточки ленты.
+    assert otbor_model.calls == []
+    [card] = showcase(user, "business").values()
+    assert card["id"] == feed_card["id"]
+    assert CONTRACT_URL in {item["source_url"] for item in card["evidence"]}
+    step = card["decision_log"][-1]
+    assert step["stage"] == "«Дедуп»" and CONTRACT_TITLE in step["text"] and "adnoc.example" in step["text"]
+    # Радар эту карточку не находил: время сигнала ленты (сортировка витрин) не сдвигается.
+    assert _last_seen(card["id"]) == seen
+    with repository.get_connection() as conn:
+        assert conn.execute("SELECT count(*) FROM signals WHERE origin = 'radar'").fetchone()[0] == 0
+
+    # Та же находка следующего прогона строку в «Ходе решения» не повторяет.
+    run_radar(monkeypatch, [event(FEED_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)}, same_event=True)
+    [card] = showcase(user, "business").values()
+    assert [one["stage"] for one in card["decision_log"]].count("«Дедуп»") == 1
+
+
+def test_worker_build_without_the_feed_dedup_gets_no_radar_run(user, contour, monkeypatch):
+    tag(DRILLING)
+    background_jobs.enqueue_daily_signal_discovery(force=True)
+
+    # Сборка контракта 9 снимок ленты молча пропустила бы: находка события, которое уже есть в ленте, стала бы
+    # второй карточкой. Задачу она не получает, задача падает с причиной.
+    assert worker("external-agents", contract_number=9).claim() is None
+    with repository.get_connection() as conn:
+        [(error,)] = conn.execute("SELECT error_message FROM background_jobs WHERE status = 'failed'").fetchall()
+    assert "нужен контракт 10" in error
