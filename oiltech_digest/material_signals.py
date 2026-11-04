@@ -7,7 +7,8 @@
 - Ссылка материала — его публикация, только если адрес ещё ничей: прикрепления к существующему сигналу нет,
   материал — свой сигнал и виден в витрине и без ссылки.
 - Накопленные материалы (присланы до включения, статус «принят») проходят конвейер один раз: convert_accumulated
-  (команда otbor-materials, сухой прогон по умолчанию).
+  (команда otbor-materials, сухой прогон по умолчанию). С --silent итог их авторам не сообщается (решение владельца
+  04.11 для присланных до включения).
 - Итог «Отбора» сообщается автору: ядро считает итог по сигналу (pending_notices), бот на NL отвечает в чате
   материала на его карточку и отмечает доставленное (mark_notified). Новый итог (человек вернул отклонённое) — новое
   уведомление.
@@ -34,13 +35,17 @@ KEY_PREFIX = "material:"
 # Витрина по категории «Отбора» — как её называет уведомление автору.
 SHOWCASES = {"business": "бизнес-лента", "technology": "технологический радар",
              "other": "раздел «Другое», он виден администратору"}
+# Пометка в notified_outcome: итог «Отбора» автору не сообщается, ни первый, ни следующий (otbor-materials --silent,
+# решение владельца 04.11: накопленные присланы до включения, ответа автор не ждёт).
+SILENT = "silent"
 # Оценка цены накопленных до вызова: русский текст — около трёх знаков на токен, ответ «Отбора» — около 300 токенов.
 _CHARS_PER_TOKEN, _OUTPUT_TOKENS = 3, 300
 
 
-def to_signal(material: dict[str, Any]) -> int:
+def to_signal(material: dict[str, Any], *, silent: bool = False) -> int:
     """Сигнал материала: заголовок, суть — описание, участники — компании автора (всё — «человек»), блок ОС с оценкой
-    автора, ссылка — если адрес ничей. Повтор — тот же сигнал (ключ по номеру материала). Номер сигнала."""
+    автора, ссылка — если адрес ничей. Повтор — тот же сигнал (ключ по номеру материала). Номер сигнала. silent: итог
+    «Отбора» автору не сообщается (SILENT), пометка ставится в той же транзакции, что и связь материала с сигналом."""
     companies = list(material.get("companies_json") or [])
     with connection.get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -70,6 +75,9 @@ def to_signal(material: dict[str, Any]) -> int:
             _link(cur, signal_id, material)
         cur.execute("UPDATE colleague_materials SET signal_id = %s WHERE id = %s AND signal_id IS NULL",
                     (signal_id, int(material["id"])))
+        if silent:
+            cur.execute("UPDATE colleague_materials SET notified_outcome = %s WHERE id = %s",
+                        (SILENT, int(material["id"])))
         conn.commit()
     return signal_id
 
@@ -212,10 +220,10 @@ def accumulated() -> list[dict[str, Any]]:
         return [dict(row) for row in cur.fetchall()]
 
 
-def convert_accumulated(*, apply: bool) -> dict[str, Any]:
+def convert_accumulated(*, apply: bool, silent: bool = False) -> dict[str, Any]:
     """Накопленные материалы — один раз через конвейер (#131). Сухой прогон: сколько их и сколько стоит «Отбор» по
-    ставкам ядра, ничего не пишет. apply: сигналы и задачи «Отбора» по полосе пересчётов; повторный запуск находит
-    только присланное после."""
+    ставкам ядра, ничего не пишет. apply: сигналы и задачи «Отбора» по полосе пересчётов; silent: итог авторам не
+    сообщается (SILENT). Повторный запуск находит только присланное после."""
     from oiltech_digest import otbor
 
     rows = accumulated()
@@ -231,7 +239,7 @@ def convert_accumulated(*, apply: bool) -> dict[str, Any]:
     if not config.OTBOR_ENABLED:
         raise otbor.OtborSetupError("OTBOR_ENABLED выключен: накопленные материалы идут через «Отбор» после включения")
     otbor.configured_model()
-    signal_ids = [to_signal(row) for row in rows]
+    signal_ids = [to_signal(row, silent=silent) for row in rows]
     jobs = otbor.enqueue([], signal_ids=signal_ids, trigger="materials", bulk=True) if signal_ids else []
     return {**plan, "applied": True, "signal_ids": signal_ids, "jobs": len(jobs)}
 
@@ -268,10 +276,12 @@ def pending_notices(*, limit: int = 20) -> list[dict[str, Any]]:
             )
             SELECT * FROM outcomes
             WHERE outcome IS NOT NULL AND outcome IS DISTINCT FROM notified_outcome
+              AND notified_outcome IS DISTINCT FROM %(silent)s
             ORDER BY id
             LIMIT %(limit)s
             """,
-            {"attempts": int(config.OTBOR_ATTEMPTS), "days": int(config.OTBOR_NEW_DAYS), "limit": int(limit)},
+            {"attempts": int(config.OTBOR_ATTEMPTS), "days": int(config.OTBOR_NEW_DAYS), "limit": int(limit),
+             "silent": SILENT},
         )
         rows = cur.fetchall()
     reasons = {value["code"]: value["label"] for value in load_dictionaries()["reject_reason"]["values"]}

@@ -2375,11 +2375,12 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
 def cmd_otbor_materials(args: argparse.Namespace) -> None:
     """Накопленные материалы коллег (#131): присланные до включения «Отбора» и не ставшие сигналом проходят конвейер
     один раз. По умолчанию сухой прогон — сколько материалов и оценка цены «Отбора», ничего не пишет; --apply —
-    сигналы материалов и задачи «Отбора» по полосе пересчётов (только при включённом флаге)."""
+    сигналы материалов и задачи «Отбора» по полосе пересчётов (только при включённом флаге); с --silent итог авторам
+    бот не сообщает (решение владельца 04.11 для присланных до включения)."""
     from oiltech_digest import material_signals, otbor
 
     try:
-        result = material_signals.convert_accumulated(apply=args.apply)
+        result = material_signals.convert_accumulated(apply=args.apply, silent=args.silent)
     except otbor.OtborSetupError as exc:
         raise SystemExit(f"otbor-materials: {exc}") from exc
     price = (f", «Отбор» около ${result['cost_usd']:.4f} ({result['model']})" if result["model"]
@@ -2388,7 +2389,8 @@ def cmd_otbor_materials(args: argparse.Namespace) -> None:
         print(f"otbor-materials: накопленных материалов {result['materials']}{price}; сухой прогон, ничего не записано"
               " (--apply — провести через конвейер)")
         return
-    print(f"otbor-materials: сигналов материалов {len(result['signal_ids'])}, задач «Отбора» {result['jobs']}{price}")
+    print(f"otbor-materials: сигналов материалов {len(result['signal_ids'])}, задач «Отбора» {result['jobs']}{price}"
+          + ("; итог авторам бот не сообщает" if args.silent else ""))
 
 
 def cmd_otbor_shadow(args: argparse.Namespace) -> None:
@@ -4090,6 +4092,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_otbor_materials.add_argument("--apply", action="store_true",
                                    help="завести сигналы материалов и задачи «Отбора»; без флага ничего не пишет")
+    p_otbor_materials.add_argument("--silent", action="store_true",
+                                   help="итог «Отбора» авторам не сообщать (накопленные до включения, решение "
+                                        "владельца 04.11)")
     p_otbor_materials.set_defaults(func=cmd_otbor_materials)
 
     p_otbor_shadow = sub.add_parser(

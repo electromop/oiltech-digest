@@ -935,7 +935,8 @@ ALTER TABLE articles ADD COLUMN IF NOT EXISTS selector TEXT;             -- otbo
 CREATE INDEX IF NOT EXISTS idx_articles_otbor ON articles(collected_at) WHERE selector = 'otbor';
 -- Радар и материалы коллег через «Отбор» (#131): находку поиска и материал коллеги, заведённые при включённом
 -- флаге, решает он (signals.selector = 'otbor'); пока решения нет, сигнал не виден нигде. Материал коллеги —
--- сигнал происхождения material; какой итог «Отбора» автору уже сообщил бот — notified_outcome; оценка автора —
+-- сигнал происхождения material; какой итог «Отбора» автору уже сообщил бот — notified_outcome (silent: итог не
+-- сообщается, otbor-materials --silent); оценка автора —
 -- блок ОС с его именем из Telegram (author).
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS selector TEXT;              -- otbor; NULL — прежние правила
 CREATE INDEX IF NOT EXISTS idx_signals_otbor_waiting ON signals(created_at)
