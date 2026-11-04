@@ -184,7 +184,7 @@ def should_keep_article(title: str, summary: str = "", source: dict | None = Non
     all_positive = POSITIVE_KEYWORDS + tag_positive
     article_positive = _matches(article_text, all_positive)
     positive = article_positive or _matches(source_text, all_positive)
-    noise = _matches(article_text, NOISE_KEYWORDS + tag_negative)
+    noise = _matches(article_text, NOISE_KEYWORDS + tag_negative, word_start=True)
 
     if noise and not article_positive:
         return PreFilterResult(False, "obvious non-domain noise without positive signal", (), noise)
@@ -193,15 +193,25 @@ def should_keep_article(title: str, summary: str = "", source: dict | None = Non
     return PreFilterResult(True, "no strong negative signal")
 
 
-def _matches(text: str, keywords: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(keyword for keyword in keywords if _keyword_in_text(text, keyword))
+def _matches(text: str, keywords: tuple[str, ...], *, word_start: bool = False) -> tuple[str, ...]:
+    return tuple(keyword for keyword in keywords if _keyword_in_text(text, keyword, word_start=word_start))
 
 
-def _keyword_in_text(text: str, keyword: str) -> bool:
+def _keyword_in_text(text: str, keyword: str, *, word_start: bool = False) -> bool:
+    """Есть ли слово в нормализованном тексте. Латинское слово из букв, цифр, пробелов и «&»
+    ищется целым словом, остальное (кириллица, латиница со знаками) основой с любым окончанием.
+    `word_start` для слов шума: основа только с начала слова. Подстрокой «спорт» находился в
+    «транспорта», «актер» в «охарактеризовав», и без нефтегазового слова рядом статья
+    отсеивалась (АНГИ, 04.11: «зимники Ямала», «удар по острову Кешм»). Замер на живых лентах
+    04.11: 10 из 73 отсевов такие. Цена: шум внутри составного слова («мультфильм»,
+    «Европарламент») теперь не ловится, его отклонит «Отбор». Позитивные основы остаются
+    подстрокой намеренно: «газ» должен находиться в «нефтегазовый»."""
     if not keyword:
         return False
     if keyword.isascii() and keyword.replace(" ", "").replace("&", "").isalnum():
         return re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", text) is not None
+    if word_start:
+        return re.search(rf"(?<!\w){re.escape(keyword)}", text) is not None
     return keyword in text
 
 

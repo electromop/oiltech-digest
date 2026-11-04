@@ -3889,6 +3889,31 @@ def has_recent_background_job(
         return cur.fetchone() is not None
 
 
+def has_recent_signal_discovery_search(*, payload_subset: dict, lookback_hours: float) -> bool:
+    """Задача радара за окно, которая обыскала или ещё обыскивает свой период: в очереди, идёт, завершается или ok, и
+    её прогон не упал. Прогон, где поиск не ответил ни в одной теме, упал при задаче ok
+    (`signal_discovery._finish_generation_run`): его окно никто не обыскал. Правило «раз в N суток» (решение владельца
+    04.11) держит следующий прогон только такой задачей."""
+    with get_connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT 1
+            FROM background_jobs j
+            WHERE j.kind = 'signal_discovery'
+              AND j.status IN ('queued', 'running', 'finalizing', 'ok')
+              AND j.created_at >= now() - (%s::text || ' hours')::interval
+              AND j.payload_json @> %s::jsonb
+              AND NOT EXISTS (
+                SELECT 1 FROM signal_generation_runs r WHERE r.background_job_id = j.id AND r.status = 'failed'
+              )
+            LIMIT 1
+            """,
+            (lookback_hours, Json(_jsonable(payload_subset))),
+        )
+        return cur.fetchone() is not None
+
+
 def get_background_job(job_id: int, *, user_id: int | None = None) -> dict | None:
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

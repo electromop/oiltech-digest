@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 from oiltech_digest import background_jobs
@@ -180,6 +181,87 @@ def test_enqueue_daily_signal_discovery_creates_web_only_ai_job(monkeypatch):
     assert captured["payload"]["web_only"] is True
     assert captured["payload"]["max_signals"] == 20
     assert captured["payload"]["schedule"] == "daily_signal_discovery"
+
+
+_MSK_MIDNIGHT = "(date_trunc('day', now() AT TIME ZONE 'Europe/Moscow') AT TIME ZONE 'Europe/Moscow')"
+
+
+def _daily_radar_job_at(sql_created_at: str, status: str = "ok") -> int:
+    with repository.get_connection() as conn:
+        job_id = conn.execute(
+            f"""
+            INSERT INTO background_jobs (kind, queue_name, status, payload_json, max_attempts, created_at)
+            VALUES ('signal_discovery', 'external-ai', %s, %s::jsonb, 1, {sql_created_at})
+            RETURNING id
+            """,
+            (status, json.dumps(background_jobs.daily_signal_discovery_payload())),
+        ).fetchone()[0]
+        conn.commit()
+    return int(job_id)
+
+
+def test_daily_radar_every_three_days_waits_for_the_third_day(isolated_db, monkeypatch):
+    """Решение владельца 04.11: радар раз в 3 дня с окном 3 дня. Прогон позавчерашних суток держит сегодняшний,
+    прогон трёхдневной давности уже нет: счёт по суткам Москвы, как у ежедневного."""
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_EVERY_DAYS", 3)
+    enqueued: list = []
+    monkeypatch.setattr(background_jobs, "enqueue", lambda *args, **kwargs: enqueued.append(args) or {"id": 1})
+
+    _daily_radar_job_at(f"{_MSK_MIDNIGHT} - interval '2 days' - interval '1 minute'")  # три дня назад, 23:59
+    assert background_jobs.enqueue_daily_signal_discovery()["enqueued"] is True
+
+    _daily_radar_job_at(f"{_MSK_MIDNIGHT} - interval '2 days' + interval '10 minutes'")  # позавчера, 00:10
+    result = background_jobs.enqueue_daily_signal_discovery()
+    assert result["enqueued"] is False and result["reason"] == "not_due"
+    assert len(enqueued) == 1
+
+
+def test_daily_radar_failed_run_is_retried_next_day_not_in_three(isolated_db, monkeypatch):
+    """Упавший прогон своё окно не обыскал: при «раз в 3 дня» он держит только свои сутки (защита от постановки
+    каждые полчаса), следующая попытка в следующие сутки, а не через три."""
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_EVERY_DAYS", 3)
+    enqueued: list = []
+    monkeypatch.setattr(background_jobs, "enqueue", lambda *args, **kwargs: enqueued.append(args) or {"id": 1})
+
+    _daily_radar_job_at(f"{_MSK_MIDNIGHT} - interval '1 day' + interval '10 minutes'", status="failed")  # вчера
+    assert background_jobs.enqueue_daily_signal_discovery()["enqueued"] is True
+
+    _daily_radar_job_at("now() - interval '1 second'", status="failed")  # сегодня
+    assert background_jobs.enqueue_daily_signal_discovery()["reason"] == "already_scheduled"
+    assert len(enqueued) == 1
+
+
+def test_daily_radar_search_failed_in_all_topics_is_retried_next_day(isolated_db, monkeypatch):
+    """Поиск не ответил ни в одной теме: задача ok, прогон failed (signal_discovery._finish_generation_run). Окно не
+    обыскано, поэтому правило «раз в 3 дня» такой прогон не держит; в его сутки повтора нет, как и раньше."""
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_EVERY_DAYS", 3)
+    enqueued: list = []
+    monkeypatch.setattr(background_jobs, "enqueue", lambda *args, **kwargs: enqueued.append(args) or {"id": 1})
+    job_id = _daily_radar_job_at(f"{_MSK_MIDNIGHT} - interval '1 day' + interval '10 minutes'")  # вчера, задача ok
+    with repository.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO signal_generation_runs (background_job_id, trigger, status) VALUES (%s, 'scheduler_daily', 'failed')",
+            (job_id,),
+        )
+        conn.commit()
+
+    assert background_jobs.enqueue_daily_signal_discovery()["enqueued"] is True
+
+
+def test_daily_radar_queued_yesterday_holds_and_force_bypasses(isolated_db, monkeypatch):
+    """Прогон прошлых суток ещё в очереди или идёт (NL занят): второй не ставится. --force обходит правило, как раньше."""
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_EVERY_DAYS", 3)
+    enqueued: list = []
+    monkeypatch.setattr(background_jobs, "enqueue", lambda *args, **kwargs: enqueued.append(args) or {"id": 1})
+    _daily_radar_job_at(f"{_MSK_MIDNIGHT} - interval '1 day' + interval '10 minutes'", status="queued")
+
+    assert background_jobs.enqueue_daily_signal_discovery()["reason"] == "not_due"
+    assert background_jobs.enqueue_daily_signal_discovery(force=True)["enqueued"] is True
+    assert len(enqueued) == 1
 
 
 def test_discover_source_candidates_job_uses_topic_gaps_and_evaluates(monkeypatch):
