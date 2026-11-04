@@ -2122,8 +2122,9 @@ def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> N
     Поиск не ответил ни в одной теме — прогон failed с понятной причиной: веб-доказательств
     нет ни у одной темы (ежедневный прогон ищет только в вебе — у него это ноль сигналов).
     Статус ЗАДАЧИ остаётся ok: его читает правило «ежедневный уже ставили в эти сутки»
-    (background_jobs.enqueue_daily_signal_discovery). Статус прогона не читает никто, кроме
-    выгрузки для обучения (signal_training), а там он не фильтр."""
+    (background_jobs.enqueue_daily_signal_discovery). Статус прогона читают правило «раз в N
+    суток» (failed не держит следующий прогон, решение владельца 04.11) и выгрузка для обучения
+    (signal_training), а там он не фильтр."""
     result: dict[str, Any] = {
         "topics": len(applied["topic_results"]),
         "signals": applied["all_signals"],
