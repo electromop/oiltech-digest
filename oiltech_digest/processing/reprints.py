@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from oiltech_digest import config
+from oiltech_digest import config, signal_dedup
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse, output_budget
 from oiltech_digest.processing.prompts import REPRINT_INSTRUCTIONS, REPRINT_SCHEMA
@@ -44,14 +44,19 @@ logger = logging.getLogger(__name__)
 # случае заказчика (36%) с запасом вниз. Выше — теряем перепечатки, которые он
 # видит глазами; ниже — растёт счёт модели, но не ошибка: решает всё равно она.
 DEFAULT_MIN_OVERLAP = 0.35
+# Порог по русскому заголовку карточки статьи (04.11) — как у дедупа радара: основы слов те же
+# (word_forms.title_stems). Английская статья и её русский пересказ, переписанный заголовок: из 45 пар ленты,
+# которые судья счёл одним событием, исходный заголовок ловил 5, а настоящие дубли лежат и ниже 0,35.
+DEFAULT_RU_MIN_OVERLAP = signal_dedup.PAIR_MIN_OVERLAP
 DEFAULT_MAX_DAYS = 5
 BODY_LIMIT = 2500
 
 
 def find_candidates(days: int = 14, min_overlap: float = DEFAULT_MIN_OVERLAP,
                     max_days_apart: int = DEFAULT_MAX_DAYS, limit: int = 200,
-                    max_overlap: float = 1.0) -> list[dict]:
-    """Пары-кандидаты: разные источники, близкие даты, пересечение значимых слов.
+                    max_overlap: float = 1.0, ru_min_overlap: float | None = DEFAULT_RU_MIN_OVERLAP) -> list[dict]:
+    """Пары-кандидаты: разные источники, близкие даты, пересечение значимых слов исходного или русского
+    заголовка.
 
     Разные источники — обязательное условие, а не настройка. Внутри одного
     издания повтор заголовка это серийная сводка («Топ-10 новостей дня»), и
@@ -60,7 +65,7 @@ def find_candidates(days: int = 14, min_overlap: float = DEFAULT_MIN_OVERLAP,
     """
     return repository.reprint_candidates(
         days=days, min_overlap=min_overlap, max_overlap=max_overlap,
-        max_days_apart=max_days_apart, limit=limit,
+        max_days_apart=max_days_apart, limit=limit, ru_min_overlap=ru_min_overlap,
     )
 
 

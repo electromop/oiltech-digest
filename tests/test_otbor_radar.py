@@ -297,6 +297,35 @@ def test_finding_of_an_event_already_in_the_feed_becomes_a_link_of_its_card_and_
     [card] = showcase(user, "business").values()
     assert [one["stage"] for one in card["decision_log"]].count("«Дедуп»") == 1
 
+    # Судья следующего прогона ответил «разные» (или вызов сбоил): ссылку держит карточка ленты, находка найдена снова —
+    # второй карточки, «Отбора» за неё и переезда ссылки нет.
+    run_radar(monkeypatch, [event(FEED_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)}, same_event=False)
+    assert decide(monkeypatch, {}).calls == []
+    [card] = showcase(user, "business").values()
+    assert card["id"] == feed_card["id"] and CONTRACT_URL in {item["source_url"] for item in card["evidence"]}
+    with repository.get_connection() as conn:
+        assert conn.execute("SELECT count(*) FROM signals WHERE origin = 'radar'").fetchone()[0] == 0
+
+
+def test_finding_whose_feed_card_hid_during_the_run_becomes_its_own_card(user, contour, monkeypatch):
+    feed_article = article(FEED_TITLE, PAGE_TEXT)
+    decide(monkeypatch, {FEED_TITLE: answer()})
+
+    def hide_the_feed_article(url):
+        # Пока шёл прогон, статью ленты пометили на удаление: её сигнал скрылся после снимка.
+        with repository.get_connection() as conn:
+            conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (feed_article,))
+            conn.commit()
+
+    run_radar(monkeypatch, [event(FEED_TITLE, CONTRACT_URL)], {CONTRACT_URL: page(CONTRACT_TITLE)}, same_event=True,
+              on_fetch=hide_the_feed_article)
+    model = decide(monkeypatch, {CONTRACT_TITLE: answer()})
+
+    # В скрытый сигнал находка не уходит (пропала бы с экранов): своей карточкой, её решил «Отбор».
+    assert len(model.calls) == 1
+    [card] = showcase(user, "business").values()
+    assert card["origin"] == "radar" and CONTRACT_URL in {item["source_url"] for item in card["evidence"]}
+
 
 def test_worker_build_without_the_feed_dedup_gets_no_radar_run(user, contour, monkeypatch):
     tag(DRILLING)

@@ -608,21 +608,42 @@ def test_drafts_of_the_search_catch_the_pair_its_page_titles_miss():
         [], "", False, False)
 
 
-def test_feed_signal_is_paired_only_with_findings_of_the_run():
+def test_feed_signal_is_paired_with_findings_and_fresh_radar_cards_but_not_with_the_feed():
     nodes = [
         _feed(1, "Halliburton buys Keystone to link well planning with rig execution",
               "Halliburton купила Keystone для связи планирования и бурения", ["Halliburton"]),
         _feed(2, "Halliburton acquires Norway's Keystone AS to expand digital well construction",
               "Halliburton приобрела норвежскую Keystone AS", ["Halliburton", "Keystone AS"]),
-        # Свежая неразобранная карточка радара прошлого прогона того же события.
+        # Свежая неразобранная карточка радара прошлого прогона того же события, старая и разобранная.
         _existing(30, "Halliburton приобрела Keystone AS", ["Halliburton"], fresh=True),
+        _existing(31, "Halliburton: сделка с Keystone", ["Halliburton"], fresh=False),
+        _existing(32, "Halliburton купила Keystone", ["Halliburton"], verdict="approved", fresh=True),
         _new("Halliburton приобрела Keystone AS", ["Halliburton"], key="new"),
+        _hidden(_existing(33, "Halliburton и Keystone: отказ «Отбора»", ["Halliburton"], fresh=True)),
     ]
 
     pairs = {(i, j) for i, j, _ in signal_dedup.find_pairs(nodes)}
 
-    # Лента с лентой — перепечатки; лента с сохранённой карточкой радара — нет: склейка спрятала бы видимую.
-    assert pairs == {(0, 3), (1, 3), (2, 3)}
+    # Лента с лентой — перепечатки; со старой или разобранной карточкой радара лента не сверяется: дублем в такой
+    # паре стала бы лента, а её прогон не прячет; со скрытой — склейка экран не изменит.
+    assert {pair for pair in pairs if 5 not in pair and pair[0] < 2} == {(0, 2), (1, 2)}
+    assert {(0, 5), (1, 5), (2, 5)} <= pairs
+
+
+def test_feed_signal_is_the_main_card_and_never_a_duplicate():
+    # Статья ленты пришла после находки прошлого прогона: главная — всё равно сигнал ленты, иначе (раньше — главная)
+    # событие осталось бы двумя карточками: ленту прогон не прячет.
+    feed = _feed(1, "Halliburton buys Keystone", "Halliburton купила Keystone", ["Halliburton"])
+    feed["signal"]["first_seen_day"] = "2026-11-05"
+    radar = _existing(30, "Halliburton приобрела Keystone AS", ["Halliburton"])
+    radar["signal"]["first_seen_day"] = "2026-11-04"
+    approved = _existing(32, "Halliburton купила Keystone", ["Halliburton"], verdict="approved", fresh=False)
+
+    assert signal_dedup.assign_duplicates([feed, radar], [(0, 1, "та же сделка")]) == {1: (0, "та же сделка")}
+    # Разобранная человеком карточка радара — главная для находки, но сигнал ленты её дублем не становится.
+    found = _new("Halliburton приобрела Keystone", ["Halliburton"], key="new")
+    assigned = signal_dedup.assign_duplicates([feed, approved, found], [(0, 1, "та же"), (1, 2, "та же")])
+    assert assigned == {2: (1, "та же")}
 
 
 def test_judge_sees_both_titles_of_a_card():
@@ -662,3 +683,44 @@ def test_worker_sends_a_finding_of_an_event_already_in_the_feed_into_the_feed_si
     [prompt] = judge.prompts
     assert HALLIBURTON_RU in prompt and HALLIBURTON_PAGE in prompt and "Halliburton; Keystone AS" in prompt
     assert "Суть модели поиска" in prompt
+
+
+def test_findings_of_the_next_run_meet_the_cards_of_the_previous_one(monkeypatch):
+    """Прогон 51751 (04.11, окно 01-04.11) завёл вторые карточки событий прогона 51351: 31019 к 30830 (итоги TETRA) и
+    31041 к 30805 (ADNOC и OpenAI). У сохранённой карточки к тому времени русский заголовок, а правило пар брало только
+    его: против английского заголовка страницы новой находки основы почти не сходятся. Черновая компания поиска у
+    ADNOC при этом ошибочна («BP»): пару держат заголовки."""
+    existing = [
+        {"id": 30805, "origin": "radar", "signal_key": "k30805",
+         "title": "ADNOC Signs Landmark Partnership Agreement with OpenAI and G42, Becoming First Energy Company to Deploy "
+                  "OpenAI Frontier Technology",
+         "title_ru": "ADNOC первой среди энергокомпаний внедрит OpenAI Frontier в партнёрстве с OpenAI и G42",
+         "theme": MARKET, "summary": "", "companies": ["ADNOC", "OpenAI", "G42"], "score": 62.37, "evidence_count": 2,
+         "fresh": True, "first_seen_day": "2026-11-04", "verdict": None, "reviewed": False, "hidden": False,
+         "evidence_urls": ["https://www.adnoc.ae/media-center/news/2026/11/adnoc-signs-landmark-partnership"]},
+        {"id": 30830, "origin": "radar", "signal_key": "k30830",
+         "title": "TETRA TECHNOLOGIES, INC. REPORTS STRONG THIRD-QUARTER 2026 RESULTS",
+         "title_ru": "TETRA Technologies представила сильные результаты за третий квартал 2026 года",
+         "theme": MARKET, "summary": "", "companies": ["TETRA Technologies, Inc."], "score": 57.87, "evidence_count": 1,
+         "fresh": True, "first_seen_day": "2026-11-04", "verdict": None, "reviewed": False, "hidden": False,
+         "evidence_urls": ["https://ir.onetetra.com/news/news-details/2026/tetra-technologies-inc-reports-strong"]},
+    ]
+    adnoc = _otbor_finding("k31041", "https://fortune.example/adnoc-openai",
+                           "ADNOC to become first energy company to deploy OpenAI’s Frontier technology | Fortune",
+                           "ADNOC первой среди энергокомпаний внедрит технологию OpenAI Frontier", "BP")
+    tetra = _otbor_finding("k31019", "https://prnewswire.example/tetra-q3",
+                           "TETRA TECHNOLOGIES, INC. REPORTS STRONG THIRD-QUARTER 2026 RESULTS",
+                           "TETRA Technologies отчиталась о высоких результатах за третий квартал 2026 года",
+                           "TETRA Technologies")
+    # Правило до 04.11 (один заголовок: русский у карточки, страницы у находки) пары не видело.
+    for row, finding in ((existing[0], adnoc), (existing[1], tetra)):
+        assert signal_dedup._overlap(signal_dedup.title_stems(row), signal_dedup.title_stems(finding["signal"])) < 0.25
+    judge = _Judge("")
+    monkeypatch.setattr(signal_discovery, "_radar_client", lambda: judge)
+    config = signal_discovery.SignalDiscoveryConfig(offline=False)
+    topics = [{"topic": MARKET, "candidates": [adnoc, tetra]}]
+
+    stats = signal_discovery._dedupe_run(config, {"existing_signals": existing}, topics, lambda: None)
+
+    assert adnoc["duplicate_of"] == {"signal_id": 30805} and tetra["duplicate_of"] == {"signal_id": 30830}
+    assert (stats["pairs"], stats["judged"]) == (2, 2)  # только эти две пары: ADNOC и TETRA между собой не сверяются

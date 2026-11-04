@@ -13,9 +13,10 @@
 ядро только пишет решения (`apply_discovery`).
 
 Одно событие — одна карточка во всей базе (блок А5 схемы агентов, 04.11): в снимке прогона и видимые сигналы
-ленты (origin feed). Они сверяются только с находками прогона (_eligible): ленту с лентой склеивают перепечатки
-(processing/reprints.py). Замер прогона 51351 (01-04.11): у 9 из 24 находок то же событие уже было в ленте под
-другой ссылкой, у пяти принятых — видимой карточкой."""
+ленты (origin feed). Они сверяются с находками прогона и со свежими карточками радара, но не между собой (_eligible):
+ленту с лентой склеивают перепечатки (processing/reprints.py). Прогон радара прячет только карточки радара: сигнал
+ленты дублем не становится никогда (assign_duplicates). Замер прогона 51351 (01-04.11): у 9 из 24 находок то же
+событие уже было в ленте под другой ссылкой, у пяти принятых — видимой карточкой."""
 
 from __future__ import annotations
 
@@ -76,8 +77,9 @@ PAIR_MIN_OVERLAP = 0.25
 # Потолок расхода на прогон. Замер 19.09: 120 пар — $0,040 (gpt-5-mini), то есть
 # $0,00033 за пару; 400 пар — около $0,13. При потолке 120 из 322 пар непроверенными
 # остались как раз дубли: ZenaTech и FleetRabbit прошли новыми карточками. Ядро может
-# передать свой потолок в снимке (dedup_max_pairs) — без пересборки воркера.
-MAX_JUDGED_PAIRS = 400
+# передать свой потолок в снимке (dedup_max_pairs) — без пересборки воркера. С сигналами ленты
+# в снимке (04.11) — 1000: замер прогона 51351 — 135 пар ленты на 24 находки, $0,00011 за пару на gpt-6-luna.
+MAX_JUDGED_PAIRS = 1000
 # Происхождение узла снимка — сигнал ленты (repository.SIGNAL_ORIGIN_FEED; модуль работает на NL без базы).
 FEED_ORIGIN = "feed"
 
@@ -100,14 +102,6 @@ def configured_model() -> str:
 # «Оценка завышена» (03.10): сигнал годный, завышен только балл — подсказкой поиска не служит.
 _POSITIVE_VERDICTS = {"strong_signal", "approved", "watch_later", "needs_better_source", "bad_translation", "overrated"}
 
-_STEM_LEN = 4
-# Слова, которые есть почти в каждом заголовке отрасли: общими основами пары не делают. Те же — у правила перепечаток
-# ленты по русскому заголовку (repository.reprint_candidates).
-TITLE_STOP_WORDS = {
-    "для", "как", "или", "что", "это", "при", "над", "под", "после", "the", "and", "for",
-    "with", "from", "нефтегаз", "нефтегазов", "нефтегазовой", "нефтегаза", "систем",
-    "системы", "решени", "технолог", "мониторинг",
-}
 # Модель пишет издателя или заглушку вместо компании: «не указаны в источниках»,
 # «bigchallenges.ru (источник)», «kissflow (publisher)». Общий издатель — не общий участник.
 _PLACEHOLDER_COMPANY = re.compile(r"не указ|упомин|источник|публикатор|publisher|публикует|публицист")
@@ -130,13 +124,8 @@ def wait_beating(pool: ThreadPoolExecutor, futures: Iterable[Future], beat: Call
         raise
 
 
-def _stems(text: str) -> set[str]:
-    words = re.findall(r"[a-zа-яё0-9]{4,}", str(text or "").lower())
-    return {word[:_STEM_LEN] for word in words if word not in TITLE_STOP_WORDS and not word.isdigit()}
-
-
 def title_stems(signal: dict[str, Any]) -> set[str]:
-    return _stems(signal.get("title_ru") or signal.get("title") or "")
+    return word_forms.title_stems(signal.get("title_ru") or signal.get("title") or "")
 
 
 def title_variants(signal: dict[str, Any]) -> list[set[str]]:
@@ -148,7 +137,7 @@ def title_variants(signal: dict[str, Any]) -> list[set[str]]:
     texts = [signal.get("title_ru"), signal.get("title"), *(signal.get("research_titles") or [])]
     variants: list[set[str]] = []
     for text in texts:
-        stems = _stems(text or "")
+        stems = word_forms.title_stems(text or "")
         if stems and stems not in variants:
             variants.append(stems)
     return variants
@@ -197,14 +186,20 @@ def _eligible(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
     Свежая карточка из этого прогона — всегда. Две сохранённые — только если одна из
     них свежая и не разобрана: иначе каждый прогон заново оплачивал бы одни и те же
-    пары, а две разобранные Виктором сверялись бы вопреки его решению. Сигнал ленты —
-    только с находкой прогона: ленту с лентой склеивают перепечатки, а склейка двух уже видимых
-    карточек, ленты и радара, спрятала бы одну из них, в том числе свежую статью ленты в карточку
-    прошлого месяца, которой в ленте этого месяца нет (04.11)."""
+    пары, а две разобранные Виктором сверялись бы вопреки его решению. Сигнал ленты — с находкой
+    прогона и со свежей неразобранной карточкой радара (её и склеят с ним: сигнал ленты дублем
+    не становится, assign_duplicates), но не с другим сигналом ленты: ленту с лентой склеивают
+    перепечатки. Пару открывает свежесть карточки радара, а не сигнала ленты: у свежего сигнала
+    ленты со старой карточкой радара дублем стала бы лента, а её прогон не прячет (04.11)."""
     if a["kind"] == "new" or b["kind"] == "new":
         return True
-    if FEED_ORIGIN in (a.get("origin"), b.get("origin")):
+    feed = [node for node in (a, b) if node.get("origin") == FEED_ORIGIN]
+    if len(feed) == 2:
         return False
+    if feed:
+        # Скрытая карточка радара (качество, отказ «Отбора») с лентой не сверяется: её склейка экран не изменит.
+        radar = b if feed[0] is a else a
+        return bool(radar["fresh"] and not radar["reviewed"] and not radar.get("hidden"))
     return any(node["fresh"] and not node["reviewed"] for node in (a, b))
 
 
@@ -224,9 +219,9 @@ def find_pairs(nodes: list[dict[str, Any]], *, min_overlap: float = PAIR_MIN_OVE
     for i, j in itertools.combinations(range(len(nodes)), 2):
         if not _eligible(nodes[i], nodes[j]):
             continue
-        stems_i, companies_i, urls_i = features[i]
-        stems_j, companies_j, urls_j = features[j]
-        overlap = _title_overlap(stems_i, stems_j)
+        titles_i, companies_i, urls_i = features[i]
+        titles_j, companies_j, urls_j = features[j]
+        overlap = _title_overlap(titles_i, titles_j)
         shared = bool(companies_i & companies_j or urls_i & urls_j)
         if overlap >= min_overlap or shared:
             pairs.append((i, j, overlap, shared))
@@ -277,7 +272,12 @@ def _rank(node: dict[str, Any]) -> tuple:
 
     Скрытая с экрана (качество, архив — `hidden` из снимка ядра) — последней, если человек
     её не отклонял: иначе новая находка того же события ушла бы в неё дублем и пропала с
-    экрана вместе с ней (02.10). Отклонённая остаётся главной — её повтор не возвращается."""
+    экрана вместе с ней (02.10). Отклонённая остаётся главной — её повтор не возвращается.
+
+    В одной ступени сигнал ленты — раньше карточки радара (04.11): одно событие — карточка ленты,
+    радар её дополняет. Сигнал ленты дублем не становится (assign_duplicates), и если бы главной
+    была более ранняя карточка радара, статья ленты, пришедшая после находки, осталась бы второй
+    карточкой."""
     signal = node["signal"]
     day = ""
     verdict = node.get("verdict")
@@ -292,6 +292,7 @@ def _rank(node: dict[str, Any]) -> tuple:
         tier = 3
     return (
         tier,
+        0 if node.get("origin") == FEED_ORIGIN else 1,
         day,
         -float(signal.get("score") or 0),
         -int(signal.get("evidence_count") or 0),
@@ -329,7 +330,9 @@ def assign_duplicates(nodes: list[dict[str, Any]], edges: list[tuple[int, int, s
     сравнил с главной. Транзитивная склейка (A~B, B~C → A~C) собрала бы обзор лития
     и конкретный пилот в одну группу через третью карточку.
 
-    Разобранная Виктором карточка не становится дублем никогда."""
+    Разобранная Виктором карточка не становится дублем никогда. Сигнал ленты — тоже: его
+    прячут только перепечатки и человек; прогон радара мог бы спрятать свежую статью ленты в
+    карточку радара прошлого месяца, которой в ленте этого месяца нет (04.11)."""
     neighbours: dict[int, dict[int, str]] = {index: {} for index in range(len(nodes))}
     for i, j, reason in edges:
         neighbours[i][j] = reason
@@ -343,7 +346,8 @@ def assign_duplicates(nodes: list[dict[str, Any]], edges: list[tuple[int, int, s
         for other in sorted(neighbours[primary], key=lambda index: position[index]):
             if other in assigned or position[other] < position[primary]:
                 continue
-            if nodes[other]["kind"] == "existing" and nodes[other]["reviewed"]:
+            if nodes[other]["kind"] == "existing" and (nodes[other]["reviewed"]
+                                                       or nodes[other].get("origin") == FEED_ORIGIN):
                 continue
             assigned[other] = (primary, neighbours[primary][other])
     return assigned

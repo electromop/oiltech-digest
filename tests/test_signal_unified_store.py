@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from oiltech_digest import api
 from oiltech_digest.db import repository
 from oiltech_digest.db import marks
-from oiltech_digest.processing import external_ai
+from oiltech_digest.processing import external_ai, reprints
 
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
 ECOLOGY = "Экология, промышленная безопасность и охрана труда"
@@ -50,21 +50,22 @@ def _tag(name):
     return int(row[0])
 
 
-def _article(n, *, collected=None):
+def _article(n, *, collected=None, title=None, source="Лента"):
     # Сбор «сейчас»: окна радара (неделя итогов, 30 дней снимка дедупа) считаются от текущего
     # дня, и сигнал ленты должен в них попадать в любой день прогона.
     collected = collected or datetime.now(timezone.utc)
     with repository.get_connection() as conn:
-        source = conn.execute("SELECT id FROM sources WHERE name = 'Лента'").fetchone()
-        if source is None:
-            source = conn.execute(
+        row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()
+        if row is None:
+            row = conn.execute(
                 "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
-                "VALUES ('Лента', 'News', 'https://feed.example', TRUE, 'rss') RETURNING id"
+                "VALUES (%s, 'News', %s, TRUE, 'rss') RETURNING id",
+                (source, f"https://{n}.source.example" if source != "Лента" else "https://feed.example"),
             ).fetchone()
         article_id = conn.execute(
             "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
             "VALUES (%s, %s, %s, %s, %s, 'текст', 'en') RETURNING id",
-            (source[0], f"Article {n}", f"https://feed.example/{n}", collected, collected),
+            (row[0], title or f"Article {n}", f"https://feed.example/{n}", collected, collected),
         ).fetchone()[0]
         conn.commit()
     return int(article_id)
@@ -486,24 +487,6 @@ def _feed_signal_id(article_id):
                                 (article_id,)).fetchone()[0])
 
 
-def _titled(n, title, source, *, language="en"):
-    """Статья сбора своего издания с заголовком — для правила перепечаток (разные издания)."""
-    collected = datetime.now(timezone.utc)
-    with repository.get_connection() as conn:
-        row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()
-        if row is None:
-            row = conn.execute("INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
-                               "VALUES (%s, 'News', %s, TRUE, 'rss') RETURNING id",
-                               (source, f"https://source-{n}.example")).fetchone()
-        article_id = conn.execute(
-            "INSERT INTO articles (source_id, title, url, published_at, collected_at, raw_text, language) "
-            "VALUES (%s, %s, %s, %s, %s, 'текст', %s) RETURNING id",
-            (row[0], title, f"https://feed.example/{n}", collected, collected, language),
-        ).fetchone()[0]
-        conn.commit()
-    return int(article_id)
-
-
 def _feedback(signal_id, verdict="approved", event_type="comment_added"):
     with repository.get_connection() as conn:
         conn.execute("INSERT INTO signal_feedback_events (signal_id, event_type, verdict) VALUES (%s, %s, %s)",
@@ -547,21 +530,21 @@ def test_dedup_snapshot_of_the_feed_takes_visible_and_reviewed_signals_of_the_se
 def test_reprint_candidates_pair_an_english_article_with_its_russian_retelling(user):
     # Прод 03.11: World Oil и Drilling Contractor об одной сделке — две видимые карточки бизнес-ленты: исходные
     # заголовки сходятся на 0,2 при пороге 0,35, русские заголовки карточек — на 0,33 (основы как у «Дедупа»).
-    world_oil = _titled(71, "Halliburton acquires Norway’s Keystone AS to expand digital well construction software",
-                        "World Oil")
-    contractor = _titled(72, "Halliburton buys Keystone to link well planning with rig execution",
-                         "Drilling Contractor")
-    other = _titled(73, "Shell agrees to sell its stake in North West Shelf to XRG", "Upstream")
+    world_oil = _article(71, title="Halliburton acquires Norway’s Keystone AS to expand digital well construction "
+                                   "software", source="World Oil")
+    contractor = _article(72, title="Halliburton buys Keystone to link well planning with rig execution",
+                          source="Drilling Contractor")
+    other = _article(73, title="Shell agrees to sell its stake in North West Shelf to XRG", source="Upstream")
     _process(world_oil, title_ru="Halliburton приобрела норвежскую Keystone для развития цифровых решений "
                                  "по строительству скважин")
     _process(contractor, title_ru="Halliburton купила Keystone для интеграции планирования и строительства скважин")
     _process(other, title_ru="Shell продаст долю в СПГ-проекте North West Shelf компании XRG")
 
-    pairs = {(row["a_id"], row["b_id"]): row["overlap"] for row in repository.reprint_candidates(days=14)}
+    pairs = {(row["a_id"], row["b_id"]): row["overlap"] for row in reprints.find_candidates(days=14)}
 
     assert set(pairs) == {(world_oil, contractor)} and float(pairs[(world_oil, contractor)]) == 0.333
     # Без русского заголовка пары нет: правило до 04.11 её не видело.
-    assert repository.reprint_candidates(days=14, ru_min_overlap=1.01) == []
+    assert repository.reprint_candidates(days=14) == []
 
 
 def test_reprint_keeps_on_screen_the_copy_people_gave_feedback_on(user):
@@ -576,10 +559,10 @@ def test_reprint_keeps_on_screen_the_copy_people_gave_feedback_on(user):
     assert sorted(card["origin_article_id"] for card in _business(user)) == [copy, third]
     with repository.get_connection() as conn:
         assert conn.execute("SELECT primary_id, reason FROM article_reprints WHERE article_id = %s",
-                            (main,)).fetchone() == (copy, "главная — разобранная человеком; судья: одно событие")
+                            (main,)).fetchone() == (copy, "главная — с обратной связью человека; судья: одно событие")
     # Блок ОС у обеих — не прячем ни одну.
     _feedback(_feed_signal_id(third))
-    with pytest.raises(ValueError, match="разобраны людьми"):
+    with pytest.raises(ValueError, match="с обратной связью людей"):
         repository.mark_article_reprint(article_id=third, primary_id=copy, similarity=0.4, reason="одно событие")
     assert sorted(card["origin_article_id"] for card in _business(user)) == [copy, third]
 

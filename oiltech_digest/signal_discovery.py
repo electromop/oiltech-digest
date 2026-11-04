@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, timedelta
 import hashlib
 import json
+import logging
 import re
 import time
 from typing import Any, Callable, Iterator
@@ -43,6 +44,8 @@ from oiltech_digest.signal_feedback import (
     topic_term_stems,
     use_memory_snapshot,
 )
+
+logger = logging.getLogger(__name__)
 
 
 INDUSTRY_CONTEXT_RE = re.compile(
@@ -755,12 +758,14 @@ def build_discovery_snapshot(config: SignalDiscoveryConfig, *, for_external: boo
         existing_signals = repository.list_signals_for_dedup()
     except Exception:  # noqa: BLE001 - без сверки с базой дедуп ограничится карточками прогона
         existing_signals = []
+    # Видимые сигналы ленты окна поиска (блок А5, 04.11): находка того же события садится в них, а не заводит вторую
+    # карточку. Окно — как у ссылок сбора: материал периода сбор мог взять раньше его даты.
+    feed_since = _research_window(config)[0] - timedelta(days=COLLECTED_MARGIN_DAYS)
     try:
-        # Видимые сигналы ленты окна поиска (блок А5, 04.11): находка того же события садится в них, а не заводит
-        # вторую карточку. Окно — как у ссылок сбора: материал периода сбор мог взять раньше его даты.
-        start, _ = _research_window(config)
-        feed_signals = repository.list_feed_signals_for_dedup(since=start - timedelta(days=COLLECTED_MARGIN_DAYS))
+        feed_signals = repository.list_feed_signals_for_dedup(since=feed_since)
     except Exception:  # noqa: BLE001 - без сверки с лентой дедуп сверит находки только с радаром
+        # Не молча: в итоге прогона это видно и по feed_signals = 0 у «Дедупа».
+        logger.exception("radar_feed_snapshot_failed since=%s", feed_since)
         feed_signals = []
     snapshot: dict[str, Any] = {
         "topics": [{key: topic.get(key) for key in _TOPIC_SNAPSHOT_FIELDS if key in topic} for topic in topics],
@@ -1742,6 +1747,9 @@ def _merge_duplicate(
     target_id = target.get("signal_id") or stored_keys.get(str(target.get("signal_key") or ""))
     target_id = repository.resolve_signal_merge_root(int(target_id)) if target_id else None
     if target_id is None:
+        return False
+    if candidate.get("otbor") and target.get("signal_id") and not repository.signal_takes_findings(target_id):
+        # Сохранённая главная скрылась, пока шёл прогон (04.11): находка — своей карточкой, её решит «Отбор».
         return False
     owner_id = candidate.get("key_owner_id")
     if owner_id and owner_id != target_id:

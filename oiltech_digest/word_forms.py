@@ -68,6 +68,24 @@ def _stems(word: str) -> set[str]:
             if word.endswith(ending) and len(word) - len(ending) >= 3}
 
 
+# Основы слов заголовка для сверки пар «одно ли событие» (signal_dedup: дедуп радара; repository.reprint_candidates:
+# перепечатки ленты по русскому заголовку): слово от TITLE_STEM_LEN букв, его первые TITLE_STEM_LEN знаков, без чисел и
+# слов, которые есть почти в каждом заголовке отрасли. Грубее лемматизации намеренно: решает судья, правило только
+# отбирает пары.
+TITLE_STEM_LEN = 4
+TITLE_STOP_WORDS = frozenset({
+    "для", "как", "или", "что", "это", "при", "над", "под", "после", "the", "and", "for",
+    "with", "from", "нефтегаз", "нефтегазов", "нефтегазовой", "нефтегаза", "систем",
+    "системы", "решени", "технолог", "мониторинг",
+})
+
+
+def title_stems(text: str) -> set[str]:
+    """Основы слов заголовка (TITLE_STEM_LEN, TITLE_STOP_WORDS)."""
+    found = re.findall(rf"[a-zа-яё0-9]{{{TITLE_STEM_LEN},}}", str(text or "").lower())
+    return {word[:TITLE_STEM_LEN] for word in found if word not in TITLE_STOP_WORDS and not word.isdigit()}
+
+
 def words(text: str) -> list[str]:
     """Слова имени, цитаты или текста для сверки имён: регистр — как написано, «ё» — «е», слово делит и апостроф
     ' ‘ ’, и буква-апостроф (_APOSTROPHE_LETTERS)."""
