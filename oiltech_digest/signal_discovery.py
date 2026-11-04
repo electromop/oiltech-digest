@@ -2012,8 +2012,8 @@ def _research_summary(research: dict[str, Any] | None) -> dict[str, Any] | None:
     }
     summary["unverified"] = len(research.get("unverified") or [])
     summary["dropped"] = len(research.get("dropped") or [])
-    if research.get("fulltext"):
-        # Счётчики докачки: сколько страниц открыто и чем (добор и сбор на РФ при «Отборе», 04.11).
+    if "via" in (research.get("fulltext") or {}):
+        # Счётчики докачки при «Отборе» (добор, 04.11): сколько страниц открыто и чем; прежняя цепочка без них.
         summary["fulltext"] = research["fulltext"]
     if "already_collected" in research:
         summary["already_collected"] = len(research["already_collected"] or [])
@@ -3055,15 +3055,14 @@ def _topic_web_evidence(
     # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье или «Отбору». При «Отборе» срока
     # на тему нет: находка без страницы во вход агента не идёт, и срезать её по времени значило бы потерять её молча
     # (признак продвижения подаётся перед каждой страницей, аренда держится). По той же причине при «Отборе» после
-    # запроса идут добор и сбор на РФ (PDF, ядро РФ, браузер; порядок цикла владельца 04.11): страница, открытая
-    # любым путём, проходит дедуп прогона вместе с остальными ссылками события.
+    # запроса идёт добор (PDF, ядро РФ, браузер; порядок цикла владельца 04.11), до дедупа прогона.
     events = research.pop("evidence")
     if config.otbor:
         events, already = _split_collected(events, collected)
         research["already_collected"] = already
     found, fulltext = _enrich_web_evidence_with_full_text(
         events, topic_name, limit=len(events), heartbeat=heartbeat, budget_seconds=0 if config.otbor else None,
-        text_chars=TEXT_LIMIT if config.otbor else WEB_EVIDENCE_FULLTEXT_CHARS, fallback=config.otbor)
+        text_chars=TEXT_LIMIT if config.otbor else WEB_EVIDENCE_FULLTEXT_CHARS, top_up=config.otbor)
     verified, unverified = signal_research.verify_research_evidence(found, finds_only=config.otbor)
     research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))
     _record_usage("radar_research", research.get("model"), calls=int(research.get("attempts") or 0),
@@ -3468,7 +3467,7 @@ def _iso(value: Any) -> Any:
 
 
 def _fetch_full_text(url: str, fallback_title: str = "", *, timeout: int | None = None,
-                     fallback: bool = False) -> dict[str, Any]:
+                     top_up: bool = False) -> dict[str, Any]:
     """Открыть страницу и достать настоящий текст статьи вместо сниппета поиска.
 
     Сниппет — это 1-2 обрубленных предложения от поисковика; по нему ни кластеризация,
@@ -3480,14 +3479,14 @@ def _fetch_full_text(url: str, fallback_title: str = "", *, timeout: int | None 
     Таймаут короче обычного (SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS): страница —
     улучшение, а не условие прогона, и 20 с × до 20 страниц × 13 тем не должны жечь аренду.
 
-    fallback (при «Отборе», поручение владельца 04.11): страница — условие находки, и после запроса идут добор и сбор
-    на РФ (publisher_page.read): PDF, ядро РФ, браузер; итог несёт fetcher — чем открыта страница.
+    top_up — добор при «Отборе» (поручение владельца 04.11): страница — условие находки, и после запроса идут PDF,
+    ядро РФ и браузер (publisher_page.read); итог несёт fetcher — чем открыта страница.
     """
     from oiltech_digest.ingestion import request_parser
     from oiltech_digest.ingestion.source_diagnostics import probe_url
 
     timeout = timeout or app_config.SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS
-    if fallback:
+    if top_up:
         return publisher_page.read(url, fallback_title, timeout=timeout, weak_title=signal_research.is_list_page)
     empty = {"ok": False, "raw_text": "", "published_at": None, "title": ""}
     if urlsplit(url).path.lower().endswith(_FULLTEXT_SKIP_SUFFIXES):
@@ -3516,12 +3515,12 @@ def _enrich_web_evidence_with_full_text(
     budget_seconds: float | None = None,
     clock: Callable[[], float] = time.monotonic,
     text_chars: int = WEB_EVIDENCE_FULLTEXT_CHARS,
-    fallback: bool = False,
+    top_up: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Заменить сниппет реальным текстом статьи там, где это удаётся и оправдано. Текста — до text_chars знаков.
 
-    fallback — добор и сбор на РФ (_fetch_full_text, при «Отборе»): в счётчиках via — сколько страниц открыто не
-    первым запросом (PDF, ядро РФ, браузер), в находке — full_text_fetcher.
+    top_up — добор при «Отборе» (_fetch_full_text): в счётчиках via — сколько страниц открыли ядро РФ и браузер, pdf —
+    сколько прочитано из PDF; в находке — full_text_fetcher (и full_text_pdf).
 
     Раньше evidence из web-поиска несло только заголовок и обрывок сниппета — судья и
     кластеризация не видели ни контракта, ни KPI, ни настоящей даты события, только то,
@@ -3536,8 +3535,8 @@ def _enrich_web_evidence_with_full_text(
     beat = heartbeat or (lambda: None)
     budget = app_config.SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS if budget_seconds is None else budget_seconds
     stats: dict[str, Any] = {"attempted": 0, "fetched": 0, "too_short": 0, "failed": 0, "skipped_budget": 0}
-    if fallback:
-        stats.update(via={"core": 0, "browser": 0}, pdf=0)
+    if top_up:
+        stats.update(via=dict.fromkeys(publisher_page.TOP_UP_FETCHERS, 0), pdf=0)
     if limit <= 0:
         return evidence, stats
 
@@ -3555,7 +3554,7 @@ def _enrich_web_evidence_with_full_text(
         beat()
         stats["attempted"] += 1
         try:
-            fetched = _fetch_full_text(url, str(item.get("title") or ""), fallback=fallback)
+            fetched = _fetch_full_text(url, str(item.get("title") or ""), top_up=top_up)
         except Exception as exc:  # noqa: BLE001 - одна страница не роняет тему
             fetched = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}", "raw_text": ""}
         raw_text = _clean_search_text(fetched.get("raw_text") or "")
@@ -3575,7 +3574,7 @@ def _enrich_web_evidence_with_full_text(
         fetcher = fetched.get("fetcher")
         if fetcher in (stats.get("via") or {}):
             stats["via"][fetcher] += 1
-        if fallback and fetched.get("pdf"):
+        if top_up and fetched.get("pdf"):
             stats["pdf"] += 1
         title = fetched.get("title") or item.get("title") or ""
         fact = raw_text[:text_chars]
@@ -3624,9 +3623,7 @@ def _contains_cjk(text: str) -> bool:
 
 
 def _clean_search_text(text: str) -> str:
-    cleaned = re.sub(r"<[^>]+>", " ", text or "")
-    cleaned = cleaned.replace("&amp;", "&").replace("&nbsp;", " ")
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return publisher_page.clean_text(text)
 
 
 def _dedupe(values: list[str]) -> list[str]:

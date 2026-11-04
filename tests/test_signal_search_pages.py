@@ -1,25 +1,27 @@
 """Добор страниц находок радара (поручение владельца 04.11): при «Отборе» находка без текста издателя теряется, поэтому
 после запроса с NL идут PDF, сбор на РФ (страницу качает ядро по просьбе воркера) и браузер NL — до дедупа прогона и
 «Отбора» (порядок цикла Михаила 04.11). Шов 1 — контур целиком (tests/otbor_radar_support.py, докачка настоящая, сеть
-подменена): задача радара → воркер NL → адрес ядра /api/external-worker/page → ядро. Шов 2 — запрос ядра
-(publisher_page.download): только публичные адреса, переадресации проверяются, размер ограничен.
+подменена): задача радара → воркер NL → адрес ядра /api/external-worker/jobs/{id}/page в аренде задачи → ядро. Шов 2 —
+запрос ядра (core_page.download): только публичные адреса, переадресации проверяются, размер ограничен; порядок шагов
+добора (publisher_page.read).
 """
 
 import base64
+import gzip
 import ipaddress
 
 from fastapi.testclient import TestClient
 import pytest
 
-from oiltech_digest import api, external_worker, signal_research
+from oiltech_digest import api, background_jobs, signal_research
 from oiltech_digest.db import repository
-from oiltech_digest.ingestion import playwright_parser, publisher_page, source_diagnostics
+from oiltech_digest.ingestion import core_page, playwright_parser, publisher_page, source_diagnostics
 from oiltech_digest.ingestion.source_diagnostics import ProbeResult
 from oiltech_digest.signal_research import PAGE_NOT_FETCHED
 from tests.otbor_radar_support import PAGE_TEXT, event, run_radar
 from tests.otbor_support import answer, decide
 from tests.otbor_support import contour  # noqa: F401 — фикстура
-from tests.signal_card_support import admin, api_get, user, worker  # noqa: F401 — фикстуры
+from tests.signal_card_support import DRILLING, admin, api_get, tag, user, worker  # noqa: F401 — фикстуры
 from tests.test_document_parsing import make_pdf
 
 PUBLIC_IP = "93.184.216.34"
@@ -29,8 +31,8 @@ OTHER_URL = "https://neftegaz.example/news/lukoil-perm-seismic-3d"
 OTHER_TITLE = "ЛУКОЙЛ-Пермь запланировала 3D-сейсморазведку на четырёх объектах"
 PDF_URL = "https://public-inspection.federalregister.example/2026-22396.pdf"
 PDF_TITLE = "PHMSA proposes updated federal safety standards for LNG facilities"
-PDF_PAGES = ["The Pipeline and Hazardous Materials Safety Administration proposes to update the federal safety standards "
-             "for liquefied natural gas facilities, including siting, design and fire protection requirements.",
+PDF_PAGES = ["The Pipeline and Hazardous Materials Safety Administration proposes to update the federal safety "
+             "standards for liquefied natural gas facilities, including siting, design and fire protection requirements.",
              "Comments on the proposed rule are due within sixty days after publication in the Federal Register."]
 SCAN_URL = "https://govinfo.example/content/pkg/FR-2026-11-03/scan.pdf"
 SCAN_TITLE = "Federal Register issue scanned without a text layer for LNG"
@@ -54,17 +56,21 @@ BOT_CHECK = ("<html><head><title>Проверяем браузер</title></head
 
 
 class _CoreResponse:
-    """Ответ сети ядра — как urllib3 без дочитывания (publisher_page._get)."""
+    """Ответ сети ядра — как urllib3 без дочитывания (core_page._get): тело приходит сжатым gzip, разжатое — только
+    по decode_content=True."""
 
     def __init__(self, status, body=b"", headers=None):
         self.status, self.body, self.headers = status, body, headers or {}
 
-    def stream(self, size, decode_content=False):
-        assert decode_content, "ядро читает страницу разжатой"
-        for start in range(0, len(self.body), size):
-            yield self.body[start:start + size]
+    def stream(self, size, decode_content=None):
+        body = self.body if decode_content else gzip.compress(self.body)
+        for start in range(0, len(body), size):
+            yield body[start:start + size]
 
     def release_conn(self):
+        pass
+
+    def shutdown(self):
         pass
 
 
@@ -79,8 +85,8 @@ class Net:
         self.calls = []
         self.status = None
         monkeypatch.setattr(source_diagnostics, "probe_url", self._probe)
-        monkeypatch.setattr(publisher_page, "_resolve", self._resolve)
-        monkeypatch.setattr(publisher_page, "_get", self._core_get)
+        monkeypatch.setattr(core_page, "_resolve", self._resolve)
+        monkeypatch.setattr(core_page, "_get", self._core_get)
         monkeypatch.setattr(playwright_parser, "fetch_rendered", self._render)
         monkeypatch.setattr(playwright_parser, "last_fetch_status", lambda: self.status)
 
@@ -99,7 +105,7 @@ class Net:
             return ProbeResult(url=url, status=answer), None
         return ProbeResult(url=url, status="ERR", error="ConnectTimeout: молчит"), None
 
-    def _core_get(self, target, *, timeout):
+    def _core_get(self, target, *, deadline):
         url = f"{target.scheme}://{target.host_header}{target.path}"
         self.calls.append(("core", url, target.ip))
         answer = self.core.get(url)
@@ -240,8 +246,10 @@ def test_core_does_not_fetch_an_inner_address_and_does_not_connect_to_it(monkeyp
 
     for url in ("http://metadata.example/latest/meta-data/", "https://mixed.example/news",
                 "http://127.0.0.1:8000/api/health", "file:///etc/passwd", "https://user:secret@site.example/a"):
-        page = publisher_page.download(url)
+        page = core_page.download(url)
         assert page["ok"] is False and page["error"].startswith("ядро не качает"), url
+        # Какой адрес внутренний, ответ не говорит: сеть ядра наружу не раскрывается.
+        assert "10.0.0.7" not in page["error"] and "169.254" not in page["error"]
     assert net.calls == []
 
 
@@ -250,62 +258,81 @@ def test_core_checks_every_redirect_and_follows_only_public_ones(monkeypatch):
     net = Net(monkeypatch, core={start: ("redirect", public), public: html(RU_TITLE)},
               resolve={"metadata.example": ["169.254.169.254"]})
 
-    page = publisher_page.download(start)
+    page = core_page.download(start)
     assert page["ok"] is True and page["final_url"] == public and RU_TITLE.encode() in page["content"]
 
     net.core[public] = ("redirect", inner)
-    page = publisher_page.download(start)
-    assert page["ok"] is False and "внутренний адрес 169.254.169.254" in page["error"]
+    page = core_page.download(start)
+    assert page["ok"] is False and page["error"] == "ядро не качает: адрес сайта во внутренней сети"
     assert [call[1] for call in net.calls] == [start, public, start, public]
 
 
 def test_core_stops_reading_a_page_over_the_size_limit(monkeypatch):
-    monkeypatch.setattr(publisher_page.config, "SIGNAL_PAGE_MAX_BYTES", 1000)
+    monkeypatch.setattr(core_page.config, "SIGNAL_PAGE_MAX_BYTES", 1000)
     Net(monkeypatch, core={"https://big.example/report": b"x" * 5000})
 
-    page = publisher_page.download("https://big.example/report")
+    page = core_page.download("https://big.example/report")
 
     assert page["ok"] is False and "больше" in page["error"]
 
 
-def test_core_page_address_answers_only_the_worker(monkeypatch):
-    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
+def test_core_page_address_answers_only_a_running_radar_job(user, contour, monkeypatch):
+    """Адрес ядра — в аренде задачи, как остальные адреса задачи воркера, и только для прогона радара: токен воркера
+    сам по себе прокси на любой сайт не даёт."""
     Net(monkeypatch, core={RU_URL: html(RU_TITLE)})
-    client = TestClient(api.app)
+    tag(DRILLING)
+    background_jobs.enqueue_daily_signal_discovery(force=True)
+    client = worker("external-agents")
+    job = client.claim()
+    path = f"/api/external-worker/jobs/{job['id']}/page"
 
-    assert client.post("/api/external-worker/page", json={"url": RU_URL}).status_code == 401
-    answer = client.post("/api/external-worker/page", json={"url": RU_URL},
-                         headers={"Authorization": "Bearer secret"}).json()
+    assert TestClient(api.app).post(path, json={"lease_token": job["lease_token"], "url": RU_URL}).status_code == 401
+    assert client.session.post(path, json={"lease_token": "чужая", "url": RU_URL}).status_code == 409
+    answer = core_page.ask(client, job, RU_URL)
+    assert answer["ok"] is True and RU_TITLE.encode() in answer["content"]
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE background_jobs SET kind = 'otbor' WHERE id = %s", (job["id"],))
+        conn.commit()
+    assert client.session.post(path, json={"lease_token": job["lease_token"], "url": RU_URL}).status_code == 403
 
-    assert answer["ok"] is True and RU_TITLE.encode() in base64.b64decode(answer["content_b64"])
 
-
-def test_worker_on_a_core_without_the_page_address_goes_on_without_it(monkeypatch):
+def test_worker_on_a_core_without_the_page_address_goes_on_without_it():
     class _OldCore:
-        headers = {}
-
         def post(self, url, **kwargs):
             return type("Response", (), {"status_code": 404})()
 
-    client = external_worker.ExternalWorkerClient(core_api_url="http://core.example", token="secret", worker_id="nl",
-                                                  queues=["external-agents"], capabilities=["openai"])
-    client.session = _OldCore()
+    client = type("Client", (), {"session": _OldCore(), "core_api_url": "http://core.example"})()
 
-    answer = client.fetch_page(RU_URL)
+    answer = core_page.ask(client, {"id": 7, "lease_token": "lease"}, RU_URL)
 
     assert answer["ok"] is False and "до 04.11" in answer["error"]
 
 
-@pytest.mark.parametrize("browser_enabled", [True, False])
-def test_page_with_a_list_title_is_kept_when_no_step_brings_a_better_one(monkeypatch, browser_enabled):
-    """aer.ca 04.11: «Bulletin 2026-45» — настоящая страница с коротким заголовком. Шаги дальше её не улучшат; итог —
-    она сама, и её, как раньше, отсеет правило страницы-списка. Браузер выключается настройкой NL."""
+def test_page_with_a_list_title_is_the_step_result_and_the_list_rule_decides_as_before(monkeypatch):
+    """aer.ca 04.11: «Bulletin 2026-45» — настоящая страница с коротким заголовком. Короткий заголовок дальше не ведёт:
+    правило страницы-списка решают отдельно (разбор 28), и её, как раньше, отсеет поиск."""
     url, title = "https://www.aer.example/bulletins/bulletin-2026-45", "Bulletin 2026-45"
-    monkeypatch.setattr(publisher_page.config, "SIGNAL_PAGE_BROWSER_ENABLED", browser_enabled)
     net = Net(monkeypatch, nl={url: html(title)}, browser={url: [html(title), html(title)]})
 
     page = publisher_page.read(url, "AER bulletin on new well licensing rules", timeout=8,
                                weak_title=signal_research.is_list_page)
 
     assert (page["fetcher"], page["title"]) == ("request", title)
-    assert net.steps(url) == (["nl", "browser", "browser"] if browser_enabled else ["nl"])
+    assert net.steps(url) == ["nl"]
+
+
+@pytest.mark.parametrize("browser_enabled", [True, False])
+def test_shell_without_a_publication_is_not_the_publisher_text_and_the_browser_can_be_switched_off(
+        monkeypatch, browser_enabled):
+    """Оболочка короче 500 знаков и после второй попытки браузера — баннер cookie, а не публикация: во вход «Отбора» её
+    текст не идёт. Браузер на NL выключается настройкой (память NL)."""
+    monkeypatch.setattr(publisher_page.config, "SIGNAL_PAGE_BROWSER_ENABLED", browser_enabled)
+    net = Net(monkeypatch, browser={JS_URL: [SHELL, SHELL]})
+
+    page = publisher_page.read(JS_URL, JS_TITLE, timeout=8, weak_title=signal_research.is_list_page)
+
+    assert page["ok"] is False
+    if browser_enabled:
+        assert net.steps(JS_URL) == ["nl", "browser", "browser"] and "оболочка без публикации" in page["error"]
+    else:
+        assert net.steps(JS_URL) == ["nl"]
