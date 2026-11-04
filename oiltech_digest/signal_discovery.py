@@ -28,6 +28,7 @@ import requests
 from oiltech_digest import config as app_config
 from oiltech_digest import signal_dedup, signal_research
 from oiltech_digest.db import repository, search_trial_store
+from oiltech_digest.ingestion import publisher_page
 from oiltech_digest.ingestion.normalize import url_key as article_url_key
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block
 from oiltech_digest.processing.openai_client import AIClientError, AIResponse, output_budget
@@ -2073,6 +2074,9 @@ def _research_summary(research: dict[str, Any] | None) -> dict[str, Any] | None:
     }
     summary["unverified"] = len(research.get("unverified") or [])
     summary["dropped"] = len(research.get("dropped") or [])
+    if "via" in (research.get("fulltext") or {}):
+        # Счётчики докачки при «Отборе» (добор, 04.11): сколько страниц открыто и чем; прежняя цепочка без них.
+        summary["fulltext"] = research["fulltext"]
     if "already_collected" in research:
         summary["already_collected"] = len(research["already_collected"] or [])
     if research.get("error"):
@@ -2184,8 +2188,9 @@ def _finish_generation_run(generation_run_id: int, applied: dict[str, Any]) -> N
     Поиск не ответил ни в одной теме — прогон failed с понятной причиной: веб-доказательств
     нет ни у одной темы (ежедневный прогон ищет только в вебе — у него это ноль сигналов).
     Статус ЗАДАЧИ остаётся ok: его читает правило «ежедневный уже ставили в эти сутки»
-    (background_jobs.enqueue_daily_signal_discovery). Статус прогона не читает никто, кроме
-    выгрузки для обучения (signal_training), а там он не фильтр."""
+    (background_jobs.enqueue_daily_signal_discovery). Статус прогона читают правило «раз в N
+    суток» (failed не держит следующий прогон, решение владельца 04.11) и выгрузка для обучения
+    (signal_training), а там он не фильтр."""
     result: dict[str, Any] = {
         "topics": len(applied["topic_results"]),
         "signals": applied["all_signals"],
@@ -3112,14 +3117,15 @@ def _topic_web_evidence(
     heartbeat()
     # Докачка — проверка: живая ли ссылка и о том ли она; текст страницы — судье или «Отбору». При «Отборе» срока
     # на тему нет: находка без страницы во вход агента не идёт, и срезать её по времени значило бы потерять её молча
-    # (признак продвижения подаётся перед каждой страницей, аренда держится).
+    # (признак продвижения подаётся перед каждой страницей, аренда держится). По той же причине при «Отборе» после
+    # запроса идёт добор (PDF, ядро РФ, браузер; порядок цикла владельца 04.11), до дедупа прогона.
     events = research.pop("evidence")
     if config.otbor:
         events, already = _split_collected(events, collected)
         research["already_collected"] = already
     found, fulltext = _enrich_web_evidence_with_full_text(
         events, topic_name, limit=len(events), heartbeat=heartbeat, budget_seconds=0 if config.otbor else None,
-        text_chars=TEXT_LIMIT if config.otbor else WEB_EVIDENCE_FULLTEXT_CHARS)
+        text_chars=TEXT_LIMIT if config.otbor else WEB_EVIDENCE_FULLTEXT_CHARS, top_up=config.otbor)
     verified, unverified = signal_research.verify_research_evidence(found, finds_only=config.otbor)
     research.update(fulltext=fulltext, unverified=unverified, evidence_count=len(verified))
     _record_usage("radar_research", research.get("model"), calls=int(research.get("attempts") or 0),
@@ -3514,21 +3520,17 @@ def _search_result_to_evidence(row: dict[str, Any], topic: str) -> dict[str, Any
 
 
 WEB_EVIDENCE_FULLTEXT_CHARS = 1500
-# Документы, а не страницы: лишний трафик, а текст из байтов PDF ушёл бы судье мусором.
-_FULLTEXT_SKIP_SUFFIXES = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip")
-_BINARY_PREFIXES = (b"%PDF", b"PK\x03\x04", b"\xd0\xcf\x11\xe0", b"\x89PNG", b"\xff\xd8\xff", b"GIF8")
+# Документы, а не страницы: лишний трафик, а текст из байтов PDF ушёл бы судье мусором. При «Отборе» PDF читается
+# (publisher_page): там находка без текста издателя теряется.
+_FULLTEXT_SKIP_SUFFIXES = (".pdf", *publisher_page.NOT_PAGE_SUFFIXES)
 
 
 def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _looks_binary(content: bytes | str) -> bool:
-    head = content[:1024] if isinstance(content, bytes) else content[:1024].encode("utf-8", "ignore")
-    return head.lstrip().startswith(_BINARY_PREFIXES) or b"\x00" in head
-
-
-def _fetch_full_text(url: str, fallback_title: str = "", *, timeout: int | None = None) -> dict[str, Any]:
+def _fetch_full_text(url: str, fallback_title: str = "", *, timeout: int | None = None,
+                     top_up: bool = False) -> dict[str, Any]:
     """Открыть страницу и достать настоящий текст статьи вместо сниппета поиска.
 
     Сниппет — это 1-2 обрубленных предложения от поисковика; по нему ни кластеризация,
@@ -3539,17 +3541,23 @@ def _fetch_full_text(url: str, fallback_title: str = "", *, timeout: int | None 
 
     Таймаут короче обычного (SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS): страница —
     улучшение, а не условие прогона, и 20 с × до 20 страниц × 13 тем не должны жечь аренду.
+
+    top_up — добор при «Отборе» (поручение владельца 04.11): страница — условие находки, и после запроса идут PDF,
+    ядро РФ и браузер (publisher_page.read); итог несёт fetcher — чем открыта страница.
     """
     from oiltech_digest.ingestion import request_parser
     from oiltech_digest.ingestion.source_diagnostics import probe_url
 
+    timeout = timeout or app_config.SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS
+    if top_up:
+        return publisher_page.read(url, fallback_title, timeout=timeout, weak_title=signal_research.is_list_page)
     empty = {"ok": False, "raw_text": "", "published_at": None, "title": ""}
     if urlsplit(url).path.lower().endswith(_FULLTEXT_SKIP_SUFFIXES):
         return {**empty, "error": "not_html"}
-    probe, content = probe_url(url, timeout=timeout or app_config.SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS)
+    probe, content = probe_url(url, timeout=timeout)
     if content is None:
         return {**empty, "error": probe.error or f"http_{probe.status}"}
-    if _looks_binary(content):
+    if publisher_page.looks_binary(content):
         return {**empty, "error": "not_html"}
     title, published_at, raw_text = request_parser.parse_article_page(content, fallback_title)
     return {
@@ -3570,8 +3578,12 @@ def _enrich_web_evidence_with_full_text(
     budget_seconds: float | None = None,
     clock: Callable[[], float] = time.monotonic,
     text_chars: int = WEB_EVIDENCE_FULLTEXT_CHARS,
+    top_up: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Заменить сниппет реальным текстом статьи там, где это удаётся и оправдано. Текста — до text_chars знаков.
+
+    top_up — добор при «Отборе» (_fetch_full_text): в счётчиках via — сколько страниц открыли ядро РФ и браузер, pdf —
+    сколько прочитано из PDF; в находке — full_text_fetcher (и full_text_pdf).
 
     Раньше evidence из web-поиска несло только заголовок и обрывок сниппета — судья и
     кластеризация не видели ни контракта, ни KPI, ни настоящей даты события, только то,
@@ -3585,7 +3597,9 @@ def _enrich_web_evidence_with_full_text(
     """
     beat = heartbeat or (lambda: None)
     budget = app_config.SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS if budget_seconds is None else budget_seconds
-    stats = {"attempted": 0, "fetched": 0, "too_short": 0, "failed": 0, "skipped_budget": 0}
+    stats: dict[str, Any] = {"attempted": 0, "fetched": 0, "too_short": 0, "failed": 0, "skipped_budget": 0}
+    if top_up:
+        stats.update(via=dict.fromkeys(publisher_page.TOP_UP_FETCHERS, 0), pdf=0)
     if limit <= 0:
         return evidence, stats
 
@@ -3603,7 +3617,7 @@ def _enrich_web_evidence_with_full_text(
         beat()
         stats["attempted"] += 1
         try:
-            fetched = _fetch_full_text(url, str(item.get("title") or ""))
+            fetched = _fetch_full_text(url, str(item.get("title") or ""), top_up=top_up)
         except Exception as exc:  # noqa: BLE001 - одна страница не роняет тему
             fetched = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}", "raw_text": ""}
         raw_text = _clean_search_text(fetched.get("raw_text") or "")
@@ -3620,6 +3634,11 @@ def _enrich_web_evidence_with_full_text(
             continue
 
         stats["fetched"] += 1
+        fetcher = fetched.get("fetcher")
+        if fetcher in (stats.get("via") or {}):
+            stats["via"][fetcher] += 1
+        if top_up and fetched.get("pdf"):
+            stats["pdf"] += 1
         title = fetched.get("title") or item.get("title") or ""
         fact = raw_text[:text_chars]
         context = {"title": title, "raw_text": f"{title}\n{fact}", "language": "mixed"}
@@ -3637,6 +3656,8 @@ def _enrich_web_evidence_with_full_text(
                 **(item.get("raw_payload") or {}),
                 "full_text_fetched": True,
                 "full_text_chars": len(raw_text),
+                **({"full_text_fetcher": fetcher} if fetcher else {}),
+                **({"full_text_pdf": True} if fetched.get("pdf") else {}),
             },
         })
     return enriched, stats
@@ -3665,9 +3686,7 @@ def _contains_cjk(text: str) -> bool:
 
 
 def _clean_search_text(text: str) -> str:
-    cleaned = re.sub(r"<[^>]+>", " ", text or "")
-    cleaned = cleaned.replace("&amp;", "&").replace("&nbsp;", " ")
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return publisher_page.clean_text(text)
 
 
 def _dedupe(values: list[str]) -> list[str]:

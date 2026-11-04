@@ -28,6 +28,9 @@ config.SIGNAL_RESEARCH_MODEL = "gpt-6.1-sol"
 # свои тесты (test_stage_models).
 config.SIGNAL_DEDUP_MODEL = "test-dedup-model"
 config.OPENAI_REPRINT_MODEL = "test-reprint-model"
+# Радар раз в N суток (решение владельца 04.11): тесты суточного шага идут с N=1, как по умолчанию в коде, а не с .env
+# разработчика или прода; правило N суток проверяют свои тесты (test_background_jobs).
+config.SIGNAL_DISCOVERY_DAILY_EVERY_DAYS = 1
 
 
 @pytest.fixture(scope="session")

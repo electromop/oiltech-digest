@@ -279,6 +279,9 @@ SIGNAL_DISCOVERY_DAILY_ENABLED = os.environ.get("SIGNAL_DISCOVERY_DAILY_ENABLED"
     "yes",
     "on",
 }
+# Раз в сколько суток Москвы суточный шаг ставит радар: 1 каждые сутки. Решение владельца 04.11: 3, окно 3 дня
+# (SIGNAL_DISCOVERY_DAYS и SIGNAL_RESEARCH_DAYS).
+SIGNAL_DISCOVERY_DAILY_EVERY_DAYS = max(1, int(os.environ.get("SIGNAL_DISCOVERY_DAILY_EVERY_DAYS", "1")))
 SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
 SIGNAL_DISCOVERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_LIMIT", "120"))
 SIGNAL_DISCOVERY_MIN_SCORE = float(os.environ.get("SIGNAL_DISCOVERY_MIN_SCORE", "40"))
@@ -296,6 +299,11 @@ SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_WEB_F
 # 20 медленных страниц × 20 с (+ повторы SSL-пути) съедали аренду задачи в 600 с.
 SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS = int(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS", "8"))
 SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS = float(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS", "120"))
+# Добор страниц находок при «Отборе» (ingestion/publisher_page.py, поручение владельца 04.11): браузер на NL после
+# запроса и ядра РФ — выключатель на случай нехватки памяти NL (Chromium в контейнере агентов); предел размера
+# страницы, которую ядро качает по просьбе воркера (выпуск Federal Register 04.11 — 11 МБ).
+SIGNAL_PAGE_BROWSER_ENABLED = os.environ.get("SIGNAL_PAGE_BROWSER_ENABLED", "1").lower() in {"1", "true", "yes"}
+SIGNAL_PAGE_MAX_BYTES = int(os.environ.get("SIGNAL_PAGE_MAX_BYTES", str(15 * 1024 * 1024)))
 # Откуда брать темы радара: tags — корневые тематики заказчика (пункт 12), table —
 # таблица signal_radar_topics (прежние 21 тема из сида).
 SIGNAL_RADAR_TOPIC_SOURCE = os.environ.get("SIGNAL_RADAR_TOPIC_SOURCE", "tags").strip().lower()

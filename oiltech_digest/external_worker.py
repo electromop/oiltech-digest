@@ -15,7 +15,7 @@ import requests
 
 from oiltech_digest import (admission, config, contract, otbor, signal_card, signal_discovery, signal_scores,
                             signal_summary, worker_shutdown)
-from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.ingestion import core_page, external_fetch, publisher_page
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.processing import external_ai
 
@@ -483,7 +483,9 @@ def _run_job(client: ExternalWorkerClient, job: dict[str, Any], beat: Callable[.
         client.progress(job, 20)
         # Heartbeat по каждому шагу (статья, страница, кусок документа) продлевает lease —
         # большой батч на медленной модели не истекает по аренде и не уходит в ретрай-петлю.
-        result = handler(job.get("payload") or {}, heartbeat=beat)
+        # Сбор на РФ (добор находок радара): страницу, которую воркер не открыл, качает ядро в аренде этой задачи.
+        with publisher_page.core_pages(lambda url: core_page.ask(client, job, url)):
+            result = handler(job.get("payload") or {}, heartbeat=beat)
     except external_ai.StopRequested:
         # Вид без частичного итога (сбор, документ): задача уходит в очередь целиком.
         if _claim_report(job):

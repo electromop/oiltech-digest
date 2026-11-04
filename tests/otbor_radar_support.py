@@ -60,8 +60,9 @@ def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False, befor
     """Ежедневная задача радара (тема — тематика бурения) → воркер NL полосы агентов с подставным поиском и
     страницами → ядро. Судья, ревью пачки и проверка темы при «Отборе» не зовутся: их вызовы копятся в
     отдельном списке. before_worker — что меняется между постановкой задачи и её выдачей (.env NL), on_fetch —
-    что происходит, пока воркер докачивает страницу (сбор успел собрать её же). Поиск и список вызовов прежней
-    цепочки."""
+    что происходит, пока воркер докачивает страницу (сбор успел собрать её же). pages=None — докачка настоящая
+    (запрос, ядро РФ, браузер; сеть подменяет сам тест, tests/test_signal_search_pages.py). Поиск и список вызовов
+    прежней цепочки."""
     tag(DRILLING)
     search = SearchModel(events, cited)
     old_chain = []
@@ -73,7 +74,8 @@ def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False, befor
             on_fetch(url)
         return pages.get(url, NO_PAGE)
 
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text", fetch)
+    if pages is not None:
+        monkeypatch.setattr(signal_discovery, "_fetch_full_text", fetch)
     monkeypatch.setattr(signal_discovery, "judge_signal_snapshot",
                         lambda *args, **kwargs: old_chain.append("судья") or ({}, {}))
     monkeypatch.setattr(signal_discovery, "_batch_review_candidates",

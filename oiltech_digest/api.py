@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -39,7 +40,7 @@ from oiltech_digest.processing.pipeline import (
 from oiltech_digest.readiness import readiness_check
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
-from oiltech_digest.ingestion import external_fetch
+from oiltech_digest.ingestion import core_page, external_fetch
 from oiltech_digest.documents import external as documents_external
 from oiltech_digest.documents import parsing as doc_parsing
 from oiltech_digest.documents.model import DocumentError
@@ -354,6 +355,11 @@ class ExternalWorkerClaimRequest(BaseModel):
 
 class ExternalWorkerLeaseRequest(BaseModel):
     lease_token: str
+
+
+class ExternalWorkerPageRequest(ExternalWorkerLeaseRequest):
+    # С большим запасом: самые длинные адреса находок поиска — около 300 знаков (04.11).
+    url: str = Field(max_length=4096)
 
 
 class ExternalWorkerProgressRequest(ExternalWorkerLeaseRequest):
@@ -2597,6 +2603,27 @@ def external_worker_claim(
 def external_worker_consumers(_: None = Depends(require_external_worker)) -> dict[str, Any]:
     """Сборки и контракты контейнеров NL — для скрипта выката на NL, где базы нет."""
     return _clean(repository.external_consumers_status())
+
+
+@app.post("/api/external-worker/jobs/{job_id}/page")
+def external_worker_page(
+    job_id: int,
+    payload: ExternalWorkerPageRequest,
+    _: None = Depends(require_external_worker),
+) -> dict[str, Any]:
+    """Сбор на РФ (добор находок радара, поручение владельца 04.11): страницу, которую воркер NL не открыл, качает
+    ядро со своего адреса — в аренде задачи и только для прогона радара; что ядро качает, а что нет, — core_page."""
+    lease = _sha256_hex(payload.lease_token)
+    if not repository.external_background_job_lease_is_active(job_id, lease_token_hash=lease):
+        raise HTTPException(status_code=409, detail="Job lease is not active")
+    if (repository.get_background_job(job_id) or {}).get("kind") != "signal_discovery":
+        raise HTTPException(status_code=403, detail="Сбор страниц — только для прогона радара")
+    page = core_page.download(payload.url)
+    content = page.pop("content", None) or b""
+    logger.info("external_worker_page job_id=%s url=%s ok=%s status=%s bytes=%s error=%s", job_id, payload.url[:200],
+                page["ok"], page.get("status"), len(content), page.get("error"))
+    return {"ok": page["ok"], "status": page.get("status"), "error": page.get("error"),
+            "content_b64": base64.b64encode(content).decode("ascii") if content else ""}
 
 
 @app.post("/api/external-worker/jobs/{job_id}/progress")
