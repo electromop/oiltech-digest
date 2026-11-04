@@ -86,6 +86,23 @@ def enqueue_daily_signal_discovery(*, force: bool = False) -> dict[str, Any]:
             "reason": "already_scheduled",
             "lookback_hours": lookback_hours,
         }
+    # Раз в N суток (решение владельца 04.11: радар раз в 3 дня с окном 3 дня): прогон прошлых суток держит
+    # следующий до N-х суток. Упавший не держит: его окно никто не обыскал, следующая попытка в следующие сутки.
+    every_days = config.SIGNAL_DISCOVERY_DAILY_EVERY_DAYS
+    if not force and every_days > 1:
+        lookback_hours = round(lookback_hours + 24 * (every_days - 1), 4)
+        if repository.has_recent_background_job(
+            kind="signal_discovery",
+            payload_subset=marker,
+            lookback_hours=lookback_hours,
+            statuses=("queued", "running", "finalizing", "ok"),
+        ):
+            return {
+                "enqueued": False,
+                "reason": "not_due",
+                "lookback_hours": lookback_hours,
+                "every_days": every_days,
+            }
 
     # Маршрут спрашиваем у политики, а не прибиваем к 'ru'. Радар генерирует
     # поисковые запросы через OpenAI, а OpenAI отвечает РФ-адресам 403
