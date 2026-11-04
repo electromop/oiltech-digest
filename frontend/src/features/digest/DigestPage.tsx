@@ -380,8 +380,13 @@ export function DigestPage({ onUnauthorized, showToast, onArticlesChanged }: Pro
       (radarItems.length ? " Сигналы радара в письме идут после статей, по баллу." : "") +
       " В PDF порядок считается сам: раздел, рубрика, балл.";
   const issueCount = orderedDigestCandidates.length + radarItems.length;
-  // Порядок черновика PDF не задаёт (#161): устаревшим PDF делают только сменившиеся фильтры.
-  const pdfStaleReason = pdfToken === 0 ? null : pdfFilterSignature !== filterSignature ? "filters" : null;
+  // PDF собирается из сохранённого черновика: «Из выпуска» и «Добавить» меняют его состав, и до сохранения PDF прежний.
+  // Порядок черновика PDF не задаёт (#161): перестановка PDF устаревшим не делает.
+  const draftBaseIds = savedDraftVisibleIds.length ? savedDraftVisibleIds : previewCandidateIds;
+  const compositionChanged =
+    draftDirty && (manualOrderIds.length !== draftBaseIds.length || manualOrderIds.some((id) => !draftBaseIds.includes(id)));
+  const pdfStaleReason =
+    pdfToken === 0 ? null : compositionChanged ? "composition" : pdfFilterSignature !== filterSignature ? "filters" : null;
 
   const workspace = (
     <div className="digestWorkspace">

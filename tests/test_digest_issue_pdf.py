@@ -178,7 +178,8 @@ def test_card_shows_five_criteria_from_its_score_breakdown_and_the_link_with_oil
     scored = _finding("scored", "Оценённая находка", signal_category="technology", theme=DRILLING, score=80,
                       oilfield_relevance="transferable", **renamed)
     bare = _finding("bare", "Находка без разбивки", signal_category="technology", theme=DRILLING, score=70)
-    set_card(feed_signal(a["hi"]), theme=MARKET, oilfield_relevance="direct", **breakdown("business", 90, 80, 70, 60, 50))
+    set_card(feed_signal(a["hi"]), theme=MARKET, oilfield_relevance="direct",
+             **breakdown("business", 90, 80, 70, 60, 50))
     analyst.mark(a["hi"])
     for signal_id in (scored, bare):
         analyst.mark_signal(signal_id)
@@ -202,7 +203,8 @@ def test_card_shows_five_criteria_from_its_score_breakdown_and_the_link_with_oil
     # Без разбивки — имена набора раздела (технологии: «Технологический радар») и «нет оценки по критериям».
     assert _flat("Ценность для нефтесервиса Технологическая новизна Зрелость / доказательность Переносимость Свежесть "
                  "Связь с нефтесервисом нет оценки по критериям не определено") in pages[2]
-    assert _flat("Стратегическая значимость для нефтесервиса") in pages[1] and _flat("90 80 70 60 50 прямая") in pages[1]
+    assert _flat("Стратегическая значимость для нефтесервиса") in pages[1]
+    assert _flat("90 80 70 60 50 прямая") in pages[1]
     assert "Итог" not in "".join(pages)
 
 
@@ -294,6 +296,19 @@ def test_card_shows_its_own_fit_picture_otherwise_the_placeholder_of_its_theme(i
         "Картинка публикации", "Рисунок темы: бурение", "Рисунок темы: бурение", "Рисунок темы: бурение",
         "Рисунок темы: энергетика",
     ]
+    # Рисунок отрисован: на месте не загрузившейся картинки Chromium печатает её подпись текстом.
+    assert not any("Рисунок темы" in text or "Картинка публикации" in text for text in pdf_pages(pdf))
+
+
+def test_every_rubric_of_the_theme_table_has_its_place_in_the_rubric_order():
+    """Порядок рубрик выпуска знает каждую рубрику таблицы тем, и в бизнес-разделе тоже: иначе карточка такой темы
+    молча ушла бы в конец раздела."""
+    from oiltech_digest.processing import digest_materials
+
+    rubrics = {theme.rubric for theme in digest_materials.THEMES}
+    rubrics |= {theme.in_business[0] for theme in digest_materials.THEMES if theme.in_business}
+    assert rubrics == set(digest_materials.RUBRIC_ORDER)
+    assert len(digest_materials.RUBRIC_ORDER) == len(set(digest_materials.RUBRIC_ORDER)) == 14
 
 
 def test_every_theme_has_its_own_placeholder_picture():

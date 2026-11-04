@@ -293,12 +293,16 @@ describe("экран выпуска: какой месяц открыт по у�
       // Порядок в PDF считается сам: перестановка в очереди меняет письмо и DOCX, а PDF устаревшим не помечает.
       await user.click((await screen.findAllByRole("button", { name: "Опустить материал ниже" }))[0]);
       expect(screen.getByText(/В PDF порядок считается сам: раздел, рубрика, балл/)).toBeInTheDocument();
-      expect(screen.queryByText(/PDF собирается из сохранённого черновика/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Состав выпуска изменён, но не сохранён/)).not.toBeInTheDocument();
+      // «Из выпуска» меняет состав черновика, а с ним и PDF после сохранения: до сохранения PDF помечен устаревшим.
+      await user.click(screen.getAllByRole("button", { name: "Из выпуска" })[0]);
+      expect(await screen.findByText(/Состав выпуска изменён, но не сохранён/)).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
 
       await waitFor(() => expect(pdfRequests()).toHaveLength(2));
       await waitFor(() => expect(screen.getByTitle("Предпросмотр выпуска в PDF")).toHaveAttribute("src", "blob:pdf-2#navpanes=0&view=FitH"));
+      expect(screen.queryByText(/Состав выпуска изменён, но не сохранён/)).not.toBeInTheDocument();
     });
 
     it("«Обновить PDF» собирает заново мимо памяти предпросмотра, открытие выпуска — через неё (LOW-2 ревью PR #155)", async () => {

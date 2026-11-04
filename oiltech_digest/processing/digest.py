@@ -316,18 +316,22 @@ def build_digest_content(
         # Сигнал радара — не статья: его номер из таблицы signals. Раньше он уезжал в
         # article_id, и сохранение черновика падало на внешнем ключе или цепляло чужую статью.
         item_type = row.get("item_type") or "article"
+        # Общее у позиции письма и PDF: кто она, заголовок, ссылка, балл.
+        position = {
+            "item_type": item_type,
+            "article_id": row["id"] if item_type == "article" else None,
+            "signal_id": row["id"] if item_type == "signal" else None,
+            "title": title,
+            "url": row["url"],
+            "score": float(row["total_score"]) if row.get("total_score") is not None else None,
+        }
         news.append(
             {
                 "category": tag,
-                "item_type": item_type,
-                "article_id": row["id"] if item_type == "article" else None,
-                "signal_id": row["id"] if item_type == "signal" else None,
-                "title": title,
+                **position,
                 "source": row["source_name"],
-                "url": row["url"],
                 "published_at": published,
                 "tag": tag,
-                "score": float(row["total_score"]) if row.get("total_score") is not None else None,
                 "score_label": row.get("score_label"),
                 "summary": _compact_digest_summary(summary, title),
                 "image_url": row.get("image_url") or "",
@@ -335,7 +339,7 @@ def build_digest_content(
         )
         positions.append(
             {
-                **{key: news[-1][key] for key in ("item_type", "article_id", "signal_id", "title", "url", "score")},
+                **position,
                 "summary": _digest_summary_text(summary, title),
                 # Своя картинка — та, что платформа уже знает (у статьи ленты); годна ли она, видно при печати.
                 "image_url": "" if _is_unusable_digest_image_url(row.get("image_url")) else row["image_url"],
@@ -1002,7 +1006,7 @@ def save_digest_draft(
 
 def render_digest_pdf(content: dict) -> bytes:
     """PDF выпуска в формате эксперта (#161) через headless Chromium: обложка и листы карточек (digest_pdf). Файлы
-    брендинга (логотип, QR) — в каталоге брендинга на сервере."""
+    брендинга (баннер, логотип, QR) — в каталоге брендинга на сервере."""
     return digest_pdf.render(content, files_dir=_branding_store_path().parent)
 
 
@@ -1021,9 +1025,10 @@ def render_digest_preview_pdf(content: dict, *, fresh: bool = False) -> bytes:
     """PDF предпросмотра: тот же render_digest_pdf, но по одной сборке за раз и с памятью на последние выпуски.
 
     Ключ — содержание выпуска целиком (состав, тексты, оформление): сменился черновик, отметка или фильтр — другой
-    ключ и новая сборка; тот же выпуск — готовые байты без Chromium. Картинок карточек в ключе нет: их Chromium грузит
-    при сборке, и сайт, который не ответил, потом оживает. Поэтому «Обновить PDF» (`fresh`) собирает заново мимо памяти,
-    и новый файл заменяет прежний (LOW-2 ревью PR #155): предпросмотр снова совпадает с выгрузкой."""
+    ключ и новая сборка; тот же выпуск — готовые байты без Chromium. Картинок карточек и файлов брендинга в ключе нет:
+    картинки Chromium грузит при сборке, сайт, который не ответил, потом оживает, а файл баннера, логотипа или QR на
+    сервере могут заменить под тем же именем. Поэтому «Обновить PDF» (`fresh`) собирает заново мимо памяти, и новый файл
+    заменяет прежний (LOW-2 ревью PR #155): предпросмотр снова совпадает с выгрузкой."""
     key = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
     if not _PREVIEW_PDF_LOCK.acquire(timeout=_PREVIEW_PDF_WAIT_SECONDS):
         raise RuntimeError("PDF сейчас собирается. Повторите через минуту.")

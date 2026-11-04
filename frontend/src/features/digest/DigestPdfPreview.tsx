@@ -16,8 +16,9 @@ type Props = {
   // Число растёт — PDF собирается заново (открытие экрана, смена выпуска, сохранённый черновик, «Обновить PDF»);
   // 0 — ещё не собирать.
   refreshToken: number;
-  // PDF показывает прежнее состояние: фильтры сменились после сборки. Порядок черновика PDF не задаёт (#161).
-  staleReason: "filters" | null;
+  // PDF показывает прежнее состояние: состав очереди изменён и не сохранён (PDF собирается из сохранённого черновика)
+  // или фильтры сменились после сборки. Порядок черновика PDF не задаёт (#161).
+  staleReason: "composition" | "filters" | null;
   onRefresh: () => void;
   onError: (error: unknown) => void;
 };
@@ -91,7 +92,11 @@ export function DigestPdfPreview({ filters, refreshToken, staleReason, onRefresh
       </div>
       {staleReason && !loading ? (
         <div className="archiveNotice digestPdfStale" role="status">
-          <span>Фильтры изменились после сборки PDF: обновите предпросмотр, чтобы увидеть выпуск как есть.</span>
+          <span>
+            {staleReason === "composition"
+              ? "Состав выпуска изменён, но не сохранён: PDF собирается из сохранённого черновика. Сохраните черновик, чтобы увидеть выпуск как есть."
+              : "Фильтры изменились после сборки PDF: обновите предпросмотр, чтобы увидеть выпуск как есть."}
+          </span>
         </div>
       ) : null}
       {failed ? <div className="documentAlert bad" role="alert">{failed}</div> : null}

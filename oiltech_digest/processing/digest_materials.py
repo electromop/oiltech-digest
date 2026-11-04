@@ -86,6 +86,8 @@ THEMES = (
 )
 # Порядок рубрик: рынок автоматизации сразу за рынком и сервисными моделями, дальше темы по таблице.
 RUBRIC_ORDER = (THEMES[0].rubric, AUTOMATION_MARKET[0], *(theme.rubric for theme in THEMES[1:]))
+# Место рубрики; рубрики не из порядка (тема не из 13) — после всех.
+_RUBRIC_PLACE = {rubric: place for place, rubric in enumerate(RUBRIC_ORDER)}
 # Давнее событие: своя рубрика и подпись, место сразу за рубрикой своей темы.
 OLD_PRACTICE_RUBRIC, OLD_PRACTICE_LABEL = "СПРАВОЧНАЯ ПРАКТИКА", "Практика прошлых периодов"
 
@@ -269,7 +271,7 @@ def _material(item: dict, fields: dict | None, month: date | None) -> tuple[tupl
     section = section_of(fields.get("signal_category"))
     theme = theme_of(fields.get("theme"))
     rubric, topic = _rubric(theme, section)
-    rank = 2 * (RUBRIC_ORDER.index(rubric) if rubric else len(RUBRIC_ORDER))
+    rank = 2 * _RUBRIC_PLACE.get(rubric, len(RUBRIC_ORDER))
     label = label_of(fields.get("event_type"), fields.get("technology_maturity"), section)
     if is_old_event(fields, month):
         rubric, label, rank = OLD_PRACTICE_RUBRIC, OLD_PRACTICE_LABEL, rank + 1

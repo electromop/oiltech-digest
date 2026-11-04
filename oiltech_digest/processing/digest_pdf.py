@@ -106,11 +106,12 @@ def _cover_html(content: dict, files_dir: Path | None) -> str:
     branding = (content.get("branding") or {}).get("cover") or {}
     cover = content.get("cover") or {}
     banner = _branding_image(files_dir, branding.get("banner_file"))
-    banner_html = f'<img class="banner" src="{banner}" alt="">' if banner else ""
+    # Вкладка стоит на баннере: без баннера ей не на чем стоять, и она легла бы на вступление.
+    hero = f'<div class="hero"><img class="banner" src="{banner}" alt="">{_tab_html(branding)}</div>' if banner else ""
     return (
         '<section class="cover">'
         f"{_masthead_html(branding, files_dir)}"
-        f'<div class="hero">{banner_html}{_tab_html(branding)}</div>'
+        f"{hero}"
         '<div class="cover-body">'
         f"{_paragraph('intro', branding.get('intro'))}"
         f"{_highlights_html(cover)}"
@@ -210,7 +211,9 @@ def _picture_html(material: dict) -> str:
     if own:
         return (f'<img class="pic" src="{_e(own)}" data-placeholder="{placeholder}" '
                 f'data-placeholder-alt="{placeholder_alt}" alt="{OWN_PICTURE_ALT}">')
-    return f'<img class="pic" src="{placeholder}" alt="{placeholder_alt}">' if placeholder else '<div class="pic"></div>'
+    if not placeholder:
+        return '<div class="pic"></div>'
+    return f'<img class="pic" src="{placeholder}" alt="{placeholder_alt}">'
 
 
 def _criteria_html(material: dict, section_names: list[str]) -> str:
@@ -345,7 +348,8 @@ def _css_string(value: object) -> str:
 def _css(document: dict) -> str:
     name = _css_string((document.get("name") or "").upper())
     month = _css_string(document.get("month_label") or "")
-    return _CSS.replace("%NAME%", name).replace("%MONTH%", month)
+    # Месяц первым: название (его правит админ) может содержать «%MONTH%», месяц (его пишет код) — нет.
+    return _CSS.replace("%MONTH%", month).replace("%NAME%", name)
 
 
 _CSS = """
@@ -367,7 +371,7 @@ a{color:inherit;text-decoration:none;}
 .logo{display:block;flex:0 0 auto;height:11.6mm;width:auto;max-width:90mm;}
 .unit{font:700 12pt 'GPN Din';letter-spacing:.03em;text-transform:uppercase;color:#003da6;}
 .hero{position:relative;flex:0 0 auto;}
-.banner{display:block;width:210mm;height:auto;}
+.banner{display:block;width:210mm;height:auto;max-height:120mm;object-fit:cover;}
 .tab{position:absolute;left:12mm;top:0;min-width:41mm;height:12.6mm;padding:0 4mm;box-sizing:border-box;
   background:#ff5600;border-radius:0 0 3mm 3mm;display:flex;align-items:center;justify-content:center;
   font:700 14pt 'GPN Din';letter-spacing:.04em;text-transform:uppercase;color:#fff;}

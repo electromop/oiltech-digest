@@ -48,11 +48,18 @@ def branding(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def empty_branding(tmp_path, monkeypatch):
-    """Пустой брендинг на сервере, как в репозитории: значений нет."""
-    path = tmp_path / "digest_branding.json"
-    path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(config, "DIGEST_BRANDING_PATH", str(path))
-    return path
+    """Брендинга на сервере нет: выпуск читает брендинг из репозитория, а в нём значения обложки пусты."""
+    monkeypatch.setattr(config, "DIGEST_BRANDING_PATH", str(tmp_path / "server" / "digest_branding.json"))
+
+
+def _edit_branding(path, **cover) -> None:
+    """Правка брендинга на сервере: поля обложки; `issue` — блок выпуска."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    issue = cover.pop("issue", None)
+    data["cover"].update(cover)
+    if issue is not None:
+        data["issue"] = issue
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
 def _issue_of_three(issue) -> None:
@@ -105,9 +112,8 @@ def test_cover_fits_exactly_one_sheet_and_the_banner_spans_its_full_width(issue,
     """Обложка фиксированной высоты, ровно в лист: на второй лист не переходит. Если обложка выше листа хоть немного,
     Chromium ужимает весь первый лист, и баннер перестаёт доходить до края (на макете 198 мм вместо 210). Длинное
     вступление обложку не растягивает: обрезается оно само, а «Главное» и блок платформы остаются целиком."""
-    data = json.loads(branding.read_text(encoding="utf-8"))
-    data["cover"]["intro"] = " ".join(["Очень длинное вступление обложки выпуска, которое не помещается в лист."] * 30)
-    branding.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    _edit_branding(branding,
+                   intro=" ".join(["Очень длинное вступление обложки выпуска, которое не помещается в лист."] * 30))
     _issue_of_three(issue)
     pdf = issue["analyst"].preview_pdf()
 
@@ -192,9 +198,7 @@ def test_branding_file_outside_its_folder_or_not_a_picture_is_not_taken(issue, c
     (branding.parent.parent / "logo.png").write_bytes(png(*LOGO))
     (branding.parent / ".logo.png").write_bytes(png(*LOGO))
     (branding.parent / "logo.txt").write_text("не картинка", encoding="utf-8")
-    data = json.loads(branding.read_text(encoding="utf-8"))
-    data["cover"]["logo_file"] = name
-    branding.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    _edit_branding(branding, logo_file=name)
     _issue_of_three(issue)
 
     pdf = issue["analyst"].preview_pdf()
@@ -205,11 +209,20 @@ def test_branding_file_outside_its_folder_or_not_a_picture_is_not_taken(issue, c
 def test_issue_name_from_the_branding_cannot_inject_markup_into_the_pdf(issue, chromium, branding):
     """Название выпуска (брендинг, правит админ) стоит в колонтитуле, а колонтитул задаёт стиль листа: «</style>» в
     названии закрыл бы стиль, и разметка после него исполнилась бы в Chromium сервера. Название печатается как текст."""
-    data = json.loads(branding.read_text(encoding="utf-8"))
-    data["issue"] = {"title_template": 'Дайджест </style><a href="https://evil.example/">чужая ссылка</a>'}
-    branding.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    injected = 'Дайджест </style><a href="https://evil.example/">чужая ссылка</a>'
+    _edit_branding(branding, issue={"title_template": injected})
     _issue_of_three(issue)
 
     pdf = issue["analyst"].preview_pdf()
     assert not any("evil.example" in target for page in pdf_links(pdf) for target in page)
     assert '</STYLE><A HREF="HTTPS://EVIL.EXAMPLE/">' in pdf_pages(pdf)[1]
+
+
+def test_tab_stands_only_on_the_banner(issue, chromium, branding):
+    """Вкладка стоит на баннере: без файла баннера на сервере её не на чем ставить, и она легла бы на вступление."""
+    _edit_branding(branding, banner_file="")
+    _issue_of_three(issue)
+
+    cover = pdf_pages(issue["analyst"].preview_pdf())[0]
+    assert "ВКЛАДКА" not in cover
+    assert "ПОДПИСЬ ПОЛОСЫ" in cover and "Вступление выпуска для читателей" in cover
