@@ -358,7 +358,9 @@ def _read(response: Any, *, deadline: float) -> bytes:
     limit = config.SIGNAL_PAGE_MAX_BYTES
     body = bytearray()
     try:
-        for chunk in response.stream(64 * 1024):
+        # Разжатие — явно: без decode_content=True stream отдавал сжатые gzip байты (замер на ядре 04.11: wam.ae,
+        # scientica.ru, aer.ca, ovintiv — 200, а разбор видел «не HTML»). Предел — по разжатому.
+        for chunk in response.stream(64 * 1024, decode_content=True):
             body += chunk
             if len(body) > limit:
                 raise PageRefused(f"страница больше {limit // (1024 * 1024)} МБ")

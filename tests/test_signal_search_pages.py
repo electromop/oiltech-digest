@@ -59,7 +59,8 @@ class _CoreResponse:
     def __init__(self, status, body=b"", headers=None):
         self.status, self.body, self.headers = status, body, headers or {}
 
-    def stream(self, size):
+    def stream(self, size, decode_content=False):
+        assert decode_content, "ядро читает страницу разжатой"
         for start in range(0, len(self.body), size):
             yield self.body[start:start + size]
 
