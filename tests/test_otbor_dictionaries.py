@@ -102,3 +102,35 @@ def test_an_occasion_with_one_link_overrides_the_models_link_through_one_retry(u
     assert (decision, reason) == (REJECT, "oil_gas_no_link")
     assert conflict in disputed
 
+
+
+def test_version_of_november_carries_the_rules_the_owner_approved():
+    # Решение владельца 04.11 (проверка #134 и замечания эксперта 26.10): итоги нефтесервисной компании и партнёрство
+    # с названными работами получают свои поводы с прямой связью, расширение линейки услуг считается бизнесом,
+    # описанное в тексте применение в нефтегазе даёт прямую связь.
+    dictionaries = load_dictionaries()
+    occasion = {value["code"]: value for value in dictionaries["occasion"]["values"]}
+    assert occasion["oilfield_results"]["relevances"] == occasion["partnership"]["relevances"] == ["direct"]
+    assert "нефтегазовых компаний" in occasion["market_finance"]["rule"]
+    rule = {value["code"]: value["rule"] for block in ("oilfield_relevance", "reject_reason", "category")
+            for value in dictionaries[block]["values"]}
+    assert "итоги, прогнозы и заказы нефтесервисной компании дают прямую связь" in rule["direct"]
+    assert "упоминания нефтегаза в перечне отраслей для этого мало" in rule["direct"]
+    assert "расширение линейки услуг" in rule["business"]
+    assert "этой причиной не отклоняются" in rule["oil_gas_no_link"]
+
+
+def test_results_of_a_service_company_are_taken_and_of_an_oil_company_are_not(user, contour, monkeypatch):
+    service = article("Итоги сервисной компании", "Сервисная компания отчиталась о росте выручки и заказов на бурение.")
+    oil = article("Итоги нефтяной компании", "Нефтяная компания увеличила прибыль и дивиденды.")
+    old = article("Итоги подрядчика", "Подрядчик по ГРП отчитался о квартале.")
+    # Прежний ответ о подрядчике (нефтесервис, «Рынок и финансы», «нефтегаз без связи») ловится конфликтом шагов.
+    by_old_rules = reject("oil_gas_no_link", industry="oilfield_services", occasion="market_finance")
+    decide(monkeypatch, {"Итоги сервисной компании": answer(industry="oilfield_services", occasion="oilfield_results"),
+                         "Итоги нефтяной компании": reject("oil_gas_no_link", occasion="market_finance"),
+                         "Итоги подрядчика": [by_old_rules, by_old_rules]})
+
+    assert _decided(service) == (ACCEPT, None, None)
+    assert _decided(oil) == (REJECT, "oil_gas_no_link", None)
+    decision, reason, disputed = _decided(old)
+    assert (decision, reason) == (REJECT, "oil_gas_no_link") and "при отрасли «нефтесервис»" in disputed
