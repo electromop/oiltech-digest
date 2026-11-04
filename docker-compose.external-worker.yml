@@ -17,7 +17,9 @@
 # (EXTERNAL_WORKER_STOP_GRACE_SECONDS + EXTERNAL_WORKER_STOP_STEP_SECONDS) с запасом на
 # запросы к ядру; меньше — Docker убьёт процесс до возврата задачи.
 #
-# Память (1,9 ГБ): ИИ-воркеры ждут сеть, Chromium живёт только в полосе браузера.
+# Память (3,9 ГБ с 21.09): ИИ-воркеры ждут сеть, Chromium — в полосе браузера и, с 04.11, в прогоне радара:
+# страницу находки, которую не открыли запрос и ядро РФ, открывает браузер (добор находок, ingestion/publisher_page.py,
+# по одной странице за раз; выключатель SIGNAL_PAGE_BROWSER_ENABLED=0 в .env.external-worker).
 # Перед первым `up` проверить `free -m` и `docker stats --no-stream`.
 #
 # Сборка — с SHA коммита (scripts/deploy-nl.sh передаёт GIT_SHA): воркер сообщает её ядру
@@ -104,6 +106,8 @@ services:
   external-worker-agents:
     build: *worker-build
     container_name: oiltech_external_worker_agents
+    # init (tini) подбирает хелперы Chromium после браузера добора находок радара, как у полосы браузера.
+    init: true
     restart: unless-stopped
     env_file:
       - .env.external-worker
