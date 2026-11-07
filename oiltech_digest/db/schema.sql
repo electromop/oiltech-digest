@@ -67,6 +67,15 @@ CREATE INDEX IF NOT EXISTS idx_sources_network_region ON sources(network_region,
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_sources_archived_at ON sources(archived_at) WHERE archived_at IS NOT NULL;
 
+-- Дата начала сбора (решение владельца 06.11): статью, опубликованную раньше, сбор не берёт (рубеж OLD у всех
+-- стратегий, `verdicts.old_cutoff`). Новому источнику база ставит дату на две недели раньше заведения, каким бы путём
+-- он ни заводился (экран «Источники», агент источников, Excel), чтобы подключение не тащило архив ленты в «Отбор»:
+-- ФИПС 06.11 принёс 264 статьи с 2017 года, свежих среди них 27. Повторное заведение (ON CONFLICT) дату не трогает.
+-- NULL: без границы, так у источников, заведённых до колонки. Нужен архив: UPDATE sources SET collect_since = NULL.
+-- Колонка без значения по умолчанию, затем значение для новых строк: иначе now() легло бы и на прежние источники.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS collect_since TIMESTAMPTZ;
+ALTER TABLE sources ALTER COLUMN collect_since SET DEFAULT now() - interval '14 days';
+
 -- =========================================================================
 -- Статьи (сырые, до обработки)
 -- =========================================================================

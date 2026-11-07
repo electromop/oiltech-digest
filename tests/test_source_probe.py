@@ -44,8 +44,10 @@ def _static_prefilter(monkeypatch):
 
 
 def _source(**fields) -> dict:
+    # Без даты начала сбора, как источники до неё (06.11): здесь проверяются другие рубежи, а даты в тестах постоянные.
+    # Сама дата начала: tests/test_source_collect_since.py.
     cols = {"name": "Проба", "source_type": "Company", "url": "https://site.example",
-            "enabled": True, "parse_strategy": "request", **fields}
+            "enabled": True, "parse_strategy": "request", "collect_since": None, **fields}
     with connection.get_connection() as conn:
         source_id = conn.execute(
             f"INSERT INTO sources ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING id",
