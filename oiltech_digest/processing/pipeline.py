@@ -462,8 +462,9 @@ def _title_call(article: dict, client, instructions: str, schema: dict) -> AIRes
 def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -> tuple[str | None, AIResponse | None]:
     """Вернуть (title_ru, ai_response). Иностранный заголовок переводим через AI. Русский не переводим
     (ai_response=None); с edit_russian — у принятой публикации — правим по правилам эксперта, если он
-    им не отвечает (title_follows_rules). Правка с числом, которого нет в том, что видела модель (заголовок и
-    текст, как в _title_prompt), не берётся: остаётся заголовок издателя. Пустой заголовок → (None, None)."""
+    им не отвечает (title_follows_rules). Правка с числом или именем, которых нет в том, что видела модель
+    (заголовок и текст, как в _title_prompt, у имени ещё источник), не берётся: остаётся заголовок издателя.
+    Пустой заголовок → (None, None)."""
     title = (article.get("title") or "").strip()
     if not title:
         return None, None
@@ -472,8 +473,10 @@ def title_ru_for_article(article: dict, client, *, edit_russian: bool = False) -
             return title[:200], None
         response = edit_title_article(article, client)
         edited = (response.data.get("title_ru") or "").strip()
-        known = _numbers(f"{title} {article.get('raw_text') or article.get('summary') or ''}")
-        return (edited if edited and _numbers(edited) <= known else title)[:200], response
+        seen = f"{title} {article.get('raw_text') or article.get('summary') or ''}"
+        taken = (edited and _numbers(edited) <= _numbers(seen)
+                 and not _new_names(edited, f"{seen} {article.get('source_name') or ''}"))
+        return (edited if taken else title)[:200], response
     response = translate_article(article, client)
     translated = (response.data.get("title_ru") or title).strip()
     return (translated or title)[:200], response
@@ -497,6 +500,28 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 
 def _numbers(text: str) -> set[str]:
     return {value.replace(",", ".") for value in _NUMBER.findall(text)}
+
+
+# Слово из букв любого алфавита, с дефисами внутри («ИТ-патентов», «Нью-Йорк»); цифры не в счёт, их сверяет _numbers.
+_WORD = re.compile(r"[^\W\d_]+(?:-[^\W\d_]+)*")
+
+
+def _new_names(edited: str, seen: str) -> list[str]:
+    """Слова правки с заглавной буквы (кроме первого слова заголовка), которых модель не видела: имя или название,
+    которого во входе нет. Падеж менять можно: слову от четырёх букв хватает основы (без последних двух букв, не короче
+    четырёх) у какого-нибудь слова входа: «Ставропольского края» → «Ставропольский край», «Белогорск» → «Белогорска».
+    Короткое должно стоять во входе как есть: так ловятся «Ен» из «Олега Ена» (06.11, ФИПС) и сокращение «РФ», которого
+    в публикации нет."""
+    known = {word.casefold() for word in _WORD.findall(seen)}
+    found = []
+    for index, word in enumerate(_WORD.findall(edited)):
+        folded = word.casefold()
+        if index == 0 or not word[:1].isupper() or folded in known:
+            continue
+        stem = folded[:max(4, len(folded) - 2)]
+        if len(folded) < 4 or not any(other.startswith(stem) for other in known):
+            found.append(word)
+    return found
 
 
 def title_follows_rules(title: str, source_name: str | None = None) -> bool:
