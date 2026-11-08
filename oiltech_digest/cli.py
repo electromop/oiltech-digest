@@ -4760,13 +4760,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_pp.add_argument("--offline", action="store_true")
     p_pp.set_defaults(func=cmd_parse_process)
 
+    # Признак команды запуска агента источников: имя подкоманды в `args.command` ненадёжно (у scheduler-lock свой
+    # аргумент command перекрывает его списком), поэтому подкоманды агента помечаются отдельным полем.
+    for name in SOURCE_AGENT_COMMANDS:
+        sub.choices[name].set_defaults(source_agent_command=name)
+
     return parser
 
 
+# Команды запуска агента источников: пока он выключен в коде (config.SOURCE_AGENT_DISABLED), отказывают. Чтение
+# истории (source-candidates, agent-readiness, agent-query-memory) работает.
+SOURCE_AGENT_COMMANDS = frozenset({
+    "discover-sources", "enqueue-source-discovery", "agent-plan", "enqueue-agent-plan", "agent-loop",
+    "enqueue-agent-loop", "source-candidate-test", "source-candidate-evaluate", "source-candidate-approve",
+})
+
+
 def main(argv: list[str] | None = None) -> None:
+    from oiltech_digest import config
+
     parser = build_parser()
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
+    agent_command = getattr(args, "source_agent_command", None)
+    if agent_command and config.SOURCE_AGENT_DISABLED:
+        raise SystemExit(f"{agent_command}: {config.SOURCE_AGENT_DISABLED_MESSAGE}")
     args.func(args)
 
 

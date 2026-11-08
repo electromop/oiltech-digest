@@ -441,6 +441,8 @@ def test_source_discovery_evaluation_endpoint(monkeypatch):
 
 
 def test_source_discovery_plan_endpoint(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     from oiltech_digest.source_discovery import planner
 
     app = api.app
@@ -469,6 +471,8 @@ def test_source_discovery_plan_endpoint(monkeypatch):
 
 
 def test_source_discovery_discover_endpoint(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     from oiltech_digest.source_discovery import agent
 
     app = api.app
@@ -514,6 +518,8 @@ def test_source_discovery_discover_endpoint(monkeypatch):
 
 
 def test_enqueue_source_discovery_plan_endpoint(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
@@ -557,6 +563,8 @@ def test_enqueue_source_discovery_plan_endpoint(monkeypatch):
 
 
 def test_enqueue_source_discovery_loop_endpoint(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     captured = {}
@@ -601,6 +609,8 @@ def test_enqueue_source_discovery_loop_endpoint(monkeypatch):
 
 
 def test_source_discovery_loop_dry_run_endpoint(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     from oiltech_digest.source_discovery import loop
 
     app = api.app
@@ -919,6 +929,8 @@ def test_source_discovery_runs_endpoint(monkeypatch):
 
 
 def test_source_candidate_evaluate_endpoint(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
 
@@ -947,6 +959,8 @@ def test_source_candidate_evaluate_endpoint(monkeypatch):
 
 
 def test_source_candidate_approve_endpoint(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     actions = []
@@ -1000,6 +1014,8 @@ def test_source_candidate_approve_endpoint(monkeypatch):
 
 
 def test_source_candidate_approve_endpoint_enqueues_initial_parse_for_rss(monkeypatch):
+    # Логика эндпоинта при включённом агенте; выключенный агент проверяет tests/test_source_agent_off.py.
+    monkeypatch.setattr(api.config, "SOURCE_AGENT_DISABLED", False)
     app = api.app
     app.dependency_overrides[api.require_user] = lambda: {"id": 1, "email": "test@example.com", "role": "admin"}
     monkeypatch.setattr(api.repository, "approve_source_candidate", lambda candidate_id, **kwargs: 55)

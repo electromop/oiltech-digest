@@ -985,7 +985,14 @@ def source_candidate_triage(
     return [_clean(row) for row in repository.source_candidate_triage_report(limit=limit)]
 
 
-@app.post("/api/source-discovery/discover")
+def require_source_agent(user: dict[str, Any] = Depends(require_admin)) -> None:
+    """Запуск агента источников: пока он выключен в коде (config.SOURCE_AGENT_DISABLED), 410. Сначала проверка
+    админа, затем отказ; чтение истории агента (кандидаты, память, прогоны) этим не закрыто."""
+    if config.SOURCE_AGENT_DISABLED:
+        raise HTTPException(status_code=410, detail=config.SOURCE_AGENT_DISABLED_MESSAGE)
+
+
+@app.post("/api/source-discovery/discover", dependencies=[Depends(require_source_agent)])
 def source_discovery_discover(
     payload: SourceDiscoveryDiscoverRequest,
     user: dict[str, Any] = Depends(require_admin),
@@ -1025,7 +1032,7 @@ def source_discovery_discover(
     return {"ok": True, "result": _clean(result)}
 
 
-@app.get("/api/source-discovery/plan")
+@app.get("/api/source-discovery/plan", dependencies=[Depends(require_source_agent)])
 def source_discovery_plan(
     days: int = Query(30, ge=1, le=365),
     target_per_topic: int = Query(10, ge=1, le=100),
@@ -1047,7 +1054,7 @@ def source_discovery_plan(
     )))
 
 
-@app.post("/api/source-discovery/plan/enqueue")
+@app.post("/api/source-discovery/plan/enqueue", dependencies=[Depends(require_source_agent)])
 def enqueue_source_discovery_plan(
     payload: SourceDiscoveryPlanRequest,
     user: dict[str, Any] = Depends(require_admin),
@@ -1072,7 +1079,7 @@ def enqueue_source_discovery_plan(
     return {"ok": True, "job": _job_payload(job)}
 
 
-@app.post("/api/source-discovery/loop/enqueue")
+@app.post("/api/source-discovery/loop/enqueue", dependencies=[Depends(require_source_agent)])
 def enqueue_source_discovery_loop(
     payload: SourceDiscoveryLoopRequest,
     user: dict[str, Any] = Depends(require_admin),
@@ -1103,7 +1110,7 @@ def enqueue_source_discovery_loop(
     return {"ok": True, "job": _job_payload(job)}
 
 
-@app.post("/api/source-discovery/loop/dry-run")
+@app.post("/api/source-discovery/loop/dry-run", dependencies=[Depends(require_source_agent)])
 def dry_run_source_discovery_loop(
     payload: SourceDiscoveryLoopRequest,
     user: dict[str, Any] = Depends(require_admin),
@@ -1315,7 +1322,7 @@ def patch_source_candidate(
     return {"ok": True}
 
 
-@app.post("/api/source-candidates/{candidate_id}/evaluate")
+@app.post("/api/source-candidates/{candidate_id}/evaluate", dependencies=[Depends(require_source_agent)])
 def evaluate_source_candidate(
     candidate_id: int,
     payload: SourceCandidateEvaluateRequest,
@@ -1338,7 +1345,7 @@ def evaluate_source_candidate(
     return _clean(result)
 
 
-@app.post("/api/source-candidates/{candidate_id}/approve")
+@app.post("/api/source-candidates/{candidate_id}/approve", dependencies=[Depends(require_source_agent)])
 def approve_source_candidate(
     candidate_id: int,
     payload: SourceCandidateApproveRequest,
