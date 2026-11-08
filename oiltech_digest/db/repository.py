@@ -874,79 +874,6 @@ def list_signal_radar_topics(*, enabled_only: bool = True) -> list[dict]:
         return cur.fetchall()
 
 
-def list_signal_article_evidence(
-    *,
-    topic: str | None = None,
-    days: int = 14,
-    limit: int = 80,
-    min_score: float = 40,
-) -> list[dict]:
-    clauses = ["a.collected_at >= now() - (%s::text || ' days')::interval"]
-    params: list = [days]
-    if topic:
-        terms = [
-            term
-            for term in dict.fromkeys(part.lower() for part in re.findall(r"[A-Za-zА-Яа-яЁё0-9]{3,}", topic))
-            if term not in {"and", "the", "for", "hse", "oil", "gas"}
-        ][:6]
-        topic_clauses = []
-        for term in terms or [topic]:
-            like = f"%{term}%"
-            topic_clauses.append(
-                """
-                (
-                  COALESCE(t.name, '') ILIKE %s OR COALESCE(t.name_en, '') ILIKE %s
-                  OR COALESCE(ac.summary, '') ILIKE %s OR COALESCE(a.title, '') ILIKE %s
-                  OR COALESCE(a.raw_text, '') ILIKE %s
-                )
-                """
-            )
-            params.extend([like, like, like, like, like])
-        clauses.append(
-            "(" + " OR ".join(topic_clauses) + ")"
-        )
-    params.extend([min_score, limit])
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT
-              a.id AS article_id,
-              a.title,
-              COALESCE(ac.title_ru, a.title) AS title_ru,
-              a.url AS source_url,
-              a.published_at,
-              a.collected_at,
-              a.language,
-              a.raw_text,
-              s.name AS publisher,
-              s.source_type,
-              ac.summary,
-              ac.relevant,
-              ac.relevance_reason,
-              t.name AS tag_name,
-              t.name_en AS tag_name_en,
-              article_scores.total_score,
-              article_scores.score_label,
-              article_scores.explanation AS score_explanation
-            FROM articles a
-            JOIN sources s ON s.id = a.source_id
-            LEFT JOIN article_cards ac ON ac.article_id = a.id
-            LEFT JOIN article_tags at ON at.article_id = a.id
-            LEFT JOIN tags t ON t.id = at.tag_id
-            LEFT JOIN article_scores ON article_scores.article_id = a.id
-            WHERE {" AND ".join(clauses)}
-              AND COALESCE(ac.relevant, TRUE) IS TRUE
-              AND COALESCE(article_scores.total_score, 50) >= %s
-              AND NOT a.pending_deletion
-            ORDER BY COALESCE(article_scores.total_score, 50) DESC, a.collected_at DESC
-            LIMIT %s
-            """,
-            params,
-        )
-        return cur.fetchall()
-
-
 # Кто поставил значение карточки сигнала (#96, signals.card_set_by): агент «Карточка сигнала», судья
 # радара, агент «Отбор» (#130: отрасль, связь и применение, категория) или человек (правки людей внесёт
 # сервис ОС).
@@ -1777,84 +1704,6 @@ def radar_weekly_summary(*, days: int = 7) -> dict:
     }
 
 
-# Вердикты, которые говорят «балл выше, чем карточка стоит», и «так и надо».
-SCORE_TOO_HIGH_VERDICTS = ("overrated", "reject", "wrong_domain", "too_generic", "wrong_block")
-SCORE_FAIR_VERDICTS = ("strong_signal", "approved")
-
-
-def radar_score_calibration() -> list[dict]:
-    """Средний балл судьи по каждому критерию профиля tech_radar — у карточек, которые заказчик
-    счёл завышенными или отклонил, и у одобренных. Последний вердикт карточки решает.
-
-    «Оценки завышены» (Виктор 29.09) превращается в число на критерий: где у отклонённых балл
-    почти как у одобренных, судья по этому критерию не различает и должен ставить строже."""
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            WITH latest AS (
-              SELECT DISTINCT ON (sfe.signal_id) sfe.signal_id, sfe.verdict
-              FROM signal_feedback_events sfe
-              WHERE sfe.signal_id IS NOT NULL AND COALESCE(sfe.verdict, '') <> ''
-              ORDER BY sfe.signal_id, sfe.created_at DESC, sfe.id DESC
-            ),
-            items AS (
-              SELECT l.verdict,
-                     (item->>'criterion_id')::bigint AS criterion_id,
-                     (item->>'final_score')::numeric AS score,
-                     (SELECT entry->>'name' FROM jsonb_array_elements(s.criteria_snapshot) entry
-                      WHERE (entry->>'id')::bigint = (item->>'criterion_id')::bigint LIMIT 1) AS name
-              FROM latest l
-              JOIN signals s ON s.id = l.signal_id
-              CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.score_items_json, '[]'::jsonb)) item
-              WHERE s.score_profile = 'tech_radar' AND {radar_origin_sql("s")}
-            )
-            SELECT criterion_id, max(name) AS name,
-                   round(avg(score) FILTER (WHERE verdict = ANY(%s)), 1) AS too_high_avg,
-                   count(*) FILTER (WHERE verdict = ANY(%s)) AS too_high_n,
-                   round(avg(score) FILTER (WHERE verdict = ANY(%s)), 1) AS fair_avg,
-                   count(*) FILTER (WHERE verdict = ANY(%s)) AS fair_n
-            FROM items
-            GROUP BY criterion_id
-            ORDER BY criterion_id
-            """,
-            (list(SCORE_TOO_HIGH_VERDICTS), list(SCORE_TOO_HIGH_VERDICTS),
-             list(SCORE_FAIR_VERDICTS), list(SCORE_FAIR_VERDICTS)),
-        )
-        return [
-            {key: (float(value) if key.endswith("_avg") and value is not None else value) for key, value in row.items()}
-            for row in cur.fetchall()
-        ]
-
-
-def business_radar_cards() -> list[dict]:
-    """Бизнес-находки радара, видимые в витрине «бизнес», со ссылками (свои и склеенных
-    дублей) — для разовой склейки пар, которые наплодило прежнее правило: пока бизнес-карточка
-    была скрыта с радара, новая находка того же события в неё не садилась (#95)."""
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT s.id, s.signal_key, s.title, s.title_ru, s.score, s.evidence_count,
-                   s.companies_json AS companies,
-                   to_char(s.first_seen_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS first_seen_day,
-                   {_SIGNAL_REVIEWED_SQL.format(alias="s")} AS reviewed,
-                   (SELECT sfe.verdict FROM signal_feedback_events sfe
-                    WHERE sfe.signal_id = s.id AND COALESCE(sfe.verdict, '') <> ''
-                    ORDER BY sfe.created_at DESC, sfe.id DESC LIMIT 1) AS verdict,
-                   ARRAY(SELECT e.source_url FROM signal_evidence e
-                         WHERE e.signal_id = s.id
-                            OR e.signal_id IN (SELECT m.id FROM signals m WHERE m.merged_into_signal_id = s.id)
-                        ) AS urls
-            FROM signals s
-            WHERE {radar_origin_sql("s")} AND {_BUSINESS_VISIBLE_SQL}
-            ORDER BY s.id
-            """
-        )
-        return [{**row, "companies": list(row["companies"] or []), "urls": list(row["urls"] or [])}
-                for row in cur.fetchall()]
-
-
 def radar_cards_for_recall() -> list[dict]:
     """Все карточки радара (кроме скрытых дублей и неодобренных отсеянных) со ссылками и
     признаком «видна на экране» — для замера полноты по эталону заказчика (signal_reference.recall).
@@ -1990,43 +1839,6 @@ def latest_signal_generation_run(*, payload_subset: dict) -> dict | None:
             (Json(_jsonable(payload_subset)),),
         )
         return cur.fetchone()
-
-
-def create_signal_training_example(
-    *,
-    generation_run_id: int | None,
-    signal_id: int | None = None,
-    topic: str,
-    signal_key: str | None,
-    pipeline_verdict: str,
-    input_payload: dict,
-    raw_output: dict | None = None,
-    normalized_output: dict | None = None,
-) -> int:
-    with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO signal_training_examples (
-              generation_run_id, signal_id, topic, signal_key, pipeline_verdict,
-              input_json, raw_output_json, normalized_output_json
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                generation_run_id,
-                signal_id,
-                topic,
-                signal_key,
-                pipeline_verdict,
-                Json(_jsonable(input_payload)),
-                Json(_jsonable(raw_output or {})),
-                Json(_jsonable(normalized_output or {})),
-            ),
-        )
-        example_id = int(cur.fetchone()[0])
-        conn.commit()
-        return example_id
 
 
 def attach_feedback_to_signal_training_examples(

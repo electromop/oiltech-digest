@@ -123,14 +123,14 @@ def _radar_card(key, title, *, category=None, url=None, score=60, **extra):
     return signal_id
 
 
-def _finding(key, title, url, **payload):
-    """Находка поиска радара — тема с одним кандидатом, как её отдаёт воркер ядру."""
-    from oiltech_digest import signal_discovery
-
-    signal = signal_discovery._normalize_signal_payload(
-        {"title": title, "summary": title, "maturity": "shortlist", "score": 70, **payload}, DRILLING)
-    signal.update({"signal_key": key, "evidence_count": 1, "evidence": [{"source_url": url, "title": title}]})
-    return {"topic": DRILLING, "candidates": [{"signal": signal, "rejected": False}]}
+def _finding(key, title, url, *, company=""):
+    """Находка поиска радара — тема с одной находкой, как её отдаёт воркер ядру (_finding_candidate): заголовок
+    страницы и ссылка, черновая компания модели поиска — в ссылке."""
+    signal = {"title": title, "theme": DRILLING, "summary": "", "companies": [], "maturity": "watch", "score": 0,
+              "signal_key": key, "evidence_count": 1,
+              "evidence": [{"source_url": url, "title": title, "raw_payload": {"research_title": title,
+                                                                              "company": company}}]}
+    return {"topic": DRILLING, "candidates": [{"signal": signal}]}
 
 
 def _discovery_config():
@@ -196,18 +196,17 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
     assert _rows(_get("/api/signals", user, q="#" + str(shared)))[0]["evidence"][0]["source_url"] == "https://feed.example/7"
 
 
-def test_radar_finding_with_the_address_of_a_feed_article_is_stored_as_without_the_feed(user):
-    # Адрес публикации уникален: ссылку держит кто-то один. Радар ведёт себя так, будто сигналов
-    # ленты нет, — находка с адресом статьи ленты становится карточкой радара со своей ссылкой.
+def test_radar_finding_with_the_address_of_a_feed_article_is_no_new_card(user):
+    # Адрес публикации уникален: ссылку держит кто-то один. Находка с адресом статьи сбора — не новый материал
+    # (#138): карточки радара нет, в итоге задачи ссылка «уже в сборе».
     article = _article(9)
     _process(article)
 
-    _apply_findings(_finding("leak", "Датчик утечек", "https://feed.example/9"))
+    result = _apply_findings(_finding("leak", "Датчик утечек", "https://feed.example/9"))
 
-    (card,) = _rows(_get("/api/signals", user))
-    assert [item["source_url"] for item in card["evidence"]] == ["https://feed.example/9"]
-    # Сигнал ленты остаётся в витрине «бизнес» по своей статье (до агента дедупа — два сигнала),
-    # и статья — по-прежнему его публикация: ту же ссылку видно и на нём.
+    assert repository.signal_key_owners(["leak"]) == {}
+    assert [item["url"] for item in result["topic_results"][0]["already_collected"]] == ["https://feed.example/9"]
+    # Сигнал ленты остаётся в витрине «бизнес» по своей статье, и статья — по-прежнему его публикация.
     (feed_card,) = _business(user)
     assert feed_card["origin_article_id"] == article
     assert [item["source_url"] for item in feed_card["evidence"]] == ["https://feed.example/9"]
@@ -354,7 +353,7 @@ def test_new_finding_of_the_same_event_sits_in_the_existing_business_card(user, 
     business = _radar_card("biz", "ZenaTech купила Velocity Geomatics", category="business",
                            companies=["ZenaTech"], url="https://radar.example/zena-1")
     topic = _finding("zena-again", "Покупка Velocity Geomatics компанией ZenaTech", "https://radar.example/zena-2",
-                     companies=["ZenaTech"], signal_category="business")
+                     company="ZenaTech")
     monkeypatch.setattr(signal_discovery, "_radar_client", lambda: _SameEventJudge())
 
     signal_discovery._dedupe_run(_discovery_config(), {"existing_signals": repository.list_signals_for_dedup()},
@@ -406,30 +405,6 @@ def test_history_backfill_is_a_dry_run_by_default_and_never_doubles(user, capsys
     created = [line for line in capsys.readouterr().out.splitlines() if "новых сигналов" in line]
     assert ["новых сигналов: 2;" in created[0], "новых сигналов: 0;" in created[1]] == [True, True]
     assert sorted(card["origin_article_id"] for card in _business(user)) == [august, october]
-
-
-def test_merge_of_business_duplicates_lists_pairs_and_merges_only_named_ones(user, capsys):
-    from oiltech_digest import cli
-
-    older = _radar_card("biz-1", "ZenaTech купила Velocity Geomatics", category="business", companies=["ZenaTech"])
-    newer = _radar_card("biz-2", "Покупка Velocity Geomatics: ZenaTech", category="business", companies=["ZenaTech"])
-    other = _radar_card("biz-3", "Татнефть строит завод сорбентов", category="business", companies=["Татнефть"])
-
-    cli.main(["merge-business-duplicates"])
-    out = capsys.readouterr().out
-    assert f"{newer}:{older}" in out and str(other) + ":" not in out
-    assert len(_business(user)) == 3  # сухой прогон
-
-    # Пара не из списка — отказ целиком, ни одной склейки.
-    with pytest.raises(SystemExit):
-        cli.main(["merge-business-duplicates", "--apply", "--pairs", f"{newer}:{older},{other}:{older}"])
-    assert len(_business(user)) == 3
-
-    cli.main(["merge-business-duplicates", "--apply", "--pairs", f"{newer}:{older}"])
-
-    (main, single) = sorted(_business(user), key=lambda card: card["id"])
-    assert (main["id"], single["id"]) == (older, other)
-    assert main["merged_count"] == 1
 
 
 def test_feed_signal_follows_the_telegram_title_repair(user):

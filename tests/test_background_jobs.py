@@ -148,15 +148,12 @@ def test_enqueue_daily_signal_discovery_skips_existing_daily_job(monkeypatch):
     assert called == []
 
 
-def test_enqueue_daily_signal_discovery_creates_web_only_ai_job(monkeypatch):
+def test_enqueue_daily_signal_discovery_creates_an_ai_job_with_the_core_search_settings(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAILY_ENABLED", True)
-    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAYS", 14)
-    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_LIMIT", 120)
-    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_MIN_SCORE", 40)
-    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_MAX_SIGNALS", 20)
-    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_WEB_QUERY_LIMIT", 8)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_DISCOVERY_DAYS", 3)
+    monkeypatch.setattr(background_jobs.config, "SIGNAL_RESEARCH_DAYS", 3)
     monkeypatch.setattr(
         background_jobs.repository,
         "has_recent_background_job",
@@ -176,11 +173,13 @@ def test_enqueue_daily_signal_discovery_creates_web_only_ai_job(monkeypatch):
     assert captured["queue_name"] == "ai"
     assert captured["capability"] == "openai"
     assert captured["max_attempts"] == 1
-    assert captured["payload"]["offline"] is False
-    assert captured["payload"]["web_search"] is True
-    assert captured["payload"]["web_only"] is True
-    assert captured["payload"]["max_signals"] == 20
-    assert captured["payload"]["schedule"] == "daily_signal_discovery"
+    # Модель, уровень, потолок и период поиска GPT — решение ядра в момент постановки (#138).
+    assert captured["payload"] == {
+        "topic": None, "days": 3, "offline": False, "dry_run": False, "trigger": "scheduler_daily",
+        "schedule": "daily_signal_discovery", "research_model": background_jobs.config.SIGNAL_RESEARCH_MODEL,
+        "research_reasoning": background_jobs.config.SIGNAL_RESEARCH_REASONING,
+        "research_limit": background_jobs.config.SIGNAL_RESEARCH_EVENTS_PER_TOPIC, "research_days": 3,
+    }
 
 
 _MSK_MIDNIGHT = "(date_trunc('day', now() AT TIME ZONE 'Europe/Moscow') AT TIME ZONE 'Europe/Moscow')"

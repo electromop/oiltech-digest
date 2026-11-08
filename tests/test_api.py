@@ -2974,14 +2974,14 @@ def test_feedback_reasons_wrong_block_only_for_signal_feedback():
 
 
 def test_external_worker_claim_hydrates_signal_discovery_payload(monkeypatch):
-    from oiltech_digest import signal_discovery
+    from oiltech_digest import contract, signal_discovery
 
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)
     monkeypatch.setattr(
         signal_discovery,
         "build_external_payload",
-        lambda payload: {"kind": "signal_discovery", "config": {"web_only": payload["web_only"]},
+        lambda payload: {"kind": "signal_discovery", "config": {"offline": payload["offline"], "days": payload["days"]},
                          "snapshot": {"topics": [{"name": "Бурение"}]}},
     )
     monkeypatch.setattr(
@@ -2990,22 +2990,23 @@ def test_external_worker_claim_hydrates_signal_discovery_payload(monkeypatch):
         lambda **kwargs: {
             "id": 13, "kind": "signal_discovery", "queue_name": "external-agents", "execution_region": "external",
             "capability": "openai", "status": "running", "progress": 10, "attempts": 1, "max_attempts": 1,
-            "run_after": None, "payload_json": {"web_only": True}, "result_json": None, "error_message": None,
-            "created_at": None, "started_at": None, "finished_at": None,
+            "run_after": None, "payload_json": {"offline": False, "days": 3}, "result_json": None,
+            "error_message": None, "created_at": None, "started_at": None, "finished_at": None,
         },
     )
     client = TestClient(api.app)
 
+    # Прогону радара нужна сборка NL нынешнего контракта: старая прогнала бы прежнюю цепочку (contract.required_contract).
     response = client.post(
         "/api/external-worker/claim",
-        headers={"Authorization": "Bearer secret"},
+        headers={"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)},
         json={"worker_id": "nl-agents-1", "queues": ["external-agents"], "capabilities": ["openai"]},
     )
 
     assert response.status_code == 200
     assert response.json()["job"]["payload"] == {
         "kind": "signal_discovery",
-        "config": {"web_only": True},
+        "config": {"offline": False, "days": 3},
         "snapshot": {"topics": [{"name": "Бурение"}]},
     }
 
@@ -3029,7 +3030,7 @@ def test_external_worker_complete_applies_signal_discovery_and_keeps_only_summar
         lambda job_id, **kwargs: completed.append((job_id, kwargs)) or True,
     )
     client = TestClient(api.app)
-    worker_result = {"signal_discovery": True, "config": {"web_only": True},
+    worker_result = {"signal_discovery": True, "config": {"offline": False},
                      "run": {"topics": [{"topic": "Бурение", "candidates": [{"signal": {"title": "x" * 5000}}]}]}}
 
     response = client.post(

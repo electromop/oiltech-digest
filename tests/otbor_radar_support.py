@@ -58,14 +58,12 @@ class _DedupJudge:
 
 def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False, before_worker=None, on_fetch=None):
     """Ежедневная задача радара (тема — тематика бурения) → воркер NL полосы агентов с подставным поиском и
-    страницами → ядро. Судья, ревью пачки и проверка темы при «Отборе» не зовутся: их вызовы копятся в
-    отдельном списке. before_worker — что меняется между постановкой задачи и её выдачей (.env NL), on_fetch —
+    страницами → ядро. before_worker — что меняется между постановкой задачи и её выдачей (.env NL), on_fetch —
     что происходит, пока воркер докачивает страницу (сбор успел собрать её же). pages=None — докачка настоящая
-    (запрос, ядро РФ, браузер; сеть подменяет сам тест, tests/test_signal_search_pages.py). Поиск и список вызовов
-    прежней цепочки."""
+    (запрос, ядро РФ, браузер; сеть подменяет сам тест, tests/test_signal_search_pages.py). Возвращает подставной
+    поиск: его вызовы и докачанные страницы."""
     tag(DRILLING)
     search = SearchModel(events, cited)
-    old_chain = []
     monkeypatch.setattr(signal_research, "make_client", lambda offline=False: search)
 
     def fetch(url, fallback_title="", **kwargs):
@@ -76,20 +74,12 @@ def run_radar(monkeypatch, events, pages, *, cited=None, same_event=False, befor
 
     if pages is not None:
         monkeypatch.setattr(signal_discovery, "_fetch_full_text", fetch)
-    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot",
-                        lambda *args, **kwargs: old_chain.append("судья") or ({}, {}))
-    monkeypatch.setattr(signal_discovery, "_batch_review_candidates",
-                        lambda *args, **kwargs: old_chain.append("ревью пачки") or {})
-    monkeypatch.setattr(signal_discovery, "_second_opinion_theme",
-                        lambda *args, **kwargs: old_chain.append("проверка темы"))
-    monkeypatch.setattr(signal_discovery, "_search_web_evidence",
-                        lambda *args, **kwargs: old_chain.append("Brave") or {"evidence": []})
     monkeypatch.setattr(signal_discovery, "_radar_client", lambda: _DedupJudge(same_event))
     background_jobs.enqueue_daily_signal_discovery(force=True)
     if before_worker is not None:
         before_worker()
     run_worker("external-agents")
-    return search, old_chain
+    return search
 
 
 class SummaryModel:

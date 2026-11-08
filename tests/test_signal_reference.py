@@ -7,7 +7,7 @@ from __future__ import annotations
 import openpyxl
 import pytest
 
-from oiltech_digest import cli, signal_discovery, signal_feedback, signal_reference
+from oiltech_digest import cli, signal_discovery, signal_reference
 from oiltech_digest.db import repository
 
 HEADER = ["№", "Направление", "НСР", "Сигнал / технология", "Краткая суть", "Почему важно для нефтесервиса",
@@ -64,14 +64,6 @@ def test_import_is_a_dry_run_by_default_and_idempotent(isolated_db, reference_xl
     assert row["facts_json"]["reason"] == "Управление ГРП в реальном времени Рекомендация заказчика: ТОП"
 
 
-def test_imported_reference_reaches_the_research_prompt(isolated_db, reference_xlsx):
-    signal_reference.import_reference(signal_reference.read_reference(reference_xlsx, sheets=["Август_2026"]), apply=True)
-
-    block = signal_feedback.research_feedback_block("ГРП")
-
-    assert "- Seismos — closed-loop ГРП по real-time акустике — Управление ГРП в реальном времени" in block
-
-
 def test_recall_matches_by_link_or_by_names_and_reports_misses(reference_xlsx):
     rows = signal_reference.read_reference(reference_xlsx, sheets=["Сентябрь_2026"])
     cards = [
@@ -117,19 +109,20 @@ def test_import_cli_dry_run_then_apply(isolated_db, reference_xlsx, capsys):
     assert len(repository.list_signal_agent_memory(memory_type="signal_verdict")) == 1
 
 
-def test_research_mode_judges_every_verified_event_beyond_max_signals(monkeypatch):
+def test_every_verified_finding_goes_to_otbor_without_a_cap(monkeypatch):
     from oiltech_digest import signal_research
     from tests.test_signal_research import _Research, _recent_event
 
-    events = [_recent_event(title=f"Событие {i}", source_url=f"https://example.com/{i}") for i in range(9)]
+    events = [_recent_event(title=f"Событие номер {i} в бурении скважин", source_url=f"https://example.com/{i}")
+              for i in range(9)]
     monkeypatch.setattr(signal_research, "make_client", lambda offline: _Research(events))
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
-                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True,
-                                                        search_mode="openai_web", max_signals=6,
-                                                        research_model="gpt-6.1-sol", research_reasoning="low")
+    page = " ".join(["Оператор внедрил автоматизацию бурения на сорока скважинах месторождения."] * 20)
+    monkeypatch.setattr(signal_discovery, "_fetch_full_text", lambda url, fallback_title="", **kwargs: {
+        "ok": True, "error": None, "title": fallback_title, "raw_text": page, "published_at": None})
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, research_model="gpt-6.1-sol",
+                                                        research_reasoning="low")
 
     run = signal_discovery.run_discovery(run_config, {"topics": [{"name": "Бурение"}], "tags": []})
 
-    # max_signals=6 отрезал бы три события до судьи.
+    # Потолок прежней цепочки (max_signals=6) отрезал бы три события до судьи; находки ждут «Отбора» все.
     assert len(run["topics"][0]["candidates"]) == 9

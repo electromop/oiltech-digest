@@ -277,9 +277,8 @@ BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
 SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
 
 # --- Signal discovery ---
-# Ежедневный радар сигналов ставится scheduler'ом в очередь один раз за окно.
-# Дефолты намеренно web-only и не-offline: это новый агент поиска сигналов, который
-# ищет гибко по web/китайским запросам, а не только по уже заведённым sources.
+# Прогон радара ставит планировщик в очередь один раз за окно (суточный шаг): поиск GPT находит материалы, решает
+# «Отбор». Прежняя цепочка (статьи корпуса, Brave, судья, ревью пачки, проверка темы) и её ключи сняты 08.11.
 SIGNAL_DISCOVERY_DAILY_ENABLED = os.environ.get("SIGNAL_DISCOVERY_DAILY_ENABLED", "1").strip().lower() in {
     "1",
     "true",
@@ -290,23 +289,10 @@ SIGNAL_DISCOVERY_DAILY_ENABLED = os.environ.get("SIGNAL_DISCOVERY_DAILY_ENABLED"
 # (SIGNAL_DISCOVERY_DAYS и SIGNAL_RESEARCH_DAYS).
 SIGNAL_DISCOVERY_DAILY_EVERY_DAYS = max(1, int(os.environ.get("SIGNAL_DISCOVERY_DAILY_EVERY_DAYS", "1")))
 SIGNAL_DISCOVERY_DAYS = int(os.environ.get("SIGNAL_DISCOVERY_DAYS", "14"))
-SIGNAL_DISCOVERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_LIMIT", "120"))
-SIGNAL_DISCOVERY_MIN_SCORE = float(os.environ.get("SIGNAL_DISCOVERY_MIN_SCORE", "40"))
-# MAX_SIGNALS — сколько кластеров КАЖДОЙ темы уходит судье (а не сколько сигналов вернуть):
-# 13 тем × 6 = до 78 вызовов модели на прогон. Прежние 20 на 21 тему давали до 420.
-SIGNAL_DISCOVERY_MAX_SIGNALS = int(os.environ.get("SIGNAL_DISCOVERY_MAX_SIGNALS", "6"))
-# Запросов к поиску на тему: 13 × 4 = 52 на прогон, ~1600 в месяц при ежедневном запуске.
-SIGNAL_DISCOVERY_WEB_QUERY_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_WEB_QUERY_LIMIT", "4"))
-# Раунды research-loop: 1 = только широкий поиск, 2 = широкий поиск + уточнение по найденным зацепкам.
-SIGNAL_DISCOVERY_RESEARCH_ROUNDS = int(os.environ.get("SIGNAL_DISCOVERY_RESEARCH_ROUNDS", "2"))
-# Сколько web-результатов на тему докачивать целиком (страница, а не сниппет поисковика)
-# перед кластеризацией и судьёй. 0 отключает докачку и оставляет только сниппеты.
-SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT = int(os.environ.get("SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT", "20"))
-# Докачка идёт на воркере: таймаут одной страницы и бюджет времени на тему. Без них
-# 20 медленных страниц × 20 с (+ повторы SSL-пути) съедали аренду задачи в 600 с.
+# Докачка страниц находок идёт на воркере: таймаут одной попытки. Срока на тему нет: находка без страницы во вход
+# «Отбора» не идёт, а аренду держит признак продвижения перед каждой страницей.
 SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS = int(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_TIMEOUT_SECONDS", "8"))
-SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS = float(os.environ.get("SIGNAL_DISCOVERY_FULLTEXT_BUDGET_SECONDS", "120"))
-# Добор страниц находок при «Отборе» (ingestion/publisher_page.py, поручение владельца 04.11): браузер на NL после
+# Добор страниц находок (ingestion/publisher_page.py, поручение владельца 04.11): браузер на NL после
 # запроса и ядра РФ — выключатель на случай нехватки памяти NL (Chromium в контейнере агентов); предел размера
 # страницы, которую ядро качает по просьбе воркера (выпуск Federal Register 04.11 — 11 МБ).
 SIGNAL_PAGE_BROWSER_ENABLED = os.environ.get("SIGNAL_PAGE_BROWSER_ENABLED", "1").lower() in {"1", "true", "yes"}
@@ -318,45 +304,17 @@ SIGNAL_RADAR_TOPIC_SOURCE = os.environ.get("SIGNAL_RADAR_TOPIC_SOURCE", "tags").
 # воркеру в снимке задачи — менять можно без пересборки NL. С сигналами ленты в снимке (04.11) пар
 # больше: замер прогона 51351 — 135 пар ленты на 24 находки; судья gpt-6-luna — $0,00011 за пару.
 SIGNAL_DEDUP_MAX_PAIRS = int(os.environ.get("SIGNAL_DEDUP_MAX_PAIRS", "1000"))
-# Качество радара (замечания Виктора 29.09).
-# Темы, которые радар не ищет: бизнес-сигналы — не техрадар (решение встречи 21.09 №4), до
-# бизнес-агента тема рынка из поиска исключена. Сравнение — по началу имени тематики,
-# несколько — через «;».
-SIGNAL_RADAR_EXCLUDED_TOPICS = tuple(
-    part.strip()
-    for part in os.environ.get("SIGNAL_RADAR_EXCLUDED_TOPICS", "Рынок, бизнес-модели").split(";")
-    if part.strip()
-)
-# Карточка, чьё событие (дата от судьи) старше этого срока, на экран не выходит. Хранится —
-# срок можно поменять без пересчёта. 0 — не скрывать по возрасту.
+# Карточка, чьё событие (дата судьи прежней цепочки или «Карточки») старше этого срока, на экран не выходит.
+# Хранится — срок можно поменять без пересчёта. 0 — не скрывать по возрасту.
 SIGNAL_RADAR_MAX_EVENT_AGE_DAYS = int(os.environ.get("SIGNAL_RADAR_MAX_EVENT_AGE_DAYS", "180"))
-# Модели радара — свои, а не OPENAI_MODEL: одна переменная правит все стадии ленты (суть,
-# теги, скоринг), и сильная модель для судьи удорожила бы всю ленту. Пусто — откат на
-# OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть поведение до правки.
-SIGNAL_JUDGE_MODEL = os.environ.get("SIGNAL_JUDGE_MODEL", "").strip() or OPENAI_MODEL
-SIGNAL_JUDGE_REASONING = os.environ.get("SIGNAL_JUDGE_REASONING", "").strip() or OPENAI_REASONING_EFFORT
-SIGNAL_REVIEW_MODEL = os.environ.get("SIGNAL_REVIEW_MODEL", "").strip() or SIGNAL_JUDGE_MODEL
-SIGNAL_REVIEW_REASONING = os.environ.get("SIGNAL_REVIEW_REASONING", "").strip() or SIGNAL_JUDGE_REASONING
 # «Дедуп» радара (signal_dedup.py) — модель явной настройкой без отката на модель ленты (спека #128, история 48):
 # пусто — прогон радара падает с понятной причиной до поиска, а не судит пары снимаемой 11.12.2026 gpt-5-mini.
 SIGNAL_DEDUP_MODEL = os.environ.get("SIGNAL_DEDUP_MODEL", "").strip()
 SIGNAL_DEDUP_REASONING = os.environ.get("SIGNAL_DEDUP_REASONING", "").strip() or OPENAI_REASONING_EFFORT
-# Второе мнение о тематике карточки — только при расхождении судьи с ключами тематик; вызов
-# короткий, хватает модели дедупа. Стадия прежней цепочки (при «Отборе» не зовётся): без своей строки и без
-# модели дедупа — модель ленты, как до правки.
-SIGNAL_THEME_CHECK_MODEL = (os.environ.get("SIGNAL_THEME_CHECK_MODEL", "").strip() or SIGNAL_DEDUP_MODEL
-                            or OPENAI_MODEL)
-SIGNAL_THEME_CHECK_REASONING = os.environ.get("SIGNAL_THEME_CHECK_REASONING", "").strip() or SIGNAL_DEDUP_REASONING
-# Таймаут вызовов модели радара: сильная модель с рассуждением думает дольше 60 с ленты.
+# Таймаут вызовов модели «Дедупа» радара: модель с рассуждением думает дольше 60 с ленты.
 SIGNAL_AI_TIMEOUT_SECONDS = float(os.environ.get("SIGNAL_AI_TIMEOUT_SECONDS", "240"))
-# Сколько вызовов судьи (кластеров темы) и судьи дедупа (пар) идут одновременно. Прогон 13 тем
-# на gpt-5 medium по одному шёл ~2 ч: судья думал 30–60 с на кластер. 1 — по-старому.
-SIGNAL_JUDGE_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_JUDGE_CONCURRENCY", "4")))
+# Сколько вызовов судьи пар «Дедупа» идут одновременно: до 1000 пар за прогон по одному шли бы часами. 1 — по одному.
 SIGNAL_DEDUP_CONCURRENCY = max(1, int(os.environ.get("SIGNAL_DEDUP_CONCURRENCY", "4")))
-# Откуда радар берёт находки: brave — поиск Brave и докачка страниц (как раньше);
-# openai_web — «режим ChatGPT»: на тему один вызов модели со встроенным поиском OpenAI
-# (signal_research.py); both — обе выдачи вместе.
-SIGNAL_SEARCH_MODE = os.environ.get("SIGNAL_SEARCH_MODE", "brave").strip().lower()
 # Модель поиска GPT (#138, спека #128) — явная настройка ядра, без умолчания и без отката: едет в задаче прогона
 # радара вместе с уровнем, потолком на тему и периодом, свои строки поиска NL не читает. Прежнее умолчание gpt-5
 # OpenAI снимает 11.12.2026 — его, gpt-5-mini и gpt-5-nano постановка отказывает (signal_discovery.research_settings).

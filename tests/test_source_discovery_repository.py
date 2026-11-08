@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 
 from oiltech_digest.db import repository
 from oiltech_digest.db import marks
@@ -383,16 +384,22 @@ def test_signal_training_example_links_generation_input_and_feedback(isolated_db
         trigger="signal_discovery",
         background_job_id=None,
     )
-    example_id = repository.create_signal_training_example(
-        generation_run_id=generation_run_id,
-        signal_id=signal_id,
-        topic="Бурение",
-        signal_key="training-example-signal",
-        pipeline_verdict="accepted",
-        input_payload={"topic": "Бурение", "evidence": [{"source_url": "https://example.com/signal"}]},
-        raw_output={"score": 0.72},
-        normalized_output={"score": 72},
-    )
+    # Обучающий пример судьи прежней цепочки — история: с 08.11 новых нет, таблица и выгрузка остаются.
+    with repository.get_connection() as conn:
+        example_id = conn.execute(
+            """
+            INSERT INTO signal_training_examples (
+              generation_run_id, signal_id, topic, signal_key, pipeline_verdict,
+              input_json, raw_output_json, normalized_output_json
+            )
+            VALUES (%s, %s, 'Бурение', 'training-example-signal', 'accepted', %s::jsonb, %s::jsonb, %s::jsonb)
+            RETURNING id
+            """,
+            (generation_run_id, signal_id,
+             json.dumps({"topic": "Бурение", "evidence": [{"source_url": "https://example.com/signal"}]}),
+             json.dumps({"score": 0.72}), json.dumps({"score": 72})),
+        ).fetchone()[0]
+        conn.commit()
     event_id = repository.record_signal_feedback_event(
         None,
         "comment_added",

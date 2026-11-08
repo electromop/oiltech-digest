@@ -17,14 +17,10 @@ def _row(key, title, theme=INFRA):
     return {"signal_key": key, "title": title, "title_ru": title, "theme": theme, "maturity": "watch", "score": 60}
 
 
-def _candidate(key, title, urls, theme=INFRA):
-    signal = signal_discovery._normalize_signal_payload(
-        {"title": title, "title_ru": title, "summary": title, "maturity": "shortlist", "score": 70, "companies": ["SLB"]},
-        theme,
-    )
-    signal.update({"signal_key": key, "evidence_count": len(urls),
-                   "evidence": [{"source_url": url, "title": title} for url in urls]})
-    return signal
+def _finding(key, title, url, theme=INFRA):
+    """Находка поиска, как её отдаёт воркер (signal_discovery._finding_candidate): одна ссылка, решения нет."""
+    return {"signal": {"title": title, "theme": theme, "summary": "", "companies": [], "maturity": "watch", "score": 0,
+                       "signal_key": key, "evidence_count": 1, "evidence": [{"source_url": url, "title": title}]}}
 
 
 def _apply(topics):
@@ -65,67 +61,50 @@ def test_link_of_hidden_duplicate_still_moves_to_main_card(isolated_db):
     assert _urls(main) == {URL}
 
 
-def test_wrong_batch_duplicate_does_not_empty_the_card_that_owns_the_link(isolated_db):
-    # Ровно сценарий 28.09: карточка темы «инфраструктура» записана первой, в теме
-    # «энергетика» тот же материал помечен дублем другого события (MoU SLB—PDVSA).
-    run = [
-        {"topic": INFRA, "candidates": [{"signal": _candidate("infra", "SLB: цифровые инструменты", [URL]), "rejected": False}]},
-        {"topic": ENERGY, "candidates": [
-            {"signal": _candidate("mou", "MoU SLB и PDVSA", ["https://slb.com/pdvsa-mou"], ENERGY), "rejected": False},
-            {"signal": _candidate("energy-dup", "SLB digital update", [URL], ENERGY), "rejected": False,
-             "duplicate_of": {"signal_key": "mou"}, "duplicate_reason": "тот же вендор"},
-        ]},
-    ]
+def test_finding_glued_to_a_wrong_card_does_not_empty_the_card_that_owns_the_link(isolated_db):
+    # Сценарий 28.09 на пути находки: «Дедуп» склеил находку с другим событием того же вендора (MoU SLB и PDVSA),
+    # а её ссылка уже у видимой карточки. Ссылка остаётся у хозяйки, чужая карточка её не получает.
+    owner = repository.upsert_signal(_row("infra", "SLB: цифровые инструменты"))
+    repository.upsert_signal_evidence(owner, {"source_url": URL, "title": "SLB digital update"})
+    repository.refresh_signal_evidence_count(owner)
+    mou = repository.upsert_signal(_row("mou", "MoU SLB и PDVSA", ENERGY))
+    repository.upsert_signal_evidence(mou, {"source_url": "https://slb.com/pdvsa-mou", "title": "MoU"})
 
-    _apply(run)
+    _apply([{"topic": ENERGY, "candidates": [
+        {**_finding("energy-dup", "SLB digital update", URL, ENERGY),
+         "duplicate_of": {"signal_id": mou}, "duplicate_reason": "тот же вендор"},
+    ]}])
 
-    infra_id = repository.signal_key_owners(["infra"])["infra"]["id"]
-    mou_id = repository.signal_key_owners(["mou"])["mou"]["id"]
-    assert _urls(infra_id) == {URL}
-    assert _count(infra_id) == 1
-    assert _urls(mou_id) == {"https://slb.com/pdvsa-mou"}
+    assert _urls(owner) == {URL}
+    assert _count(owner) == 1
+    assert _urls(mou) == {"https://slb.com/pdvsa-mou"}
 
 
-def test_candidate_whose_links_all_belong_to_another_card_does_not_create_an_empty_card(isolated_db):
-    # Тот же материал найден снова с новым ключом (fact:-ключ зависит от текста модели).
+def test_finding_whose_link_belongs_to_another_card_does_not_create_an_empty_card(isolated_db):
+    # Тот же материал найден снова, а ссылка уже у видимой карточки: отмечается она, своей находки нет.
     owner = repository.upsert_signal(_row("owner", "SLB: цифровые инструменты"))
     repository.upsert_signal_evidence(owner, {"source_url": URL, "title": "t"})
     repository.refresh_signal_evidence_count(owner)
 
-    result = _apply([{"topic": ENERGY, "candidates": [
-        {"signal": _candidate("new-key", "SLB цифровое обновление", [URL], ENERGY), "rejected": False},
-    ]}])
+    result = _apply([{"topic": ENERGY, "candidates": [_finding("new-key", "SLB цифровое обновление", URL, ENERGY)]}])
 
     assert repository.signal_key_owners(["new-key"]) == {}
     assert _urls(owner) == {URL}
-    assert result["signals"][0]["id"] == owner
+    [found] = result["topic_results"][0]["signals"]
+    assert (found["id"], found["found_again"]) == (owner, True)
 
 
-def test_candidate_with_some_new_links_keeps_only_its_own(isolated_db):
+def test_finding_with_the_key_of_a_stored_card_is_only_marked_found_again(isolated_db):
+    # Та же ссылка — тот же ключ: решённое второй раз не решается, ссылки карточки не меняются.
     owner = repository.upsert_signal(_row("owner", "SLB: цифровые инструменты"))
     repository.upsert_signal_evidence(owner, {"source_url": URL, "title": "t"})
 
-    _apply([{"topic": ENERGY, "candidates": [
-        {"signal": _candidate("fresh", "SLB расширяет автономные операции", [URL, "https://slb.com/autonomy"], ENERGY),
-         "rejected": False},
-    ]}])
-
-    fresh_id = repository.signal_key_owners(["fresh"])["fresh"]["id"]
-    assert _urls(owner) == {URL}
-    assert _urls(fresh_id) == {"https://slb.com/autonomy"}
-    assert _count(fresh_id) == 1
-
-
-def test_same_card_refound_updates_its_own_links(isolated_db):
-    owner = repository.upsert_signal(_row("owner", "SLB: цифровые инструменты"))
-    repository.upsert_signal_evidence(owner, {"source_url": URL, "title": "t"})
-
-    _apply([{"topic": INFRA, "candidates": [
-        {"signal": _candidate("owner", "SLB: цифровые инструменты", [URL]), "rejected": False},
-    ]}])
+    result = _apply([{"topic": INFRA, "candidates": [_finding("owner", "SLB: цифровые инструменты", URL)]}])
 
     assert _urls(owner) == {URL}
     assert repository.signal_key_owners(["owner"])["owner"]["id"] == owner
+    [found] = result["topic_results"][0]["signals"]
+    assert (found["id"], found["found_again"]) == (owner, True)
 
 
 def test_refresh_all_counts_fixes_cards_left_with_stale_number(isolated_db):
@@ -137,62 +116,3 @@ def test_refresh_all_counts_fixes_cards_left_with_stale_number(isolated_db):
     assert repository.refresh_all_signal_evidence_counts() == 1
     assert _count(emptied) == 0
     assert repository.refresh_all_signal_evidence_counts() == 0
-
-
-# --- Сигнал 71: две разные истории в одной карточке -----------------------------------
-
-
-def _review(monkeypatch, decisions):
-    from oiltech_digest.processing.openai_client import AIResponse
-
-    class Client:
-        def complete_json(self, *args, **kwargs):
-            return AIResponse(data={"decisions": decisions}, model="fake-ai")
-
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: Client())
-
-
-def _item(key, title, urls):
-    return {"signal": {"signal_key": key, "title": title, "title_ru": title, "score": 60, "companies": ["SLB"],
-                       "evidence": [{"source_url": url, "title": title} for url in urls]},
-            "raw_output": {}, "rejected": False}
-
-
-def _decision(key, keep, duplicate_of=""):
-    return {"signal_key": key, "keep": keep, "duplicate_of_signal_key": duplicate_of, "reason": "тот же вендор",
-            "interest_score": 70 if keep else 0, "why_interesting": ""}
-
-
-def test_batch_review_does_not_glue_different_events_of_one_vendor(monkeypatch):
-    # 28.09: цифровое обновление SLB модель пометила дублем MoU SLB—PDVSA.
-    _review(monkeypatch, [_decision("mou", True), _decision("update", False, duplicate_of="mou")])
-    mou = _item("mou", "Меморандум SLB и PDVSA о цифровой трансформации Венесуэлы", ["https://slb.com/pdvsa"])
-    update = _item("update", "SLB: масштабная интеграция цифровых инструментов на месторождениях", [URL])
-
-    result = signal_discovery._batch_review_candidates([mou, update], ENERGY, offline=False)
-
-    assert "duplicate_of" not in update
-    assert update["rejected"] is False
-    assert result["refused_duplicates"] == ["update"]
-    assert result["duplicates"] == 0
-
-
-def test_batch_review_keeps_real_duplicate_with_similar_title(monkeypatch):
-    _review(monkeypatch, [_decision("a", True), _decision("b", False, duplicate_of="a")])
-    a = _item("a", "Меморандум SLB и PDVSA о цифровой трансформации", ["https://slb.com/pdvsa"])
-    b = _item("b", "SLB и PDVSA подписали меморандум о цифровой трансформации", ["https://energiesmedia.com/x"])
-
-    signal_discovery._batch_review_candidates([a, b], ENERGY, offline=False)
-
-    assert b["duplicate_of"] == {"signal_key": "a"}
-
-
-def test_batch_review_keeps_real_duplicate_with_shared_link(monkeypatch):
-    # Английский и русский заголовки общих основ почти не дают — общая ссылка решает.
-    _review(monkeypatch, [_decision("ru", True), _decision("en", False, duplicate_of="ru")])
-    ru = _item("ru", "Меморандум о цифровой трансформации", ["https://slb.com/pdvsa"])
-    en = _item("en", "SLB signs MoU with PDVSA", ["https://slb.com/pdvsa/"])
-
-    signal_discovery._batch_review_candidates([ru, en], ENERGY, offline=False)
-
-    assert en["duplicate_of"] == {"signal_key": "ru"}

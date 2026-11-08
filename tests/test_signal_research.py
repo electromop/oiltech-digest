@@ -1,4 +1,5 @@
-"""«Режим ChatGPT» радара: находки темы — один вызов модели со встроенным поиском OpenAI."""
+"""Поиск радара («режим ChatGPT»): находки темы — один вызов модели со встроенным поиском OpenAI. Поиск только
+находит: по смыслу не отсеивает ничего, остаются технические проверки (#131)."""
 
 from __future__ import annotations
 
@@ -49,9 +50,9 @@ class _Research:
 
 
 def _run_config():
-    """Задача прогона радара в «режиме ChatGPT»: модель и уровень поиска едут в ней (#138), воркер своих не читает."""
-    return signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True, search_mode="openai_web",
-                                                  research_model="gpt-6.1-sol", research_reasoning="low")
+    """Задача прогона радара: модель и уровень поиска едут в ней (#138), воркер своих не читает."""
+    return signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, research_model="gpt-6.1-sol",
+                                                  research_reasoning="low")
 
 
 def _research(client, **kwargs):
@@ -76,22 +77,27 @@ def test_events_become_radar_evidence_with_primary_source_strength():
     assert client.calls[0]["model"] == config.SIGNAL_RESEARCH_MODEL
 
 
-@pytest.mark.parametrize("event, reason", [
-    (_event(event_date="2025-01-15"), "вне периода"),
-    (_event(source_url="slb.com/news"), "нет ссылки"),
-    (_event(title=""), "нет ссылки или заголовка"),
-])
-def test_bad_events_are_dropped_with_a_reason(event, reason):
+@pytest.mark.parametrize("event", [_event(source_url="slb.com/news"), _event(title="")])
+def test_material_without_a_link_or_a_title_is_dropped_with_a_reason(event):
     result = _research(_Research([event]))
 
     assert result["evidence"] == []
-    assert reason in result["dropped"][0]["reason"]
+    assert result["dropped"][0]["reason"] == signal_research.NO_LINK_OR_TITLE
 
 
-def test_event_without_date_is_kept_for_the_judge():
-    result = _research(_Research([_event(event_date="")]))
+@pytest.mark.parametrize("event", [
+    # Дата модели вне периода и её нет вовсе: дата — черновые данные, старое событие решает «Отбор» по тексту.
+    _event(event_date="2025-01-15"),
+    _event(event_date=""),
+    # «Не технология» по оценке поиска и технология не названа: категорию ставит «Отбор».
+    _event(event_kind="not_technology", technology="", title="ProPetro получила контракт на генерацию 230 МВт"),
+    _event(material_kind="deal", technology="", title="SLB покупает долю в разработчике ПО для бурения"),
+])
+def test_search_drops_nothing_by_meaning_every_material_goes_on(event):
+    result = _research(_Research([event]))
 
-    assert result["evidence"][0]["published_at"] is None
+    assert result["dropped"] == [] and len(result["evidence"]) == 1
+    assert result["evidence"][0]["published_at"] == (event["event_date"] or None)
 
 
 def test_model_failure_is_a_status_not_a_crash():
@@ -102,22 +108,29 @@ def test_model_failure_is_a_status_not_a_crash():
     assert result["evidence"] == []
 
 
-def test_unverified_link_is_dropped_but_cited_or_fetched_ones_stay():
-    fetched = {"source_url": "https://a.example/1", "title": "a", "summary_ru": "текст страницы",
+def test_only_a_finding_with_its_publisher_page_goes_on():
+    """Во вход «Отбора» идёт текст издателя: ссылка без страницы — отсев, даже если адрес из найденного поиском;
+    выдуманная ссылка и страница-список — тоже. Сводка модели остаётся в summary_ru рядом с текстом страницы."""
+    title = "SLB wins Aramco integrated well construction contracts"
+    fetched = {"source_url": "https://a.example/1", "title": title, "summary_ru": "текст страницы",
                "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": True,
                                "cited_by_search": False, "research_summary": "сводка модели"}}
-    cited = {"source_url": "https://b.example/2", "title": "b",
+    cited = {"source_url": "https://b.example/2", "title": title,
              "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": False, "cited_by_search": True}}
-    invented = {"source_url": "https://c.example/3", "title": "c",
+    invented = {"source_url": "https://c.example/3", "title": title,
                 "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": False, "cited_by_search": False}}
-    brave = {"source_url": "https://d.example/4", "title": "d", "raw_payload": {"evidence_source": "web_search"}}
+    listing = {"source_url": "https://d.example/news", "title": "Press Releases",
+               "raw_payload": {"evidence_source": "openai_web_search", "full_text_fetched": True}}
 
-    kept, dropped = signal_research.verify_research_evidence([fetched, cited, invented, brave])
+    kept, dropped = signal_research.verify_research_evidence([fetched, cited, invented, listing])
 
-    assert [item["source_url"] for item in kept] == ["https://a.example/1", "https://b.example/2", "https://d.example/4"]
-    # Судье — и текст страницы (extracted_fact), и сводка модели.
+    assert [item["source_url"] for item in kept] == ["https://a.example/1"]
     assert kept[0]["summary_ru"] == "сводка модели"
-    assert dropped[0]["url"] == "https://c.example/3"
+    assert [(item["url"], item["reason"]) for item in dropped] == [
+        ("https://b.example/2", signal_research.PAGE_NOT_FETCHED),
+        ("https://c.example/3", signal_research.UNCONFIRMED_LINK),
+        ("https://d.example/news", signal_research.LIST_PAGE),
+    ]
 
 
 def test_each_research_event_is_its_own_cluster():
@@ -125,16 +138,14 @@ def test_each_research_event_is_its_own_cluster():
              "extracted_fact": "SLB autonomous drilling", "raw_payload": {"evidence_source": "openai_web_search"}}
     second = {**first, "source_url": "https://slb.com/b"}
 
-    clusters = signal_discovery._cluster_evidence([first, second], TOPIC)
+    clusters = signal_discovery._cluster_evidence([first, second])
 
     assert len(clusters) == 2
 
 
-def test_run_in_research_mode_uses_openai_search_not_brave(monkeypatch):
+def test_run_searches_with_gpt_and_a_finding_without_its_page_is_a_search_drop(monkeypatch):
     client = _Research([_recent_event()])
     monkeypatch.setattr(signal_research, "make_client", lambda offline: client)
-    monkeypatch.setattr(signal_discovery, "_search_web_evidence",
-                        lambda *args, **kwargs: pytest.fail("Brave не должен вызываться в режиме openai_web"))
     monkeypatch.setattr(signal_discovery, "_fetch_full_text",
                         lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
     run_config = _run_config()
@@ -144,16 +155,11 @@ def test_run_in_research_mode_uses_openai_search_not_brave(monkeypatch):
     topic = run["topics"][0]
     assert topic["web_search"]["provider"] == "openai_web_search"
     assert topic["web_search"]["research"]["events"] == 1
-    # Страница не открылась, но адрес из найденного — находка осталась и дошла до судьи.
-    assert topic["candidates"][0]["signal"]["evidence"][0]["source_url"].startswith("https://www.slb.com/newsroom/")
-
-
-def test_search_mode_travels_from_core_to_worker(monkeypatch):
-    monkeypatch.setattr(config, "SIGNAL_SEARCH_MODE", "openai_web")
-
-    assert signal_discovery.config_from_payload({}).search_mode == "openai_web"
-    assert signal_discovery.config_from_payload({"search_mode": "both"}).search_mode == "both"
-    assert signal_discovery.config_from_payload({"search_mode": "gpt"}).search_mode == "brave"
+    # Страница не открылась, хотя адрес из найденного: «Отбору» нечего дать — находка уходит в технический отсев.
+    assert topic["candidates"] == []
+    [dropped] = topic["filtered_findings"]
+    assert (dropped["stage"], dropped["reason"]) == ("search", signal_research.PAGE_NOT_FETCHED)
+    assert dropped["url"].startswith("https://www.slb.com/newsroom/")
 
 
 def test_research_answer_in_several_messages_or_with_trailing_text_is_parsed():
@@ -247,7 +253,7 @@ def test_research_client_collects_search_sources_as_grounding(monkeypatch):
     monkeypatch.setattr(openai_client.requests, "post", lambda url, **kwargs: sent.update(kwargs["json"]) or Response())
     client = openai_client.OpenAIResponsesClient(api_key="test")
 
-    response = client.research_json("i", "u", signal_research.RESEARCH_SCHEMA, model="gpt-5",
+    response = client.research_json("i", "u", signal_research.RESEARCH_SCHEMA_BROAD, model="gpt-5",
                                      reasoning_effort="low", max_output_tokens=100, timeout=5)
 
     assert sent["include"] == ["web_search_call.action.sources"]
@@ -264,78 +270,13 @@ def test_heartbeat_before_each_attempt_keeps_the_job_alive_on_the_worker():
     assert len(beats) == 2
 
 
-# --- Обратная связь заказчика — во вход поиска ------------------------------------------------
+# --- Что поиск знает о прошлом: только уже найденное по теме (граница данных О-7) -------------------
 
 
-def _memory(**types):
-    base = {name: [] for name in ("signal_verdict", "signal_quality_rule", "signal_source_preference",
+def _memory():
+    """Пустая память ОС в снимке: воркер NL в базу за ней не ходит."""
+    return {name: [] for name in ("signal_verdict", "signal_quality_rule", "signal_source_preference",
                                   "signal_glossary", "signal_query_hint", "signal_title_correction", "signal_duplicate")}
-    base.update(types)
-    return base
-
-
-def _verdict(subject, title, reason="", topic=""):
-    return {"memory_type": "signal_verdict", "subject": subject, "score": 0,
-            "facts_json": {"signal_title": title, "reason": reason, "topic": topic}}
-
-
-def test_feedback_block_carries_verdicts_rules_sources_and_known_cards():
-    from oiltech_digest import signal_feedback
-
-    memory = _memory(
-        signal_verdict=[
-            _verdict("approved", "Роботизированная буровая на Ямале", "первое внедрение в РФ", topic=TOPIC),
-            _verdict("wrong_block", "SLB купила стартап", "сделка без технологии"),
-            _verdict("too_generic", "Обзор рынка бурения 2026", "нет события"),
-            _verdict("merge_duplicate", "Повтор карточки 12"),
-        ],
-        signal_quality_rule=[{"subject": "Не приносить вебинары", "facts_json": {}},
-                             {"subject": "Для сигнала 'X' использовать исправленную суть: Y", "facts_json": {}}],
-        signal_source_preference=[{"subject": "jpt.spe.org", "facts_json": {}}],
-    )
-
-    with signal_feedback.use_memory_snapshot(memory):
-        block = signal_feedback.research_feedback_block(TOPIC, known_titles=["SLB: 4 контракта Aramco"])
-
-    assert "одобрил" in block and "- Роботизированная буровая на Ямале — первое внедрение в РФ" in block
-    assert "- SLB купила стартап — это бизнес-сигнал, а не технология. сделка без технологии" in block
-    assert "Обзор рынка бурения 2026" in block
-    # Дубль — не урок для поиска; правка сути конкретной карточки — тоже.
-    assert "Повтор карточки 12" not in block and "исправленную суть" not in block
-    assert "- Не приносить вебинары" in block
-    assert "в первую очередь: jpt.spe.org" in block
-    assert "не повторяй, ищи новое:\n- SLB: 4 контракта Aramco" in block
-
-
-def test_feedback_block_is_empty_without_memory():
-    from oiltech_digest import signal_feedback
-
-    with signal_feedback.use_memory_snapshot(_memory()):
-        assert signal_feedback.research_feedback_block(TOPIC) == ""
-
-
-def test_research_prompt_gets_feedback_and_cards_already_on_the_radar(monkeypatch):
-    client = _Research([_event()])
-    monkeypatch.setattr(signal_research, "make_client", lambda offline: client)
-    monkeypatch.setattr(signal_discovery, "_fetch_full_text",
-                        lambda url, fallback_title="", **kwargs: {"ok": False, "error": "403", "title": "", "raw_text": ""})
-    run_config = _run_config()
-    snapshot = {
-        "topics": [{"name": TOPIC}], "tags": [],
-        "memory": _memory(signal_verdict=[_verdict("reject", "Вебинар по бурению", "нет события")]),
-        "existing_signals": [
-            {"id": 1, "title_ru": "Nabors встроила MPD в SmartROS", "theme": TOPIC, "fresh": True},
-            {"id": 2, "title_ru": "Старая карточка", "theme": TOPIC, "fresh": False},
-            {"id": 3, "title_ru": "Чужая тема", "theme": "HSE", "fresh": True},
-        ],
-    }
-
-    signal_discovery.run_discovery(run_config, snapshot)
-
-    prompt = client.calls[0]["input"]
-    assert "Вебинар по бурению — нет события" in prompt
-    assert "- Nabors встроила MPD в SmartROS" in prompt
-    assert "Старая карточка" not in prompt and "Чужая тема" not in prompt
 
 
 def _known_cards_prompt(monkeypatch, existing_signals):
@@ -421,73 +362,14 @@ def test_core_snapshot_lets_the_search_know_a_card_refound_within_the_period(iso
     assert "- Expro Velonix: первые ILI‑прогоны на водородном трубопроводе" in prompt
 
 
-# --- Только технологические сигналы: бизнес отсекается до судьи (02.10) ------------------------
-
-
-NOT_TECH_REASON = "не технологическое событие (по оценке поиска)"
-
-
-@pytest.mark.parametrize("event, reason", [
-    (_event(event_kind="not_technology", technology="", title="ProPetro получила контракт на генерацию 230 МВт"),
-     NOT_TECH_REASON),
-    # Премия остаётся премией, даже если поиск назвал награждённую технологию (прогон 17.10).
-    (_event(event_kind="not_technology", technology="AiPSO — ИИ-платформа оптимизации добычи",
-            title="GEI Excellence Awards 2026: ADNOC — Best Digital Transformation"), NOT_TECH_REASON),
-    (_event(event_kind="merger", technology="ИИ", title="Неизвестный тип события"), NOT_TECH_REASON),
-    (_event(event_kind="deployment", technology="  ", title="Внедрение без названной технологии"),
-     "не названа технология"),
-    (_event(event_kind="other", technology="", title="Событие без технологии"), "не названа технология"),
-])
-def test_business_or_unnamed_technology_events_never_reach_the_judge(event, reason):
-    result = _research(_Research([event]))
-
-    assert result["evidence"] == []
-    assert result["dropped"][0]["reason"] == reason
-
-
-def test_technology_contract_is_kept_and_names_the_technology():
-    event = _event(event_kind="technology_contract", technology="Автоматизированное строительство скважин SLB")
+def test_named_technology_stays_in_the_finding_as_draft_data():
+    event = _event(material_kind="contract", technology="Автоматизированное строительство скважин SLB")
 
     item = _research(_Research([event]))["evidence"][0]
 
     assert "Технология: Автоматизированное строительство скважин SLB." in item["extracted_fact"]
-    assert (item["raw_payload"]["event_kind"], item["raw_payload"]["technology"]) == (
-        "technology_contract", "Автоматизированное строительство скважин SLB")
-
-
-# --- Ложный отсев «нет технологии» (прогоны 06–17.10) -------------------------------------------
-# Поиск называл технологию, но тип события был вне шести: квалификация (AiP, NTQ, JIP),
-# испытательный центр, рубеж применения. Схема оставляла ему только other, а код резал other как
-# бизнес: на проде у всех 28 карточек «нет технологии» технология была названа.
-
-
-@pytest.mark.parametrize("event", [
-    _event(title="MODEC и Eld Energy получили этап ABS NTQ для SOFC-модуля на FPSO", company="MODEC",
-           technology="SOFC-энергоустановка 40 кВт на попутном газе для FPSO", event_kind="other"),
-    _event(title="Seismos открыл полноразмерный акустический тест-центр", company="Seismos",
-           technology="Акустический мониторинг и замкнутый цикл стимуляции", event_kind="other"),
-    _event(title="SLB OneSubsea завершила JIP по полностью электрическим подводным системам",
-           technology="Полностью электрическая подводная система заканчивания", event_kind="other"),
-    _event(title="SLB Retina at-bit imaging преодолела рубеж 50 скважин",
-           technology="Retina — визуализация у долота", event_kind="other"),
-])
-def test_named_technology_of_an_unlisted_kind_reaches_the_judge(event):
-    result = _research(_Research([event]))
-
-    assert result["dropped"] == []
-    assert result["evidence"][0]["raw_payload"]["technology"] == event["technology"]
-
-
-def test_research_asks_for_technology_and_event_kind_and_excludes_business():
-    item = signal_research.RESEARCH_SCHEMA["schema"]["properties"]["events"]["items"]
-    assert {"technology", "event_kind"} <= set(item["required"])
-    assert item["properties"]["event_kind"]["enum"][-1] == "not_technology"
-    text = signal_research.RESEARCH_INSTRUCTIONS
-    assert "Нужны ТЕХНОЛОГИЧЕСКИЕ сигналы, не бизнес-новости" in text
-    assert "FID" in text and "слияния и поглощения" in text
-    # Каждый тип описан в инструкции: перечень типов и их смысл не расходятся. До 17.10
-    # квалификации и испытательному центру было некуда деться, кроме other.
-    assert all(f"- {kind} —" in text for kind in signal_research.EVENT_KINDS)
+    assert (item["raw_payload"]["material_kind"], item["raw_payload"]["technology"]) == (
+        "contract", "Автоматизированное строительство скважин SLB")
 
 
 def test_research_asks_for_a_russian_title_by_the_title_rules():
@@ -496,7 +378,7 @@ def test_research_asks_for_a_russian_title_by_the_title_rules():
     from oiltech_digest.processing.prompts import TRANSLATE_INSTRUCTIONS
 
     limit = re.search(r"Не длиннее (\d+) знаков", TRANSLATE_INSTRUCTIONS).group(1)
-    text = " ".join(signal_research.RESEARCH_INSTRUCTIONS.split())
+    text = " ".join(signal_research.RESEARCH_INSTRUCTIONS_BROAD.split())
 
     assert f"- title: по-русски, по правилам заголовка (кто что сделал, до {limit} знаков, без тире и скобок)" in text
 
@@ -505,7 +387,7 @@ def test_research_asks_for_a_russian_title_by_the_title_rules():
 
 
 def test_research_failure_reaches_the_job_result_with_its_text():
-    web = {"status": "error", "provider": "openai_web_search", "queries": [],
+    web = {"status": "error", "provider": "openai_web_search",
            "research": {"status": "error", "events": 0, "feedback_chars": 812, "web_search_calls": 0, "attempts": 2,
                         "error": "AIClientError: OpenAI HTTP 403: tool web_search is not supported", "dropped": []}}
 
@@ -516,7 +398,7 @@ def test_research_failure_reaches_the_job_result_with_its_text():
     }
 
 
-def test_research_summary_counts_without_events_and_brave_errors_keep_priority():
+def test_research_summary_counts_without_events():
     research = {"status": "ok", "events": 7, "evidence_count": 5, "feedback_chars": 900, "web_search_calls": 23,
                 "attempts": 1, "unverified": [{"url": "x"}, {"url": "y"}], "dropped": [{"title": "t", "reason": "r"}]}
 
@@ -525,6 +407,3 @@ def test_research_summary_counts_without_events_and_brave_errors_keep_priority()
         "attempts": 1, "unverified": 2, "dropped": 1,
     }
     assert signal_discovery._research_summary(None) is None
-    both = {"status": "ok", "errors": ["q: HTTP 402 Usage limit exceeded"], "queries": ["q"],
-            "research": {"status": "error", "error": "timeout"}}
-    assert "402" in signal_discovery._search_error_summary(both)

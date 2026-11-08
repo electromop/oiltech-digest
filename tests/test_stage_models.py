@@ -204,21 +204,20 @@ def test_minimal_keeps_todays_limits(monkeypatch):
 
 def test_tags_fall_back_but_dedup_does_not():
     """Теги без строки в .env — на OPENAI_MODEL, как раньше. У «Дедупа» отката нет (спека #128, история 48): пусто — пусто,
-    и стадия падает с причиной. Второе мнение о теме (прежняя цепочка радара) без своей строки и без модели дедупа —
-    на модели ленты, как до правки."""
+    и стадия падает с причиной."""
     # Пустые, а не удалённые: config при импорте читает .env, и строка оттуда подменила бы отсутствующую переменную.
     env = {**os.environ, "OPENAI_MODEL": "main-model", "OPENAI_REASONING_EFFORT": "low", "OPENAI_TAG_MODEL": "",
            "OPENAI_TAG_REASONING": "", "OPENAI_REPRINT_MODEL": "", "OPENAI_REPRINT_REASONING": "",
-           "SIGNAL_DEDUP_MODEL": "", "SIGNAL_DEDUP_REASONING": "", "SIGNAL_THEME_CHECK_MODEL": ""}
+           "SIGNAL_DEDUP_MODEL": "", "SIGNAL_DEDUP_REASONING": ""}
     probe = ("from oiltech_digest import config as c; "
              "print(repr((c.OPENAI_TAG_MODEL, c.OPENAI_TAG_REASONING, c.OPENAI_REPRINT_MODEL, c.OPENAI_REPRINT_REASONING, "
-             "c.SIGNAL_DEDUP_MODEL, c.SIGNAL_DEDUP_REASONING, c.SIGNAL_THEME_CHECK_MODEL)))")
+             "c.SIGNAL_DEDUP_MODEL, c.SIGNAL_DEDUP_REASONING)))")
 
     result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
                             cwd=REPO_ROOT, env=env)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == repr(("main-model", "low", "", "low", "", "low", "main-model"))
+    assert result.stdout.strip() == repr(("main-model", "low", "", "low", "", "low"))
 
 
 # --- «Дедуп» без модели: сбой с причиной до вызовов, а не «разные события» у каждой пары --------------------------
@@ -269,7 +268,7 @@ def test_radar_run_without_dedup_model_fails_before_search(monkeypatch):
     monkeypatch.setattr(config, "SIGNAL_DEDUP_MODEL", "")
     searched: list[str] = []
     monkeypatch.setattr(signal_discovery, "_topic_web_evidence", lambda *args, **kwargs: searched.append("x"))
-    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True)
+    run_config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True)
 
     with pytest.raises(signal_dedup.DedupSetupError):
         signal_discovery.run_discovery(run_config, {"topics": [{"name": "Бурение"}], "tags": []})

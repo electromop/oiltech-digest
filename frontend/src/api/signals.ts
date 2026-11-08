@@ -137,7 +137,8 @@ export function updateSignal(signalId: number, payload: SignalPatch) {
   });
 }
 
-// Здоровье поиска последнего ежедневного прогона — отдаётся только админу (/api/signals/search-health).
+// Здоровье поиска последнего ежедневного прогона — отдаётся только админу (/api/signals/search-health): в скольких
+// темах поиск GPT не ответил и первая ошибка (signal_discovery._search_health).
 export type SignalSearchHealth = {
   run_id: number;
   job_id: number | null;
@@ -147,11 +148,6 @@ export type SignalSearchHealth = {
   topics: number;
   failed: number;
   first_error: string | null;
-  http_status: number | null;
-  provider: string | null;
-  // not_configured — поиск не вызывался (нет ключа, провайдер не подключён); network — таймаут
-  // или обрыв соединения; connection — TLS или прокси; null — сбоя нет. Считает ядро (signal_discovery._search_failure_cause).
-  cause: "not_configured" | "unsupported_provider" | "http" | "network" | "connection" | "other" | null;
 };
 
 // Возврат отклонённого (#132): поля «Отбора», которые вписывает человек, — коды справочника «Отбора».

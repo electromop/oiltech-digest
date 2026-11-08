@@ -41,16 +41,8 @@ def daily_signal_discovery_payload() -> dict[str, Any]:
         **signal_discovery.research_settings(days=config.SIGNAL_DISCOVERY_DAYS),
         "topic": None,
         "days": config.SIGNAL_DISCOVERY_DAYS,
-        "limit": config.SIGNAL_DISCOVERY_LIMIT,
-        "min_score": config.SIGNAL_DISCOVERY_MIN_SCORE,
         "offline": False,
         "dry_run": False,
-        "max_signals": config.SIGNAL_DISCOVERY_MAX_SIGNALS,
-        "web_search": True,
-        "web_only": True,
-        "web_query_limit": config.SIGNAL_DISCOVERY_WEB_QUERY_LIMIT,
-        "research_rounds": config.SIGNAL_DISCOVERY_RESEARCH_ROUNDS,
-        "web_fulltext_limit": config.SIGNAL_DISCOVERY_WEB_FULLTEXT_LIMIT,
         "trigger": "scheduler_daily",
         "schedule": DAILY_SIGNAL_DISCOVERY_MARKER,
     }
@@ -100,8 +92,8 @@ def enqueue_daily_signal_discovery(*, force: bool = False) -> dict[str, Any]:
                 "every_days": every_days,
             }
 
-    # Маршрут спрашиваем у политики, а не прибиваем к 'ru'. Радар генерирует
-    # поисковые запросы через OpenAI, а OpenAI отвечает РФ-адресам 403
+    # Маршрут спрашиваем у политики, а не прибиваем к 'ru'. Радар ищет через
+    # OpenAI (поиск GPT), а OpenAI отвечает РФ-адресам 403
     # unsupported_country_region_territory — поэтому жёсткий регион 'ru' ронял
     # ежедневную задачу КАЖДЫЙ раз, молча: сигналы стояли с 13.09.
     # Остальные ИИ-стадии давно ходят этим же маршрутом, через внешний воркер.

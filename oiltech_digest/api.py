@@ -153,14 +153,8 @@ class SourceCandidatePatch(BaseModel):
 class SignalDiscoveryRequest(BaseModel):
     topic: str | None = None
     days: int = 14
-    limit: int = 80
-    min_score: float = 40
-    max_signals: int = 10
     offline: bool = True
     dry_run: bool = False
-    web_search: bool = False
-    web_only: bool = False
-    web_query_limit: int = 8
 
 
 class SignalFeedbackCreate(BaseModel):
@@ -2339,9 +2333,10 @@ def signal_memory(
 
 @app.get("/api/signals/search-health")
 def signal_search_health(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """Здоровье поиска последнего ежедневного прогона радара — только админу.
+    """Здоровье поиска последнего ежедневного прогона радара — только админу: в скольких темах поиск GPT не ответил
+    и первая ошибка.
 
-    23–27.09 Brave отвечал 402 во всех темах, задача оставалась ok, и пять дней этого никто
+    23–27.09 поиск (тогда Brave) не отвечал во всех темах, задача оставалась ok, и пять дней этого никто
     не видел. Обычный пользователь сюда не ходит (403), его экран не меняется."""
     run = repository.latest_signal_generation_run(
         payload_subset={"schedule": background_jobs.DAILY_SIGNAL_DISCOVERY_MARKER}
@@ -2364,10 +2359,6 @@ def signal_search_health(user: dict[str, Any] = Depends(require_admin)) -> dict[
 def enqueue_signal_discovery(payload: SignalDiscoveryRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     if payload.days < 1 or payload.days > 90:
         raise HTTPException(status_code=400, detail="days must be between 1 and 90")
-    if payload.limit < 1 or payload.limit > 500:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
-    if payload.max_signals < 1 or payload.max_signals > 50:
-        raise HTTPException(status_code=400, detail="max_signals must be between 1 and 50")
     from oiltech_digest import signal_discovery
 
     try:

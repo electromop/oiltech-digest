@@ -9,7 +9,6 @@ import argparse
 import csv
 import json
 import logging
-import re
 import sys
 import threading
 import time
@@ -2209,71 +2208,21 @@ def cmd_seed_signal_topics(args: argparse.Namespace) -> None:
     print(f"seed-signal-topics: topics={changed}")
 
 
-def cmd_discover_signals(args: argparse.Namespace) -> None:
-    from oiltech_digest.signal_discovery import SignalDiscoveryConfig, discover_signals
-
-    result = discover_signals(SignalDiscoveryConfig(
-        topic=args.topic,
-        days=args.days,
-        limit=args.limit,
-        min_score=args.min_score,
-        offline=args.offline,
-        dry_run=args.dry_run,
-        max_signals=args.max_signals,
-        web_search=args.web,
-        web_only=args.web_only,
-        web_query_limit=args.web_query_limit,
-        research_rounds=args.research_rounds,
-        web_fulltext_limit=args.web_fulltext_limit,
-        search_mode=args.search_mode or "",
-    ))
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-    suffix = " [dry-run]" if result["dry_run"] else ""
-    print(
-        f"discover-signals{suffix}: topics={len(result['topics'])} "
-        f"signals={len(result['signals'])} days={result['days']} "
-        f"offline={result['offline']} web={result.get('web_search')} web_only={result.get('web_only')}"
-    )
-    if not result["signals"]:
-        print("  сигналов не найдено: расширь topic/days или снизь --min-score")
-        return
-    for item in result["signals"]:
-        print(
-            f"  [{item['maturity']}] score={item['score']:.1f} "
-            f"evidence={item.get('evidence_count', 0)} theme={item['theme']}"
-        )
-        print(f"    {item['title']}")
-        if item.get("thesis"):
-            print(f"    thesis: {item['thesis'][:220]}")
-
-
 def cmd_enqueue_signal_discovery(args: argparse.Namespace) -> None:
     from oiltech_digest import signal_discovery
     from oiltech_digest.db import repository
 
     try:
         # Модель поиска GPT и прочие его настройки (#138) — решение ядра, едут в задаче.
-        research = signal_discovery.research_settings(search_mode=args.search_mode, offline=args.offline,
-                                                      days=args.days)
+        research = signal_discovery.research_settings(offline=args.offline, days=args.days)
     except signal_discovery.SearchSetupError as exc:
         raise SystemExit(f"enqueue-signal-discovery: {exc}") from exc
     payload = {
         **research,
         "topic": args.topic,
         "days": args.days,
-        "limit": args.limit,
-        "min_score": args.min_score,
         "offline": args.offline,
         "dry_run": args.dry_run,
-        "max_signals": args.max_signals,
-        "web_search": args.web,
-        "web_only": args.web_only,
-        "web_query_limit": args.web_query_limit,
-        "research_rounds": args.research_rounds,
-        "web_fulltext_limit": args.web_fulltext_limit,
-        **({"search_mode": args.search_mode} if args.search_mode else {}),
     }
     # См. background_jobs.enqueue_daily_signal_discovery: маршрут решает политика,
     # иначе задача уезжает на РФ-адрес и OpenAI отвечает 403 по географии.
@@ -2304,10 +2253,7 @@ def cmd_enqueue_daily_signal_discovery(args: argparse.Namespace) -> None:
         print(f"enqueue-daily-signal-discovery: skipped reason={result['reason']}")
         return
     job = result["job"]
-    print(
-        f"enqueue-daily-signal-discovery: job id={job['id']} "
-        f"queue={job['queue_name']} max_signals={job['payload_json']['max_signals']}"
-    )
+    print(f"enqueue-daily-signal-discovery: job id={job['id']} queue={job['queue_name']}")
 
 
 def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
@@ -2645,20 +2591,6 @@ def cmd_import_signal_feedback(args: argparse.Namespace) -> None:
         "import-signal-feedback: "
         f"rows={result['rows']} events={result['feedback_events']} "
         f"memories={result['memories']} dry_run={result['dry_run']}"
-    )
-
-
-def cmd_retire_signal_query_hints(args: argparse.Namespace) -> None:
-    from oiltech_digest.signal_feedback import retire_query_hints_from_negative_feedback
-
-    result = retire_query_hints_from_negative_feedback(dry_run=args.dry_run)
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-    print(
-        "retire-signal-query-hints: "
-        f"active_before={result['active_before']} kept={result['kept']} "
-        f"retired={result['retired']} dry_run={result['dry_run']}"
     )
 
 
@@ -3123,47 +3055,6 @@ def cmd_sync_feed_signals(args: argparse.Namespace) -> None:
         print("Сухой прогон: записать — тот же вызов с --apply.")
 
 
-def cmd_merge_business_duplicates(args: argparse.Namespace) -> None:
-    """Разовая склейка пар дублей среди бизнес-находок радара (#95). Пары — правилом дедупа без
-    судьи, поэтому список — на просмотр: записываются только пары, названные в --pairs."""
-    from oiltech_digest import signal_dedup
-    from oiltech_digest.db import repository
-
-    cards = repository.business_radar_cards()
-    titles = {card["id"]: str(card.get("title_ru") or card.get("title") or "") for card in cards}
-    pairs = signal_dedup.pairs_among_stored(cards)
-    print(f"merge-business-duplicates: бизнес-находок радара {len(cards)}, пар-кандидатов {len(pairs)}")
-    for pair in pairs:
-        why = "; ".join(part for part in (
-            f"общая ссылка {', '.join(pair['urls'][:2])}" if pair["urls"] else "",
-            f"общая компания {', '.join(pair['companies'][:3])}" if pair["companies"] else "",
-            f"сходство заголовков {pair['overlap']}",
-        ) if part)
-        print(f"  {pair['duplicate']}:{pair['main']}  #{pair['duplicate']} {titles[pair['duplicate']][:60]!r}"
-              f" → #{pair['main']} {titles[pair['main']][:60]!r} ({why})")
-    if not args.apply:
-        print("Сухой прогон. Склеить выбранные: --apply --pairs ДУБЛЬ:ГЛАВНАЯ[,ДУБЛЬ:ГЛАВНАЯ…]")
-        return
-    # Весь --pairs разбирается и сверяется со списком до первой записи: опечатка в одной паре не
-    # должна оставить склеенными только те, что стояли перед ней.
-    chosen = []
-    for value in (part.strip() for part in (args.pairs or "").split(",")):
-        match = re.fullmatch(r"(\d+):(\d+)", value)
-        if value and not match:
-            raise SystemExit(f"--pairs: «{value}» — нужно ДУБЛЬ:ГЛАВНАЯ; ничего не склеено")
-        if match:
-            chosen.append((int(match[1]), int(match[2])))
-    if not chosen:
-        raise SystemExit("--apply без --pairs: правило без судьи даёт и ложные пары — назовите пары из списка")
-    known = {(pair["duplicate"], pair["main"]) for pair in pairs}
-    unknown = [f"{duplicate}:{main}" for duplicate, main in chosen if (duplicate, main) not in known]
-    if unknown:
-        raise SystemExit(f"--pairs: нет в списке пар — {', '.join(unknown)}; ничего не склеено")
-    for duplicate, main in chosen:
-        merged = repository.mark_signal_merged(duplicate, main, "то же событие: бизнес-находка радара (разовая склейка, #95)")
-        print(f"  {duplicate}:{main}: {'склеено' if merged else 'не склеено (разобрана или уже дубль)'}")
-
-
 def cmd_unarchive_signals(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -3177,23 +3068,6 @@ def cmd_unmerge_signal(args: argparse.Namespace) -> None:
 
     ok = repository.unmerge_signal(args.signal_id)
     print(f"unmerge-signal: #{args.signal_id} " + ("снова видна на радаре" if ok else "не была скрыта как дубль"))
-
-
-def cmd_assign_signal_hint_topics(args: argparse.Namespace) -> None:
-    from oiltech_digest.signal_discovery import assign_query_hint_topics
-
-    result = assign_query_hint_topics(dry_run=args.dry_run)
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-    print(
-        f"assign-signal-hint-topics: active={result['active']} already_scoped={result['already_scoped']} "
-        f"assigned={len(result['assigned'])} unassigned={len(result['unassigned'])} dry_run={result['dry_run']}"
-    )
-    for item in result["assigned"]:
-        print(f"  → {item['topic'][:45]} ({item['overlap']}/{item['runner_up']}): {item['subject'][:80]}")
-    for item in result["unassigned"]:
-        print(f"  × без темы ({item['overlap']}/{item['runner_up']}): {item['subject'][:80]}")
 
 
 def cmd_export_signal_training_jsonl(args: argparse.Namespace) -> None:
@@ -3992,53 +3866,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("seed-signal-topics", help="создать дефолтные темы радара сигналов").set_defaults(func=cmd_seed_signal_topics)
 
-    p_discover_signals = sub.add_parser("discover-signals", help="найти технологические сигналы поверх обработанных статей")
-    p_discover_signals.add_argument("--topic", default=None, help="тема радара; по умолчанию все активные темы")
-    p_discover_signals.add_argument("--days", type=int, default=14)
-    p_discover_signals.add_argument("--limit", type=int, default=80, help="сколько evidence-статей взять на тему")
-    p_discover_signals.add_argument("--min-score", type=float, default=40)
-    p_discover_signals.add_argument("--max-signals", type=int, default=10)
-    p_discover_signals.add_argument("--web", action="store_true",
-                                    help="искать evidence через web search provider, без привязки к sources")
-    p_discover_signals.add_argument("--web-only", action="store_true",
-                                    help="использовать только web evidence и не брать статьи из локальных sources")
-    p_discover_signals.add_argument("--web-query-limit", type=int, default=8,
-                                    help="сколько поисковых запросов сделать на тему в --web режиме")
-    p_discover_signals.add_argument("--research-rounds", type=int, default=2,
-                                    help="сколько раундов research-loop: 1=только широкий поиск, 2=поиск+follow-up")
-    p_discover_signals.add_argument("--search-mode", choices=["brave", "openai_web", "both"], default=None,
-                        help="откуда находки: brave, openai_web («режим ChatGPT»), both; по умолчанию SIGNAL_SEARCH_MODE")
-    p_discover_signals.add_argument("--web-fulltext-limit", type=int, default=20,
-                                    help="сколько web-результатов докачивать целиком вместо сниппета поиска; 0 отключает")
-    p_discover_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
-                                    help="offline heuristic вместо LLM-judge")
-    p_discover_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True,
-                                    help="не писать signals/signal_evidence в БД")
-    p_discover_signals.add_argument("--json", action="store_true")
-    p_discover_signals.set_defaults(func=cmd_discover_signals)
-
-    p_enqueue_signals = sub.add_parser("enqueue-signal-discovery", help="поставить радар сигналов в background_jobs")
+    p_enqueue_signals = sub.add_parser(
+        "enqueue-signal-discovery",
+        help="поставить прогон радара в очередь: поиск GPT, находки решает «Отбор»; проверка — с --no-offline",
+    )
     p_enqueue_signals.add_argument("--topic", default=None)
     p_enqueue_signals.add_argument("--days", type=int, default=14)
-    p_enqueue_signals.add_argument("--limit", type=int, default=80)
-    p_enqueue_signals.add_argument("--min-score", type=float, default=40)
-    p_enqueue_signals.add_argument("--max-signals", type=int, default=10)
-    p_enqueue_signals.add_argument("--web", action="store_true",
-                                   help="искать evidence через web search provider, без привязки к sources")
-    p_enqueue_signals.add_argument("--web-only", action="store_true",
-                                   help="использовать только web evidence и не брать статьи из локальных sources")
-    p_enqueue_signals.add_argument("--web-query-limit", type=int, default=8)
-    p_enqueue_signals.add_argument("--research-rounds", type=int, default=2)
-    p_enqueue_signals.add_argument("--search-mode", choices=["brave", "openai_web", "both"], default=None,
-                        help="откуда находки: brave, openai_web («режим ChatGPT»), both; по умолчанию SIGNAL_SEARCH_MODE")
-    p_enqueue_signals.add_argument("--web-fulltext-limit", type=int, default=20)
-    p_enqueue_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True)
+    p_enqueue_signals.add_argument("--offline", action=argparse.BooleanOptionalAction, default=True,
+                                   help="без «Дедупа» и на ядре РФ, где OpenAI отвечает 403; рабочий прогон — --no-offline")
     p_enqueue_signals.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
     p_enqueue_signals.set_defaults(func=cmd_enqueue_signal_discovery)
 
     p_enqueue_daily_signals = sub.add_parser(
         "enqueue-daily-signal-discovery",
-        help="поставить ежедневный web-only радар сигналов в очередь один раз за окно",
+        help="поставить прогон радара по расписанию: раз в сутки Москвы, с SIGNAL_DISCOVERY_DAILY_EVERY_DAYS реже",
     )
     p_enqueue_daily_signals.add_argument("--force", action="store_true", help="игнорировать daily-idempotency")
     p_enqueue_daily_signals.set_defaults(func=cmd_enqueue_daily_signal_discovery)
@@ -4186,22 +4027,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_import_signal_feedback.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
     p_import_signal_feedback.add_argument("--json", action="store_true")
     p_import_signal_feedback.set_defaults(func=cmd_import_signal_feedback)
-
-    p_retire_hints = sub.add_parser(
-        "retire-signal-query-hints",
-        help="погасить поисковые подсказки радара, выведенные из отклонённых сигналов",
-    )
-    p_retire_hints.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
-    p_retire_hints.add_argument("--json", action="store_true")
-    p_retire_hints.set_defaults(func=cmd_retire_signal_query_hints)
-
-    p_assign_hints = sub.add_parser(
-        "assign-signal-hint-topics",
-        help="привязать старые поисковые подсказки радара без темы к одной теме (сухой прогон по умолчанию)",
-    )
-    p_assign_hints.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
-    p_assign_hints.add_argument("--json", action="store_true")
-    p_assign_hints.set_defaults(func=cmd_assign_signal_hint_topics)
 
     p_unmerge = sub.add_parser("unmerge-signal", help="снять пометку дубля с карточки радара (ошибочный «Дубль #ID»)")
     p_unmerge.add_argument("signal_id", type=int)
@@ -4431,14 +4256,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync_feed.add_argument("--until", default=None, help="собраны до даты ГГГГ-ММ-ДД (не включая)")
     p_sync_feed.add_argument("--apply", action="store_true", help="записать; без флага — только числа")
     p_sync_feed.set_defaults(func=cmd_sync_feed_signals)
-
-    p_merge_business = sub.add_parser(
-        "merge-business-duplicates",
-        help="пары дублей среди бизнес-находок радара; по умолчанию сухой прогон со списком",
-    )
-    p_merge_business.add_argument("--pairs", default="", help="ДУБЛЬ:ГЛАВНАЯ через запятую — из списка сухого прогона")
-    p_merge_business.add_argument("--apply", action="store_true")
-    p_merge_business.set_defaults(func=cmd_merge_business_duplicates)
 
     p_unarchive_signals = sub.add_parser("unarchive-signals", help="вернуть карточки радара из архива")
     p_unarchive_signals.add_argument("--ids", default="")

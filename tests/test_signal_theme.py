@@ -3,8 +3,6 @@
 «Бурение» у карточки про ИИ и дроны: тема была темой поиска, которым нашли статью.
 """
 
-import json
-
 from oiltech_digest import signal_discovery
 
 DRILLING = "Бурение и заканчивание скважин"
@@ -78,225 +76,34 @@ def test_evidence_titles_count_too():
     assert theme == DIGITAL
 
 
-def test_run_discovery_writes_content_theme_and_explains_it(monkeypatch):
-    page = {"source_url": "https://example.com/drones", "title": "AI drone fleet expands",
-            "extracted_fact": "Operator expands drone fleet with machine learning analytics."}
-    monkeypatch.setattr(
-        signal_discovery,
-        "_search_web_evidence",
-        lambda topic, config, **kwargs: {"status": "ok", "queries": ["q"], "results": 1, "evidence": [page]},
-    )
-    monkeypatch.setattr(signal_discovery, "_has_industry_context", lambda row: True)
-    monkeypatch.setattr(
-        signal_discovery,
-        "judge_signal_snapshot",
-        lambda cluster, topic, offline=True: (
-            {"title": "Drone fleet with machine learning", "title_ru": "Флот дронов с ИИ", "theme": topic,
-             "summary": "Дрон и искусственный интеллект для осмотра.", "maturity": "watch", "score": 60},
-            {"theme": topic},
-        ),
-    )
-    config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True)
-    snapshot = {"topics": [{"name": DRILLING, "tag_id": 1}, {"name": DIGITAL, "tag_id": 2}], "tags": TAGS}
+def _run(monkeypatch, topics, page):
+    """Прогон радара без базы: поиск темы приносит одну страницу, дальше — путь находки до «Отбора»."""
+    monkeypatch.setattr(signal_discovery, "_topic_web_evidence", lambda topic, topic_name, config, **kwargs: {
+        "status": "ok", "provider": "openai_web_search", "research": {}, "evidence": [page]})
+    config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True)
+    return signal_discovery.run_discovery(config, {"topics": topics, "tags": TAGS})
 
-    run = signal_discovery.run_discovery(config, snapshot)
+
+def test_finding_of_a_search_topic_gets_the_theme_of_its_content(monkeypatch):
+    """Находку про дроны и ИИ принёс поиск темы бурения: тема находки — по ключам тематик, а не тема поиска (тему из
+    13 потом ставит «Карточка», #132)."""
+    page = {"source_url": "https://example.com/drones", "title": "AI drone fleet expands with machine learning",
+            "extracted_fact": "Operator expands drone fleet with machine learning analytics.", "strength": 0.9}
+
+    run = _run(monkeypatch, [{"name": DRILLING, "tag_id": 1}, {"name": DIGITAL, "tag_id": 2}], page)
 
     drilling_topic = run["topics"][0]
-    candidate = drilling_topic["candidates"][0]
+    [candidate] = drilling_topic["candidates"]
     assert drilling_topic["topic"] == DRILLING
     assert candidate["signal"]["theme"] == DIGITAL
-    assert candidate["raw_output"]["theme_choice"]["reason"] == "content"
-    assert candidate["raw_output"]["theme_choice"]["search_topic"] == DRILLING
+    assert candidate["signal"]["title"] == page["title"]
 
 
-def test_free_text_topics_keep_model_theme(monkeypatch):
-    # Режим таблицы тем (без tag_id): тема не подменяется ни запросом, ни содержанием.
-    monkeypatch.setattr(
-        signal_discovery,
-        "_search_web_evidence",
-        lambda topic, config, **kwargs: {"status": "ok", "queries": ["q"], "results": 1,
-                                         "evidence": [{"source_url": "https://example.com/x", "title": "AI drone"}]},
-    )
-    monkeypatch.setattr(
-        signal_discovery,
-        "judge_signal_snapshot",
-        lambda cluster, topic, offline=True: ({"title": "AI drone", "theme": "Своя тема модели", "score": 60}, {}),
-    )
-    config = signal_discovery.SignalDiscoveryConfig(offline=True, dry_run=True, web_only=True)
+def test_finding_of_a_free_text_topic_keeps_the_search_topic(monkeypatch):
+    # Режим таблицы тем (без tag_id): тему ключами тематик не подменяем.
+    page = {"source_url": "https://example.com/x", "title": "AI drone with machine learning"}
 
-    run = signal_discovery.run_discovery(config, {"topics": [{"name": DRILLING}], "tags": TAGS})
+    run = _run(monkeypatch, [{"name": "Своя тема таблицы"}], page)
 
-    candidate = run["topics"][0]["candidates"][0]
-    assert candidate["signal"]["theme"] == "Своя тема модели"
-    assert "theme_choice" not in candidate["raw_output"]
-
-
-# --- Второе мнение о тематике при расхождении судьи с ключами (02.10) ---------------------------
-
-from oiltech_digest.processing.openai_client import AIResponse  # noqa: E402
-
-CHECK_TAGS = [
-    {"id": 1, "name": DRILLING, "parent_id": None, "description": "Бурение скважин, MPD, буровые установки",
-     "keywords_json": ["бурение", "буровая"], "keywords_en_json": ["drilling", "mpd", "rig"]},
-    {"id": 2, "name": DIGITAL, "parent_id": None, "description": "Общие цифровые платформы и промышленный edge",
-     "keywords_json": ["цифровизация"], "keywords_en_json": ["edge"]},
-]
-
-
-class _Checker:
-    def __init__(self, answer=None, error=None):
-        self.answer, self.error, self.calls = answer, error, []
-
-    def complete_json(self, instructions, user_input, schema, **kwargs):
-        self.calls.append({"input": user_input, "enum": schema["schema"]["properties"]["theme"]["enum"], **kwargs})
-        if self.error:
-            raise self.error
-        return AIResponse(data=self.answer, model="gpt-5-mini-check", input_tokens=300, output_tokens=40)
-
-
-def _check(monkeypatch, signal, judged, checker):
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: checker)
-    snapshot = {"tags": CHECK_TAGS, "radar_themes": [DRILLING, DIGITAL], "radar_criteria": []}
-    with signal_discovery.use_discovery_snapshot(snapshot):
-        return signal_discovery._choose_theme(signal, {"theme": judged}, [], DRILLING, [DRILLING, DIGITAL])
-
-
-NABORS = {"title_ru": "Nabors встроила автоматизированное MPD в систему буровой", "summary": "MPD на rig, drilling"}
-
-
-def test_judge_theme_without_any_keyword_gets_a_second_opinion(monkeypatch):
-    checker = _Checker({"theme": DRILLING, "reason": "MPD — операция бурения"})
-
-    theme, choice = _check(monkeypatch, NABORS, DIGITAL, checker)
-
-    assert theme == DRILLING
-    assert choice["reason"] == "theme_check"
-    assert choice["theme_check"]["judge_theme"] == DIGITAL and choice["theme_check"]["reason"] == "MPD — операция бурения"
-    # Выбор — только из двух тематик, с их описаниями.
-    assert checker.calls[0]["enum"] == [DIGITAL, DRILLING]
-    assert "Бурение скважин, MPD" in checker.calls[0]["input"]
-
-
-def test_second_opinion_can_confirm_the_judge(monkeypatch):
-    theme, choice = _check(monkeypatch, NABORS, DIGITAL, _Checker({"theme": DIGITAL, "reason": "общая платформа"}))
-
-    assert theme == DIGITAL
-    assert choice["reason"] == "judge_confirmed"
-
-
-def test_no_check_when_keywords_support_the_judge(monkeypatch):
-    checker = _Checker({"theme": DIGITAL, "reason": "x"})
-
-    theme, choice = _check(monkeypatch, NABORS, DRILLING, checker)
-
-    assert theme == DRILLING and choice["reason"] == "judge"
-    assert checker.calls == []
-
-
-def test_no_check_on_a_single_passing_keyword(monkeypatch):
-    checker = _Checker({"theme": DRILLING, "reason": "x"})
-    signal = {"title_ru": "Платформа данных для объектов", "summary": "упоминается бурение"}
-
-    theme, _ = _check(monkeypatch, signal, DIGITAL, checker)
-
-    assert theme == DIGITAL
-    assert checker.calls == []
-
-
-def test_failed_check_keeps_the_judge_theme(monkeypatch):
-    theme, choice = _check(monkeypatch, NABORS, DIGITAL, _Checker(error=RuntimeError("503")))
-
-    assert theme == DIGITAL
-    assert choice["theme_check"]["result"] == "error"
-
-
-def test_check_answer_outside_the_two_themes_is_ignored(monkeypatch):
-    theme, choice = _check(monkeypatch, NABORS, DIGITAL, _Checker({"theme": "Чужая тема", "reason": "x"}))
-
-    assert theme == DIGITAL
-    assert choice["theme_check"]["result"] == "error"
-
-
-def test_theme_check_usage_is_counted(monkeypatch):
-    usage_token = signal_discovery._USAGE.set({})
-    try:
-        _check(monkeypatch, NABORS, DIGITAL, _Checker({"theme": DRILLING, "reason": "MPD"}))
-        rows = list(signal_discovery._USAGE.get().values())
-    finally:
-        signal_discovery._USAGE.reset(usage_token)
-
-    assert rows == [{"stage": "radar_theme", "model": "gpt-5-mini-check", "calls": 1, "input_tokens": 300,
-                     "output_tokens": 40, "web_search_calls": 0}]
-
-
-def test_judge_instruction_assigns_theme_by_operation():
-    text = signal_discovery.SIGNAL_JUDGE_INSTRUCTIONS
-    assert "по ОПЕРАЦИИ нефтесервиса" in text
-    assert "автоматизированное MPD и автономное направленное бурение — бурение" in text
-
-
-# --- Ревью пачки не бракует за тему карточки, отличную от темы поиска (18.10) -----------------------
-#
-# Прогон 18.10: поиск темы геологоразведки нашёл Seismos, судья отнёс его к ГРП, а ревью пачки
-# отбраковало «не по теме пачки»: во входе была тема поиска («topic»), у кандидата — тема карточки от
-# судьи, а инструкция говорила о «пачке по одной теме». Событие, которое нашла только «чужая» тема
-# поиска, так терялось. Теперь темы поиска во входе ревью нет.
-
-
-class _ReviewRecorder:
-    """Пишет каждый вызов модели. Проверки — после прогона: assert внутри клиента проглотил бы
-    except Exception у второго мнения о теме карточки."""
-
-    def __init__(self):
-        self.calls = []
-
-    def complete_json(self, instructions, user_input, schema, **kwargs):
-        self.calls.append({"schema": schema["name"], "instructions": instructions, "input": user_input})
-        return AIResponse(data={"decisions": []}, model="fake-review")
-
-
-def test_batch_review_gets_judge_themes_no_search_topic_and_rule_against_theme_drops(monkeypatch):
-    pages = [
-        {"source_url": "https://example.com/drones", "title": "AI drone fleet expands",
-         "extracted_fact": "Operator expands drone fleet with machine learning analytics."},
-        {"source_url": "https://example.com/rig", "title": "Robotic drilling rig deployed",
-         "extracted_fact": "Robotic drilling rig drilled the first well."},
-    ]
-    monkeypatch.setattr(
-        signal_discovery,
-        "_search_web_evidence",
-        lambda topic, config, **kwargs: {"status": "ok", "queries": ["q"], "results": 2, "evidence": pages},
-    )
-
-    def judge(cluster, topic, offline=True):
-        # Судья выбирает тему карточки из списка по содержанию: дроны с ИИ — не бурение.
-        drones = "drone" in cluster[0]["source_url"]
-        theme = DIGITAL if drones else DRILLING
-        signal = {
-            "title": cluster[0]["title"], "theme": theme, "maturity": "watch", "score": 60,
-            "title_ru": "Флот дронов с ИИ" if drones else "Роботизированная буровая",
-            "summary": "Дрон и искусственный интеллект для осмотра." if drones else "Роботизированная буровая пробурила скважину.",
-        }
-        return signal, {"theme": theme}
-
-    monkeypatch.setattr(signal_discovery, "judge_signal_snapshot", judge)
-    monkeypatch.setattr(signal_discovery, "_dedupe_run", lambda *args: {"skipped": "test"})
-    reviewer = _ReviewRecorder()
-    monkeypatch.setattr(signal_discovery, "make_client", lambda offline: reviewer)
-    config = signal_discovery.SignalDiscoveryConfig(offline=False, dry_run=True, web_only=True, search_mode="brave")
-    snapshot = {"topics": [{"name": DRILLING, "tag_id": 1}], "tags": TAGS, "radar_themes": TOPICS, "memory": {}}
-
-    signal_discovery.run_discovery(config, snapshot)
-
-    # Один вызов модели — ревью пачки: второе мнение о теме карточки не понадобилось.
-    assert [call["schema"] for call in reviewer.calls] == ["signal_batch_review"]
-    review = json.loads(reviewer.calls[0]["input"])
-    # Темы поиска во входе нет; у кандидатов — тема карточки, которую выбрал судья.
-    assert set(review) == {"candidates", "customer_feedback"}
-    assert {item["title"]: item["theme"] for item in review["candidates"]} == {
-        "Флот дронов с ИИ": DIGITAL, "Роботизированная буровая": DRILLING,
-    }
-    # Инструкция прямо говорит: другая тема карточки — не причина убирать и не повод снижать балл.
-    rule = " ".join(reviewer.calls[0]["instructions"].split())
-    assert ("Тема карточки — не причина убирать кандидата («не по теме пачки») и не повод снижать "
-            "interest_score") in rule
+    [candidate] = run["topics"][0]["candidates"]
+    assert candidate["signal"]["theme"] == "Своя тема таблицы"
