@@ -42,17 +42,15 @@ _SCALE_LABELS = (("strong", "80 и выше"), ("useful", "65-79"), ("watch", "4
 
 
 class ScoresSetupError(ValueError):
-    """Этап нельзя поставить в работу: выключен флаг «Отбора», не задана модель или границы ступеней неверны."""
+    """Этап нельзя поставить в работу: не задана модель или границы ступеней неверны."""
 
 
 # --- Постановка (ядро) ---------------------------------------------------------------------------
 
 
 def scheduler_step() -> dict[str, Any]:
-    """Шаг планировщика «баллы», за флагом OTBOR_ENABLED (этап конвейера «Отбора»): сигналы после основного вызова
-    «Карточки» без баллов и с баллами, которые «пересчитываются», — в задачи по полосе ежедневной обработки."""
-    if not config.OTBOR_ENABLED:
-        return {"signals": 0, "jobs": [], "reason": "disabled"}
+    """Шаг планировщика «баллы» (этап конвейера «Отбора»): сигналы после основного вызова «Карточки» без баллов и с
+    баллами, которые «пересчитываются», ставит в задачи по полосе ежедневной обработки."""
     # Без модели шаг отказывает в каждом цикле, даже когда сигналов нет: настройка видна сразу.
     configured_model()
     ids = signal_scores_store.new_signal_ids(days=config.OTBOR_NEW_DAYS, limit=config.OTBOR_STEP_LIMIT)
@@ -71,8 +69,6 @@ def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[
     """Задачи этапа пачками по OTBOR_BATCH; bulk — названные сигналы, по полосе пересчётов."""
     from oiltech_digest import network_policy
 
-    if not config.OTBOR_ENABLED:
-        raise ScoresSetupError("OTBOR_ENABLED выключен, а баллы «Карточки» идут этапом конвейера «Отбора»")
     model = configured_model()
     route = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
     batch = config.OTBOR_BATCH

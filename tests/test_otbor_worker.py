@@ -1,5 +1,5 @@
 """Агент «Отбор» для ленты (#130, спека #128), шов 1 — воркер «Отбора» на подставной модели и контракт ядра с
-воркером: старая сборка отказывает явно, модель без отката на модель ленты, шаг планировщика за флагом, сбой по
+воркером: старая сборка отказывает явно, модель без отката на модель ленты, шаг планировщика каждого цикла, сбой по
 причине (технический повторяется до трёх задач, ответ не по правилам — нет), один повтор при конфликте шагов,
 расход под именем агента, остановка воркера (tests/otbor_support.py).
 """
@@ -19,6 +19,14 @@ from tests.signal_card_support import admin, api_get, run_worker, user, worker  
 
 def _jobs(admin):
     return api_get("/api/jobs", admin, kind="otbor")
+
+
+def _collected_before_otbor(article_id):
+    """Статья, собранная до «Отбора» (история: путь статьи пуст, решал гейт ленты): «Отбор» её не решает."""
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE articles SET selector = NULL WHERE id = %s", (article_id,))
+        conn.commit()
+    return article_id
 
 
 def test_old_worker_build_does_not_get_the_otbor_job_and_check_lanes_shows_the_mismatch(user, admin, contour, capsys):
@@ -70,14 +78,11 @@ def test_no_model_no_fallback_to_the_feed_model(user, contour, monkeypatch):
     assert "OTBOR_MODEL" in repository.get_background_job(job["id"])["error_message"]
 
 
-def test_scheduler_step_is_behind_the_flag_and_takes_new_articles_once(user, admin, contour, monkeypatch, capsys):
+def test_scheduler_step_takes_new_articles_once(user, admin, contour, monkeypatch):
+    # Флага у «Отбора» с 08.11 нет: шаг ставит новую статью в первом же цикле, и только один раз.
     first = article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    cli.main(["enqueue-otbor"])
-    assert "skipped reason=disabled" in capsys.readouterr().out
-    assert _jobs(admin) == []
+    _collected_before_otbor(article("Статья гейта", "Weatherford получила контракт на бурение 274 скважин в Омане."))
 
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
     cli.main(["enqueue-otbor"])
     cli.main(["enqueue-otbor"])  # следующий цикл: статья уже в задаче
 
@@ -123,9 +128,8 @@ def test_whole_task_failure_leaves_the_article_in_the_no_answer_section_once_the
 
 
 def test_answer_off_rules_is_not_written_not_retried_and_does_not_drop_the_batch(user, admin, contour, monkeypatch):
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    gate_article = article("Статья гейта", "Weatherford получила контракт на бурение 274 скважин в Омане.")
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    gate_article = _collected_before_otbor(
+        article("Статья гейта", "Weatherford получила контракт на бурение 274 скважин в Омане."))
     article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
     off_schema = article("Не по схеме", "SLB подписала контракт с Saudi Aramco на бурение 40 скважин.")
     off_dictionary = article("Не из справочника", "Нефть дешевеет после роста запасов нефти в США.")
@@ -257,7 +261,6 @@ def test_worker_stop_keeps_the_paid_part_and_requeues_the_rest(user, admin, cont
 def test_otbor_job_runs_in_the_local_contour_too(user, monkeypatch):
     # Без внешних воркеров (местный стек) ИИ-задачи идут в местную очередь ai.
     monkeypatch.setattr(api.config, "EXTERNAL_WORKERS_ENABLED", False)
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
     monkeypatch.setattr(api.config, "OTBOR_MODEL", MODEL)
     monkeypatch.setattr(api.config, "BACKGROUND_JOB_INLINE", False)
     article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
@@ -271,9 +274,7 @@ def test_otbor_job_runs_in_the_local_contour_too(user, monkeypatch):
 
 def test_core_writes_decisions_only_for_the_articles_of_the_job(user, admin, contour, monkeypatch):
     article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    foreign = article("Чужая статья", "Weatherford получила контракт на бурение 274 скважин в Омане.")
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    foreign = _collected_before_otbor(article("Чужая статья", "Weatherford получила контракт на бурение 274 скважин в Омане."))
     monkeypatch.setattr(otbor, "make_client", lambda: OtborModel({"Программа бурения Equinor": answer()}))
     cli.main(["enqueue-otbor"])
     client = worker("external-ai")

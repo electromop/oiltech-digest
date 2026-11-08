@@ -4,13 +4,14 @@ import time
 
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api
+from oiltech_digest import api, contract
 from oiltech_digest.db import connection
 from oiltech_digest.network_policy import ExecutionDecision
 from oiltech_digest.processing import external_ai, mixed_script
-from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient
+from oiltech_digest.processing.openai_client import OfflineAIClient
 
-AUTH = {"Authorization": "Bearer secret"}
+# Пакет статей ленты выдаётся только сборке контракта 11 (снятие старой цепочки 08.11).
+AUTH = {"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)}
 
 
 def _card(conn, source_id, url, title, title_ru, summary):
@@ -76,16 +77,14 @@ def test_explicit_articles_are_regenerated_without_the_script_check(isolated_db)
     assert sorted(selection["summary"]) == sorted([ids["clean"], ids["half"]])
 
 
-class _GateSaysNo(OfflineAIClient):
-    """Офлайн-модель, чей гейт отвергает любую статью, — и список схем, за которые её звали."""
+class _Recording(OfflineAIClient):
+    """Офлайн-модель и список схем, за которые её звали."""
 
     def __init__(self, calls: list) -> None:
         self.calls = calls
 
     def complete_json(self, instructions, user_input, schema, **kwargs):
         self.calls.append(schema["name"])
-        if schema["name"] == "article_relevance":
-            return AIResponse(data={"relevant": False, "reason": "передумал"}, model="gate", input_tokens=1)
         return super().complete_json(instructions, user_input, schema, **kwargs)
 
 
@@ -104,13 +103,10 @@ def test_resummarize_reaches_the_worker_with_only_and_rewrites_every_summary(iso
     """Перегенерация 27.09 (задачи 11034–11038): воркер NL пометки only не знал — гонял гейт и
     балл, которые ядро не пишет ($0,59 из $0,83 — гейт), а статьи, которые его гейт счёл
     нерелевантными, пропускал: 7 из 52 сутей остались с браком. Теперь пометка доходит до
-    воркера: гейт (и стоп-слова), теги и балл не зовутся, суть переписана у каждой статьи."""
+    воркера: зовутся только суть и перевод (гейт, тег и балл статьи сняты 08.11), суть переписана
+    у каждой статьи."""
     with connection.get_connection() as conn:
         ids = _seed(conn)
-        # Стоп-слово родительского тега бьёт по заголовку «Power prices»: отсев гейта без модели.
-        conn.execute("INSERT INTO tags (name, enabled, sort_order, negative_keywords_json) "
-                     "VALUES ('Бурение', TRUE, 1, '[\"prices\"]')")
-        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Значимость', 100, TRUE, 1)")
         conn.execute("UPDATE article_cards SET relevant = TRUE, relevance_reason = 'в ленте'")
         conn.commit()
     regenerate = [ids["twins"], ids["half"]]
@@ -125,12 +121,11 @@ def test_resummarize_reaches_the_worker_with_only_and_rewrites_every_summary(iso
     assert job["payload"]["only"] == ["summary", "translation"]  # пометка доходит до воркера
 
     calls: list = []
-    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _GateSaysNo(calls))
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _Recording(calls))
     result = external_ai.process_payload(job["payload"])
-    # Только суть и перевод (оба заголовка иностранные): ни гейта, ни тегов, ни балла.
+    # Только суть и перевод (оба заголовка иностранные).
     assert sorted(calls) == ["article_summary"] * 2 + ["article_title_translation"] * 2
-    assert all("relevance" not in item and "tagging" not in item and "scoring" not in item
-               for item in result["articles"])
+    assert all(set(item) == {"article_id", "errors", "summary", "translation"} for item in result["articles"])
 
     response = core.post(f"/api/external-worker/jobs/{job_id}/complete", headers=AUTH,
                          json={"lease_token": job["lease_token"], "result": result})
@@ -141,7 +136,7 @@ def test_resummarize_reaches_the_worker_with_only_and_rewrites_every_summary(iso
             (regenerate,))}
         stages = {row[0] for row in conn.execute("SELECT stage FROM ai_processing_runs WHERE job_id = %s", (job_id,))}
     assert cards[ids["twins"]][0] != "Суть совместно сExxonMobil."
-    assert cards[ids["half"]][0] != "Цены на электроэнergyю выросли."  # стоп-слово суть не остановило
+    assert cards[ids["half"]][0] != "Цены на электроэнergyю выросли."
     assert all(card[1:] == (True, "в ленте") for card in cards.values())  # вердикт гейта не тронут
     assert stages == {"summary", "translation"}  # оплачено и учтено только запрошенное
 

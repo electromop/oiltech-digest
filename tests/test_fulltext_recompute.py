@@ -1,10 +1,10 @@
-"""Пересчёт сути, тега и балла после того, как обрывок статьи заменён полным текстом.
+"""Пересчёт сути после того, как обрывок статьи заменён полным текстом.
 
 С #79 пакет планировщика зовёт у статьи только недостающие стадии (external_ai._stages_left):
-суть, тег и балл, посчитанные по анонсу ленты, остались бы навсегда. Полное тело приходит позже —
-зарубежным воркером (refetch_text) или локальной дозагрузкой (fetch-full-text), — и тогда статья
-идёт в пересчёт один раз: только суть, тег и балл, только при реальном приросте текста, только
-в окне ленты.
+суть, посчитанная по анонсу ленты, осталась бы навсегда. Полное тело приходит позже, зарубежным
+воркером (refetch_text) или локальной дозагрузкой (fetch-full-text), и тогда принятая статья
+идёт в пересчёт один раз: только суть (тег и балл статьи сняты 08.11), только при реальном приросте
+текста, только в окне ленты.
 """
 
 from __future__ import annotations
@@ -15,15 +15,15 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api, feed_window, scoring_profiles
-from oiltech_digest.db import connection, repository
+from oiltech_digest import api, contract, feed_window
+from oiltech_digest.db import connection, feed_signals, repository
 from oiltech_digest.ingestion import article_fetcher, external_fetch
 from oiltech_digest.processing import external_ai, fulltext_recompute
 from oiltech_digest.processing.openai_client import AIResponse
-from oiltech_digest.processing.seed import seed_default_scoring_criteria
 
-AUTH = {"Authorization": "Bearer secret"}
-STAGES = ["summary", "tagging", "scoring"]
+# Пакет статей ленты выдаётся только сборке контракта 11 (снятие старой цепочки 08.11).
+AUTH = {"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)}
+STAGES = ["summary"]
 TITLE = "Aker BP starts drilling campaign at Yggdrasil field in the North Sea"
 # Анонс ленты: 167 знаков (средний обрывок Oil & Gas Journal по замеру 17.09 — 183).
 TEASER = ("Aker BP has started a drilling campaign at the Yggdrasil field. The operator plans "
@@ -59,15 +59,6 @@ def _source(*, region: str = "external") -> int:
     return int(source_id)
 
 
-def _tag_id() -> int:
-    with connection.get_connection() as conn:
-        row = conn.execute("SELECT id FROM tags WHERE name = 'Бурение'").fetchone()
-        if row is None:
-            row = conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Бурение', TRUE, 1) RETURNING id").fetchone()
-            conn.commit()
-    return int(row[0])
-
-
 def _article(source_id: int, n: int, *, text: str = TEASER, published: str = "2026-09-20 12:00+00",
              title: str = TITLE) -> int:
     with connection.get_connection() as conn:
@@ -80,18 +71,29 @@ def _article(source_id: int, n: int, *, text: str = TEASER, published: str = "20
     return int(article_id)
 
 
-def _scored_on_teaser(article_id: int, *, relevant: bool = True) -> None:
-    """Как пакет планировщика до дозагрузки: вердикт гейта, суть, перевод, тег и балл по анонсу."""
-    repository.set_article_relevance(article_id, relevant, "по анонсу", "gate")
+def _decided(article_id: int, accepted: bool, *, by: str = "gate") -> None:
+    """Решение о статье: «Отбора» (у её сигнала ленты, как пишет otbor_store) или гейта ленты до «Отбора»
+    (история: вердикт в карточке статьи)."""
+    with connection.get_connection() as conn:
+        if by == "otbor":
+            conn.execute(feed_signals.BASE_SIGNAL_INSERT,
+                         {"id": article_id, "unclassified": repository.SYSTEM_TAG_UNCLASSIFIED})
+            conn.execute("UPDATE signals SET otbor_decision = %s WHERE signal_key = %s",
+                         ("accept" if accepted else "reject", f"feed:{article_id}"))
+        else:
+            conn.execute(
+                "INSERT INTO article_cards (article_id, relevant, relevance_reason, relevance_model, status) "
+                "VALUES (%s, %s, 'по анонсу', 'gate', %s)", (article_id, accepted, "new" if accepted else "rejected"))
+        conn.commit()
+
+
+def _scored_on_teaser(article_id: int, *, relevant: bool = True, by: str = "gate") -> None:
+    """Как пакет планировщика до дозагрузки: решение о статье, суть и перевод по анонсу."""
+    _decided(article_id, relevant, by=by)
     if not relevant:
         return
     repository.upsert_article_card(article_id, "Суть по анонсу", "old-model")
     repository.set_article_title_ru(article_id, "Aker BP начала бурение на Yggdrasil")
-    repository.upsert_article_tag(article_id, _tag_id(), 0.5, "по анонсу", "old-model")
-    criteria = repository.list_enabled_scoring_criteria()
-    items = [{"criterion_id": int(c["id"]), "ai_score": 84, "keyword_score": 0, "final_score": 84} for c in criteria]
-    repository.replace_article_score(article_id, 84.0, "Высокая", "по анонсу", items, "old-model",
-                                     profile="business", criteria_snapshot=scoring_profiles.criteria_snapshot(criteria))
 
 
 def _mark_for_digest(article_id: int) -> None:
@@ -140,19 +142,9 @@ class _Model:
     def complete_json(self, instructions, user_input, schema, **kwargs):
         name = schema["name"]
         self.calls.append((name, user_input))
-        if name == "article_relevance":
-            return AIResponse(data={"relevant": True, "reason": "ok"}, model="fake")
         if name == "article_summary":
             return AIResponse(data={"summary": "Суть по полному тексту"}, model="fake")
-        if name == "article_tag":
-            return AIResponse(data={"tag_id": _TAG["id"], "confidence": 0.9, "rationale": "r"}, model="fake")
-        if name == "article_score":
-            return AIResponse(data={"incident_without_solution": False, "explanation": "по полному тексту",
-                                    "items": []}, model="fake")
         return AIResponse(data={"title_ru": "перевод"}, model="fake")
-
-
-_TAG: dict = {}
 
 
 def _claim(core: TestClient) -> dict | None:
@@ -196,13 +188,14 @@ def test_substantial_gain_is_measured_on_what_the_model_reads(old, new, gain):
 # --- Внешний путь: обрывок → суть и балл → полное тело → пересчёт ----------------------------
 
 
-def test_teaser_scored_then_full_body_goes_to_next_batch_with_exactly_summary_tag_score(isolated_db, monkeypatch):
+@pytest.mark.parametrize("by", ["otbor", "gate"])
+def test_teaser_scored_then_full_body_goes_to_next_batch_with_exactly_summary(isolated_db, monkeypatch, by):
+    """Принятая статья («Отбором» или гейтом до него), суть которой посчитана по анонсу: полное тело ставит пересчёт
+    одной сути, перевод заголовка не зовётся."""
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()   # оба профиля: балл статьи — business
-    _TAG["id"] = _tag_id()
     article_id = _article(_source(), 0)
-    _scored_on_teaser(article_id)
+    _scored_on_teaser(article_id, by=by)
 
     applied = _refetch(article_id)
 
@@ -217,15 +210,14 @@ def test_teaser_scored_then_full_body_goes_to_next_batch_with_exactly_summary_ta
     assert job is not None and job["id"] == job_id
     (sent,) = job["payload"]["articles"]
     assert sent["raw_text"] == FULL and sent["summary"] is None   # старая суть в промпт не идёт
-    business = repository.list_enabled_scoring_criteria()
-    assert [c["id"] for c in job["payload"]["criteria"]] == [c["id"] for c in business]
+    assert job["payload"]["only"] == STAGES
 
     model = _Model()
     monkeypatch.setattr(external_ai, "make_client", lambda offline=False: model)
     result = external_ai.process_payload(job["payload"])
 
-    # Ровно суть, тег и балл: ни гейта, ни перевода заголовка.
-    assert [name for name, _ in model.calls] == ["article_summary", "article_tag", "article_score"]
+    # Ровно суть: ни перевода заголовка, ни снятых гейта, тега и балла.
+    assert [name for name, _ in model.calls] == ["article_summary"]
     summary_input = model.calls[0][1]
     assert "ПОЛНЫЙ-ТЕКСТ-МАРКЕР" in summary_input and "Суть по анонсу" not in summary_input
 
@@ -233,14 +225,12 @@ def test_teaser_scored_then_full_body_goes_to_next_batch_with_exactly_summary_ta
                      json={"lease_token": job["lease_token"], "result": result})
     assert done.status_code == 200
     with connection.get_connection() as conn:
-        card = conn.execute("SELECT summary, title_ru, relevant FROM article_cards WHERE article_id = %s",
+        card = conn.execute("SELECT summary, title_ru FROM article_cards WHERE article_id = %s",
                             (article_id,)).fetchone()
-        score = conn.execute("SELECT model, profile, explanation FROM article_scores WHERE article_id = %s",
-                             (article_id,)).fetchone()
-        tag = conn.execute("SELECT model, rationale FROM article_tags WHERE article_id = %s", (article_id,)).fetchone()
-    assert card == ("Суть по полному тексту", "Aker BP начала бурение на Yggdrasil", True)
-    assert score == ("fake", "business", "по полному тексту")
-    assert tag == ("fake", "r")
+        signal_summary = conn.execute("SELECT summary FROM signals WHERE signal_key = %s",
+                                      (f"feed:{article_id}",)).fetchone()
+    assert card == ("Суть по полному тексту", "Aker BP начала бурение на Yggdrasil")
+    assert signal_summary == ("Суть по полному тексту",)   # мост «лента → сигнал» повторил новую суть
 
     # Повторная дозагрузка того же тела (ретрай задачи refetch_text) в пересчёт не ставит.
     assert _refetch(article_id)["recompute"] == 0
@@ -250,7 +240,6 @@ def test_teaser_scored_then_full_body_goes_to_next_batch_with_exactly_summary_ta
 def test_body_without_gain_is_written_but_not_recomputed(isolated_db, monkeypatch):
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     source_id = _source()
     short = _article(source_id, 1, text="Aker BP Yggdrasil drilling " * 16)   # 432 знака
     _scored_on_teaser(short)
@@ -268,7 +257,6 @@ def test_intermediate_too_short_body_counts_once_from_the_teaser(isolated_db, mo
     следующий — только если тело снова вдвое длиннее (850 от 440 — нет)."""
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     article_id = _article(_source(), 0)
     _scored_on_teaser(article_id)
     middle, final = FULL[:440], FULL[:850]
@@ -288,7 +276,6 @@ def test_shorter_refetch_never_overwrites_the_stored_body(isolated_db, monkeypat
     затирает и пересчёт не ставит — ни полное тело, ни анонс."""
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     source_id = _source()
     full_id, teaser_id = _article(source_id, 1), _article(source_id, 2, text=FULL[:400])
     _scored_on_teaser(full_id)
@@ -306,11 +293,10 @@ def test_shorter_refetch_never_overwrites_the_stored_body(isolated_db, monkeypat
 
 def test_archive_rejected_hidden_and_unprocessed_articles_are_not_recomputed(isolated_db, monkeypatch):
     """Архив — только просмотр: статья закрытого месяца, выбранная людьми в дайджест, не меняется.
-    Отвергнутую гейтом и скрытую не пересчитываем, а ещё не обработанную возьмёт обычный пакет —
-    уже по полному тексту."""
+    Отклонённую (здесь гейтом до «Отбора») и скрытую не пересчитываем, а ещё не решённую возьмёт обычный пакет после
+    решения «Отбора», уже по полному тексту."""
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     source_id = _source()
     august = _article(source_id, 1, published="2026-08-28 12:00+00")
     rejected = _article(source_id, 2)
@@ -330,17 +316,17 @@ def test_archive_rejected_hidden_and_unprocessed_articles_are_not_recomputed(iso
     assert _jobs() == []
 
 
-def test_article_in_flight_on_teaser_is_recomputed_after_that_batch_unless_gate_rejects(isolated_db, monkeypatch):
+def test_article_in_flight_on_teaser_is_recomputed_after_that_batch_unless_rejected(isolated_db, monkeypatch):
     """Главный случай зарубежных источников: пакет дня выдан с анонсом (резерв при выдаче), а
     refetch_text той же минуты кладёт полное тело. Суть ляжет по анонсу уже после замены тела —
-    пересчёт ставится сразу и ждёт, пока пакет не допишет. Кого пакет отверг гейтом, тот
+    пересчёт ставится сразу и ждёт, пока пакет не допишет. Кого за это время отклонили, тот
     пересчёта не получает: модель за него не платится."""
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
-    _TAG["id"] = _tag_id()
     source_id = _source()
     kept, rejected = _article(source_id, 1), _article(source_id, 2)
+    for article_id in (kept, rejected):
+        _decided(article_id, True, by="otbor")   # «Отбор» принял: пакет дня берёт их без сути
     batch = repository.create_background_job("process_articles", {"limit": 5}, queue_name="external-ai",
                                              execution_region="external", capability="openai")
     with connection.get_connection() as conn:   # выдан воркеру NL: аренда живая
@@ -361,8 +347,8 @@ def test_article_in_flight_on_teaser_is_recomputed_after_that_batch_unless_gate_
     assert _claim(core) is None   # пакет дня ещё пишет итог по анонсу: пересчёт ждёт его
     assert repository.get_background_job(recompute_id)["status"] == "queued"
 
-    _scored_on_teaser(kept)
-    _scored_on_teaser(rejected, relevant=False)
+    repository.upsert_article_card(kept, "Суть по анонсу", "old-model")   # итог пакета дня
+    _decided(rejected, False, by="otbor")   # решение сменилось, пока задача ждала
     with connection.get_connection() as conn:
         conn.execute("UPDATE background_jobs SET status = 'ok' WHERE id = %s", (batch["id"],))
         conn.execute("UPDATE background_jobs SET run_after = now() - interval '1 second' WHERE id = %s", (recompute_id,))
@@ -381,7 +367,6 @@ def test_articles_marked_for_digest_are_not_recomputed_at_enqueue_or_claim(isola
     черновика выпуска: его состав приходит и списком из черновика, без отметки."""
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 10, 4, 12, 0, tzinfo=feed_window.MSK))
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     source_id = _source()
     marked, drafted, marked_later, plain = (_article(source_id, n) for n in range(1, 5))
     for article_id in (marked, drafted, marked_later, plain):
@@ -407,7 +392,6 @@ def test_month_closed_while_recompute_waited_drops_article_at_claim(isolated_db,
     сентябрь уже архив, только просмотр: статья отброшена, модель за неё не зовётся."""
     monkeypatch.setattr(feed_window, "_now", lambda: datetime(2026, 10, 4, 12, 0, tzinfo=feed_window.MSK))
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     article_id = _article(_source(), 0)
     _scored_on_teaser(article_id)
 
@@ -428,7 +412,6 @@ def test_local_fetch_full_text_step_enqueues_recompute_once(isolated_db, monkeyp
 
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     article_id = _article(_source(region="auto"), 0)
     _scored_on_teaser(article_id)
     monkeypatch.setattr(article_fetcher, "fetch_article_text",
@@ -449,7 +432,6 @@ def test_local_fetch_full_text_step_enqueues_recompute_once(isolated_db, monkeyp
 def test_recompute_is_not_queued_twice_and_not_without_external_ai(isolated_db, monkeypatch):
     _freeze_window(monkeypatch)
     _external_ai(monkeypatch)
-    seed_default_scoring_criteria()
     article_id = _article(_source(), 0)
     _scored_on_teaser(article_id)
 

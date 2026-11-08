@@ -1,11 +1,13 @@
-"""Article processing services: summary, tagging, scoring and cost reports."""
+"""Обработка статей ленты: суть и перевод заголовка; общий с баллами сигнала счёт балла по критериям.
+
+С 08.11 ленту решает только «Отбор» (#130), тему и баллы ставит «Карточка» (#132): гейт ленты, тег и балл статьи сняты.
+Их стадии нужны только выключенному агенту источников и лежат у него (source_discovery/legacy_stages.py)."""
 
 from __future__ import annotations
 
 import json
 import math
 import re
-import time
 from typing import Any
 
 import logging
@@ -15,7 +17,6 @@ from oiltech_digest.db import repository
 from oiltech_digest.ingestion import article_fetcher
 from oiltech_digest.processing.domain_glossary import enforce_glossary_text, glossary_prompt_block, mixed_script_words
 from oiltech_digest.processing.openai_client import (
-    AIClientError,
     AIResponse,
     OfflineAIClient,
     OpenAIResponsesClient,
@@ -24,18 +25,11 @@ from oiltech_digest.processing.openai_client import (
 from oiltech_digest.processing.prompts import (
     EDIT_TITLE_INSTRUCTIONS,
     EDIT_TITLE_SCHEMA,
-    RELEVANCE_INSTRUCTIONS,
-    RELEVANCE_SCHEMA,
-    SCORING_INSTRUCTIONS,
-    SCORE_SCHEMA,
     SUMMARY_INSTRUCTIONS,
     SUMMARY_SCHEMA,
-    TAG_SCHEMA,
-    TAGGING_INSTRUCTIONS,
     TITLE_MAX_CHARS,
     TRANSLATE_INSTRUCTIONS,
     TRANSLATE_SCHEMA,
-    tags_scope_block,
 )
 
 
@@ -94,151 +88,6 @@ def process_translation_articles(articles: list[dict], client) -> dict:
     return stats
 
 
-def process_relevance(limit: int = 20, offline: bool = False) -> dict:
-    client = make_client(offline)
-    return process_relevance_articles(repository.get_articles_needing_relevance(limit), client)
-
-
-def process_relevance_articles(articles: list[dict], client) -> dict:
-    """AI-фильтр: помечает статьи как релевантные/нерелевантные нефтесервису.
-    Нерелевантные получают status='rejected' и дальше не тегируются/не скорятся.
-    Перед AI-вызовом отсекаем статьи со стоп-словами родительских тегов (бэклог #6)."""
-    tags = repository.list_enabled_tags()
-    stats = {"processed": 0, "relevant": 0, "rejected": 0, "errors": 0}
-    for article in articles:
-        try:
-            blocked_reason = _negative_keyword_block(article, tags)
-            if blocked_reason:
-                repository.set_article_relevance(article["id"], False, blocked_reason, "negative-keyword")
-                stats["processed"] += 1
-                stats["rejected"] += 1
-                continue
-            response = relevance_article(article, client, tags=tags)
-            relevant = bool(response.data.get("relevant"))
-            repository.set_article_relevance(
-                article["id"], relevant, response.data.get("reason"), response.model
-            )
-            _record_run(article, "relevance", client, response)
-            stats["processed"] += 1
-            stats["relevant" if relevant else "rejected"] += 1
-        except Exception as exc:  # noqa: BLE001 - batch should continue
-            _record_error(article, "relevance", client, exc)
-            stats["errors"] += 1
-    return stats
-
-
-def process_recheck(limit: int = 100, offline: bool = False, force: bool = False,
-                    max_articles: int | None = None) -> dict:
-    """Локальный перепрогон релевантности по ВСЕЙ базе (для тестов/дампа; на проде
-    OpenAI доступен только через воркер — там используется enqueue-recheck).
-    Идёт по возрастанию id с чекпоинтом; нерелевантные удаляются физически."""
-    client = make_client(offline)
-    totals = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
-    after_id = 0
-    while True:
-        batch = repository.get_articles_for_recheck(after_id, limit)
-        if not batch:
-            break
-        after_id = max(int(article["id"]) for article in batch)
-        stats = recheck_relevance_articles(batch, client, force=force)
-        for key in totals:
-            totals[key] += stats[key]
-        if max_articles is not None and totals["checked"] >= max_articles:
-            break
-    return totals
-
-
-def recheck_relevance_articles(articles: list[dict], client, *, force: bool = False) -> dict:
-    """Прогнать гейт релевантности по сырому тексту; релевантные — персист,
-    нерелевантные — УДАЛИТЬ физически (delete_article защищает статьи из выпусков: сохранённый
-    черновик или отметка «в дайджест»)."""
-    tags = repository.list_enabled_tags()
-    stats = {"checked": 0, "kept": 0, "deleted": 0, "skipped_in_digest": 0, "errors": 0}
-    for article in articles:
-        stats["checked"] += 1
-        try:
-            blocked_reason = _negative_keyword_block(article, tags)
-            if blocked_reason:
-                relevant, reason, model = False, blocked_reason, "negative-keyword"
-            else:
-                resp = relevance_article(article, client, tags=tags)
-                relevant = bool(resp.data.get("relevant"))
-                reason, model = resp.data.get("reason"), resp.model
-                _record_run(article, "relevance", client, resp)
-            if relevant:
-                repository.set_article_relevance(article["id"], True, reason, model)
-                stats["kept"] += 1
-            else:
-                deleted = repository.delete_article(int(article["id"]), force=force)
-                stats["deleted" if deleted else "skipped_in_digest"] += 1
-        except Exception as exc:  # noqa: BLE001 - одна плохая статья не валит батч
-            _record_error(article, "relevance", client, exc)
-            stats["errors"] += 1
-    return stats
-
-
-def process_tags(limit: int = 20, offline: bool = False) -> dict:
-    client = make_client(offline)
-    return process_tag_articles(repository.get_articles_needing_tags(limit), client)
-
-
-def process_tag_articles(articles: list[dict], client) -> dict:
-    tags = repository.list_enabled_tags()
-    stats = {"processed": 0, "errors": 0}
-    if not tags:
-        raise ValueError("Нет активных тегов. Запустите seed-tags.")
-    for article in articles:
-        try:
-            response = tag_article(article, tags, client)
-            tag_id = _valid_tag_id(response.data.get("tag_id"), tags)
-            if tag_id == 0:
-                tag_id = keyword_tag(article, tags)["tag_id"]
-            repository.upsert_article_tag(
-                article["id"],
-                tag_id,
-                _clamp(float(response.data.get("confidence") or 0), 0, 1),
-                response.data.get("rationale"),
-                response.model,
-            )
-            _record_run(article, "tagging", client, response)
-            stats["processed"] += 1
-        except Exception as exc:  # noqa: BLE001
-            _record_error(article, "tagging", client, exc)
-            stats["errors"] += 1
-    return stats
-
-
-def process_scores(limit: int = 20, offline: bool = False) -> dict:
-    client = make_client(offline)
-    return process_score_articles(repository.get_articles_needing_scores(limit), client)
-
-
-def process_score_articles(articles: list[dict], client) -> dict:
-    criteria = repository.list_enabled_scoring_criteria()
-    _validate_weights(criteria)
-    stats = {"processed": 0, "errors": 0}
-    for article in articles:
-        try:
-            response = score_article(article, criteria, client)
-            payload = normalize_score_payload(article, criteria, response.data)
-            repository.replace_article_score(
-                article["id"],
-                payload["total_score"],
-                payload["score_label"],
-                payload["explanation"],
-                payload["items"],
-                response.model,
-                profile=payload["profile"],
-                criteria_snapshot=payload["criteria_snapshot"],
-            )
-            _record_run(article, "scoring", client, response)
-            stats["processed"] += 1
-        except Exception as exc:  # noqa: BLE001
-            _record_error(article, "scoring", client, exc)
-            stats["errors"] += 1
-    return stats
-
-
 def process_full(limit: int = 20, offline: bool = False) -> dict:
     """Запустить по-статейный конвейер на статьях с незавершённым AI pipeline."""
     client = make_client(offline)
@@ -246,22 +95,20 @@ def process_full(limit: int = 20, offline: bool = False) -> dict:
 
 
 def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = True) -> dict:
-    """Полный конвейер по одной статье целиком: full-text → релевантность → суть → тег → скоринг.
+    """Конвейер ленты по одной статье целиком: полный текст → суть → перевод заголовка.
 
-    Каждая статья проходит все этапы до конца, прежде чем берётся следующая, —
-    готовые карточки появляются по мере обработки, не нужно ждать прогона всего
-    батча на каждом этапе. Нерелевантные дальше не тегируются и не скорятся.
+    Каждая статья проходит все этапы до конца, прежде чем берётся следующая: готовые карточки
+    появляются по мере обработки. «Брать или нет» решает только «Отбор» (#130): статью, которую он
+    держит (отклонил или ещё не решил), конвейер не берёт, отклонённую до него гейтом тоже:
+    гейта, который мог бы передумать, с 08.11 нет. Тег и балл статьи не считаются: тему и баллы
+    ставит «Карточка» у сигнала статьи (#132).
     """
-    tags = repository.list_enabled_tags()
-    if not tags:
-        raise ValueError("Нет активных тегов. Запустите seed-tags.")
-    criteria = repository.list_enabled_scoring_criteria()
-    _validate_weights(criteria)
-    stats = {"processed": 0, "fulltext": 0, "summary": 0, "relevant": 0,
-             "rejected": 0, "tagged": 0, "translated": 0, "scored": 0, "errors": 0}
-    # Статью, которую держит «Отбор» (#130): отклонённую им и ждущую его решения, — не обрабатываем.
+    stats = {"processed": 0, "fulltext": 0, "summary": 0, "translated": 0, "rejected": 0, "errors": 0}
     for article in [item for item in articles if not repository.held_by_otbor(item)]:
         stats["processed"] += 1
+        if repository.article_rejected(article):
+            stats["rejected"] += 1
+            continue
         try:
             # 1. Полный текст из HTML, если RSS отдал только сниппет.
             if fetch_full and article.get("text_truncated") and article.get("url"):
@@ -275,32 +122,7 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
                     article["text_truncated"] = False
                     stats["fulltext"] += 1
 
-            # 2. Релевантность ПЕРВОЙ — на сыром тексте, до сути (без bias и без лишних
-            #    AI-вызовов на нерелевантном). Решение «Отбора» (#130) главнее гейта: решённую им
-            #    статью не решают ни стоп-слова, ни гейт.
-            verdict = repository.otbor_verdict(article)
-            blocked_reason = None if verdict is not None else _negative_keyword_block(article, tags)
-            if blocked_reason:
-                repository.set_article_relevance(article["id"], False, blocked_reason, "negative-keyword")
-                stats["rejected"] += 1
-                continue
-
-            if verdict is not None:
-                relevant = verdict
-            elif article.get("relevant") is True:
-                relevant = True
-            elif article.get("relevant") is False:
-                relevant = False
-            else:
-                rel_resp = relevance_article(article, client, tags=tags)
-                relevant = bool(rel_resp.data.get("relevant"))
-                repository.set_article_relevance(article["id"], relevant, rel_resp.data.get("reason"), rel_resp.model)
-                _record_run(article, "relevance", client, rel_resp)
-            stats["relevant" if relevant else "rejected"] += 1
-            if not relevant:
-                continue
-
-            # 3. Суть.
+            # 2. Суть.
             if not article.get("summary"):
                 summary_resp = summarize_article(article, client)
                 repository.upsert_article_card(article["id"], summary_resp.data["summary"], summary_resp.model)
@@ -308,7 +130,7 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
                 article["summary"] = summary_resp.data["summary"]
                 stats["summary"] += 1
 
-            # 3b. Перевод заголовка — отдельная стадия: иностранный переводится, русский не по правилам эксперта правится.
+            # 3. Перевод заголовка, отдельная стадия: иностранный переводится, русский не по правилам эксперта правится.
             if not article.get("title_ru"):
                 title_ru, translate_resp = title_ru_for_article(article, client, edit_russian=True)
                 if title_ru is not None:
@@ -316,32 +138,6 @@ def process_pipeline_articles(articles: list[dict], client, fetch_full: bool = T
                     if translate_resp is not None:
                         _record_run(article, "translation", client, translate_resp)
                         stats["translated"] += 1
-
-            # 4. Тег.
-            if article.get("existing_tag_id") is None:
-                tag_resp = tag_article(article, tags, client)
-                tag_id = _valid_tag_id(tag_resp.data.get("tag_id"), tags)
-                if tag_id == 0:
-                    tag_id = keyword_tag(article, tags)["tag_id"]
-                repository.upsert_article_tag(
-                    article["id"], tag_id,
-                    _clamp(float(tag_resp.data.get("confidence") or 0), 0, 1),
-                    tag_resp.data.get("rationale"), tag_resp.model,
-                )
-                _record_run(article, "tagging", client, tag_resp)
-                stats["tagged"] += 1
-
-            # 5. Скоринг.
-            if article.get("existing_score_id") is None:
-                score_resp = score_article(article, criteria, client)
-                payload = normalize_score_payload(article, criteria, score_resp.data)
-                repository.replace_article_score(
-                    article["id"], payload["total_score"], payload["score_label"],
-                    payload["explanation"], payload["items"], score_resp.model,
-                    profile=payload["profile"], criteria_snapshot=payload["criteria_snapshot"],
-                )
-                _record_run(article, "scoring", client, score_resp)
-                stats["scored"] += 1
         except Exception as exc:  # noqa: BLE001 - batch should continue
             _record_error(article, "pipeline", client, exc)
             stats["errors"] += 1
@@ -402,33 +198,6 @@ def _mixed_script_note(words: list[str]) -> str:
         f"{listed}. Ответь заново: каждое слово — целиком по-русски, имена собственные "
         "и аббревиатуры — целиком латиницей."
     )
-
-
-def relevance_article(article: dict, client, tags: list[dict] | None = None) -> AIResponse:
-    # Гейт судит по СЫРОМУ тексту (title+source+text), БЕЗ AI-сути: суммаризатор
-    # обязан притягивать любую статью к нефтегазу, и подача его сути на вход гейта
-    # давала самосбывающуюся релевантность (мусор проходил). Модель/effort — отдельные,
-    # обычно сильнее основных: вызов дешёвый, цена ошибки высокая.
-    try:
-        return client.complete_json(
-            RELEVANCE_INSTRUCTIONS,
-            _relevance_prompt(article, tags=tags),
-            RELEVANCE_SCHEMA,
-            max_output_tokens=2500,
-            model=config.OPENAI_RELEVANCE_MODEL,
-            reasoning_effort=config.OPENAI_RELEVANCE_REASONING,
-        )
-    except AIClientError as exc:
-        if "max_output_tokens" not in str(exc):
-            raise
-        return client.complete_json(
-            RELEVANCE_INSTRUCTIONS,
-            _relevance_prompt(article, tags=tags, text_limit=1500),
-            RELEVANCE_SCHEMA,
-            max_output_tokens=2500,
-            model=config.OPENAI_RELEVANCE_MODEL,
-            reasoning_effort="minimal",
-        )
 
 
 def translate_article(article: dict, client) -> AIResponse:
@@ -556,93 +325,6 @@ def _needs_translation(title: str) -> bool:
     return cyrillic / len(letters) < 0.5
 
 
-def tag_article(article: dict, tags: list[dict], client) -> AIResponse:
-    tag_lines = []
-    for tag in tags:
-        path = f"{tag.get('parent_name')} / {tag['name']}" if tag.get("parent_name") else tag["name"]
-        tag_lines.append(
-            f"{tag['id']}: {path} | EN: {tag.get('name_en') or ''} | "
-            f"keywords: {', '.join((tag.get('keywords_en_json') or [])[:12])}"
-        )
-    rules = tag_rules(tags)
-    return client.complete_json(
-        TAGGING_INSTRUCTIONS,
-        _article_prompt(article) + "\n\navailable_tags:\n" + "\n".join(tag_lines)
-        + ("\n\nrules:\n" + "\n".join(f"- {rule}" for rule in rules) if rules else ""),
-        TAG_SCHEMA,
-        max_output_tokens=output_budget(1000, config.OPENAI_TAG_REASONING),
-        model=config.OPENAI_TAG_MODEL,
-        reasoning_effort=config.OPENAI_TAG_REASONING,
-    )
-
-
-def tag_rules(tags: list[dict]) -> list[str]:
-    """Правила выбора тега под списком тегов — с именами из списка, а не из кода (как правило темы «Карточки», #149).
-
-    Переигровка 03.11 (переезд с gpt-5): новые модели клали новости о ценах на сырьё в тег-приёмник, считая, что тега
-    для них нет (gpt-6-luna — 26% статей, у прода 3%). Общая фраза «тема рынка, если такой тег есть» luna не убедила:
-    «тега рынка в списке нет» — у 26 из 34 таких статей; поэтому правило называет тег. Нет тега в списке — нет правила."""
-    from oiltech_digest import signal_themes
-
-    names = [str(tag.get("name") or "") for tag in tags]
-    rules = []
-    market = signal_themes.market(names)
-    if market:
-        rules.append(f"Цены и котировки сырья и их прогнозы, спрос и предложение, квоты и ограничения поставок — тег «{market}».")
-    if UNCLASSIFIED_TAG_NAME in names:
-        rules.append(f"«{UNCLASSIFIED_TAG_NAME}» — только когда не подходит ни один тег.")
-    return rules
-
-
-def score_article(article: dict, criteria: list[dict], client) -> AIResponse:
-    criterion_lines = []
-    for criterion in criteria:
-        criterion_lines.append(
-            f"{criterion['id']}: {criterion['name']} | weight={criterion['weight']} | "
-            f"description={criterion.get('description') or ''} | "
-            f"keywords={', '.join((criterion.get('keywords_en_json') or [])[:12])}"
-        )
-    return client.complete_json(
-        SCORING_INSTRUCTIONS,
-        _article_prompt(article) + "\n\ncriteria:\n" + "\n".join(criterion_lines),
-        SCORE_SCHEMA,
-        max_output_tokens=1800,
-        model=config.OPENAI_SCORE_MODEL,
-        reasoning_effort=config.OPENAI_SCORE_REASONING,
-    )
-
-
-# Куда падает статья, не совпавшая НИ С ОДНИМ ключевым словом. Раньше — в tags[0],
-# то есть в первый тег по порядку: при таксономии D01–D18 это была «Сейсморазведка»,
-# при 13 тематиках заказчика стала бы «Геологоразведка». Мусор копился в одном
-# направлении и выглядел как обычная классификация.
-# Заказчик 13.09 сам предложил решение: «если статья не совпадает ни с одной тематикой,
-# она должна попадать в Unclassified / потенциально новая тема, чтобы Discovery Agent
-# не был ограничен текущей taxonomy».
-# Имя одно на всю систему: repository защищает этот тег от выключения, сид его создаёт,
-# классификация на него падает. Три копии строки разъехались бы молча.
-UNCLASSIFIED_TAG_NAME = repository.SYSTEM_TAG_UNCLASSIFIED
-
-
-def _fallback_tag(tags: list[dict]) -> dict:
-    """Тег-приёмник, если он заведён; иначе — прежнее поведение (первый по порядку)."""
-    for tag in tags:
-        if tag.get("name") == UNCLASSIFIED_TAG_NAME:
-            return tag
-    return tags[0]
-
-
-def keyword_tag(article: dict, tags: list[dict]) -> dict:
-    text = _search_text(article)
-    best = {"tag_id": _fallback_tag(tags)["id"], "confidence": 0.15, "matches": 0}
-    for tag in tags:
-        keywords = (tag.get("keywords_json") or []) + (tag.get("keywords_en_json") or [])
-        matches = sum(1 for keyword in keywords if _contains_keyword(text, keyword))
-        if matches > best["matches"]:
-            best = {"tag_id": tag["id"], "confidence": min(0.9, 0.35 + matches * 0.08), "matches": matches}
-    return best
-
-
 # Блендинг балла критерия. Оценка модели (ai_score) — ОСНОВНОЙ сигнал и НИЖНЯЯ граница:
 # модель читает суть статьи. Ключевые слова (keyword_score) могут только ПОДНЯТЬ балл, но
 # никогда не топят — узкие списки ключей (нужно 3+ точных совпадения из ~10 на критерий)
@@ -658,7 +340,7 @@ SCORE_AI_WEIGHT = 0.8
 # #54: потолок подпункта статьи-инцидента без решения. Правило «инциденты — низко» жило только
 # в промпте, без числа, рядом с якорем «40-64: косвенно» — и удар по складу ГСМ взял ровно 60.
 # Модель теперь только классифицирует (incident_without_solution в ответе), а
-# потолок ставит код; число в SCORING_INSTRUCTIONS — то же.
+# потолок ставит код; число в промпте балла (у агента источников: legacy_stages.SCORING_INSTRUCTIONS) то же.
 INCIDENT_CRITERION_CAP = 30
 
 
@@ -680,8 +362,8 @@ def normalize_score_payload(article: dict, criteria: list[dict], payload: dict[s
             ai_score = keyword_score
         ai_score_raw = ai_score
         if payload.get("incident_without_solution") is True:
-            # Потолок — на оба слагаемых, а не на итог: rescore-recompute пересчитывает final из
-            # сохранённых ai_score и keyword_score, а признака инцидента в базе нет.
+            # Потолок на оба слагаемых, а не на итог: признака инцидента среди сохранённых подпунктов нет,
+            # и final, пересчитанный из ai_score и keyword_score, иначе потерял бы потолок.
             keyword_score = min(keyword_score, INCIDENT_CRITERION_CAP)
             ai_score = min(ai_score, INCIDENT_CRITERION_CAP)
         blended = (keyword_score * SCORE_KEYWORD_WEIGHT) + (ai_score * SCORE_AI_WEIGHT)
@@ -733,8 +415,8 @@ def score_label(score: float) -> str:
     return "Низкая"
 
 
-# Сколько знаков текста статьи видят суть, тег и балл. По нему же fulltext_recompute решает,
-# стоит ли пересчитывать их после замены обрывка полным текстом.
+# Сколько знаков текста статьи видит модель сути (и стадии агента источников). По нему же fulltext_recompute решает,
+# стоит ли пересчитывать суть после замены обрывка полным текстом.
 ARTICLE_PROMPT_TEXT_CHARS = 6000
 
 
@@ -750,7 +432,8 @@ def _otbor_lines(article: dict) -> list[str]:
 
 
 def _article_prompt(article: dict, *, otbor: bool = False) -> str:
-    """Вход сути, тега и балла по публикации; otbor — с полями «Отбора» (только «Суть и перевод», #131)."""
+    """Вход сути по публикации (и тега и балла агента источников); otbor: с полями «Отбора» (только «Суть и перевод»,
+    #131)."""
     base = "\n".join(
         [
             f"title: {article.get('title') or ''}",
@@ -767,62 +450,6 @@ def _article_prompt(article: dict, *, otbor: bool = False) -> str:
     return f"{base}\n\n{glossary}" if glossary else base
 
 
-_TAGS_SCOPE_CACHE: dict[str, Any] = {"block": None, "at": 0.0}
-_TAGS_SCOPE_TTL_SECONDS = 300
-
-
-def _tags_scope() -> str:
-    """Блок тематик заказчика для гейта, с коротким кэшем.
-
-    Гейт зовётся на КАЖДОЙ статье, а справочник тегов меняется редко и руками, так
-    что ходить в базу каждый раз незачем. TTL короткий намеренно: заказчик правит
-    тематики на экране и ждёт, что новая выборка поедет по ним, а не после деплоя.
-    Сбой чтения не должен ронять гейт — тогда просто судим без тематик, как раньше.
-    """
-    now = time.monotonic()
-    cached = _TAGS_SCOPE_CACHE.get("block")
-    if cached is not None and now - float(_TAGS_SCOPE_CACHE.get("at") or 0) < _TAGS_SCOPE_TTL_SECONDS:
-        return cached
-    try:
-        block = tags_scope_block(repository.list_enabled_tags())
-    except Exception:  # noqa: BLE001 - тематики это подсказка, а не обязательный вход
-        logger.warning("не удалось прочитать тематики для гейта релевантности")
-        block = ""
-    _TAGS_SCOPE_CACHE["block"] = block
-    _TAGS_SCOPE_CACHE["at"] = now
-    return block
-
-
-def _relevance_prompt(article: dict, *, tags: list[dict] | None = None, text_limit: int = 6000) -> str:
-    """Вход гейта релевантности — БЕЗ AI-сути (намеренно): только сырые поля статьи,
-    чтобы суждение шло по реальному содержанию, а не по подкрученной нефтегаз-сути.
-
-    С 17.09 сюда добавлен блок тематик заказчика: до этого теги влияли только на
-    классификацию уже отобранного, и заказчик, расширяя их, не менял выборку вообще.
-    Блок идёт в пользовательскую часть, а не в инструкции, чтобы не ломать кэш
-    префикса: инструкции у всех статей одни и те же.
-    """
-    lines = [
-        f"title: {article.get('title') or ''}",
-        f"source: {article.get('source_name') or ''}",
-        f"url: {article.get('url') or ''}",
-        f"language: {article.get('language') or 'unknown'}",
-        f"published_at: {article.get('published_at') or ''}",
-        f"text: {_compact(article.get('raw_text') or '', text_limit)}",
-    ]
-    # Тематики берём из переданного списка, если он есть, и только иначе идём в базу.
-    # Это не оптимизация: на проде стадия исполняется на зарубежном воркере, у
-    # которого БАЗЫ НЕТ (docker-compose.external-worker.yml без DATABASE_URL).
-    # Там чтение падало бы в except и блок молча уезжал пустым — то есть тематики
-    # не влияли бы ни на что именно в боевом режиме. Теги в payload воркера уже
-    # кладутся для стадии тегирования (external_ai.build_process_articles_payload).
-    scope = tags_scope_block(tags) if tags else _tags_scope()
-    if scope:
-        lines.append("")
-        lines.append(scope)
-    return "\n".join(lines)
-
-
 def _title_prompt(article: dict) -> str:
     """Вход переводчика — только заголовок и контекст источника (дёшево, без полного текста); поля «Отбора», если
     они есть, — как у сути (#131)."""
@@ -837,19 +464,6 @@ def _title_prompt(article: dict) -> str:
     )
     glossary = glossary_prompt_block(article, limit=8)
     return f"{base}\n\n{glossary}" if glossary else base
-
-
-def _negative_keyword_block(article: dict, tags: list[dict]) -> str | None:
-    """Если текст статьи содержит стоп-слово родительского тега — вернуть причину, иначе None.
-    Стоп-слова задаются только у родительских тегов (parent_id IS NULL) — бэклог заказчика #6."""
-    text = _search_text(article)
-    for tag in tags:
-        if tag.get("parent_id"):
-            continue
-        for keyword in tag.get("negative_keywords_json") or []:
-            if _contains_keyword(text, keyword):
-                return f"стоп-слово «{keyword}» (тег «{tag.get('name')}»)"
-    return None
 
 
 def _search_text(article: dict) -> str:
@@ -871,22 +485,6 @@ def _contains_keyword(text: str, keyword: str) -> bool:
 def _compact(text: str, limit: int) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
-
-
-def _valid_tag_id(value, tags: list[dict]) -> int:
-    try:
-        tag_id = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return tag_id if any(int(t["id"]) == tag_id for t in tags) else 0
-
-
-def _validate_weights(criteria: list[dict]) -> None:
-    if not criteria:
-        raise ValueError("Нет активных критериев скоринга. Запустите seed-scoring.")
-    total = sum(float(c["weight"]) for c in criteria)
-    if round(total, 2) != 100:
-        raise ValueError(f"Сумма весов критериев должна быть 100, сейчас {total}")
 
 
 def _record_run(article: dict, stage: str, client, response: AIResponse) -> None:

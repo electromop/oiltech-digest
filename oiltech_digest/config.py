@@ -153,19 +153,12 @@ PROXY_HOST_OVERRIDES: dict[str, str] = _parse_proxy_host_overrides(
 
 # --- OpenAI / AI processing ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-nano")
+# Основная модель: умолчание всех стадий без своей модели (ИИ-оценка агента источников, откат перевода и сути). Только
+# линейка gpt-6 (решение владельца 08.11): gpt-5, gpt-5-mini и gpt-5-nano снимают 11.12.2026.
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "60"))
 OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "minimal")
-
-# Гейт релевантности — критическая защита от мусора в выборке. Ему можно дать
-# модель сильнее основной, но reasoning по умолчанию минимальный: ответ строго JSON,
-# и при medium/high Responses API иногда тратит весь output budget на рассуждение.
-# Если переменные не заданы — откат на основную модель с надежным коротким ответом.
-# ВАЖНО (инцидент 2026-06): эти override'ы НЕ в git — прописывать в .env воркера,
-# где реально вызывается OpenAI, иначе гейт тихо откатится на слабую модель.
-OPENAI_RELEVANCE_MODEL = os.environ.get("OPENAI_RELEVANCE_MODEL", "").strip() or OPENAI_MODEL
-OPENAI_RELEVANCE_REASONING = os.environ.get("OPENAI_RELEVANCE_REASONING", "").strip() or "minimal"
 
 # Переводчик заголовков — отдельная стадия. Ответ короткий (один заголовок), поэтому
 # по умолчанию хватает основной (дешёвой) модели и минимального reasoning. Можно
@@ -179,12 +172,9 @@ OPENAI_TRANSLATE_REASONING = os.environ.get("OPENAI_TRANSLATE_REASONING", "").st
 # OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки.
 OPENAI_SUMMARY_MODEL = os.environ.get("OPENAI_SUMMARY_MODEL", "").strip() or OPENAI_MODEL
 OPENAI_SUMMARY_REASONING = os.environ.get("OPENAI_SUMMARY_REASONING", "").strip() or OPENAI_REASONING_EFFORT
-# Теги — своя модель (переезд с gpt-5 до 11.12.2026): стадия старой цепочки ленты, до её снятия. Пусто — откат на
-# OPENAI_MODEL / OPENAI_REASONING_EFFORT, то есть как до правки. Откат оставлен намеренно, в отличие от «Дедупа»: тег и
-# балл статьи идут на воркере одной цепочкой, и сбой тега без строки оставил бы статьи и без балла. На OPENAI_MODEL
-# остаётся ИИ-оценка агента источников.
-OPENAI_TAG_MODEL = os.environ.get("OPENAI_TAG_MODEL", "").strip() or OPENAI_MODEL
-OPENAI_TAG_REASONING = os.environ.get("OPENAI_TAG_REASONING", "").strip() or OPENAI_REASONING_EFFORT
+# Гейт ленты, тег и балл статьи сняты 08.11 вместе со своими ключами (OPENAI_RELEVANCE_*, OPENAI_TAG_*,
+# OPENAI_SCORE_*): решает «Отбор», тему и баллы ставит «Карточка». Агент источников зовёт их стадии на
+# OPENAI_MODEL (source_discovery/legacy_stages.py).
 
 # «Дедуп» ленты: судья перепечаток (processing/reprints.py). Модель — явная настройка без отката на модель ленты
 # (спека #128, история 48): пусто — задача перепечаток падает с понятной причиной до первого вызова, а не судит
@@ -192,21 +182,13 @@ OPENAI_TAG_REASONING = os.environ.get("OPENAI_TAG_REASONING", "").strip() or OPE
 OPENAI_REPRINT_MODEL = os.environ.get("OPENAI_REPRINT_MODEL", "").strip()
 OPENAI_REPRINT_REASONING = os.environ.get("OPENAI_REPRINT_REASONING", "").strip() or OPENAI_REASONING_EFFORT
 
-# Скоринг (бизнес-эффект и пр. критерии) — балл напрямую определяет отбор в дайджест.
-# Раньше скоринг ТИХО ехал на основной OPENAI_MODEL с минимальным reasoning: при смене
-# основной модели на слабую/быструю (или откате на nano) балл систематически проседал
-# (инцидент 2026-06: средний total_score ~30, до 65+ дотягивали единицы). Даём скорингу
-# СВОЮ модель и НЕ minimal reasoning по умолчанию (minimal даёт терсые, заниженные баллы).
-# Если override не задан — основная модель, но reasoning по умолчанию medium, а не minimal.
-OPENAI_SCORE_MODEL = os.environ.get("OPENAI_SCORE_MODEL", "").strip() or OPENAI_MODEL
-OPENAI_SCORE_REASONING = os.environ.get("OPENAI_SCORE_REASONING", "").strip() or "medium"
-
 # Модель разбора ДОКУМЕНТОВ. Своя переменная, и намеренно БЕЗ отката на OPENAI_MODEL.
 # Пер-стадийные переменные читаются из окружения того процесса, который реально зовёт
 # модель, — это внешний воркер, чей .env не в git. Тихий откат на основную модель уже
-# случался (инцидент 2026-06): дефолт — самая дешёвая gpt-5-nano, она ЕСТЬ в таблице
+# случался (инцидент 2026-06): дефолт был самой дешёвой моделью, она ЕСТЬ в таблице
 # ставок, поэтому счёт бы сошёлся, а корпус разобрала бы слабейшая модель, и никто
-# не заметил бы. Пусто → стадия падает с явной ошибкой, а не работает молча.
+# не заметил бы. Пусто → стадия падает с явной ошибкой, а не работает молча. На NL: gpt-6.1-terra, low
+# (решение владельца 08.11, строкой .env.external-worker).
 OPENAI_DOC_MODEL = os.environ.get("OPENAI_DOC_MODEL", "").strip() or None
 OPENAI_DOC_REASONING = os.environ.get("OPENAI_DOC_REASONING", "").strip() or "medium"
 
@@ -352,10 +334,9 @@ SIGNAL_CARD_NEW_DAYS = max(1, int(os.environ.get("SIGNAL_CARD_NEW_DAYS", "2")))
 SIGNAL_CARD_STEP_LIMIT = max(1, int(os.environ.get("SIGNAL_CARD_STEP_LIMIT", "200")))
 
 # --- Агент «Отбор» (#130, спека #128, ADR 0005) ---
-# Единственный решает «брать или нет». Статья, вставленная при включённом флаге, идёт через «Отбор», а не через
-# гейт ленты: шаг планировщика ставит её в задачу агента во внешний контур. Включать после пересборки NL
-# (контракт 4): старая сборка такую задачу отказывает; на проде — после экзамена (#133).
-OTBOR_ENABLED = os.environ.get("OTBOR_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# Единственный решает «брать или нет»: каждая новая статья, находка поиска и материал коллеги идут через него, шаг
+# планировщика ставит их в задачу агента во внешний контур. Флаг OTBOR_ENABLED снят 08.11 вместе с гейтом ленты:
+# «Отбор» работает всегда, строка .env больше не читается.
 # Модель — своя настройка агента и намеренно без отката на OPENAI_MODEL: пусто — постановка отказывает с явной
 # ошибкой. Кандидатов выбирает экзамен (#133). Читает ядро: модель едет воркеру в задаче и попадает в рецепт.
 OTBOR_MODEL = os.environ.get("OTBOR_MODEL", "").strip()
@@ -375,8 +356,8 @@ OTBOR_ATTEMPTS = max(1, int(os.environ.get("OTBOR_ATTEMPTS", "3")))
 OTBOR_OLD_EVENT_DAYS = max(1, int(os.environ.get("OTBOR_OLD_EVENT_DAYS", "180")))
 
 # --- «Карточка», второй вызов: баллы (#132, спека #128) ---
-# Баллы по критериям профиля категории сигнала после «Отбора»: шаг планировщика — за флагом OTBOR_ENABLED (этап
-# его конвейера). Модель — своя настройка, без отката на модель ленты и основного вызова: пусто — постановка
+# Баллы по критериям профиля категории сигнала после «Отбора»: шаг планировщика каждого цикла (этап его
+# конвейера). Модель: своя настройка, без отката на модель ленты и основного вызова; пусто, и постановка
 # отказывает с явной ошибкой. Кандидатов выбирает экзамен (#133). Читает ядро: модель едет воркеру в задаче.
 SIGNAL_SCORES_MODEL = os.environ.get("SIGNAL_SCORES_MODEL", "").strip()
 SIGNAL_SCORES_REASONING = os.environ.get("SIGNAL_SCORES_REASONING", "").strip() or "low"

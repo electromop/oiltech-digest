@@ -276,7 +276,6 @@ def _release(client: "ExternalWorkerClient", job: dict[str, Any], reason: str,
 # минут на длинном рассуждении модели, шаг сбора — до ~1,5 мин на браузерной странице.
 _JOB_STALL_SECONDS = {
     "process_articles": 1200,
-    "recheck_relevance": 1200,
     "translate_titles": 1200,
     "process_document": 1800,
     "reprint_review": 1200,
@@ -435,7 +434,6 @@ def _handle_job(client: ExternalWorkerClient, job: dict[str, Any]) -> None:
 # атрибут модуля, и таблица обязана видеть подмену.
 _HANDLERS: dict[str, tuple[Any, str]] = {
     "process_articles": (external_ai, "process_payload"),
-    "recheck_relevance": (external_ai, "process_recheck_payload"),
     "translate_titles": (external_ai, "process_translate_payload"),
     "process_document": (documents_external, "process_document_payload"),
     "scrape_source": (external_fetch, "process_payload"),

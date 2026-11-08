@@ -10,10 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api
-from oiltech_digest.db import repository
+from oiltech_digest.db import feed_signals, repository
 from oiltech_digest.db import marks
 from oiltech_digest.ingestion.normalize import url_key
 from oiltech_digest.processing import external_ai, reprints
+from tests.signal_card_support import before_otbor
 
 DRILLING = "Бурение, заканчивание и внутрискважинные работы"
 ECOLOGY = "Экология, промышленная безопасность и охрана труда"
@@ -72,17 +73,26 @@ def _article(n, *, collected=None, title=None, source="Лента"):
     return int(article_id)
 
 
+SNAPSHOT = [{"id": 1, "name": "к", "weight": 100, "text_hash": "h"}]
+
+
 def _process(article_id, *, relevant=True, summary="Суть статьи", title_ru=None, theme=DRILLING, score=70.0):
-    """Итог обработки статьи воркером — так, как его применяет ядро."""
-    item = {"article_id": article_id, "relevance": {"relevant": relevant, "reason": "r", "model": "m"}}
-    if relevant:
-        item["summary"] = {"summary": summary, "model": "m"}
-        item["translation"] = {"title_ru": title_ru or f"Статья {article_id}", "model": "m"}
-        item["tagging"] = {"tag_id": _tag(theme), "confidence": 0.9, "model": "m"}
-        item["scoring"] = {"total_score": score, "score_label": "Выше средней", "explanation": "e", "items": [],
-                           "model": "m", "profile": "business",
-                           "criteria_snapshot": [{"id": 1, "name": "к", "weight": 100, "text_hash": "h"}]}
-    external_ai.apply_process_result({"articles": [item]})
+    """Статья до «Отбора»: вердикт гейта, тег и балл прежней обработки (история, сняты 08.11), затем суть и перевод,
+    итог воркера, как его применяет ядро."""
+    if not relevant:
+        _reject_by_gate(article_id)
+        return
+    before_otbor(article_id, tag_id=_tag(theme), score=score, snapshot=SNAPSHOT)
+    external_ai.apply_process_result({"articles": [{
+        "article_id": article_id, "summary": {"summary": summary, "model": "m"},
+        "translation": {"title_ru": title_ru or f"Статья {article_id}", "model": "m"}}]})
+
+
+def _reject_by_gate(article_id):
+    """Вердикт гейта «не брать» (история: так статью снимала перепроверка гейтом до 08.11); мост синхронизирован, как
+    после записи вердикта."""
+    before_otbor(article_id, relevant=False)
+    feed_signals.sync_quietly([article_id])
 
 
 def _business(user, **params):
@@ -178,7 +188,7 @@ def test_radar_shows_exactly_the_same_with_feed_signals_in_the_store(user, admin
         _process(article_id, title_ru=f"Бизнес-новость {n}")
     article = _article(8)
     _process(article)
-    repository.set_article_relevance(article, False, "передумал")
+    _reject_by_gate(article)
     feed = {card["origin_article_id"]: card["id"] for card in _business(user) if card["origin"] == "feed"}
     assert sorted(feed) == sorted(articles.values())
     with repository.get_connection() as conn:
@@ -242,19 +252,18 @@ def test_business_showcase_has_radar_business_finds_and_its_own_summary(user, ad
     assert _get("/api/signals", user, showcase="business", hidden=True).status_code == 422
 
 
-def test_feed_signal_follows_resummary_retagging_and_rescoring(user):
+def test_feed_signal_follows_resummary_and_the_history_tag_and_score(user):
+    """Сигнал ленты повторяет новую суть и заголовок статьи, а у статьи до «Отбора» ещё тему и балл её тега и балла
+    (история: тег и балл статьи сняты 08.11, мост берёт их при следующей записи статьи)."""
     article = _article(1)
     _process(article, summary="Первая суть", title_ru="Первый заголовок", score=50)
+    before_otbor(article, tag_id=_tag(ECOLOGY), score=88.0, snapshot=SNAPSHOT)
 
     external_ai.apply_process_result(
         {"articles": [{"article_id": article, "summary": {"summary": "Новая суть", "model": "m"},
-                       "translation": {"title_ru": "Новый заголовок", "model": "m"},
-                       "relevance": {"relevant": True, "reason": "r"}}]},
+                       "translation": {"title_ru": "Новый заголовок", "model": "m"}}]},
         only=["summary", "translation"],
     )
-    repository.upsert_article_tag(article, _tag(ECOLOGY), 0.8, "другая тема")
-    repository.replace_article_score(article, 88.0, "Высокая", "e", [], "m", profile="business",
-                                     criteria_snapshot=[{"id": 1, "name": "к", "weight": 100, "text_hash": "h"}])
 
     (card,) = _business(user)
     assert (card["title_ru"], card["summary"], card["theme"], card["score"]) == (
@@ -265,7 +274,7 @@ def test_feed_signal_leaves_the_showcase_with_its_article(user):
     kept, rejected_later, deleted = _article(1), _article(2), _article(3)
     for article in (kept, rejected_later, deleted):
         _process(article)
-    repository.set_article_relevance(rejected_later, False, "перепроверка: не нефтесервис")
+    _reject_by_gate(rejected_later)
     with repository.get_connection() as conn:
         conn.execute("UPDATE articles SET pending_deletion = TRUE WHERE id = %s", (deleted,))
         conn.commit()
@@ -487,7 +496,7 @@ def test_dedup_snapshot_of_the_feed_takes_visible_and_reviewed_signals_of_the_se
     for article in (visible, reviewed, hidden, old):
         _process(article)
     for article in (reviewed, hidden):
-        repository.set_article_relevance(article, False, "перепроверка: не нефтесервис")
+        _reject_by_gate(article)
     _feedback(_feed_signal_id(reviewed), "reject", event_type="verdict")
     _participants(_feed_signal_id(visible), "Halliburton", "Keystone AS")
 

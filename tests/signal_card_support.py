@@ -85,10 +85,45 @@ def tag(name):
     return int(row[0])
 
 
+def before_otbor(article_id, *, relevant=True, tag_id=None, score=None, items=(), profile="business", snapshot=None):
+    """История статьи, решённой до «Отбора» (гейт ленты, тег и балл статьи сняты 08.11): вердикт гейта в её карточке,
+    тег и балл с подпунктами прежней обработки, как их записала она. Мост «лента → сигнал» сам не зовётся: сигнал
+    заводит или обновляет следующая запись статьи (суть, перевод) или sync-feed-signals."""
+    from psycopg.types.json import Jsonb
+
+    with repository.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO article_cards (article_id, relevant, relevance_reason, relevance_model, status) "
+            "VALUES (%s, %s, 'r', 'm', %s) ON CONFLICT (article_id) DO UPDATE SET relevant = EXCLUDED.relevant, "
+            "status = EXCLUDED.status, updated_at = now()",
+            (article_id, relevant, "new" if relevant else "rejected"))
+        if tag_id is not None:
+            conn.execute(
+                "INSERT INTO article_tags (article_id, tag_id, confidence, model) VALUES (%s, %s, 0.9, 'm') "
+                "ON CONFLICT (article_id) DO UPDATE SET tag_id = EXCLUDED.tag_id", (article_id, tag_id))
+        if score is not None:
+            label = "Высокая" if score >= 80 else "Выше средней" if score >= 65 else "Средняя" if score >= 40 else "Низкая"
+            score_id = conn.execute(
+                "INSERT INTO article_scores (article_id, model, total_score, score_label, explanation, profile, "
+                "criteria_snapshot) VALUES (%s, 'm', %s, %s, 'e', %s, %s) ON CONFLICT (article_id) DO UPDATE SET "
+                "total_score = EXCLUDED.total_score, score_label = EXCLUDED.score_label, profile = EXCLUDED.profile, "
+                "criteria_snapshot = EXCLUDED.criteria_snapshot RETURNING id",
+                (article_id, score, label, profile, Jsonb(snapshot) if snapshot is not None else None)).fetchone()[0]
+            conn.execute("DELETE FROM article_score_items WHERE article_score_id = %s", (score_id,))
+            for item in items:
+                conn.execute(
+                    "INSERT INTO article_score_items (article_score_id, criterion_id, keyword_score, ai_score, "
+                    "final_score, rationale) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (score_id, item["criterion_id"], item.get("keyword_score"), item.get("ai_score"),
+                     item.get("final_score"), item.get("rationale")))
+        conn.commit()
+
+
 def feed_signal(title, text, *, published=datetime(2026, 9, 25, 10, tzinfo=timezone.utc), source="Нефтегаз",
                 source_type="Media", collected=None):
-    """Статья, принятая отбором, — сигнал ленты (мост #95). source_type — как в справочнике источников:
-    Media, News, Company, Company / NOC… collected: когда статью собрали (по умолчанию сейчас)."""
+    """Статья, принятая отбором (гейтом до «Отбора», с тегом прежней обработки), становится сигналом ленты (мост
+    #95). source_type: как в справочнике источников: Media, News, Company, Company / NOC… collected: когда статью собрали
+    (по умолчанию сейчас)."""
     collected = collected or datetime.now(timezone.utc)
     with repository.get_connection() as conn:
         source_row = conn.execute("SELECT id FROM sources WHERE name = %s", (source,)).fetchone()
@@ -104,12 +139,12 @@ def feed_signal(title, text, *, published=datetime(2026, 9, 25, 10, tzinfo=timez
             (source_row[0], title, f"https://feed.example/{abs(hash(title))}", published, collected, text),
         ).fetchone()[0])
         conn.commit()
+    before_otbor(article_id, tag_id=tag(DRILLING))
+    # Суть и перевод: итог воркера, как его применяет ядро; запись заводит сигнал ленты.
     external_ai.apply_process_result({"articles": [{
         "article_id": article_id,
-        "relevance": {"relevant": True, "reason": "r", "model": "m"},
         "summary": {"summary": f"Суть: {title}", "model": "m"},
         "translation": {"title_ru": title, "model": "m"},
-        "tagging": {"tag_id": tag(DRILLING), "confidence": 0.9, "model": "m"},
     }]})
     return article_id
 

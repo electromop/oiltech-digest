@@ -117,9 +117,6 @@ SIGNAL_DISCOVERY_DAILY_ENABLED="${SIGNAL_DISCOVERY_DAILY_ENABLED:-1}"
 # Агент «Карточка сигнала» (#96): новые сигналы — в задачи агента на NL. По умолчанию выключен:
 # включать после пересборки NL (контракт 2) — старая сборка такие задачи отказывает.
 SIGNAL_CARD_ENABLED="${SIGNAL_CARD_ENABLED:-0}"
-# Агент «Отбор» (#130): статьи, вставленные при включённом флаге, решает он, а не гейт ленты. По умолчанию
-# выключен: включать после пересборки NL (контракт 4) и экзамена (#133) — флаг и для вставки статей (ядро).
-OTBOR_ENABLED="${OTBOR_ENABLED:-0}"
 
 if [ "$SKIP_BOOTSTRAP" != "1" ]; then
   log "Bootstrapping database and seed data"
@@ -183,12 +180,11 @@ while true; do
     fi
   fi
 
-  if [ "$OTBOR_ENABLED" = "1" ]; then
-    # Новые статьи, находки поиска и материалы коллег — агенту «Отбор» на NL; принятые статьи получат суть, тег и
-    # балл обработкой ленты следующего цикла, находки и материалы — суть и русский заголовок своим шагом (#131).
-    run_step "enqueue-otbor" python -m oiltech_digest.cli enqueue-otbor
-    run_step "enqueue-signal-summary" python -m oiltech_digest.cli enqueue-signal-summary
-  fi
+  # Агент «Отбор» (#130) решает каждую новую статью, находку поиска и материал коллеги (флаг и гейт ленты сняты
+  # 08.11): принятые статьи получат суть и перевод обработкой ленты следующего цикла, находки и материалы: суть и
+  # русский заголовок своим шагом (#131).
+  run_step "enqueue-otbor" python -m oiltech_digest.cli enqueue-otbor
+  run_step "enqueue-signal-summary" python -m oiltech_digest.cli enqueue-signal-summary
 
   if [ "$FETCH_EXTERNAL_ENABLED" = "1" ]; then
     # Западные источники (network_region='external') фетчим через зарубежный воркер —
@@ -218,10 +214,8 @@ while true; do
     run_step "enqueue-signal-cards" python -m oiltech_digest.cli enqueue-signal-cards
   fi
 
-  if [ "$OTBOR_ENABLED" = "1" ]; then
-    # Второй вызов «Карточки» (#132): баллы по профилю категории — после её основного вызова.
-    run_step "enqueue-signal-scores" python -m oiltech_digest.cli enqueue-signal-scores
-  fi
+  # Второй вызов «Карточки» (#132): баллы по профилю категории, после её основного вызова.
+  run_step "enqueue-signal-scores" python -m oiltech_digest.cli enqueue-signal-scores
 
   if [ "$SOURCE_DISCOVERY_ENABLED" = "1" ]; then
     if [ "$SOURCE_DISCOVERY_EVERY_CYCLES" -gt 0 ] && [ $((cycle % SOURCE_DISCOVERY_EVERY_CYCLES)) -eq 0 ]; then

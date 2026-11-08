@@ -155,7 +155,7 @@ def cmd_fetch_full_text(args: argparse.Namespace) -> None:
         min_chars=args.min_chars,
         retry_too_short=args.retry_too_short,
     )
-    # Суть, тег и балл, посчитанные по обрывку до дозагрузки, — в пересчёт один раз, если тело
+    # Суть, посчитанная по обрывку до дозагрузки, идёт в пересчёт один раз, если тело
     # дало модели заметно больше текста (как перерасчёт у repair-article-bodies).
     recompute = fulltext_recompute.after_bodies(stats.pop("replaced", []))
     print(
@@ -260,8 +260,9 @@ def cmd_apply_scoring_preset(args: argparse.Namespace) -> None:
                        ("disable", "выключатся (не удаляются: подпункты старых баллов остаются целыми)")):
         print(f"  {label}: {', '.join(plan[key]) or '—'}")
     if result["applied"]:
-        print("  применено. Баллы статей, посчитанные прежним набором, не пересчитаны: "
-              f"enqueue-rescore --profile {result['profile']} --month ГГГГ-ММ (сначала сухой прогон)")
+        # Балл статьи снят 08.11 (баллы ставит второй вызов «Карточки» у сигнала): прежние баллы не пересчитываются.
+        print("  применено. Баллы, посчитанные прежним набором, не пересчитаны: новый набор возьмут новые баллы "
+              "сигналов")
 
 
 def cmd_apply_source_overrides(args: argparse.Namespace) -> None:
@@ -509,13 +510,6 @@ def _markdown_cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
-def cmd_tag(args: argparse.Namespace) -> None:
-    from oiltech_digest.processing.pipeline import process_tags
-
-    stats = process_tags(limit=args.limit, offline=args.offline)
-    print(f"tagging: обработано={stats['processed']}, ошибок={stats['errors']}")
-
-
 def cmd_retire_tags(args: argparse.Namespace) -> None:
     """Разовая миграция таксономии: выключить теги, которых нет в списке заказчика."""
     from oiltech_digest.processing.seed import retire_old_tags
@@ -524,83 +518,27 @@ def cmd_retire_tags(args: argparse.Namespace) -> None:
     print(f"retire-tags: выключено прежних тегов={stats['disabled']}")
 
 
-def cmd_retag_reset(args: argparse.Namespace) -> None:
-    """Снять классификацию по выключенным тегам, чтобы статьи перетегировались заново.
-
-    Сама по себе ничего не тегирует и ничего не тратит: возвращает статьи в очередь,
-    а разметку делает обычная стадия `tag` (или планировщик). Разделено намеренно —
-    перетегирование 11 тысяч статей платное, и запускать его надо осознанно.
-    """
-    from oiltech_digest.db import repository
-
-    removed = repository.clear_article_tags_for_disabled(limit=args.limit)
-    print(f"retag-reset: снято тегов={removed} (статьи вернулись в очередь тегирования)")
-
-
-def cmd_score(args: argparse.Namespace) -> None:
-    from oiltech_digest.processing.pipeline import process_scores
-
-    stats = process_scores(limit=args.limit, offline=args.offline)
-    print(f"scoring: обработано={stats['processed']}, ошибок={stats['errors']}")
-
-
-def cmd_rescore_recompute(args: argparse.Namespace) -> None:
-    """Пересчитать баллы из УЖЕ сохранённых ai_score новым блендингом — без OpenAI и без воркера.
-    Гоняется на ядре (РФ) прямо по БД. Полезно, когда менялась только формула блендинга или веса,
-    а внешний AI-воркер недоступен/дорог. Полный AI-перепрогон (новая модель+промпт) — отдельно.
-
-    С сессии G — по профилю и только у баллов, чей снимок совпадает с текущим набором по id и
-    текстам (изменились только веса); остальные пропускаются и считаются в выводе. Смена текстов
-    или набора — пересчёт с ИИ: enqueue-rescore."""
-    from oiltech_digest.db import repository
-    from oiltech_digest.processing.pipeline import SCORE_AI_WEIGHT, SCORE_KEYWORD_WEIGHT
-
-    try:
-        stats = repository.recompute_total_scores_from_items(
-            SCORE_KEYWORD_WEIGHT, SCORE_AI_WEIGHT, profile=args.profile,
-            include_legacy=args.include_legacy, dry_run=args.dry_run,
-        )
-    except ValueError as exc:
-        raise SystemExit(f"rescore-recompute: {exc}") from exc
-    print(json.dumps(
-        {**stats, "keyword_weight": SCORE_KEYWORD_WEIGHT, "ai_weight": SCORE_AI_WEIGHT},
-        ensure_ascii=False))
-
-
 def cmd_process_full(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.pipeline import process_full
 
     stats = process_full(limit=args.limit, offline=args.offline)
     print(
         f"pipeline: статей={stats['processed']}, full-text={stats['fulltext']}, "
-        f"суть={stats['summary']}, релевантно={stats['relevant']}, отсев={stats['rejected']}, "
-        f"теги={stats['tagged']}, скоринг={stats['scored']}, ошибок={stats['errors']}"
-    )
-
-
-def cmd_relevance(args: argparse.Namespace) -> None:
-    from oiltech_digest.processing.pipeline import process_relevance
-
-    stats = process_relevance(limit=args.limit, offline=args.offline)
-    print(
-        f"relevance: обработано={stats['processed']}, релевантно={stats['relevant']}, "
-        f"отклонено={stats['rejected']}, ошибок={stats['errors']}"
+        f"суть={stats['summary']}, перевод={stats['translated']}, отклонено={stats['rejected']}, "
+        f"ошибок={stats['errors']}"
     )
 
 
 def cmd_process(args: argparse.Namespace) -> None:
     from oiltech_digest.processing.pipeline import process_full
 
-    # Канонический pipeline: full-text → relevance → summary → translate → tag → score.
-    # Релевантность идёт до сути, чтобы summary не bias-ила гейт и чтобы не тратить AI
-    # на нерелевантные материалы.
+    # Конвейер ленты: full-text → summary → translate у статей, принятых «Отбором» (до него гейтом). Гейт, тег и
+    # балл статьи сняты 08.11: решает «Отбор», тему и баллы ставит «Карточка».
     stats = process_full(limit=args.limit, offline=args.offline)
     print(
         "process: "
-        f"статей={stats['processed']}, full-text={stats['fulltext']}, "
-        f"релевантно={stats['relevant']}, отклонено={stats['rejected']}, "
+        f"статей={stats['processed']}, full-text={stats['fulltext']}, отклонено={stats['rejected']}, "
         f"summary={stats['summary']}, translate={stats['translated']}, "
-        f"tagging={stats['tagged']}, scoring={stats['scored']}, "
         f"errors={stats['errors']}"
     )
 
@@ -617,10 +555,8 @@ def cmd_process_articles(args: argparse.Namespace) -> None:
     stats = process_pipeline_articles(articles, client, fetch_full=True)
     print(
         "process-articles: "
-        f"статей={stats['processed']}, full-text={stats['fulltext']}, "
-        f"релевантно={stats['relevant']}, отклонено={stats['rejected']}, "
+        f"статей={stats['processed']}, full-text={stats['fulltext']}, отклонено={stats['rejected']}, "
         f"summary={stats['summary']}, translate={stats['translated']}, "
-        f"tagging={stats['tagged']}, scoring={stats['scored']}, "
         f"errors={stats['errors']}"
     )
 
@@ -652,58 +588,11 @@ def cmd_enqueue_process(args: argparse.Namespace) -> None:
     )
 
 
-def cmd_enqueue_recheck(args: argparse.Namespace) -> None:
-    """Поставить в очередь перепрогон релевантности по всей базе батчами.
-
-    Нерелевантные статьи будут УДАЛЕНЫ физически при применении результата на core
-    (статьи из выпусков — сохранённый черновик или отметка «в дайджест» — пропускаются, если не
-    задан --force). На проде
-    задачи разбирает внешний NL-воркер (OpenAI). limit — опциональный потолок числа статей."""
-    from oiltech_digest import network_policy
-    from oiltech_digest.db import repository
-
-    # Поток дня, а не полоса пересчётов: перепроверка удаляет статьи, а резерв при выдаче
-    # защищает только пакет×пакет (lanes.py).
-    decision = network_policy.route_ai_processing()
-    dry_run = bool(getattr(args, "dry_run", False))
-    ids = repository.all_article_ids()
-    if args.limit and len(ids) > args.limit:
-        if dry_run:
-            # dry-run: представительная СЛУЧАЙНАЯ выборка по всей базе. Первые id —
-            # уже выжившие после реального recheck (нерелевантное удалено) → дали бы 0
-            # отклонений. Случайная выборка ловит и ещё не перепроверенные «сырые» статьи.
-            import random
-            ids = random.sample(ids, args.limit)
-        else:
-            ids = ids[: args.limit]
-    batch = max(1, args.batch_size)
-    mark = bool(getattr(args, "mark", False))
-    chunks = [ids[i : i + batch] for i in range(0, len(ids), batch)]
-    job_ids = []
-    for chunk in chunks:
-        job = repository.create_background_job(
-            "recheck_relevance",
-            {"article_ids": chunk, "force": bool(args.force), "dry_run": dry_run, "mark": mark},
-            queue_name=decision.queue_name,
-            execution_region=decision.execution_region,
-            capability=decision.capability,
-        )
-        job_ids.append(job["id"])
-    if dry_run:
-        suffix = "  ← DRY-RUN: ничего не удаляется, смотри `recheck-dry-show <job_id>`"
-    elif mark:
-        suffix = "  ← MARK: нерелевантные ПОМЕЧАЮТСЯ (не удаляются); смотри `recheck-marked`, затем `recheck-purge`"
-    else:
-        suffix = "  ← УДАЛЕНИЕ физическое"
-    print(
-        f"enqueue-recheck: статей={len(ids)}, задач={len(job_ids)} {job_ids if dry_run else ''}, батч={batch}, "
-        f"queue={decision.queue_name} region={decision.execution_region} force={bool(args.force)} dry_run={dry_run} mark={mark} ({decision.reason}){suffix}"
-    )
-
-
 def cmd_recheck_marked(args: argparse.Namespace) -> None:
-    """Показать помеченные на удаление (recheck --mark): счётчик + выборка с причинами.
-    Ничего не удаляет — только смотрим, что накопилось на удаление."""
+    """Показать помеченные на удаление (pending_deletion): счётчик + выборка с причинами.
+    Ничего не удаляет: только показывает, что накопилось на удаление. Перепроверку гейтом, которая
+    помечала (recheck --mark), сняли 08.11; пометки остались от неё и от склейки ключей адреса 13.09
+    (их возвращает repair-url-keys)."""
     from oiltech_digest.db import repository
 
     total = repository.count_pending_deletion()
@@ -734,39 +623,11 @@ def cmd_recheck_purge(args: argparse.Namespace) -> None:
 
 
 def cmd_recheck_unmark(args: argparse.Namespace) -> None:
-    """Снять пометку «на удаление» со ВСЕХ статей (вернуть в ленту). Если гейт срезал лишнее."""
+    """Снять пометку «на удаление» со ВСЕХ статей (вернуть в ленту)."""
     from oiltech_digest.db import repository
 
     n = repository.unmark_all_pending_deletion()
     print(f"recheck-unmark: возвращено в строй={n}")
-
-
-def cmd_recheck_dry_show(args: argparse.Namespace) -> None:
-    """Показать вердикты dry-run recheck-задачи: что БЫ срезалось (заголовок + причина).
-    Ничего не меняет — читает result уже выполненной задачи из background_jobs."""
-    from oiltech_digest.db import repository
-
-    job = repository.get_background_job(args.job_id)
-    if job is None:
-        raise SystemExit(f"задача {args.job_id} не найдена")
-    # ИМЕННО result_json: get_background_job делает SELECT *, ключи = колонки (schema.sql:305).
-    # Чтение несуществующего "result" молча давало {} → команда всегда ругалась «нет применённого
-    # результата», то есть превью dry-run было недоступно (тот же класс бага, что T3).
-    applied = ((job.get("result_json") or {}).get("applied")) or {}
-    if "checked" not in applied:
-        raise SystemExit(f"у задачи {args.job_id} нет применённого результата "
-                         f"(status={job.get('status')}; это завершённая dry-run задача?)")
-    preview = applied.get("rejected_preview") or []
-    print(f"DRY-RUN job {args.job_id}: проверено={applied.get('checked')}, "
-          f"оставили={applied.get('kept')}, СРЕЗАЛОСЬ БЫ={applied.get('deleted')}, ошибок={applied.get('errors')}")
-    if not preview:
-        print("  В этой выборке гейт ничего не срезал (0 отклонено) — вероятно, это уже "
-              "выжившие статьи. Запусти dry-run заново (теперь выборка случайная по всей базе).")
-        return
-    print("--- что бы удалилось (заголовок · источник · причина) ---")
-    for r in preview[: args.limit]:
-        title = (r.get("title") or "")[:90]
-        print(f"  [{r.get('source') or '—'}] {title}\n      причина: {r.get('reason') or '—'}")
 
 
 def cmd_enqueue_translate(args: argparse.Namespace) -> None:
@@ -856,53 +717,6 @@ def cmd_enqueue_title_edit(args: argparse.Namespace) -> None:
                                      allow_live_lane=args.allow_live_lane)
     except RuntimeError as exc:
         raise SystemExit(f"enqueue-title-edit: {exc}") from exc
-    print(f"  задач: {len(jobs)} ({jobs[:20]}{' …' if len(jobs) > 20 else ''})")
-
-
-def cmd_enqueue_rescore(args: argparse.Namespace) -> None:
-    """Пересчитать балл статей месяца с ИИ — после смены текстов или набора критериев профиля.
-
-    Сначала всегда сухой прогон (по умолчанию): выборка N, стоимость по формуле ADR 0002 и полоса,
-    куда встанут задачи. Задачи — только с --no-dry-run, решение о запуске — за владельцем."""
-    from oiltech_digest.processing import rescore
-
-    try:
-        selection = rescore.rescore_selection(args.profile, args.month)
-    except ValueError as exc:
-        raise SystemExit(f"enqueue-rescore: {exc}") from exc
-    ids = selection["article_ids"][: args.limit] if args.limit else selection["article_ids"]
-    estimate = rescore.stage_cost_estimate("scoring", len(ids))
-    lane = rescore.rescore_lane()
-    print(
-        f"enqueue-rescore: профиль {selection['profile']}, месяц {selection['month']} — видимых оценённых статей "
-        f"{selection['scored']}: посчитаны текущим набором {selection['up_to_date']} (из них другие только веса — "
-        f"{selection['weights_only']}, им хватит rescore-recompute), набор или тексты другие {selection['changed']}, "
-        f"без снимка (до профилей) {selection['no_snapshot']}"
-    )
-    in_digest = sum(1 for article_id in ids if article_id in selection.get("digest_ids", ()))
-    print(f"  к пересчёту с ИИ: N={len(ids)} (из них выбраны в дайджест: {in_digest}); "
-          f"уже в задачах пересчёта, повторно не ставятся: {selection['queued']}")
-    if estimate["model"] is None:
-        print(f"  стоимость не оценить: вызовов scoring за {estimate['days']} дней нет")
-    else:
-        print(
-            f"  стоимость ≈ ${estimate['usd_total']:.2f}: модель {estimate['model']}, вызовов scoring за "
-            f"{estimate['days']} дней: {estimate['runs']}, в среднем in={estimate['avg_input_tokens']} / "
-            f"out={estimate['avg_output_tokens']} токенов, ставки ${estimate['price_in']}/${estimate['price_out']} "
-            f"за 1М → ${estimate['usd_per_call']:.5f} за вызов; сверять со счётом провайдера"
-        )
-    workers = ", ".join(f"{name} (задачу просил {minutes} мин назад)" for name, minutes in lane["workers"]) or "нет"
-    print(f"  полоса: {lane['queue']} ({lane['region']}); воркеры полосы: {workers}")
-    for warning in lane["warnings"]:
-        print(f"  ВНИМАНИЕ: {warning}")
-    if args.dry_run:
-        print("  [dry-run] задачи не поставлены (поставить: --no-dry-run)")
-        return
-    try:
-        jobs = rescore.enqueue_stage(ids, rescore.RESCORE_STAGES, what="пересчёт балла", batch_size=args.batch_size,
-                                     allow_live_lane=args.allow_live_lane)
-    except RuntimeError as exc:
-        raise SystemExit(f"enqueue-rescore: {exc}") from exc
     print(f"  задач: {len(jobs)} ({jobs[:20]}{' …' if len(jobs) > 20 else ''})")
 
 
@@ -1040,17 +854,15 @@ def cmd_repair_article_bodies(args: argparse.Namespace) -> None:
     """Перекачать тела статей с дефектом (чужое/кракозябры/простыня) новым извлечением, срезать хвосты.
 
     По умолчанию сухой прогон. С --apply тела заменяются, а по заменённым ставится
-    перерасчёт сути, тега и балла (посчитаны по старому тексту) тем же путём, что пересчёт после
-    полного текста (fulltext_recompute.enqueue_after_body): без гейта (решение ленты дальше за
-    «Отбором», правило владельца 02.11), мимо выбранного «в дайджест», черновика выпуска, скрытого и
-    отклонённого, по полосе пересчётов.
+    перерасчёт сути (посчитана по старому тексту) тем же путём, что пересчёт после полного текста
+    (fulltext_recompute.enqueue_after_body): решение ленты за «Отбором» (правило владельца 02.11),
+    мимо выбранного «в дайджест», черновика выпуска, скрытого и отклонённого, по полосе пересчётов.
 
     --tails: только хвосты (#140), по всем источникам или по названному. В конце по источникам:
     сколько статей и знаков уйдёт. --all-pages: качать страницу и там, где хвост не виден по тексту.
 
-    Перерасчёт — только статьям открытых месяцев окна ленты, как у пересчёта балла
-    (rescore_selection): у статьи закрытого месяца новая суть, тег или вердикт гейта
-    переписали бы закрытый выпуск, а он только на просмотр (решение владельца 30.09). Тело
+    Перерасчёт ставится только статьям открытых месяцев окна ленты: у статьи закрытого месяца новая суть
+    переписала бы закрытый выпуск, а он только на просмотр (решение владельца 30.09). Тело
     такой статьи меняется (выпуск его не показывает); пропущенные — в отчёте."""
     from oiltech_digest import feed_window
     from oiltech_digest.db import repository
@@ -1376,20 +1188,6 @@ def cmd_source_dump_listing(args: argparse.Namespace) -> None:
             break
 
 
-def cmd_recheck_relevance(args: argparse.Namespace) -> None:
-    """Локальный перепрогон релевантности (для тестов/дампа; на проде — enqueue-recheck)."""
-    from oiltech_digest.processing.pipeline import process_recheck
-
-    stats = process_recheck(
-        limit=args.limit, offline=args.offline, force=args.force, max_articles=args.max_articles
-    )
-    print(
-        f"recheck-relevance: проверено={stats['checked']}, оставлено={stats['kept']}, "
-        f"удалено={stats['deleted']}, пропущено(в дайджесте)={stats['skipped_in_digest']}, "
-        f"ошибок={stats['errors']}"
-    )
-
-
 def cmd_ai_cost_report(args: argparse.Namespace) -> None:
     from oiltech_digest.db import repository
 
@@ -1645,8 +1443,7 @@ def cmd_parse_process(args: argparse.Namespace) -> None:
     parse_thread = threading.Thread(target=_run_parse, daemon=True)
     parse_thread.start()
 
-    process_totals = {"processed": 0, "fulltext": 0, "summary": 0,
-                      "relevant": 0, "rejected": 0, "tagged": 0, "scored": 0, "errors": 0}
+    process_totals = {"processed": 0, "fulltext": 0, "summary": 0, "translated": 0, "rejected": 0, "errors": 0}
     poll_interval = getattr(args, "poll_interval", 10)
     batch_limit = getattr(args, "process_limit", 20)
 
@@ -1675,8 +1472,7 @@ def cmd_parse_process(args: argparse.Namespace) -> None:
     print(
         f"parse-process pipeline: статей={process_totals['processed']}, "
         f"full-text={process_totals['fulltext']}, суть={process_totals['summary']}, "
-        f"релевантно={process_totals['relevant']}, отсев={process_totals['rejected']}, "
-        f"теги={process_totals['tagged']}, скоринг={process_totals['scored']}, "
+        f"перевод={process_totals['translated']}, отклонено={process_totals['rejected']}, "
         f"ошибок={process_totals['errors']}"
     )
 
@@ -2280,7 +2076,7 @@ def cmd_enqueue_signal_cards(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
     """Шаг планировщика «Отбор» (#130, #131): новые статьи, находки поиска и материалы коллег, которые решает агент
-    «Отбор», — в его задачи по полосе ежедневной обработки. За флагом OTBOR_ENABLED. С --ids (статьи) и
+    «Отбор», ставит в его задачи по полосе ежедневной обработки. С --ids (статьи) и
     --signal-ids (находки и материалы) — названные публикации «Отбора» по полосе пересчётов: повтор после разбора
     сбоя, в том числе ответа не по правилам (его шаг не повторяет)."""
     from oiltech_digest import otbor
@@ -2308,9 +2104,6 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
             result = otbor.scheduler_step()
     except otbor.OtborSetupError as exc:
         raise SystemExit(f"enqueue-otbor: {exc}") from exc
-    if result.get("reason"):
-        print(f"enqueue-otbor: skipped reason={result['reason']}")
-        return
     queues = sorted({job["queue_name"] for job in result["jobs"]})
     print(f"enqueue-otbor: статей {result['articles']}, находок и материалов {result['signals']},"
           f" задач {len(result['jobs'])}"
@@ -2321,7 +2114,7 @@ def cmd_enqueue_otbor(args: argparse.Namespace) -> None:
 def cmd_otbor_materials(args: argparse.Namespace) -> None:
     """Накопленные материалы коллег (#131): присланные до включения «Отбора» и не ставшие сигналом проходят конвейер
     один раз. По умолчанию сухой прогон — сколько материалов и оценка цены «Отбора», ничего не пишет; --apply —
-    сигналы материалов и задачи «Отбора» по полосе пересчётов (только при включённом флаге); с --silent итог авторам
+    сигналы материалов и задачи «Отбора» по полосе пересчётов; с --silent итог авторам
     бот не сообщает (решение владельца 04.11 для присланных до включения)."""
     from oiltech_digest import material_signals, otbor
 
@@ -2406,7 +2199,7 @@ def cmd_otbor_shadow_report(args: argparse.Namespace) -> None:
 def cmd_otbor_switch(args: argparse.Namespace) -> None:
     """Переключение витрин на «Отбор» (#134): решения проверки на реальных данных в сигналы, принятые идут дальше по
     конвейеру. По умолчанию сухой прогон: что перенесётся и куда, что пропущено, что дальше и почём; --json — то же с
-    номерами статей (поимённый список для дампа и согласования). --apply только при включённом флаге, когда задачи
+    номерами статей (поимённый список для дампа и согласования). --apply только при включённой «Карточке», когда задачи
     проверки дошли и у всех статей окна, решённых гейтом, есть решение проверки."""
     from oiltech_digest import otbor, otbor_shadow
     from oiltech_digest.otbor_pack_format import load_dictionaries as load_otbor_dictionaries
@@ -2447,20 +2240,14 @@ def cmd_otbor_switch(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
     """Шаг планировщика «Суть и перевод» сигналов (#131): находки и материалы, принятые «Отбором», без сути или
-    русского заголовка — в задачи по полосе ежедневной обработки. За флагом OTBOR_ENABLED. С --ids — названные
+    русского заголовка ставит в задачи по полосе ежедневной обработки. С --ids: названные
     сигналы по полосе пересчётов (повтор после сбоя модели), только принятые «Отбором»."""
     from oiltech_digest import signal_summary
 
-    try:
-        if args.ids:
-            result = signal_summary.enqueue_named([int(value) for value in args.ids.split(",") if value.strip()])
-        else:
-            result = signal_summary.scheduler_step()
-    except signal_summary.SummarySetupError as exc:
-        raise SystemExit(f"enqueue-signal-summary: {exc}") from exc
-    if result.get("reason"):
-        print(f"enqueue-signal-summary: skipped reason={result['reason']}")
-        return
+    if args.ids:
+        result = signal_summary.enqueue_named([int(value) for value in args.ids.split(",") if value.strip()])
+    else:
+        result = signal_summary.scheduler_step()
     queues = sorted({job["queue_name"] for job in result["jobs"]})
     print(f"enqueue-signal-summary: сигналов {result['signals']}, задач {len(result['jobs'])}"
           + (f", очередь {', '.join(queues)}" if queues else ""))
@@ -2470,8 +2257,8 @@ def cmd_enqueue_signal_summary(args: argparse.Namespace) -> None:
 
 def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
     """Шаг планировщика «баллы» — второй вызов «Карточки» (#132): сигналы после основного вызова без баллов и с
-    баллами, которые «пересчитываются» после «не тот блок», — в задачи по полосе ежедневной обработки. За флагом
-    OTBOR_ENABLED, модель — SIGNAL_SCORES_MODEL. С --ids — названные сигналы по полосе пересчётов."""
+    баллами, которые «пересчитываются» после «не тот блок», ставит в задачи по полосе ежедневной обработки. Модель:
+    SIGNAL_SCORES_MODEL. С --ids: названные сигналы по полосе пересчётов."""
     from oiltech_digest import signal_scores
 
     try:
@@ -2481,9 +2268,6 @@ def cmd_enqueue_signal_scores(args: argparse.Namespace) -> None:
             result = signal_scores.scheduler_step()
     except signal_scores.ScoresSetupError as exc:
         raise SystemExit(f"enqueue-signal-scores: {exc}") from exc
-    if result.get("reason"):
-        print(f"enqueue-signal-scores: skipped reason={result['reason']}")
-        return
     queues = sorted({job["queue_name"] for job in result["jobs"]})
     print(f"enqueue-signal-scores: сигналов {result['signals']}, задач {len(result['jobs'])}"
           + (f", очередь {', '.join(queues)}" if queues else ""))
@@ -3482,10 +3266,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_ai_args(p_summary)
     p_summary.set_defaults(func=cmd_summarize)
 
-    p_relevance = sub.add_parser("relevance", help="AI-фильтр релевантности (отсев нерелевантных)")
-    add_ai_args(p_relevance)
-    p_relevance.set_defaults(func=cmd_relevance)
-
     p_translate = sub.add_parser("translate-titles", help="перевести заголовки на русский (отдельная стадия, AI только для иностранных)")
     add_ai_args(p_translate)
     p_translate.set_defaults(func=cmd_translate)
@@ -3543,59 +3323,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_tg_titles.add_argument("--json", action="store_true")
     p_tg_titles.set_defaults(func=cmd_repair_telegram_titles)
 
-    p_tag = sub.add_parser("tag", help="присвоить статьи тегам")
-    add_ai_args(p_tag)
-    p_tag.set_defaults(func=cmd_tag)
-
     sub.add_parser(
         "retire-tags",
         help="разово выключить теги вне списка заказчика (смена таксономии)",
     ).set_defaults(func=cmd_retire_tags)
 
-    p_retag = sub.add_parser(
-        "retag-reset",
-        help="снять классификацию по выключенным тегам — статьи вернутся в очередь тегирования",
-    )
-    p_retag.add_argument("--limit", type=int, default=None,
-                         help="сколько связей снять за прогон (по умолчанию все)")
-    p_retag.set_defaults(func=cmd_retag_reset)
-
-    p_score = sub.add_parser("score", help="рассчитать скоринг статей")
-    add_ai_args(p_score)
-    p_score.set_defaults(func=cmd_score)
-
-    p_rescore_recompute = sub.add_parser(
-        "rescore-recompute",
-        help="пересчитать total_score из сохранённых ai_score (без OpenAI/воркера, на ядре): "
-             "только баллы профиля, чей снимок совпадает с текущим набором по id и текстам")
-    p_rescore_recompute.add_argument("--profile", choices=SCORING_PROFILES, default=ARTICLE_SCORING_PROFILE)
-    p_rescore_recompute.add_argument(
-        "--include-legacy", action="store_true",
-        help="и баллы без снимка (до профилей) с тем же набором id подпунктов — тексты не сверить")
-    p_rescore_recompute.add_argument("--dry-run", action="store_true", help="только посчитать, ничего не писать")
-    p_rescore_recompute.set_defaults(func=cmd_rescore_recompute)
-
-    p_rescore = sub.add_parser(
-        "enqueue-rescore",
-        help="пересчитать балл статей месяца с ИИ по текущему набору профиля (по умолчанию — выборка и стоимость)")
-    p_rescore.add_argument("--profile", choices=SCORING_PROFILES, default=ARTICLE_SCORING_PROFILE)
-    p_rescore.add_argument("--month", required=True, help="ГГГГ-ММ — месяц из окна ленты")
-    p_rescore.add_argument("--limit", type=int, default=0, help="не больше N статей (0 — все)")
-    p_rescore.add_argument("--batch-size", type=int, default=20)
-    p_rescore.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
-    p_rescore.add_argument("--allow-live-lane", action="store_true",
-                           help="ставить в поток дня, если полоса пересчётов выключена (обычно — нет)")
-    p_rescore.set_defaults(func=cmd_enqueue_rescore)
-
-    p_process = sub.add_parser("process", help="summary → tagging → scoring")
+    p_process = sub.add_parser("process", help="суть и перевод заголовка принятых статей (местный конвейер)")
     add_ai_args(p_process)
     p_process.set_defaults(func=cmd_process)
 
-    p_process_full = sub.add_parser("process-full", help="по-статейный конвейер: full-text→суть→релевантность→тег→скоринг")
+    p_process_full = sub.add_parser("process-full", help="по-статейный конвейер: full-text→суть→перевод заголовка")
     add_ai_args(p_process_full)
     p_process_full.set_defaults(func=cmd_process_full)
 
-    p_process_articles = sub.add_parser("process-articles", help="summary → tagging → scoring для выбранных article_id")
+    p_process_articles = sub.add_parser("process-articles", help="суть и перевод заголовка для выбранных article_id")
     p_process_articles.add_argument("article_id", nargs="+", type=int)
     p_process_articles.add_argument("--offline", action="store_true", help="детерминированная локальная заглушка без OpenAI API")
     p_process_articles.set_defaults(func=cmd_process_articles)
@@ -3604,20 +3345,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_ai_args(p_enqueue_process)
     p_enqueue_process.set_defaults(func=cmd_enqueue_process)
 
-    p_enqueue_recheck = sub.add_parser("enqueue-recheck", help="перепрогон релевантности по всей базе батчами через воркер (нерелевантные удаляются)")
-    p_enqueue_recheck.add_argument("--batch-size", type=int, default=100, help="статей в одной задаче")
-    p_enqueue_recheck.add_argument("--limit", type=int, default=0, help="потолок числа статей (0 = вся база)")
-    p_enqueue_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из выпусков (черновик или отметка «в дайджест»)")
-    p_enqueue_recheck.add_argument("--dry-run", action="store_true", help="НЕ удалять — только посчитать и собрать превью отклонённого (recheck-dry-show)")
-    p_enqueue_recheck.add_argument("--mark", action="store_true", help="нерелевантные ПОМЕЧАТЬ на удаление (pending_deletion), не удалять; потом recheck-purge")
-    p_enqueue_recheck.set_defaults(func=cmd_enqueue_recheck)
-
-    p_dry_show = sub.add_parser("recheck-dry-show", help="показать вердикты dry-run recheck-задачи (что бы срезалось)")
-    p_dry_show.add_argument("job_id", type=int, help="id выполненной dry-run задачи")
-    p_dry_show.add_argument("--limit", type=int, default=80, help="сколько отклонённых показать")
-    p_dry_show.set_defaults(func=cmd_recheck_dry_show)
-
-    p_marked = sub.add_parser("recheck-marked", help="показать помеченные на удаление (recheck --mark): счётчик + выборка")
+    p_marked = sub.add_parser("recheck-marked", help="показать помеченные на удаление (pending_deletion): счётчик + выборка")
     p_marked.add_argument("--limit", type=int, default=80, help="сколько показать")
     p_marked.set_defaults(func=cmd_recheck_marked)
 
@@ -3740,8 +3468,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_bodies.add_argument("--pause", type=float, default=0.5, help="пауза между страницами, с")
     p_repair_bodies.add_argument("--apply", action="store_true", help="записать тела (без флага — сухой прогон)")
     p_repair_bodies.add_argument("--reprocess", action=argparse.BooleanOptionalAction, default=True,
-                                 help="после --apply поставить перерасчёт сути, тега и балла по заменённым (без "
-                                      "гейта, мимо выпуска)")
+                                 help="после --apply поставить перерасчёт сути по заменённым (мимо выпуска)")
     p_repair_bodies.add_argument("--batch", type=int, default=25, help="статей в задаче перерасчёта")
     p_repair_bodies.add_argument("--json", action="store_true")
     p_repair_bodies.set_defaults(func=cmd_repair_article_bodies)
@@ -3778,12 +3505,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_dump_listing.add_argument("--render", action="store_true", help="форсить playwright-рендер (проверить, даёт ли JS-SPA статьи)")
     p_dump_listing.add_argument("--url", default=None, help="протестить произвольный URL вместо listing_url источника (не меняет БД)")
     p_dump_listing.set_defaults(func=cmd_source_dump_listing)
-
-    p_recheck = sub.add_parser("recheck-relevance", help="локальный перепрогон релевантности (тесты/дамп; на проде — enqueue-recheck)")
-    add_ai_args(p_recheck)
-    p_recheck.add_argument("--force", action="store_true", help="удалять даже статьи из выпусков (черновик или отметка «в дайджест»)")
-    p_recheck.add_argument("--max-articles", type=int, default=None, help="ограничить число проверенных статей")
-    p_recheck.set_defaults(func=cmd_recheck_relevance)
 
     sub.add_parser("ai-cost-report", help="отчёт по токенам/стоимости AI-этапов").set_defaults(func=cmd_ai_cost_report)
 
@@ -3897,8 +3618,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_enqueue_otbor = sub.add_parser(
         "enqueue-otbor",
-        help="шаг планировщика «Отбор»: новые статьи, находки поиска и материалы коллег — агенту «Отбор» "
-             "(за флагом OTBOR_ENABLED)",
+        help="шаг планировщика «Отбор»: новые статьи, находки поиска и материалы коллег в задачи агента «Отбор»",
     )
     p_enqueue_otbor.add_argument("--ids", default="",
                                  help="повторить «Отбор» названных статей (номера через запятую) — по полосе "
@@ -3911,7 +3631,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_summary = sub.add_parser(
         "enqueue-signal-summary",
         help="шаг планировщика «Суть и перевод» сигналов: принятые «Отбором» находки и материалы без сути или "
-             "русского заголовка (за флагом OTBOR_ENABLED)",
+             "русского заголовка",
     )
     p_enqueue_summary.add_argument("--ids", default="",
                                    help="повторить для названных сигналов (номера через запятую) — по полосе "
@@ -3921,7 +3641,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue_scores = sub.add_parser(
         "enqueue-signal-scores",
         help="шаг планировщика «баллы» (второй вызов «Карточки»): сигналы после основного вызова без баллов и с "
-             "баллами после «не тот блок» (за флагом OTBOR_ENABLED, модель SIGNAL_SCORES_MODEL)",
+             "баллами после «не тот блок» (модель SIGNAL_SCORES_MODEL)",
     )
     p_enqueue_scores.add_argument("--ids", default="",
                                   help="повторить для названных сигналов (номера через запятую) по полосе "
@@ -3972,7 +3692,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_otbor_switch.add_argument("--since", type=_iso_date, required=True,
                                 help="начало окна ГГГГ-ММ-ДД по дате сбора статьи (как у проверки)")
     p_otbor_switch.add_argument("--apply", action="store_true",
-                                help="перенести (только при включённом флаге); без флага ничего не пишет")
+                                help="перенести (только при включённой «Карточке»); без флага ничего не пишет")
     p_otbor_switch.add_argument("--json", action="store_true", help="всё с номерами статей, JSON")
     p_otbor_switch.set_defaults(func=cmd_otbor_switch)
 

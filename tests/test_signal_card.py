@@ -368,8 +368,8 @@ def test_agent_spend_is_accounted_under_its_name(user, admin, contour, monkeypat
     # gpt-5.4-nano: 3 000 входных × $0,20 + 600 выходных × $1,25 за 1 млн = $0,00135 на сигнал.
     assert float(report["signal_card"]["cost_usd"]) == pytest.approx(0.0027)
     monthly = {row["area"]: (row["model"], row["runs"]) for row in api_get("/api/stats/monthly", admin, months=1)["ai_cost"]}
-    # Своя строка — не в расходе ленты (её здесь дала подготовка статей: модель «m»).
-    assert monthly == {"signal_card": (f"{MODEL}-2026-03-17", 2), "feed": ("m", 8)}
+    # Своя строка, не в расходе ленты (её здесь дала подготовка статей: суть и перевод двух статей, модель «m»).
+    assert monthly == {"signal_card": (f"{MODEL}-2026-03-17", 2), "feed": ("m", 4)}
 
 
 def _issue_and_run(answers, monkeypatch, between):

@@ -12,8 +12,8 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 import pytest
 
-from oiltech_digest import api, feed_window
-from oiltech_digest.db import connection
+from oiltech_digest import api, contract, feed_window
+from oiltech_digest.db import connection, repository
 from oiltech_digest.processing import external_ai, pipeline
 from oiltech_digest.processing.openai_client import AIResponse
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
@@ -101,7 +101,7 @@ def test_dry_run_counts_russian_copies_off_the_rules_in_open_months_and_enqueues
 
 
 def test_refuses_without_the_external_contour_or_the_bulk_lane(isolated_db, monkeypatch):
-    """Как у пересчёта балла (rescore.enqueue_stage): локальный конвейер пометки only не знает, а в потоке дня пачки
+    """Задачи с пометкой only (rescore.enqueue_stage): локальный конвейер пометки не знает, а в потоке дня пачки
     встали бы перед новыми статьями — только сознательно, --allow-live-lane."""
     _freeze(monkeypatch)
     _article(OFF_RULES)
@@ -116,15 +116,51 @@ def test_refuses_without_the_external_contour_or_the_bulk_lane(isolated_db, monk
     assert _jobs() == []
 
 
+def _external(monkeypatch, *, bulk: bool) -> None:
+    monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", True)
+    monkeypatch.setattr("oiltech_digest.config.AI_EXECUTION_REGION", "external")
+    monkeypatch.setattr("oiltech_digest.config.AI_BULK_LANE_ENABLED", bulk)
+
+
+def test_dry_run_names_the_lane_and_the_live_lane_needs_consent(isolated_db, monkeypatch, capsys):
+    """Без полосы пересчётов пачки встали бы в поток дня перед новыми статьями (18.09 28 пачек задержали его на 4,5 ч):
+    сухой прогон это показывает, запись отказывает, --allow-live-lane ставит сознательно (rescore.rescore_lane и
+    enqueue_stage; до снятия балла статьи 08.11 их проверял пересчёт балла)."""
+    _freeze(monkeypatch)
+    _article(OFF_RULES)
+    _external(monkeypatch, bulk=False)
+
+    _cli("enqueue-title-edit")
+    out = capsys.readouterr().out
+    assert "полоса: external-ai (external); воркеры полосы: нет" in out
+    assert "ВНИМАНИЕ: полоса пересчётов выключена" in out and "нет живого воркера" in out
+
+    with pytest.raises(SystemExit, match="поток дня"):
+        _cli("enqueue-title-edit", "--no-dry-run")
+    assert _jobs() == []
+    _cli("enqueue-title-edit", "--no-dry-run", "--allow-live-lane")
+    assert [queue for _, queue, _ in _jobs()] == ["external-ai"]
+
+
+def test_dry_run_shows_the_live_worker_of_the_bulk_lane(isolated_db, monkeypatch, capsys):
+    _freeze(monkeypatch)
+    _article(OFF_RULES)
+    _external(monkeypatch, bulk=True)
+    repository.record_external_consumer("nl-ai-bulk-1", queues=["external-ai-bulk"], build="abc", contract_number=1)
+
+    _cli("enqueue-title-edit")
+
+    out = capsys.readouterr().out
+    assert "полоса: external-ai-bulk (external); воркеры полосы: nl-ai-bulk-1 (задачу просил" in out
+    assert "ВНИМАНИЕ" not in out
+
+
 def test_jobs_edit_the_title_on_the_worker_and_the_core_writes_it(isolated_db, monkeypatch, capsys):
     """Задачи — process_articles с only=["translation"] в полосе пересчётов: правит тот же шаг воркера, что у новых
     статей, ядро пишет только заголовок; правленая статья в выборку больше не попадает, стоящая в задаче — тоже."""
     _freeze(monkeypatch)
     seed_default_scoring_criteria()
     first, second = _article(OFF_RULES), _article(OFF_RULES)
-    with connection.get_connection() as conn:  # пакет без тематик воркер не примет
-        conn.execute("INSERT INTO tags (name, enabled, sort_order) VALUES ('Бурение', TRUE, 1)")
-        conn.commit()
     monkeypatch.setattr("oiltech_digest.config.EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr("oiltech_digest.config.AI_EXECUTION_REGION", "external")
     monkeypatch.setattr("oiltech_digest.config.AI_BULK_LANE_ENABLED", True)
@@ -136,7 +172,7 @@ def test_jobs_edit_the_title_on_the_worker_and_the_core_writes_it(isolated_db, m
                        for one in (first, second)]
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     core = TestClient(api.app)
-    auth = {"Authorization": "Bearer secret"}
+    auth = {"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)}  # пакет статей: 11
     deadline = time.monotonic() + 2.0  # часы ВМ colima подводятся назад: задача на миг «из будущего»
     job = None
     while job is None and time.monotonic() < deadline:

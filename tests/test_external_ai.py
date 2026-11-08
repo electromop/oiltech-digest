@@ -4,6 +4,8 @@ from oiltech_digest.processing import external_ai
 
 
 def test_external_ai_process_payload_offline_returns_structured_result():
+    """Пакет статей ленты (снятие старой цепочки 08.11): только суть и перевод заголовка, тегов и критериев в пакете
+    нет. Гейта, тега и балла в итоге нет: решает «Отбор», тему и баллы ставит «Карточка»."""
     payload = {
         "offline": True,
         "articles": [
@@ -15,26 +17,7 @@ def test_external_ai_process_payload_offline_returns_structured_result():
                 "raw_text": "Automation improves drilling efficiency and well construction quality.",
                 "source_name": "Example",
                 "source_category": "Drilling",
-            }
-        ],
-        "tags": [
-            {
-                "id": 10,
-                "name": "Бурение",
-                "parent_name": "Технологии",
-                "name_en": "Drilling",
-                "keywords_json": ["бурение"],
-                "keywords_en_json": ["drilling", "well construction"],
-            }
-        ],
-        "criteria": [
-            {
-                "id": 20,
-                "name": "Технологическая значимость",
-                "weight": 100,
-                "description": "Technology impact",
-                "keywords_json": ["технология"],
-                "keywords_en_json": ["automation", "drilling"],
+                "otbor_decision": "accept",
             }
         ],
     }
@@ -42,18 +25,12 @@ def test_external_ai_process_payload_offline_returns_structured_result():
     result = external_ai.process_payload(payload)
 
     assert result["external_ai"] is True
-    assert result["stats"]["processed"] == 1
-    assert result["stats"]["summary"] == 1
-    assert result["stats"]["tagged"] == 1
-    assert result["stats"]["scored"] == 1
+    assert result["stats"] == {"processed": 1, "summary": 1, "translated": 1, "errors": 0}
     article = result["articles"][0]
     assert article["article_id"] == 1
     assert article["summary"]["summary"]
-    assert result["stats"]["translated"] == 1                # #2: перевод — отдельная стадия
     assert article["translation"]["title_ru"]                # иностранный заголовок переведён
-    assert article["relevance"]["relevant"] is True
-    assert article["tagging"]["tag_id"] == 10
-    assert article["scoring"]["items"][0]["criterion_id"] == 20
+    assert set(article) == {"article_id", "errors", "summary", "translation"}
 
 
 def test_external_ai_process_payload_heartbeats_per_article():
@@ -69,10 +46,6 @@ def test_external_ai_process_payload_heartbeats_per_article():
     payload = {
         "offline": True,
         "articles": [dict(article, id=1), dict(article, id=2), dict(article, id=3)],
-        "tags": [{"id": 10, "name": "Бурение", "parent_name": "Технологии", "name_en": "Drilling",
-                  "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}],
-        "criteria": [{"id": 20, "name": "Значимость", "weight": 100, "description": "x",
-                      "keywords_json": [], "keywords_en_json": ["automation"]}],
     }
     beats = []
     # Колбэк, который один раз бросает — обработка не должна падать (heartbeat защищён).
@@ -94,14 +67,10 @@ def test_heartbeat_that_cannot_take_the_result_fails_loudly():
     payload = {
         "offline": True,
         "articles": [{"id": 1, "title": "Drilling", "url": "https://example.com/a", "raw_text": "drilling"}],
-        "tags": [{"id": 10, "name": "Бурение"}],
-        "criteria": [{"id": 20, "name": "Значимость", "weight": 100}],
     }
 
     with pytest.raises(TypeError):
         external_ai.process_payload(payload, heartbeat=lambda: None)
-    with pytest.raises(TypeError):
-        external_ai.process_recheck_payload({"articles": payload["articles"], "tags": []}, heartbeat=lambda: None)
     with pytest.raises(TypeError):
         external_ai.process_translate_payload({"articles": payload["articles"]}, heartbeat=lambda: None)
 
@@ -110,10 +79,7 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
     calls = []
 
     monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: calls.append(("summary", args)))
-    monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *args: calls.append(("relevance", args)))
-    monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: calls.append(("tagging", args)))
-    monkeypatch.setattr(external_ai.repository, "replace_article_score",
-                        lambda *args, **kwargs: calls.append(("scoring", args)))
+    monkeypatch.setattr(external_ai.repository, "set_article_title_ru", lambda *args: calls.append(("translation", args)))
     monkeypatch.setattr(external_ai.repository, "insert_ai_run", lambda rec: calls.append(("run", rec["stage"])))
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
 
@@ -124,25 +90,14 @@ def test_external_ai_apply_process_result_calls_repository(monkeypatch):
                 {
                     "article_id": 1,
                     "summary": {"summary": "Short", "model": "offline", "provider": "offline"},
-                    "relevance": {"relevant": True, "reason": "ok", "model": "offline", "provider": "offline"},
-                    "tagging": {"tag_id": 10, "confidence": 0.5, "rationale": "ok", "model": "offline", "provider": "offline"},
-                    "scoring": {
-                        "total_score": 50,
-                        "score_label": "Средняя",
-                        "explanation": "ok",
-                        "items": [{"criterion_id": 20, "final_score": 50}],
-                        "model": "offline",
-                        "provider": "offline",
-                    },
+                    "translation": {"title_ru": "Короткий заголовок", "model": "offline", "provider": "offline"},
                 }
             ],
         }
     )
 
-    assert stats == {"articles": 1, "summary": 1, "relevance": 1, "translation": 0, "tagging": 1, "scoring": 1, "errors": 0}
-    assert [item[0] for item in calls[:4]] == ["summary", "run", "relevance", "run"]
-    assert ("run", "scoring") in calls
-
+    assert stats == {"articles": 1, "summary": 1, "translation": 1, "errors": 0}
+    assert [item[0] for item in calls] == ["summary", "run", "translation", "run"]
 
 
 SPUD_ARTICLE = {
@@ -217,17 +172,14 @@ def test_core_writes_paid_result_as_is_when_glossary_context_fails(monkeypatch):
     assert written["summary"] == "NDC 9 спудрил скважину."
 
 
-def test_apply_only_writes_summary_and_translation_but_bills_every_stage(monkeypatch):
-    """Перегенерация сути (enqueue-resummarize): воркер NL старой сборки гоняет весь конвейер —
-    пометки он не знает, — а ядро пишет только суть и перевод. Гейт, передумав, не уберёт статью
-    из ленты, балл не сдвинется у отобранного в выпуск; оплаченные вызовы учтены все."""
+def test_result_of_build_before_the_cleanup_writes_summary_but_bills_every_stage(monkeypatch):
+    """Итог сборки NL, выданный до выката снятия (08.11), несёт ответы гейта, тега и балла: ядро их не пишет (гейт,
+    передумав, убрал бы статью из ленты, а тег и балл статьи больше никто не читает как своё), но оплаченные вызовы
+    учитывает все. С пометкой only, как раньше, пишется запрошенное."""
     writes, runs = [], []
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [])
     monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: writes.append("summary"))
     monkeypatch.setattr(external_ai.repository, "set_article_title_ru", lambda *args: writes.append("translation"))
-    monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *args: writes.append("relevance"))
-    monkeypatch.setattr(external_ai.repository, "upsert_article_tag", lambda *args: writes.append("tagging"))
-    monkeypatch.setattr(external_ai.repository, "replace_article_score", lambda *args, **kwargs: writes.append("scoring"))
     monkeypatch.setattr(external_ai, "_insert_run", lambda article_id, stage, payload, **kwargs: runs.append(stage))
     item = {
         "article_id": 1,
@@ -238,11 +190,15 @@ def test_apply_only_writes_summary_and_translation_but_bills_every_stage(monkeyp
         "scoring": {"total_score": 10, "score_label": "Низкая", "items": [], "model": "gpt-5-mini"},
     }
 
-    stats = external_ai.apply_process_result({"articles": [item]}, only=["summary", "translation"])
+    stats = external_ai.apply_process_result({"articles": [item]})
 
     assert writes == ["summary", "translation"]
     assert sorted(runs) == ["relevance", "scoring", "summary", "tagging", "translation"]
-    assert (stats["summary"], stats["translation"], stats["relevance"], stats["scoring"]) == (1, 1, 0, 0)
+    assert (stats["summary"], stats["translation"]) == (1, 1)
+
+    writes.clear()
+    external_ai.apply_process_result({"articles": [item]}, only=["summary", "tagging", "scoring"])
+    assert writes == ["summary"]
 
 
 def test_apply_rejects_malformed_only_before_any_write(monkeypatch):
@@ -254,32 +210,33 @@ def test_apply_rejects_malformed_only_before_any_write(monkeypatch):
     monkeypatch.setattr(external_ai.repository, "upsert_article_card", lambda *args: writes.append(args))
     result = {"articles": [{"article_id": 1, "summary": {"summary": "Суть", "model": "gpt"}}]}
 
-    for bad in ("summary", [], ["summary", "gate"], [1]):
+    for bad in ("summary", [], ["summary", "gate"], [1], ["tagging", "scoring"]):
         with pytest.raises(ValueError, match="only"):
             external_ai.apply_process_result(result, only=bad)
     assert writes == []
 
 
 def test_resummarize_payload_drops_the_old_broken_summary(monkeypatch):
-    """Старая суть попадала в промпт (_article_prompt кладёт summary) — модель повторяла брак."""
+    """Старая суть попадала в промпт (_article_prompt кладёт summary), и модель повторяла брак. Задача пересчёта после
+    полного текста, поставленная до снятия тега и балла (суть, тег и балл), выдаётся с одной сутью, а не падает."""
     article = {"id": 7, "title": "Power prices", "summary": "Цены на электроэнergyю выросли.", "raw_text": "x"}
     monkeypatch.setattr(external_ai.repository, "reserve_process_articles", lambda job_id, **kwargs: [7])
     monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [dict(article)])
-    monkeypatch.setattr(external_ai.repository, "list_enabled_tags", lambda: [])
-    # Критерии с суммой 100: пакет с баллом без них ядро не выдаёт (сессия G, C0).
-    monkeypatch.setattr(external_ai.repository, "list_enabled_scoring_criteria",
-                        lambda: [{"id": 20, "name": "Значимость", "weight": 100}])
 
     regular = external_ai.build_process_articles_payload({"article_ids": [7]}, job_id=1)
     regen = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["summary", "translation"]}, job_id=2)
-    rescore = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["scoring"]}, job_id=3)
+    queued_before = external_ai.build_process_articles_payload(
+        {"article_ids": [7], "only": ["summary", "tagging", "scoring"]}, job_id=3)
+    title_edit = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["translation"]}, job_id=4)
 
     assert regular["articles"][0]["summary"] == article["summary"]
     assert regen["articles"][0]["summary"] is None
-    # Пометку исполняет воркер (28.09): балл без перегенерации сути считается по записанной сути —
-    # новой, как раньше, у него уже не будет.
-    assert rescore["articles"][0]["summary"] == article["summary"]
-    assert (regular.get("only"), regen["only"], rescore["only"]) == (None, ["summary", "translation"], ["scoring"])
+    assert queued_before["articles"][0]["summary"] is None
+    # Правка заголовка суть не перегенерирует: заголовок пишется по записанной сути.
+    assert title_edit["articles"][0]["summary"] == article["summary"]
+    assert (regular.get("only"), regen["only"], queued_before["only"], title_edit["only"]) == (
+        None, ["summary", "translation"], ["summary"], ["translation"])
+    assert "tags" not in regular and "criteria" not in regular
 
 
 def test_malformed_only_is_rejected_before_articles_are_reserved(monkeypatch):
@@ -292,27 +249,6 @@ def test_malformed_only_is_rejected_before_articles_are_reserved(monkeypatch):
     with pytest.raises(external_ai.InvalidJobPayload, match="only"):
         external_ai.build_process_articles_payload({"article_ids": [7], "only": "summary"}, job_id=3)
     assert reserved == []
-
-
-def test_core_refuses_scoring_batch_with_weights_not_summing_to_100(monkeypatch):
-    """Сессия G, C0: сумма весов ≠ 100 — задачу не выдаём (InvalidJobPayload), статьи не
-    резервируем. Иначе воркер оплатил бы вызовы, а итог Σ final·вес/100 молча исказился бы."""
-    reserved = []
-    monkeypatch.setattr(external_ai.repository, "reserve_process_articles",
-                        lambda job_id, **kwargs: reserved.append(job_id) or [7])
-    monkeypatch.setattr(external_ai.repository, "get_articles_by_ids", lambda ids, **kwargs: [{"id": 7}])
-    monkeypatch.setattr(external_ai.repository, "list_enabled_tags", lambda: [])
-    monkeypatch.setattr(external_ai.repository, "list_enabled_scoring_criteria",
-                        lambda: [{"id": 20, "name": "А", "weight": 100}, {"id": 21, "name": "Б", "weight": 100}])
-
-    for payload in ({"limit": 5}, {"article_ids": [7]}, {"article_ids": [7], "only": ["scoring"]}):
-        with pytest.raises(external_ai.InvalidJobPayload, match="200"):
-            external_ai.build_process_articles_payload(payload, job_id=3)
-    assert reserved == []
-
-    # Перегенерация сути балл не считает — её веса не касаются.
-    regen = external_ai.build_process_articles_payload({"article_ids": [7], "only": ["summary", "translation"]}, job_id=4)
-    assert reserved == [4] and regen["only"] == ["summary", "translation"]
 
 
 def test_core_passes_only_from_job_payload_to_apply(monkeypatch):
@@ -330,18 +266,16 @@ def test_core_passes_only_from_job_payload_to_apply(monkeypatch):
     assert seen["only"] is None
 
 
-def _gate_says_no(calls: list):
-    """Офлайн-модель, чей гейт отвергает любую статью, — и список схем, за которые её звали."""
-    from oiltech_digest.processing.openai_client import AIResponse, OfflineAIClient
+def _recording_offline(calls: list):
+    """Офлайн-модель и список схем, за которые её звали."""
+    from oiltech_digest.processing.openai_client import OfflineAIClient
 
-    class GateSaysNo(OfflineAIClient):
+    class Recording(OfflineAIClient):
         def complete_json(self, instructions, user_input, schema, **kwargs):
             calls.append(schema["name"])
-            if schema["name"] == "article_relevance":
-                return AIResponse(data={"relevant": False, "reason": "передумал"}, model="gate", input_tokens=1)
             return super().complete_json(instructions, user_input, schema, **kwargs)
 
-    return GateSaysNo()
+    return Recording()
 
 
 def _regeneration_payload(only) -> dict:
@@ -349,113 +283,46 @@ def _regeneration_payload(only) -> dict:
         "offline": True,
         "only": only,
         "articles": [
-            # Стоп-слово родительского тега в заголовке: гейт отсёк бы статью без модели.
             {"id": 1, "title": "Oil prices rally", "url": "https://e.com/1", "language": "en",
-             "raw_text": "Oil prices rally after drilling news.", "source_name": "S"},
+             "raw_text": "Oil prices rally after drilling news.", "source_name": "S", "otbor_decision": "accept"},
             {"id": 2, "title": "Бурение на шельфе", "url": "https://e.ru/2", "language": "ru",
-             "raw_text": "Бурение на шельфе Сахалина.", "source_name": "S"},
+             "raw_text": "Бурение на шельфе Сахалина.", "source_name": "S", "otbor_decision": "accept"},
         ],
-        "tags": [{"id": 10, "name": "Бурение", "parent_id": None, "negative_keywords_json": ["rally"],
-                  "keywords_json": ["бурение"], "keywords_en_json": ["drilling"]}],
-        "criteria": [{"id": 20, "name": "Значимость", "weight": 100, "keywords_json": [], "keywords_en_json": []}],
     }
 
 
 def test_worker_runs_only_the_stages_the_core_will_write(monkeypatch):
-    """Перегенерация сути (27.09): воркер гонял весь конвейер, а ядро писало только суть и
-    перевод — один гейт был 71 % расхода ($0,59 из $0,83), и статью, которую он отверг, воркер
-    оставлял без новой сути. Пометка only теперь приходит воркеру: не запрошенное не зовётся,
-    гейт (и стоп-слова) суть не отменяет."""
+    """Перегенерация сути (27.09): пометка only приходит воркеру, не запрошенное не зовётся."""
     calls: list = []
-    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _gate_says_no(calls))
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _recording_offline(calls))
 
     result = external_ai.process_payload(_regeneration_payload(["summary", "translation"]))
 
     assert sorted(calls) == ["article_summary", "article_summary", "article_title_translation"]
     for item in result["articles"]:
         assert set(item) == {"article_id", "errors", "summary", "translation"}, item
-    assert result["stats"]["summary"] == 2 and result["stats"]["rejected"] == 0
+    assert result["stats"]["summary"] == 2
 
 
-def test_gate_still_gates_when_only_asks_for_it(monkeypatch):
-    """Пометка с гейтом — гейт работает, как в полном конвейере: отвергнутое дальше не зовётся."""
+def test_worker_drops_retired_stages_from_a_job_queued_before_the_cleanup(monkeypatch):
+    """Пометка с гейтом, тегом или баллом (задача поставлена до 08.11): воркер зовёт только то, что от неё осталось."""
     calls: list = []
-    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _gate_says_no(calls))
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _recording_offline(calls))
 
-    result = external_ai.process_payload(_regeneration_payload(["relevance", "summary"]))
+    result = external_ai.process_payload(_regeneration_payload(["relevance", "summary", "tagging", "scoring"]))
 
-    assert calls == ["article_relevance"]  # первую отсекло стоп-слово, вторую — модель
-    assert [item["relevance"]["model"] for item in result["articles"]] == ["negative-keyword", "gate"]
-    assert all("summary" not in item for item in result["articles"])
+    assert calls == ["article_summary", "article_summary"]
+    assert all(set(item) == {"article_id", "errors", "summary"} for item in result["articles"])
 
 
 def test_worker_rejects_malformed_only_before_any_model_call(monkeypatch):
     """payload — граница: строка «summary» дала бы множество букв, и воркер не сделал бы ничего."""
     calls: list = []
-    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _gate_says_no(calls))
+    monkeypatch.setattr(external_ai, "make_client", lambda offline=False: _recording_offline(calls))
 
     with pytest.raises(external_ai.InvalidJobPayload, match="only"):
         external_ai.process_payload(_regeneration_payload("summary"))
     assert calls == []
-
-
-def _recheck_result(relevant: bool) -> dict:
-    return {
-        "articles": [
-            {
-                "article_id": 42,
-                "relevance": {
-                    "relevant": relevant,
-                    "reason": "тест",
-                    "model": "gpt-5.5-2026-04-23",
-                    "input_tokens": 1800,
-                    "output_tokens": 120,
-                    "total_tokens": 1920,
-                    "cost_usd": 0.0126,
-                },
-            }
-        ]
-    }
-
-
-def test_recheck_records_ai_run_for_rejected_articles(monkeypatch):
-    """Регресс: вызов гейта оплачен OpenAI и при relevant=false — прогон обязан попасть
-    в ai_processing_runs. Раньше _insert_run стоял только в ветке relevant=True, из-за чего
-    отклонённые (~40% базы) были невидимы для экрана «AI-затраты» (разрыв с дашбордом до 4.5×)."""
-    runs: list[tuple] = []
-    monkeypatch.setattr(external_ai, "_insert_run", lambda *a, **k: runs.append(a))
-    monkeypatch.setattr(external_ai.repository, "mark_article_for_deletion", lambda *a, **k: "marked")
-
-    stats = external_ai.apply_recheck_result(_recheck_result(relevant=False), mark=True)
-
-    assert stats["marked"] == 1
-    assert len(runs) == 1, "прогон по отклонённой статье не записан — счёт снова занижен"
-    assert runs[0][1] == "relevance"
-
-
-def test_recheck_records_ai_run_for_kept_articles(monkeypatch):
-    """Симметрия: у релевантных запись прогона тоже сохраняется (не сломали прежнее поведение)."""
-    runs: list[tuple] = []
-    monkeypatch.setattr(external_ai, "_insert_run", lambda *a, **k: runs.append(a))
-    monkeypatch.setattr(external_ai.repository, "set_article_relevance", lambda *a, **k: None)
-
-    stats = external_ai.apply_recheck_result(_recheck_result(relevant=True))
-
-    assert stats["kept"] == 1
-    assert len(runs) == 1
-
-
-def test_recheck_skips_run_for_negative_keyword_block(monkeypatch):
-    """Детерминированный стоп-слово-отсев не ходит в OpenAI → прогон писать НЕ надо."""
-    runs: list[tuple] = []
-    monkeypatch.setattr(external_ai, "_insert_run", lambda *a, **k: runs.append(a))
-    monkeypatch.setattr(external_ai.repository, "mark_article_for_deletion", lambda *a, **k: "marked")
-    result = _recheck_result(relevant=False)
-    result["articles"][0]["relevance"]["model"] = "negative-keyword"
-
-    external_ai.apply_recheck_result(result, mark=True)
-
-    assert runs == []
 
 
 def test_lease_loss_aborts_batch_instead_of_burning_money():
@@ -473,8 +340,6 @@ def test_lease_loss_aborts_batch_instead_of_burning_money():
         "articles": [{"id": i, "title": f"A{i}", "url": f"https://e.ru/{i}",
                       "language": "ru", "raw_text": "бурение скважин", "source_name": "S"}
                      for i in range(1, 6)],
-        "tags": [{"id": 10, "name": "Бурение", "keywords_json": ["бурение"], "keywords_en_json": []}],
-        "criteria": [{"id": 1, "name": "Тех", "weight": 100, "keywords_json": [], "keywords_en_json": []}],
     }
 
     try:
@@ -500,8 +365,6 @@ def test_transient_heartbeat_failure_does_not_abort_batch():
         "articles": [{"id": i, "title": f"A{i}", "url": f"https://e.ru/{i}",
                       "language": "ru", "raw_text": "бурение скважин", "source_name": "S"}
                      for i in range(1, 4)],
-        "tags": [{"id": 10, "name": "Бурение", "keywords_json": ["бурение"], "keywords_en_json": []}],
-        "criteria": [{"id": 1, "name": "Тех", "weight": 100, "keywords_json": [], "keywords_en_json": []}],
     }
 
     result = external_ai.process_payload(payload, heartbeat=flaky_heartbeat)

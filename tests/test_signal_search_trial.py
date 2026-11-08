@@ -218,19 +218,6 @@ def test_dates_of_the_period_are_whole_days(user, contour):
     assert (trial["days"], trial["until"]) == (30, "2026-10-31")
 
 
-def test_trial_runs_with_otbor_switched_off_as_on_prod(user, contour, monkeypatch):
-    # На проде флаг «Отбора» выключен: пробный прогон сам везёт «поиск только находит» и сам ставит «Отбор» находок.
-    monkeypatch.setattr(config, "OTBOR_ENABLED", False)
-    tag(DRILLING)
-
-    job_id, _, model = run_trial(monkeypatch, [event(DEAL, DEAL_URL)], {DEAL_URL: page(DEAL)}, {DEAL: answer()})
-
-    from oiltech_digest import signal_search_trial
-    result = signal_search_trial.report(job_id)
-    assert len(model.calls) == 1 and (result["new_findings"], result["otbor"]["accepted"]) == (1, 1)
-    assert showcase(user, "technology") == {} and showcase(user, "business") == {}
-
-
 def test_duplicate_of_a_main_finding_collected_during_the_run_reaches_otbor_itself(user, contour, monkeypatch):
     tag(DRILLING)
     other_url = "https://aramco.example/news/autonomous-rig"

@@ -50,6 +50,17 @@ def _send(material, file=None):
     return colleague_materials.get_material(response.json()["material"]["id"])
 
 
+def _accumulated(monkeypatch, material):
+    """Накопленный материал: бот его прислал, а сигнал при приёме не завёлся (присланные до включения «Отбора» и сбой
+    записи сигнала при приёме): строка материала без сигнала, её проводит команда otbor-materials."""
+    def refuse(row, **kwargs):
+        raise RuntimeError("сигнал материала не записан")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(api.material_signals, "to_signal", refuse)
+        return _send(material)
+
+
 class _Telegram:
     """Подставной Telegram бота: отправленные сообщения; ошибка следующей отправки — fail."""
 
@@ -261,10 +272,8 @@ def test_card_history_run_takes_only_what_otbor_accepted(user, contour, monkeypa
 
 
 def test_accumulated_materials_go_through_once_with_a_dry_run_by_default(user, admin, contour, monkeypatch, capsys):
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    material = _send(_material())
+    material = _accumulated(monkeypatch, _material())
     assert material["signal_id"] is None
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
 
     cli.main(["otbor-materials"])
     assert "накопленных материалов 1" in capsys.readouterr().out
@@ -285,11 +294,9 @@ LATE_TITLE = "Газпром нефть выбрала подрядчика по
 
 def test_silent_accumulated_materials_tell_no_author_but_a_new_material_does(user, admin, contour, monkeypatch):
     """С --silent накопленные проходят конвейер молча: итог «Отбора» их авторам не уходит, ни первый, ни следующий
-    (решение владельца 04.11 для присланных до включения: ответа никто не ждёт). Материал, присланный при включённом
-    флаге, итог получает, как прежде."""
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    material = _send(_material())
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    (решение владельца 04.11 для присланных до включения: ответа никто не ждёт). Материал, присланный после, итог
+    получает, как прежде."""
+    material = _accumulated(monkeypatch, _material())
     cli.main(["otbor-materials", "--apply", "--silent"])
     _send(_material(title=LATE_TITLE, tg_message_id=79))
 

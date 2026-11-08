@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from oiltech_digest import api, cli, lanes, network_policy
-from oiltech_digest.db import connection, repository
+from oiltech_digest import api, cli, contract, lanes, network_policy
+from oiltech_digest.db import connection, feed_signals, repository
 
 NOW = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
 
@@ -99,6 +99,12 @@ def _articles(count: int) -> list[int]:
         })
     with connection.get_connection() as conn:
         ids = [int(row[0]) for row in conn.execute("SELECT id FROM articles ORDER BY published_at DESC").fetchall()]
+        # «Отбор» принял статьи (решение у сигнала ленты, как пишет otbor_store): пакет берёт их за сутью.
+        for article_id in ids:
+            conn.execute(feed_signals.BASE_SIGNAL_INSERT,
+                         {"id": article_id, "unclassified": repository.SYSTEM_TAG_UNCLASSIFIED})
+            conn.execute("UPDATE signals SET otbor_decision = 'accept' WHERE signal_key = %s", (f"feed:{article_id}",))
+        conn.commit()
     assert len(ids) == count  # иначе тест резерва прошёл бы вхолостую на одной статье
     return ids
 
@@ -149,14 +155,50 @@ def test_null_article_ids_in_running_job_do_not_break_claims(isolated_db):
     assert repository.reserve_process_articles(job, limit=2) == ids[:2]
 
 
+def test_processed_article_without_tag_and_score_is_not_taken_again(isolated_db):
+    """Ловушка снятия тега и балла (08.11): условие «нет тега или балла» в выборке пакета выбирало бы каждую принятую
+    статью с сутью и переводом в каждом цикле, и она занимала бы AI_PROCESS_LIMIT, не получая ничего. Пакет берёт
+    только принятую статью без сути или перевода: «Отбором» или гейтом до него (история); отклонённую и ждущую
+    «Отбора» не берёт."""
+    done, no_summary, no_title, rejected, waiting = _articles(5)
+    gate_done, gate_no_title = _articles_before_otbor(2)
+    for article_id in (done, gate_done):  # суть и перевод есть, тега и балла нет
+        repository.upsert_article_card(article_id, "Суть", "m", title_ru="Заголовок")
+    for article_id in (no_title, gate_no_title):  # суть есть, перевода нет
+        repository.upsert_article_card(article_id, "Суть", "m")
+    with connection.get_connection() as conn:
+        conn.execute("UPDATE signals SET otbor_decision = 'reject' WHERE signal_key = %s", (f"feed:{rejected}",))
+        conn.execute("UPDATE signals SET otbor_decision = NULL WHERE signal_key = %s", (f"feed:{waiting}",))
+        conn.commit()
+
+    needing = {int(row["id"]) for row in repository.get_articles_needing_pipeline(limit=50)}
+    reserved = set(repository.reserve_process_articles(_running_job({"limit": 50}), limit=50))
+
+    assert needing == reserved == {no_summary, no_title, gate_no_title}
+
+
+def _articles_before_otbor(count: int) -> list[int]:
+    """Статьи, собранные до «Отбора» и принятые гейтом ленты (история: путь пуст, вердикт гейта в карточке)."""
+    with connection.get_connection() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources (name, source_type, url, enabled, parse_strategy) "
+            "VALUES ('Gate Source', 'News', 'https://gate.example', TRUE, 'request') RETURNING id"
+        ).fetchone()[0]
+        ids = [int(conn.execute(
+            "INSERT INTO articles (source_id, title, url, published_at, raw_text, language) "
+            "VALUES (%s, %s, %s, %s, 'Текст статьи о бурении.', 'ru') RETURNING id",
+            (source_id, f"Статья гейта {index}", f"https://gate.example/{index}", NOW - timedelta(days=1, hours=index)),
+        ).fetchone()[0]) for index in range(count)]
+        for article_id in ids:
+            conn.execute("INSERT INTO article_cards (article_id, relevant, status) VALUES (%s, TRUE, 'new')", (article_id,))
+        conn.commit()
+    return ids
+
+
 def test_busy_recount_goes_back_to_queue_without_spending_attempt(isolated_db, monkeypatch):
     from fastapi.testclient import TestClient
 
     ids = _articles(2)
-    # Критерии с суммой 100: без них пакет с баллом не выдаётся вовсе (сессия G, C0).
-    with connection.get_connection() as conn:
-        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Значимость', 100, TRUE, 1)")
-        conn.commit()
     live = _running_job({"limit": 1})
     repository.reserve_process_articles(live, limit=1)
     recount = repository.create_background_job("process_articles", {"article_ids": [ids[0]], "limit": 1},
@@ -166,7 +208,7 @@ def test_busy_recount_goes_back_to_queue_without_spending_attempt(isolated_db, m
 
     response = TestClient(api.app).post(
         "/api/external-worker/claim",
-        headers={"Authorization": "Bearer secret"},
+        headers={"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)},
         json={"worker_id": "nl-ai-bulk-1", "queues": ["external-ai-bulk"], "capabilities": ["openai"]},
     )
 
@@ -174,40 +216,6 @@ def test_busy_recount_goes_back_to_queue_without_spending_attempt(isolated_db, m
     stored = repository.get_background_job(int(recount["id"]))
     assert stored["status"] == "queued" and stored["attempts"] == 0
     assert stored["run_after"] > datetime.now(timezone.utc)
-
-
-def test_claim_fails_scoring_batch_when_weights_do_not_sum_to_100(isolated_db, monkeypatch):
-    """Сессия G, C0: пакет с баллом при сумме весов ≠ 100 воркер не получает — выдача проваливает
-    задачу с понятной причиной, статьи не резервируются, модель не оплачивается."""
-    from fastapi.testclient import TestClient
-
-    _articles(2)
-    with connection.get_connection() as conn:
-        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('А', 100, TRUE, 1)")
-        conn.execute("INSERT INTO scoring_criteria (name, weight, enabled, sort_order) VALUES ('Б', 30, TRUE, 2)")
-        conn.commit()
-    job = repository.create_background_job("process_articles", {"limit": 2}, queue_name="external-ai",
-                                           execution_region="external", capability="openai")
-    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
-
-    response = TestClient(api.app).post(
-        "/api/external-worker/claim",
-        headers={"Authorization": "Bearer secret"},
-        json={"worker_id": "nl-ai-1", "queues": ["external-ai"], "capabilities": ["openai"]},
-    )
-
-    assert response.status_code == 200 and response.json() == {"job": None}
-    stored = repository.get_background_job(int(job["id"]))
-    assert stored["status"] == "failed"
-    assert "критерии скоринга" in stored["error_message"] and "130" in stored["error_message"]
-    assert not (stored["payload_json"] or {}).get("reserved_article_ids")
-
-
-def test_bulk_lane_refuses_relevance_recheck(isolated_db):
-    """Перепроверка удаляет статьи; резерв защищает только пакет×пакет — в полосу
-    пересчётов её не ставим, она идёт потоком дня (ревью 21.09, п.5)."""
-    with pytest.raises(ValueError, match="не обслуживает"):
-        repository.create_background_job("recheck_relevance", {"article_ids": [1]}, queue_name="external-ai-bulk")
 
 
 # --- Сторож ------------------------------------------------------------------------------

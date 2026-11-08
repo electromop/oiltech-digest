@@ -1,8 +1,8 @@
 """Два профиля скоринга (сессия G, ADR 0002): «Бизнес-сигналы» и «Технологический радар».
 
-Главное, что держат эти тесты: после выката лента считается тем же набором, что и до него.
-Все прежние критерии — профиль business, конвейер видит только его (сумма 100, а не 200),
-а сид не добавляет ни строки в профиль, где уже есть хоть один критерий.
+Главное, что держат эти тесты: после выката прежние критерии стали профилем business, список по умолчанию видит
+только его (сумма 100, а не 200), а сид не добавляет ни строки в профиль, где уже есть хоть один критерий. Балл
+статьи снят 08.11 (баллы ставит второй вызов «Карточки» по профилю категории), его история показывается, как была.
 """
 
 from __future__ import annotations
@@ -10,12 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import psycopg
+from psycopg.types.json import Jsonb
 import pytest
 from fastapi.testclient import TestClient
 
 from oiltech_digest import api, scoring_profiles
 from oiltech_digest.db import connection, repository
-from oiltech_digest.processing import external_ai, pipeline
+from oiltech_digest.processing import pipeline
 from oiltech_digest.processing.seed import DEFAULT_SCORING_PROFILES, seed_default_scoring_criteria
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts" / "g"
@@ -143,17 +144,13 @@ def test_readonly_check_after_rollout_runs_and_changes_nothing(isolated_db):
 # --- Кто что видит ----------------------------------------------------------------------------
 
 
-def test_pipeline_and_nl_batch_see_only_business_with_sum_100(isolated_db, monkeypatch):
+def test_default_criteria_list_is_business_with_sum_100(isolated_db, monkeypatch):
     seed_default_scoring_criteria()
 
     criteria = repository.list_enabled_scoring_criteria()
 
     assert {row["profile"] for row in criteria} == {"business"}
-    assert sum(float(row["weight"]) for row in criteria) == 100   # а не 200: профиль Б не в ленте
-    pipeline._validate_weights(criteria)
-    payload = external_ai.build_process_articles_payload({"limit": 5})
-    assert [c["id"] for c in payload["criteria"]] == [row["id"] for row in criteria]
-    assert {c["profile"] for c in payload["criteria"]} == {"business"}   # профиль едет воркеру в снимке
+    assert sum(float(row["weight"]) for row in criteria) == 100   # а не 200: профиль Б отдельно
     tech = repository.list_enabled_scoring_criteria("tech_radar")
     assert [row[0] for row in _rows("tech_radar")] == [row["name"] for row in tech]
     with pytest.raises(ValueError, match="профиль"):
@@ -354,20 +351,22 @@ def _article() -> int:
     return int(article_id)
 
 
-def _stored_score(article_id: int) -> tuple:
+def _history_score(article_id: int, items: list[dict], *, profile: str | None = None,
+                   snapshot: list[dict] | None = None) -> None:
+    """Балл статьи из истории (балл статьи снят 08.11): строка балла с подпунктами, как её записала прежняя оценка."""
     with connection.get_connection() as conn:
-        return conn.execute(
-            "SELECT profile, criteria_snapshot FROM article_scores WHERE article_id = %s", (article_id,)
-        ).fetchone()
-
-
-def _worker_scoring(criteria: list[dict], **extra) -> dict:
-    return {
-        "total_score": 70, "score_label": "Выше средней", "explanation": "e", "model": "gpt", "provider": "openai",
-        "items": [{"criterion_id": int(c["id"]), "ai_score": 70, "keyword_score": 0, "final_score": 70,
-                   "rationale": "r"} for c in criteria],
-        **extra,
-    }
+        score_id = conn.execute(
+            "INSERT INTO article_scores (article_id, model, total_score, score_label, explanation, profile, "
+            "criteria_snapshot) VALUES (%s, 'gpt', 70, 'Выше средней', 'e', %s, %s) RETURNING id",
+            (article_id, profile, Jsonb(snapshot) if snapshot is not None else None),
+        ).fetchone()[0]
+        for item in items:
+            conn.execute(
+                "INSERT INTO article_score_items (article_score_id, criterion_id, keyword_score, ai_score, final_score) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (score_id, item["criterion_id"], item["keyword_score"], item["ai_score"], item["final_score"]),
+            )
+        conn.commit()
 
 
 def test_score_carries_profile_and_snapshot_of_the_criteria_it_was_computed_with():
@@ -402,70 +401,6 @@ def test_text_hash_ignores_weight_but_not_what_the_model_and_keywords_see():
         assert text_hash(base) != text_hash({**base, field: value}), field
 
 
-def test_worker_sends_profile_and_snapshot_with_the_score(monkeypatch):
-    """Воркер NL базы не видит: профиль и снимок он берёт из критериев пакета — тех, что ядро
-    положило в него при выдаче. Контракт тот же (номер 1): старое ядро лишние поля пропустит."""
-    from oiltech_digest.processing.openai_client import OfflineAIClient
-
-    criteria = [{"id": 20, "name": "Значимость", "weight": 100, "description": "", "profile": "business",
-                 "keywords_json": [], "keywords_en_json": ["drilling"]}]
-    monkeypatch.setattr(external_ai, "make_client", lambda offline: OfflineAIClient())
-
-    result = external_ai.process_payload({
-        "offline": True, "criteria": criteria,
-        "articles": [{"id": 1, "title": "Drilling automation", "raw_text": "drilling", "language": "en"}],
-        "tags": [{"id": 10, "name": "Бурение", "keywords_json": [], "keywords_en_json": ["drilling"]}],
-    })
-
-    scoring = result["articles"][0]["scoring"]
-    assert scoring["profile"] == "business"
-    assert scoring["criteria_snapshot"] == scoring_profiles.criteria_snapshot(criteria)
-
-
-def test_old_nl_result_without_snapshot_gets_one_from_the_core(isolated_db):
-    """NL пересобирают после ядра: итог старой сборки — без профиля и снимка. Ядро строит их
-    по id подпунктов — балл всё равно знает, каким профилем и набором посчитан."""
-    seed_default_scoring_criteria()
-    business = repository.list_enabled_scoring_criteria()
-    article_id = _article()
-
-    external_ai.apply_process_result({"articles": [{"article_id": article_id, "scoring": _worker_scoring(business)}]})
-
-    profile, snapshot = _stored_score(article_id)
-    assert profile == "business"
-    assert snapshot == scoring_profiles.criteria_snapshot(business)
-
-
-def test_new_nl_snapshot_is_written_as_sent(isolated_db):
-    """Снимок воркера — критерии на момент выдачи задачи, то есть то, что видела модель."""
-    seed_default_scoring_criteria()
-    business = repository.list_enabled_scoring_criteria()
-    sent = scoring_profiles.criteria_snapshot(business)
-    sent[0]["weight"] = 35.0   # к записи итога вес успели поправить на экране
-    article_id = _article()
-
-    external_ai.apply_process_result({"articles": [{
-        "article_id": article_id,
-        "scoring": _worker_scoring(business, profile="business", criteria_snapshot=sent),
-    }]})
-
-    assert _stored_score(article_id) == ("business", sent)
-
-
-def test_malformed_provenance_from_worker_is_rebuilt_by_the_core(isolated_db):
-    seed_default_scoring_criteria()
-    business = repository.list_enabled_scoring_criteria()
-    article_id = _article()
-    broken = [{"id": "x"}], [{"id": 999999, "name": "чужой", "weight": 100, "text_hash": "h"}], "не список"
-
-    for snapshot in broken:
-        external_ai.apply_process_result({"articles": [{
-            "article_id": article_id,
-            "scoring": _worker_scoring(business, profile="digest", criteria_snapshot=snapshot),
-        }]})
-        assert _stored_score(article_id) == ("business", scoring_profiles.criteria_snapshot(business)), snapshot
-
-
 def test_article_breakdown_shows_the_weight_it_was_scored_with(isolated_db):
     """Вес в разбивке статьи — из снимка: текущий вес после правки на экране дал бы
     разбивку, которая не складывается в итог. У балла до профилей снимка нет — вес текущий."""
@@ -483,12 +418,8 @@ def test_article_breakdown_shows_the_weight_it_was_scored_with(isolated_db):
         ).fetchone()[0]
         conn.commit()
     items = [{"criterion_id": int(c["id"]), "ai_score": 70, "keyword_score": 0, "final_score": 70} for c in rows]
-    repository.replace_article_score(scored, 70, "Выше средней", "e", items, "gpt", profile="business",
-                                     criteria_snapshot=scoring_profiles.criteria_snapshot(rows))
-    repository.replace_article_score(legacy, 70, "Выше средней", "e", items, "gpt")
-    with connection.get_connection() as conn:
-        conn.execute("UPDATE article_scores SET criteria_snapshot = NULL, profile = NULL WHERE article_id = %s", (legacy,))
-        conn.commit()
+    _history_score(scored, items, profile="business", snapshot=scoring_profiles.criteria_snapshot(rows))
+    _history_score(legacy, items)  # балл до профилей: без снимка
 
     repository.save_scoring_criteria([{**rows[0], "weight": 30}, {**rows[1], "weight": 70}])
 

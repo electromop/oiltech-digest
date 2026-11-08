@@ -133,7 +133,10 @@ def test_bot_history_pages_with_total_and_status(core):
     rest = core.get(path, headers=WORKER, params={**user, "offset": 10}).json()
 
     assert (first["total"], len(first["materials"]), len(rest["materials"])) == (12, 10, 2)
-    assert (first["materials"][0]["status"], first["materials"][0]["status_label"]) == ("accepted", "Принят на платформу")
+    # Флаг «Отбора» снят 08.11: материал при записи сразу становится сигналом, и бот показывает автору его номер.
+    newest = first["materials"][0]
+    assert newest["signal_id"]
+    assert (newest["status"], newest["status_label"]) == ("signal", f"Стал сигналом №{newest['signal_id']}")
     assert {row["id"] for row in first["materials"]}.isdisjoint(row["id"] for row in rest["materials"])
 
 
@@ -141,7 +144,9 @@ def test_bot_history_pages_with_total_and_status(core):
 
 
 def _as(role):
-    api.app.dependency_overrides[api.require_user] = lambda: {"id": 1, "role": role}
+    # Материал сразу сигнал (флаг «Отбора» снят 08.11), правка пишет журнал ОС сигнала с автором: учётка настоящая.
+    user = repository.create_user(f"{role}@example.com", "test-password", role)
+    api.app.dependency_overrides[api.require_user] = lambda: {"id": user["id"], "role": role}
 
 
 def test_admin_edits_material_with_bot_rules(core):

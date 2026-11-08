@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi.testclient import TestClient
 
-from oiltech_digest import api, feed_window
+from oiltech_digest import api, contract, feed_window
 
 
 def _freeze_inside_month(monkeypatch, month: str) -> None:
@@ -2200,7 +2200,7 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
         api.external_ai,
         "build_process_articles_payload",
         lambda payload, job_id=None: built_for.append(job_id)
-        or {"kind": "process_articles", "articles": [{"id": 1}], "tags": [], "criteria": []},
+        or {"kind": "process_articles", "articles": [{"id": 1}]},
     )
     captured = {}
 
@@ -2230,7 +2230,8 @@ def test_external_worker_claim_returns_leased_job(monkeypatch):
 
     response = client.post(
         "/api/external-worker/claim",
-        headers={"Authorization": "Bearer secret"},
+        # Пакет статей ленты выдаётся только сборке контракта 11 (снятие старой цепочки 08.11).
+        headers={"Authorization": "Bearer secret", contract.HEADER_CONTRACT: str(contract.CONTRACT)},
         json={"worker_id": "eu-1", "queues": ["external-ai"], "capabilities": ["openai"], "max_lease_seconds": 300},
     )
 
@@ -2447,50 +2448,6 @@ def test_external_worker_complete_applies_source_candidate_result(monkeypatch):
     assert response.status_code == 200
     assert applied == [({"source_candidate_evaluate": True, "candidate_id": 42, "articles": []}, {"job_id": 10})]
     assert completed[0][1]["result"]["applied"] == {"articles": 1, "ok": 1}
-
-
-def test_external_worker_complete_reads_recheck_flags_from_payload_json(monkeypatch):
-    """Флаги мягкого режима recheck читаются из payload_json — РЕАЛЬНОГО ключа строки задачи.
-
-    Баг T3 (P1, потеря данных): код читал job.get("payload"), которого в строке нет —
-    get_background_job делает SELECT *, поэтому ключ называется payload_json (schema.sql:304).
-    В результате mark/dry_run/force ВСЕГДА были False, и recheck удалял статьи ФИЗИЧЕСКИ,
-    даже когда оператор явно просил только пометить (--mark) или лишь посмотреть (--dry-run).
-    Так уже потеряли ~2000 статей. Прод гонит AI на внешнем воркере, т.е. это живой путь.
-
-    Прежние тесты этот баг не ловили, потому что мокали задачу рукописным словарём без
-    payload_json — здесь форма строки повторяет то, что реально отдаёт репозиторий.
-    """
-    monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        api.repository,
-        "get_background_job",
-        lambda job_id: {
-            "id": job_id,
-            "kind": "recheck_relevance",
-            "payload_json": {"mark": True, "dry_run": False, "force": True},
-        },
-    )
-    monkeypatch.setattr(api.repository, "begin_external_background_job_finalize", lambda job_id, **kwargs: True)
-    monkeypatch.setattr(
-        api.external_ai,
-        "apply_recheck_result",
-        lambda result, **kwargs: captured.update(kwargs) or {"checked": 1, "marked": 1},
-    )
-    monkeypatch.setattr(api.repository, "finish_external_background_job", lambda job_id, **kwargs: True)
-    client = TestClient(api.app)
-
-    response = client.post(
-        "/api/external-worker/jobs/10/complete",
-        headers={"Authorization": "Bearer secret"},
-        json={"lease_token": "lease", "result": {"recheck_relevance": True, "articles": []}},
-    )
-
-    assert response.status_code == 200
-    assert captured.get("mark") is True, "mark потерян → статьи удалятся ФИЗИЧЕСКИ вместо пометки"
-    assert captured.get("force") is True
-    assert captured.get("dry_run") is False
 
 
 def test_external_worker_complete_applies_external_fetch_result(monkeypatch):
@@ -2981,7 +2938,7 @@ def test_feedback_reasons_wrong_block_only_for_signal_feedback():
 
 
 def test_external_worker_claim_hydrates_signal_discovery_payload(monkeypatch):
-    from oiltech_digest import contract, signal_discovery
+    from oiltech_digest import signal_discovery
 
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
     monkeypatch.setattr(api.repository, "requeue_expired_external_leases", lambda: 0)

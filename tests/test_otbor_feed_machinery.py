@@ -1,7 +1,7 @@
-"""Агент «Отбор» для ленты (#130, спека #128), шов 1 — прежняя механика ленты при «Отборе»: агент включается,
-прежняя релевантность (гейт, стоп-слова, перепроверка) для его статей выключается; что остаётся от механики ленты
-(лента статей, обработка, перепечатки, счётчики, пересчёт после полного текста), читает его решение из сигнала
-(решение владельца 23.10). Флаг выключили — снова работает гейт (tests/otbor_support.py).
+"""Агент «Отбор» для ленты (#130, спека #128), шов 1: прежняя механика ленты при «Отборе». Прежняя релевантность
+(гейт, стоп-слова, перепроверка) снята 08.11 вместе с флагом «Отбора»; что осталось от механики ленты (лента статей,
+обработка, перепечатки, счётчики, пересчёт после полного текста), читает его решение из сигнала (решение владельца
+23.10). Статья, решённая гейтом до «Отбора», живёт по его решению (история).
 """
 
 import pytest
@@ -24,11 +24,17 @@ def _feed(user):
     return {row["title"] for row in api_get("/api/articles", user)}
 
 
-def _gate(article_id, relevant):
-    """Решение гейта ленты — как его пишет ядро из итога обработки (до «Отбора»)."""
-    external_ai.apply_process_result({"articles": [{
-        "article_id": article_id, "relevance": {"relevant": relevant, "reason": "r", "model": "m"},
-    }]})
+def _gate(article_id, relevant=None):
+    """Статья, собранная до «Отбора» (история: путь статьи пуст), и вердикт гейта ленты в её карточке, как его
+    записала прежняя обработка (гейт снят 08.11); relevant=None: гейт её не решал. Мост «лента → сигнал»
+    синхронизирован, как после записи вердикта."""
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE articles SET selector = NULL WHERE id = %s", (article_id,))
+        if relevant is not None:
+            conn.execute("INSERT INTO article_cards (article_id, relevant, relevance_reason, relevance_model, status) "
+                         "VALUES (%s, %s, 'r', 'm', %s)", (article_id, relevant, "new" if relevant else "rejected"))
+        conn.commit()
+    repository._sync_feed_signal(article_id)
 
 
 def test_new_article_is_hidden_until_otbor_decides_then_shown_by_its_decision(user, contour, monkeypatch):
@@ -44,13 +50,9 @@ def test_new_article_is_hidden_until_otbor_decides_then_shown_by_its_decision(us
 
 
 def test_article_decided_before_otbor_lives_by_the_gate_rules(user, contour, monkeypatch):
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    accepted = article("Контракт Weatherford", "Weatherford получила контракт на бурение 274 скважин в Омане.")
-    rejected = article("Прибыль BP", "BP более чем вдвое увеличила чистую прибыль во втором квартале.")
-    article("Ещё не проверена", "Газпром нефть пробурила новую скважину на Ямале.")
-    _gate(accepted, True)
-    _gate(rejected, False)
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
+    _gate(article("Контракт Weatherford", "Weatherford получила контракт на бурение 274 скважин в Омане."), True)
+    _gate(article("Прибыль BP", "BP более чем вдвое увеличила чистую прибыль во втором квартале."), False)
+    _gate(article("Ещё не проверена", "Газпром нефть пробурила новую скважину на Ямале."))
 
     model = decide(monkeypatch, {})
 
@@ -61,7 +63,7 @@ def test_article_decided_before_otbor_lives_by_the_gate_rules(user, contour, mon
 
 
 def _process_feed():
-    """Обработка ленты (суть, перевод, тег, балл) — шаг планировщика и воркер NL с офлайн-клиентом."""
+    """Обработка ленты (суть и перевод заголовка): шаг планировщика и воркер NL с офлайн-клиентом."""
     cli.main(["enqueue-process", "--limit", "10", "--offline"])
     [job] = run_worker("external-ai")
     return job
@@ -69,7 +71,7 @@ def _process_feed():
 
 def test_article_accepted_by_otbor_is_processed_without_the_gate_and_stop_words(user, admin, contour, monkeypatch):
     seed_default_scoring_criteria()
-    # Стоп-слово темы — смысловой фильтр гейта: принятую «Отбором» статью оно не отклоняет.
+    # Стоп-слово темы действует только в предфильтре сбора: принятую «Отбором» статью оно не отклоняет.
     with repository.get_connection() as conn:
         conn.execute("UPDATE tags SET negative_keywords_json = '[\"шельфе\"]'::jsonb WHERE id = %s", (tag(DRILLING),))
         conn.commit()
@@ -83,9 +85,10 @@ def test_article_accepted_by_otbor_is_processed_without_the_gate_and_stop_words(
     assert api_get(f"/api/jobs/{job['id']}", admin)["result"]["stats"]["processed"] == 1
     [row] = api_get("/api/articles", user)
     assert (row["title"], row["relevant"], bool(row["summary"])) == ("Программа бурения Equinor", None, True)
-    # Мост «лента → сигнал» дописал принятой суть и тему.
+    # Мост «лента → сигнал» дописал принятой суть; тега у статьи нет (снят 08.11): тема до ответа «Карточки»
+    # «не классифицировано», балла нет.
     card = showcase(user)["Программа бурения Equinor"]
-    assert card["summary"] == row["summary"] and card["theme"] == DRILLING
+    assert card["summary"] == row["summary"] and card["theme"] == repository.SYSTEM_TAG_UNCLASSIFIED
 
 
 def test_summary_of_an_article_gets_the_otbor_category_and_link_but_not_its_decision(user, contour, monkeypatch):
@@ -114,8 +117,8 @@ def test_summary_of_an_article_gets_the_otbor_category_and_link_but_not_its_deci
 
 
 def test_old_feed_machinery_counts_and_recomputes_by_the_otbor_decision(user, admin, contour, monkeypatch):
-    # Решение владельца 23.10: что остаётся от прежней механики ленты (счётчики, пересчёт, тег и балл), читает
-    # решение «Отбора» из сигнала.
+    # Решение владельца 23.10: что остаётся от прежней механики ленты (счётчики, пересчёт после полного текста),
+    # читает решение «Отбора» из сигнала.
     seed_default_scoring_criteria()
     tag(DRILLING)
     accepted = article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
@@ -131,14 +134,14 @@ def test_old_feed_machinery_counts_and_recomputes_by_the_otbor_decision(user, ad
     # Аналитика — без стоимости: та за курсом ходит в сеть ЦБ.
     month = analytics.monthly_analytics(1)["months"][-1]
     assert (month["relevant"], month["rejected"], month["summarized"], month["sources_relevant"]) == (1, 1, 1, 1)
-    # Пересчёт после полного текста: суть и балл принятой — по новому телу, отклонённой — ничего.
+    # Пересчёт после полного текста: суть принятой по новому телу, отклонённой ничего.
     monkeypatch.setattr(api.config, "AI_BULK_LANE_ENABLED", True)
     assert fulltext_recompute.enqueue_after_body([accepted, rejected])["articles"] == [accepted]
 
 
 def test_explicit_article_list_does_not_bypass_otbor(user, admin, contour, monkeypatch, capsys):
-    # Явный список (ручной импорт с обработкой, перекачка тела): ждущую «Отбора» гейт не решает, а за суть, тег и
-    # балл отклонённой модель не платится; принятая «Отбором» обрабатывается без гейта.
+    # Явный список (ручной импорт с обработкой, перекачка тела): ждущую «Отбора» никто, кроме него, не решает, а за
+    # суть отклонённой модель не платится; принятая «Отбором» обрабатывается.
     seed_default_scoring_criteria()
     tag(DRILLING)
     waiting = article("Ждёт решения", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
@@ -162,65 +165,27 @@ def test_explicit_article_list_does_not_bypass_otbor(user, admin, contour, monke
     assert step["payload"]["article_ids"] == [waiting]
 
 
-def test_flag_off_keeps_the_old_chain_and_flag_on_runs_the_new_one(user, contour, monkeypatch):
-    seed_default_scoring_criteria()
-    tag(DRILLING)
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    article("Старая цепочка", "Weatherford получила контракт на бурение 274 скважин в Омане.")
-    model = decide(monkeypatch, {"Старая цепочка": answer()})
-    _process_feed()
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
-    article("Новая цепочка", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
-    decide(monkeypatch, {"Новая цепочка": answer()})
-    _process_feed()
+def test_otbor_failure_of_an_article_decided_by_the_gate_before_otbor_is_cleared(user, admin, contour, monkeypatch,
+                                                                                   capsys):
+    """Статья окна переноса #134 живёт на пути гейта (путь пуст, вердикт гейта в карточке). Если «Карточка» вернула её
+    в «Отбор», а он дал сбой, сбой снимается следующей записью статьи: она живёт по решению гейта, с «В дайджест»
+    и «Карточкой», как все (_CLEAR_GATE_DECIDED_FAILURES). «Отбор» её командой с номером не пересматривает."""
+    gated = article("Контракт Weatherford", "Weatherford получила контракт на бурение 274 скважин в Омане.")
+    _gate(gated, True)
+    with repository.get_connection() as conn:
+        conn.execute("UPDATE signals SET otbor_failure = 'technical', otbor_failure_reason = 'timeout' "
+                     "WHERE signal_key = %s", (f"feed:{gated}",))
+        conn.commit()
 
-    # Выключен — статью решает гейт (офлайн-клиент её принимает), «Отбор» не зовётся; включён — наоборот.
-    assert model.calls == []
-    assert {row["title"]: row["relevant"] for row in api_get("/api/articles", user)} == {
-        "Старая цепочка": True, "Новая цепочка": None}
-    assert {title: card["otbor_decision"] for title, card in showcase(user).items()} == {
-        "Старая цепочка": None, "Новая цепочка": "accept"}
+    repository.upsert_article_card(gated, "Weatherford пробурит 274 скважины в Омане.", "m")
 
-
-def test_flag_switched_off_returns_the_waiting_article_to_the_gate(user, admin, contour, monkeypatch, capsys):
-    seed_default_scoring_criteria()
-    tag(DRILLING)
-    waiting = article("Ждёт решения", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
-    decide(monkeypatch, {"Ждёт решения": AIClientError("timeout")})
-    assert _feed(user) == set()
-
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    _process_feed()
-
-    assert {row["title"]: row["relevant"] for row in api_get("/api/articles", user)} == {"Ждёт решения": True}
-    # Статью решил гейт: прежний сбой «Отбора» снят, у карточки, как у всех, «В дайджест».
-    card = showcase(user)["Ждёт решения"]
+    card = showcase(user)["Контракт Weatherford"]
     assert (card["otbor_failure"], card["otbor_decision"]) == (None, None)
     api_send("PATCH", f"/api/signals/{card['id']}", user, {"selected_for_digest": True})
-    # Решённое гейтом «Отбор» не пересматривает и командой с номером (проверка на реальных данных, #134, пишет
-    # свои решения отдельно).
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
     capsys.readouterr()
-    cli.main(["enqueue-otbor", "--ids", str(waiting)])
+    cli.main(["enqueue-otbor", "--ids", str(gated)])
     assert "решает не «Отбор» — пропущены" in capsys.readouterr().out
-    assert len(api_get("/api/jobs", admin, kind="otbor")) == 1
-
-
-def test_manual_gate_command_leaves_otbor_articles_alone(user, contour, monkeypatch):
-    # Агент включается, прежняя релевантность для его статей выключается (владелец, 23.10): и ручная команда гейта.
-    seed_default_scoring_criteria()
-    tag(DRILLING)
-    article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
-    article("Ждёт решения", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
-    decide(monkeypatch, {"Программа бурения Equinor": answer(), "Ждёт решения": AIClientError("timeout")})
-    _process_feed()
-
-    cli.main(["relevance", "--offline"])
-
-    [row] = api_get("/api/articles", user)
-    assert (row["title"], row["relevant"]) == ("Программа бурения Equinor", None)
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    assert _feed(user) == {"Программа бурения Equinor"}  # ждущую «Отбора» гейт не решал
+    assert api_get("/api/jobs", admin, kind="otbor") == []
 
 
 def test_rerun_of_otbor_does_not_hide_an_article_chosen_for_the_digest(user, contour, monkeypatch, capsys):
@@ -246,27 +211,6 @@ def test_rerun_of_otbor_does_not_hide_an_article_chosen_for_the_digest(user, con
     assert showcase(user)["Контракт Weatherford"]["otbor_decision"] == "accept"
     assert {item["title"] for item in api_get("/api/digest-content", user)["news"]} == {
         "Пилот робота Equinor", "Контракт Weatherford"}
-
-
-def test_gate_recheck_leaves_otbor_articles_alone(user, contour, monkeypatch):
-    # Стоп-слово отклоняет статью в перепроверке гейтом без вызова модели.
-    with repository.get_connection() as conn:
-        conn.execute("UPDATE tags SET negative_keywords_json = '[\"шельфе\"]'::jsonb WHERE id = %s", (tag(DRILLING),))
-        conn.commit()
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    _gate(article("Старая статья", "Бурение на шельфе Сахалина продолжится."), True)
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
-    article("Программа бурения Equinor", "Equinor начнёт бурение 12 скважин на шельфе Норвегии в 2027 году.")
-    article("Ждёт решения", "Equinor испытает робота-бурильщика на шельфе в 2027 году.")
-    decide(monkeypatch, {"Программа бурения Equinor": answer(), "Ждёт решения": AIClientError("timeout")})
-
-    cli.main(["enqueue-recheck", "--mark"])
-    run_worker("external-ai")
-
-    # Перепроверка — механизм гейта: статьи, которые решает или решил «Отбор», она не трогает.
-    assert _feed(user) == {"Программа бурения Equinor"}
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", False)
-    assert _feed(user) == {"Программа бурения Equinor"}  # ждущая «Отбора» не помечена на удаление
 
 
 def test_reprint_never_hides_the_accepted_copy_behind_one_otbor_rejected_or_has_not_decided(user, contour, monkeypatch):

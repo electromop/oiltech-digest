@@ -2799,20 +2799,11 @@ def external_worker_complete(
 def _apply_external_result(job: dict[str, Any], result: dict[str, Any], job_id: int) -> dict[str, Any]:
     """Записать итог внешней задачи в базу ядра — полный (complete) или частичный (release)."""
     if job.get("kind") == "process_articles" and result.get("external_ai"):
-        # Какие стадии писать — в payload_json задачи (перегенерация сути: только суть и
-        # перевод). Ключа "payload" в строке нет — см. recheck ниже.
+        # Какие стадии писать, лежит в payload_json задачи (пересчёт после полного текста: только суть).
+        # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи в нём это
+        # колонки таблицы; ключа "payload" в строке нет (баг T3: чтение его молча давало {}).
         only = (job.get("payload_json") or {}).get("only")
         result = {**result, "applied": external_ai.apply_process_result(result, job_id=job_id, only=only)}
-    if job.get("kind") == "recheck_relevance" and result.get("recheck_relevance"):
-        # ИМЕННО payload_json: job приходит из get_background_job (SELECT *), поэтому ключи —
-        # это колонки таблицы (schema.sql:304). Ключа "payload" в строке НЕТ, и чтение его
-        # молча давало {} → mark/dry_run/force всегда False → recheck удалял статьи ФИЗИЧЕСКИ
-        # вопреки запрошенному мягкому режиму (баг T3, так уже потеряли ~2000 статей).
-        job_payload = job.get("payload_json") or {}
-        force = bool(job_payload.get("force", False))
-        dry_run = bool(job_payload.get("dry_run", False))
-        mark = bool(job_payload.get("mark", False))
-        result = {**result, "applied": external_ai.apply_recheck_result(result, force=force, dry_run=dry_run, mark=mark, job_id=job_id)}
     if job.get("kind") == "translate_titles" and result.get("translate_titles"):
         result = {**result, "applied": external_ai.apply_translate_result(result, job_id=job_id)}
     if job.get("kind") == "source_candidate_evaluate" and result.get("source_candidate_evaluate"):
@@ -3350,7 +3341,6 @@ def _signal_discovery_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 _EXTERNAL_PAYLOAD_BUILDERS: dict[str, Any] = {
     "process_articles": lambda payload, job_id: external_ai.build_process_articles_payload(payload, job_id=job_id),
-    "recheck_relevance": lambda payload, job_id: external_ai.build_recheck_payload(payload),
     "translate_titles": lambda payload, job_id: external_ai.build_translate_payload(payload),
     "process_document": lambda payload, job_id: documents_external.build_document_payload(payload),
     "scrape_source": lambda payload, job_id: external_fetch.build_scrape_source_payload(int(payload["source_id"]), payload),
@@ -3759,7 +3749,7 @@ async def external_worker_save_material(
         path = colleague_materials.store_file(content, file.filename or "")
         file_fields = {"file_name": (file.filename or "файл")[:300], "file_path": str(path), "file_size": len(content)}
     row, created = colleague_materials.save(fields, **file_fields)
-    if created and config.OTBOR_ENABLED:
+    if created:
         # Материал — сигнал третьего происхождения (#131): его решит «Отбор». Сбой здесь приём не ломает: материал
         # записан, сигнал заведёт команда накопленных (otbor-materials).
         try:

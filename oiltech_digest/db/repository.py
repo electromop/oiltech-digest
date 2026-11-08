@@ -21,7 +21,6 @@ from oiltech_digest.ingestion import normalize, verdicts
 from oiltech_digest.db import article_tail_store, marks
 from oiltech_digest.db.connection import get_connection
 from oiltech_digest.feed_window import FeedWindow, period_month_sql, signal_month_sql, visible_sql
-from oiltech_digest import scoring_profiles
 from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, check_profile
 
 logger = logging.getLogger(__name__)
@@ -40,9 +39,9 @@ logger = logging.getLogger(__name__)
 ArticleStatus = Literal["new", "digest", "archive", "noise", "duplicate"]
 ARTICLE_STATUS_VALUES: tuple[ArticleStatus, ...] = get_args(ArticleStatus)
 
-# Служебный тег-приёмник: сюда падает статья, не совпавшая ни с одной тематикой
-# (pipeline._fallback_tag). Он не тематика, а предохранитель — без него классификация
-# уводит весь непонятый поток в ПЕРВЫЙ тег списка. Поэтому его нельзя выключить ни
+# Служебный тег-приёмник: сюда падает статья, не совпавшая ни с одной тематикой (у агента источников
+# legacy_stages._fallback_tag; у сигнала ленты это тема до ответа «Карточки»). Он не тематика, а предохранитель:
+# без него классификация уводит весь непонятый поток в ПЕРВЫЙ тег списка. Поэтому его нельзя выключить ни
 # сохранением экрана тегов, ни удалением: 13.09 он выключился именно так и молча,
 # а страховка «больше половины» такой случай не ловит (один тег из четырнадцати).
 SYSTEM_TAG_UNCLASSIFIED = "Не классифицировано / новая тема"
@@ -881,7 +880,8 @@ CARD_SET_BY_AGENT = "agent"
 CARD_SET_BY_JUDGE = "radar_judge"
 CARD_SET_BY_OTBOR = "otbor"
 CARD_SET_BY_HUMAN = "human"
-# Статья, которую решает агент «Отбор», а не гейт ленты (articles.selector, #130): вставлена при включённом флаге.
+# Статья, которую решает агент «Отбор», а не гейт ленты (articles.selector, #130): с 08.11 так вставляется каждая
+# новая статья (флаг и гейт сняты); пустой путь у статьи, вставленной до включения «Отбора».
 ARTICLE_SELECTOR_OTBOR = "otbor"
 # То же у сигнала (signals.selector, #131): находка поиска или материал коллеги, заведённые при включённом флаге. Пока
 # решения нет, сигнал не виден нигде (правила показа и «Карточка» его не берут).
@@ -4912,8 +4912,8 @@ def insert_article(rec: dict) -> bool:
     Решение «вставлять или нет» — insert_verdict (рубежи в одном месте, их же читает
     проба источника); ON CONFLICT (url) остаётся страховкой от гонки двух вставок.
 
-    При включённом «Отборе» (OTBOR_ENABLED, #130) новая статья идёт через него, а не через гейт ленты
-    (articles.selector): пока «Отбор» не решил, лента её не показывает.
+    Новая статья идёт через «Отбор» (#130, articles.selector = 'otbor'; флаг снят 08.11, гейта ленты больше нет):
+    пока «Отбор» не решил, лента её не показывает.
     """
     with get_connection() as conn:
         verdict = insert_verdict(conn, rec)
@@ -4932,7 +4932,7 @@ def insert_article(rec: dict) -> bool:
             conn, rec.get("source_id"), rec.get("title") or "", rec.get("raw_text"))
         rec = {**rec, "image_url": rec.get("image_url"),
                "body_hash": verdict.body_hash, "url_key": verdict.url_key,
-               "selector": ARTICLE_SELECTOR_OTBOR if config.OTBOR_ENABLED else None,
+               "selector": ARTICLE_SELECTOR_OTBOR,
                "raw_text": kept, "text_tail": tail}
         cur = conn.execute(
             """
@@ -5940,21 +5940,14 @@ def _otbor_fields_sql(alias: str = "a") -> str:
 def get_articles_by_ids(article_ids: list[int], include_summary: bool = False) -> list[dict]:
     if not article_ids:
         return []
-    # Решение «Отбора» (#130) — воркеру: у решённой им статьи гейта и стоп-слов нет (external_ai._stages_left); его
-    # категория, связь и применение — во вход сути и перевода (#131).
+    # Решение «Отбора» (#130) нужно конвейеру: отклонённую статью он не обрабатывает (article_rejected), ждущую
+    # решения не берёт (held_by_otbor); категория, связь и применение «Отбора» идут во вход сути и перевода (#131).
     summary_select = (
-        ", c.summary, c.relevant, c.title_ru, at.id AS existing_tag_id, sc.id AS existing_score_id,"
+        ", c.summary, c.relevant, c.title_ru,"
         f" {feed_window.otbor_decision_sql('a')} AS otbor_decision, {_otbor_fields_sql('a')}"
         if include_summary else ""
     )
-    summary_join = (
-        """
-        LEFT JOIN article_cards c ON c.article_id = a.id
-        LEFT JOIN article_tags at ON at.article_id = a.id
-        LEFT JOIN article_scores sc ON sc.article_id = a.id
-        """
-        if include_summary else ""
-    )
+    summary_join = "LEFT JOIN article_cards c ON c.article_id = a.id" if include_summary else ""
     placeholders = ", ".join(["%s"] * len(article_ids))
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -5993,7 +5986,7 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
     в правильном порядке (отметка статьи каскадится сама). По умолчанию НЕ удаляем
     статью из выпуска (сохранённый черновик или отметка «в дайджест») — чтобы не
     рвать историю и не терять отметку; force=True снимает защиту (удалит и ссылки дайджеста).
-    Статью агента «Отбор» (#130) удаление по гейту не трогает и с force: её решает не гейт."""
+    Статью агента «Отбор» (#130) удаление не трогает и с force: убирает её из ленты только его решение."""
     with get_connection() as conn:
         if _is_otbor_article(conn, article_id) or (not force and _in_some_issue(conn, article_id)):
             return False
@@ -6014,25 +6007,6 @@ def delete_article(article_id: int, *, force: bool = False) -> bool:
         deleted = cur.fetchone() is not None
         conn.commit()
     return deleted
-
-
-def mark_article_for_deletion(article_id: int, reason: str | None, *, force: bool = False) -> str:
-    """Пометить статью на удаление (мягко, без физического DELETE). Возвращает
-    'marked' либо 'skipped_in_digest' (статья в выпуске — сохранённый черновик или
-    отметка «в дайджест», force=False), либо 'skipped_otbor' — статью решает агент «Отбор» (#130), а не
-    гейт."""
-    with get_connection() as conn:
-        if _is_otbor_article(conn, article_id):
-            return "skipped_otbor"
-        if not force and _in_some_issue(conn, article_id):
-            return "skipped_in_digest"
-        conn.execute(
-            "UPDATE articles SET pending_deletion = TRUE, deletion_reason = %s, "
-            "marked_for_deletion_at = now(), updated_at = now() WHERE id = %s",
-            (reason, article_id),
-        )
-        conn.commit()
-    return "marked"
 
 
 def count_pending_deletion() -> int:
@@ -6079,8 +6053,8 @@ def unmark_all_pending_deletion() -> int:
 
 
 def otbor_article_sql(alias: str = "a") -> str:
-    """Статья агента «Отбор» (#130): решает он (вставлена при включённом флаге) или уже решил. Механизмы гейта
-    ленты — перепроверка с удалением — такую статью не трогают."""
+    """Статья агента «Отбор» (#130): решает он (вставлена после его включения) или уже решил. Удаление статьи
+    (delete_article, разовая чистка помеченных recheck-purge) такую статью не трогает."""
     return (f"({alias}.selector IS NOT DISTINCT FROM '{ARTICLE_SELECTOR_OTBOR}'"
             f" OR {feed_window.otbor_decision_sql(alias)} IS NOT NULL)")
 
@@ -6088,14 +6062,6 @@ def otbor_article_sql(alias: str = "a") -> str:
 def _is_otbor_article(conn, article_id: int) -> bool:
     return conn.execute(f"SELECT 1 FROM articles a WHERE a.id = %s AND {otbor_article_sql('a')}",
                         (int(article_id),)).fetchone() is not None
-
-
-def all_article_ids() -> list[int]:
-    """Все id статей по возрастанию — для батч-перепрогона релевантности. Статьи «Отбора» (#130) — мимо:
-    гейт их не решает."""
-    with get_connection() as conn:
-        cur = conn.execute(f"SELECT a.id FROM articles a WHERE NOT {otbor_article_sql('a')} ORDER BY a.id ASC")
-        return [row[0] for row in cur.fetchall()]
 
 
 def article_ids_needing_title_ru() -> list[int]:
@@ -6110,26 +6076,6 @@ def article_ids_needing_title_ru() -> list[int]:
             """
         )
         return [row[0] for row in cur.fetchall()]
-
-
-def get_articles_for_recheck(after_id: int = 0, limit: int = 100) -> list[dict]:
-    """Все статьи по возрастанию id после чекпоинта — для локального перепрогона
-    релевантности на сыром тексте (независимо от наличия карточки). Статьи «Отбора» (#130) — мимо."""
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT a.*, s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
-            FROM articles a
-            JOIN sources s ON s.id = a.source_id
-            WHERE a.id > %s AND NOT {otbor_article_sql('a')}
-            ORDER BY a.id ASC
-            LIMIT %s
-            """,
-            (after_id, limit),
-        )
-        return cur.fetchall()
 
 
 def get_articles_needing_summary(limit: int = 20) -> list[dict]:
@@ -6163,31 +6109,28 @@ def get_articles_needing_summary(limit: int = 20) -> list[dict]:
         return cur.fetchall()
 
 
-# Каких стадий нет у статьи: сути, перевода, тега или балла.
-_STAGES_MISSING_SQL = "(c.summary IS NULL OR c.title_ru IS NULL OR at.id IS NULL OR sc.id IS NULL)"
+# Каких стадий нет у статьи: сути или перевода. Тега и балла статьи с 08.11 нет (тему и баллы ставит «Карточка» у
+# сигнала): условие «нет тега или балла» выбирало бы каждую принятую статью в каждом цикле, и она занимала бы
+# AI_PROCESS_LIMIT, не получая ничего.
+_STAGES_MISSING_SQL = "(c.summary IS NULL OR c.title_ru IS NULL)"
 
 
 def _needs_pipeline_from() -> str:
-    """Статьи, которым не хватает стадий обработки ленты, — FROM и WHERE для выборки.
+    """Статьи, которым не хватает стадий обработки ленты (суть, перевод): FROM и WHERE для выборки.
 
-    Решение «Отбора» (#130) главнее гейта: принятая им статья получает недостающие суть, перевод, тег и
-    балл без гейта, отклонённая — ничего. Статья, которую решает «Отбор», пока решения нет, обработку не
-    проходит, пока он включён: её решит он, а не гейт; выключили — её решит гейт (решение владельца 23.10).
-    Остальные — как до «Отбора»: ещё не проверенные гейтом и принятые им без какой-нибудь стадии. Флаг
-    читается при каждом вызове. То же правило для явного списка статей — held_by_otbor."""
-    waiting_goes_to_gate = "FALSE" if config.OTBOR_ENABLED else "TRUE"
+    Решает «Отбор» (#130): принятая им статья получает недостающие суть и перевод, отклонённая не получает ничего,
+    ждущая его решения тоже, пока он не решит. Статья, решённая до «Отбора» гейтом ленты (история: гейт снят 08.11),
+    живёт по его решению: принятая догоняет суть и перевод, остальные не берутся (решать их больше некому). То же
+    правило для явного списка статей: held_by_otbor и article_rejected."""
     return f"""
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             LEFT JOIN article_cards c ON c.article_id = a.id
-            LEFT JOIN article_tags at ON at.article_id = a.id
-            LEFT JOIN article_scores sc ON sc.article_id = a.id
             LEFT JOIN LATERAL (SELECT {feed_window.otbor_decision_sql('a')} AS decision) od ON TRUE
             WHERE CASE
               WHEN od.decision IS NOT NULL
                 THEN od.decision = '{feed_window.OTBOR_ACCEPT}' AND (c.article_id IS NULL OR {_STAGES_MISSING_SQL})
-              WHEN a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND c.relevant IS NULL THEN {waiting_goes_to_gate}
-              ELSE c.relevant IS NULL OR (c.relevant IS TRUE AND {_STAGES_MISSING_SQL}) OR c.article_id IS NULL
+              ELSE c.relevant IS TRUE AND {_STAGES_MISSING_SQL}
             END
 """
 
@@ -6199,29 +6142,35 @@ def otbor_verdict(article: dict) -> bool | None:
     return None if decision is None else decision == feed_window.OTBOR_ACCEPT
 
 
+def article_rejected(article: dict) -> bool:
+    """Статья строки выборки отклонена: «Отбором», а без его решения гейтом ленты до «Отбора» (история). Суть и
+    перевод ей не пишутся ни в каком пути обработки: гейта, который мог передумать, с 08.11 нет. Строка: из
+    get_articles_by_ids с include_summary или get_articles_needing_pipeline."""
+    verdict = otbor_verdict(article)
+    return verdict is False or (verdict is None and article.get("relevant") is False)
+
+
 def held_by_otbor(article: dict) -> bool:
     """Статью держит «Отбор» (#130) — правило _needs_pipeline_from для явного списка статей (ручной импорт,
-    перекачка тела, команда с номерами): отклонённую им обработка ленты не берёт, ждущую его решения — пока он
-    включён. Строка — из get_articles_by_ids с include_summary (решение «Отбора», гейт, путь статьи)."""
+    перекачка тела, команда с номерами): отклонённую им обработка ленты не берёт, ждущую его решения (путь «Отбора»,
+    гейт её не решал) тоже. Строка: из get_articles_by_ids с include_summary (решение «Отбора», гейт, путь статьи)."""
     verdict = otbor_verdict(article)
     if verdict is not None:
         return not verdict
-    return (bool(config.OTBOR_ENABLED) and article.get("selector") == ARTICLE_SELECTOR_OTBOR
-            and article.get("relevant") is None)
+    return article.get("selector") == ARTICLE_SELECTOR_OTBOR and article.get("relevant") is None
 
 
 def get_articles_needing_pipeline(limit: int = 20) -> list[dict]:
-    """Статьи, которым не хватает любого AI-этапа канонического pipeline.
+    """Статьи, которым не хватает сути или перевода заголовка (_needs_pipeline_from).
 
     Используется process/process-full/background/external enqueue. Старый выбор только по
-    ``summary IS NULL`` не поднимал статьи после частичного сбоя на тегировании/скоринге.
+    ``summary IS NULL`` не поднимал статьи после частичного сбоя на переводе.
     """
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
             SELECT a.*, c.summary, c.relevant, c.title_ru,
-                   at.id AS existing_tag_id, sc.id AS existing_score_id,
                    s.name AS source_name, s.priority AS source_priority,
                    s.category AS source_category, od.decision AS otbor_decision, {_otbor_fields_sql('a')}
             {_needs_pipeline_from()}
@@ -6333,97 +6282,6 @@ def defer_claimed_background_job(job_id: int, *, seconds: int = 120) -> bool:
         )
         conn.commit()
         return cur.rowcount == 1
-
-
-def get_articles_needing_relevance(limit: int = 20) -> list[dict]:
-    """Статьи с готовой сутью, но без проверки релевантности (card.relevant IS NULL). Решённые «Отбором» и ждущие
-    его решения, пока он включён, гейт не берёт (#130): агент включается, прежняя релевантность для его статей
-    выключается (решение владельца 23.10)."""
-    otbor_on = "TRUE" if config.OTBOR_ENABLED else "FALSE"
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
-            FROM articles a
-            JOIN sources s ON s.id = a.source_id
-            JOIN article_cards c ON c.article_id = a.id
-            WHERE c.summary IS NOT NULL AND c.relevant IS NULL
-              AND {feed_window.otbor_decision_sql('a')} IS NULL
-              AND NOT (a.selector = '{ARTICLE_SELECTOR_OTBOR}' AND {otbor_on})
-            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-        return cur.fetchall()
-
-
-def set_article_relevance(article_id: int, relevant: bool, reason: str | None,
-                          model: str | None = None) -> None:
-    """Записать вердикт релевантности (UPSERT). Нерелевантные → status='rejected'.
-
-    Раньше был чистый UPDATE — но после перестановки «релевантность ПЕРВОЙ» у
-    отклонённой статьи карточки ещё нет (она создаётся на этапе суммаризации),
-    и UPDATE по 0 строк терял вердикт. UPSERT создаёт карточку при необходимости."""
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO article_cards (article_id, relevant, relevance_reason, relevance_model, status)
-            VALUES (%(id)s, %(rel)s, %(reason)s, %(model)s,
-                    CASE WHEN %(rel)s THEN 'new' ELSE 'rejected' END)
-            ON CONFLICT (article_id) DO UPDATE SET
-                relevant = EXCLUDED.relevant,
-                relevance_reason = EXCLUDED.relevance_reason,
-                relevance_model = EXCLUDED.relevance_model,
-                status = CASE WHEN EXCLUDED.relevant THEN article_cards.status ELSE 'rejected' END,
-                updated_at = now()
-            """,
-            {"id": article_id, "rel": relevant, "reason": reason, "model": model},
-        )
-        conn.commit()
-    _sync_feed_signal(article_id)
-
-
-def get_articles_needing_tags(limit: int = 20) -> list[dict]:
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
-            FROM articles a
-            JOIN sources s ON s.id = a.source_id
-            JOIN article_cards c ON c.article_id = a.id
-            LEFT JOIN article_tags at ON at.article_id = a.id
-            WHERE c.summary IS NOT NULL AND {feed_window.relevance_sql('a', 'c')} IS TRUE AND at.id IS NULL
-            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-        return cur.fetchall()
-
-
-def get_articles_needing_scores(limit: int = 20) -> list[dict]:
-    with get_connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT a.*, c.summary, s.name AS source_name, s.priority AS source_priority,
-                   s.category AS source_category
-            FROM articles a
-            JOIN sources s ON s.id = a.source_id
-            JOIN article_cards c ON c.article_id = a.id
-            LEFT JOIN article_scores sc ON sc.article_id = a.id
-            WHERE c.summary IS NOT NULL AND {feed_window.relevance_sql('a', 'c')} IS TRUE AND sc.id IS NULL
-            ORDER BY a.published_at DESC NULLS LAST, a.id DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-        return cur.fetchall()
 
 
 def find_article_candidates(query: str, limit: int = 20) -> list[dict]:
@@ -6780,35 +6638,6 @@ def save_tags(items: list[dict]) -> dict:
     return {"saved": len(items)}
 
 
-def clear_article_tags_for_disabled(limit: int | None = None) -> int:
-    """Снять теги, присвоенные ныне ВЫКЛЮЧЕННЫМИ тегами. Возвращает, сколько снято.
-
-    Нужно при смене таксономии: 13.09 набор из 18 направлений заменён на 13 тематик
-    заказчика, и 11 тысяч статей остались с классификацией по несуществующему больше
-    справочнику. Выборка тегирования берёт статьи, у которых тега НЕТ
-    (`get_articles_needing_tags`: `at.id IS NULL`), поэтому снятие строки — и есть
-    способ вернуть статью в очередь.
-
-    Удаляются только строки связи, сами статьи и их суть не трогаются.
-    """
-    with get_connection() as conn:
-        cur = conn.execute(
-            """
-            DELETE FROM article_tags
-            WHERE id IN (
-                SELECT at.id FROM article_tags at
-                JOIN tags t ON t.id = at.tag_id
-                WHERE NOT t.enabled
-                ORDER BY at.id
-                LIMIT %s
-            )
-            """,
-            (limit if limit is not None else 10_000_000,),
-        )
-        conn.commit()
-        return cur.rowcount or 0
-
-
 def disable_tags_except(names: list[str]) -> int:
     """Выключить все теги, кроме перечисленных. Возвращает, сколько выключено.
 
@@ -6842,26 +6671,6 @@ def delete_tag(tag_id: int) -> None:
             (tag_id, tag_id),
         )
         conn.commit()
-
-
-def upsert_article_tag(article_id: int, tag_id: int, confidence: float,
-                       rationale: str | None, model: str | None = None) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO article_tags (article_id, tag_id, confidence, rationale, model)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (article_id) DO UPDATE SET
-                tag_id = EXCLUDED.tag_id,
-                confidence = EXCLUDED.confidence,
-                rationale = EXCLUDED.rationale,
-                model = EXCLUDED.model,
-                created_at = now()
-            """,
-            (article_id, tag_id, confidence, rationale, model),
-        )
-        conn.commit()
-    _sync_feed_signal(article_id)
 
 
 def _upsert_scoring_criterion(conn, rec: dict, profile: str) -> int:
@@ -7090,8 +6899,8 @@ def delete_scoring_criterion(criterion_id: int) -> None:
     ПРОВЕРЯЕМ сумму весов оставшихся активных критериев. Раньше не проверяли, и это было
     миной: «Сохранить» сумму валидирует, а «Удалить» уходило в БД немедленно. Стоило уйти
     со страницы, не добив веса до 100, — и следующая стадия скоринга падала ЦЕЛИКОМ, ещё
-    до первой статьи (`_validate_weights`, pipeline.py). Заказчик 11.09 как раз просил
-    «убрать старые, не актуальные» критерии — по одному это гарантированно ломало бы
+    до первой статьи (`_validate_weights`, с 08.11 у агента источников: source_discovery/legacy_stages.py).
+    Заказчик 11.09 как раз просил «убрать старые, не актуальные» критерии: по одному это гарантированно ломало бы
     скоринг на каждом шаге. Теперь удаление отклоняется с понятным текстом, а привести
     профиль в порядок можно одним «Сохранить» (bulk), где веса пересчитываются вместе.
 
@@ -7198,176 +7007,6 @@ def save_scoring_criteria(items: list[dict], profile: str = ARTICLE_SCORING_PROF
             ) from exc
         raise ValueError("Два критерия профиля с одним именем: имена в профиле должны различаться.") from exc
     return {"saved": len(items), "weight_sum": total, "profile": profile}
-
-
-def replace_article_score(article_id: int, total_score: float, score_label: str,
-                          explanation: str, items: list[dict],
-                          model: str | None = None, *, profile: str | None = None,
-                          criteria_snapshot: list[dict] | None = None) -> None:
-    """Балл статьи с подпунктами и происхождением: профиль и снимок критериев (сессия G).
-
-    Снимок присылает тот, кто считал балл. Нет его (итог сборки NL до сессии G) — строим
-    здесь по id подпунктов из текущих критериев: пакет выдан минуты назад, и расхождение
-    возможно, только если веса правили именно в эти минуты."""
-    with get_connection() as conn:
-        if criteria_snapshot is None or profile is None:
-            ids = [int(item["criterion_id"]) for item in items]
-            cur = conn.cursor(row_factory=dict_row)
-            rows = cur.execute(
-                "SELECT * FROM scoring_criteria WHERE id = ANY(%s) ORDER BY sort_order, id", (ids,)
-            ).fetchall() if ids else []
-            if criteria_snapshot is None and rows:
-                criteria_snapshot = scoring_profiles.criteria_snapshot(rows)
-            if profile is None:
-                profile = scoring_profiles.profile_of(rows)
-        cur = conn.execute(
-            """
-            INSERT INTO article_scores (article_id, model, total_score, score_label, explanation,
-                                        profile, criteria_snapshot)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (article_id) DO UPDATE SET
-                model = EXCLUDED.model,
-                total_score = EXCLUDED.total_score,
-                score_label = EXCLUDED.score_label,
-                explanation = EXCLUDED.explanation,
-                profile = EXCLUDED.profile,
-                criteria_snapshot = EXCLUDED.criteria_snapshot,
-                updated_at = now()
-            RETURNING id
-            """,
-            (article_id, model, total_score, score_label, explanation, profile,
-             Json(criteria_snapshot) if criteria_snapshot is not None else None),
-        )
-        score_id = cur.fetchone()[0]
-        conn.execute("DELETE FROM article_score_items WHERE article_score_id = %s", (score_id,))
-        for item in items:
-            conn.execute(
-                """
-                INSERT INTO article_score_items
-                  (article_score_id, criterion_id, keyword_score, ai_score, final_score, rationale)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    score_id,
-                    item["criterion_id"],
-                    item.get("keyword_score"),
-                    item.get("ai_score"),
-                    item.get("final_score"),
-                    item.get("rationale"),
-                ),
-            )
-        conn.commit()
-    _sync_feed_signal(article_id)
-
-
-def recompute_total_scores_from_items(keyword_weight: float, ai_weight: float, *,
-                                      profile: str = ARTICLE_SCORING_PROFILE,
-                                      include_legacy: bool = False, dry_run: bool = False) -> dict:
-    """Пересчитать total_score/score_label/final_score из УЖЕ сохранённых ai_score/keyword_score
-    (article_score_items) по текущему блендингу — БЕЗ повторного вызова OpenAI и без воркера.
-
-    Применяет НОВЫЙ блендинг к старым AI-баллам (полезно, когда менялась только формула, а
-    переспрашивать модель дорого/недоступно — напр. внешний воркер лежит). Формула синхронна
-    pipeline.normalize_score_payload: final = max(ai, kw*keyword_weight + ai*ai_weight);
-    total = Σ final*weight/100 (вес критерия из scoring_criteria). Пороги score_label синхронны
-    pipeline.score_label (80/65/40). ai_score/keyword_score не трогаются → можно гонять повторно
-    или поверх сделать полный AI-перепрогон.
-
-    Сессия G: только в пределах профиля и только там, где пересчёт без ИИ верен.
-    - Балл со снимком — если набор id и хэши текстов снимка совпадают с текущими активными
-      критериями профиля. Отличаться могут только веса: итог — с новыми весами, снимок получает
-      их же. Набор или тексты другие — пропуск (skipped_changed): подпункты отвечали на другие
-      вопросы, нужен пересчёт с ИИ (enqueue-rescore).
-    - Балл без снимка (до профилей) — пропуск (skipped_no_snapshot). С include_legacy —
-      пересчёт, если набор id подпунктов совпадает с текущим; тексты сверить не с чем, решение
-      за владельцем, снимок такому баллу не пишется.
-    Прежний пересчёт брал все активные критерии без сверки: статья, оценённая пятью старыми
-    критериями, из которых активным остался один, получала итог по одному подпункту.
-    Сумма весов профиля ≠ 100 — отказ: пересчёт исказил бы баллы. dry_run — только счёт."""
-    profile = check_profile(profile)
-    current = list_enabled_scoring_criteria(profile)
-    weight_sum = round(sum(float(row["weight"]) for row in current), 2)
-    if weight_sum != 100:
-        raise ValueError(f"Сумма весов профиля {profile} — {weight_sum}, а нужна 100: пересчёт исказил бы баллы")
-    snapshot = scoring_profiles.criteria_snapshot(current)
-    current_texts = scoring_profiles.snapshot_texts(snapshot)
-    stats = {"profile": profile, "recomputed": 0, "legacy_recomputed": 0,
-             "skipped_changed": 0, "skipped_no_snapshot": 0, "dry_run": dry_run}
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT s.id, s.criteria_snapshot, array_agg(i.criterion_id)
-            FROM article_scores s
-            JOIN article_score_items i ON i.article_score_id = s.id
-            WHERE COALESCE(s.profile, %s) = %s
-            GROUP BY s.id
-            ORDER BY s.id
-            """,
-            (ARTICLE_SCORING_PROFILE, profile),
-        ).fetchall()
-        matched: list[int] = []
-        legacy: list[int] = []
-        for score_id, stored, item_ids in rows:
-            same_set = {int(item) for item in item_ids} == set(current_texts)
-            if stored is None:
-                if include_legacy and same_set:
-                    legacy.append(int(score_id))
-                else:
-                    stats["skipped_no_snapshot"] += 1
-            elif same_set and scoring_profiles.snapshot_texts(stored) == current_texts:
-                matched.append(int(score_id))
-            else:
-                stats["skipped_changed"] += 1
-        stats["recomputed"], stats["legacy_recomputed"] = len(matched), len(legacy)
-        eligible = matched + legacy
-        if dry_run or not eligible:
-            return stats
-        conn.execute(
-            """
-            UPDATE article_score_items
-            SET final_score = ROUND(
-                GREATEST(COALESCE(ai_score, 0),
-                         COALESCE(keyword_score, 0) * %s + COALESCE(ai_score, 0) * %s)::numeric, 2)
-            WHERE article_score_id = ANY(%s)
-            """,
-            (keyword_weight, ai_weight, eligible),
-        )
-        conn.execute(
-            """
-            -- Подпункты каждого балла здесь — ровно активный набор профиля (проверено выше):
-            -- выключенный критерий вклада не вносит, недостающий не обнуляет итог.
-            WITH recomputed AS (
-                SELECT i.article_score_id, SUM(i.final_score * c.weight / 100.0) AS total
-                FROM article_score_items i
-                JOIN scoring_criteria c ON c.id = i.criterion_id
-                WHERE i.article_score_id = ANY(%s)
-                GROUP BY i.article_score_id
-            )
-            UPDATE article_scores s
-            SET total_score = ROUND(LEAST(GREATEST(r.total, 0), 100)::numeric, 2),
-                score_label = CASE
-                    WHEN r.total >= 80 THEN 'Высокая'
-                    WHEN r.total >= 65 THEN 'Выше средней'
-                    WHEN r.total >= 40 THEN 'Средняя'
-                    ELSE 'Низкая' END,
-                updated_at = now()
-            FROM recomputed r
-            WHERE s.id = r.article_score_id
-            """,
-            (eligible,),
-        )
-        if matched:
-            conn.execute(
-                "UPDATE article_scores SET criteria_snapshot = %s, profile = %s WHERE id = ANY(%s)",
-                (Json(snapshot), profile, matched),
-            )
-        article_ids = [row[0] for row in conn.execute(
-            "SELECT article_id FROM article_scores WHERE id = ANY(%s)", (eligible,)
-        )]
-        conn.commit()
-    if article_ids:
-        _sync_feed_signal(*article_ids)
-    return stats
 
 
 def insert_ai_run(rec: dict) -> None:

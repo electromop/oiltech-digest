@@ -30,18 +30,12 @@ STAGE = "Суть и перевод"
 _SUMMARY_CHARS, _TITLE_CHARS = 1500, 200
 
 
-class SummarySetupError(ValueError):
-    """Этап нельзя поставить в работу: выключен флаг «Отбора»."""
-
-
 # --- Постановка (ядро) ---------------------------------------------------------------------------
 
 
 def scheduler_step() -> dict[str, Any]:
-    """Шаг планировщика «Суть и перевод» сигналов, за флагом OTBOR_ENABLED (этап нового конвейера): принятые
-    «Отбором» находки и материалы без сути или русского заголовка — в задачи по полосе ежедневной обработки."""
-    if not config.OTBOR_ENABLED:
-        return {"signals": 0, "jobs": [], "reason": "disabled"}
+    """Шаг планировщика «Суть и перевод» сигналов (этап конвейера «Отбора»): принятые «Отбором» находки и материалы
+    без сути или русского заголовка ставит в задачи по полосе ежедневной обработки."""
     ids = signal_summary_store.new_signal_ids(days=config.OTBOR_NEW_DAYS, limit=config.OTBOR_STEP_LIMIT)
     return {"signals": len(ids), "jobs": enqueue(ids, trigger="daily")}
 
@@ -58,8 +52,6 @@ def enqueue(signal_ids: list[int], *, trigger: str, bulk: bool = False) -> list[
     """Задачи этапа пачками по OTBOR_BATCH; bulk — названные сигналы, по полосе пересчётов."""
     from oiltech_digest import network_policy
 
-    if not config.OTBOR_ENABLED:
-        raise SummarySetupError("OTBOR_ENABLED выключен: «Суть и перевод» сигналов — этап конвейера «Отбора»")
     route = network_policy.route_ai_bulk() if bulk else network_policy.route_ai_processing()
     batch = config.OTBOR_BATCH
     return [
