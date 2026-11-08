@@ -4,6 +4,7 @@
 """
 
 from fastapi.testclient import TestClient
+import pytest
 
 from oiltech_digest import api, cli, signal_card
 from oiltech_digest.db import repository
@@ -12,10 +13,13 @@ from oiltech_digest.otbor_pack_format import load_dictionaries
 from oiltech_digest.processing.openai_client import AIClientError
 from oiltech_digest.processing.seed import seed_default_scoring_criteria
 from tests.otbor_support import JUSTIFICATION, answer, api_request, api_send, article, decide, reject, showcase
-from tests.otbor_support import contour  # noqa: F401 — фикстура
+from tests.otbor_support import contour, window_of_published  # noqa: F401 (фикстуры)
 from tests.signal_card_support import (DRILLING, FakeModel, admin, api_get, radar_finding, run_worker, tag,  # noqa: F401
                                        user)
 from tests.signal_card_support import answer as card_answer
+
+# Лента статей и отметка «в дайджест» смотрят окно открытых месяцев: оно на день статей (tests/otbor_support.py).
+pytestmark = pytest.mark.usefixtures("window_of_published")
 
 OTBOR_FIELDS = ("industry", "oilfield_relevance", "decision", "reject_reason", "category")
 

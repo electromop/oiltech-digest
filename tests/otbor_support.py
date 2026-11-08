@@ -11,7 +11,7 @@ import itertools
 from fastapi.testclient import TestClient
 import pytest
 
-from oiltech_digest import api, cli, otbor
+from oiltech_digest import api, cli, feed_window, otbor
 from oiltech_digest.db import repository
 from oiltech_digest.processing.openai_client import AIResponse
 from tests.signal_card_support import api_get, run_worker
@@ -83,8 +83,25 @@ def contour(monkeypatch):
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
 
 
-def article(title, text, *, source="Нефтегаз", language="ru",
-            published=datetime(2026, 10, 20, 9, tzinfo=timezone.utc)):
+# Статьи этих тестов датированы 20.10.2026, а лента показывает и даёт править только открытые месяцы (окно от
+# сегодняшнего дня, в тестах прошлый месяц открыт до 5-го: conftest). С 05.11 октябрь стал архивом, и тесты, которые
+# смотрят ленту статей и отметку «в дайджест», падали (08.11). Поэтому «сегодня» окна закреплено рядом с датой статей:
+# 3 ноября, открыты октябрь и ноябрь. Одно место на все тесты «Отбора» (test_otbor_feed*, test_otbor_shadow,
+# card_pipeline_support).
+PUBLISHED = datetime(2026, 10, 20, 9, tzinfo=timezone.utc)
+WINDOW_NOW = datetime(2026, 11, 3, 12, 0, tzinfo=feed_window.MSK)
+
+
+@pytest.fixture()
+def window_of_published(monkeypatch):
+    """Окно ленты на день WINDOW_NOW: статьи с датой PUBLISHED видны и правятся, как в тот день.
+
+    Часы базы при этом настоящие. Поэтому статья должна нести свою дату (октябрь или ноябрь 2026): у статьи без
+    `published` месяц берётся по дате сбора, то есть по сегодняшнему дню, и с декабря она выйдет из окна ленты."""
+    monkeypatch.setattr(feed_window, "_now", lambda: WINDOW_NOW)
+
+
+def article(title, text, *, source="Нефтегаз", language="ru", published=PUBLISHED):
     """Статья сбора — как её вставляет сбор (insert_article); номер статьи."""
     number = next(_NUMBERS)
     with repository.get_connection() as conn:
