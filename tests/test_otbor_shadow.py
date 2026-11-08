@@ -1,6 +1,6 @@
-"""Проверка «Отбора» на реальных данных (#134, спека #128), шов 2: команды проверки, отчёта и переключения. Статьи
-сбора, решённые гейтом до «Отбора», проходят «Отбор» на воркере NL с подставной моделью; решения пишутся рядом,
-витрины не меняются; переключение после флага переносит решения в витрины (tests/otbor_support.py).
+"""Проверка «Отбора» на реальных данных (#134, спека #128, история), шов 2: команды проверки, отчёта и
+переключения. Статьи сбора, решённые гейтом до «Отбора», проходят «Отбор» на воркере NL с подставной моделью;
+решения пишутся рядом, витрины не меняются; переключение переносит решения в витрины (tests/otbor_support.py).
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -11,7 +11,6 @@ import pytest
 from oiltech_digest import api, cli, feed_window, otbor
 from oiltech_digest.db import marks, repository
 from oiltech_digest.otbor_pack_format import load_dictionaries
-from oiltech_digest.processing import external_ai
 from oiltech_digest.processing.openai_client import AIClientError
 from tests.card_pipeline_support import (MARKET, SCORES_MODEL, card_answer, even, fill_cards,  # noqa: F401
                                          pipeline, process_feed, run_scores, scores)

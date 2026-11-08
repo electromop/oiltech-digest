@@ -959,12 +959,12 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_disputed TEXT;        -- по
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_failure TEXT;         -- technical / invalid_answer, пока решения нет
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_failure_reason TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS otbor_recipe JSONB;         -- инструкция, модель, справочники, время, задача
--- Статью, вставленную при включённом «Отборе» (OTBOR_ENABLED), решает он, а не гейт ленты: пока решения нет,
--- её не видно (feed_window.visible_sql) и обработка ленты её не берёт.
+-- Статью с selector = 'otbor' (с 08.11 каждую новую: флаг OTBOR_ENABLED и гейт ленты сняты) решает «Отбор»:
+-- пока решения нет, её не видно (feed_window.visible_sql) и обработка ленты её не берёт.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS selector TEXT;             -- otbor; NULL — гейт ленты
 CREATE INDEX IF NOT EXISTS idx_articles_otbor ON articles(collected_at) WHERE selector = 'otbor';
--- Радар и материалы коллег через «Отбор» (#131): находку поиска и материал коллеги, заведённые при включённом
--- флаге, решает он (signals.selector = 'otbor'); пока решения нет, сигнал не виден нигде. Материал коллеги —
+-- Радар и материалы коллег через «Отбор» (#131): находку поиска и материал коллеги (с 08.11 всегда, флаг снят)
+-- решает он (signals.selector = 'otbor'); пока решения нет, сигнал не виден нигде. Материал коллеги —
 -- сигнал происхождения material; какой итог «Отбора» автору уже сообщил бот — notified_outcome (silent: итог не
 -- сообщается, otbor-materials --silent); оценка автора —
 -- блок ОС с его именем из Telegram (author).

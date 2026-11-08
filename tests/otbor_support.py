@@ -75,10 +75,9 @@ def reject(reason, **overrides):
 
 @pytest.fixture()
 def contour(monkeypatch):
-    """Прод-маршрут: ИИ — на внешнем воркере, «Отбор» включён флагом, модель задана."""
+    """Прод-маршрут: ИИ на внешнем воркере, модель «Отбора» задана (флага у «Отбора» с 08.11 нет)."""
     monkeypatch.setattr(api.config, "EXTERNAL_WORKERS_ENABLED", True)
     monkeypatch.setattr(api.config, "AI_EXECUTION_REGION", "external")
-    monkeypatch.setattr(api.config, "OTBOR_ENABLED", True)
     monkeypatch.setattr(api.config, "OTBOR_MODEL", MODEL)
     monkeypatch.setattr(api.config, "EXTERNAL_WORKER_TOKEN_HASH", api._sha256_hex("secret"))
 

@@ -48,7 +48,7 @@ def theme(name, keywords):
 
 
 def process_feed():
-    """Обработка ленты (суть, перевод, тег, балл) — шаг планировщика и воркер NL с офлайн-клиентом."""
+    """Обработка ленты (суть и перевод): шаг планировщика и воркер NL с офлайн-клиентом."""
     cli.main(["enqueue-process", "--limit", "10", "--offline"])
     return run_worker("external-ai")
 
