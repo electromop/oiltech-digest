@@ -35,10 +35,9 @@ from oiltech_digest import material_signals
 from oiltech_digest.processing.pipeline import (
     make_client,
     process_pipeline_articles,
-    score_label,
 )
 from oiltech_digest.readiness import readiness_check
-from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE
+from oiltech_digest.scoring_profiles import ARTICLE_SCORING_PROFILE, SCORING_PROFILES
 from oiltech_digest.ingestion import normalize, playwright_parser, request_parser
 from oiltech_digest.ingestion import core_page, external_fetch
 from oiltech_digest.documents import external as documents_external
@@ -698,12 +697,13 @@ def list_articles(
         # (2) теги в поиск не входили вовсе: набрать «Бурение» и получить статьи этого
         #     направления было нельзя, хотя в сборщике дайджеста такой поиск уже есть
         #     (repository.digest_candidates). Два разных поиска в двух файлах.
-        # Требование владельца 12.09: теги влияют и на парсинг, и на выдачу.
+        # Требование владельца 12.09: теги влияют и на парсинг, и на выдачу. С 08.11 вместо тега статьи тема её
+        # публикации (repository.publication_joins: тема сигнала ленты, у статьи без него прежний тег).
         clauses.append(
             "LOWER("
             "COALESCE(c.title_ru, '') || ' ' || a.title || ' ' "
             "|| COALESCE(a.raw_text, '') || ' ' || COALESCE(c.summary, '') || ' ' "
-            "|| COALESCE(t.name, '') || ' ' || COALESCE(parent.name, '')"
+            "|| COALESCE(pub.tag_name, '') || ' ' || COALESCE(pub.parent_tag_name, '')"
             ") LIKE %s"
         )
         params.append(f"%{search.lower()}%")
@@ -711,7 +711,7 @@ def list_articles(
         clauses.append("s.name = %s")
         params.append(source)
     if tag:
-        clauses.append("(t.name = %s OR parent.name = %s)")
+        clauses.append("(pub.tag_name = %s OR pub.parent_tag_name = %s)")
         params.extend([tag, tag])
     if status:
         clauses.append(f"{marks.article_status_sql()} = %s")
@@ -732,15 +732,16 @@ def list_articles(
         clauses.append("a.language = %s")
         params.append(language)
     if min_score is not None:
-        # Ещё НЕ оценённые статьи (нет строки в article_scores) — это не «низкобалльные»:
+        # Ещё НЕ оценённые статьи (у публикации нет балла: «Карточка» не ответила, у статьи без сигнала нет строки в
+        # article_scores) не «низкобалльные»:
         # балла у них попросту нет, и COALESCE(...,0) выдавал бы за 0, отсекая свежий приток
         # порогом. Порог применяем только к УЖЕ оценённым — иначе новые статьи исчезают из
         # ленты до прохода ИИ и она выглядит замороженной. Тот же принцип, что строкой ниже
         # для c.relevant IS NULL: необработанное не прячем.
-        clauses.append("(sc.total_score IS NULL OR sc.total_score >= %s)")
+        clauses.append("(pub.total_score IS NULL OR pub.total_score >= %s)")
         params.append(min_score)
     if max_score is not None:
-        clauses.append("COALESCE(sc.total_score, 0) <= %s")
+        clauses.append("COALESCE(pub.total_score, 0) <= %s")
         params.append(max_score)
     if date_from:
         clauses.append("COALESCE(a.published_at::date, a.collected_at::date) >= %s")
@@ -754,14 +755,17 @@ def list_articles(
     clauses.append(feed_window.visible_sql())
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     order_by = {
-        "date_desc": "a.published_at DESC NULLS LAST, COALESCE(sc.total_score, 0) DESC, a.id DESC",
-        "score_asc": "COALESCE(sc.total_score, 0) ASC, a.published_at DESC NULLS LAST, a.id DESC",
-        "score_desc": "COALESCE(sc.total_score, 0) DESC, a.published_at DESC NULLS LAST, a.id DESC",
+        "date_desc": "a.published_at DESC NULLS LAST, COALESCE(pub.total_score, 0) DESC, a.id DESC",
+        "score_asc": "COALESCE(pub.total_score, 0) ASC, a.published_at DESC NULLS LAST, a.id DESC",
+        "score_desc": "COALESCE(pub.total_score, 0) DESC, a.published_at DESC NULLS LAST, a.id DESC",
     }[sort]
     params.append(limit)
 
     with get_connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        # Тема, балл, подпись и разбивка берутся у публикации ленты (repository.publication_joins): у статьи с сигналом
+        # ленты его, как на бизнес-ленте, у статьи без сигнала прежние тег и балл. Пояснения тега и балла
+        # (tag_rationale, score_explanation) и решение гейта остаются историей статьи, как раньше.
         cur.execute(
             f"""
             SELECT a.id, COALESCE(c.title_ru, a.title) AS title, a.url, a.language, length(a.raw_text) AS raw_text_chars,
@@ -771,17 +775,14 @@ def list_articles(
                    {marks.article_status_sql()} AS status,
                    c.relevant, c.relevance_reason,
                    ({marks.article_status_sql()} = 'digest') AS selected_for_digest,
-                   sc.total_score, sc.score_label, sc.explanation AS score_explanation,
-                   t.name AS tag_name, parent.name AS parent_tag_name,
+                   pub.total_score, pub.score_band, sc.explanation AS score_explanation,
+                   pub.tag_name, pub.parent_tag_name,
                    at.confidence AS tag_confidence, at.rationale AS tag_rationale
             FROM articles a
             JOIN sources s ON s.id = a.source_id
             {marks.article_mark_join()}
             LEFT JOIN article_cards c ON c.article_id = a.id
-            LEFT JOIN article_scores sc ON sc.article_id = a.id
-            LEFT JOIN article_tags at ON at.article_id = a.id
-            LEFT JOIN tags t ON t.id = at.tag_id
-            LEFT JOIN tags parent ON parent.id = t.parent_id
+            {repository.publication_joins('a')}
             {where}
             ORDER BY {order_by}
             LIMIT %s
@@ -1996,14 +1997,10 @@ def list_signals(
     for row in cards:
         # Словесная оценка — по порогам ленты (80/65/40), как у бизнес-сигналов (документ
         # заказчика 19.09); цвет балла на экране — по этому слову, как в ленте. У сигнала с баллами второго
-        # вызова «Карточки» (#132) — его ступень: сильный, полезный, наблюдать, слабый.
-        band = row.get("score_band")
-        # Балла нет у сигнала после «Отбора» без ступени (второй вызов не прошёл или он «другое»), у сбоя «Отбора» и у
-        # отсеянного поиском: их не оценивали ни «Карточка», ни судья, и «0» с подписью «Низкая» солгали бы.
-        unscored = band is None and (row.get("otbor_decision") is not None or row.get("otbor_failure") is not None
-                                     or row.get("filter_stage") == "search")
-        label = (signal_scoring.BAND_LABELS[band].capitalize() if band in signal_scoring.BAND_LABELS
-                 else None if unscored else score_label(float(row.get("score") or 0)))
+        # вызова «Карточки» (#132) его ступень: сильный, полезный, наблюдать, слабый. Балла нет, нет и подписи
+        # (signal_scoring.unscored). Та же подпись у статьи в /api/articles: «Дайджест» и витрины показывают один балл.
+        unscored = signal_scoring.unscored(row)
+        label = signal_scoring.label(None if unscored else float(row.get("score") or 0), row.get("score_band"))
         rows.append(_clean({
             **row,
             "score_label": label,
@@ -3386,9 +3383,11 @@ def _external_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-    """Per-criterion scoring breakdown grouped by article id.
+    """Разбивка балла по критериям, по статьям: та, что у балла, который /api/articles отдаёт (тема и балл публикации,
+    repository.publication_joins). У статьи с сигналом ленты разбивка его балла (_signal_score_items), у сигнала без
+    балла (signal_scoring.unscored) её нет. У статьи без сигнала разбивка балла статьи, как раньше.
 
-    Вес — из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
+    Вес у балла статьи берётся из снимка критериев в балле (сессия G): с ним итог статьи и считался. Текущий вес
     после правки на экране дал бы разбивку, которая в итог не складывается. У балла до
     профилей снимка нет (или он битый) — вес текущий, как раньше. Вес достаётся из снимка
     в запросе: сам снимок в каждой строке разбивки — ~0,7 КБ × пять подпунктов × до 2000
@@ -3396,6 +3395,28 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
     if not article_ids:
         return {}
     cur = conn.cursor(row_factory=dict_row)
+    # Сигнал ленты ищется так же, как в publication_joins и у полей материала PDF (issue_material_fields).
+    cur.execute(
+        f"""
+        SELECT DISTINCT ON (x.origin_article_id) x.origin_article_id AS article_id, x.score_band, x.otbor_decision,
+               x.otbor_failure, x.filter_stage, x.score_profile, x.score_items_json, x.criteria_snapshot
+        FROM signals x
+        WHERE x.origin_article_id = ANY(%s) AND x.origin = '{repository.SIGNAL_ORIGIN_FEED}'
+        ORDER BY x.origin_article_id, x.merged_into_signal_id NULLS FIRST, x.id
+        """,
+        (article_ids,),
+    )
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    with_signal: set[int] = set()
+    for signal in cur.fetchall():
+        article_id = int(signal["article_id"])
+        with_signal.add(article_id)
+        items = [] if signal_scoring.unscored(signal) else _signal_score_items(signal)
+        if items:
+            grouped[article_id] = items
+    without_signal = [article_id for article_id in article_ids if int(article_id) not in with_signal]
+    if not without_signal:
+        return grouped
     cur.execute(
         """
         SELECT s.article_id, sc.name,
@@ -3414,9 +3435,8 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
         WHERE s.article_id = ANY(%s)
         ORDER BY sc.sort_order, sc.id
         """,
-        (article_ids,),
+        (without_signal,),
     )
-    grouped: dict[int, list[dict[str, Any]]] = {}
     for row in cur.fetchall():
         grouped.setdefault(int(row["article_id"]), []).append(
             {
@@ -3431,10 +3451,52 @@ def _score_items_by_article(conn, article_ids: list[int]) -> dict[int, list[dict
     return grouped
 
 
+def _optional_float(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool) else None
+
+
+def _signal_score_items(signal: dict[str, Any]) -> list[dict[str, Any]]:
+    """Разбивка балла сигнала ленты, как её показывает бизнес-лента (scoreBreakdown экрана радара) и PDF
+    (digest_materials.criteria_of): имя и вес критерия из снимка набора на момент оценки; балл, посчитанный профилем,
+    которого нет в наборах, разбивки не даёт. Критерий, который в итог не вошёл («Свежесть» без даты события в тексте),
+    в разбивку не идёт: балла у него нет, и «0» в ней солгал бы."""
+    if signal.get("score_profile") not in SCORING_PROFILES:
+        return []
+    snapshot: dict[int, dict[str, Any]] = {}
+    for entry in signal.get("criteria_snapshot") or []:
+        try:
+            snapshot[int(entry["id"])] = entry
+        except (KeyError, TypeError, ValueError):
+            continue
+    items = []
+    for item in signal.get("score_items_json") or []:
+        try:
+            criterion_id = int(item["criterion_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        final = _optional_float(item.get("final_score"))
+        if item.get("excluded") or final is None:
+            continue
+        criterion = snapshot.get(criterion_id) or {}
+        items.append({
+            "name": criterion.get("name") or item.get("name") or f"Критерий {criterion_id}",
+            "weight": _optional_float(criterion.get("weight", item.get("weight"))) or 0.0,
+            "final_score": final,
+            "ai_score": _optional_float(item.get("ai_score")),
+            "keyword_score": _optional_float(item.get("keyword_score")),
+            "rationale": item.get("rationale"),
+        })
+    return items
+
+
 def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
+    # Тема и балл берутся у публикации ленты (repository.publication_joins): у статьи с сигналом ленты тема сигнала
+    # (корневая, родителя нет), у статьи без сигнала «родитель / тег», как раньше. Подпись балла по правилу витрин
+    # (signal_scoring.label): «Дайджест» и бизнес-лента показывают один балл.
     tag = row.get("tag_name") or "Без тега"
     if row.get("parent_tag_name"):
         tag = f"{row['parent_tag_name']} / {tag}"
+    score = float(row["total_score"]) if row.get("total_score") is not None else None
     # Эмодзи снимаем НА ВЫДАЧЕ, а не при вставке (решение владельца 12.09:
     # «чтобы в любой части сигнала — название, суть и так далее — не было эмодзи»).
     # Этот сериализатор — единственный шов, через который лента, поиск и карточка
@@ -3453,8 +3515,9 @@ def _article_payload(row: dict[str, Any]) -> dict[str, Any]:
         "future_date": normalize.is_future_date(row.get("published_at")),
         "summary": normalize.strip_emoji(row.get("summary")),
         "tag": tag,
-        "score": float(row["total_score"]) if row.get("total_score") is not None else 0,
-        "rating": row.get("score_label") or "Без оценки",
+        # Балла нет: 0, как раньше; экран «Дайджест» пишет у него «без баллов».
+        "score": score if score is not None else 0,
+        "rating": signal_scoring.label(score, row.get("score_band")) or "Без оценки",
         "status": row.get("status") or "new",
         "digest": (row.get("status") or "new") == "digest",
         "tag_confidence": float(row["tag_confidence"]) if row.get("tag_confidence") is not None else None,

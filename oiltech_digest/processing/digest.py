@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from oiltech_digest import config, feed_window
+from oiltech_digest import config, feed_window, signal_scoring
 from oiltech_digest.config import EXPORTS_DIR
 from oiltech_digest.db import repository
 from oiltech_digest.ingestion.normalize import strip_emoji
@@ -299,6 +299,9 @@ def build_digest_content(
     # (раздел, рубрика, подпись, критерии, связь) с его сигнала — digest_materials.
     positions = []
     for row in rows:
+        # Рубрика письма и DOCX, заглушка картинки и сводные цифры идут по теме публикации
+        # (repository.publication_joins): у статьи с сигналом ленты тема сигнала, одна из 13 корневых тематик (родителя
+        # у неё нет), у статьи без сигнала «родитель / тег», как раньше; у карточки радара её тема.
         tag = row.get("tag_name") or "Без тега"
         if row.get("parent_tag_name"):
             tag = f"{row['parent_tag_name']} / {tag}"
@@ -316,14 +319,16 @@ def build_digest_content(
         # Сигнал радара — не статья: его номер из таблицы signals. Раньше он уезжал в
         # article_id, и сохранение черновика падало на внешнем ключе или цепляло чужую статью.
         item_type = row.get("item_type") or "article"
-        # Общее у позиции письма и PDF: кто она, заголовок, ссылка, балл.
+        # Общее у позиции письма и PDF: кто она, заголовок, ссылка, балл. Балл статьи берётся у её публикации (балл
+        # сигнала ленты, None у сигнала без балла): по нему идут письмо и DOCX без черновика и карточки PDF в рубрике.
+        score = float(row["total_score"]) if row.get("total_score") is not None else None
         position = {
             "item_type": item_type,
             "article_id": row["id"] if item_type == "article" else None,
             "signal_id": row["id"] if item_type == "signal" else None,
             "title": title,
             "url": row["url"],
-            "score": float(row["total_score"]) if row.get("total_score") is not None else None,
+            "score": score,
         }
         news.append(
             {
@@ -332,7 +337,10 @@ def build_digest_content(
                 "source": row["source_name"],
                 "published_at": published,
                 "tag": tag,
-                "score_label": row.get("score_label"),
+                # Подпись балла статьи по правилу витрин (signal_scoring.label), как в /api/articles; у карточки радара
+                # прежняя.
+                "score_label": (row.get("score_label") if item_type == "signal"
+                                else signal_scoring.label(score, row.get("score_band"))),
                 "summary": _compact_digest_summary(summary, title),
                 "image_url": row.get("image_url") or "",
             }

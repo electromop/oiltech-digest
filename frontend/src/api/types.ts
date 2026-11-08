@@ -1304,6 +1304,9 @@ export type MonthlyAnalytics = {
   top_sources: { month: string; source_id: number; source: string; strong: number; relevant: number; collected: number }[];
   sources_enabled: number;
   targets: { sources: number; articles_month: number; ai_rub_month: number };
+  // С какого балла «сильный сигнал» и «топ» (с 08.11 ступени балла сигнала, db/analytics.score_thresholds): по ним
+  // подписи плиток и графиков. Нет поля (сервер до 08.11): прежние 60 и 70.
+  score_thresholds?: { strong: number; top: number };
   // Только администратору: стоимость — коммерческая сторона.
   ai_cost?: AnalyticsCost[];
   ai_cost_previous_same_period?: AnalyticsCost & { days: number };
