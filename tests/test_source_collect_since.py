@@ -40,7 +40,7 @@ def _ago(days: float) -> datetime:
     return datetime.now(timezone.utc) - timedelta(days=days)
 
 
-def _close(left: datetime | None, right: datetime, seconds: float = 120) -> bool:
+def _near(left: datetime | None, right: datetime, seconds: float = 120) -> bool:
     return left is not None and abs((left - right).total_seconds()) < seconds
 
 
@@ -77,9 +77,9 @@ def test_cutoff_is_the_later_of_run_window_and_source_start():
     assert verdicts.old_cutoff({}, None) is None
     assert verdicts.old_cutoff({"collect_since": None}, None) is None
     assert verdicts.old_cutoff({"collect_since": since}, None) == since
-    assert _close(verdicts.old_cutoff({}, 30), _ago(30))
+    assert _near(verdicts.old_cutoff({}, 30), _ago(30))
     assert verdicts.old_cutoff({"collect_since": since}, 30) == since, "дата начала позже окна прогона"
-    assert _close(verdicts.old_cutoff({"collect_since": _ago(60)}, 30), _ago(30)), "окно прогона позже даты начала"
+    assert _near(verdicts.old_cutoff({"collect_since": _ago(60)}, 30), _ago(30)), "окно прогона позже даты начала"
 
 
 def test_cutoff_reads_source_start_from_worker_payload():
@@ -102,8 +102,13 @@ def test_new_source_starts_two_weeks_before_it_is_added_by_any_path(isolated_db)
     candidate = repository.upsert_source_candidate({"url": "https://agent.example/news", "name": "Находка агента"})
     agent = repository.approve_source_candidate(candidate)
 
-    for source_id in (screen, _source_id("Из таблицы"), agent):
-        assert _close(_collect_since(source_id), _ago(14)), source_id
+    # Сверка по часам базы, а не по часам теста: часы ВМ colima после сна Mac отстают на минуты (07.11 на 15).
+    with connection.get_connection() as conn:
+        starts = conn.execute("SELECT id, collect_since, created_at FROM sources WHERE id = ANY(%s)",
+                              ([screen, _source_id("Из таблицы"), agent],)).fetchall()
+    assert len(starts) == 3
+    for source_id, since, created in starts:
+        assert since == created - timedelta(days=14), source_id
 
 
 def test_adding_existing_source_again_keeps_its_start(isolated_db):
@@ -151,6 +156,7 @@ def test_new_rss_source_skips_its_archive_and_probe_says_the_same(isolated_db, m
     }
     assert (stats["added"], stats["skipped_old"]) == (2, 2)
     assert _urls() == {f"{base}/fresh", f"{base}/undated"}, "статья без даты собирается: судить её не по чему"
+    assert any(note.startswith("дата начала сбора ") for note in report["notes"]), "проба называет причину вердикта old"
 
 
 def test_source_without_start_collects_as_before(isolated_db, monkeypatch):
@@ -253,4 +259,4 @@ def test_core_does_not_insert_archive_sent_by_old_worker_build(monkeypatch):
     ]})
 
     assert inserted == ["https://example.com/fresh", "https://example.com/undated"]
-    assert stats == {"inserted": 2, "duplicates": 0, "skipped_old": 1, "source_id": 7}
+    assert stats == {"inserted": 2, "duplicates": 0, "skipped_before_start": 1, "source_id": 7}

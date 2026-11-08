@@ -110,7 +110,7 @@ def test_external_fetch_apply_inserts_articles(monkeypatch):
         }
     )
 
-    assert stats == {"inserted": 1, "duplicates": 0, "skipped_old": 0, "source_id": 7}
+    assert stats == {"inserted": 1, "duplicates": 0, "skipped_before_start": 0, "source_id": 7}
     assert inserted[0]["source_id"] == 7
     assert touched == [7]
     assert state_updates[0][1]["last_listing_hash"] == "hash"

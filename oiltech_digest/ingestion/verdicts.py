@@ -28,6 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from oiltech_digest.ingestion import dates
+
 KNOWN = "known"
 OLD = "old"
 FETCH_FAILED = "fetch_failed"
@@ -82,28 +84,16 @@ class Step:
     detail: str = ""
 
 
-def old_cutoff(source: dict, max_age_days: int | None, *, now: datetime | None = None) -> datetime | None:
+def old_cutoff(source: dict, max_age_days: int | None) -> datetime | None:
     """Граница рубежа OLD: что опубликовано раньше, сбор не берёт. Поздняя из двух: окно свежести прогона
     (`max_age_days`) и дата начала сбора источника (`sources.collect_since`, решение владельца 06.11: новый источник
     не тащит архив своей ленты, база ставит дату на две недели раньше заведения). Нет ни той, ни другой: границы нет.
-    Одна граница на все стратегии сбора, на воркер NL и на пробу источника."""
+    Одна граница на все стратегии сбора, на воркер NL и на пробу источника. Статью без даты граница не отсекает:
+    судить её не по чему."""
     bounds = []
     if max_age_days is not None:
-        bounds.append((now or datetime.now(timezone.utc)) - timedelta(days=int(max_age_days)))
-    since = as_utc(source.get("collect_since"))
+        bounds.append(datetime.now(timezone.utc) - timedelta(days=int(max_age_days)))
+    since = dates.as_utc(source.get("collect_since"))
     if since is not None:
         bounds.append(since)
     return max(bounds) if bounds else None
-
-
-def as_utc(value: datetime | str | None) -> datetime | None:
-    """Дата из базы или из JSON задачи воркера: строка ISO (в том числе с «Z»); дата без пояса считается UTC.
-    Нет даты или она нечитаема: None."""
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    if not isinstance(value, datetime):
-        return None
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
