@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
 
 import feedparser
 
@@ -68,9 +67,7 @@ def feed_entry_steps(source: dict, content: bytes, max_age_days: int | None = No
     ссылки сбор пропускает молча — шага у него нет.
     """
     feed = feedparser.parse(content)
-    cutoff = None
-    if max_age_days is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    cutoff = verdicts.old_cutoff(source, max_age_days)
 
     language = _guess_language(source)
     for entry in feed.entries:

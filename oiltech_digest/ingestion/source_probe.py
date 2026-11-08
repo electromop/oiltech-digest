@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 import feedparser
 
 from oiltech_digest.db import connection, repository
-from oiltech_digest.ingestion import playwright_parser, request_parser, rss_parser, telegram_parser, verdicts
+from oiltech_digest.ingestion import dates, playwright_parser, request_parser, rss_parser, telegram_parser, verdicts
 from oiltech_digest.ingestion.verdicts import Step
 
 
@@ -162,6 +162,9 @@ def _notes(source: dict) -> list[str]:
         notes.append("источник выключен — сбор его не опрашивает; проба показывает, что было бы при включении")
     if source.get("archived_at"):
         notes.append("источник в архиве")
+    since = dates.as_utc(source.get("collect_since"))
+    if since is not None:
+        notes.append(f"дата начала сбора {since:%d.%m.%Y}: опубликованное раньше сбор не берёт (вердикт old)")
     if rss_parser.collected_externally(source):
         notes.append("сбор идёт через зарубежный воркер (network_region = external): там страницы качаются "
                      "из NL, знакомые адреса берутся из списка ядра, тело RSS добирается со страницы — "

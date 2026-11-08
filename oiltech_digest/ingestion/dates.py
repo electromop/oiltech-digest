@@ -306,3 +306,17 @@ def parse_datetime(raw: str) -> datetime | None:
     if normalize.is_future_date(parsed):
         return None  # дата-анонс из будущего (календарь событий) — не дата публикации
     return parsed
+
+
+def as_utc(value: datetime | str | None) -> datetime | None:
+    """Дата из базы или из JSON задачи воркера NL (строка ISO, в том числе с «Z»), с поясом; без пояса считается UTC.
+    Не parse_datetime: здесь не разбор текста страницы, а наша же дата, и будущее не отбрасывается. Нет даты или она
+    нечитаема: None."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

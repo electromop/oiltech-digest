@@ -95,6 +95,7 @@ def test_external_fetch_apply_inserts_articles(monkeypatch):
     inserted = []
     touched = []
     state_updates = []
+    monkeypatch.setattr(external_fetch.repository, "get_source", lambda source_id: {"id": source_id, "collect_since": None})
     monkeypatch.setattr(external_fetch.repository, "insert_article", lambda article: inserted.append(article) or True)
     monkeypatch.setattr(external_fetch.repository, "touch_last_parsed", lambda source_id: touched.append(source_id))
     monkeypatch.setattr(external_fetch.repository, "update_source_request_state", lambda source_id, **kwargs: state_updates.append((source_id, kwargs)))
@@ -109,7 +110,7 @@ def test_external_fetch_apply_inserts_articles(monkeypatch):
         }
     )
 
-    assert stats == {"inserted": 1, "duplicates": 0, "source_id": 7}
+    assert stats == {"inserted": 1, "duplicates": 0, "skipped_before_start": 0, "source_id": 7}
     assert inserted[0]["source_id"] == 7
     assert touched == [7]
     assert state_updates[0][1]["last_listing_hash"] == "hash"

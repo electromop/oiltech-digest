@@ -3,7 +3,8 @@
 Две группы — по тому, кто решает.
 
 Рубежи сбора ДО вставки (строчными) проходит парсер источника: `known` — адрес уже
-в базе (или сбор считает пост знакомым), `old` — старее окна свежести, `fetch_failed` —
+в базе (или сбор считает пост знакомым), `old` — старее окна свежести или даты начала сбора
+источника (`old_cutoff`), `fetch_failed` —
 страница статьи не скачалась, `redirected_home` — скачалась, но сайт увёл со статьи на
 свою главную (переехал или снял статью: лечится сменой ленты или архивом, а не маршрутом
 через NL или браузером — поэтому не `fetch_failed`), `too_short` — нет заголовка или
@@ -25,7 +26,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+from oiltech_digest.ingestion import dates
 
 KNOWN = "known"
 OLD = "old"
@@ -79,3 +82,18 @@ class Step:
     text_chars: int | None = None
     record: dict | None = None
     detail: str = ""
+
+
+def old_cutoff(source: dict, max_age_days: int | None) -> datetime | None:
+    """Граница рубежа OLD: что опубликовано раньше, сбор не берёт. Поздняя из двух: окно свежести прогона
+    (`max_age_days`) и дата начала сбора источника (`sources.collect_since`, решение владельца 06.11: новый источник
+    не тащит архив своей ленты, база ставит дату на две недели раньше заведения). Нет ни той, ни другой: границы нет.
+    Одна граница на все стратегии сбора, на воркер NL и на пробу источника. Статью без даты граница не отсекает:
+    судить её не по чему."""
+    bounds = []
+    if max_age_days is not None:
+        bounds.append(datetime.now(timezone.utc) - timedelta(days=int(max_age_days)))
+    since = dates.as_utc(source.get("collect_since"))
+    if since is not None:
+        bounds.append(since)
+    return max(bounds) if bounds else None
